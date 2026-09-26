@@ -18,7 +18,7 @@ use super::{
     root_prompts::{self, WorkerResult},
     root_session_store::{self, RootSession, RootTurn, StandardWorkerResult},
     workflow_evidence,
-    workflows::{ReviewRange, advisor_label, turn_workflow_input},
+    workflows::{ReviewRange, Workflow, advisor_label, turn_workflow_input},
 };
 
 /// One terminal delegate turn as the task host observed it natively.
@@ -138,10 +138,7 @@ pub fn finish_delegate_turn(
         mut base,
     } = finished;
     let rows = root_session_store::root_observation_rows(database, &session.task_id)?;
-    let workflow = rows.control["workflow"]
-        .as_str()
-        .unwrap_or("standard")
-        .to_owned();
+    let workflow = rows.control.workflow;
     let session_row = rows
         .sessions
         .iter()
@@ -242,7 +239,7 @@ pub fn finish_delegate_turn(
             },
         );
     }
-    if workflow != "standard" {
+    if workflow != Workflow::Standard {
         match native_tools(database_path, &session_row, &turn.id) {
             Ok(tools) => {
                 base["tools"] = json!(tools);
@@ -258,7 +255,7 @@ pub fn finish_delegate_turn(
         base["verificationRange"] = range.clone();
     }
     let wake = root_prompts::worker_result_wake(
-        &workflow,
+        workflow,
         &receipt,
         &WorkerResult {
             turn_id: &turn.id,
@@ -744,9 +741,12 @@ mod tests {
         );
         assert_eq!(complete(&mut database), WorkflowCompletion::Completed);
         let rows = root_session_store::root_observation_rows(&database, &root.task_id).unwrap();
-        assert_eq!(rows.control["status"], "delivered");
         assert_eq!(
-            rows.control["workflowState"]["completion"]["reviewedHead"],
+            rows.control.status,
+            crate::tasks::control::TaskStatus::Delivered
+        );
+        assert_eq!(
+            serde_json::json!(rows.control.workflow_state)["completion"]["reviewedHead"],
             sha('b')
         );
         assert_eq!(complete(&mut database), WorkflowCompletion::Already);

@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use super::advisor_bridge::AdvisorRole;
+use crate::tasks::control::TaskControlRow;
 
 pub const REPAIR_RATING_TARGET: i64 = 9;
 
@@ -276,7 +277,7 @@ pub fn latest_review(reviews: &[ReviewRecord], role: AdvisorRole) -> Option<&Rev
 /// Pure gate over the latest Reviewer or Rater record; a newer invalid or
 /// negative record supersedes an earlier positive one.
 pub fn review_gate(
-    workflow: &str,
+    workflow: Workflow,
     reviews: &[ReviewRecord],
     actual: &ReviewRange,
 ) -> Result<(), String> {
@@ -410,7 +411,7 @@ pub fn worker_candidate_reports(input: &Value) -> Option<[Value; 2]> {
 
 /// Whether the workflow's obligations for the actual range are complete.
 pub fn workflow_ready_for_delivery(
-    workflow: &str,
+    workflow: Workflow,
     reviews: &[ReviewRecord],
     sessions: &[Value],
     turns: &[Value],
@@ -422,8 +423,8 @@ pub fn workflow_ready_for_delivery(
             .any(|session| session["id"] == turn["sessionId"] && plain_worker(session))
     };
     match workflow {
-        "standard" => Ok(()),
-        "direct_build" => {
+        Workflow::Standard => Ok(()),
+        Workflow::DirectBuild => {
             let built = turns.iter().any(|turn| {
                 let input = turn_workflow_input(sessions, turn);
                 worker_turn(turn)
@@ -440,7 +441,7 @@ pub fn workflow_ready_for_delivery(
                 Err("Direct build requires a completed Worker assignment in direct mode before delivery.".into())
             }
         }
-        "competing_plans" => {
+        Workflow::CompetingPlans => {
             let build = turns.iter().find(|turn| {
                 let input = turn_workflow_input(sessions, turn);
                 worker_turn(turn)
@@ -472,7 +473,9 @@ pub fn workflow_ready_for_delivery(
                 Err("Combined planning requires two valid plan reports and a completed Worker build of the combined plan before delivery.".into())
             }
         }
-        _ => review_gate(workflow, reviews, actual),
+        Workflow::IndependentReview | Workflow::RefinePullRequest => {
+            review_gate(workflow, reviews, actual)
+        }
     }
 }
 
@@ -488,15 +491,15 @@ pub struct DeliveryRefusal {
     pub reason: String,
 }
 
-pub fn review_role(workflow: &str) -> Option<AdvisorRole> {
+pub fn review_role(workflow: Workflow) -> Option<AdvisorRole> {
     match workflow {
-        "refine_pull_request" => Some(AdvisorRole::Rater),
-        "independent_review" => Some(AdvisorRole::Reviewer),
-        _ => None,
+        Workflow::RefinePullRequest => Some(AdvisorRole::Rater),
+        Workflow::IndependentReview => Some(AdvisorRole::Reviewer),
+        Workflow::Standard | Workflow::DirectBuild | Workflow::CompetingPlans => None,
     }
 }
 
-pub fn fresh_review_hint(workflow: &str) -> String {
+pub fn fresh_review_hint(workflow: Workflow) -> String {
     match review_role(workflow) {
         Some(role) => format!(
             " Inspect the new range and request a new {} assessment.",
@@ -510,20 +513,18 @@ pub fn fresh_review_hint(workflow: &str) -> String {
 /// range: the source is on the task branch at the reviewed head and clean, no
 /// delegate is reserved, live, or unknown, and the workflow's own obligations hold.
 pub fn delivery_decision(
-    control: &Value,
+    control: &TaskControlRow,
     sessions: &[Value],
     turns: &[Value],
     range: &ReviewRange,
     local: &LocalSourceFacts<'_>,
     require_review: bool,
 ) -> Result<(), DeliveryRefusal> {
-    let workflow = control["workflow"].as_str().unwrap_or("standard");
-    if workflow == "standard" {
+    let workflow = control.workflow;
+    if workflow == Workflow::Standard {
         return Ok(());
     }
-    let head_branch = control["deliveryIntent"]["headBranch"]
-        .as_str()
-        .unwrap_or_default();
+    let head_branch = control.delivery_intent.head_branch.as_str();
     if let Some(branch) = local.branch
         && branch != head_branch
     {
@@ -582,9 +583,8 @@ pub fn delivery_decision(
     if !require_review {
         return Ok(());
     }
-    let reviews: Vec<ReviewRecord> =
-        serde_json::from_value(control["workflowState"]["reviews"].clone()).unwrap_or_default();
-    workflow_ready_for_delivery(workflow, &reviews, sessions, turns, range).map_err(|reason| {
+    let reviews = &control.workflow_state.reviews;
+    workflow_ready_for_delivery(workflow, reviews, sessions, turns, range).map_err(|reason| {
         DeliveryRefusal {
             code: "workflow_review_required",
             reason,
@@ -744,11 +744,11 @@ mod tests {
     fn the_review_gate_uses_the_latest_same_role_record_for_the_actual_range() {
         let range = range();
         let pass = json!({"role":"rater","rating":9,"blockingFindings":[],"verification":"passed","verificationSummary":"ok","summary":"ok"});
-        assert_eq!(review_gate("standard", &[], &range), Ok(()));
-        assert!(review_gate("refine_pull_request", &[], &range).is_err());
+        assert_eq!(review_gate(Workflow::Standard, &[], &range), Ok(()));
+        assert!(review_gate(Workflow::RefinePullRequest, &[], &range).is_err());
         assert_eq!(
             review_gate(
-                "refine_pull_request",
+                Workflow::RefinePullRequest,
                 &[record("rater", pass.clone(), &range)],
                 &range
             ),
@@ -756,7 +756,7 @@ mod tests {
         );
         assert!(
             review_gate(
-                "refine_pull_request",
+                Workflow::RefinePullRequest,
                 &[
                     record("rater", pass.clone(), &range),
                     record("rater", Value::Null, &range)
@@ -770,7 +770,7 @@ mod tests {
         eight["rating"] = json!(8);
         assert!(
             review_gate(
-                "refine_pull_request",
+                Workflow::RefinePullRequest,
                 &[
                     record("rater", pass.clone(), &range),
                     record("rater", eight, &range)
@@ -786,7 +786,7 @@ mod tests {
         };
         assert!(
             review_gate(
-                "refine_pull_request",
+                Workflow::RefinePullRequest,
                 &[record("rater", pass, &moved)],
                 &range
             )
@@ -796,7 +796,7 @@ mod tests {
         let approved = json!({"role":"reviewer","approved":true,"blockingFindings":[],"verification":"not_applicable","verificationSummary":"docs only","summary":"ok"});
         assert_eq!(
             review_gate(
-                "independent_review",
+                Workflow::IndependentReview,
                 &[record("reviewer", approved, &range)],
                 &range
             ),
@@ -805,7 +805,7 @@ mod tests {
         let rejected = json!({"role":"reviewer","approved":false,"blockingFindings":["x"],"verification":"passed","verificationSummary":"ok","summary":"no"});
         assert!(
             review_gate(
-                "independent_review",
+                Workflow::IndependentReview,
                 &[record("reviewer", rejected, &range)],
                 &range
             )
@@ -864,7 +864,9 @@ mod tests {
     #[test]
     fn delivery_decision_names_the_first_unsafe_condition() {
         let range = range();
-        let control = json!({"workflow":"independent_review","deliveryIntent":{"headBranch":"task"},"workflowState":{"reviews":[]}});
+        let mut control = TaskControlRow::fixture();
+        control.workflow = Workflow::IndependentReview;
+        control.delivery_intent.head_branch = "task".into();
         let clean = LocalSourceFacts {
             branch: Some("task"),
             head_sha: Some(&range.head_sha),
@@ -872,7 +874,7 @@ mod tests {
         };
         assert_eq!(
             delivery_decision(
-                &json!({"workflow":"standard"}),
+                &TaskControlRow::fixture(),
                 &[],
                 &[],
                 &range,
@@ -992,7 +994,7 @@ mod tests {
         );
         assert_eq!(
             workflow_ready_for_delivery(
-                "direct_build",
+                Workflow::DirectBuild,
                 &[],
                 std::slice::from_ref(&direct_worker),
                 std::slice::from_ref(&direct),
@@ -1008,7 +1010,7 @@ mod tests {
         );
         assert!(
             workflow_ready_for_delivery(
-                "direct_build",
+                Workflow::DirectBuild,
                 &[],
                 std::slice::from_ref(&direct_worker),
                 &[planned],
@@ -1030,7 +1032,7 @@ mod tests {
         let sessions = [direct_worker, plan_a, plan_b];
         assert_eq!(
             workflow_ready_for_delivery(
-                "competing_plans",
+                Workflow::CompetingPlans,
                 &[],
                 &sessions,
                 &[a.clone(), b.clone(), build.clone()],
@@ -1046,7 +1048,7 @@ mod tests {
         );
         assert!(
             workflow_ready_for_delivery(
-                "competing_plans",
+                Workflow::CompetingPlans,
                 &[],
                 &sessions,
                 &[a, invalid_b, build],

@@ -270,7 +270,7 @@ pub async fn prepare_before_native_work(database_path: &Path, task_id: &str) -> 
         (
             rows.context["configuration"].clone(),
             rows.context["issueContext"].clone(),
-            rows.control["worktree"]["path"].as_str().map(PathBuf::from),
+            rows.control.worktree_path().map(PathBuf::from),
             started,
         )
     };

@@ -15,7 +15,10 @@ use rusqlite::OptionalExtension;
 use serde_json::{Value, json};
 
 use crate::{
-    coordination::root_session_store::{self, RootObservationRows},
+    coordination::{
+        advisor_bridge::AdvisorRole,
+        root_session_store::{self, RootObservationRows},
+    },
     http::{
         AppState,
         contracts::typed::{self, tasks as task_contracts},
@@ -55,8 +58,11 @@ async fn checks(
     let intent = state.with_database(|database| -> Result<_, Box<dyn Error>> {
         let (rows, _) = read_task(database, &user_id, &task_id)?;
         let configuration = &rows.context["configuration"];
-        Ok(rows.control["pullRequest"]["number"]
-            .as_u64()
+        Ok(rows
+            .control
+            .pull_request
+            .as_ref()
+            .map(|pull| pull.number)
             .map(|number| {
                 (
                     number,
@@ -183,19 +189,19 @@ fn role_label(session: &Value) -> &'static str {
     }
 }
 
-fn session_profile<'a>(rows: &'a RootObservationRows, session: &'a Value) -> &'a Value {
+fn session_profile(rows: &RootObservationRows, session: &Value) -> Value {
     if !session["profile"].is_null() {
-        return &session["profile"];
+        return session["profile"].clone();
     }
-    if session["kind"] == "root" {
-        &rows.control["rootProfile"]
+    json!(if session["kind"] == "root" {
+        &rows.control.root_profile
     } else if let Some(role) = session["advisorRole"].as_str() {
-        rows.control["advisorProfiles"]
-            .get(role)
-            .unwrap_or(&rows.control["rootProfile"])
+        AdvisorRole::parse(role)
+            .and_then(|role| rows.control.advisor_profiles.get(&role))
+            .unwrap_or(&rows.control.root_profile)
     } else {
-        &rows.control["workerProfile"]
-    }
+        &rows.control.worker_profile
+    })
 }
 
 fn activity_document(rows: &RootObservationRows) -> Value {
@@ -231,7 +237,7 @@ fn activity_document(rows: &RootObservationRows) -> Value {
         .collect::<Vec<_>>();
     json!({
         "sessions":sessions, "turns":turns,
-        "shellPaneId":rows.control["shellPaneId"],
+        "shellPaneId":rows.control.shell_pane_id,
     })
 }
 
@@ -386,19 +392,21 @@ async fn read_diff(
     }
     let intent = match state.with_database(|database| -> Result<DiffIntent, Box<dyn Error>> {
         let (rows, _) = read_task(database, &user_id, &task_id)?;
-        let Some(path) = rows.control["worktree"].get("path").and_then(Value::as_str) else {
-            if rows.control["worktree"].is_null() {
-                return Ok(DiffIntent::NoWorktree);
-            }
-            return Err("Task worktree path is invalid".into());
+        let Some(path) = rows.control.worktree_path() else {
+            return Ok(DiffIntent::NoWorktree);
         };
         let configuration = &rows.context["configuration"];
         // TypeScript `resolveTaskDiffBase`: a pull request diff uses its current base branch.
-        let pull_request = rows.control["pullRequest"]["number"].as_u64().or_else(|| {
-            (configuration["source"]["kind"] == "pull_request")
-                .then(|| configuration["source"]["number"].as_u64())
-                .flatten()
-        });
+        let pull_request = rows
+            .control
+            .pull_request
+            .as_ref()
+            .map(|pull| pull.number)
+            .or_else(|| {
+                (configuration["source"]["kind"] == "pull_request")
+                    .then(|| configuration["source"]["number"].as_u64())
+                    .flatten()
+            });
         let repository = configuration["repository"]
             .as_str()
             .ok_or("Task repository is missing")?;

@@ -25,7 +25,10 @@ use crate::{
         artifacts::{self, ArtifactInput},
         database::{DatabaseResult, OpenMode, SuplexDatabase},
     },
-    tasks::issue_context,
+    tasks::{
+        control::{DeliveryTarget, TaskControlRow, TaskStatus},
+        issue_context,
+    },
 };
 
 const LIMIT: u64 = 8 * 1024 * 1024;
@@ -371,7 +374,7 @@ async fn publish(
     }
     let configuration: Value = serde_json::from_str(&configuration)?;
     // Issue-backed draft delivery is opt-in; ready and merge targets keep their completion semantics.
-    if control_now(operations, task_id)?["deliveryTarget"] != "pull_request_draft" {
+    if control_now(operations, task_id)?.delivery_target != DeliveryTarget::PullRequestDraft {
         return Ok(());
     }
     let mut publication = match publication_json {
@@ -397,13 +400,13 @@ async fn publish(
     };
     recheck_now()?;
     let current = control_now(operations, task_id)?;
-    if current["status"] != "active" {
+    if current.status != TaskStatus::Active {
         return Err(delivery_failure(
             "workflow_review_required",
             "Resume the task before publishing issue evidence.",
         ));
     }
-    if current["workflowState"]["acceptedDelivery"]["headSha"] != head_sha {
+    if !accepted_head(&current, head_sha) {
         return Err(delivery_failure(
             "delivery_review_required",
             "Review the current source before publishing issue evidence.",
@@ -417,8 +420,8 @@ async fn publish(
     let text = |error: Box<dyn Error>| error.to_string();
     let inspect_before_write = || async {
         let control = control_now(operations, task_id).map_err(text)?;
-        let path = control["worktree"]["path"]
-            .as_str()
+        let path = control
+            .worktree_path()
             .ok_or("The task worktree is unavailable")?
             .to_owned();
         let local = github_delivery::inspect_local_revision(Path::new(&path))
@@ -432,13 +435,11 @@ async fn publish(
             return Err::<_, String>("The pull request changed before evidence publication".into());
         }
         let latest = control_now(operations, task_id).map_err(text)?;
-        if latest["status"] != "active"
-            || latest["workflowState"]["acceptedDelivery"]["headSha"] != head_sha
-        {
+        if latest.status != TaskStatus::Active || !accepted_head(&latest, head_sha) {
             return Err("Task authorization changed before evidence publication".into());
         }
         if local.head_sha != head_sha
-            || latest["deliveryIntent"]["headBranch"] != local.branch.as_str()
+            || latest.delivery_intent.head_branch != local.branch
             || !local.clean
         {
             return Err("Review the clean task branch before publishing evidence".into());
@@ -583,7 +584,16 @@ async fn publish(
     })
 }
 
-fn control_now(operations: &DeliveryOperations, task_id: &str) -> DatabaseResult<Value> {
+/// The workflow accepted delivery of exactly this head.
+fn accepted_head(control: &TaskControlRow, head_sha: &str) -> bool {
+    control
+        .workflow_state
+        .accepted_delivery
+        .as_ref()
+        .is_some_and(|accepted| accepted.head_sha == head_sha)
+}
+
+fn control_now(operations: &DeliveryOperations, task_id: &str) -> DatabaseResult<TaskControlRow> {
     let database = SuplexDatabase::open(operations.database_path(), OpenMode::ReadOnly)?;
     Ok(crate::coordination::root_session_store::root_observation_rows(&database, task_id)?.control)
 }

@@ -18,7 +18,7 @@ use rusqlite::OptionalExtension;
 use serde_json::{Value, json};
 
 use crate::{
-    coordination::root_session_store,
+    coordination::{advisor_bridge::AdvisorRole, root_session_store},
     http::{AppState, contracts::typed::finding, session, validation},
     identity::companies,
     platform::database::SuplexDatabase,
@@ -138,18 +138,20 @@ fn scoped_session(
         .find(|value| value["id"] == session_id)
         .ok_or_else(TaskError::not_found)?;
     let fallback = if session["kind"] == "root" {
-        &rows.control["rootProfile"]
+        &rows.control.root_profile
     } else if let Some(role) = session["advisorRole"].as_str() {
-        rows.control["advisorProfiles"]
-            .get(role)
-            .unwrap_or(&rows.control["rootProfile"])
+        AdvisorRole::parse(role)
+            .and_then(|role| rows.control.advisor_profiles.get(&role))
+            .unwrap_or(&rows.control.root_profile)
     } else {
-        &rows.control["workerProfile"]
+        &rows.control.worker_profile
     };
-    let profile = if session["profile"].is_null() {
-        fallback
+    let instance_home_directory = if session["profile"].is_null() {
+        fallback.instance_home_directory().map(str::to_owned)
     } else {
-        &session["profile"]
+        session["profile"]["instanceHomeDirectory"]
+            .as_str()
+            .map(str::to_owned)
     };
     Ok(ScopedSession {
         database_path: PathBuf::from(
@@ -161,7 +163,7 @@ fn scoped_session(
         session_id: session_id.to_owned(),
         current: session["current"] == true,
         native_session_id: session["nativeSessionId"].as_str().map(str::to_owned),
-        instance_home_directory: profile["instanceHomeDirectory"].as_str().map(str::to_owned),
+        instance_home_directory,
     })
 }
 

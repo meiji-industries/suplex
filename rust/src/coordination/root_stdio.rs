@@ -25,6 +25,7 @@ use super::{
     root_controller::{self, WorkerAssignment, WorkerEvidenceRequest},
     root_session_store,
     worker_evidence::{EvidenceField, EvidencePosition, EvidenceQuery},
+    workflows::Workflow,
 };
 
 pub struct RootBridgeServer {
@@ -535,7 +536,7 @@ impl RootBridgeServer {
                     .map_err(|error| error.to_string()),
                 RootCall::RequestDelivery { operation: DeliveryOperation::InspectDeliveryDiff, .. }
                     if root_session_store::root_observation_rows(&database, &root.task_id)
-                        .is_ok_and(|rows| rows.control["workflow"] != "standard") =>
+                        .is_ok_and(|rows| rows.control.workflow != Workflow::Standard) =>
                 {
                     runtime
                         .block_on(root_controller::inspect_workflow_delivery_diff(&database_path, &artifact_root, &root, &token))

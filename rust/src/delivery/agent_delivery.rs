@@ -6,6 +6,7 @@
 use crate::shared::hash::sha256_hex;
 use crate::shared::time::{now_millis_rfc3339, rfc3339_millis};
 use crate::tasks::TaskError;
+use crate::tasks::control::{TaskControlRow, TaskStatus};
 use std::path::Path;
 
 use chrono::{Duration, Utc};
@@ -178,7 +179,7 @@ impl AgentDelivery {
         Ok(row.ok_or_else(TaskError::not_found)?)
     }
 
-    fn control(&self, task_id: &str) -> DatabaseResult<Value> {
+    fn control(&self, task_id: &str) -> DatabaseResult<TaskControlRow> {
         Ok(
             crate::coordination::root_session_store::root_observation_rows(
                 &self.open(OpenMode::ReadOnly)?,
@@ -200,12 +201,7 @@ impl AgentDelivery {
     }
 
     fn accepted(&self, task_id: &str) -> DatabaseResult<Option<ReviewRange>> {
-        let accepted = self.control(task_id)?["workflowState"]["acceptedDelivery"].clone();
-        Ok(if accepted.is_null() {
-            None
-        } else {
-            Some(serde_json::from_value(accepted)?)
-        })
+        Ok(self.control(task_id)?.workflow_state.accepted_delivery)
     }
 
     fn audit(
@@ -326,7 +322,7 @@ impl AgentDelivery {
     ) -> DatabaseResult<Value> {
         let (company, _) = self.task(principal, task_id)?;
         let control = self.control(task_id)?;
-        if control["status"] != "active" {
+        if control.status != TaskStatus::Active {
             return Err(
                 TaskError::new("Start the task before you request delivery repair.", 409).into(),
             );
@@ -353,12 +349,7 @@ impl AgentDelivery {
         let attempt = format!("dpr_{}", uuid::Uuid::new_v4().simple());
         self.wake_root(
             task_id,
-            &reconciliation_prompt(
-                control["deliveryIntent"]["baseBranch"]
-                    .as_str()
-                    .unwrap_or(""),
-                &observed,
-            ),
+            &reconciliation_prompt(&control.delivery_intent.base_branch, &observed),
         )?;
         self.insert_provenance(
             Some(&attempt),
@@ -407,16 +398,12 @@ impl AgentDelivery {
                 .into());
             }
             let control = self.control(task_id)?;
-            if control["status"] != "active" {
+            if control.status != TaskStatus::Active {
                 return Err(TaskError::new("Start the task before you resume it.", 409).into());
             }
             self.wake_root(
                 task_id,
-                &resume_prompt(
-                    control["deliveryIntent"]["baseBranch"]
-                        .as_str()
-                        .unwrap_or(""),
-                ),
+                &resume_prompt(&control.delivery_intent.base_branch),
             )?;
         }
         self.audit(
@@ -482,7 +469,7 @@ impl AgentDelivery {
             let accepted = self.accepted(&id)?;
             let observed = observation.as_ref();
             entries.push(json!({
-                "taskId": id, "title": titles[&id], "status": self.control(&id)?["status"], "dependsOn": depends,
+                "taskId": id, "title": titles[&id], "status": self.control(&id)?.status, "dependsOn": depends,
                 "pullRequestNumber": observed.and_then(|o| o.number), "headSha": observed.and_then(|o| o.head_sha.clone()),
                 "baseSha": observed.and_then(|o| o.base_sha.clone()), "isDraft": observed.and_then(|o| o.is_draft),
                 "reviewDecision": observed.and_then(|o| o.review_decision.clone()),
@@ -594,7 +581,7 @@ impl AgentDelivery {
         if !valid_receipt {
             return Err(TaskError::new("The approval receipt is not valid.", 403).into());
         }
-        if self.control(task_id)?["status"] != "active" {
+        if self.control(task_id)?.status != TaskStatus::Active {
             return Err(TaskError::new("The task is not active.", 409).into());
         }
         let observation = self
@@ -609,7 +596,7 @@ impl AgentDelivery {
             return Err(TaskError::new("The approval receipt is not valid.", 403).into());
         }
         let control = self.control(task_id)?;
-        let root_id = control["rootSessionId"].as_str().map(str::to_owned);
+        let root_id = control.root_session_id;
         let root = self.open(OpenMode::ReadOnly)?.connection().query_row(
             "SELECT id, generation FROM suplex_task_sessions WHERE task_id = ?1 AND kind = 'root' AND is_current = 1",
             [task_id], |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)),

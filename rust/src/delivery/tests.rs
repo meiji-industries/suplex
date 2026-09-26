@@ -309,7 +309,7 @@ fn fixture(target: &str) -> Fixture {
             [&task_id],
         )
         .unwrap();
-    let worktree = json!({"path": work, "branch": branch, "baseSha": seed.to_string(), "headSha": head.to_string(), "dirty": false});
+    let worktree = serde_json::from_value(json!({"path": work, "branch": branch, "baseSha": seed.to_string(), "headSha": head.to_string(), "dirty": false})).unwrap();
     root_session_store::set_worktree(&mut database, &task_id, &worktree, now).unwrap();
     let root = root_session_store::reserve_root(&mut database, &task_id, now).unwrap();
     let root = RootIdentity {
@@ -326,7 +326,7 @@ fn fixture(target: &str) -> Fixture {
     }
 }
 
-fn control(fixture: &Fixture) -> Value {
+fn control(fixture: &Fixture) -> crate::tasks::control::TaskControlRow {
     let database = SuplexDatabase::open(&fixture.database_path, OpenMode::ReadOnly).unwrap();
     root_session_store::root_observation_rows(&database, &fixture.task_id)
         .unwrap()
@@ -449,10 +449,10 @@ async fn standard_task_pushes_and_opens_a_draft_pull_request() {
     );
     assert_eq!(fake.lock().unwrap().pulls[0]["draft"], true);
     let control = control(&fixture);
-    assert_eq!(control["status"], "delivered");
-    assert_eq!(control["pullRequest"]["number"], 1);
+    assert_eq!(control.status, crate::tasks::control::TaskStatus::Delivered);
+    assert_eq!(serde_json::json!(control)["pullRequest"]["number"], 1);
     assert_eq!(
-        control["workflowState"]["acceptedDelivery"]["headSha"],
+        serde_json::json!(control.workflow_state)["acceptedDelivery"]["headSha"],
         head.as_str()
     );
     std::fs::remove_dir_all(&fixture.base).unwrap();
@@ -490,8 +490,8 @@ async fn ready_and_merged_targets_complete_through_github_state() {
         .unwrap();
     assert_eq!(created["state"], "open");
     assert_eq!(
-        control(&fixture)["status"],
-        "active",
+        control(&fixture).status,
+        crate::tasks::control::TaskStatus::Active,
         "an open draft does not reach the merged target"
     );
     let checks = operations
@@ -536,7 +536,7 @@ async fn ready_and_merged_targets_complete_through_github_state() {
         .unwrap();
     assert_eq!(waiting["kind"], "merge_requested");
     assert_eq!(
-        control(&fixture)["workflowState"]["deliveryWait"]["reason"],
+        serde_json::json!(control(&fixture).workflow_state)["deliveryWait"]["reason"],
         "merge_queue"
     );
     // GitHub merges while Suplex waits; the wait observation adopts it without a Suplex receipt.
@@ -553,9 +553,9 @@ async fn ready_and_merged_targets_complete_through_github_state() {
         "finished"
     );
     let control = control(&fixture);
-    assert_eq!(control["status"], "delivered");
-    assert_eq!(control["pullRequest"]["state"], "merged");
-    assert!(control["workflowState"]["deliveryWait"].is_null());
+    assert_eq!(control.status, crate::tasks::control::TaskStatus::Delivered);
+    assert_eq!(serde_json::json!(control)["pullRequest"]["state"], "merged");
+    assert!(serde_json::json!(control.workflow_state)["deliveryWait"].is_null());
     std::fs::remove_dir_all(&fixture.base).unwrap();
 }
 
@@ -608,7 +608,10 @@ async fn direct_merge_completes_and_stale_local_pull_request_is_replaced() {
         .unwrap();
     assert_eq!(merged["state"], "merged");
     assert_eq!(merged["reviewedHead"], head.as_str());
-    assert_eq!(control(&fixture)["status"], "delivered");
+    assert_eq!(
+        control(&fixture).status,
+        crate::tasks::control::TaskStatus::Delivered
+    );
     assert_eq!(
         fake.lock().unwrap().pulls[0]["mergedAt"],
         "2026-09-25T01:00:00Z"
@@ -729,6 +732,6 @@ async fn observing_a_pull_request_another_task_names_records_the_observation() {
     drop(database);
     let observed = operations.observe(&fixture.task_id).await.unwrap();
     assert_eq!(observed["number"], 1);
-    assert_eq!(control(&fixture)["pullRequest"]["number"], 1);
+    assert_eq!(control(&fixture).pull_request.unwrap().number, 1);
     std::fs::remove_dir_all(&fixture.base).unwrap();
 }

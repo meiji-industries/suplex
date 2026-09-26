@@ -398,7 +398,7 @@ mod tests {
             id: "task".into(),
             status: TaskStatus::Active,
             rows: RootObservationRows {
-                control: Value::Null,
+                control: crate::tasks::control::TaskControlRow::fixture(),
                 context: Value::Null,
                 dependencies: Vec::new(),
                 root: None,

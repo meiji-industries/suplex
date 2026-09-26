@@ -1,6 +1,7 @@
 //! Restart-safe admission of a prepared Standard Root turn. Worktree preparation
 //! and the outer task wake loop call this after durable task/root setup.
 
+use crate::coordination::{advisor_bridge::AdvisorRole, workflows::Workflow};
 use crate::shared::time::{now_millis_rfc3339, rfc3339_millis};
 use crate::tasks::TaskError;
 use crate::tasks::control::{TaskStatus, TurnStatus};
@@ -399,26 +400,27 @@ fn native_observation(
         serde_json::json!({
             "messageID":turn.id,"parentID":turn.id,"providerID":provider,
             "modelID":profile["model"],"mode":agent,
-            "agent":agent,"cwd":rows.control["worktree"]["path"],
-            "root":rows.control["worktree"]["path"],
+            "agent":agent,"cwd":rows.control.worktree_path(),
+            "root":rows.control.worktree_path(),
         }),
     )?)
 }
 
 /// TypeScript `session.profile ?? control.<role>Profile`.
-fn selected_profile<'a>(
-    rows: &'a root_session_store::RootObservationRows,
+fn selected_profile(
+    rows: &root_session_store::RootObservationRows,
     kind: &str,
-) -> &'a serde_json::Value {
+) -> serde_json::Value {
     let (session, fallback) = if kind == "root" {
-        (rows.root.as_ref(), &rows.control["rootProfile"])
+        (rows.root.as_ref(), &rows.control.root_profile)
     } else {
-        (rows.worker.as_ref(), &rows.control["workerProfile"])
+        (rows.worker.as_ref(), &rows.control.worker_profile)
     };
     session
         .map(|session| &session["profile"])
         .filter(|profile| profile.is_object())
-        .unwrap_or(fallback)
+        .cloned()
+        .unwrap_or_else(|| serde_json::json!(fallback))
 }
 
 fn complete_root_if_terminal(
@@ -499,8 +501,8 @@ fn complete_worker_if_terminal(
             "messageID":turn.id,"parentID":turn.id,
             "providerID":task_harness_registry::profile_harness(provider),
             "modelID":launch.profile["model"],"mode":agent,
-            "agent":agent,"cwd":rows.control["worktree"]["path"],
-            "root":rows.control["worktree"]["path"],
+            "agent":agent,"cwd":rows.control.worktree_path(),
+            "root":rows.control.worktree_path(),
         }),
     )?;
     let terminal_observation = terminal_observation(observation, native, &text, &directory, turn)?;
@@ -796,7 +798,7 @@ fn recover_prepared_root_blocking(
         )? {
             return Err(TaskError::internal("Native Root session changed before dispatch").into());
         }
-        let worktree = rows.control["worktree"]["path"].as_str();
+        let worktree = rows.control.worktree_path();
         let model = profile["model"]
             .as_str()
             .ok_or_else(|| TaskError::internal("Root model is missing"))?;
@@ -821,7 +823,7 @@ fn recover_prepared_root_blocking(
             session_id: &session.id,
             native_session_id: &native_id,
             workflow: WorkflowLaunch {
-                workflow_root: rows.control["workflow"] != "standard",
+                workflow_root: rows.control.workflow != Workflow::Standard,
                 ..WorkflowLaunch::default()
             },
             role: TaskRole::Root(&identity),
@@ -979,12 +981,13 @@ fn delegate_launch(
     let profile = if session["profile"].is_object() {
         session["profile"].clone()
     } else if let Some(role) = role {
-        Some(&rows.control["advisorProfiles"][role])
-            .filter(|profile| profile.is_object())
-            .unwrap_or(&rows.control["rootProfile"])
-            .clone()
+        serde_json::json!(
+            AdvisorRole::parse(role)
+                .and_then(|role| rows.control.advisor_profiles.get(&role))
+                .unwrap_or(&rows.control.root_profile)
+        )
     } else {
-        rows.control["workerProfile"].clone()
+        serde_json::json!(rows.control.worker_profile)
     };
     let turn = rows
         .turns
@@ -1069,7 +1072,7 @@ fn recover_prepared_worker_blocking(
                 TaskError::internal("Native Worker session changed before dispatch").into(),
             );
         }
-        let worktree = rows.control["worktree"]["path"].as_str();
+        let worktree = rows.control.worktree_path();
         let profile = &delegate.profile;
         let model = profile["model"]
             .as_str()
@@ -1506,8 +1509,8 @@ async fn sweep_task_once(
         let database = SuplexDatabase::open(database_path, OpenMode::ReadOnly)?;
         let rows = root_session_store::root_observation_rows(&database, task_id)?;
         (
-            rows.control["status"] == "active",
-            rows.control["worktree"].is_null(),
+            rows.control.status == TaskStatus::Active,
+            rows.control.worktree.is_none(),
         )
     };
     if !active {
@@ -1515,12 +1518,8 @@ async fn sweep_task_once(
     }
     if needs_worktree {
         let prepared = prepare_task_worktree(database_path, task_id).await?;
-        let worktree = serde_json::json!({
-            "path":prepared.path,"branch":prepared.branch,"baseSha":prepared.base_sha,
-            "headSha":prepared.head_sha,"dirty":prepared.dirty,
-        });
         let mut database = SuplexDatabase::open(database_path, OpenMode::ReadWrite)?;
-        root_session_store::set_worktree(&mut database, task_id, &worktree, Utc::now())?;
+        root_session_store::set_worktree(&mut database, task_id, &prepared, Utc::now())?;
     }
     if !super::issue_context::prepare_for_host(database_path, artifact_root, task_id).await? {
         return Ok(());
@@ -1597,7 +1596,7 @@ mod tests {
     #[test]
     fn standard_worker_wake_matches_pinned_typescript_bytes() {
         let prompt = crate::coordination::root_prompts::worker_result_wake(
-            "standard",
+            crate::coordination::workflows::Workflow::Standard,
             "codex-one:msg-one:completed",
             &crate::coordination::root_prompts::WorkerResult {
                 turn_id: "msg-one",
@@ -3070,8 +3069,8 @@ mod tests {
         let control = root_session_store::root_observation_rows(&database, &task_id)
             .unwrap()
             .control;
-        assert_eq!(control["status"], "delivered");
-        assert_eq!(control["worktree"]["dirty"], true);
+        assert_eq!(control.status, crate::tasks::control::TaskStatus::Delivered);
+        assert_eq!(serde_json::json!(control)["worktree"]["dirty"], true);
         drop(database);
         {
             let database = SuplexDatabase::open(&database_path, OpenMode::ReadWrite).unwrap();
@@ -3157,9 +3156,9 @@ mod tests {
         let failed = root_session_store::root_observation_rows(&database, &failing_task)
             .unwrap()
             .control;
-        assert_eq!(failed["status"], "waiting_human");
+        assert_eq!(failed.status, TaskStatus::WaitingHuman);
         assert_eq!(
-            failed["humanQuestion"],
+            failed.human_question.as_deref().unwrap(),
             "The agent stopped the Coordinator turn (error). native_startup_failed Can you resolve the failure and continue?"
         );
         drop(database);

@@ -2,7 +2,9 @@
 
 use serde_json::Value;
 
+use super::workflows::Workflow;
 use crate::shared::js_json;
+use crate::tasks::control::TaskControlRow;
 
 const STANDARD_INITIAL_PROMPT: &str = include_str!("root_standard_initial_prompt.txt");
 const CAPTURED_CONTEXT_SUFFIX: &str = include_str!("root_standard_context_suffix.txt");
@@ -40,14 +42,11 @@ fn visual_evidence_instruction(value: &str) -> &'static str {
 }
 
 pub fn initial_coordinator_prompt(
-    control: &Value,
+    control: &TaskControlRow,
     context: &Value,
     dependencies: &[Value],
 ) -> Result<String, String> {
-    let workflow = string_field(control, "workflow")?;
-    let intent = control
-        .get("deliveryIntent")
-        .ok_or("deliveryIntent is missing from task intent")?;
+    let intent = &control.delivery_intent;
     let visual_evidence = context
         .get("configuration")
         .and_then(|value| value.get("visualEvidence"))
@@ -55,41 +54,41 @@ pub fn initial_coordinator_prompt(
         .unwrap_or("required");
     let identity = format!(
         "Objective: {}\nDelivery target: {}\nRepository: {}\nBranch: {}",
-        string_field(control, "objective")?,
-        string_field(control, "deliveryTarget")?,
-        string_field(intent, "repository")?,
-        string_field(intent, "headBranch")?,
+        control.objective, control.delivery_target, intent.repository, intent.head_branch,
     );
-    let mut prompt = if workflow == "standard" {
-        format!(
-            "{STANDARD_INITIAL_PROMPT}\n\n{identity}\n\nCaptured task configuration:\n{}\n\n{CAPTURED_CONTEXT_SUFFIX}\n\n{}",
-            js_json::stringify(context),
-            visual_evidence_instruction(visual_evidence),
-        )
-    } else {
-        let instructions = match workflow {
-            "direct_build" => include_str!("prompts/workflow_direct_build.txt"),
-            "independent_review" => include_str!("prompts/workflow_independent_review.txt"),
-            "competing_plans" => include_str!("prompts/workflow_competing_plans.txt"),
-            "refine_pull_request" => include_str!("prompts/workflow_refine_pull_request.txt"),
-            _ => return Err("The task workflow is invalid".into()),
-        };
-        let base_branch = string_field(intent, "baseBranch")?;
-        let pull = intent["pullRequestNumber"]
-            .as_i64()
+    let instructions = match control.workflow {
+        Workflow::Standard => None,
+        Workflow::DirectBuild => Some(include_str!("prompts/workflow_direct_build.txt")),
+        Workflow::IndependentReview => {
+            Some(include_str!("prompts/workflow_independent_review.txt"))
+        }
+        Workflow::CompetingPlans => Some(include_str!("prompts/workflow_competing_plans.txt")),
+        Workflow::RefinePullRequest => {
+            Some(include_str!("prompts/workflow_refine_pull_request.txt"))
+        }
+    };
+    let mut prompt = if let Some(instructions) = instructions {
+        let base_branch = &intent.base_branch;
+        let pull = intent
+            .pull_request_number
             .map(|number| {
-                Ok::<_, String>(format!(
+                format!(
                     "\nPull request: #{number} ({} into {base_branch})",
-                    string_field(intent, "headBranch")?
-                ))
+                    intent.head_branch
+                )
             })
-            .transpose()?
             .unwrap_or_default();
         let suffix = CAPTURED_CONTEXT_SUFFIX
             .strip_prefix(STANDARD_CONTEXT_PREFIX)
             .unwrap_or(CAPTURED_CONTEXT_SUFFIX);
         format!(
             "{COORDINATOR_SYSTEM_PROMPT}\n\n{instructions}\n\n{identity}\nBase branch: {base_branch}{pull}\n\nCaptured task configuration:\n{}\n\n{suffix}\n\n{}",
+            js_json::stringify(context),
+            visual_evidence_instruction(visual_evidence),
+        )
+    } else {
+        format!(
+            "{STANDARD_INITIAL_PROMPT}\n\n{identity}\n\nCaptured task configuration:\n{}\n\n{CAPTURED_CONTEXT_SUFFIX}\n\n{}",
             js_json::stringify(context),
             visual_evidence_instruction(visual_evidence),
         )
@@ -110,7 +109,7 @@ pub fn initial_coordinator_prompt(
         prompt.push_str(&format!(
             "\n\nThis task depends on these tasks: {}. The dependencies constrain execution and delivery ordering. Suplex does not admit new work for this task until every dependency is delivered. After release, observe the actual Git and GitHub state for {}. Integrate prerequisite work only when the current repository state requires it. Suplex resumes this task when every dependency is delivered.",
             pending.join(", "),
-            string_field(intent, "baseBranch")?,
+            intent.base_branch,
         ));
     }
     Ok(prompt)
@@ -182,7 +181,7 @@ pub struct AdvisorAssignment<'a> {
     pub repository: &'a str,
     pub head_branch: &'a str,
     pub base_branch: &'a str,
-    pub pull_request_number: Option<i64>,
+    pub pull_request_number: Option<u64>,
     pub range: &'a super::workflows::ReviewRange,
     pub evidence_directory: &'a str,
     pub attachments: &'a [super::workflow_evidence::ManifestAttachment],
@@ -311,7 +310,7 @@ pub struct WorkerResult<'a> {
 
 /// TypeScript `workerResultWake`.
 pub fn worker_result_wake(
-    workflow: &str,
+    workflow: Workflow,
     receipt_id: &str,
     result: &WorkerResult<'_>,
     purpose: &str,
@@ -337,22 +336,22 @@ pub fn worker_result_wake(
         ("verification", None) => " No check-only range shortcut was recorded. This alone does not invalidate implementation or historical command evidence; inspect native command and Git evidence before deciding whether a check is missing.".to_owned(),
         _ => String::new(),
     };
-    if workflow == "standard" {
-        return format!(
-            "Worker result {receipt_id}. {STANDARD_WORKER_RESULT_WAKE}{range} {access}"
-        );
-    }
     let next = match workflow {
-        "independent_review" => {
+        Workflow::Standard => {
+            return format!(
+                "Worker result {receipt_id}. {STANDARD_WORKER_RESULT_WAKE}{range} {access}"
+            );
+        }
+        Workflow::IndependentReview => {
             "When the implementation and its checks satisfy you, request Reviewer with delegate_advisor. Reviewer approval for the current range is necessary before delivery."
         }
-        "refine_pull_request" => {
+        Workflow::RefinePullRequest => {
             "Rater owns quality assessment. Inspect only delivery integrity: objective scope, unrelated or unpublished work, real check evidence, and teammate or base integration. Do not delegate source repairs from your own code-quality opinion. Source repairs require a Rater report and its advisorTurnId. If you suspect Rater missed a serious defect, request a fresh Rater assessment. After a passing rating, delegate Worker only for teammate pushes, base conflicts, or CI failures, then request a fresh Rater assessment for the complete current range. Do not request delivery on an earlier rating."
         }
-        "competing_plans" => {
+        Workflow::CompetingPlans => {
             "Compare the result with the accepted combined assignment. Request coherent repairs if necessary, then request the selected delivery target."
         }
-        _ => {
+        Workflow::DirectBuild => {
             "Compare the result with the accepted assignment and acceptance outcomes. Request coherent repairs or missing checks if necessary, then request the selected delivery target."
         }
     };
@@ -401,7 +400,9 @@ mod tests {
 
     #[test]
     fn standard_prompt_includes_intent_and_live_dependencies() {
-        let control = json!({"objective":"Complete the change","deliveryTarget":"local_worktree","deliveryIntent":{"repository":"owner/repo","headBranch":"task","baseBranch":"main"},"workflow":"standard"});
+        let mut control = TaskControlRow::fixture();
+        control.objective = "Complete the change".into();
+        control.delivery_intent.head_branch = "task".into();
         let context = json!({"configuration":{"visualEvidence":"off"},"images":[]});
         let prompt = initial_coordinator_prompt(
             &control,
@@ -443,7 +444,12 @@ mod tests {
 
     #[test]
     fn workflow_prompts_match_pinned_typescript_bytes() {
-        let control = json!({"objective":"Repair it","deliveryTarget":"merged","deliveryIntent":{"repository":"owner/repo","headBranch":"feature","baseBranch":"main","pullRequestNumber":7},"workflow":"refine_pull_request"});
+        let mut control = TaskControlRow::fixture();
+        control.objective = "Repair it".into();
+        control.delivery_target = crate::tasks::control::DeliveryTarget::Merged;
+        control.delivery_intent.head_branch = "feature".into();
+        control.delivery_intent.pull_request_number = Some(7);
+        control.workflow = Workflow::RefinePullRequest;
         let context = json!({"configuration":{"visualEvidence":"capture"},"images":[]});
         let dependency = json!({"id":"task_dep","title":"Dep","status":"active"});
         assert_eq!(
@@ -552,7 +558,7 @@ mod tests {
         let cases = [
             (
                 worker_result_wake(
-                    "independent_review",
+                    Workflow::IndependentReview,
                     "r1",
                     &result("completed", "  done  ", Some((true, None))),
                     "verification",
@@ -561,7 +567,7 @@ mod tests {
             ),
             (
                 worker_result_wake(
-                    "refine_pull_request",
+                    Workflow::RefinePullRequest,
                     "r1",
                     &result("error", "", Some((false, Some("moved")))),
                     "verification",
@@ -570,7 +576,7 @@ mod tests {
             ),
             (
                 worker_result_wake(
-                    "competing_plans",
+                    Workflow::CompetingPlans,
                     "r1",
                     &result("completed", "built", None),
                     "implementation",
@@ -579,7 +585,7 @@ mod tests {
             ),
             (
                 worker_result_wake(
-                    "direct_build",
+                    Workflow::DirectBuild,
                     "r1",
                     &result("completed", "checked", None),
                     "verification",
@@ -588,7 +594,7 @@ mod tests {
             ),
             (
                 worker_result_wake(
-                    "standard",
+                    Workflow::Standard,
                     "r1",
                     &result("completed", "checked", Some((true, None))),
                     "verification",

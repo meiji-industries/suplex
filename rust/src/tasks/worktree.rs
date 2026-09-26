@@ -23,7 +23,9 @@ pub struct TaskWorktreeIntent {
     pub starting_sha: String,
 }
 
-#[derive(Debug, Clone, Eq, PartialEq)]
+/// TypeScript `WorktreeReference`: the worktree Git last reported.
+#[derive(Debug, Clone, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct WorktreeReference {
     pub path: PathBuf,
     pub branch: String,

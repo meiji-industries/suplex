@@ -83,9 +83,10 @@ pub fn prepare_advisor_evidence(
     rows: &RootObservationRows,
     range: &ReviewRange,
 ) -> Result<AdvisorEvidence, Box<dyn std::error::Error>> {
-    let task_id = rows.control["taskId"].as_str().unwrap_or_default();
-    let worktree = rows.control["worktree"]["path"]
-        .as_str()
+    let task_id = rows.control.task_id.as_str();
+    let worktree = rows
+        .control
+        .worktree_path()
         .ok_or("The task has no worktree")?;
     let configuration = &rows.context["configuration"];
     let workers = completed_worker_turns(rows);
@@ -109,7 +110,7 @@ pub fn prepare_advisor_evidence(
     // ponytail: pull request check observation is null until delivery reads GitHub checks here.
     let verification = json!({
         "configuration": {"verificationCommand": configuration["verificationCommand"], "runProjectTests": configuration["runProjectTests"], "visualEvidence": configuration["visualEvidence"]},
-        "pullRequest": rows.control["pullRequest"], "pullRequestChecks": null, "workerTurns": worker_turns,
+        "pullRequest": rows.control.pull_request, "pullRequestChecks": null, "workerTurns": worker_turns,
     });
     let attachments = rows.context["images"]
         .as_array()

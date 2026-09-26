@@ -676,7 +676,7 @@ pub fn continue_user_delivery(
             .map_err(|error| conflict(&error.to_string()))?;
         let time = crate::shared::time::now_millis_rfc3339();
         let rows = root_session_store::root_observation_rows(database, task_id)?;
-        let mut state: WorkflowState = serde_json::from_value(rows.control["workflowState"].clone())?;
+        let mut state = rows.control.workflow_state.clone();
         let resumed = DeliveryHistoryEntry {
             resumed_at: time.clone(),
             accepted_delivery: state.accepted_delivery.take(),
@@ -689,7 +689,7 @@ pub fn continue_user_delivery(
             "UPDATE suplex_task_controls SET workflow_state_json = ?1, delivery_target = ?2, status = 'active', wake_at = ?3, updated_at = ?3 WHERE task_id = ?4 AND status = 'delivered'",
             params![crate::shared::js_json::stringify(&serde_json::to_value(&state)?), request.delivery_target, time, task_id],
         )?;
-        if let Some(root_id) = rows.control["rootSessionId"].as_str() {
+        if let Some(root_id) = &rows.control.root_session_id {
             database.connection().execute(
                 "UPDATE suplex_task_sessions SET is_current = 1, lifecycle = 'reserved', stop_requested_at = NULL, stopped_at = NULL, updated_at = ?1 WHERE id = ?2 AND task_id = ?3 AND kind = 'root'",
                 params![time, root_id, task_id],
@@ -1726,11 +1726,18 @@ mod tests {
         );
         assert_eq!(wakes.load(Ordering::SeqCst), 1);
         let rows = root_session_store::root_observation_rows(&database, &task.id).unwrap();
-        assert_eq!(rows.control["deliveryTarget"], "merged");
-        assert_eq!(rows.control["workflowState"]["followUp"], true);
-        assert!(rows.control["workflowState"]["acceptedDelivery"].is_null());
         assert_eq!(
-            rows.control["workflowState"]["deliveryHistory"][0]["acceptedDelivery"]["headSha"],
+            rows.control.delivery_target,
+            crate::tasks::control::DeliveryTarget::Merged
+        );
+        assert_eq!(
+            serde_json::json!(rows.control.workflow_state)["followUp"],
+            true
+        );
+        assert!(serde_json::json!(rows.control.workflow_state)["acceptedDelivery"].is_null());
+        assert_eq!(
+            serde_json::json!(rows.control.workflow_state)["deliveryHistory"][0]["acceptedDelivery"]
+                ["headSha"],
             "a"
         );
         assert_eq!(
@@ -1979,7 +1986,10 @@ mod tests {
         let rows = root_session_store::root_observation_rows(&database, &task.id).unwrap();
         let root_session = rows.root.unwrap();
         assert_eq!(root_session["profile"]["profileId"], "alternate-root");
-        assert_eq!(rows.control["rootProfile"]["profileId"], "alternate-root");
+        assert_eq!(
+            serde_json::json!(rows.control)["rootProfile"]["profileId"],
+            "alternate-root"
+        );
         let prompts = rows
             .turns
             .iter()
@@ -1999,7 +2009,7 @@ mod tests {
         select(&mut database, worker.clone()).unwrap();
         let rows = root_session_store::root_observation_rows(&database, &task.id).unwrap();
         assert_eq!(
-            rows.control["workerProfile"]["profileId"],
+            serde_json::json!(rows.control)["workerProfile"]["profileId"],
             "alternate-worker"
         );
         assert!(rows.turns.iter().any(|turn| turn["promptText"]
@@ -2045,7 +2055,10 @@ mod tests {
             "Build the feature\n\nFresh Worker handoff:\nAdditional direction from the user:\nUse tests\n\nContinue the preserved assignment. Inspect current work and evidence before changing it."
         );
         let rows = root_session_store::root_observation_rows(&database, &task.id).unwrap();
-        assert_eq!(rows.control["workerSessionId"], replacement.as_str());
+        assert_eq!(
+            serde_json::json!(rows.control)["workerSessionId"],
+            replacement.as_str()
+        );
         assert!(rows.turns.iter().any(|turn| turn["promptText"]
             == format!("Human note:\nThe user selected Worker profile third-worker.\n\nAdditional direction from the user:\nUse tests\n\nContinue with replacement session {replacement} and the preserved assignment.").as_str()));
         // A workflow Advisor defaults to the Coordinator profile and records its own selection.
@@ -2059,7 +2072,7 @@ mod tests {
         select(&mut database, json!({"role":"reviewer","expectedProfileId":"alternate-root","expectedSessionId":null,"profileId":"alternate-root","direction":"","resume":false})).unwrap();
         let rows = root_session_store::root_observation_rows(&database, &task.id).unwrap();
         assert_eq!(
-            rows.control["advisorProfiles"]["reviewer"]["profileId"],
+            serde_json::json!(rows.control)["advisorProfiles"]["reviewer"]["profileId"],
             "alternate-root"
         );
         assert!(rows.turns.iter().any(|turn| turn["promptText"]

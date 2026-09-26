@@ -15,7 +15,10 @@ use crate::{
         database::{DatabaseResult, OpenMode, SuplexDatabase},
     },
     runtimes::{task_harness::ReaderSession, task_harness_registry},
-    tasks::worktree,
+    tasks::{
+        control::{TaskControlRow, TaskStatus},
+        worktree,
+    },
 };
 
 use super::{
@@ -26,8 +29,8 @@ use super::{
     root_session_store::{self, RootObservationRows, RootSession},
     worker_evidence::{self, EvidenceQuery},
     workflows::{
-        ReviewRange, WorkflowState, advisor_label, latest_review, same_range, turn_outcome,
-        turn_workflow_input, workflow_definition,
+        ReviewRange, Workflow, advisor_label, latest_review, same_range, turn_outcome,
+        turn_workflow_input,
     },
 };
 
@@ -118,7 +121,8 @@ fn worker_result(turn: &Value) -> Value {
     })
 }
 
-fn public_control(mut control: Value) -> DatabaseResult<Value> {
+fn public_control(control: TaskControlRow) -> DatabaseResult<Value> {
+    let mut control = serde_json::to_value(control)?;
     let workflow_state = control
         .get_mut("workflowState")
         .and_then(Value::as_object_mut)
@@ -192,8 +196,8 @@ pub fn observe(database_path: &Path, root: &RootIdentity) -> DatabaseResult<Valu
     };
     let (pull_request, github) =
         crate::delivery::operations::observe_for_root(database_path, &rows.control)?;
-    let worktree = match rows.control["worktree"]["path"].as_str() {
-        Some(path) => match worktree::observe_worktree(Path::new(path)) {
+    let worktree = match &rows.control.worktree {
+        Some(worktree) => match worktree::observe_worktree(Path::new(&worktree.path)) {
             Ok(observed) => json!({"headSha":observed.head_sha,"dirty":observed.dirty}),
             Err(error) => json!({"state":"unknown","error":error.to_string()}),
         },
@@ -289,9 +293,7 @@ pub fn read_worker_evidence(
         .and_then(task_harness_registry::native_session_reader)
         .or_else(|| {
             task_harness_registry::for_profile(
-                provider
-                    .or(rows.control["workerProfile"]["provider"].as_str())
-                    .unwrap_or_default(),
+                provider.unwrap_or(&rows.control.worker_profile.provider),
             )
         });
     let evidence = reader
@@ -488,12 +490,9 @@ pub async fn delegate_worker(
     assignment: &WorkerAssignment,
 ) -> DatabaseResult<Value> {
     let (_, rows) = open_root(database_path, root)?;
-    let workflow = rows.control["workflow"]
-        .as_str()
-        .unwrap_or("standard")
-        .to_owned();
+    let workflow = rows.control.workflow;
     let (mode, purpose) = (assignment.mode.as_str(), assignment.purpose.as_str());
-    if mode == "direct" && workflow != "direct_build" {
+    if mode == "direct" && workflow != Workflow::DirectBuild {
         return Err(invalid(
             "Direct mode is legal only for the Direct build workflow. Supply a plan in planned mode.",
         ));
@@ -541,7 +540,7 @@ pub async fn delegate_worker(
         )?;
         launched_worker(&database, &root.task_id, worker)
     };
-    if workflow == "standard" {
+    if workflow == Workflow::Standard {
         if purpose != "verification" {
             return launch(&compose(None, None)?, None);
         }
@@ -581,7 +580,7 @@ pub async fn delegate_worker(
         root_session_store::root_observation_rows(&database, &root.task_id)?
     };
     let mut candidate_reports = Value::Null;
-    if workflow == "competing_plans" && purpose == "implementation" {
+    if workflow == Workflow::CompetingPlans && purpose == "implementation" {
         let built = rows.turns.iter().any(|turn| {
             let session = rows
                 .sessions
@@ -630,17 +629,16 @@ pub async fn delegate_worker(
         }
     }
     if (assignment.candidate_turn_ids.is_some() || assignment.candidate_session_ids.is_some())
-        && workflow != "competing_plans"
+        && workflow != Workflow::CompetingPlans
     {
         return Err(invalid("candidateTurnIds apply only to Combined planning."));
     }
     let mut advisor_report = None;
     let mut advisor_reference = Value::Null;
-    if workflow == "refine_pull_request" && purpose == "implementation" {
+    if workflow == Workflow::RefinePullRequest && purpose == "implementation" {
         let requested = assignment.advisor_turn_id.as_deref().or(assignment.advisor_session_id.as_deref())
             .ok_or_else(|| invalid("Pull request repair implementation requires advisorSessionId or advisorTurnId for the latest valid Rater report."))?;
-        let state: WorkflowState = serde_json::from_value(rows.control["workflowState"].clone())?;
-        let latest = latest_review(&state.reviews, AdvisorRole::Rater)
+        let latest = latest_review(&rows.control.workflow_state.reviews, AdvisorRole::Rater)
             .filter(|latest| {
                 let field = if assignment.advisor_turn_id.is_some() {
                     &latest.turn_id
@@ -701,7 +699,7 @@ async fn advisor_source(
     advisor_evidence::AdvisorEvidence,
 )> {
     let (database, rows) = open_root(database_path, root)?;
-    if rows.control["worktree"]["path"].as_str().is_none() {
+    if rows.control.worktree.is_none() {
         return Err(invalid("The task has no worktree"));
     }
     recheck(&database, root, owner_token)?;
@@ -731,19 +729,19 @@ fn advisor_prompt(
     prior_findings: Option<&[String]>,
     repair_evidence: Option<&[String]>,
 ) -> String {
-    let intent = &rows.control["deliveryIntent"];
+    let intent = &rows.control.delivery_intent;
     let configuration = &rows.context["configuration"];
     root_prompts::compose_advisor_assignment(&root_prompts::AdvisorAssignment {
         role,
-        objective: rows.control["objective"].as_str().unwrap_or_default(),
+        objective: &rows.control.objective,
         configuration,
         visual_evidence: configuration["visualEvidence"]
             .as_str()
             .unwrap_or("required"),
-        repository: intent["repository"].as_str().unwrap_or_default(),
-        head_branch: intent["headBranch"].as_str().unwrap_or_default(),
+        repository: &intent.repository,
+        head_branch: &intent.head_branch,
         base_branch: &observed.base_branch,
-        pull_request_number: intent["pullRequestNumber"].as_i64(),
+        pull_request_number: intent.pull_request_number,
         range: &observed.range,
         evidence_directory: &evidence.evidence.directory.to_string_lossy(),
         attachments: &evidence.evidence.attachments,
@@ -779,9 +777,7 @@ pub async fn delegate_advisor(
     brief: Option<&str>,
 ) -> DatabaseResult<Value> {
     let (_, rows) = open_root(database_path, root)?;
-    let workflow = rows.control["workflow"].as_str().unwrap_or("standard");
-    let definition =
-        workflow_definition(workflow).ok_or_else(|| invalid("The task workflow is invalid"))?;
+    let definition = rows.control.workflow.definition();
     let label = advisor_label(role);
     if !definition.advisor_roles.contains(&role) {
         return Err(CoordinationError::refused(format!(
@@ -802,9 +798,8 @@ pub async fn delegate_advisor(
         ));
     }
     let (observed, rows, evidence) = advisor_source(database_path, artifact_root, root, owner_token, "The worktree has uncommitted changes. Commit or discard them before requesting an Advisor; Advisors review committed source only.").await?;
-    let state: WorkflowState = serde_json::from_value(rows.control["workflowState"].clone())?;
     let previous = (role == "rater")
-        .then(|| latest_review(&state.reviews, AdvisorRole::Rater))
+        .then(|| latest_review(&rows.control.workflow_state.reviews, AdvisorRole::Rater))
         .flatten();
     let prior_findings = previous
         .and_then(|previous| previous.result.as_ref()?["blockingFindings"].as_array())
@@ -873,7 +868,7 @@ pub async fn delegate_planners(
     owner_token: &str,
 ) -> DatabaseResult<Value> {
     let (_, rows) = open_root(database_path, root)?;
-    if rows.control["workflow"] != "competing_plans" {
+    if rows.control.workflow != Workflow::CompetingPlans {
         return Err(invalid(
             "delegate_planners is legal only for Combined planning.",
         ));
@@ -920,11 +915,13 @@ pub async fn complete_workflow_local_work(
     })?;
     let mut database = SuplexDatabase::open(database_path, OpenMode::ReadWrite)?;
     let current = root_session_store::root_observation_rows(&database, &root.task_id)?.control;
-    if current["status"] == "active" {
-        let mut projected = current["worktree"].clone();
-        projected["branch"] = json!(local.branch);
-        projected["headSha"] = json!(local.head_sha);
-        projected["dirty"] = json!(!local.clean);
+    if current.status == TaskStatus::Active {
+        let mut projected = current
+            .worktree
+            .ok_or_else(|| CoordinationError::refused("Invalid task worktree"))?;
+        projected.branch = local.branch.clone();
+        projected.head_sha = local.head_sha.clone();
+        projected.dirty = !local.clean;
         root_session_store::set_worktree(
             &mut database,
             &root.task_id,
@@ -982,8 +979,9 @@ pub async fn inspect_workflow_delivery_diff(
         "commits": result["commits"], "patchDigest": result["patchDigest"],
     }))
     .ok_or_else(|| invalid("The delivery range observation is invalid"))?;
-    let worktree = rows.control["worktree"]["path"]
-        .as_str()
+    let worktree = rows
+        .control
+        .worktree_path()
         .ok_or_else(|| invalid("The task has no worktree"))?;
     let evidence = crate::coordination::workflow_evidence::write_task_evidence(
         &crate::coordination::workflow_evidence::task_evidence_root(database_path),
@@ -1052,7 +1050,9 @@ pub fn ask_human(
     )? {
         return Err(invalid("The current Root could not ask this task question"));
     }
-    Ok(root_session_store::root_observation_rows(&database, &root.task_id)?.control)
+    Ok(serde_json::to_value(
+        root_session_store::root_observation_rows(&database, &root.task_id)?.control,
+    )?)
 }
 
 #[cfg(test)]
@@ -1067,8 +1067,14 @@ mod tests {
 
     #[test]
     fn absent_worktree_evidence_does_not_remove_task_context() {
+        let mut control = TaskControlRow::fixture();
+        control.workflow_state.tool_owner = Some(super::super::workflows::ToolOwner {
+            token: "private".into(),
+            pid: 1,
+            process_start_time: "start".into(),
+        });
         let rows = RootObservationRows {
-            control: json!({"workflow":"standard","deliveryTarget":"local_worktree","status":"active","pullRequest":{"number":7},"workflowState":{"version":1,"reviews":[],"acceptedDelivery":null,"deliveryWait":null,"completion":null,"toolOwner":{"token":"private"}}}),
+            control,
             context: json!({"configuration":{"visualEvidence":"off"},"images":[]}),
             dependencies: vec![],
             root: None,

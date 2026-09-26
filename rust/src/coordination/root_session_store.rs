@@ -4,7 +4,9 @@ use super::CoordinationError;
 use crate::shared::hash::sha256_hex;
 use crate::shared::time::rfc3339_millis;
 use crate::tasks::TaskError;
-use crate::tasks::control::{SessionLifecycle, TaskProfile, TaskStatus, TurnStatus};
+use crate::tasks::control::{
+    SessionLifecycle, TaskControlRow, TaskProfile, TaskStatus, TurnStatus, WorktreeReference,
+};
 use chrono::{DateTime, Utc};
 use rusqlite::{OptionalExtension, Row, params};
 use serde::{Deserialize, Serialize};
@@ -69,7 +71,7 @@ pub struct TaskLimitUsage {
 
 /// Persisted Root inputs. The controller adds live Git and native observations.
 pub struct RootObservationRows {
-    pub control: Value,
+    pub control: TaskControlRow,
     pub context: Value,
     pub dependencies: Vec<Value>,
     pub root: Option<Value>,
@@ -110,6 +112,61 @@ pub fn task_artifact(
         .optional()?)
 }
 
+/// A JSON text column parsed into its type; SQL NULL parses as JSON `null`.
+fn json_column<T: serde::de::DeserializeOwned>(row: &Row<'_>, column: &str) -> rusqlite::Result<T> {
+    let raw: Option<String> = row.get(column)?;
+    serde_json::from_str(raw.as_deref().unwrap_or("null")).map_err(|error| {
+        rusqlite::Error::FromSqlConversionFailure(
+            row.as_ref().column_index(column).unwrap_or_default(),
+            rusqlite::types::Type::Text,
+            Box::new(error),
+        )
+    })
+}
+
+/// TypeScript `control(row)`: one `suplex_task_controls` row by column name.
+fn control_row(row: &Row<'_>) -> rusqlite::Result<TaskControlRow> {
+    Ok(TaskControlRow {
+        task_id: row.get("task_id")?,
+        objective: row.get("objective")?,
+        delivery_target: row.get("delivery_target")?,
+        delivery_intent: json_column(row, "delivery_intent_json")?,
+        status: row.get("status")?,
+        wake_at: row.get("wake_at")?,
+        human_question: row.get("human_question")?,
+        human_question_options: json_column::<Option<Value>>(row, "human_question_options_json")?
+            .unwrap_or_else(|| json!([])),
+        human_question_id: row.get("human_question_id")?,
+        recovery_turn_id: row.get("recovery_turn_id")?,
+        limit_pause: json_column(row, "limit_pause_json")?,
+        worktree: json_column(row, "worktree_json")?,
+        pull_request: json_column(row, "pull_request_json")?,
+        root_session_id: row.get("root_session_id")?,
+        worker_session_id: row.get("worker_session_id")?,
+        shell_pane_id: row.get("shell_pane_id")?,
+        root_profile: json_column(row, "root_profile_json")?,
+        worker_profile: json_column(row, "worker_profile_json")?,
+        workflow: row.get("workflow")?,
+        advisor_profiles: json_column(row, "advisor_profiles_json")?,
+        workflow_state: json_column(row, "workflow_state_json")?,
+    })
+}
+
+/// The durable control of one task, when the task exists.
+pub fn task_control(
+    database: &SuplexDatabase,
+    task_id: &str,
+) -> DatabaseResult<Option<TaskControlRow>> {
+    Ok(database
+        .connection()
+        .query_row(
+            "SELECT * FROM suplex_task_controls WHERE task_id = ?1",
+            [task_id],
+            control_row,
+        )
+        .optional()?)
+}
+
 fn json_rows(database: &SuplexDatabase, sql: &str, task_id: &str) -> DatabaseResult<Vec<Value>> {
     let mut statement = database.connection().prepare(sql)?;
     let rows = statement
@@ -124,26 +181,7 @@ pub fn root_observation_rows(
     database: &SuplexDatabase,
     task_id: &str,
 ) -> DatabaseResult<RootObservationRows> {
-    let control = json_rows(
-        database,
-        r#"SELECT json_object(
-            'taskId',task_id,'objective',objective,'deliveryTarget',delivery_target,
-            'deliveryIntent',json(delivery_intent_json),'status',status,'wakeAt',wake_at,
-            'humanQuestion',human_question,
-            'humanQuestionOptions',json(COALESCE(human_question_options_json,'[]')),
-            'humanQuestionId',human_question_id,'recoveryTurnId',recovery_turn_id,
-            'limitPause',json(limit_pause_json),'worktree',json(worktree_json),
-            'pullRequest',json(pull_request_json),'rootSessionId',root_session_id,
-            'workerSessionId',worker_session_id,'shellPaneId',shell_pane_id,
-            'rootProfile',json(root_profile_json),'workerProfile',json(worker_profile_json),
-            'workflow',workflow,'advisorProfiles',json(advisor_profiles_json),
-            'workflowState',json(workflow_state_json))
-            FROM suplex_task_controls WHERE task_id = ?1"#,
-        task_id,
-    )?
-    .into_iter()
-    .next()
-    .ok_or("task_control_missing")?;
+    let control = task_control(database, task_id)?.ok_or("task_control_missing")?;
     let context = json_rows(
         database,
         r#"SELECT json_object(
@@ -212,7 +250,7 @@ pub fn root_observation_rows(
         Some("planner_b") => 1,
         _ => 2,
     });
-    let pointed = control["workerSessionId"].as_str();
+    let pointed = control.worker_session_id.as_deref();
     let worker = workers
         .iter()
         .find(|session| session["id"].as_str() == pointed)
@@ -1358,7 +1396,7 @@ pub fn replace_coordinator(
         let rows = root_observation_rows(database, task_id)?;
         let old_profile_json = old_profile_json.unwrap_or(control_profile);
         let old_profile: TaskProfile = serde_json::from_str(&old_profile_json)?;
-        let advisor_profiles: Value = rows.control["advisorProfiles"].clone();
+        let advisor_profiles = &rows.control.advisor_profiles;
         let mut advisor_updates = Vec::new();
         {
             let mut statement = database.connection().prepare("SELECT id,advisor_role FROM suplex_task_sessions WHERE task_id = ?1 AND kind = 'worker' AND advisor_role IS NOT NULL AND profile_json IS NULL")?;
@@ -1367,11 +1405,8 @@ pub fn replace_coordinator(
             }
         }
         for (id, role) in advisor_updates {
-            let advisor = match advisor_profiles.get(&role).filter(|value| !value.is_null()) {
-                Some(advisor) => js_json::stringify(advisor),
-                None => serde_json::to_string(&old_profile)?,
-            };
-            database.connection().execute("UPDATE suplex_task_sessions SET profile_json = ?1 WHERE id = ?2 AND profile_json IS NULL", params![advisor,id])?;
+            let advisor = AdvisorRole::parse(&role).and_then(|role| advisor_profiles.get(&role)).unwrap_or(&old_profile);
+            database.connection().execute("UPDATE suplex_task_sessions SET profile_json = ?1 WHERE id = ?2 AND profile_json IS NULL", params![serde_json::to_string(advisor)?,id])?;
         }
         let mut root_turns = Vec::new();
         {
@@ -2186,27 +2221,20 @@ pub fn fail_delivery_wait(
 pub fn set_worktree(
     database: &mut SuplexDatabase,
     task_id: &str,
-    worktree: &Value,
+    worktree: &WorktreeReference,
     now: DateTime<Utc>,
 ) -> DatabaseResult<()> {
-    let fields = worktree
-        .as_object()
-        .ok_or_else(|| CoordinationError::refused("Invalid task worktree"))?;
-    if fields.len() != 5
-        || ["path", "branch", "baseSha", "headSha"].iter().any(|key| {
-            fields
-                .get(*key)
-                .and_then(Value::as_str)
-                .is_none_or(str::is_empty)
-        })
-        || fields.get("dirty").and_then(Value::as_bool).is_none()
+    if worktree.path.as_os_str().is_empty()
+        || [&worktree.branch, &worktree.base_sha, &worktree.head_sha]
+            .iter()
+            .any(|field| field.is_empty())
     {
         return Err(CoordinationError::refused("Invalid task worktree").into());
     }
     database.transaction(false, |database| {
         let changed = database.connection().execute(
             "UPDATE suplex_task_controls SET worktree_json = ?1, updated_at = ?2 WHERE task_id = ?3 AND status = 'active'",
-            params![worktree.to_string(), rfc3339_millis(now), task_id],
+            params![serde_json::to_string(worktree)?, rfc3339_millis(now), task_id],
         )?;
         if changed != 1 { return Err(CoordinationError::refused("task_not_active").into()); }
         Ok(())
@@ -3019,10 +3047,17 @@ mod tests {
             "6b9a237b2658b9659363286f8a54845684e413b60d9e3decf4d3006beb066b8b"
         );
         let rows = root_observation_rows(&database, &task.id).unwrap();
-        assert_eq!(rows.control["status"], "active");
-        assert_eq!(rows.control["workflowState"]["followUp"], true);
         assert_eq!(
-            rows.control["workflowState"]["deliveryHistory"][0]["acceptedDelivery"]["headSha"],
+            rows.control.status,
+            crate::tasks::control::TaskStatus::Active
+        );
+        assert_eq!(
+            serde_json::json!(rows.control.workflow_state)["followUp"],
+            true
+        );
+        assert_eq!(
+            serde_json::json!(rows.control.workflow_state)["deliveryHistory"][0]["acceptedDelivery"]
+                ["headSha"],
             "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
         );
         assert_eq!(rows.root.as_ref().unwrap()["id"], root_id);
@@ -3160,8 +3195,11 @@ mod tests {
         let root = reserve_root(&mut database, &created.task.id, now).unwrap();
         assert!(Uuid::parse_str(&root.id).is_ok());
         let observed = root_observation_rows(&database, &created.task.id).unwrap();
-        assert_eq!(observed.control["status"], "active");
-        assert_eq!(observed.control["workflow"], "standard");
+        assert_eq!(
+            observed.control.status,
+            crate::tasks::control::TaskStatus::Active
+        );
+        assert_eq!(serde_json::json!(observed.control)["workflow"], "standard");
         assert_eq!(observed.context["configuration"]["branch"], "task-one");
         assert_eq!(observed.root.as_ref().unwrap()["id"], root.id);
         assert!(observed.worker.is_none());
@@ -3452,10 +3490,11 @@ mod tests {
         set_worktree(
             &mut database,
             &created.task.id,
-            &serde_json::json!({
+            &serde_json::from_value(serde_json::json!({
                 "path":"/tmp/task-one","branch":"task-one","baseSha":"base",
                 "headSha":"head","dirty":true,
-            }),
+            }))
+            .unwrap(),
             now,
         )
         .unwrap();
@@ -3489,8 +3528,9 @@ mod tests {
         assert_eq!(
             root_observation_rows(&database, &created.task.id)
                 .unwrap()
-                .control["status"],
-            "delivered"
+                .control
+                .status,
+            crate::tasks::control::TaskStatus::Delivered
         );
         let answer_input = PreparedTask {
             id: repository::new_task_id(),

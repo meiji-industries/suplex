@@ -1,8 +1,16 @@
 //! TypeScript `tasks/control-contracts.ts`: the persisted task control vocabulary.
 
-use serde::{Deserialize, Deserializer, Serialize};
+use std::collections::BTreeMap;
 
+use serde::{Deserialize, Deserializer, Serialize};
+use serde_json::Value;
+
+use crate::coordination::{
+    advisor_bridge::AdvisorRole,
+    workflows::{Workflow, WorkflowState},
+};
 use crate::shared::wire_enum;
+pub use crate::tasks::worktree::WorktreeReference;
 
 wire_enum! {
     /// TypeScript `TaskControlStatus`, which is also the public task status.
@@ -131,15 +139,93 @@ pub struct DeliveryIntent {
     pub pull_request_number: Option<u64>,
 }
 
-/// TypeScript `WorktreeReference`: the worktree Git last reported.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+/// TypeScript `TaskControl`: the durable intent of one task. It serializes
+/// with the field names and order of the persisted control projection.
+#[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct WorktreeReference {
-    pub path: String,
-    pub branch: String,
-    pub base_sha: String,
-    pub head_sha: String,
-    pub dirty: bool,
+pub struct TaskControlRow {
+    pub task_id: String,
+    pub objective: String,
+    pub delivery_target: DeliveryTarget,
+    pub delivery_intent: DeliveryIntent,
+    pub status: TaskStatus,
+    pub wake_at: Option<String>,
+    pub human_question: Option<String>,
+    pub human_question_options: Value,
+    pub human_question_id: Option<String>,
+    pub recovery_turn_id: Option<String>,
+    pub limit_pause: Option<Value>,
+    pub worktree: Option<WorktreeReference>,
+    pub pull_request: Option<PullRequestReference>,
+    pub root_session_id: Option<String>,
+    pub worker_session_id: Option<String>,
+    pub shell_pane_id: Option<String>,
+    pub root_profile: TaskProfile,
+    pub worker_profile: TaskProfile,
+    pub workflow: Workflow,
+    pub advisor_profiles: BTreeMap<AdvisorRole, TaskProfile>,
+    pub workflow_state: WorkflowState,
+}
+
+#[cfg(test)]
+impl TaskControlRow {
+    /// An active Standard local-worktree control for tests to adjust.
+    pub fn fixture() -> Self {
+        let profile = |id: &str| TaskProfile {
+            profile_id: id.into(),
+            provider: "codex".into(),
+            model: "gpt-6-sol".into(),
+            reasoning_level: "medium".into(),
+            service_tier: "default".into(),
+            provider_instance_id: None,
+            instance_home_directory: None,
+        };
+        Self {
+            task_id: "task".into(),
+            objective: "Objective".into(),
+            delivery_target: DeliveryTarget::LocalWorktree,
+            delivery_intent: DeliveryIntent {
+                repository: "owner/repo".into(),
+                head_branch: "task-branch".into(),
+                base_branch: "main".into(),
+                baseline_sha: "head".into(),
+                pull_request_number: None,
+            },
+            status: TaskStatus::Active,
+            wake_at: None,
+            human_question: None,
+            human_question_options: Value::Array(Vec::new()),
+            human_question_id: None,
+            recovery_turn_id: None,
+            limit_pause: None,
+            worktree: None,
+            pull_request: None,
+            root_session_id: None,
+            worker_session_id: None,
+            shell_pane_id: None,
+            root_profile: profile("profile_root"),
+            worker_profile: profile("profile_worker"),
+            workflow: Workflow::Standard,
+            advisor_profiles: BTreeMap::new(),
+            workflow_state: WorkflowState::default(),
+        }
+    }
+}
+
+impl TaskControlRow {
+    /// The worktree path; a stored path is JSON text, so it is always UTF-8.
+    pub fn worktree_path(&self) -> Option<&str> {
+        self.worktree.as_ref()?.path.to_str()
+    }
+
+    /// The pull request this task delivers through: the observed one, else the
+    /// one its intent pins.
+    pub fn pull_request_number(&self) -> Option<u64> {
+        self.pull_request
+            .as_ref()
+            .map(|pull| pull.number)
+            .or(self.delivery_intent.pull_request_number)
+    }
 }
 
 /// TypeScript `PullRequestReference`: the pull request GitHub last reported.

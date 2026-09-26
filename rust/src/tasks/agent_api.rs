@@ -1284,15 +1284,10 @@ fn project_profile(
     ))
 }
 
-/// `resolveAgentApiRequest`: the workflow or template the project permits, applied under its policy.
-fn resolve(
-    database: &SuplexDatabase,
-    company_id: &str,
-    raw: &TaskCreateBody,
-) -> DatabaseResult<Resolved> {
-    let project = projects::get_in_company(database, company_id, &raw.project_id)?;
+/// The caller's request under the project policy, before a workflow or template applies.
+fn base_request(raw: &TaskCreateBody, project: &Project) -> task_contracts::TaskCreateBody {
     let policy = &project.agent_task_policy;
-    let mut request = task_contracts::TaskCreateBody {
+    task_contracts::TaskCreateBody {
         project_id: raw.project_id.clone(),
         title: raw.title.clone(),
         description: raw.description.clone().unwrap_or_default(),
@@ -1310,108 +1305,137 @@ fn resolve(
         advisor_profile_ids: raw.advisor_profile_ids.clone(),
         depends_on: raw.depends_on.clone().unwrap_or_default(),
         blocked_by_pull_requests: raw.blocked_by_pull_requests.clone().unwrap_or_default(),
-    };
-    let raw_advisors = serde_json::to_value(&raw.advisor_profile_ids)?;
-    let has_advisors = raw_advisors.as_object().is_some_and(|ids| !ids.is_empty());
-    let selection;
-    if let Some(template_id) = &raw.template_id {
-        let details = |reason: &str| json!({"field": "templateId", "value": template_id, "reason": reason, "permittedTemplateIds": policy.template_ids});
-        let stored: Option<String> = database
-            .connection()
-            .query_row(
-                "SELECT configuration_json FROM suplex_task_templates WHERE id = ?1 AND project_id = ?2",
-                params![template_id, project.id],
-                |row| row.get(0),
-            )
-            .optional()?;
-        let Some(stored) = stored else {
-            return Err(fail_with(
-                "The selected template is not available",
-                422,
-                "template_not_found",
-                details("The selected template is not available."),
-            ));
-        };
-        if !policy.template_ids.contains(template_id) {
-            return Err(fail_with(
-                "The selected template is not permitted",
-                422,
-                "template_not_permitted",
-                details("The selected template is not permitted."),
-            ));
-        }
-        let template = task_templates::parse_stored_configuration(serde_json::from_str(&stored)?)?;
-        request.workflow = template.workflow;
-        if raw.description.is_none() {
-            request.description = template.description;
-        }
-        if request.root_profile_id.is_none() {
-            request.root_profile_id = template.root_profile_id;
-        }
-        if request.worker_profile_id.is_none() {
-            request.worker_profile_id = template.worker_profile_id;
-        }
-        if !has_advisors {
-            request.advisor_profile_ids = template.advisor_profile_ids;
-        }
-        selection = json!({"workflowId": null, "workflowName": null, "templateId": template_id});
-    } else {
-        let workflow_id = raw
-            .workflow_id
-            .clone()
-            .unwrap_or_else(|| policy.default_workflow_id.clone());
-        let details = |reason: &str| json!({"field": "workflowId", "value": workflow_id, "reason": reason, "permittedWorkflowIds": policy.workflow_ids});
-        let record: Option<(String, String, String)> = database
-            .connection()
-            .query_row(
-                "SELECT name, configuration_json, engine FROM suplex_workflows WHERE id = ?1 AND archived_at IS NULL",
-                [&workflow_id],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-            )
-            .optional()?;
-        let Some((name, configuration, engine)) = record else {
-            return Err(fail_with(
-                "The selected workflow is not available",
-                422,
-                "workflow_not_found",
-                details("The selected workflow is not available."),
-            ));
-        };
-        if !policy.workflow_ids.contains(&workflow_id) {
-            return Err(fail_with(
-                "The selected workflow is not permitted",
-                422,
-                "workflow_not_permitted",
-                details("The selected workflow is not permitted."),
-            ));
-        }
-        let configuration: Value = serde_json::from_str(&configuration)?;
-        request.workflow = crate::coordination::workflows::Workflow::parse(&engine)
-            .ok_or_else(|| workflow_input_failure("The selected workflow does not exist"))?;
-        if !has_advisors {
-            let advisors = configuration
-                .get("advisorProfileIds")
-                .cloned()
-                .unwrap_or_else(|| json!({}));
-            validate_advisors(&advisors)?;
-            request.advisor_profile_ids = serde_json::from_value(advisors)?;
-        }
-        let selected_profile = |name: &str| {
-            configuration
-                .get(name)
-                .and_then(Value::as_str)
-                .filter(|id| !id.is_empty())
-                .map(str::to_owned)
-        };
-        if request.root_profile_id.is_none() {
-            request.root_profile_id = selected_profile("rootProfileId");
-        }
-        if request.worker_profile_id.is_none() {
-            request.worker_profile_id = selected_profile("workerProfileId");
-        }
-        let name = crate::identity::auth::js_trim(&name).to_owned();
-        selection = json!({"workflowId": workflow_id, "workflowName": name, "templateId": null});
     }
+}
+
+/// Apply a permitted project template: its workflow, and its description and
+/// profiles where the caller left them out. Returns the selection record.
+fn apply_template(
+    database: &SuplexDatabase,
+    project: &Project,
+    raw: &TaskCreateBody,
+    template_id: &str,
+    request: &mut task_contracts::TaskCreateBody,
+) -> DatabaseResult<Value> {
+    let policy = &project.agent_task_policy;
+    let details = |reason: &str| json!({"field": "templateId", "value": template_id, "reason": reason, "permittedTemplateIds": policy.template_ids});
+    let stored: Option<String> = database
+        .connection()
+        .query_row(
+            "SELECT configuration_json FROM suplex_task_templates WHERE id = ?1 AND project_id = ?2",
+            params![template_id, project.id],
+            |row| row.get(0),
+        )
+        .optional()?;
+    let Some(stored) = stored else {
+        return Err(fail_with(
+            "The selected template is not available",
+            422,
+            "template_not_found",
+            details("The selected template is not available."),
+        ));
+    };
+    if !policy.template_ids.iter().any(|id| id == template_id) {
+        return Err(fail_with(
+            "The selected template is not permitted",
+            422,
+            "template_not_permitted",
+            details("The selected template is not permitted."),
+        ));
+    }
+    let template = task_templates::parse_stored_configuration(serde_json::from_str(&stored)?)?;
+    request.workflow = template.workflow;
+    if raw.description.is_none() {
+        request.description = template.description;
+    }
+    request.root_profile_id = request.root_profile_id.take().or(template.root_profile_id);
+    request.worker_profile_id = request
+        .worker_profile_id
+        .take()
+        .or(template.worker_profile_id);
+    if !has_advisors(raw)? {
+        request.advisor_profile_ids = template.advisor_profile_ids;
+    }
+    Ok(json!({"workflowId": null, "workflowName": null, "templateId": template_id}))
+}
+
+/// Apply a permitted workflow, the project default when none is named: its
+/// engine, and its Advisor and agent profiles where the caller left them out.
+/// Returns the selection record.
+fn apply_workflow(
+    database: &SuplexDatabase,
+    project: &Project,
+    raw: &TaskCreateBody,
+    request: &mut task_contracts::TaskCreateBody,
+) -> DatabaseResult<Value> {
+    let policy = &project.agent_task_policy;
+    let workflow_id = raw
+        .workflow_id
+        .clone()
+        .unwrap_or_else(|| policy.default_workflow_id.clone());
+    let details = |reason: &str| json!({"field": "workflowId", "value": workflow_id, "reason": reason, "permittedWorkflowIds": policy.workflow_ids});
+    let record: Option<(String, String, String)> = database
+        .connection()
+        .query_row(
+            "SELECT name, configuration_json, engine FROM suplex_workflows WHERE id = ?1 AND archived_at IS NULL",
+            [&workflow_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .optional()?;
+    let Some((name, configuration, engine)) = record else {
+        return Err(fail_with(
+            "The selected workflow is not available",
+            422,
+            "workflow_not_found",
+            details("The selected workflow is not available."),
+        ));
+    };
+    if !policy.workflow_ids.contains(&workflow_id) {
+        return Err(fail_with(
+            "The selected workflow is not permitted",
+            422,
+            "workflow_not_permitted",
+            details("The selected workflow is not permitted."),
+        ));
+    }
+    let configuration: Value = serde_json::from_str(&configuration)?;
+    request.workflow = crate::coordination::workflows::Workflow::parse(&engine)
+        .ok_or_else(|| workflow_input_failure("The selected workflow does not exist"))?;
+    if !has_advisors(raw)? {
+        let advisors = configuration
+            .get("advisorProfileIds")
+            .cloned()
+            .unwrap_or_else(|| json!({}));
+        validate_advisors(&advisors)?;
+        request.advisor_profile_ids = serde_json::from_value(advisors)?;
+    }
+    let selected_profile = |name: &str| {
+        configuration
+            .get(name)
+            .and_then(Value::as_str)
+            .filter(|id| !id.is_empty())
+            .map(str::to_owned)
+    };
+    request.root_profile_id = request
+        .root_profile_id
+        .take()
+        .or_else(|| selected_profile("rootProfileId"));
+    request.worker_profile_id = request
+        .worker_profile_id
+        .take()
+        .or_else(|| selected_profile("workerProfileId"));
+    let name = crate::identity::auth::js_trim(&name).to_owned();
+    Ok(json!({"workflowId": workflow_id, "workflowName": name, "templateId": null}))
+}
+
+/// The caller named at least one Advisor profile.
+fn has_advisors(raw: &TaskCreateBody) -> DatabaseResult<bool> {
+    let raw_advisors = serde_json::to_value(&raw.advisor_profile_ids)?;
+    Ok(raw_advisors.as_object().is_some_and(|ids| !ids.is_empty()))
+}
+
+/// Trim the text fields and validate the resolved request as a task create body.
+fn validate_resolved(request: &mut task_contracts::TaskCreateBody) -> DatabaseResult<()> {
     request.title = crate::identity::auth::js_trim(&request.title).to_owned();
     request.description = crate::identity::auth::js_trim(&request.description).to_owned();
     let advisors = serde_json::to_value(&request.advisor_profile_ids)?;
@@ -1429,9 +1453,15 @@ fn resolve(
     request.validate().map_err(|report| {
         TaskError::internal(format!(
             "task input is invalid: {:?}",
-            crate::http::contracts::typed::garde_findings(&report, &request)
+            crate::http::contracts::typed::garde_findings(&report, &*request)
         ))
     })?;
+    Ok(())
+}
+
+/// The caller may not override the project's delivery settings.
+fn check_delivery_policy(raw: &TaskCreateBody, project: &Project) -> DatabaseResult<()> {
+    let policy = &project.agent_task_policy;
     if raw
         .delivery_target
         .as_ref()
@@ -1453,6 +1483,11 @@ fn resolve(
             "delivery_policy_rejected",
         ));
     }
+    Ok(())
+}
+
+/// Each profile the caller named must exist.
+fn check_requested_profiles(database: &SuplexDatabase, raw: &TaskCreateBody) -> DatabaseResult<()> {
     if let Some(id) = &raw.root_profile_id {
         crate::profiles::agent_profiles::read_profile(database, id, "root")?
             .ok_or_else(|| profile_not_available(id, "root", "rootProfileId"))?;
@@ -1461,23 +1496,12 @@ fn resolve(
         crate::profiles::agent_profiles::read_profile(database, id, "worker")?
             .ok_or_else(|| profile_not_available(id, "worker", "workerProfileId"))?;
     }
-    let root = project_profile(
-        database,
-        request.root_profile_id.as_deref(),
-        &project.root_profile_id,
-        "root",
-        &project,
-    )?;
-    let worker = project_profile(
-        database,
-        request.worker_profile_id.as_deref(),
-        &project.worker_profile_id,
-        "worker",
-        &project,
-    )?;
-    let root_id = root.profile_id;
-    let worker_id = worker.profile_id;
-    // The allowlist governs what a caller may choose; server-chosen defaults are already trusted.
+    Ok(())
+}
+
+/// The allowlist governs what a caller may choose; server-chosen defaults are already trusted.
+fn check_permitted_profiles(raw: &TaskCreateBody, project: &Project) -> DatabaseResult<()> {
+    let policy = &project.agent_task_policy;
     if let Some(id) = &raw.root_profile_id
         && !policy.root_profile_ids.contains(id)
     {
@@ -1500,12 +1524,25 @@ fn resolve(
             json!({"field": "workerProfileId", "value": id, "reason": reason}),
         ));
     }
+    Ok(())
+}
+
+/// Every Advisor role of the workflow resolves to a permitted profile; one the
+/// caller named must exist. An unnamed role follows the Coordinator profile.
+fn check_advisor_profiles(
+    database: &SuplexDatabase,
+    raw: &TaskCreateBody,
+    request: &task_contracts::TaskCreateBody,
+    project: &Project,
+    root_id: &str,
+) -> DatabaseResult<()> {
+    let raw_advisors = serde_json::to_value(&raw.advisor_profile_ids)?;
     let requested_advisors = serde_json::to_value(&request.advisor_profile_ids)?;
-    let permitted_advisors = serde_json::to_value(&policy.advisor_profile_ids)?;
+    let permitted_advisors = serde_json::to_value(&project.agent_task_policy.advisor_profile_ids)?;
     for role in advisor_roles(request.workflow.as_str()) {
         let profile_id = requested_advisors[*role]
             .as_str()
-            .unwrap_or(&root_id)
+            .unwrap_or(root_id)
             .to_owned();
         let field = format!("advisorProfileIds.{role}");
         if raw_advisors.get(*role).is_some() {
@@ -1525,8 +1562,42 @@ fn resolve(
             ));
         }
     }
-    request.root_profile_id = Some(root_id);
-    request.worker_profile_id = Some(worker_id);
+    Ok(())
+}
+
+/// `resolveAgentApiRequest`: the workflow or template the project permits, applied under its policy.
+fn resolve(
+    database: &SuplexDatabase,
+    company_id: &str,
+    raw: &TaskCreateBody,
+) -> DatabaseResult<Resolved> {
+    let project = projects::get_in_company(database, company_id, &raw.project_id)?;
+    let mut request = base_request(raw, &project);
+    let selection = match &raw.template_id {
+        Some(template_id) => apply_template(database, &project, raw, template_id, &mut request)?,
+        None => apply_workflow(database, &project, raw, &mut request)?,
+    };
+    validate_resolved(&mut request)?;
+    check_delivery_policy(raw, &project)?;
+    check_requested_profiles(database, raw)?;
+    let root = project_profile(
+        database,
+        request.root_profile_id.as_deref(),
+        &project.root_profile_id,
+        "root",
+        &project,
+    )?;
+    let worker = project_profile(
+        database,
+        request.worker_profile_id.as_deref(),
+        &project.worker_profile_id,
+        "worker",
+        &project,
+    )?;
+    check_permitted_profiles(raw, &project)?;
+    check_advisor_profiles(database, raw, &request, &project, &root.profile_id)?;
+    request.root_profile_id = Some(root.profile_id);
+    request.worker_profile_id = Some(worker.profile_id);
     let signature =
         crate::shared::js_json::stringify(&json!({"request": request, "selection": selection}));
     Ok(Resolved {

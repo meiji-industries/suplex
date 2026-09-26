@@ -6,6 +6,7 @@ test.each([1280, 390])("tasks can be created, started and viewed on the board at
   const value = await nativeBrowser(width);
   try {
     const { page } = value;
+    const createdIds: string[] = [];
     await page.goto(`${value.base}/tasks?company=${value.company.id}`);
     for (const immediate of [true, false]) {
       await page.getByRole("heading", { name: "Tasks", exact: true }).waitFor();
@@ -22,6 +23,7 @@ test.each([1280, 390])("tasks can be created, started and viewed on the board at
       const created = await response;
       expect(created.status(), await created.text()).toBe(201);
       const task = TaskSchema.parse(await created.json());
+      createdIds.push(task.id);
       expect(task.status).toBe(immediate ? "active" : "backlog");
       await page.getByRole("heading", { name: `Task ${immediate}`, level: 2, exact: true }).waitFor();
       expect(await page.getByRole("button", { name: "Start task", exact: true }).count()).toBe(immediate ? 0 : 1);
@@ -36,7 +38,7 @@ test.each([1280, 390])("tasks can be created, started and viewed on the board at
     }
     await page.goto(`${value.base}/board?company=${value.company.id}`);
     await page.getByRole("region", { name: "Active", exact: true }).waitFor();
-    expect(await page.getByRole("region", { name: "Active", exact: true }).getByRole("link").count()).toBe(2);
+    for (const id of createdIds) expect(await page.locator(`a[href*="/board/${id}"]`).count()).toBe(1);
     expect(value.errors).toEqual([]);
   } finally { await value.close(); }
 });

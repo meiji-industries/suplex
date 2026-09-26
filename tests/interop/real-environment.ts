@@ -79,7 +79,7 @@ async function seedOrigin() {
 }
 
 const started = new Date();
-const fixture = await nativeBrowser();
+const fixture = await nativeBrowser(1280, "127.0.0.1", undefined, { providerMode: "inherited" });
 const results: Array<Record<string, unknown>> = [];
 let failure: unknown;
 const api = async (method: "GET" | "POST", path: string, data?: unknown) => {

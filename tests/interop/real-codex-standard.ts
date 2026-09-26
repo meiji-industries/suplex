@@ -184,7 +184,7 @@ async function nativeGroupsAbsent(databasePath: string, sessionIds: string[]): P
   return true;
 }
 
-const fixture = await nativeBrowser().catch(async error => {
+const fixture = await nativeBrowser(1280, "127.0.0.1", undefined, { providerMode: "inherited" }).catch(async error => {
   if (controlDirectory) await rm(controlDirectory, { recursive: true, force: true });
   throw error;
 });

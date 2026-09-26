@@ -1,7 +1,7 @@
 // eslint-disable-next-line no-restricted-imports -- The Rust API is a long-running fixture process.
 import { execFile, spawn } from "node:child_process";
 import { appendFileSync } from "node:fs";
-import { mkdtemp, rm, stat } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -21,14 +21,29 @@ async function loopbackPort(): Promise<number> {
   return address.port;
 }
 
-async function startRustServer(root: string, port: number): Promise<() => Promise<void>> {
+type FixtureOptions = { providerMode?: "isolated" | "inherited" };
+
+async function startRustServer(root: string, port: number, options: FixtureOptions): Promise<() => Promise<void>> {
   const executable = resolve(process.env.SUPLEX_RUST_BIN ?? "rust/target/debug/suplex");
   const assets = resolve(process.env.SUPLEX_RUST_ASSETS_DIR ?? "dist/web");
   await stat(executable);
   await stat(join(assets, "suplex-ui.js"));
+  const isolated = options.providerMode !== "inherited";
+  const fixtureBin = join(root, "fixture-bin");
+  if (isolated) {
+    await mkdir(fixtureBin, { recursive: true });
+    const unavailableHerdr = join(fixtureBin, "herdr");
+    await writeFile(unavailableHerdr, "#!/bin/sh\nexit 127\n");
+    await chmod(unavailableHerdr, 0o700);
+  }
   const data = join(root, "data");
-  const child = spawn(executable, [], { env: {
+  const child = spawn(executable, [], { detached: isolated, env: {
     ...process.env,
+    ...(isolated ? {
+      PATH: `${fixtureBin}:${process.env.PATH ?? "/usr/bin:/bin"}`,
+      SUPLEX_CODEX_COMMAND: "/usr/bin/false", SUPLEX_CLAUDE_COMMAND: "/usr/bin/false",
+      SUPLEX_OPENCODE_COMMAND: "/usr/bin/false", SUPLEX_DEVIN_COMMAND: "/usr/bin/false",
+    } : {}),
     SUPLEX_ENV_FILE: join(root, "suplex.env"), SUPLEX_RUST_ROOT: root,
     SUPLEX_PORT: String(port), SUPLEX_RUST_PORT: String(port),
     SUPLEX_ACCESS_MODE: "local", SUPLEX_BIND_ADDRESS: "127.0.0.1",
@@ -48,9 +63,17 @@ async function startRustServer(root: string, port: number): Promise<() => Promis
   const stop = async () => {
     if (stopped) return;
     stopped = true;
-    if (child.exitCode === null && child.signalCode === null) child.kill("SIGTERM");
+    if (isolated && child.pid) {
+      try { process.kill(-child.pid, "SIGTERM"); } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error; }
+    } else if (child.exitCode === null && child.signalCode === null) child.kill("SIGTERM");
     await Promise.race([exited, new Promise<void>(accept => setTimeout(accept, 2_000))]);
-    if (child.exitCode === null && child.signalCode === null) { child.kill("SIGKILL"); await exited; }
+    if (child.exitCode === null && child.signalCode === null) {
+      if (isolated && child.pid) {
+        try { process.kill(-child.pid, "SIGKILL"); } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error; }
+      }
+      else child.kill("SIGKILL");
+      await exited;
+    }
   };
   try {
     const deadline = Date.now() + 15_000;
@@ -63,7 +86,7 @@ async function startRustServer(root: string, port: number): Promise<() => Promis
   } catch (error) { await stop(); throw error; }
 }
 
-export async function nativeFixture(host = "127.0.0.1", reachableAddress?: string) {
+export async function nativeFixture(host = "127.0.0.1", reachableAddress?: string, options: FixtureOptions = {}) {
   if (host !== "127.0.0.1") throw new Error("Rust browser fixtures require loopback");
   const directory = await mkdtemp(join(tmpdir(), "suplex-rust-browser-"));
   const port = reachableAddress ? Number(new URL(reachableAddress).port) : await loopbackPort();
@@ -71,7 +94,7 @@ export async function nativeFixture(host = "127.0.0.1", reachableAddress?: strin
   let stopRust: (() => Promise<void>) | undefined;
   let database: DatabaseSync | undefined;
   try {
-    stopRust = await startRustServer(directory, port);
+    stopRust = await startRustServer(directory, port, options);
     const signIn = await fetch(`${base}/api/auth/me`);
     if (!signIn.ok) throw new Error(`Fixture sign-in failed: ${signIn.status} ${await signIn.text()}`);
     const user = (await signIn.json() as { user: { id: string } }).user;
@@ -109,14 +132,14 @@ export async function nativeFixture(host = "127.0.0.1", reachableAddress?: strin
       .run(project.id, company.id, project.name, repositoryPath, worktreeRoot, project.repository, project.rootProfileId, project.workerProfileId, now, now);
     const openedDatabase = database;
     return { directory, config: { port, databasePath, artifactRoot: join(directory, "data", "artifacts") }, database, userId: user.id, company, project, headers, api, createTask, base,
-      async restartRust() { await stopRust?.(); stopRust = await startRustServer(directory, port); },
+      async restartRust() { await stopRust?.(); stopRust = await startRustServer(directory, port, options); },
       async close(options: { preserveData?: boolean } = {}) { openedDatabase.close(); await stopRust?.(); if (!options.preserveData) await rm(directory, { recursive: true, force: true }); },
     };
   } catch (error) { database?.close(); await stopRust?.(); await rm(directory, { recursive: true, force: true }); throw error; }
 }
 
-export async function nativeBrowser(width = 1280, host = "127.0.0.1", reachableAddress?: string) {
-  const fixture = await nativeFixture(host, reachableAddress);
+export async function nativeBrowser(width = 1280, host = "127.0.0.1", reachableAddress?: string, options: FixtureOptions = {}) {
+  const fixture = await nativeFixture(host, reachableAddress, options);
   let browser: Awaited<ReturnType<typeof chromium.launch>> | undefined;
   try {
     browser = await chromium.launch({ headless: true });

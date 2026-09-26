@@ -790,4 +790,62 @@ mod tests {
         fs::remove_dir_all(&directory).unwrap();
         result.unwrap();
     }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn stop_rescans_and_stops_a_detached_child_created_during_shutdown() {
+        use std::io::{BufRead, BufReader};
+
+        let directory = std::env::temp_dir().join(format!("suplex-child-stop-{}", Uuid::new_v4()));
+        fs::create_dir_all(&directory).unwrap();
+        let child_pid_file = directory.join("child.pid");
+        let script = r#"
+import os, signal, subprocess, sys, time
+def stop(_signal, _frame):
+    child = subprocess.Popen(['/bin/sleep', '20'], start_new_session=True, env=os.environ.copy())
+    with open(sys.argv[1], 'w') as output:
+        output.write(str(child.pid))
+    sys.exit(0)
+signal.signal(signal.SIGTERM, stop)
+print('ready', flush=True)
+while True:
+    time.sleep(1)
+"#;
+        let mut parent = Command::new("/usr/bin/python3")
+            .args(["-c", script, child_pid_file.to_str().unwrap()])
+            .env("SUPLEX_SESSION_PROCESS_OWNER", owner_marker(&directory))
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        let mut ready = String::new();
+        BufReader::new(parent.stdout.take().unwrap())
+            .read_line(&mut ready)
+            .unwrap();
+        assert_eq!(ready, "ready\n");
+        let result = (|| -> io::Result<()> {
+            stop_discovered_processes("SUPLEX_SESSION_PROCESS_OWNER", &directory)?;
+            parent.wait()?;
+            let child_pid: u32 = fs::read_to_string(&child_pid_file)?
+                .parse()
+                .map_err(io::Error::other)?;
+            if discovered_process_ids("SUPLEX_SESSION_PROCESS_OWNER", &directory)?
+                .contains(&child_pid)
+            {
+                return Err(io::Error::other("Detached child survived session cleanup"));
+            }
+            Ok(())
+        })();
+        let _ = parent.kill();
+        let _ = parent.wait();
+        if let Ok(child_pid) = fs::read_to_string(&child_pid_file)
+            .unwrap_or_default()
+            .parse::<i32>()
+        {
+            let _ = kill(Pid::from_raw(child_pid), Signal::SIGKILL);
+        }
+        fs::remove_dir_all(directory).unwrap();
+        result.unwrap();
+    }
 }

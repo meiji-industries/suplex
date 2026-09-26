@@ -255,9 +255,8 @@ pub fn running(record: &HeadlessTurnRecord) -> io::Result<bool> {
     ) {
         IdentityMatch::Exact => Ok(true),
         IdentityMatch::OwnerUncertain | IdentityMatch::NotRunning => group_alive(record),
-        other => Err(io::Error::other(format!(
-            "Recorded process ownership is {other:?}"
-        ))),
+        // TypeScript `headlessTurnRunning`: another process now holds the pid, so the recorded one is gone.
+        _ => Ok(false),
     }
 }
 
@@ -722,7 +721,9 @@ mod tests {
         unsafe_record.pid = std::process::id();
         unsafe_record.process_identity.start_time = "stale start time".to_owned();
         write_record(&directory.join("turn.json"), &unsafe_record).unwrap();
-        assert!(stop_session(&directory, Some("codex-session-3")).is_err());
+        // A reused pid means the recorded process is gone: the stop completes without signalling it.
+        assert!(!running(&unsafe_record).unwrap());
+        stop_session(&directory, Some("codex-session-3")).unwrap();
         assert!(inspect_process(std::process::id()).is_some());
         fs::remove_dir_all(directory).unwrap();
     }

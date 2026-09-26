@@ -4,8 +4,9 @@ import type { ProjectExecution } from "./ProjectExecution.js";
 import type { ProjectIntegration } from "./ProjectIntegration.js";
 import type { ProjectProviderPolicy } from "./ProjectProviderPolicy.js";
 import type { TaskSource } from "./TaskSource.js";
+import type { VisualEvidence } from "./VisualEvidence.js";
 
 /**
  * The project and delivery settings captured when the task was created.
  */
-export type TaskConfiguration = { providerPolicy?: ProjectProviderPolicy | null, integration?: ProjectIntegration, execution?: ProjectExecution, repository: string, repositoryPath: string, worktreeRoot: string, branch: string, baseBranch: string, baselineSha: string, startingSha: string, setupCommand: string, verificationCommand: string, runProjectTests: boolean, visualEvidence: string, hermesSelection?: HermesSelection, source: TaskSource | null, capturedAt: string, };
+export type TaskConfiguration = { providerPolicy?: ProjectProviderPolicy | null, integration?: ProjectIntegration, execution?: ProjectExecution, repository: string, repositoryPath: string, worktreeRoot: string, branch: string, baseBranch: string, baselineSha: string, startingSha: string, setupCommand: string, verificationCommand: string, runProjectTests: boolean, visualEvidence: VisualEvidence, hermesSelection?: HermesSelection, source: TaskSource | null, capturedAt: string, };

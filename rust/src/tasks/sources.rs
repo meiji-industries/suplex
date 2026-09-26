@@ -370,7 +370,7 @@ pub async fn resolve(project: &Project, selector: &Value) -> Result<Value, Box<d
                     &[&format!(
                         "refs/heads/{fetched}:refs/remotes/origin/{fetched}"
                     )],
-                    false,
+                    true,
                     token.as_deref(),
                 )?;
                 Ok(repository
@@ -563,8 +563,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn branch_discovery_reads_remote_refs_without_changing_the_checkout() {
+    #[tokio::test]
+    async fn branch_discovery_reads_remote_refs_without_changing_the_checkout() {
         let base = std::env::temp_dir().join(format!("suplex-sources-{}", uuid::Uuid::new_v4()));
         let origin = base.join("origin");
         let work = base.join("work");
@@ -601,6 +601,72 @@ mod tests {
         assert_eq!(rows[0]["branch"], "feature/one");
         assert_eq!(rows[0]["subject"], "Feature subject");
         assert_eq!(rows[0]["author"], "Fixture");
+        let project = Project {
+            integration: None,
+            execution: None,
+            id: "project".into(),
+            company_id: "company".into(),
+            name: "Project".into(),
+            repository_path: work.to_string_lossy().into_owned(),
+            worktree_root: base.join("worktrees").to_string_lossy().into_owned(),
+            repository: Some("acme/repo".into()),
+            base_branch: "main".into(),
+            setup_command: String::new(),
+            verification_command: String::new(),
+            root_profile_id: "root".into(),
+            worker_profile_id: "worker".into(),
+            agent_task_policy: serde_json::from_value(json!({
+                "workflowIds": ["standard"], "defaultWorkflowId": "standard",
+                "rootProfileIds": ["root"], "workerProfileIds": ["worker"]
+            }))
+            .unwrap(),
+            provider_policy: None,
+            created_at: "2026-09-26T00:00:00Z".into(),
+            updated_at: "2026-09-26T00:00:00Z".into(),
+        };
+        assert_eq!(
+            resolve(&project, &json!({"kind":"branch","branch":"feature/one"}))
+                .await
+                .unwrap()["headSha"],
+            json!(rows[0]["headSha"])
+        );
+        let branch_head = upstream
+            .find_commit(upstream.refname_to_id("refs/heads/feature/one").unwrap())
+            .unwrap();
+        let newer = upstream
+            .commit(
+                Some("refs/heads/feature/one"),
+                &signature,
+                &signature,
+                "Updated feature",
+                &tree,
+                &[&branch_head],
+            )
+            .unwrap();
+        assert_eq!(
+            resolve(&project, &json!({"kind":"branch","branch":"feature/one"}))
+                .await
+                .unwrap(),
+            json!({"kind":"branch","branch":"feature/one","headSha":newer.to_string()})
+        );
+        assert_eq!(clone.head().unwrap().name().map(str::to_owned), head);
+        let code = |error: Box<dyn Error>| match error
+            .downcast::<super::super::TaskError>()
+            .unwrap()
+            .as_ref()
+        {
+            super::super::TaskError::Source { code, .. } => *code,
+            other => panic!("unexpected source error: {other:?}"),
+        };
+        assert_eq!(
+            code(
+                resolve(&project, &json!({"kind":"branch","branch":"main"}))
+                    .await
+                    .unwrap_err()
+            ),
+            "source-base-branch"
+        );
+        let updated_rows = remote_branches(&work, "main", None).unwrap();
         clone
             .remote_set_url("origin", "git@github.com:acme/repo.git")
             .unwrap();
@@ -614,9 +680,22 @@ mod tests {
             .unwrap();
         assert_eq!(
             remote_branches(&work, "main", Some("fixture-token")).unwrap(),
-            rows
+            updated_rows
         );
         assert_eq!(clone.head().unwrap().name().map(str::to_owned), head);
+        upstream
+            .find_reference("refs/heads/feature/one")
+            .unwrap()
+            .delete()
+            .unwrap();
+        assert_eq!(
+            code(
+                resolve(&project, &json!({"kind":"branch","branch":"feature/one"}))
+                    .await
+                    .unwrap_err()
+            ),
+            "source-provider-unavailable"
+        );
         std::fs::remove_dir_all(base).unwrap();
     }
 }

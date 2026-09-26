@@ -878,6 +878,26 @@ mod tests {
     }
 
     #[test]
+    fn source_create_contract_accepts_only_stable_selectors() {
+        assert_eq!(
+            source(Some(&json!({"kind":"pull_request","number":7}))).unwrap(),
+            json!({"kind":"pull_request","number":7})
+        );
+        assert!(
+            source(Some(
+                &json!({"kind":"pull_request","number":7,"headSha":"a".repeat(40)})
+            ))
+            .is_err()
+        );
+        assert!(
+            source(Some(
+                &json!({"kind":"branch","branch":"feature","headSha":"a".repeat(40)})
+            ))
+            .is_err()
+        );
+    }
+
+    #[test]
     fn garde_paths_use_request_field_names() {
         let body: TaskCreateBody = serde_json::from_value(json!({
             "projectId": "", "title": "Build", "idempotencyKey": "sample-001",

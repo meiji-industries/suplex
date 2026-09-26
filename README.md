@@ -109,7 +109,7 @@ ships the server, its dependencies, and Node 26.7.0 inside the bundle. It
 checks the Mac, installs Apple's developer tools (for git) and Herdr if they
 are missing, prepares a database under `~/Library/Application Support/Suplex`,
 and starts Suplex on `127.0.0.1`. No git, Homebrew, GitHub account, or
-Tailscale is needed for a local install. See the [Desktop app](#desktop-app)
+Tailscale is necessary for a local install. See the [Desktop app](#desktop-app)
 section below.
 
 To run Suplex on a host from a checkout instead:

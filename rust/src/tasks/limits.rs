@@ -330,11 +330,13 @@ pub(crate) enum Admission {
     Blocked,
 }
 
-/// The task's status and saved limit overrides.
+/// The task's status and saved budget and turn limit overrides.
+type AdmissionControl = (TaskStatus, Option<f64>, Option<i64>);
+
 fn admission_control(
     database: &SuplexDatabase,
     task_id: &str,
-) -> DatabaseResult<Option<(TaskStatus, Option<f64>, Option<i64>)>> {
+) -> DatabaseResult<Option<AdmissionControl>> {
     Ok(database
         .connection()
         .query_row(

@@ -837,7 +837,7 @@ enum PendingTurn {
     /// Native evidence settled the turn; nothing is dispatched.
     Settled(PromptObservation),
     /// Native evidence proves the turn was not admitted; it may be dispatched.
-    Dispatchable(PromptObservation, TurnRow),
+    Dispatchable(PromptObservation, Box<TurnRow>),
 }
 
 /// The current session of the plan and its first pending turn, when the host
@@ -974,7 +974,7 @@ impl BoundSession<'_> {
                     Utc::now(),
                 )?
             {
-                return Ok(PendingTurn::Dispatchable(before, turn));
+                return Ok(PendingTurn::Dispatchable(before, Box::new(turn)));
             }
             let Some(next) = root_session_store::pending_turns(database, &launch.session.id)?
                 .into_iter()
@@ -1062,7 +1062,7 @@ fn dispatch_claimed(
     }
     let (before, turn) = match bound.observe_pending(database, turn)? {
         PendingTurn::Settled(observation) => return Ok(observation),
-        PendingTurn::Dispatchable(before, turn) => (before, turn),
+        PendingTurn::Dispatchable(before, turn) => (before, *turn),
     };
     if dependency_blocked(rows) {
         return Ok(before);

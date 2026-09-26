@@ -4,6 +4,8 @@
 
 use serde_json::{Value, json};
 
+use super::advisor_bridge::AdvisorRole;
+
 pub const REPAIR_RATING_TARGET: i64 = 9;
 
 pub struct WorkflowDefinition {
@@ -61,6 +63,14 @@ pub fn workflow_definition(workflow: &str) -> Option<&'static WorkflowDefinition
     WORKFLOWS
         .iter()
         .find(|definition| definition.id == workflow)
+}
+
+/// The Advisor roles of a workflow; an unknown workflow has none.
+pub fn advisor_roles(workflow: &str) -> impl Iterator<Item = AdvisorRole> {
+    workflow_definition(workflow)
+        .map_or(&[][..], |definition| definition.advisor_roles)
+        .iter()
+        .map(|role| AdvisorRole::parse(role).expect("the catalog names Advisor roles"))
 }
 
 pub fn advisor_label(role: &str) -> &'static str {

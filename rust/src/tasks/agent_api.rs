@@ -7,7 +7,7 @@ use crate::projects::ProjectError;
 use crate::shared::hash::sha256_hex;
 use crate::shared::time::rfc3339_millis;
 use crate::tasks::TaskError;
-use crate::tasks::control::DeliveryTarget;
+use crate::tasks::control::{DeliveryTarget, TaskProfile};
 use std::{
     collections::HashSet,
     error::Error,
@@ -1222,7 +1222,7 @@ fn profile_not_available(profile_id: &str, role: &str, field: &str) -> Box<dyn E
     )
 }
 
-fn profile(database: &SuplexDatabase, profile_id: &str, role: &str) -> DatabaseResult<Value> {
+fn profile(database: &SuplexDatabase, profile_id: &str, role: &str) -> DatabaseResult<TaskProfile> {
     commands::read_profile(database, profile_id, role)?.ok_or_else(|| {
         fail(
             "The selected agent profile does not exist",
@@ -1239,7 +1239,7 @@ fn project_profile(
     default_id: &str,
     role: &str,
     project: &Project,
-) -> DatabaseResult<Value> {
+) -> DatabaseResult<TaskProfile> {
     if let Some(explicit) = explicit {
         return profile(database, explicit, role);
     }
@@ -1460,8 +1460,8 @@ fn resolve(
         "worker",
         &project,
     )?;
-    let root_id = root["profileId"].as_str().unwrap_or_default().to_owned();
-    let worker_id = worker["profileId"].as_str().unwrap_or_default().to_owned();
+    let root_id = root.profile_id;
+    let worker_id = worker.profile_id;
     // The allowlist governs what a caller may choose; server-chosen defaults are already trusted.
     if let Some(id) = &raw.root_profile_id
         && !policy.root_profile_ids.contains(id)
@@ -1748,7 +1748,7 @@ fn write(
             now,
         )?
     };
-    sources::apply(&mut prepared, source);
+    sources::apply(&mut prepared, source)?;
     prepared.creator = TaskCreator::Agent(principal.agent_id.clone());
     prepared.pull_request_dependencies = pending.pull_requests.clone();
     prepared.request_hash = pending.hash.clone();

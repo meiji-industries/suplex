@@ -1,5 +1,7 @@
 //! TypeScript `tasks/control-contracts.ts`: the persisted task control vocabulary.
 
+use serde::{Deserialize, Deserializer, Serialize};
+
 use crate::shared::wire_enum;
 
 wire_enum! {
@@ -74,6 +76,84 @@ impl DeliveryTarget {
     }
 }
 
+/// A present JSON field, `null` included; a missing one stays `None`.
+fn present<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    D: Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    T::deserialize(deserializer).map(Some)
+}
+
+/// TypeScript `TaskProfile`: the agent profile a task or session captured.
+/// The instance fields are optional in older snapshots, and a snapshot
+/// serializes with exactly the fields it was saved with.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TaskProfile {
+    pub profile_id: String,
+    pub provider: String,
+    pub model: String,
+    pub reasoning_level: String,
+    pub service_tier: String,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "present"
+    )]
+    pub provider_instance_id: Option<Option<String>>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "present"
+    )]
+    pub instance_home_directory: Option<Option<String>>,
+}
+
+impl TaskProfile {
+    pub fn provider_instance_id(&self) -> Option<&str> {
+        self.provider_instance_id.as_ref()?.as_deref()
+    }
+
+    pub fn instance_home_directory(&self) -> Option<&str> {
+        self.instance_home_directory.as_ref()?.as_deref()
+    }
+}
+
+/// TypeScript `DeliveryIntent`: where the task delivers.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeliveryIntent {
+    pub repository: String,
+    pub head_branch: String,
+    pub base_branch: String,
+    pub baseline_sha: String,
+    pub pull_request_number: Option<u64>,
+}
+
+/// TypeScript `WorktreeReference`: the worktree Git last reported.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorktreeReference {
+    pub path: String,
+    pub branch: String,
+    pub base_sha: String,
+    pub head_sha: String,
+    pub dirty: bool,
+}
+
+/// TypeScript `PullRequestReference`: the pull request GitHub last reported.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PullRequestReference {
+    pub repository: String,
+    pub number: u64,
+    pub url: String,
+    pub head_sha: String,
+    pub state: String,
+    pub merged_at: Option<String>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -95,6 +175,7 @@ mod tests {
             assert_eq!(stored, target);
         }
         assert!(DeliveryTarget::PullRequestDraft < DeliveryTarget::Merged);
+        assert!(!DeliveryTarget::Merged.bitbucket_supports());
         assert_eq!(
             TaskStatus::parse("waiting_human"),
             Some(TaskStatus::WaitingHuman)
@@ -104,5 +185,17 @@ mod tests {
                 .query_row("SELECT 'paused'", [], |row| row.get::<_, TaskStatus>(0))
                 .is_err()
         );
+    }
+
+    #[test]
+    fn a_profile_snapshot_serializes_with_the_fields_it_was_saved_with() {
+        for saved in [
+            r#"{"profileId":"p","provider":"codex","model":"m","reasoningLevel":"medium","serviceTier":"default"}"#,
+            r#"{"profileId":"p","provider":"codex","model":"m","reasoningLevel":"medium","serviceTier":"default","providerInstanceId":null,"instanceHomeDirectory":"/home"}"#,
+        ] {
+            let profile: TaskProfile = serde_json::from_str(saved).unwrap();
+            assert_eq!(serde_json::to_string(&profile).unwrap(), saved);
+        }
+        assert!(serde_json::from_str::<TaskProfile>(r#"{"profileId":"p"}"#).is_err());
     }
 }

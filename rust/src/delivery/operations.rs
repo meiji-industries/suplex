@@ -2388,8 +2388,8 @@ pub(crate) mod tests {
             configuration: json!({"branch":"task-flow","baseBranch":"main","visualEvidence":"off"}),
             idempotency_key: "delivery-1".into(), request_hash: "delivery-hash".into(),
             creator: TaskCreator::User(user.id), delivery_target: "merged".into(),
-            delivery_intent: json!({"repository":"owner/repo","headBranch":"task-flow","baseBranch":"main","pullRequestNumber":null}),
-            root_profile: profile.clone(), worker_profile: profile, advisor_profiles: json!({}), issue: None, start_queued: true,
+            delivery_intent: serde_json::from_value(json!({"repository":"owner/repo","headBranch":"task-flow","baseBranch":"main","baselineSha":"head","pullRequestNumber":null})).unwrap(),
+            root_profile: serde_json::from_value(profile.clone()).unwrap(), worker_profile: serde_json::from_value(profile).unwrap(), advisor_profiles: serde_json::from_value(json!({})).unwrap(), issue: None, start_queued: true,
             copied_from_task_id: None, depends_on: vec![], pull_request_dependencies: vec![],
         }, now).unwrap().task;
         let worktree_json = json!({"path": worktree, "branch": "task-flow", "baseSha": head, "headSha": head, "dirty": false});

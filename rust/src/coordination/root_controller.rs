@@ -1121,10 +1121,10 @@ mod tests {
             configuration: json!({"branch":"task-evidence","baseBranch":"main"}),
             idempotency_key: "evidence-1".into(), request_hash: "evidence-hash".into(),
             creator: TaskCreator::User(user.id), delivery_target: "local_worktree".into(),
-            delivery_intent: json!({"headBranch":"task-evidence","baseBranch":"main"}),
-            root_profile: json!({"profileId":"profile_root","provider":"codex","model":"gpt-6-sol","reasoningLevel":"medium","serviceTier":"default"}),
-            worker_profile: json!({"profileId":"profile_worker","provider":"codex","model":"gpt-6-sol","reasoningLevel":"medium","serviceTier":"default"}),
-            advisor_profiles: json!({}), issue: None, start_queued: true,
+            delivery_intent: serde_json::from_value(json!({"repository":"owner/repo","headBranch":"task-evidence","baseBranch":"main","baselineSha":"head","pullRequestNumber":null})).unwrap(),
+            root_profile: serde_json::from_value(json!({"profileId":"profile_root","provider":"codex","model":"gpt-6-sol","reasoningLevel":"medium","serviceTier":"default"})).unwrap(),
+            worker_profile: serde_json::from_value(json!({"profileId":"profile_worker","provider":"codex","model":"gpt-6-sol","reasoningLevel":"medium","serviceTier":"default"})).unwrap(),
+            advisor_profiles: serde_json::from_value(json!({})).unwrap(), issue: None, start_queued: true,
             copied_from_task_id: None, depends_on: vec![], pull_request_dependencies: vec![],
         }, now).unwrap().task;
         let root = root_session_store::reserve_root(&mut database, &task.id, now).unwrap();

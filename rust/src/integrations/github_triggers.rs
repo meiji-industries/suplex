@@ -1588,7 +1588,7 @@ fn create_captured(
         base_sha,
         now,
     )?;
-    sources::apply(&mut prepared, source);
+    sources::apply(&mut prepared, source)?;
     let configuration = &prepared.configuration;
     let policy = &dispatch.policy;
     if configuration["source"]["kind"] != "pull_request"
@@ -1608,9 +1608,9 @@ fn create_captured(
         return Err(TaskError::new("GitHub trigger source changed", 409).into());
     }
     // TypeScript creates the task from the captured profile snapshots.
-    prepared.root_profile = dispatch.profiles["root"].clone();
-    prepared.worker_profile = dispatch.profiles["worker"].clone();
-    prepared.advisor_profiles = dispatch.profiles["advisors"].clone();
+    prepared.root_profile = serde_json::from_value(dispatch.profiles["root"].clone())?;
+    prepared.worker_profile = serde_json::from_value(dispatch.profiles["worker"].clone())?;
+    prepared.advisor_profiles = serde_json::from_value(dispatch.profiles["advisors"].clone())?;
     let (sender, receiver) = std::sync::mpsc::channel();
     let task = database.transaction(true, |database| {
         require_admission(database, dispatch)?;

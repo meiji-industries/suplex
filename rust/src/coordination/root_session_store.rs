@@ -4,7 +4,7 @@ use super::CoordinationError;
 use crate::shared::hash::sha256_hex;
 use crate::shared::time::rfc3339_millis;
 use crate::tasks::TaskError;
-use crate::tasks::control::{SessionLifecycle, TaskStatus, TurnStatus};
+use crate::tasks::control::{SessionLifecycle, TaskProfile, TaskStatus, TurnStatus};
 use chrono::{DateTime, Utc};
 use rusqlite::{OptionalExtension, Row, params};
 use serde::{Deserialize, Serialize};
@@ -1135,7 +1135,7 @@ pub fn replace_worker(
             return Err(CoordinationError::refused("The Worker has no saved assignment.").into());
         };
         let previous_profile_json = previous_profile_json.unwrap_or(control_profile);
-        let previous_profile: Value = serde_json::from_str(&previous_profile_json)?;
+        let previous_profile: TaskProfile = serde_json::from_str(&previous_profile_json)?;
         let profile = match request.worker_profile_id.as_deref() {
             Some(id) => read_profile(database, id, "worker")?
                 .ok_or_else(|| CoordinationError::refused("The selected Worker profile does not exist."))?,
@@ -1245,6 +1245,27 @@ fn outcome_text_owned(observation: &str) -> String {
         .unwrap_or_else(|| observation.to_owned())
 }
 
+/// TypeScript `replacementIntent`: the selection a Coordinator successor saves.
+/// Older intents may omit the question fields.
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ReplacementIntent {
+    root_profile_id: String,
+    handoff: String,
+    resume: bool,
+    #[serde(default)]
+    question_id: Option<String>,
+    #[serde(default)]
+    pending_question: Option<PendingQuestion>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct PendingQuestion {
+    id: String,
+    text: String,
+    options: Value,
+}
+
 struct CoordinatorControlRow {
     status: TaskStatus,
     archived_at: Option<String>,
@@ -1303,9 +1324,9 @@ pub fn replace_coordinator(
             [&request.session_id], |row| Ok((row.get(0)?,row.get(1)?)),
         ).optional()?;
         if let Some((id, reason)) = existing {
-            let saved: Value = serde_json::from_str(&reason)?;
-            if saved["rootProfileId"] != request.root_profile_id || saved["handoff"] != handoff
-                || saved["resume"] != request.resume || saved["questionId"].as_str() != question_intent
+            let saved = serde_json::from_str::<ReplacementIntent>(&reason).ok();
+            if saved.is_none_or(|saved| saved.root_profile_id != request.root_profile_id || saved.handoff != handoff
+                || saved.resume != request.resume || saved.question_id.as_deref() != question_intent)
                 || current_root_id.as_deref() != Some(id.as_str()) {
                 return Err(CoordinationError::refused("The Coordinator changed. Read the current Coordinator before selecting another.").into());
             }
@@ -1333,7 +1354,7 @@ pub fn replace_coordinator(
         }
         let rows = root_observation_rows(database, task_id)?;
         let old_profile_json = old_profile_json.unwrap_or(control_profile);
-        let old_profile: Value = serde_json::from_str(&old_profile_json)?;
+        let old_profile: TaskProfile = serde_json::from_str(&old_profile_json)?;
         let advisor_profiles: Value = rows.control["advisorProfiles"].clone();
         let mut advisor_updates = Vec::new();
         {
@@ -1343,8 +1364,11 @@ pub fn replace_coordinator(
             }
         }
         for (id, role) in advisor_updates {
-            let advisor = advisor_profiles.get(&role).filter(|value| !value.is_null()).unwrap_or(&old_profile);
-            database.connection().execute("UPDATE suplex_task_sessions SET profile_json = ?1 WHERE id = ?2 AND profile_json IS NULL", params![js_json::stringify(advisor),id])?;
+            let advisor = match advisor_profiles.get(&role).filter(|value| !value.is_null()) {
+                Some(advisor) => js_json::stringify(advisor),
+                None => serde_json::to_string(&old_profile)?,
+            };
+            database.connection().execute("UPDATE suplex_task_sessions SET profile_json = ?1 WHERE id = ?2 AND profile_json IS NULL", params![advisor,id])?;
         }
         let mut root_turns = Vec::new();
         {
@@ -1358,9 +1382,8 @@ pub fn replace_coordinator(
             let mut statement = database.connection().prepare("SELECT replacement_reason,generation FROM suplex_task_sessions WHERE task_id = ?1 AND kind = 'root' AND replaces_session_id IS NOT NULL ORDER BY generation")?;
             for row in statement.query_map([task_id], |row| Ok((row.get::<_, String>(0)?,row.get::<_, i64>(1)?)))? {
                 let (reason,generation) = row?;
-                if let Ok(value) = serde_json::from_str::<Value>(&reason)
-                    && value["rootProfileId"].is_string() && value["handoff"].is_string() && value["resume"].is_boolean() {
-                    prior_intents.push((value,generation));
+                if let Ok(intent) = serde_json::from_str::<ReplacementIntent>(&reason) {
+                    prior_intents.push((intent,generation));
                 }
             }
         }
@@ -1381,28 +1404,30 @@ pub fn replace_coordinator(
                 messages.push(format!("Accepted human task limit decision ({created_at}):\n{question}\nDecision: {}",js_json::stringify(decision)));
             }
         }
-        let earlier_directions = prior_intents.iter().filter_map(|(intent,_)| intent["handoff"].as_str().filter(|text| !text.is_empty())).collect::<Vec<_>>().join("\n\n");
-        let mut unanswered = Vec::<(String,String,Value)>::new();
+        let earlier_directions = prior_intents.iter().map(|(intent,_)| intent.handoff.as_str()).filter(|text| !text.is_empty()).collect::<Vec<_>>().join("\n\n");
+        let mut unanswered = Vec::<PendingQuestion>::new();
         for (intent,generation) in &prior_intents {
-            if let (Some(id),Some(text),Some(options)) = (intent["pendingQuestion"]["id"].as_str(),intent["pendingQuestion"]["text"].as_str(),intent["pendingQuestion"].get("options"))
-                && !accepted.iter().any(|(answer,at)| answer == text && at >= generation) && !unanswered.iter().any(|(prior,_,_)| prior == id) {
-                unanswered.push((id.to_owned(),text.to_owned(),options.clone()));
+            if let Some(pending) = &intent.pending_question
+                && !accepted.iter().any(|(answer,at)| *answer == pending.text && at >= generation) && !unanswered.iter().any(|prior| prior.id == pending.id) {
+                unanswered.push(pending.clone());
             }
         }
         let current_question = question.map(|text| -> DatabaseResult<_> {
-            Ok((question_id.clone().unwrap_or_default(),text,serde_json::from_str::<Value>(question_options.as_deref().unwrap_or("[]"))?))
+            Ok(PendingQuestion { id: question_id.clone().unwrap_or_default(), text, options: serde_json::from_str::<Value>(question_options.as_deref().unwrap_or("[]"))? })
         }).transpose()?;
-        if let Some((id,text,options)) = &current_question
-            && !unanswered.iter().any(|(prior,_,_)| prior == id) {
-            unanswered.push((id.clone(),text.clone(),options.clone()));
+        if let Some(current) = &current_question
+            && !unanswered.iter().any(|prior| prior.id == current.id) {
+            unanswered.push(current.clone());
         }
-        let reason = js_json::stringify(&serde_json::json!({
-            "rootProfileId":request.root_profile_id,"handoff":handoff,"resume":request.resume,
-            "questionId":question_intent,
-            "pendingQuestion":current_question.as_ref().map(|(id,text,options)| serde_json::json!({"id":id,"text":text,"options":options})),
-        }));
+        let reason = js_json::stringify(&serde_json::to_value(ReplacementIntent {
+            root_profile_id: request.root_profile_id.clone(),
+            handoff: handoff.to_owned(),
+            resume: request.resume,
+            question_id: question_intent.map(str::to_owned),
+            pending_question: current_question,
+        })?);
         let pending_question = if unanswered.is_empty() { String::new() } else {
-            let items = unanswered.iter().map(|(id,text,options)| format!("Question {id}:\n{text}\nOptions: {}",js_json::stringify(options))).collect::<Vec<_>>().join("\n\n");
+            let items = unanswered.iter().map(|pending| format!("Question {}:\n{}\nOptions: {}",pending.id,pending.text,js_json::stringify(&pending.options))).collect::<Vec<_>>().join("\n\n");
             let guidance = if request.resume { "The user authorized resuming with a new Coordinator. Resolve a provider failure if possible; ask the user if a real decision is still necessary." }
                 else if status == TaskStatus::WaitingHuman { "The task stays paused until the user answers its current decision." }
                 else { "The task is active. Reassess these questions and ask the user if a decision is still necessary." };
@@ -1438,9 +1463,9 @@ pub fn replace_coordinator(
         database.connection().execute("UPDATE suplex_task_sessions SET profile_json = ?1 WHERE task_id = ?2 AND kind = 'root' AND advisor_role IS NULL AND profile_json IS NULL",params![old_profile_json,task_id])?;
         database.connection().execute("UPDATE suplex_task_sessions SET is_current = 0,lifecycle = 'cancelled',stop_requested_at = ?1,stopped_at = NULL,updated_at = ?1 WHERE id = ?2",params![time,request.session_id])?;
         database.connection().execute("UPDATE suplex_task_turns SET status = 'cancelled',updated_at = ?1 WHERE session_id = ?2 AND status IN ('pending_prompt','prompted','unknown')",params![time,request.session_id])?;
-        database.connection().execute("INSERT INTO suplex_task_sessions (id,task_id,kind,generation,is_current,lifecycle,profile_json,replaces_session_id,replacement_reason,replacement_handoff,created_at,updated_at) VALUES (?1,?2,'root',?3,1,'reserved',?4,?5,?6,?7,?8,?8)",params![id,task_id,generation,js_json::stringify(&profile),request.session_id,reason,handoff_text,time])?;
+        database.connection().execute("INSERT INTO suplex_task_sessions (id,task_id,kind,generation,is_current,lifecycle,profile_json,replaces_session_id,replacement_reason,replacement_handoff,created_at,updated_at) VALUES (?1,?2,'root',?3,1,'reserved',?4,?5,?6,?7,?8,?8)",params![id,task_id,generation,serde_json::to_string(&profile)?,request.session_id,reason,handoff_text,time])?;
         database.connection().execute("INSERT INTO suplex_task_turns (id,task_id,session_id,generation,prompt_hash,prompt_text,status,created_at,updated_at) VALUES (?1,?2,?3,?4,?5,?6,'pending_prompt',?7,?7)",params![new_turn_id(now)?,task_id,id,generation,prompt_hash,prompt,time])?;
-        database.connection().execute("UPDATE suplex_task_controls SET root_session_id = ?1,root_profile_json = ?2,status = CASE WHEN ?3 THEN 'active' ELSE status END,status_changed_at = CASE WHEN ?3 THEN ?4 ELSE status_changed_at END,human_question = CASE WHEN ?3 THEN NULL ELSE human_question END,human_question_id = CASE WHEN ?3 THEN NULL ELSE human_question_id END,human_question_options_json = CASE WHEN ?3 THEN '[]' ELSE human_question_options_json END,wake_at = CASE WHEN status = 'active' OR ?3 THEN ?4 ELSE wake_at END,updated_at = ?4 WHERE task_id = ?5",params![id,js_json::stringify(&profile),request.resume,time,task_id])?;
+        database.connection().execute("UPDATE suplex_task_controls SET root_session_id = ?1,root_profile_json = ?2,status = CASE WHEN ?3 THEN 'active' ELSE status END,status_changed_at = CASE WHEN ?3 THEN ?4 ELSE status_changed_at END,human_question = CASE WHEN ?3 THEN NULL ELSE human_question END,human_question_id = CASE WHEN ?3 THEN NULL ELSE human_question_id END,human_question_options_json = CASE WHEN ?3 THEN '[]' ELSE human_question_options_json END,wake_at = CASE WHEN status = 'active' OR ?3 THEN ?4 ELSE wake_at END,updated_at = ?4 WHERE task_id = ?5",params![id,serde_json::to_string(&profile)?,request.resume,time,task_id])?;
         root_observation_rows(database, task_id)?.root.ok_or_else(|| CoordinationError::refused("replacement_session_missing").into())
     })
 }
@@ -2530,10 +2555,10 @@ mod tests {
             request_hash: "replace-hash".into(),
             creator: TaskCreator::User(user.id),
             delivery_target: "local_worktree".into(),
-            delivery_intent: serde_json::json!({"repository":"owner/repo","headBranch":"task-replace","baseBranch":"main","baselineSha":"head","pullRequestNumber":null}),
-            root_profile: serde_json::json!({"profileId":"root","provider":"codex","model":"test","reasoningLevel":"medium","serviceTier":"default"}),
-            worker_profile: serde_json::json!({"profileId":"worker","provider":"codex","model":"test","reasoningLevel":"medium","serviceTier":"default"}),
-            advisor_profiles: serde_json::json!({}),
+            delivery_intent: serde_json::from_value(serde_json::json!({"repository":"owner/repo","headBranch":"task-replace","baseBranch":"main","baselineSha":"head","pullRequestNumber":null})).unwrap(),
+            root_profile: serde_json::from_value(serde_json::json!({"profileId":"root","provider":"codex","model":"test","reasoningLevel":"medium","serviceTier":"default"})).unwrap(),
+            worker_profile: serde_json::from_value(serde_json::json!({"profileId":"worker","provider":"codex","model":"test","reasoningLevel":"medium","serviceTier":"default"})).unwrap(),
+            advisor_profiles: serde_json::from_value(serde_json::json!({})).unwrap(),
             issue: None,
             start_queued: true,
             copied_from_task_id: None,
@@ -2846,10 +2871,10 @@ mod tests {
             request_hash: "event-first-hash".into(),
             creator: TaskCreator::User(user.id),
             delivery_target: "local_worktree".into(),
-            delivery_intent: serde_json::json!({"repository":"owner/repo","headBranch":"task-first","baseBranch":"main","baselineSha":"head","pullRequestNumber":null}),
-            root_profile: serde_json::json!({"profileId":"root","provider":"codex","model":"test","reasoningLevel":"medium","serviceTier":"default"}),
-            worker_profile: serde_json::json!({"profileId":"worker","provider":"codex","model":"test","reasoningLevel":"medium","serviceTier":"default"}),
-            advisor_profiles: serde_json::json!({}),
+            delivery_intent: serde_json::from_value(serde_json::json!({"repository":"owner/repo","headBranch":"task-first","baseBranch":"main","baselineSha":"head","pullRequestNumber":null})).unwrap(),
+            root_profile: serde_json::from_value(serde_json::json!({"profileId":"root","provider":"codex","model":"test","reasoningLevel":"medium","serviceTier":"default"})).unwrap(),
+            worker_profile: serde_json::from_value(serde_json::json!({"profileId":"worker","provider":"codex","model":"test","reasoningLevel":"medium","serviceTier":"default"})).unwrap(),
+            advisor_profiles: serde_json::from_value(serde_json::json!({})).unwrap(),
             issue: None,
             start_queued: true,
             copied_from_task_id: None,
@@ -2940,10 +2965,10 @@ mod tests {
             request_hash: "note-hash".into(),
             creator: TaskCreator::User(user.id),
             delivery_target: "local_worktree".into(),
-            delivery_intent: serde_json::json!({"repository":"owner/repo","headBranch":"task-note","baseBranch":"main","baselineSha":"head","pullRequestNumber":null}),
-            root_profile: serde_json::json!({"profileId":"root","provider":"codex","model":"test","reasoningLevel":"medium","serviceTier":"default"}),
-            worker_profile: serde_json::json!({"profileId":"worker","provider":"codex","model":"test","reasoningLevel":"medium","serviceTier":"default"}),
-            advisor_profiles: serde_json::json!({}),
+            delivery_intent: serde_json::from_value(serde_json::json!({"repository":"owner/repo","headBranch":"task-note","baseBranch":"main","baselineSha":"head","pullRequestNumber":null})).unwrap(),
+            root_profile: serde_json::from_value(serde_json::json!({"profileId":"root","provider":"codex","model":"test","reasoningLevel":"medium","serviceTier":"default"})).unwrap(),
+            worker_profile: serde_json::from_value(serde_json::json!({"profileId":"worker","provider":"codex","model":"test","reasoningLevel":"medium","serviceTier":"default"})).unwrap(),
+            advisor_profiles: serde_json::from_value(serde_json::json!({})).unwrap(),
             issue: None,
             start_queued: true,
             copied_from_task_id: None,
@@ -3053,10 +3078,10 @@ mod tests {
             request_hash: "same-request".into(),
             creator: TaskCreator::User(user.id),
             delivery_target: "local_worktree".into(),
-            delivery_intent: serde_json::json!({"repository":"owner/repo","headBranch":"task-one","baseBranch":"main","baselineSha":"head","pullRequestNumber":null}),
-            root_profile: serde_json::json!({"profileId":"profile_native_root","provider":"codex","model":"gpt-6-sol","reasoningLevel":"medium","serviceTier":"default"}),
-            worker_profile: serde_json::json!({"profileId":"profile_native_worker","provider":"codex","model":"gpt-6-sol","reasoningLevel":"medium","serviceTier":"default"}),
-            advisor_profiles: serde_json::json!({}),
+            delivery_intent: serde_json::from_value(serde_json::json!({"repository":"owner/repo","headBranch":"task-one","baseBranch":"main","baselineSha":"head","pullRequestNumber":null})).unwrap(),
+            root_profile: serde_json::from_value(serde_json::json!({"profileId":"profile_native_root","provider":"codex","model":"gpt-6-sol","reasoningLevel":"medium","serviceTier":"default"})).unwrap(),
+            worker_profile: serde_json::from_value(serde_json::json!({"profileId":"profile_native_worker","provider":"codex","model":"gpt-6-sol","reasoningLevel":"medium","serviceTier":"default"})).unwrap(),
+            advisor_profiles: serde_json::from_value(serde_json::json!({})).unwrap(),
             issue: None,
             start_queued: true,
             copied_from_task_id: None,
@@ -3103,7 +3128,7 @@ mod tests {
             idempotency_key: "pull-request-key".into(),
             request_hash: "pull-request-request".into(),
             configuration: serde_json::json!({"repository":"owner/repo","source":{"kind":"pull_request","number":42}}),
-            delivery_intent: serde_json::json!({"repository":"owner/repo","pullRequestNumber":42}),
+            delivery_intent: serde_json::from_value(serde_json::json!({"repository":"owner/repo","headBranch":"task","baseBranch":"main","baselineSha":"head","pullRequestNumber":42})).unwrap(),
             start_queued: false,
             ..prepared.clone()
         };

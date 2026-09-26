@@ -14,8 +14,10 @@ use crate::platform::{
     database::{DatabaseResult, SuplexDatabase},
 };
 
-use super::control::TaskStatus;
+use super::control::{DeliveryIntent, TaskProfile, TaskStatus};
 use super::images::DecodedTaskImage;
+use crate::coordination::advisor_bridge::AdvisorRole;
+use std::collections::BTreeMap;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum TaskCreator {
@@ -35,10 +37,10 @@ pub struct PreparedTask {
     pub request_hash: String,
     pub creator: TaskCreator,
     pub delivery_target: String,
-    pub delivery_intent: Value,
-    pub root_profile: Value,
-    pub worker_profile: Value,
-    pub advisor_profiles: Value,
+    pub delivery_intent: DeliveryIntent,
+    pub root_profile: TaskProfile,
+    pub worker_profile: TaskProfile,
+    pub advisor_profiles: BTreeMap<AdvisorRole, TaskProfile>,
     pub issue: Option<Value>,
     pub start_queued: bool,
     pub copied_from_task_id: Option<String>,
@@ -63,9 +65,9 @@ pub struct TaskEditSnapshot {
     pub task: TaskRecord,
     pub delivery_target: String,
     pub workflow: String,
-    pub root_profile: Value,
-    pub worker_profile: Value,
-    pub advisor_profiles: Value,
+    pub root_profile: TaskProfile,
+    pub worker_profile: TaskProfile,
+    pub advisor_profiles: BTreeMap<AdvisorRole, TaskProfile>,
     pub configuration: Value,
 }
 
@@ -76,9 +78,9 @@ pub struct TaskDetailsWrite {
     pub workflow: String,
     pub run_project_tests: bool,
     pub visual_evidence: String,
-    pub root_profile: Value,
-    pub worker_profile: Value,
-    pub advisor_profiles: Value,
+    pub root_profile: TaskProfile,
+    pub worker_profile: TaskProfile,
+    pub advisor_profiles: BTreeMap<AdvisorRole, TaskProfile>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -285,7 +287,7 @@ fn create_inner(
         let objective = if input.description.is_empty() { input.title.clone() } else { format!("{}\n\n{}", input.title, input.description) };
         database.connection().execute(
             "INSERT INTO suplex_task_controls (task_id, objective, delivery_target, delivery_intent_json, status, root_profile_json, worker_profile_json, workflow, advisor_profiles_json, workflow_state_json, status_changed_at, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'standard', ?8, '{\"version\":1,\"reviews\":[],\"acceptedDelivery\":null,\"deliveryWait\":null,\"completion\":null,\"toolOwner\":null}', ?9, ?9, ?9)",
-            params![id, objective, input.delivery_target, input.delivery_intent.to_string(), if input.start_queued { "queued" } else { "backlog" }, input.root_profile.to_string(), input.worker_profile.to_string(), input.advisor_profiles.to_string(), time],
+            params![id, objective, input.delivery_target, serde_json::to_string(&input.delivery_intent)?, if input.start_queued { "queued" } else { "backlog" }, serde_json::to_string(&input.root_profile)?, serde_json::to_string(&input.worker_profile)?, serde_json::to_string(&input.advisor_profiles)?, time],
         )?;
         assert_task_pull_requests_available(database, id)?;
         for dependency in input.depends_on.iter().collect::<std::collections::BTreeSet<_>>() {
@@ -370,7 +372,7 @@ pub fn update_details(
         if changed != 1 { return Ok(false); }
         database.connection().execute(
             "UPDATE suplex_task_controls SET objective = (SELECT CASE WHEN description = '' THEN title ELSE title || char(10) || char(10) || description END FROM suplex_tasks WHERE id = ?1), delivery_target = ?2, workflow = ?3, root_profile_json = ?4, worker_profile_json = ?5, advisor_profiles_json = ?6, updated_at = ?7 WHERE task_id = ?1",
-            params![task_id, details.delivery_target, details.workflow, details.root_profile.to_string(), details.worker_profile.to_string(), details.advisor_profiles.to_string(), time],
+            params![task_id, details.delivery_target, details.workflow, serde_json::to_string(&details.root_profile)?, serde_json::to_string(&details.worker_profile)?, serde_json::to_string(&details.advisor_profiles)?, time],
         )?;
         Ok(true)
     })

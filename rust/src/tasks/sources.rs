@@ -438,7 +438,7 @@ pub async fn creation_source(
 }
 
 /// Apply a resolved source to the prepared task configuration and delivery intent.
-pub fn apply(prepared: &mut PreparedTask, created: CreationSource) {
+pub fn apply(prepared: &mut PreparedTask, created: CreationSource) -> serde_json::Result<()> {
     if let Some(description) = created.description {
         prepared.description = description;
     }
@@ -460,11 +460,12 @@ pub fn apply(prepared: &mut PreparedTask, created: CreationSource) {
             _ => {}
         }
     }
-    prepared.delivery_intent = json!({
+    prepared.delivery_intent = serde_json::from_value(json!({
         "repository": configuration["repository"], "headBranch": configuration["branch"],
         "baseBranch": configuration["baseBranch"], "baselineSha": configuration["baselineSha"],
         "pullRequestNumber": if configuration["source"]["kind"] == "pull_request" { configuration["source"]["number"].clone() } else { Value::Null },
-    });
+    }))?;
+    Ok(())
 }
 
 #[cfg(test)]

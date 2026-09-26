@@ -3,8 +3,8 @@
 use crate::shared::hash::sha256_hex;
 use crate::shared::time::rfc3339_millis;
 use crate::tasks::TaskError;
-use crate::tasks::control::{DeliveryTarget, TaskStatus};
-use std::path::Path;
+use crate::tasks::control::{DeliveryIntent, DeliveryTarget, TaskProfile, TaskStatus};
+use std::{collections::BTreeMap, path::Path};
 
 use chrono::{DateTime, Utc};
 use rusqlite::{OptionalExtension, params};
@@ -12,7 +12,7 @@ use serde_json::{Map, Value, json};
 use uuid::Uuid;
 
 use crate::{
-    coordination::{root_prompts, root_session_store, workflows},
+    coordination::{advisor_bridge::AdvisorRole, root_prompts, root_session_store, workflows},
     http::contracts::typed::{
         projects::ProjectProviderPolicy,
         task_answers::{AnswerBody, LimitDecisionBody, TaskLimitDecision},
@@ -144,26 +144,19 @@ pub fn existing_user_task(
     repository::task_by_id(database, &task_id)
 }
 
-pub(crate) fn allowed_profile(policy: Option<&ProjectProviderPolicy>, value: &Value) -> bool {
+pub(crate) fn allowed_profile(
+    policy: Option<&ProjectProviderPolicy>,
+    profile: &TaskProfile,
+) -> bool {
     let Some(policy) = policy else {
         return true;
     };
-    if let Some(instance) = value
-        .get("providerInstanceId")
-        .and_then(Value::as_str)
-        .filter(|id| !id.is_empty())
-    {
-        policy.allowed_instance_ids.iter().any(|id| id == instance)
-    } else {
-        value
-            .get("provider")
-            .and_then(Value::as_str)
-            .is_some_and(|provider| {
-                policy
-                    .allowed_providers
-                    .iter()
-                    .any(|allowed| allowed == provider)
-            })
+    match profile.provider_instance_id().filter(|id| !id.is_empty()) {
+        Some(instance) => policy.allowed_instance_ids.iter().any(|id| id == instance),
+        None => policy
+            .allowed_providers
+            .iter()
+            .any(|allowed| allowed == &profile.provider),
     }
 }
 
@@ -171,11 +164,19 @@ pub(crate) fn read_profile(
     database: &SuplexDatabase,
     id: &str,
     role: &str,
-) -> DatabaseResult<Option<Value>> {
+) -> DatabaseResult<Option<TaskProfile>> {
     let profile = database.connection().query_row(
             "SELECT p.id, p.provider, p.model, p.reasoning_level, p.service_tier, p.provider_instance_id, i.home_directory FROM suplex_profiles p LEFT JOIN suplex_provider_instances i ON i.id = p.provider_instance_id WHERE p.id = ?1 AND p.role = ?2 AND p.archived_at IS NULL",
             params![id, role],
-            |row| Ok(json!({"profileId": row.get::<_, String>(0)?, "provider": row.get::<_, String>(1)?, "model": row.get::<_, String>(2)?, "reasoningLevel": row.get::<_, String>(3)?, "serviceTier": row.get::<_, String>(4)?, "providerInstanceId": row.get::<_, Option<String>>(5)?, "instanceHomeDirectory": row.get::<_, Option<String>>(6)?})),
+            |row| Ok(TaskProfile {
+                profile_id: row.get(0)?,
+                provider: row.get(1)?,
+                model: row.get(2)?,
+                reasoning_level: row.get(3)?,
+                service_tier: row.get(4)?,
+                provider_instance_id: Some(row.get(5)?),
+                instance_home_directory: Some(row.get(6)?),
+            }),
         ).optional()?;
     Ok(profile)
 }
@@ -186,7 +187,7 @@ fn selected_profile(
     selected: Option<&str>,
     default_id: &str,
     role: &str,
-) -> DatabaseResult<Value> {
+) -> DatabaseResult<TaskProfile> {
     let id = selected.unwrap_or(default_id);
     let profile = read_profile(database, id, role)?
         .ok_or_else(|| TaskError::new("The selected agent profile does not exist", 422))?;
@@ -289,9 +290,9 @@ fn task_branch_name(title: &str, task_id: &str) -> String {
 }
 
 pub struct LocalProfiles {
-    root: Value,
-    worker: Value,
-    advisors: Value,
+    root: TaskProfile,
+    worker: TaskProfile,
+    advisors: BTreeMap<AdvisorRole, TaskProfile>,
 }
 
 /// Profile selection precedes the Git fetch in the TypeScript create flow.
@@ -315,22 +316,17 @@ pub fn select_local_profiles(
         "worker",
     )?;
     // TypeScript `create`: each workflow Advisor defaults to the Coordinator profile.
-    let mut advisors = Map::new();
-    let roles = crate::coordination::workflows::workflow_definition(&input.workflow)
-        .map_or(&[][..], |definition| definition.advisor_roles);
+    let mut advisors = BTreeMap::new();
     let selected = serde_json::to_value(&input.advisor_profile_ids)?;
-    for role in roles {
-        let id = selected[*role]
-            .as_str()
-            .or(root["profileId"].as_str())
-            .unwrap_or_default();
+    for role in workflows::advisor_roles(&input.workflow) {
+        let id = selected[role.as_str()].as_str().unwrap_or(&root.profile_id);
         let profile = selected_profile(database, project, Some(id), id, "root")?;
-        advisors.insert((*role).to_owned(), profile);
+        advisors.insert(role, profile);
     }
     Ok(LocalProfiles {
         root,
         worker,
-        advisors: Value::Object(advisors),
+        advisors,
     })
 }
 
@@ -391,7 +387,13 @@ pub fn prepare_local_user_task(
         request_hash: task_request_hash(input, actor_user_id)?,
         creator: TaskCreator::User(actor_user_id.to_owned()),
         delivery_target: input.delivery_target.clone(),
-        delivery_intent: json!({"repository": repository, "headBranch": branch, "baseBranch": project.base_branch, "baselineSha": base_sha, "pullRequestNumber": null}),
+        delivery_intent: DeliveryIntent {
+            repository: repository.to_owned(),
+            head_branch: branch,
+            base_branch: project.base_branch.clone(),
+            baseline_sha: base_sha.to_owned(),
+            pull_request_number: None,
+        },
         root_profile: profiles.root,
         worker_profile: profiles.worker,
         advisor_profiles: profiles.advisors,
@@ -794,8 +796,8 @@ pub fn select_user_task_agent(
             "questionId": if request.resume { request.question_id.as_deref() } else { None },
         });
         let mut advisors: Value = serde_json::from_str(&advisor_profiles)?;
-        let previous_profile: Value = match advisor_role {
-            Some(role) if !advisors[role].is_null() => advisors[role].clone(),
+        let previous_profile: TaskProfile = match advisor_role {
+            Some(role) if !advisors[role].is_null() => serde_json::from_value(advisors[role].clone())?,
             Some(_) => serde_json::from_str(&root_profile)?,
             None => serde_json::from_str(if root { &root_profile } else { &worker_profile })?,
         };
@@ -812,13 +814,13 @@ pub fn select_user_task_agent(
         if root && repeated && root_session_id.is_some() && state["initialRootSelectionSessionId"].as_str() == root_session_id.as_deref() {
             return Ok(());
         }
-        if !root && repeated && previous_profile["profileId"] == request.profile_id.as_str() {
+        if !root && repeated && previous_profile.profile_id == request.profile_id {
             return Ok(());
         }
-        if root && (root_session_id.is_some() || previous_profile["profileId"] != request.expected_profile_id.as_str()) {
+        if root && (root_session_id.is_some() || previous_profile.profile_id != request.expected_profile_id) {
             return Err(conflict(coordinator_changed));
         }
-        if !root && (previous_profile["profileId"] != request.expected_profile_id.as_str() || current.as_ref().map(|current| &current.0) != request.expected_session_id.as_ref()) {
+        if !root && (previous_profile.profile_id != request.expected_profile_id || current.as_ref().map(|current| &current.0) != request.expected_session_id.as_ref()) {
             return Err(conflict("The agent changed. Read the current agent before selecting another."));
         }
         if request.resume && (status != TaskStatus::WaitingHuman || question_id != request.question_id || pending_decision) {
@@ -831,7 +833,7 @@ pub fn select_user_task_agent(
         if !allowed_profile(policy.as_ref(), &profile) {
             return Err(conflict("Select an agent with a provider and login allowed by this project"));
         }
-        let profile_json = crate::shared::js_json::stringify(&profile);
+        let profile_json = serde_json::to_string(&profile)?;
         let insert_turn = |database: &SuplexDatabase, session_id: &str, generation: i64, prompt: &str| -> DatabaseResult<()> {
             database.connection().execute(
                 "INSERT INTO suplex_task_turns (id, task_id, session_id, generation, prompt_hash, prompt_text, status, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'pending_prompt', ?7, ?7)",
@@ -878,7 +880,7 @@ pub fn select_user_task_agent(
         } else {
             database.connection().execute(
                 "UPDATE suplex_task_sessions SET profile_json = ?1 WHERE task_id = ?2 AND kind = 'worker' AND advisor_role IS ?3 AND profile_json IS NULL",
-                params![crate::shared::js_json::stringify(&previous_profile), task_id, advisor_role],
+                params![serde_json::to_string(&previous_profile)?, task_id, advisor_role],
             )?;
             if let Some((current_id, current_generation, slot, session_input, inherited)) = &current {
                 let latest = database.connection().query_row(
@@ -933,7 +935,7 @@ pub fn select_user_task_agent(
                     params![profile_json, task_id],
                 )?,
                 Some(role) => {
-                    advisors[role] = profile.clone();
+                    advisors[role] = serde_json::to_value(&profile)?;
                     database.connection().execute(
                         "UPDATE suplex_task_controls SET advisor_profiles_json = ?1 WHERE task_id = ?2",
                         params![crate::shared::js_json::stringify(&advisors), task_id],
@@ -1359,10 +1361,10 @@ pub fn answer_user_task_limit(
 fn edit_profile(
     database: &SuplexDatabase,
     id: &str,
-    current: &Value,
+    current: Option<&TaskProfile>,
     role: &str,
-) -> DatabaseResult<Value> {
-    if current.get("profileId").and_then(Value::as_str) == Some(id) {
+) -> DatabaseResult<TaskProfile> {
+    if let Some(current) = current.filter(|current| current.profile_id == id) {
         return Ok(current.clone());
     }
     read_profile(database, id, role)?
@@ -1424,46 +1426,33 @@ pub fn update_user_task_details(
         let root_id = input
             .root_profile_id
             .as_deref()
-            .or_else(|| {
-                current
-                    .root_profile
-                    .get("profileId")
-                    .and_then(Value::as_str)
-            })
-            .ok_or("Stored Root profile is missing")?;
+            .unwrap_or(&current.root_profile.profile_id);
         let worker_id = input
             .worker_profile_id
             .as_deref()
-            .or_else(|| {
-                current
-                    .worker_profile
-                    .get("profileId")
-                    .and_then(Value::as_str)
-            })
-            .ok_or("Stored Worker profile is missing")?;
-        let root_profile = edit_profile(database, root_id, &current.root_profile, "root")?;
-        let worker_profile = edit_profile(database, worker_id, &current.worker_profile, "worker")?;
+            .unwrap_or(&current.worker_profile.profile_id);
+        let root_profile = edit_profile(database, root_id, Some(&current.root_profile), "root")?;
+        let worker_profile =
+            edit_profile(database, worker_id, Some(&current.worker_profile), "worker")?;
         // A request that names its Advisors states them all; only a request without any Advisor selection keeps the stored ones.
-        let mut advisor_profiles = Map::new();
-        let roles = workflows::workflow_definition(workflow)
-            .map_or(&[][..], |definition| definition.advisor_roles);
-        for role in roles {
+        let mut advisor_profiles = BTreeMap::new();
+        for role in workflows::advisor_roles(workflow) {
+            let stored_profile = current.advisor_profiles.get(&role);
             let stored = input
                 .advisor_profile_ids
                 .is_none()
-                .then(|| current.advisor_profiles[*role]["profileId"].as_str())
+                .then(|| stored_profile.map(|profile| profile.profile_id.as_str()))
                 .flatten();
-            let id = normalized["advisorProfileIds"][*role]
+            let id = normalized["advisorProfileIds"][role.as_str()]
                 .as_str()
                 .or(stored)
-                .or_else(|| root_profile["profileId"].as_str())
-                .unwrap_or_default();
-            let profile = if root_profile["profileId"] == id {
+                .unwrap_or(&root_profile.profile_id);
+            let profile = if root_profile.profile_id == id {
                 root_profile.clone()
             } else {
-                edit_profile(database, id, &current.advisor_profiles[*role], "root")?
+                edit_profile(database, id, stored_profile, "root")?
             };
-            advisor_profiles.insert((*role).to_owned(), profile);
+            advisor_profiles.insert(role, profile);
         }
         let policy: Option<ProjectProviderPolicy> = current
             .configuration
@@ -1532,7 +1521,7 @@ pub fn update_user_task_details(
                 .unwrap_or_else(|| stored_visual.to_owned()),
             root_profile,
             worker_profile,
-            advisor_profiles: Value::Object(advisor_profiles),
+            advisor_profiles,
         };
         if !repository::update_details(database, task_id, &details, now)? {
             return Err(TaskError::new(
@@ -1602,10 +1591,10 @@ mod tests {
             request_hash: "command-hash".into(),
             creator: TaskCreator::User(user.id.clone()),
             delivery_target: "local_worktree".into(),
-            delivery_intent: json!({"repository":"owner/repo","headBranch":"task-command","baseBranch":"main","baselineSha":"head","pullRequestNumber":null}),
-            root_profile: json!({"profileId":"profile_native_root","provider":"codex","model":"test","reasoningLevel":"medium","serviceTier":"default"}),
-            worker_profile: json!({"profileId":"profile_native_worker","provider":"codex","model":"test","reasoningLevel":"medium","serviceTier":"default"}),
-            advisor_profiles: json!({}),
+            delivery_intent: serde_json::from_value(json!({"repository":"owner/repo","headBranch":"task-command","baseBranch":"main","baselineSha":"head","pullRequestNumber":null})).unwrap(),
+            root_profile: serde_json::from_value(json!({"profileId":"profile_native_root","provider":"codex","model":"test","reasoningLevel":"medium","serviceTier":"default"})).unwrap(),
+            worker_profile: serde_json::from_value(json!({"profileId":"profile_native_worker","provider":"codex","model":"test","reasoningLevel":"medium","serviceTier":"default"})).unwrap(),
+            advisor_profiles: serde_json::from_value(json!({})).unwrap(),
             issue: None,
             start_queued: false,
             copied_from_task_id: None,
@@ -2173,10 +2162,10 @@ mod tests {
             request_hash: "command-hash".into(),
             creator: TaskCreator::User(user.id.clone()),
             delivery_target: "local_worktree".into(),
-            delivery_intent: json!({"repository":"owner/repo","headBranch":"task-command","baseBranch":"main","baselineSha":"head","pullRequestNumber":null}),
-            root_profile: json!({"profileId":"profile_native_root","provider":"codex","model":"gpt-6-sol","reasoningLevel":"medium","serviceTier":"default"}),
-            worker_profile: json!({"profileId":"profile_native_worker","provider":"codex","model":"gpt-6-sol","reasoningLevel":"medium","serviceTier":"default"}),
-            advisor_profiles: json!({}),
+            delivery_intent: serde_json::from_value(json!({"repository":"owner/repo","headBranch":"task-command","baseBranch":"main","baselineSha":"head","pullRequestNumber":null})).unwrap(),
+            root_profile: serde_json::from_value(json!({"profileId":"profile_native_root","provider":"codex","model":"gpt-6-sol","reasoningLevel":"medium","serviceTier":"default"})).unwrap(),
+            worker_profile: serde_json::from_value(json!({"profileId":"profile_native_worker","provider":"codex","model":"gpt-6-sol","reasoningLevel":"medium","serviceTier":"default"})).unwrap(),
+            advisor_profiles: serde_json::from_value(json!({})).unwrap(),
             issue: None,
             start_queued: false,
             copied_from_task_id: None,

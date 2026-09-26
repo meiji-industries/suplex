@@ -670,7 +670,7 @@ async fn finish_admitted_create(state: AppState, admitted: AdmittedCreate) -> Re
             &base_sha,
             now,
         )?;
-        crate::tasks::sources::apply(&mut prepared, pinned);
+        crate::tasks::sources::apply(&mut prepared, pinned)?;
         prepared.pull_request_dependencies = pull_requests;
         let artifact_root = state
             .artifact_root

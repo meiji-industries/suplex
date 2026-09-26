@@ -180,10 +180,10 @@ mod tests {
             configuration: json!({"branch":"timeline-branch","baseBranch":"main"}),
             idempotency_key: "timeline-route".into(), request_hash: "timeline-hash".into(),
             creator: TaskCreator::User(admin.user.id), delivery_target: "local_worktree".into(),
-            delivery_intent: json!({"headBranch":"timeline-branch","baseBranch":"main"}),
-            root_profile: json!({"profileId":"root_profile","provider":"codex","model":"gpt-6-sol","reasoningLevel":"medium","serviceTier":"default"}),
-            worker_profile: json!({"profileId":"worker_profile","provider":"codex","model":"gpt-6-sol","reasoningLevel":"medium","serviceTier":"default"}),
-            advisor_profiles: json!({}), issue: None, start_queued: false,
+            delivery_intent: serde_json::from_value(json!({"repository":"owner/repo","headBranch":"timeline-branch","baseBranch":"main","baselineSha":"head","pullRequestNumber":null})).unwrap(),
+            root_profile: serde_json::from_value(json!({"profileId":"root_profile","provider":"codex","model":"gpt-6-sol","reasoningLevel":"medium","serviceTier":"default"})).unwrap(),
+            worker_profile: serde_json::from_value(json!({"profileId":"worker_profile","provider":"codex","model":"gpt-6-sol","reasoningLevel":"medium","serviceTier":"default"})).unwrap(),
+            advisor_profiles: serde_json::from_value(json!({})).unwrap(), issue: None, start_queued: false,
             copied_from_task_id: None, depends_on: vec![], pull_request_dependencies: vec![],
         }, now).unwrap().task;
         database.connection().execute("INSERT INTO suplex_users (id,display_name,username,role,status,created_at,updated_at,identity_version) VALUES ('timeline_member','Member','user_v1_timeline_member','member','active',?1,?1,1)", [&stamp]).unwrap();

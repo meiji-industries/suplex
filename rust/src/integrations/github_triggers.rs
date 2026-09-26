@@ -1029,67 +1029,14 @@ async fn preview<D: Db>(
         list_open_pull_requests_by_label(github, &rule.repository_name, &rule.label).await?;
     let (mut candidate_failure, mut candidate_retry) = (false, None);
     for number in candidates {
-        let observed: Result<Activity, Failure> = async {
-            let pull = inspect_pull_request(github, &rule.repository_name, number).await?;
-            let matching_paths = pull.matching_paths(&rule.protected_paths);
-            let same = pull.base_repository.id == rule.repository_id
-                && pull.base_repository.id == binding_id
-                && pull.base_repository.full_name == rule.repository_name.to_lowercase()
-                && pull.base_repository.full_name == binding_name.to_lowercase();
-            let owned = db(database, |database| {
-                owns_pull_request(database, &rule.repository_name, pull.number)
-            })?;
-            let reason = if !same {
-                "The pull request repository does not match this rule."
-            } else if pull.state != "open" {
-                "The pull request is closed."
-            } else if pull.is_draft {
-                "The pull request is a draft."
-            } else if pull.is_cross_repository {
-                "The pull request comes from a fork."
-            } else if pull.base_branch != expected.dependencies.base_branch {
-                "The pull request targets a different base branch."
-            } else if !pull.labels.contains(&rule.label) {
-                "The pull request does not have the required label."
-            } else if !matching_paths.is_empty() {
-                "The pull request changes a protected path."
-            } else if owned {
-                "A task already uses this pull request."
-            } else {
-                "Eligible."
-            };
-            let (dispatch, processed) = db(database, |database| {
-                Ok((
-                    dispatches::find(database, &rule.id, pull.base_repository.id, pull.number)?,
-                    dispatches::previously_processed(
-                        database,
-                        pull.base_repository.id,
-                        pull.number,
-                    )?,
-                ))
-            })?;
-            let task_id = dispatch.and_then(|dispatch| dispatch.task_id);
-            let task_status = match &task_id {
-                Some(task_id) => Some(task_status(database, &rule.authority_user_id, task_id)?),
-                None => None,
-            };
-            Ok(Activity {
-                matching_paths,
-                task_id,
-                task_status,
-                previously_processed: processed,
-                ..Activity::new(
-                    pull.number,
-                    Some(&pull.url),
-                    if reason == "Eligible." {
-                        "eligible"
-                    } else {
-                        "excluded"
-                    },
-                    reason,
-                )
-            })
-        }
+        let observed = preview_candidate(
+            database,
+            github,
+            rule,
+            &expected,
+            (binding_id, &binding_name),
+            number,
+        )
         .await;
         match observed {
             Ok(value) => activity.push(value),
@@ -1132,6 +1079,72 @@ async fn preview<D: Db>(
         return Err(public(CHANGED, 409));
     }
     Ok(std::mem::take(activity))
+}
+
+/// The preview activity of one labelled pull request.
+async fn preview_candidate<D: Db>(
+    database: &D,
+    github: &Github,
+    rule: &Rule,
+    expected: &Local,
+    (binding_id, binding_name): (i64, &str),
+    number: i64,
+) -> Result<Activity, Failure> {
+    let pull = inspect_pull_request(github, &rule.repository_name, number).await?;
+    let matching_paths = pull.matching_paths(&rule.protected_paths);
+    let same = pull.base_repository.id == rule.repository_id
+        && pull.base_repository.id == binding_id
+        && pull.base_repository.full_name == rule.repository_name.to_lowercase()
+        && pull.base_repository.full_name == binding_name.to_lowercase();
+    let owned = db(database, |database| {
+        owns_pull_request(database, &rule.repository_name, pull.number)
+    })?;
+    let reason = if !same {
+        "The pull request repository does not match this rule."
+    } else if pull.state != "open" {
+        "The pull request is closed."
+    } else if pull.is_draft {
+        "The pull request is a draft."
+    } else if pull.is_cross_repository {
+        "The pull request comes from a fork."
+    } else if pull.base_branch != expected.dependencies.base_branch {
+        "The pull request targets a different base branch."
+    } else if !pull.labels.contains(&rule.label) {
+        "The pull request does not have the required label."
+    } else if !matching_paths.is_empty() {
+        "The pull request changes a protected path."
+    } else if owned {
+        "A task already uses this pull request."
+    } else {
+        "Eligible."
+    };
+    let (dispatch, processed) = db(database, |database| {
+        Ok((
+            dispatches::find(database, &rule.id, pull.base_repository.id, pull.number)?,
+            dispatches::previously_processed(database, pull.base_repository.id, pull.number)?,
+        ))
+    })?;
+    let task_id = dispatch.and_then(|dispatch| dispatch.task_id);
+    let task_status = match &task_id {
+        Some(task_id) => Some(task_status(database, &rule.authority_user_id, task_id)?),
+        None => None,
+    };
+    Ok(Activity {
+        matching_paths,
+        task_id,
+        task_status,
+        previously_processed: processed,
+        ..Activity::new(
+            pull.number,
+            Some(&pull.url),
+            if reason == "Eligible." {
+                "eligible"
+            } else {
+                "excluded"
+            },
+            reason,
+        )
+    })
 }
 
 /// `eligible`: the exclusion reason for a pull request, if any.

@@ -329,9 +329,10 @@ pub fn prepare_local_task_worktree(
             Err(error)
                 if initially_absent
                     && attempt < 19
-                    && (error
-                        .downcast_ref::<git2::Error>()
-                        .is_some_and(|git| git.code() == git2::ErrorCode::Locked)
+                    // A concurrent preparation holds or just created the branch or worktree metadata.
+                    && (error.downcast_ref::<git2::Error>().is_some_and(|git| {
+                        matches!(git.code(), git2::ErrorCode::Locked | git2::ErrorCode::Exists)
+                    })
                         || fs::symlink_metadata(&task_path).is_ok()) =>
             {
                 std::thread::sleep(std::time::Duration::from_millis(25));
@@ -424,13 +425,7 @@ fn prepare_local_task_worktree_once(
                 published_base_commit(&repository, oid, github_token)?;
             }
             let commit = repository.find_commit(oid)?;
-            match repository.branch(&intent.branch, &commit, false) {
-                // A concurrent preparation created it first; use it as an existing branch.
-                Err(error) if error.code() == git2::ErrorCode::Exists => {
-                    repository.find_branch(&intent.branch, BranchType::Local)?
-                }
-                result => result?,
-            }
+            repository.branch(&intent.branch, &commit, false)?
         }
         Err(error) => return Err(error.into()),
     };

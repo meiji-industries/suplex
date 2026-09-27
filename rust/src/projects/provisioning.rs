@@ -191,6 +191,76 @@ pub async fn github_repositories(
     })
 }
 
+#[derive(Serialize, ts_rs::TS)]
+#[serde(rename_all = "camelCase")]
+pub struct RecentRepository {
+    /// `owner/name`.
+    pub repository: String,
+    pub default_branch: String,
+    pub pushed_at: String,
+}
+
+#[derive(serde::Deserialize)]
+struct UserRepository {
+    full_name: String,
+    default_branch: Option<String>,
+    pushed_at: Option<String>,
+    archived: bool,
+}
+
+/// Repositories the signed-in account can reach that anyone pushed to since `since`, newest first.
+// ponytail: one page of 100; page further if people miss repositories.
+pub async fn recent_github_repositories(
+    github: &Github,
+    since: chrono::DateTime<chrono::Utc>,
+) -> Result<Vec<RecentRepository>, ProjectError> {
+    let list = async {
+        let access = github
+            .access()
+            .await
+            .map_err(|error| github_reason(&*error))?;
+        let rows: Vec<UserRepository> = access
+            .client()
+            .get(
+                "/user/repos",
+                Some(&json!({"sort": "pushed", "direction": "desc", "per_page": 100, "affiliation": "owner,collaborator,organization_member"})),
+            )
+            .await
+            .map_err(|error| github_reason(&error))?;
+        Ok::<_, String>(
+            rows.into_iter()
+                .filter(|row| !row.archived)
+                .filter_map(|row| {
+                    let pushed_at = row.pushed_at?;
+                    let pushed = chrono::DateTime::parse_from_rfc3339(&pushed_at).ok()?;
+                    (pushed >= since).then(|| RecentRepository {
+                        repository: row.full_name,
+                        default_branch: row
+                            .default_branch
+                            .filter(|branch| !branch.is_empty())
+                            .unwrap_or_else(|| "main".to_owned()),
+                        pushed_at,
+                    })
+                })
+                .collect(),
+        )
+    };
+    list.await.map_err(|error| {
+        failure(
+            "Repository listing failed",
+            422,
+            finding(
+                "github-list-failed",
+                "repository",
+                format!(
+                    "GitHub CLI could not list recent repositories: {}",
+                    command_failure(&error)
+                ),
+            ),
+        )
+    })
+}
+
 fn clone(
     github: &Github,
     url: &str,

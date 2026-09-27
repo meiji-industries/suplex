@@ -18,6 +18,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from ".
 import { Textarea } from "../../components/ui/textarea.js";
 import { taskDeliveryTargetOptions } from "../tasks/task-delivery-target.js";
 import { LoadingState } from "../../components/app/loading-state.js";
+import { listProjects } from "../projects/lib/project-api.js";
 
 const columns: SettingsTableColumn[] = [
   { key: "name", label: "Name", width: 180 },
@@ -57,11 +58,11 @@ export function TriggerSettingsView(): ReactElement {
   const reload = async (): Promise<GithubTriggerRule[]> => {
     const [ruleResult, projectResult, workflowResult] = await Promise.all([
       readJsonUnchecked<{ rules: GithubTriggerRule[] }>(`/api/companies/${encodeURIComponent(companyId)}/github-triggers`),
-      readJsonUnchecked<{ projects: ApiProject[] }>(`/api/companies/${encodeURIComponent(companyId)}/projects`),
+      listProjects(companyId),
       readJsonUnchecked<{ workflows: ApiWorkflow[] }>("/api/workflows?includeArchived=true"),
     ]);
     setRules(ruleResult.rules);
-    setProjects(projectResult.projects);
+    setProjects(projectResult);
     setWorkflows(workflowResult.workflows.filter((workflow) => !workflow.archivedAt));
     return ruleResult.rules;
   };

@@ -21,6 +21,7 @@ import { Textarea } from "../../components/ui/textarea.js";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../components/ui/select.js";
 import { readJsonUnchecked, withCompany } from "../../lib/api.js";
 import type { ApiProfile, ApiProject, ApiTaskTemplate } from "../../shell/view-shared.js";
+import { listProjects } from "../projects/lib/project-api.js";
 
 type EditorState =
   | { kind: "closed" }
@@ -63,15 +64,15 @@ export function TaskTemplateSettings({ projectId: initialProjectId }: { projectI
     setLoadingProjects(true);
     setProjectError("");
     void Promise.all([
-      readJsonUnchecked<{ projects: ApiProject[] }>(`/api/companies/${encodeURIComponent(companyId)}/projects`),
+      listProjects(companyId),
       readJsonUnchecked<{ profiles: ApiProfile[] }>("/api/profiles"),
     ]).then(([projectResult, profileResult]) => {
       if (closed) return;
-      setProjects(projectResult.projects);
+      setProjects(projectResult);
       setProfiles(profileResult.profiles);
       setProjectId((current) => initialProjectId
-        ? projectResult.projects.some((project) => project.id === initialProjectId) ? initialProjectId : ""
-        : projectResult.projects.some((project) => project.id === current) ? current : projectResult.projects[0]?.id ?? "");
+        ? projectResult.some((project) => project.id === initialProjectId) ? initialProjectId : ""
+        : projectResult.some((project) => project.id === current) ? current : projectResult[0]?.id ?? "");
     }).catch((reason) => { if (!closed) setProjectError(String(reason)); })
       .finally(() => { if (!closed) setLoadingProjects(false); });
     return () => { closed = true; };

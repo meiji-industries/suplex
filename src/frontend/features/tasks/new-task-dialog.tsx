@@ -29,6 +29,7 @@ import { readNewTaskMemory, writeNewTaskMemory, type NewTaskMemory } from "./new
 import { TaskRoleSelector } from "./task-role-selectors.js";
 import { supportsDeliveryTarget } from "./lib/delivery-target-capabilities.js";
 import type { NewTaskDraft } from "./lib/duplicate-task-prefill.js";
+import { listProjects } from "../projects/lib/project-api.js";
 
 type Delivery = { deliveryTarget: NonNullable<TaskInput["deliveryTarget"]>; runProjectTests: boolean };
 type RecordFallback = { rootProfileId?: string | undefined; workerProfileId?: string | undefined; advisorProfileIds?: AdvisorProfileIds | undefined; deliveryTarget?: Delivery["deliveryTarget"] | undefined; runProjectTests?: boolean | undefined; visualEvidence?: NonNullable<TaskInput["visualEvidence"]> | undefined };
@@ -126,16 +127,16 @@ export function NewTaskDialog({ open, onOpenChange, companyId, onCreated, initia
       setRunProjectTests(saved.runProjectTests ?? true);
     }
     let cancelled = false;
-    void Promise.all([readJsonUnchecked<{ projects: ApiProject[] }>(`/api/companies/${companyId}/projects`), readJsonUnchecked<{ profiles: ApiProfile[] }>("/api/profiles"), readJsonUnchecked<{ workflows: ApiWorkflow[] }>("/api/workflows?includeArchived=true")]).then(([projectResult, profileResult, workflowResult]) => {
+    void Promise.all([listProjects(companyId), readJsonUnchecked<{ profiles: ApiProfile[] }>("/api/profiles"), readJsonUnchecked<{ workflows: ApiWorkflow[] }>("/api/workflows?includeArchived=true")]).then(([projectResult, profileResult, workflowResult]) => {
       if (cancelled) return;
-      setProjects(projectResult.projects); setProfiles(profileResult.profiles); setWorkflows(workflowResult.workflows);
+      setProjects(projectResult); setProfiles(profileResult.profiles); setWorkflows(workflowResult.workflows);
       // The workflow record supplies its engine and defaults once it is known; explicit draft fields still win.
       const record = findRecord(workflowResult.workflows, initialDraft?.workflowId, nextWorkflow);
       if (record) { setWorkflow(record.engine); setWorkflowId(record.id); applyRecord(record, initialDraft ?? {}, memory()); }
       setRootProfileId(current => profileResult.profiles.some(profile => profile.id === current && profile.role === "root") ? current : "");
       setWorkerProfileId(current => profileResult.profiles.some(profile => profile.id === current && profile.role === "worker") ? current : "");
       setAdvisorProfileIds(current => Object.fromEntries(Object.entries(current).filter(([, id]) => profileResult.profiles.some(profile => profile.id === id && profile.role === "root"))) as AdvisorProfileIds);
-      setProjectId(current => projectResult.projects.some(project => project.id === current) ? current : projectResult.projects[0]?.id ?? "");
+      setProjectId(current => projectResult.some(project => project.id === current) ? current : projectResult[0]?.id ?? "");
       setSettingsLoaded(true);
     }).catch(error => { if (!cancelled) setError(error instanceof Error ? error.message : "Task settings are not available"); });
     return () => { cancelled = true; };

@@ -147,6 +147,36 @@ for arch in arm64 x64; do
   SUPLEX_DESKTOP_ARCH=$arch op run --env-file desktop/release.env -- pnpm run desktop:publish
 done
 '''
+[tasks."linux:dist"]
+description = "Build the Linux suplex binary in Docker for arm64 and x64 and pack each under dist/linux/<arch>"
+run = '''
+for arch in arm64 x64; do
+  SUPLEX_LINUX_ARCH=$arch sh scripts/build-linux.sh
+done
+'''
+[tasks."linux:publish"]
+description = "Publish the Linux suplex tarballs from dist/linux with R2 credentials from 1Password"
+run = '''
+source scripts/onepassword.sh
+onepassword_setup_service_account
+for arch in arm64 x64; do
+  SUPLEX_LINUX_ARCH=$arch op run --env-file desktop/release.env -- bash scripts/publish-linux-release.sh
+done
+'''
+[tasks."_release:publish"]
+hide = true
+description = "Upload the Mac and Linux files for both architectures, then point all four download feeds at the new version"
+run = '''
+source scripts/onepassword.sh
+onepassword_setup_service_account
+# Every file is uploaded before any feed changes, so a failed upload leaves the previous release live on all platforms.
+for phase in files manifest; do
+  for arch in arm64 x64; do
+    SUPLEX_PUBLISH_PHASE=$phase SUPLEX_DESKTOP_ARCH=$arch op run --env-file desktop/release.env -- pnpm run desktop:publish
+    SUPLEX_PUBLISH_PHASE=$phase SUPLEX_LINUX_ARCH=$arch op run --env-file desktop/release.env -- bash scripts/publish-linux-release.sh
+  done
+done
+'''
 [tasks."_release:bump"]
 hide = true
 run = '''
@@ -173,10 +203,11 @@ NODE
 '''
 [tasks."_release:check"]
 hide = true
-description = "Verify the checkout is ready for a desktop release"
+description = "Verify the checkout and Docker are ready for a desktop and Linux release"
 run = '''
 git --no-pager diff --check
 [[ -z "$(git status --porcelain)" ]] || { echo "Commit or remove working-tree changes before releasing." >&2; exit 1; }
+docker info >/dev/null 2>&1 || { echo "Start Docker before releasing; the Linux build runs in Docker." >&2; exit 1; }
 node --input-type=module <<'NODE'
 import { readFileSync } from "node:fs";
 const version = JSON.parse(readFileSync("package.json", "utf8")).version;
@@ -198,16 +229,16 @@ git push origin "v$version"
 '''
 [tasks."_release:run"]
 hide = true
-description = "Run the desktop release pipeline"
-run = "mise run _release:check && mise run _1password:setup && mise run _release:bump && mise run desktop:dist:signed && mise run _release:commit && mise run desktop:publish"
+description = "Run the desktop and Linux release pipeline"
+run = "mise run _release:check && mise run _1password:setup && mise run _release:bump && mise run desktop:dist:signed && mise run linux:dist && mise run _release:commit && mise run _release:publish"
 [tasks."release:major"]
-description = "Bump, sign, notarize, commit, tag, push, and publish the next major desktop release"
+description = "Bump, sign, notarize, commit, tag, push, and publish the next major desktop and Linux release"
 run = "RELEASE_BUMP=major mise run _release:run"
 [tasks."release:minor"]
-description = "Bump, sign, notarize, commit, tag, push, and publish the next minor desktop release"
+description = "Bump, sign, notarize, commit, tag, push, and publish the next minor desktop and Linux release"
 run = "RELEASE_BUMP=minor mise run _release:run"
 [tasks."release:patch"]
-description = "Bump, sign, notarize, commit, tag, push, and publish the next patch desktop release"
+description = "Bump, sign, notarize, commit, tag, push, and publish the next patch desktop and Linux release"
 run = "RELEASE_BUMP=patch mise run _release:run"
 [tasks."desktop:open"]
 description = "Open the installed Suplex.app at this checkout's native development stack"

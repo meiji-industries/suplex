@@ -7,6 +7,12 @@ set -euo pipefail
 : "${CF_R2_BUCKET:?Set CF_R2_BUCKET}"
 : "${SUPLEX_DESKTOP_UPDATE_URL:?Set SUPLEX_DESKTOP_UPDATE_URL}"
 
+# SUPLEX_PUBLISH_PHASE: files uploads the release files, manifest points the download feed at them, all (default) does both.
+phase="${SUPLEX_PUBLISH_PHASE:-all}"
+case "$phase" in
+  files|manifest|all) ;;
+  *) echo "SUPLEX_PUBLISH_PHASE must be files, manifest, or all, not $phase" >&2; exit 1 ;;
+esac
 arch="${SUPLEX_DESKTOP_ARCH:-arm64}"
 release_dir="desktop/release/$arch"
 prefix="stable/mac/$arch"
@@ -54,10 +60,14 @@ upload_immutable() {
   curl --fail --silent --show-error --range 0-0 --output /dev/null "$base_url/$name"
 }
 
-upload_immutable "$zip" application/zip
-upload_immutable "$blockmap" application/octet-stream
-upload_immutable "$dmg" application/x-apple-diskimage
+if [[ "$phase" != manifest ]]; then
+  upload_immutable "$zip" application/zip
+  upload_immutable "$blockmap" application/octet-stream
+  upload_immutable "$dmg" application/x-apple-diskimage
+fi
 
-aws s3api put-object --endpoint-url "$endpoint" --bucket "$CF_R2_BUCKET" --key "$prefix/latest-mac.yml" --body "$manifest" --content-type text/yaml --cache-control no-cache >/dev/null
-curl --fail --silent --show-error --head "$base_url/latest-mac.yml" >/dev/null
-curl --fail --silent --show-error --range 0-0 --output /dev/null "$base_url/latest-mac.yml"
+if [[ "$phase" != files ]]; then
+  aws s3api put-object --endpoint-url "$endpoint" --bucket "$CF_R2_BUCKET" --key "$prefix/latest-mac.yml" --body "$manifest" --content-type text/yaml --cache-control no-cache >/dev/null
+  curl --fail --silent --show-error --head "$base_url/latest-mac.yml" >/dev/null
+  curl --fail --silent --show-error --range 0-0 --output /dev/null "$base_url/latest-mac.yml"
+fi

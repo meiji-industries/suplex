@@ -183,13 +183,17 @@ jobs:
       - name: Browser tests
         run: pnpm exec vitest run --config vitest.browser.config.ts --maxWorkers "$TEST_WORKERS" --reporter=default --reporter=junit --outputFile=test-results/browser.xml
 
+      # Each journey has its own server, data directory and browser, so they run
+      # side by side. More than about half the vCPUs starves the UI waits.
       - name: Native workflow journeys
         env:
           SUPLEX_DETERMINISTIC_CODEX_RUN: "1"
+          JOURNEY_PARALLELISM: "4"
         run: |
-          for phase in deliver deliver_pr answer restart cancel deliver_claude direct_build independent_review competing_plans refine_pull_request; do
-            SUPLEX_DETERMINISTIC_PHASE=$phase pnpm exec tsx tests/interop/real-codex-standard.ts
-          done
+          mkdir -p test-results/journeys
+          printf '%s\n' deliver deliver_pr answer restart cancel deliver_claude direct_build independent_review competing_plans refine_pull_request |
+            xargs -P "$JOURNEY_PARALLELISM" -I{} sh -c 'SUPLEX_DETERMINISTIC_PHASE={} pnpm exec tsx tests/interop/real-codex-standard.ts > test-results/journeys/{}.log 2>&1 && echo "passed {}" || { echo "failed {}"; exit 1; }' ||
+            { for log in test-results/journeys/*.log; do echo "::group::$log"; cat "$log"; echo "::endgroup::"; done; exit 1; }
 
       - name: Enforce persistent target size limit
         if: ${{ always() && steps.rust-target.outcome == 'success' }}

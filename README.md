@@ -104,10 +104,10 @@ The simplest install is the desktop app: open `Suplex-<version>-arm64.dmg`
 (Apple silicon) or `Suplex-<version>-x64.dmg` (Intel),
 drag Suplex to Applications, and choose **Run locally**. The app
 ships the native server and web assets inside the bundle. It
-checks the Mac, installs Apple's developer tools (for git) and Herdr if they
-are missing, prepares a database under `~/Library/Application Support/Suplex`,
-and starts Suplex on `127.0.0.1`. No git, Homebrew, GitHub account, or
-Tailscale is necessary for a local install. See the [Desktop app](#desktop-app)
+checks the Mac, installs Apple's developer tools if Git is missing, installs
+Herdr if it is missing, prepares a database under `~/Library/Application Support/Suplex`,
+and starts Suplex on `127.0.0.1`. You do not need to install Git before setup.
+Homebrew, a GitHub account, and Tailscale are optional. See the [Desktop app](#desktop-app)
 section below.
 
 To run Suplex on a host from a checkout instead:

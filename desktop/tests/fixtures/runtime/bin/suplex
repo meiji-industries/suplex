@@ -11,7 +11,7 @@ from pathlib import Path
 
 STAGES = [
     {"name": "prerequisites", "title": "Check this Mac"},
-    {"name": "developer-tools", "title": "Install Apple developer tools (git)"},
+    {"name": "developer-tools", "title": "Set up Git"},
     {"name": "herdr", "title": "Install Herdr terminals"},
     {"name": "data", "title": "Prepare Suplex data"},
     {"name": "complete", "title": "Finish"},

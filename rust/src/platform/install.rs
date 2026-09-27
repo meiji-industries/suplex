@@ -13,7 +13,7 @@ use std::{
 
 const STAGES: [(&str, &str); 5] = [
     ("prerequisites", "Check this Mac"),
-    ("developer-tools", "Install Apple developer tools (git)"),
+    ("developer-tools", "Set up Git"),
     ("herdr", "Install Herdr terminals"),
     ("data", "Prepare Suplex data"),
     ("complete", "Finish"),
@@ -100,10 +100,8 @@ fn prerequisites() -> Value {
 }
 async fn developer_tools() -> Value {
     let git = command("git", &["--version"]);
-    let tools = command("xcode-select", &["-p"]);
-    if let (Ok(git), Ok(tools)) = (&git, &tools)
+    if let Ok(git) = &git
         && git.status.success()
-        && tools.status.success()
     {
         return success(
             format!(

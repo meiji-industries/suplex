@@ -24,6 +24,9 @@
   #count { text-align: center; }
   .progress { width: min(100%, 584px); margin: 20px auto 0; }
   .actions { justify-content: center; }
+  #cancel { min-height: 32px; padding: 0 10px; border-radius: 9999px; border-color: oklch(1 0 0 / 15%); background: oklch(1 0 0 / 4.5%); font-size: 14px; font-weight: 500; }
+  #cancel:hover:not(:disabled) { background: oklch(1 0 0 / 7.5%); }
+  #cancel:active:not(:disabled) { transform: translateY(1px); }
   #demo-toggle { position: fixed; bottom: 12px; left: 0; right: 0; text-align: center; }
   #demo-toggle[hidden] { display: none; }
   #demo-toggle a { color: #525252; font-size: 11px; text-decoration: none; }
@@ -88,19 +91,30 @@
     document.getElementById("cancel").disabled = true;
     window.suplexDesktop?.cancel?.();
   });
-  if (new URLSearchParams(location.search).has("demo")) {
+  const demo = new URLSearchParams(location.search).get("demo");
+  if (demo !== null) {
     state.stages = [
       { name: "check", title: "Check this Mac" },
-      { name: "xcode", title: "Install Apple developer tools (git)" },
+      { name: "developer-tools", title: "Set up Git" },
       { name: "herdr", title: "Install Herdr terminals" },
       { name: "data", title: "Prepare Suplex data" },
       { name: "finish", title: "Finish" },
     ];
     state.finished.set("check", { stage: "check", elapsedMs: 400 });
-    state.finished.set("xcode", { stage: "xcode", elapsedMs: 1200, skipped: true });
-    state.finished.set("herdr", { stage: "herdr", elapsedMs: 300, skipped: true });
-    state.current = "data";
-    state.log = ["[demo] preparing Suplex data…"];
+    if (demo === "git") {
+      state.current = "developer-tools";
+      state.log = ["[demo] Git is missing", "Asking macOS to install the Apple developer tools"];
+    } else {
+      state.finished.set("developer-tools", { stage: "developer-tools", elapsedMs: 1200, skipped: true });
+      if (demo === "herdr") {
+        state.current = "herdr";
+        state.log = ["[demo] Herdr is missing", "Downloading the Herdr installer"];
+      } else {
+        state.finished.set("herdr", { stage: "herdr", elapsedMs: 300, skipped: true });
+        state.current = "data";
+        state.log = ["[demo] preparing Suplex data…"];
+      }
+    }
     render();
   } else if (window.suplexDesktop) {
     window.suplexDesktop.on((event) => { if (live) apply(event); else pending.push(event); });

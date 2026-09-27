@@ -59,6 +59,17 @@ fn marker(root: &Path, name: &str) -> PathBuf {
 }
 
 #[test]
+fn developer_tools_accepts_existing_git_without_apple_tools() {
+    let fixture = Fixture::new();
+    fixture.script("git", "#!/bin/sh\necho 'git version 2.50.1'\n");
+    fixture.script("xcode-select", "#!/bin/sh\necho 'must not run' >&2\nexit 1\n");
+    let (output, result) = fixture.stage("developer-tools");
+    assert!(output.status.success());
+    assert_eq!(result["skipped"], true);
+    assert_eq!(result["reason"], "git version 2.50.1 already installed");
+}
+
+#[test]
 fn developer_tools_accepts_xcode_license_then_retries_git() {
     let fixture = Fixture::new();
     fixture.script("git", "#!/bin/sh\nif [ -f \"$SUPLEX_TEST_ROOT/license-accepted\" ]; then echo 'git version 2.50.1 (Apple Git-155)'; exit 0; fi\necho 'You have not agreed to the Xcode and Apple SDKs license.'\nexit 69\n");

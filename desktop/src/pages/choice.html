@@ -18,13 +18,14 @@
   #modes { width: fit-content; max-width: 100%; margin: 0 auto; }
   #remote, #tailscale-section { display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; margin: 20px 0 0; padding: 0; border: 0; min-width: 0; contain: inline-size; }
   #remote[disabled] { display: none; }
-  /* Same shape as shadcn's InputGroup: one bordered control with inline-start and inline-end addons. */
-  .input-group { display: flex; align-items: center; height: 32px; border: 1px solid #404040; border-radius: 6px; background: #141414; -webkit-app-region: no-drag; }
-  .input-group:focus-within { border-color: #a3a3a3; box-shadow: 0 0 0 3px rgb(163 163 163 / 0.25); }
-  .input-group input, .input-group select { font: inherit; height: 100%; min-width: 0; padding: 0 8px; border: 0; background: none; color: inherit; outline: none; }
+  /* Match the app's InputGroup while keeping the native protocol and port controls. */
+  .input-group { display: flex; align-items: center; height: 36px; border: 1px solid oklch(1 0 0 / 15%); border-radius: 9999px; background: oklch(1 0 0 / 4.5%); box-shadow: 0 1px 2px rgb(0 0 0 / 0.12); transition: border-color 150ms, box-shadow 150ms; -webkit-app-region: no-drag; }
+  .input-group:has(:focus-visible) { border-color: oklch(0.556 0 0); box-shadow: 0 0 0 3px oklch(0.556 0 0 / 50%); }
+  .input-group input, .input-group select { font: 14px/1.5 -apple-system, system-ui, sans-serif; height: 100%; min-width: 0; padding: 0 8px; border: 0; background: none; color: inherit; outline: none; }
+  .input-group input::placeholder { color: oklch(0.708 0 0); }
   .input-group select { padding-right: 4px; color: #a3a3a3; cursor: pointer; }
   .input-group > span { color: #737373; }
-  #host, #machine { flex: 1; border-left: 1px solid #303030; }
+  #host, #machine { flex: 1; }
   #port { width: 64px; }
   /* Styled like shadcn's Select through Chromium's customizable <select>; keyboard and screen reader behavior stay native. */
   #machine, #machine::picker(select) { appearance: base-select; }
@@ -74,7 +75,11 @@
   h1 { position: absolute; top: 14px; left: 0; right: 0; display: flex; justify-content: center; pointer-events: none; }
   h1 img { width: 88px; height: auto; }
   .actions { flex-direction: column; }
-  #continue { align-self: stretch; }
+  #continue { align-self: stretch; min-height: 36px; border: 0; border-radius: 9999px; background: oklch(0.938 0.172 121.709); color: oklch(0.205 0 0); font-size: 14px; font-weight: 500; }
+  #continue:hover:not(:disabled) { background: color-mix(in oklch, oklch(0.938 0.172 121.709) 80%, transparent); }
+  #test, #scan, #tailscale-action { min-height: 32px; padding: 0 10px; border-radius: 9999px; border-color: oklch(1 0 0 / 15%); background: oklch(1 0 0 / 4.5%); font-size: 14px; font-weight: 500; }
+  #test:hover:not(:disabled), #scan:hover:not(:disabled), #tailscale-action:hover:not(:disabled) { background: oklch(1 0 0 / 7.5%); }
+  #continue:active:not(:disabled), #test:active:not(:disabled), #scan:active:not(:disabled), #tailscale-action:active:not(:disabled) { transform: translateY(1px); }
   /* Intro: a large wordmark fades in, moves into the header wordmark, then the page appears. */
   #intro { position: fixed; inset: 0; z-index: 10; display: grid; place-items: center; pointer-events: none; }
   #intro img { width: min(360px, 60vw); height: auto; opacity: 0; }

@@ -86,7 +86,7 @@ impl Fixture {
         );
         script(
             &bin.join("mise"),
-            "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$SUPLEX_TEST_COMMAND_LOG\"\nmkdir -p rust/target/release\nif [ -f \"$SUPLEX_TEST_FAIL_READY\" ]; then printf '#!/bin/sh\\nexit 0\\n' > rust/target/release/suplex; chmod +x rust/target/release/suplex; else cp \"$SUPLEX_TEST_BINARY\" rust/target/release/suplex; fi\n",
+            "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$SUPLEX_TEST_COMMAND_LOG\"\nmkdir -p rust/target/release\n# Replace, as cargo does: Linux refuses to write a running executable.\nrm -f rust/target/release/suplex\nif [ -f \"$SUPLEX_TEST_FAIL_READY\" ]; then printf '#!/bin/sh\\nexit 0\\n' > rust/target/release/suplex; chmod +x rust/target/release/suplex; else cp \"$SUPLEX_TEST_BINARY\" rust/target/release/suplex; fi\n",
         );
         let port = TcpListener::bind("127.0.0.1:0")
             .unwrap()

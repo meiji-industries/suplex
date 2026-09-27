@@ -3,7 +3,9 @@ mod host_tests {
     use super::*;
     use crate::runtimes::task_harness::{NativeTimeline, UsageEntry};
     use crate::shared::time::rfc3339_millis;
-    use crate::tasks::host::{due_task_ids, scheduled_task_ids, sweep_task};
+    use crate::tasks::host::{
+        due_task_ids, scheduled_task_ids, sweep_task, sweep_task_with_herdr,
+    };
     use crate::tasks::limits::replace_observed_usage;
     use crate::tasks::limits::{
         estimate_unpriced_usage, observed_usage, reconcile_limit_pause, settle_usage,
@@ -693,7 +695,351 @@ mod host_tests {
             "a swept delivered task is due again at once"
         );
         assert!(!due().contains(&delivered));
+        {
+            let database = SuplexDatabase::open(&database_path, OpenMode::ReadWrite).unwrap();
+            database.connection().execute(
+                "UPDATE suplex_task_controls SET status = 'backlog', wake_at = NULL WHERE task_id = ?1",
+                [&delivered],
+            ).unwrap();
+            database.connection().execute(
+                "UPDATE suplex_tasks SET archived_at = ?1 WHERE id = ?2",
+                rusqlite::params![Utc::now().to_rfc3339(), &delivered],
+            ).unwrap();
+        }
+        assert!(
+            due().contains(&delivered),
+            "an archived backlog task with a pending native stop remains due"
+        );
         fs::remove_dir_all(base).unwrap();
+    }
+
+    #[test]
+    fn a_newly_delivered_unstopped_session_keeps_the_native_stop_cadence() {
+        let (base, database_path, delivered) = fixture_task();
+        let now = Utc::now();
+        {
+            let database = SuplexDatabase::open(&database_path, OpenMode::ReadWrite).unwrap();
+            let time = now.to_rfc3339();
+            database.connection().execute(
+                "UPDATE suplex_task_controls SET status = 'delivered', wake_at = NULL WHERE task_id = ?1",
+                [&delivered],
+            ).unwrap();
+            database.connection().execute(
+                "INSERT INTO suplex_task_sessions (id,task_id,kind,generation,is_current,lifecycle,created_at,updated_at) VALUES ('newly-delivered',?1,'root',1,1,'live',?2,?2)",
+                rusqlite::params![&delivered, &time],
+            ).unwrap();
+            repository::schedule_next_sweep(&database, &delivered, now).unwrap();
+        }
+        let wake_at: String = SuplexDatabase::open(&database_path, OpenMode::ReadOnly)
+            .unwrap()
+            .connection()
+            .query_row(
+                "SELECT wake_at FROM suplex_task_controls WHERE task_id = ?1",
+                [&delivered],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(wake_at, rfc3339_millis(now + chrono::Duration::seconds(15)));
+        fs::remove_dir_all(base).unwrap();
+    }
+
+    #[tokio::test]
+    async fn terminal_display_reconciliation_is_bounded_without_visible_task_churn() {
+        let (base, database_path, cancelled) = fixture_task();
+        let unchanged = "2026-09-27T00:00:00.000Z";
+        {
+            let database = SuplexDatabase::open(&database_path, OpenMode::ReadWrite).unwrap();
+            database.connection().execute(
+                "UPDATE suplex_task_controls SET status = 'cancelled', wake_at = NULL, updated_at = ?1 WHERE task_id = ?2",
+                rusqlite::params![unchanged, &cancelled],
+            ).unwrap();
+        }
+        let before = Utc::now();
+        sweep_task(
+            &database_path,
+            &base.join("artifacts"),
+            &cancelled,
+            None,
+            &HashMap::new(),
+        )
+        .await
+        .unwrap();
+        let database = SuplexDatabase::open(&database_path, OpenMode::ReadOnly).unwrap();
+        let (status, wake_at, updated_at): (String, String, String) = database
+            .connection()
+            .query_row(
+                "SELECT status,wake_at,updated_at FROM suplex_task_controls WHERE task_id = ?1",
+                [&cancelled],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(status, "cancelled");
+        assert_eq!(updated_at, unchanged);
+        let wake_at = chrono::DateTime::parse_from_rfc3339(&wake_at)
+            .unwrap()
+            .with_timezone(&Utc);
+        assert!(wake_at >= before + chrono::Duration::seconds(299));
+        assert!(wake_at <= Utc::now() + chrono::Duration::seconds(301));
+        assert!(!due_task_ids(&database).unwrap().contains(&cancelled));
+        drop(database);
+        fs::remove_dir_all(base).unwrap();
+    }
+
+    #[tokio::test]
+    #[ignore = "requires HERDR_ENV=1 and a live Herdr installation"]
+    async fn terminal_task_sweeps_close_six_real_owned_herdr_displays_and_processes() {
+        use crate::{
+            integrations::herdr::{Herdr, MetadataReport},
+            runtimes::task_display::task_shell_pane_binding,
+        };
+
+        assert_eq!(std::env::var("HERDR_ENV").ok().as_deref(), Some("1"));
+        let (base, database_path, first_task) = fixture_task();
+        let herdr = Herdr::new("herdr");
+        struct Cleanup<'a> {
+            herdr: &'a Herdr,
+            workspaces: Vec<String>,
+            base: PathBuf,
+        }
+        impl Drop for Cleanup<'_> {
+            fn drop(&mut self) {
+                for workspace in &self.workspaces {
+                    if self
+                        .herdr
+                        .get_workspace(workspace)
+                        .ok()
+                        .flatten()
+                        .is_some()
+                    {
+                        let _ = self.herdr.close_workspace(workspace);
+                    }
+                }
+                let _ = fs::remove_dir_all(&self.base);
+            }
+        }
+        let mut cleanup = Cleanup {
+            herdr: &herdr,
+            workspaces: Vec::new(),
+            base,
+        };
+        let mut task_ids = vec![first_task];
+        {
+            let mut database =
+                SuplexDatabase::open(&database_path, OpenMode::ReadWrite).unwrap();
+            let user = auth::development_sign_in(&mut database, Utc::now())
+                .unwrap()
+                .user;
+            for index in 1..6 {
+                let task = repository::create(
+                    &mut database,
+                    &PreparedTask {
+                        id: repository::new_task_id(),
+                        company_id: "usage_company".into(),
+                        project_id: "usage_project".into(),
+                        title: format!("Terminal display proof {index}"),
+                        description: "Close the owned display".into(),
+                        configuration: serde_json::json!({"repository":"owner/repo","branch":format!("proof-{index}"),"baseBranch":"main"}),
+                        idempotency_key: format!("terminal-display-proof-{index}"),
+                        request_hash: format!("terminal-display-proof-request-{index}"),
+                        creator: TaskCreator::User(user.id.clone()),
+                        delivery_target: "local_worktree".into(),
+                        delivery_intent: serde_json::from_value(serde_json::json!({"repository":"owner/repo","headBranch":format!("proof-{index}"),"baseBranch":"main","baselineSha":"head","pullRequestNumber":null})).unwrap(),
+                        root_profile: serde_json::from_value(serde_json::json!({"profileId":"root_profile","provider":"codex","model":"gpt-6-sol","reasoningLevel":"medium","serviceTier":"default"})).unwrap(),
+                        worker_profile: serde_json::from_value(serde_json::json!({"profileId":"worker_profile","provider":"codex","model":"gpt-6-sol","reasoningLevel":"medium","serviceTier":"default"})).unwrap(),
+                        advisor_profiles: serde_json::from_value(serde_json::json!({})).unwrap(),
+                        issue: None,
+                        start_queued: false,
+                        copied_from_task_id: None,
+                        depends_on: vec![],
+                        pull_request_dependencies: vec![],
+                        workflow: crate::coordination::workflows::Workflow::Standard,
+                    },
+                    Utc::now(),
+                )
+                .unwrap()
+                .task;
+                task_ids.push(task.id);
+            }
+        }
+
+        let mut pane_ids = Vec::new();
+        let mut process_ids = Vec::new();
+        for (index, task_id) in task_ids.iter().enumerate() {
+            let directory = cleanup.base.join(format!("display-{index}"));
+            fs::create_dir_all(&directory).unwrap();
+            let (workspace, pane) = herdr
+                .create_workspace(&format!("suplex-{task_id}"), directory.to_str().unwrap())
+                .unwrap();
+            cleanup.workspaces.push(workspace.workspace_id);
+            let binding = if index % 2 == 0 {
+                format!("proof-session-{index}")
+            } else {
+                task_shell_pane_binding(task_id)
+            };
+            herdr
+                .report_pane_metadata(&MetadataReport {
+                    pane_id: pane.pane_id.clone(),
+                    source: "suplex".into(),
+                    title: Some("Terminal lifecycle cleanup proof".into()),
+                    tokens: vec![
+                        ("suplex_task_id".into(), task_id.clone()),
+                        ("suplex_binding_id".into(), binding.clone()),
+                    ],
+                    ..MetadataReport::default()
+                })
+                .unwrap();
+            herdr
+                .run_pane_command(&pane.pane_id, "exec /bin/zsh -f")
+                .unwrap();
+            let deadline = std::time::Instant::now() + Duration::from_secs(10);
+            loop {
+                let info = herdr.get_pane_process_info(&pane.pane_id).unwrap();
+                if !info.foreground_processes.is_empty()
+                    && info.foreground_processes.iter().all(|process| {
+                        Some(process.pid) == info.shell_pid && process.name == "zsh"
+                    })
+                {
+                    break;
+                }
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "pane did not reach a clean shell"
+                );
+                std::thread::sleep(Duration::from_millis(100));
+            }
+            herdr
+                .run_pane_command(&pane.pane_id, "sleep 300")
+                .unwrap();
+            let deadline = std::time::Instant::now() + Duration::from_secs(10);
+            let process_id = loop {
+                let info = herdr.get_pane_process_info(&pane.pane_id).unwrap();
+                if let Some(pid) = info
+                    .foreground_processes
+                    .iter()
+                    .find(|process| process.name == "sleep")
+                    .map(|process| process.pid)
+                {
+                    break pid;
+                }
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "sleep process was not found"
+                );
+                std::thread::sleep(Duration::from_millis(100));
+            };
+            pane_ids.push(pane.pane_id.clone());
+            process_ids.push(process_id);
+
+            let database = SuplexDatabase::open(&database_path, OpenMode::ReadWrite).unwrap();
+            let status = if index < 3 { "delivered" } else { "cancelled" };
+            database
+                .connection()
+                .execute(
+                    "UPDATE suplex_task_controls SET status = ?1, wake_at = NULL WHERE task_id = ?2",
+                    rusqlite::params![status, task_id],
+                )
+                .unwrap();
+            let recorded = match index % 3 {
+                0 => Some(pane.pane_id.as_str()),
+                1 => None,
+                _ => Some("stale-pane"),
+            };
+            if index % 2 == 0 {
+                let time = Utc::now().to_rfc3339();
+                database.connection().execute(
+                    "INSERT INTO suplex_task_sessions (id,task_id,kind,generation,is_current,pane_id,lifecycle,stop_requested_at,stopped_at,created_at,updated_at) VALUES (?1,?2,'root',1,0,?3,'stopped',?4,?4,?4,?4)",
+                    rusqlite::params![binding, task_id, recorded, time],
+                ).unwrap();
+                if index == 0 {
+                    database.connection().execute(
+                        "UPDATE suplex_task_sessions SET stopped_at = NULL, launch_owner_pid = ?1, launch_owner_start_time = ?2 WHERE id = ?3",
+                        rusqlite::params![
+                            i64::from(std::process::id()),
+                            inspect_process(std::process::id()).unwrap().start_time,
+                            binding,
+                        ],
+                    ).unwrap();
+                }
+            } else {
+                database.connection().execute(
+                    "UPDATE suplex_task_controls SET shell_pane_id = ?1 WHERE task_id = ?2",
+                    rusqlite::params![recorded, task_id],
+                ).unwrap();
+            }
+        }
+
+        sweep_task_with_herdr(
+            &database_path,
+            &cleanup.base.join("artifacts"),
+            &task_ids[0],
+            None,
+            &HashMap::new(),
+            &herdr,
+        )
+        .await
+        .unwrap();
+        assert!(
+            herdr.get_pane(&pane_ids[0]).unwrap().is_some(),
+            "a live launch owner must defer display cleanup"
+        );
+        SuplexDatabase::open(&database_path, OpenMode::ReadWrite)
+            .unwrap()
+            .connection()
+            .execute(
+                "UPDATE suplex_task_sessions SET launch_owner_pid = NULL, launch_owner_start_time = NULL WHERE id = 'proof-session-0'",
+                [],
+            )
+            .unwrap();
+        for task_id in &task_ids {
+            sweep_task_with_herdr(
+                &database_path,
+                &cleanup.base.join("artifacts"),
+                task_id,
+                None,
+                &HashMap::new(),
+                &herdr,
+            )
+            .await
+            .unwrap();
+        }
+        for pane_id in &pane_ids {
+            assert!(herdr.get_pane(pane_id).unwrap().is_none());
+        }
+        for process_id in &process_ids {
+            assert_eq!(
+                nix::sys::signal::kill(nix::unistd::Pid::from_raw(*process_id as i32), None),
+                Err(nix::errno::Errno::ESRCH)
+            );
+        }
+        for task_id in &task_ids {
+            let database = SuplexDatabase::open(&database_path, OpenMode::ReadOnly).unwrap();
+            let status: String = database
+                .connection()
+                .query_row(
+                    "SELECT status FROM suplex_task_controls WHERE task_id = ?1",
+                    [task_id],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert!(matches!(status.as_str(), "delivered" | "cancelled"));
+            drop(database);
+            sweep_task_with_herdr(
+                &database_path,
+                &cleanup.base.join("artifacts"),
+                task_id,
+                None,
+                &HashMap::new(),
+                &herdr,
+            )
+            .await
+            .unwrap();
+        }
+        eprintln!(
+            "verified {} terminal tasks, {} panes closed, and {} process IDs gone",
+            task_ids.len(),
+            pane_ids.len(),
+            process_ids.len()
+        );
     }
 
     #[tokio::test]

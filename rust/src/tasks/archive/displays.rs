@@ -1,6 +1,6 @@
-//! Archive cleanup of Herdr task displays. Only panes whose live Herdr
-//! metadata proves task ownership are signalled or closed. A missing,
-//! reassigned, or unobservable pane is left alone and never blocks archive.
+//! Cleanup of Herdr task displays after archive or terminal lifecycle changes.
+//! Only panes whose live Herdr metadata proves task ownership are signalled or
+//! closed. A missing, reassigned, or unobservable pane is left alone.
 
 use std::{
     error::Error,
@@ -165,15 +165,13 @@ impl DisplayCleanup {
                 self.workspaces.push(workspace);
             }
         }
-        if sessions.iter().any(|session| session.pane_id.is_some()) {
-            for workspace in self.herdr.list_workspaces()? {
-                if sessions
-                    .iter()
-                    .any(|session| workspace.label == format!("suplex-{}", session.task_id))
-                    && !self.workspaces.contains(&workspace.workspace_id)
-                {
-                    self.workspaces.push(workspace.workspace_id);
-                }
+        for workspace in self.herdr.list_workspaces()? {
+            if sessions
+                .iter()
+                .any(|session| workspace.label == format!("suplex-{}", session.task_id))
+                && !self.workspaces.contains(&workspace.workspace_id)
+            {
+                self.workspaces.push(workspace.workspace_id);
             }
         }
         Ok(())
@@ -305,6 +303,14 @@ pub fn prepare_task_displays(
     database: &SuplexDatabase,
     task_id: &str,
 ) -> DatabaseResult<DisplayCleanup> {
+    let sessions = task_display_sessions(database, task_id)?;
+    prepare_archive_displays(&Herdr::default(), &sessions, system_kill)
+}
+
+pub(crate) fn task_display_sessions(
+    database: &SuplexDatabase,
+    task_id: &str,
+) -> DatabaseResult<Vec<ArchiveSession>> {
     let mut statement = database.connection().prepare(
         "SELECT id, pane_id FROM suplex_task_sessions WHERE task_id = ?1 ORDER BY created_at, id",
     )?;
@@ -327,7 +333,11 @@ pub fn prepare_task_displays(
         task_id: task_id.to_owned(),
         pane_id: shell_pane_id,
     });
-    prepare_archive_displays(&Herdr::default(), &sessions, system_kill)
+    Ok(sessions)
+}
+
+pub(crate) fn close_task_displays(herdr: &Herdr, sessions: &[ArchiveSession]) -> Result<()> {
+    prepare_archive_displays(herdr, sessions, system_kill)?.close()
 }
 
 #[cfg(test)]
@@ -541,6 +551,19 @@ mod tests {
             archive(&state, &all).unwrap();
             assert!(ids(&state).is_empty(), "{recorded}");
         }
+    }
+
+    #[test]
+    fn archive_discovers_an_owned_display_when_every_cached_pane_id_is_missing() {
+        let state = fixture(false);
+        let sessions = vec![ArchiveSession {
+            id: "session".into(),
+            task_id: "task".into(),
+            pane_id: None,
+        }];
+        archive(&state, &sessions).unwrap();
+        assert!(!state.lock().unwrap().workspace_open);
+        assert!(ids(&state).is_empty());
     }
 
     #[test]

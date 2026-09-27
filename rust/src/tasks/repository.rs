@@ -439,7 +439,23 @@ pub(crate) fn schedule_next_sweep(
         "UPDATE suplex_task_controls SET wake_at = ?1 WHERE task_id = ?2 AND status NOT IN ('active','waiting_human') AND EXISTS (SELECT 1 FROM suplex_task_sessions s WHERE s.task_id = ?2 AND s.stopped_at IS NULL AND (s.stop_requested_at IS NOT NULL OR suplex_task_controls.status = 'delivered'))",
         params![time(15), task_id],
     )?;
+    database.connection().execute(
+        "UPDATE suplex_task_controls SET wake_at = ?1 WHERE task_id = ?2 AND status IN ('cancelled','delivered') AND EXISTS (SELECT 1 FROM suplex_tasks t WHERE t.id = ?2 AND t.archived_at IS NULL) AND NOT EXISTS (SELECT 1 FROM suplex_task_sessions s WHERE s.task_id = ?2 AND s.stopped_at IS NULL AND (s.stop_requested_at IS NOT NULL OR suplex_task_controls.status = 'delivered'))",
+        params![time(300), task_id],
+    )?;
     Ok(())
+}
+
+pub(crate) fn terminal_displays_ready(
+    database: &SuplexDatabase,
+    task_id: &str,
+) -> DatabaseResult<bool> {
+    let (status, pending): (TaskStatus, bool) = database.connection().query_row(
+        "SELECT status, EXISTS(SELECT 1 FROM suplex_task_sessions s WHERE s.task_id = ?1 AND s.stopped_at IS NULL AND (s.stop_requested_at IS NOT NULL OR suplex_task_controls.status = 'delivered')) FROM suplex_task_controls WHERE task_id = ?1",
+        [task_id],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )?;
+    Ok(matches!(status, TaskStatus::Cancelled | TaskStatus::Delivered) && !pending)
 }
 
 /// Return a queued task to the manual backlog. A manual backlog task is a no-op.

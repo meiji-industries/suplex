@@ -4,9 +4,15 @@ pub use super::worktree::prepare_task_worktree;
 pub use crate::coordination::session_recovery::{recover_prepared_root, recover_prepared_worker};
 use crate::{
     coordination::{root_session_store, session_recovery::stop_retired_sessions},
+    integrations::herdr::Herdr,
     platform::database::{DatabaseResult, OpenMode, SuplexDatabase},
     shared::time::now_millis_rfc3339,
-    tasks::{control::TaskStatus, limits::reconcile_limit_pause},
+    tasks::{
+        TaskError,
+        archive::displays::{close_task_displays, task_display_sessions},
+        control::TaskStatus,
+        limits::reconcile_limit_pause,
+    },
 };
 use chrono::Utc;
 use std::{
@@ -179,7 +185,7 @@ pub(crate) fn scheduled_task_ids(database_path: &Path) -> DatabaseResult<Vec<Str
 
 pub(crate) fn due_task_ids(database: &SuplexDatabase) -> DatabaseResult<Vec<String>> {
     let mut statement = database.connection().prepare(
-        "SELECT c.task_id FROM suplex_task_controls c JOIN suplex_tasks t ON t.id = c.task_id WHERE (t.archived_at IS NULL AND c.status IN ('active','waiting_human') AND (c.wake_at IS NULL OR c.wake_at <= ?1)) OR ((c.wake_at IS NULL OR c.wake_at <= ?1) AND ((c.status = 'delivered' AND EXISTS (SELECT 1 FROM suplex_task_sessions s WHERE s.task_id = c.task_id AND s.stopped_at IS NULL)) OR EXISTS (SELECT 1 FROM suplex_task_sessions s WHERE s.task_id = c.task_id AND s.stop_requested_at IS NOT NULL AND s.stopped_at IS NULL))) ORDER BY COALESCE(c.wake_at,c.created_at)",
+        "SELECT c.task_id FROM suplex_task_controls c JOIN suplex_tasks t ON t.id = c.task_id WHERE (t.archived_at IS NULL AND c.status IN ('active','waiting_human') AND (c.wake_at IS NULL OR c.wake_at <= ?1)) OR ((c.wake_at IS NULL OR c.wake_at <= ?1) AND ((c.status = 'delivered' AND EXISTS (SELECT 1 FROM suplex_task_sessions s WHERE s.task_id = c.task_id AND s.stopped_at IS NULL)) OR EXISTS (SELECT 1 FROM suplex_task_sessions s WHERE s.task_id = c.task_id AND s.stop_requested_at IS NOT NULL AND s.stopped_at IS NULL))) OR (t.archived_at IS NULL AND c.status IN ('cancelled','delivered') AND (c.wake_at IS NULL OR c.wake_at <= ?1)) ORDER BY COALESCE(c.wake_at,c.created_at)",
     )?;
     Ok(statement
         .query_map([now_millis_rfc3339()], |row| row.get::<_, String>(0))?
@@ -198,6 +204,25 @@ pub async fn sweep_task(
     executable: Option<&Path>,
     inherited_environment: &HashMap<String, String>,
 ) -> DatabaseResult<()> {
+    sweep_task_with_herdr(
+        database_path,
+        artifact_root,
+        task_id,
+        executable,
+        inherited_environment,
+        &Herdr::default(),
+    )
+    .await
+}
+
+pub(crate) async fn sweep_task_with_herdr(
+    database_path: &Path,
+    artifact_root: &Path,
+    task_id: &str,
+    executable: Option<&Path>,
+    inherited_environment: &HashMap<String, String>,
+    herdr: &Herdr,
+) -> DatabaseResult<()> {
     let mut database = SuplexDatabase::open(database_path, OpenMode::ReadWrite)?;
     let swept = sweep_task_once(
         &mut database,
@@ -206,6 +231,7 @@ pub async fn sweep_task(
         task_id,
         executable,
         inherited_environment,
+        herdr,
     )
     .await;
     super::repository::schedule_next_sweep(&database, task_id, Utc::now())?;
@@ -219,11 +245,21 @@ async fn sweep_task_once(
     task_id: &str,
     executable: Option<&Path>,
     inherited_environment: &HashMap<String, String>,
+    herdr: &Herdr,
 ) -> DatabaseResult<()> {
     {
         root_session_store::retire_delivered_sessions(database, task_id, Utc::now())?;
     }
     stop_retired_sessions(database, database_path, task_id).await?;
+    if super::repository::terminal_displays_ready(database, task_id)? {
+        let sessions = task_display_sessions(database, task_id)?;
+        let herdr = herdr.clone();
+        tokio::task::spawn_blocking(move || {
+            close_task_displays(&herdr, &sessions).map_err(|error| error.to_string())
+        })
+        .await?
+        .map_err(TaskError::internal)?;
+    }
     reconcile_limit_pause(database, database_path, task_id).await?;
     crate::delivery::operations::host_observation(database_path, artifact_root, task_id).await;
     let (active, needs_worktree) = {

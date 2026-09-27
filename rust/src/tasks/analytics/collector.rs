@@ -208,6 +208,25 @@ fn missing_opencode_session(error: &(dyn Error + 'static)) -> bool {
             )
 }
 
+fn incomplete_usage_diagnostic(mut error: &(dyn Error + 'static)) -> Option<serde_json::Value> {
+    loop {
+        if error
+            .downcast_ref::<serde_json::Error>()
+            .is_some_and(serde_json::Error::is_eof)
+        {
+            return Some(serde_json::json!({
+                "type": "analytics",
+                "level": 20,
+                "reason": "Suplex could not update usage totals because the session data is incomplete. Suplex will retry automatically."
+            }));
+        }
+        error = match error.downcast_ref::<std::io::Error>() {
+            Some(error) => error.get_ref().map(|inner| inner as &(dyn Error + 'static)),
+            None => error.source(),
+        }?;
+    }
+}
+
 /// Collect now, then every 30 seconds until shutdown.
 pub fn spawn(database_path: PathBuf, mut shutdown: watch::Receiver<bool>) {
     tokio::spawn(async move {
@@ -230,7 +249,11 @@ pub fn spawn(database_path: PathBuf, mut shutdown: watch::Receiver<bool>) {
                     read_native_usage(&path, session, home.as_deref(), catalog.as_deref())
                 };
                 let mut report = |error: Box<dyn Error>| {
-                    eprintln!("Analytics observation failed: {error}");
+                    if let Some(event) = incomplete_usage_diagnostic(error.as_ref()) {
+                        crate::platform::system_events::emit(event);
+                    } else {
+                        eprintln!("Analytics observation failed: {error}");
+                    }
                 };
                 collect(&mut database, startup, Utc::now(), &mut read, &mut report)
                     .map_err(|error| error.to_string())
@@ -256,6 +279,30 @@ mod tests {
 
     use super::*;
     use crate::{profiles::model_pricing::ModelPricing, tasks::analytics};
+
+    #[test]
+    fn incomplete_usage_is_a_concise_debug_diagnostic() {
+        let incomplete =
+            || serde_json::from_str::<serde_json::Value>(r#"{"text":"unfinished"#).unwrap_err();
+        let direct = super::incomplete_usage_diagnostic(&incomplete()).unwrap();
+        let wrapped =
+            super::incomplete_usage_diagnostic(&std::io::Error::other(incomplete())).unwrap();
+        assert_eq!(direct, wrapped);
+        assert_eq!(direct["level"], 20);
+        assert_eq!(
+            direct["reason"],
+            "Suplex could not update usage totals because the session data is incomplete. Suplex will retry automatically."
+        );
+        assert!(
+            crate::platform::log_viewer::format(&direct)
+                .contains(direct["reason"].as_str().unwrap())
+        );
+        let invalid = serde_json::from_str::<serde_json::Value>("!").unwrap_err();
+        assert!(super::incomplete_usage_diagnostic(&invalid).is_none());
+        assert!(
+            super::incomplete_usage_diagnostic(&std::io::Error::other("disk failure")).is_none()
+        );
+    }
 
     fn session(native: &str, kind: &str) -> Session {
         Session {

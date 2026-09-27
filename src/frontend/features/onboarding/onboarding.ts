@@ -17,7 +17,7 @@ export const ONBOARDING_STEPS: readonly { id: OnboardingStepId; label: string; d
   { id: "company", label: "Company", description: "Name the company." },
   { id: "tools", label: "Tools", description: "Check the host tools." },
   { id: "providers", label: "Providers", description: "Connect one provider." },
-  { id: "agents", label: "Agents", description: "Select the agent models." },
+  { id: "agents", label: "Agents", description: "Review your team." },
   { id: "projects", label: "Projects", description: "Add one project." },
   { id: "done", label: "Done", description: "Start the first task." },
 ];

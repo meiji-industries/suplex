@@ -16,7 +16,7 @@ test("admin sees Company, AI, and System groups in order", () => {
   const groups = buildSettingsGroups("company-1", admin);
   expect(titles(groups)).toEqual(["Company", "Features", "System"]);
   expect(items(groups, "Company")).toEqual(["Profile", "Projects", "Templates", "Workspace", "Workflows", "Triggers", "Onboarding"]);
-  expect(items(groups, "Features")).toEqual(["Agents", "Models", "Providers"]);
+  expect(items(groups, "Features")).toEqual(["Agents", "Providers"]);
   expect(items(groups, "System")).toEqual(["Users", "Companies", "Passkeys", "Invitations", "Environment", "Backups", "Host health"]);
 });
 
@@ -43,7 +43,6 @@ test("items keep their existing hrefs", () => {
     Workflows: "/admin/workflows?company=company-1",
     Triggers: "/admin/triggers?company=company-1",
     Agents: "/admin/agents?company=company-1",
-    Models: "/admin/models?company=company-1",
     Providers: "/admin/providers?company=company-1",
     Users: "/admin?company=company-1",
     Companies: "/admin/companies?company=company-1",

@@ -62,7 +62,10 @@ fn marker(root: &Path, name: &str) -> PathBuf {
 fn developer_tools_accepts_existing_git_without_apple_tools() {
     let fixture = Fixture::new();
     fixture.script("git", "#!/bin/sh\necho 'git version 2.50.1'\n");
-    fixture.script("xcode-select", "#!/bin/sh\necho 'must not run' >&2\nexit 1\n");
+    fixture.script(
+        "xcode-select",
+        "#!/bin/sh\necho 'must not run' >&2\nexit 1\n",
+    );
     let (output, result) = fixture.stage("developer-tools");
     assert!(output.status.success());
     assert_eq!(result["skipped"], true);

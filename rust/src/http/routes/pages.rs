@@ -27,7 +27,6 @@ pub fn router() -> Router<AppState> {
         .route("/admin/workflows", get(admin))
         .route("/admin/triggers", get(admin))
         .route("/admin/agents", get(admin))
-        .route("/admin/models", get(admin))
         .route("/admin/providers", get(admin))
         .route("/admin/onboarding", get(admin_onboarding))
         .route("/admin/environment", get(admin))

@@ -1,14 +1,6 @@
 import { EntityAvatar } from "../../components/app/entity-avatar.js";
 import { providerIcons } from "../../components/app/provider-icons.js";
 import {
-  SettingsDataTable,
-  SettingsTableCell,
-  SettingsTableEmpty,
-  SettingsTableGroup,
-  SettingsTableRow,
-  type SettingsTableColumn,
-} from "../../components/app/settings-table.js";
-import {
   AlertDialog,
   AlertDialogAction,
   AlertDialogCancel,
@@ -21,103 +13,104 @@ import {
 import { Badge } from "../../components/ui/badge.js";
 import { Button } from "../../components/ui/button.js";
 import {
+  Card,
+  CardAction,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "../../components/ui/card.js";
+import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "../../components/ui/dropdown-menu.js";
-import { Input } from "../../components/ui/input.js";
 import { NewButton } from "../../components/ui/new-button.js";
 import { SettingsSectionHeader } from "../settings/settings-layout.js";
-import { Archive, ArchiveRestore, Copy, Ellipsis, Pencil, Trash2, Zap } from "lucide-react";
-import {
-  useEffect,
-  useRef,
-  useState,
-  type Dispatch,
-  type ReactElement,
-  type SetStateAction,
+import { Archive, ArchiveRestore, Copy, Ellipsis, Pencil, Trash2 } from "lucide-react";
+import type {
+  Dispatch,
+  ReactElement,
+  ReactNode,
+  SetStateAction,
 } from "react";
 import type { ApiProfile } from "../../shell/view-shared.js";
+import { modelHint } from "./model-hints.js";
 
-const AGENT_COLUMNS: SettingsTableColumn[] = [
-  { key: "name", label: "Name ↓", width: 240 },
-  { key: "role", label: "Role", width: 140 },
-  { key: "provider", label: "Provider", width: 120 },
-  { key: "model", label: "Model", width: 200 },
-  { key: "reasoning", label: "Reasoning", width: 90 },
-  { key: "status", label: "Status", width: 100 },
-  { key: "menu", width: 28 },
-  { key: "end", width: 32 },
-];
+const SEEDED_AGENT_DESCRIPTIONS: Record<string, string> = {
+  profile_native_root: "Plans each task and reviews the changes of the Worker.",
+  profile_native_worker: "Builds the changes for each task.",
+};
 
-function AgentNameEditor({
+export const isDefaultAgent = (agent: ApiProfile): boolean =>
+  agent.id in SEEDED_AGENT_DESCRIPTIONS;
+
+export function agentDescription(agent: ApiProfile): string {
+  const seeded = SEEDED_AGENT_DESCRIPTIONS[agent.id];
+  if (seeded) return seeded;
+  const role =
+    agent.role === "root"
+      ? "Plans tasks and reviews changes."
+      : "Builds the changes for tasks.";
+  const hint = modelHint(agent.model);
+  return hint ? `${role} ${hint}` : role;
+}
+
+const REASONING_LABELS: Record<string, string> = {
+  low: "Low",
+  medium: "Medium",
+  high: "High",
+  xhigh: "XHigh",
+  max: "Max",
+};
+
+export function AgentCard({
   agent,
-  onSave,
+  actions,
 }: {
   agent: ApiProfile;
-  onSave: (name: string) => Promise<void>;
+  actions?: ReactNode;
 }): ReactElement {
-  const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState(agent.name);
-  const [saving, setSaving] = useState(false);
-  const skipBlur = useRef(false);
-  useEffect(() => {
-    if (!editing) setDraft(agent.name);
-  }, [editing, agent.name]);
-  const save = async (): Promise<void> => {
-    if (skipBlur.current) {
-      skipBlur.current = false;
-      return;
-    }
-    const next = draft.trim();
-    if (next === agent.name) {
-      setEditing(false);
-      return;
-    }
-    if (!next || saving) return;
-    setSaving(true);
-    try {
-      await onSave(next);
-      setEditing(false);
-    } finally {
-      setSaving(false);
-    }
-  };
-  if (editing)
-    return (
-      <Input
-        aria-label="Agent name"
-        autoFocus
-        className="h-7"
-        disabled={saving}
-        value={draft}
-        onChange={(event) => setDraft(event.target.value)}
-        onBlur={() => void save()}
-        onKeyDown={(event) => {
-          if (event.key === "Escape") {
-            event.preventDefault();
-            skipBlur.current = true;
-            setDraft(agent.name);
-            setEditing(false);
-          } else if (event.key === "Enter") event.currentTarget.blur();
-        }}
-      />
-    );
   return (
-    <button
-      type="button"
-      data-agent-name-editor
-      aria-label={`Rename ${agent.name}`}
-      className="min-w-0 truncate text-left"
-      onClick={() => {
-        skipBlur.current = false;
-        setDraft(agent.name);
-        setEditing(true);
-      }}
-    >
-      {agent.name}
-    </button>
+    <Card size="sm" aria-label={agent.name}>
+      <CardHeader>
+        <CardTitle>
+          <span className="flex min-w-0 items-center gap-2">
+            <EntityAvatar
+              kind="agent"
+              id={agent.id}
+              name={agent.name}
+              seed={agent.avatarSeed}
+            />
+            <span className="truncate">{agent.name}</span>
+          </span>
+        </CardTitle>
+        <CardDescription>
+          {agent.role === "root" ? "Coordinator" : "Worker"}
+        </CardDescription>
+        {actions ? <CardAction>{actions}</CardAction> : null}
+      </CardHeader>
+      <CardContent>
+        <p>{agentDescription(agent)}</p>
+        <p className="text-xs text-muted-foreground">
+          {providerIcons[agent.provider].label} · {agent.model} ·{" "}
+          {REASONING_LABELS[agent.reasoningLevel] ?? agent.reasoningLevel}{" "}
+          reasoning
+          {agent.serviceTier === "priority" ? " · Priority" : ""}
+        </p>
+        {isDefaultAgent(agent) || agent.archivedAt ? (
+          <span className="flex gap-1">
+            {isDefaultAgent(agent) ? (
+              <Badge variant="outline">Default</Badge>
+            ) : null}
+            {agent.archivedAt ? (
+              <Badge variant="secondary">Archived</Badge>
+            ) : null}
+          </span>
+        ) : null}
+      </CardContent>
+    </Card>
   );
 }
 
@@ -155,158 +148,88 @@ export function InternalAgentsSection({
       <SettingsSectionHeader
         title="Internal agents"
         description="Suplex runs an internal agent as the Coordinator or Worker for a task."
-        actions={<NewButton onClick={onOpenNewAgent}>New agent</NewButton>}
+        actions={<NewButton onClick={onOpenNewAgent}>Add agent</NewButton>}
       />
-      <SettingsDataTable
-        label="Internal Agents"
-        columns={AGENT_COLUMNS}
-      >
-        <SettingsTableGroup
-          label="Internal agents"
-          count={agents.length}
-          columnCount={AGENT_COLUMNS.length}
+      {agents.length === 0 ? (
+        <p className="text-sm text-muted-foreground">
+          No internal agents configured.
+        </p>
+      ) : (
+        <div
+          className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3"
+          aria-label="Internal agents"
         >
           {sortedAgents.map((agent) => (
-            <SettingsTableRow
-              aria-label={`Edit ${agent.name}`}
+            <AgentCard
               key={agent.id}
-              onClick={(event) => {
-                if (
-                  !(event.target as HTMLElement).closest(
-                    "button, input, label, [data-base-ui-portal]",
-                  )
-                )
-                  onOpenEditAgent(agent);
-              }}
-              tabIndex={0}
-            >
-              <SettingsTableCell>
-                <span className="flex min-w-0 items-center gap-3">
-                  <EntityAvatar
-                    kind="agent"
-                    id={agent.id}
-                    name={agent.name}
-                    seed={agent.avatarSeed}
-                  />
-                  <AgentNameEditor
-                    agent={agent}
-                    onSave={(name) =>
-                      onPatchAgent(agent, { name }, "Unable to rename agent")
-                    }
-                  />
-                  {agent.archivedAt ? (
-                    <Badge variant="secondary">Archived</Badge>
-                  ) : null}
-                </span>
-              </SettingsTableCell>
-              <SettingsTableCell>
-                {agent.role === "root" ? "Coordinator" : "Worker"}
-              </SettingsTableCell>
-              <SettingsTableCell className="truncate text-muted-foreground">
-                {providerIcons[agent.provider].label}
-              </SettingsTableCell>
-              <SettingsTableCell>
-                <span className="flex min-w-0 items-center gap-1.5">
-                  <span className="truncate">{agent.model}</span>
-                  {agent.serviceTier === "priority" ? (
-                    <span className="inline-flex" title="Priority service tier">
-                      <Zap
-                        role="img"
-                        aria-label="Priority service tier"
-                        fill="currentColor"
-                        className="size-3.5 shrink-0 text-muted-foreground"
-                      />
-                    </span>
-                  ) : null}
-                </span>
-              </SettingsTableCell>
-              <SettingsTableCell className="truncate text-muted-foreground">
-                {agent.reasoningLevel}
-              </SettingsTableCell>
-              <SettingsTableCell>
-                <span className="flex items-center gap-1.5 text-muted-foreground">
-                  <span
-                    className={
-                      agent.archivedAt
-                        ? "size-1.5 rounded-full bg-muted-foreground"
-                        : "size-1.5 rounded-full bg-emerald-500"
-                    }
-                  />
-                  {agent.archivedAt ? "archived" : "active"}
-                </span>
-              </SettingsTableCell>
-              <SettingsTableCell className="p-0">
-                <DropdownMenu>
-                  <DropdownMenuTrigger
-                    render={
-                      <Button
-                        variant="ghost"
-                        size="icon-xs"
-                        aria-label={`${agent.name} actions`}
-                        title={`${agent.name} actions`}
-                      />
-                    }
+              agent={agent}
+              actions={
+                <span className="flex items-center gap-1">
+                  <Button
+                    variant="ghost"
+                    size="icon-xs"
+                    aria-label={`Edit ${agent.name}`}
+                    title={`Edit ${agent.name}`}
+                    onClick={() => onOpenEditAgent(agent)}
                   >
-                    <Ellipsis />
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent align="end">
-                    <DropdownMenuItem
-                      onClick={() => void onDuplicateAgent(agent)}
+                    <Pencil />
+                  </Button>
+                  <DropdownMenu>
+                    <DropdownMenuTrigger
+                      render={
+                        <Button
+                          variant="ghost"
+                          size="icon-xs"
+                          aria-label={`${agent.name} actions`}
+                          title={`${agent.name} actions`}
+                        />
+                      }
                     >
-                      <Copy />
-                      Duplicate
-                    </DropdownMenuItem>
-                    {agent.archivedAt ? (
+                      <Ellipsis />
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end">
                       <DropdownMenuItem
-                        onClick={() =>
-                          void onPatchAgent(
-                            agent,
-                            { archived: false },
-                            "Unable to unarchive agent",
-                          )
-                        }
+                        onClick={() => void onDuplicateAgent(agent)}
                       >
-                        <ArchiveRestore />
-                        Unarchive
+                        <Copy />
+                        Duplicate
                       </DropdownMenuItem>
-                    ) : (
+                      {agent.archivedAt ? (
+                        <DropdownMenuItem
+                          onClick={() =>
+                            void onPatchAgent(
+                              agent,
+                              { archived: false },
+                              "Unable to unarchive agent",
+                            )
+                          }
+                        >
+                          <ArchiveRestore />
+                          Unarchive
+                        </DropdownMenuItem>
+                      ) : (
+                        <DropdownMenuItem
+                          onClick={() => onArchiveTargetChange(agent)}
+                        >
+                          <Archive />
+                          Archive
+                        </DropdownMenuItem>
+                      )}
                       <DropdownMenuItem
-                        onClick={() => onArchiveTargetChange(agent)}
+                        variant="destructive"
+                        onClick={() => onDeleteTargetChange(agent)}
                       >
-                        <Archive />
-                        Archive
+                        <Trash2 />
+                        Delete
                       </DropdownMenuItem>
-                    )}
-                    <DropdownMenuItem
-                      variant="destructive"
-                      onClick={() => onDeleteTargetChange(agent)}
-                    >
-                      <Trash2 />
-                      Delete
-                    </DropdownMenuItem>
-                  </DropdownMenuContent>
-                </DropdownMenu>
-              </SettingsTableCell>
-              <SettingsTableCell className="p-0">
-                <Button
-                  variant="ghost"
-                  size="icon-xs"
-                  aria-label={`Edit ${agent.name}`}
-                  title={`Edit ${agent.name}`}
-                  onClick={() => onOpenEditAgent(agent)}
-                >
-                  <Pencil />
-                </Button>
-              </SettingsTableCell>
-            </SettingsTableRow>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                </span>
+              }
+            />
           ))}
-        </SettingsTableGroup>
-        {agents.length === 0 ? (
-          <SettingsTableEmpty columnCount={AGENT_COLUMNS.length}>
-            No internal agents configured.
-          </SettingsTableEmpty>
-        ) : null}
-      </SettingsDataTable>
+        </div>
+      )}
       <AlertDialog
         open={archiveTarget !== null}
         onOpenChange={(open) => {

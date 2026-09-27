@@ -17,7 +17,6 @@
   "GET /admin/companies",
   "GET /admin/environment",
   "GET /admin/invitations",
-  "GET /admin/models",
   "GET /admin/onboarding",
   "GET /admin/passkeys",
   "GET /admin/profiles",

@@ -4,6 +4,14 @@ import {
 } from "../../components/app/entity-avatar.js";
 import { Button } from "../../components/ui/button.js";
 import {
+  Combobox,
+  ComboboxContent,
+  ComboboxEmpty,
+  ComboboxInput,
+  ComboboxItem,
+  ComboboxList,
+} from "../../components/ui/combobox.js";
+import {
   Dialog,
   DialogClose,
   DialogContent,
@@ -24,6 +32,7 @@ import {
 } from "../../components/ui/select.js";
 import type { ApiModel } from "../../shell/view-shared.js";
 import type { ReactElement } from "react";
+import { modelHint } from "./model-hints.js";
 
 const SERVICE_PRIORITIES = ["default", "priority"] as const;
 
@@ -98,7 +107,7 @@ export function InternalAgentDialog({
       <DialogContent>
         <DialogHeader>
           <DialogTitle>
-            {editingAgentId ? "Edit agent" : "New agent"}
+            {editingAgentId ? "Edit agent" : "Add agent"}
           </DialogTitle>
           <DialogDescription>
             Set the role and execution settings for this agent.
@@ -204,21 +213,41 @@ export function InternalAgentDialog({
             <Field>
               <FieldLabel htmlFor="agent-model">Model</FieldLabel>
               {/* Free text: the provider CLI accepts models that Suplex does not list yet. */}
-              <Input
-                id="agent-model"
-                list="agent-model-options"
-                value={agentModel}
-                placeholder="Select or type a model"
-                autoComplete="off"
-                onChange={(event) => onAgentModelChange(event.target.value.trim())}
-              />
-              <datalist id="agent-model-options">
-                {providerModels.map((model) => (
-                  <option key={model.id} value={model.id}>
-                    {model.displayName}
-                  </option>
-                ))}
-              </datalist>
+              <Combobox
+                items={providerModels}
+                itemToStringLabel={(model: ApiModel) => model.id}
+                value={providerModels.find((model) => model.id === agentModel) ?? null}
+                onValueChange={(model: ApiModel | null) => {
+                  if (model) onAgentModelChange(model.id);
+                }}
+                inputValue={agentModel}
+                onInputValueChange={(value, details) => {
+                  // Closing without a listed selection clears the input. Keep the typed model.
+                  if (details.reason !== "input-clear") onAgentModelChange(value.trim());
+                }}
+                filter={null}
+              >
+                <ComboboxInput
+                  id="agent-model"
+                  placeholder="Select or type a model"
+                  autoComplete="off"
+                />
+                <ComboboxContent>
+                  <ComboboxEmpty>No models listed. Type a model ID.</ComboboxEmpty>
+                  <ComboboxList>
+                    {(model: ApiModel) => (
+                      <ComboboxItem key={model.id} value={model}>
+                        <span className="flex min-w-0 flex-col">
+                          <span className="truncate">{model.displayName}</span>
+                          <span className="truncate text-xs text-muted-foreground">
+                            {modelHint(model.id, `${model.providerLabel} model`)}
+                          </span>
+                        </span>
+                      </ComboboxItem>
+                    )}
+                  </ComboboxList>
+                </ComboboxContent>
+              </Combobox>
             </Field>
             <Field>
               <FieldLabel htmlFor="agent-reasoning">Reasoning level</FieldLabel>
@@ -279,7 +308,7 @@ export function InternalAgentDialog({
                   type="submit"
                   disabled={!agentName.trim() || !agentModel}
                 >
-                  New agent
+                  Add agent
                 </NewButton>
               )}
             </DialogFooter>

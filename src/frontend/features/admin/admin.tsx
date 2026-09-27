@@ -8,13 +8,11 @@ import type {
   ApiCredential,
   ApiExternalAgent,
   ApiInvitation,
-  ApiModel,
   ApiProject,
 } from "../../shell/view-shared.js";
 import { UsersSection } from "./users-section.js";
 import { CompaniesSection } from "./companies-section.js";
 import { InvitationsSection } from "./invitations-section.js";
-import { ModelsSection } from "./models-section.js";
 import { PasskeysSection } from "./passkeys-section.js";
 import { InternalAgentsManager } from "./internal-agents-manager.js";
 import { ExternalAgentsSection } from "./external-agents-section.js";
@@ -34,7 +32,6 @@ export function AdminView(): ReactElement {
   const [agents, setAgents] = useState<ApiProfile[]>([]);
   const [externalAgents, setExternalAgents] = useState<ApiExternalAgent[]>([]);
   const [companyProjects, setCompanyProjects] = useState<ApiProject[]>([]);
-  const [models, setModels] = useState<ApiModel[]>([]);
   const [displayName, setDisplayName] = useState("");
   const [inviteOpen, setInviteOpen] = useState(false);
   const [inviteToken, setInviteToken] = useState("");
@@ -70,7 +67,6 @@ export function AdminView(): ReactElement {
   >([]);
 
   const isAgents = window.location.pathname.endsWith("/agents");
-  const isModels = window.location.pathname.endsWith("/models");
   const isCompanies = window.location.pathname.endsWith("/companies");
   const isInvitations = window.location.pathname.endsWith("/invitations");
   const isPasskeys = window.location.pathname.endsWith("/passkeys");
@@ -79,10 +75,9 @@ export function AdminView(): ReactElement {
     async (signal?: AbortSignal): Promise<void> => {
       const options = signal ? { signal } : {};
       const needsUsers =
-        isCompanies || isPasskeys || (!isAgents && !isModels && !isInvitations);
+        isCompanies || isPasskeys || (!isAgents && !isInvitations);
       const needsCredentials =
-        isPasskeys ||
-        (!isAgents && !isModels && !isCompanies && !isInvitations);
+        isPasskeys || (!isAgents && !isCompanies && !isInvitations);
       try {
         setError("");
         const [
@@ -92,7 +87,6 @@ export function AdminView(): ReactElement {
           agentList,
           externalAgentList,
           projectList,
-          modelList,
         ] = await Promise.all([
           needsUsers
             ? readJsonUnchecked<{ users: ApiUser[] }>("/api/admin/users", options)
@@ -127,18 +121,6 @@ export function AdminView(): ReactElement {
                 options,
               ).catch(() => ({ projects: [] }))
             : Promise.resolve({ projects: [] }),
-          isModels
-            ? readJsonUnchecked<{ models: ApiModel[] }>(
-                "/api/admin/models",
-                options,
-              ).catch(() => {
-                if (signal?.aborted) return { models: [] };
-                setError(
-                   "Suplex cannot read the model configuration. Check OpenCode, Claude Code, Devin CLI, or Codex CLI on the Suplex host.",
-                );
-                return { models: [] };
-              })
-            : { models: [] },
         ]);
         if (signal?.aborted) return;
         setUsers(userList.users);
@@ -156,7 +138,6 @@ export function AdminView(): ReactElement {
         setEditingExternalAgentProjectIds((selected) =>
           selected.filter((projectId) => projectIds.has(projectId)),
         );
-        setModels(modelList.models);
       } catch (reason) {
         if (signal?.aborted) return;
         if (
@@ -172,7 +153,6 @@ export function AdminView(): ReactElement {
       isAgents,
       isCompanies,
       isInvitations,
-      isModels,
       isPasskeys,
     ],
   );
@@ -316,26 +296,22 @@ export function AdminView(): ReactElement {
 
   const viewTitle = isAgents
     ? "Agents"
-    : isModels
-      ? "Models"
-      : isCompanies
-        ? "Companies"
-        : isInvitations
-          ? "Invitations"
-          : isPasskeys
-            ? "Passkeys"
-            : "Users";
+    : isCompanies
+      ? "Companies"
+      : isInvitations
+        ? "Invitations"
+        : isPasskeys
+          ? "Passkeys"
+          : "Users";
   const viewDescription = isAgents
     ? "Agents plan and build the work of each task. Suplex runs internal agents. External agents connect to Suplex."
-    : isModels
-      ? "OpenCode, Claude Code, Devin CLI, and Codex CLI supply these models. Configure providers on the Suplex host."
-      : isCompanies
-        ? "Each company has its own projects and tasks. Select the accounts that can open each company."
-        : isInvitations
-          ? "An invitation lets a person create an account on this Suplex host."
-          : isPasskeys
-            ? "A passkey lets an account sign in to Suplex without a password."
-            : "These accounts can sign in to this Suplex host.";
+    : isCompanies
+      ? "Each company has its own projects and tasks. Select the accounts that can open each company."
+      : isInvitations
+        ? "An invitation lets a person create an account on this Suplex host."
+        : isPasskeys
+          ? "A passkey lets an account sign in to Suplex without a password."
+          : "These accounts can sign in to this Suplex host.";
   const activeHref = withCompany(window.location.pathname, currentCompany?.id);
   const backHref = withCompany("/projects", currentCompany?.id);
 
@@ -380,7 +356,6 @@ export function AdminView(): ReactElement {
     >
       <SettingsContent width="wide" title={viewTitle} description={viewDescription}>
         {!isAgents &&
-        !isModels &&
         !isCompanies &&
         !isInvitations &&
         !isPasskeys ? (
@@ -504,10 +479,6 @@ export function AdminView(): ReactElement {
             }
             onClearPendingAction={() => setPendingAction("")}
           />
-        ) : null}
-
-        {isModels ? (
-          <ModelsSection models={models} onReload={() => void reload()} />
         ) : null}
 
         {error ? (

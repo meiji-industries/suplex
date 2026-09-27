@@ -36,7 +36,6 @@ jobs:
   rust:
     name: Rust fmt, clippy, and tests
     env:
-      RUST_TEST_THREADS: "4"
       TARGET_CACHE_MAX_KIB: 12582912
       TARGET_CACHE_MAX_SIZE: 12GB
     runs-on: ${{ inputs.runner || 'blacksmith-8vcpu-ubuntu-2404' }}
@@ -68,6 +67,10 @@ jobs:
           key: ${{ github.repository }}-rust-job-target-${{ hashFiles('rust/rust-toolchain.toml') }}-${{ runner.arch }}
           path: ${{ github.workspace }}/rust/target
           commit: on-change
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest@0.9.146
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v6
         with:
@@ -81,7 +84,8 @@ jobs:
       - run: pnpm exec vite build
       - run: cargo fmt --manifest-path rust/Cargo.toml --check
       - run: cargo clippy --manifest-path rust/Cargo.toml --all-targets -- -D warnings
-      - run: cargo test --manifest-path rust/Cargo.toml --all-targets
+      # The crate has no doctests, which nextest does not run.
+      - run: cargo nextest run --manifest-path rust/Cargo.toml --all-targets --profile ci
       - name: Generated TypeScript contracts are committed
         run: git diff --exit-code -- src/frontend/contracts/generated
       - name: Enforce persistent target size limit

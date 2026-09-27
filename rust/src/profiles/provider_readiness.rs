@@ -411,6 +411,10 @@ pub async fn check(
 mod tests {
     use super::*;
 
+    #[expect(
+        clippy::unnecessary_wraps,
+        reason = "stands in for executable resolution"
+    )]
     fn present(path: &str) -> io::Result<PathBuf> {
         Ok(PathBuf::from(path))
     }
@@ -419,6 +423,7 @@ mod tests {
         Err(io::Error::new(io::ErrorKind::NotFound, "Install the tool"))
     }
 
+    #[expect(clippy::unnecessary_wraps, reason = "stands in for a probe result")]
     fn ok(stdout: &str) -> Option<io::Result<ProbeResult>> {
         Some(Ok(ProbeResult {
             stdout: stdout.into(),

@@ -1059,7 +1059,7 @@ fn normalized_edit(
         json!(
             input
                 .workflow
-                .map(|workflow| workflow.as_str())
+                .map(super::super::coordination::workflows::Workflow::as_str)
                 .unwrap_or(&current.workflow)
         ),
     );

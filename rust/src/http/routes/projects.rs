@@ -102,7 +102,7 @@ async fn repository_status(
     let mut response = with_cookies(response, cookies);
     response.headers_mut().insert(
         axum::http::header::CACHE_CONTROL,
-        "no-store".parse().unwrap(),
+        axum::http::HeaderValue::from_static("no-store"),
     );
     response
 }

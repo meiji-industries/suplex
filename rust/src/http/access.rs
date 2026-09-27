@@ -21,7 +21,12 @@ pub async fn cookie_refresh(mut request: Request, next: Next) -> Response {
     let mut response = next.run(request).await;
     append_cookies(
         &mut response,
-        std::mem::take(&mut *cookies.0.lock().unwrap()),
+        std::mem::take(
+            &mut *cookies
+                .0
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+        ),
     );
     response
 }
@@ -47,7 +52,11 @@ impl FromRequestParts<AppState> for SessionUser {
     async fn from_request_parts(parts: &mut Parts, state: &AppState) -> Result<Self, ApiError> {
         let (user, refresh) = Self::read(state, &parts.headers)?;
         if let Some(cookies) = parts.extensions.get::<RefreshCookies>() {
-            cookies.0.lock().unwrap().extend(refresh);
+            cookies
+                .0
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .extend(refresh);
         }
         Ok(Self(user))
     }

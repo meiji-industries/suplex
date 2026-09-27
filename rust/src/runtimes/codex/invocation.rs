@@ -21,7 +21,7 @@ fn toml_string(value: &str) -> String {
             '\r' => quoted.push_str("\\r"),
             '\t' => quoted.push_str("\\t"),
             character if character < ' ' || character == '\u{7f}' => {
-                quoted.push_str(&format!("\\u{:04x}", character as u32))
+                quoted.push_str(&format!("\\u{:04x}", character as u32));
             }
             character => quoted.push(character),
         }

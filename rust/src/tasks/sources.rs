@@ -20,7 +20,8 @@ use crate::{
     tasks::{issue_context, repository::PreparedTask},
 };
 
-static BRANCH: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^[A-Za-z0-9._/-]{1,240}$").unwrap());
+static BRANCH: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^[A-Za-z0-9._/-]{1,240}$").expect("valid regex"));
 
 /// TypeScript `branchPattern` (the lookaheads are checked separately).
 fn branch_pattern(branch: &str) -> bool {

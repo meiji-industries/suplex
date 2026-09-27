@@ -3024,7 +3024,7 @@ mod tests {
                     params![id, configuration.to_string(), dispatch.idempotency_key, hash, f.admin, time]).unwrap();
                 database.connection().execute("INSERT INTO suplex_task_controls (task_id,objective,delivery_target,delivery_intent_json,status,root_profile_json,worker_profile_json,workflow,advisor_profiles_json,workflow_state_json,status_changed_at,created_at,updated_at) VALUES (?1,'T','pull_request_draft','{}','backlog',?2,?3,'competing_plans',?4,'{}',?5,?5,?5)",
                     params![id, serde_json::to_string(root).unwrap(), serde_json::to_string(&dispatch.profiles.worker).unwrap(), serde_json::to_string(&dispatch.profiles.advisors).unwrap(), time]).unwrap();
-            })
+            });
         };
         let other = TaskProfile {
             model: "other".into(),

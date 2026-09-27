@@ -4,7 +4,8 @@ use std::{collections::HashSet, sync::LazyLock};
 
 use regex::Regex;
 
-static NUMBERED: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^(.*?)(?: \((\d+)\))?$").unwrap());
+static NUMBERED: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^(.*?)(?: \((\d+)\))?$").expect("valid regex"));
 
 pub fn duplicate_title(title: &str, used_titles: &HashSet<String>) -> String {
     let captures = NUMBERED.captures(title);

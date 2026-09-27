@@ -1,3 +1,4 @@
+#[cfg(test)]
 mod migration_regressions {
     use super::*;
     use serde_json::{Map, Value, json};
@@ -21,7 +22,7 @@ mod migration_regressions {
         let names: Vec<String> = statement
             .column_names()
             .iter()
-            .map(|name| name.to_string())
+            .map(std::string::ToString::to_string)
             .collect();
         let values = statement
             .query_map([], |row| {

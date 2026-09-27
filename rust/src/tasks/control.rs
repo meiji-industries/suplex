@@ -586,7 +586,7 @@ fn nonnegative_integer<'de, D: Deserializer<'de>>(deserializer: D) -> Result<u64
     let value = Value::deserialize(deserializer)?;
     value
         .as_number()
-        .and_then(|number| number.as_f64())
+        .and_then(serde_json::Number::as_f64)
         .filter(|number| number.is_finite() && *number >= 0.0 && number.fract() == 0.0)
         .filter(|number| *number <= u64::MAX as f64)
         .map(|number| number as u64)

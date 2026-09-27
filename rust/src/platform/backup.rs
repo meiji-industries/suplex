@@ -118,7 +118,7 @@ fn tar(args: &[&std::ffi::OsStr], seconds: u64) -> BackupResult<String> {
 /// types are unsafe in a backup.
 fn files_under(root: &Path, prefix: &str) -> BackupResult<Vec<Value>> {
     let mut names = fs::read_dir(root)?.collect::<Result<Vec<_>, _>>()?;
-    names.sort_by_key(|entry| entry.file_name());
+    names.sort_by_key(std::fs::DirEntry::file_name);
     let mut entries = Vec::new();
     for entry in names {
         let name = entry.file_name().to_string_lossy().into_owned();

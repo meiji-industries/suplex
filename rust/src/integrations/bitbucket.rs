@@ -20,11 +20,12 @@ use super::{
 use crate::shared::encode_uri_component;
 
 const ORIGIN: &str = "https://api.bitbucket.org";
-static SHA: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)^[a-f0-9]{40,64}$").unwrap());
+static SHA: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?i)^[a-f0-9]{40,64}$").expect("valid regex"));
 static REPOSITORY: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$").unwrap());
+    LazyLock::new(|| Regex::new(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$").expect("valid regex"));
 static EVIDENCE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^suplex-[A-Za-z0-9._-]+$").unwrap());
+    LazyLock::new(|| Regex::new(r"^suplex-[A-Za-z0-9._-]+$").expect("valid regex"));
 
 fn coordinate(repository: &str) -> ProviderResult<String> {
     if !REPOSITORY.is_match(repository) {
@@ -259,8 +260,8 @@ impl BitbucketClient {
         self.api(path, "GET", None).await
     }
 
-    fn json_body(value: &Value) -> Option<(Vec<u8>, String)> {
-        Some((value.to_string().into_bytes(), "application/json".into()))
+    fn json_body(value: &Value) -> (Vec<u8>, String) {
+        (value.to_string().into_bytes(), "application/json".into())
     }
 
     /// Follow at most five Downloads redirects to known Bitbucket storage hosts.
@@ -519,7 +520,7 @@ impl BitbucketClient {
                 .api(
                     &format!("{}/pullrequests", coordinate(repository)?),
                     "POST",
-                    Self::json_body(&request),
+                    Some(Self::json_body(&request)),
                 )
                 .await?,
         )
@@ -537,7 +538,9 @@ impl BitbucketClient {
                 .api(
                     &format!("{}/pullrequests/{number}", coordinate(repository)?),
                     "PUT",
-                    Self::json_body(&json!({"title": title, "description": body})),
+                    Some(Self::json_body(
+                        &json!({"title": title, "description": body}),
+                    )),
                 )
                 .await?,
         )

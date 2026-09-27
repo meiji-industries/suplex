@@ -102,7 +102,7 @@ fn queue(key: String) -> Arc<Mutex<()>> {
     QUEUES
         .get_or_init(Default::default)
         .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
         .entry(key)
         .or_default()
         .clone()
@@ -116,7 +116,9 @@ pub fn split_balanced_pane_row(herdr: &Herdr, pane_id: &str, cwd: &str) -> Herdr
         |layout| format!("tab:{}", layout.tab_id),
     );
     let lock = queue(key);
-    let _serialized = lock.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let _serialized = lock
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let target = herdr.get_pane_layout(pane_id).map_or_else(
         |_| pane_id.to_owned(),
         |layout| pane_for_next_row(&layout, pane_id),

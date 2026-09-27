@@ -244,14 +244,11 @@ async fn archive_pending(
         )
         .map_err(archive_error)
     });
-    let result = match operation.await {
-        Ok(result) => result,
-        Err(_) => {
-            return with_cookies(
-                auth::error(StatusCode::INTERNAL_SERVER_ERROR, "Internal server error"),
-                cookies,
-            );
-        }
+    let Ok(result) = operation.await else {
+        return with_cookies(
+            auth::error(StatusCode::INTERNAL_SERVER_ERROR, "Internal server error"),
+            cookies,
+        );
     };
     match result {
         Ok(ArchiveOutcome::ConfirmationRequired(paths)) => with_cookies(
@@ -382,9 +379,10 @@ async fn get_one(
         Ok(task) => Json(task).into_response(),
         Err(error) => ApiError::response(error),
     };
-    response
-        .headers_mut()
-        .insert("cache-control", "private, no-store".parse().unwrap());
+    response.headers_mut().insert(
+        "cache-control",
+        axum::http::HeaderValue::from_static("private, no-store"),
+    );
     with_cookies(response, cookies)
 }
 

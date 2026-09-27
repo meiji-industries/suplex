@@ -583,7 +583,7 @@ impl Herdr {
             |flag: &str, value: &Option<String>, clear: Option<(bool, &str)>| match value {
                 Some(value) => args.extend([flag.to_owned(), value.clone()]),
                 None if clear.is_some_and(|(clear, _)| clear) => {
-                    args.push(clear.map(|(_, name)| name).unwrap_or_default().to_owned())
+                    args.push(clear.map(|(_, name)| name).unwrap_or_default().to_owned());
                 }
                 None => {}
             };

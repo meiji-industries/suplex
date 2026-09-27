@@ -79,7 +79,7 @@ pub fn claude_display_attached(runtime_directory: &Path, argv: &[String]) -> boo
 fn safe_terminal_text(text: &str) -> String {
     static ANSI: OnceLock<Regex> = OnceLock::new();
     let ansi = ANSI.get_or_init(|| {
-        Regex::new(r"[\x1b\x{9b}][\[\]()#;?]*(?:(?:(?:(?:;[-a-zA-Z\d/#&.:=?%@~_]+)*|[a-zA-Z\d]+(?:;[-a-zA-Z\d/#&.:=?%@~_]*)*)?\x07)|(?:(?:\d{1,4}(?:;\d{0,4})*)?[\dA-PR-TZcf-ntqry=><~]))").unwrap()
+        Regex::new(r"[\x1b\x{9b}][\[\]()#;?]*(?:(?:(?:(?:;[-a-zA-Z\d/#&.:=?%@~_]+)*|[a-zA-Z\d]+(?:;[-a-zA-Z\d/#&.:=?%@~_]*)*)?\x07)|(?:(?:\d{1,4}(?:;\d{0,4})*)?[\dA-PR-TZcf-ntqry=><~]))").expect("valid regex")
     });
     ansi.replace_all(text, "")
         .replace("\r\n", "\n")
@@ -736,7 +736,7 @@ mod tests {
                 .open(&path)
                 .unwrap()
                 .write_all(bytes)
-                .unwrap()
+                .unwrap();
         };
         let (mut display, mut output) = (ClaudeDisplay::default(), Vec::new());
         assert!(!display.scan(&directory, &mut output).unwrap());

@@ -1,6 +1,7 @@
 //! Every request contract against the Zod fixtures under `tests/parity`.
 //! An accepted input must produce Zod's output and a typed request; a rejected
 //! input must produce the same set of `code`/`field` findings (order is free).
+#![allow(clippy::unwrap_used, reason = "integration test helpers")]
 
 use std::collections::BTreeSet;
 

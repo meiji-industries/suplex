@@ -50,9 +50,8 @@ pub fn recover_thread_id(directory: &Path) -> io::Result<Option<String>> {
     if let Some(thread_id) = read_thread_id(directory)? {
         return Ok(Some(thread_id));
     }
-    let entries = match fs::read_dir(directory) {
-        Ok(entries) => entries,
-        Err(_) => return Ok(None),
+    let Ok(entries) = fs::read_dir(directory) else {
+        return Ok(None);
     };
     let mut logs = Vec::new();
     for entry in entries {

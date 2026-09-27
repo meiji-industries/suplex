@@ -23,7 +23,7 @@ pub struct DecodedTaskImage {
 
 fn data_uri() -> &'static Regex {
     static DATA_URI: OnceLock<Regex> = OnceLock::new();
-    DATA_URI.get_or_init(|| Regex::new(r"^data:([^;,]+);base64,(.+)$").unwrap())
+    DATA_URI.get_or_init(|| Regex::new(r"^data:([^;,]+);base64,(.+)$").expect("valid regex"))
 }
 
 pub fn decode_task_image(image: &TaskImage) -> Result<DecodedTaskImage, PlatformError> {

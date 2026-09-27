@@ -156,7 +156,7 @@ mod tests {
                 counted.fetch_add(1, Ordering::SeqCst);
                 async move {
                     let query = body["query"].as_str().unwrap();
-                    let pattern = regex::Regex::new(r#"p(\d+): repository\(owner: "([^"]+)", name: "([^"]+)"\) \{ pullRequest\(number: (\d+)\)"#).unwrap();
+                    let pattern = regex::Regex::new(r#"p(\d+): repository\(owner: "([^"]+)", name: "([^"]+)"\) \{ pullRequest\(number: (\d+)\)"#).expect("valid regex");
                     let data = pattern.captures_iter(query).map(|capture| {
                         let number: u64 = capture[4].parse().unwrap();
                         let value = if &capture[2] == "missing" { Value::Null } else {

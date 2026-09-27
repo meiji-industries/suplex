@@ -138,9 +138,14 @@ pub(crate) fn artifact_check(path: Option<&Path>) -> Value {
 }
 
 fn disk_check(worktree: Option<&Path>, artifact: Option<&Path>, minimum_gb: Option<f64>) -> Value {
-    let Some(((worktree_free, worktree_total), (artifact_free, artifact_total))) = worktree
-        .and_then(filesystem_bytes)
-        .zip(artifact.and_then(filesystem_bytes))
+    fn bytes(path: Option<&Path>) -> Option<(&Path, (u64, u64))> {
+        let path = path?;
+        Some((path, filesystem_bytes(path)?))
+    }
+    let Some((
+        (worktree, (worktree_free, worktree_total)),
+        (artifact, (artifact_free, artifact_total)),
+    )) = bytes(worktree).zip(bytes(artifact))
     else {
         return check(
             "disk-space",
@@ -180,8 +185,8 @@ fn disk_check(worktree: Option<&Path>, artifact: Option<&Path>, minimum_gb: Opti
         },
         json!({
             "freeBytes":worktree_free.min(artifact_free),"minFreeBytes":js_number(minimum),
-            "worktreeRoot":worktree.unwrap().display().to_string(),"worktreeFreeBytes":worktree_free,"worktreeTotalBytes":worktree_total,
-            "artifactRoot":artifact.unwrap().display().to_string(),"artifactFreeBytes":artifact_free,"artifactTotalBytes":artifact_total,
+            "worktreeRoot":worktree.display().to_string(),"worktreeFreeBytes":worktree_free,"worktreeTotalBytes":worktree_total,
+            "artifactRoot":artifact.display().to_string(),"artifactFreeBytes":artifact_free,"artifactTotalBytes":artifact_total,
         }),
     )
 }

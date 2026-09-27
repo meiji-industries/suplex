@@ -107,7 +107,7 @@ impl ProviderLogins {
         let mut sessions = self
             .sessions
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if let Some(existing) = sessions.iter().find(|session| session.target == target)
             && herdr
                 .get_pane(&existing.pane_id)
@@ -137,7 +137,7 @@ impl ProviderLogins {
     pub fn get(&self, pane_id: &str) -> Option<ProviderLoginSession> {
         self.sessions
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .iter()
             .find(|session| session.pane_id == pane_id)
             .cloned()
@@ -147,7 +147,7 @@ impl ProviderLogins {
         let mut sessions = self
             .sessions
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let Some(index) = sessions
             .iter()
             .position(|session| session.pane_id == pane_id)

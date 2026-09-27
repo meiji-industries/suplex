@@ -661,9 +661,8 @@ mod tests {
             )
             .unwrap();
         drop(database);
-        let error = match SuplexDatabase::open(&filename, OpenMode::Migrate) {
-            Ok(_) => panic!("modified migration must fail"),
-            Err(error) => error,
+        let Err(error) = SuplexDatabase::open(&filename, OpenMode::Migrate) else {
+            panic!("modified migration must fail");
         };
         assert!(error.to_string().contains("different SQL"));
         let read_only = SuplexDatabase::open(&filename, OpenMode::ReadOnly).unwrap();

@@ -71,7 +71,7 @@ pub fn create_message_id(timestamp: u64) -> String {
     let counter = {
         let mut clock = MESSAGE_CLOCK
             .lock()
-            .unwrap_or_else(|poison| poison.into_inner());
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if clock.0 != timestamp {
             *clock = (timestamp, 0);
         }
@@ -970,7 +970,7 @@ pub(crate) mod tests {
     fn generated_prompt_ids_use_opencodes_ascending_native_message_format() {
         let first = create_message_id(1_788_576_300_000);
         let second = create_message_id(1_788_576_300_000);
-        let format = regex::Regex::new("^msg_[0-9a-f]{12}[0-9A-Za-z]{14}$").unwrap();
+        let format = regex::Regex::new("^msg_[0-9a-f]{12}[0-9A-Za-z]{14}$").expect("valid regex");
         assert!(format.is_match(&first) && format.is_match(&second));
         assert!(first < second);
     }

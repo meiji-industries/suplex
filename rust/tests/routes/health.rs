@@ -11,9 +11,8 @@ mod tests {
 
     #[tokio::test]
     async fn health_query_keeps_public_field_order_for_empty_duplicate_and_unknown_keys() {
-        let invalid = match query(Some("projectId=&other=x")) {
-            Err(response) => response,
-            Ok(_) => panic!("invalid health query was accepted"),
+        let Err(invalid) = query(Some("projectId=&other=x")) else {
+            panic!("invalid health query was accepted");
         };
         let body: Value =
             serde_json::from_slice(&to_bytes((*invalid).into_body(), 4096).await.unwrap()).unwrap();
@@ -24,9 +23,8 @@ mod tests {
                 {"code":"invalid-unrecognized_keys","field":".","message":"Request value is invalid"},
             ])
         );
-        let duplicate = match query(Some("projectId=x&projectId=y&profileIds=")) {
-            Err(response) => response,
-            Ok(_) => panic!("duplicate health query was accepted"),
+        let Err(duplicate) = query(Some("projectId=x&projectId=y&profileIds=")) else {
+            panic!("duplicate health query was accepted");
         };
         let body: Value =
             serde_json::from_slice(&to_bytes((*duplicate).into_body(), 4096).await.unwrap())

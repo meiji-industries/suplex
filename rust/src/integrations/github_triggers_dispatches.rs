@@ -24,9 +24,10 @@ use crate::{
     tasks::{commands::task_request_hash, control::TaskProfile},
 };
 
-static SHA: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)^[a-f0-9]{40,64}$").unwrap());
+static SHA: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?i)^[a-f0-9]{40,64}$").expect("valid regex"));
 static REPOSITORY: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?i)^[a-z0-9][a-z0-9_.-]{0,99}/[a-z0-9][a-z0-9_.-]{0,99}$").unwrap()
+    Regex::new(r"(?i)^[a-z0-9][a-z0-9_.-]{0,99}/[a-z0-9][a-z0-9_.-]{0,99}$").expect("valid regex")
 });
 
 fn fail(message: &str) -> Box<dyn Error> {

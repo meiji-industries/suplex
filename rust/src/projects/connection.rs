@@ -61,12 +61,12 @@ pub async fn check(
     .await
     .ok()
     .flatten();
-    result.origin_repository = origin;
-    if result.origin_repository.is_none() {
+    result.origin_repository.clone_from(&origin);
+    let Some(origin) = origin else {
         result.message =
             "Open a local checkout with a GitHub origin. Correct the repository path below.";
         return result;
-    }
+    };
     let access = match github.access().await {
         Ok(access) if access.token().is_some() => access,
         _ => {
@@ -75,13 +75,7 @@ pub async fn check(
             return result;
         }
     };
-    match same_repository(
-        &access,
-        identity,
-        result.origin_repository.as_deref().unwrap(),
-    )
-    .await
-    {
+    match same_repository(&access, identity, &origin).await {
         Ok(false) => {
             result.message = "The local origin points to a different repository. Correct the repository or checkout path below.";
             return result;

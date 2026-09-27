@@ -70,9 +70,10 @@ async fn health_with_github(
         Err(error) => return with_cookies(error.into_response(), session.set_cookies),
     };
     let mut response = Json(snapshot(&state, providers, github_override).await).into_response();
-    response
-        .headers_mut()
-        .insert(header::CACHE_CONTROL, "private, no-store".parse().unwrap());
+    response.headers_mut().insert(
+        header::CACHE_CONTROL,
+        axum::http::HeaderValue::from_static("private, no-store"),
+    );
     auth::append_cookies(&mut response, session.set_cookies);
     response
 }

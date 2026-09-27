@@ -85,26 +85,24 @@ fn verify_advisor_outcome(
     task_id: &str,
     input: &Value,
     outcome: AdvisorReportOutcome,
-) -> DatabaseResult<AdvisorReportOutcome> {
-    if outcome.is_err() {
-        return Ok(outcome);
-    }
+) -> AdvisorReportOutcome {
+    let Ok(_) = outcome else {
+        return outcome;
+    };
     let directory = input["evidenceDirectory"].as_str().unwrap_or_default();
     let digest = input["evidenceSha256"].as_str().unwrap_or_default();
     if !workflow_evidence::verify_task_evidence(Path::new(directory), digest) {
-        return Ok(Err("The evidence files changed or are missing since the assignment. Request a new assessment.".into()));
+        return Err("The evidence files changed or are missing since the assignment. Request a new assessment.".into());
     }
     let range = ReviewRange::from_value(&input["range"]).unwrap_or_default();
     let activity = format!(
         "{} review",
         advisor_label(input["role"].as_str().unwrap_or_default())
     );
-    Ok(
-        match source_still_matches(database_path, task_id, &range, &activity) {
-            Ok(_) => outcome,
-            Err(mismatch) => Err(format!("{}. Request a new assessment.", mismatch.0)),
-        },
-    )
+    match source_still_matches(database_path, task_id, &range, &activity) {
+        Ok(_) => outcome,
+        Err(mismatch) => Err(format!("{}. Request a new assessment.", mismatch.0)),
+    }
 }
 
 fn advisor_summary(outcome: &AdvisorReportOutcome) -> String {
@@ -200,7 +198,7 @@ pub fn finish_delegate_turn(
             };
             Err(format!("The {label} turn ended with state {state}{detail}"))
         };
-        let outcome = verify_advisor_outcome(database_path, &session.task_id, &input, outcome)?;
+        let outcome = verify_advisor_outcome(database_path, &session.task_id, &input, outcome);
         let (result, invalid_reason) = match &outcome {
             Ok(result) => (result.clone(), Value::Null),
             Err(reason) => (Value::Null, json!(reason)),
@@ -1612,7 +1610,9 @@ mod tests {
             turn.id
         )));
         assert_eq!(
-            reviewer.advisor_role.map(|role| role.as_str()),
+            reviewer
+                .advisor_role
+                .map(super::super::advisor_bridge::AdvisorRole::as_str),
             Some("reviewer")
         );
         std::fs::remove_dir_all(directory).unwrap();

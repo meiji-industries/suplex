@@ -185,11 +185,12 @@ pub fn issue_text(value: &Value) -> String {
     }
 }
 
-static HTTPS_LINK: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"https://[^\s<>()]+").unwrap());
+static HTTPS_LINK: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"https://[^\s<>()]+").expect("valid regex"));
 static IMAGE_REFERENCE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"!\[[^\]]*\]\((https://[^\s)]+)\)").unwrap());
+    LazyLock::new(|| Regex::new(r"!\[[^\]]*\]\((https://[^\s)]+)\)").expect("valid regex"));
 static EVIDENCE_SHAPE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?is)\n\nSource: [a-f0-9]{40,64}\n\n## Before\n\n.*\n\n## After\n\n.*\n\n## How to verify\n\n").unwrap()
+    Regex::new(r"(?is)\n\nSource: [a-f0-9]{40,64}\n\n## Before\n\n.*\n\n## After\n\n.*\n\n## How to verify\n\n").expect("valid regex")
 });
 
 /// TypeScript `jiraEvidenceDocument`: one paragraph per line with linked URLs.
@@ -921,7 +922,7 @@ impl IssueTracker {
                 Err(_) => {
                     detail += &format!(
                         "\nLinked issue {key} could not be read with this tracker connection."
-                    )
+                    );
                 }
             }
         }

@@ -495,7 +495,9 @@ fn dispatch_state(dispatch: DispatchState) -> Dispatch {
 // ponytail: interns each distinct native provider name once; widen `UsageEntry.provider` to `String` to drop this.
 fn provider_name(name: &str) -> &'static str {
     static NAMES: Mutex<Vec<&'static str>> = Mutex::new(Vec::new());
-    let mut names = NAMES.lock().unwrap_or_else(|poison| poison.into_inner());
+    let mut names = NAMES
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     if let Some(found) = names.iter().find(|known| **known == name) {
         return found;
     }

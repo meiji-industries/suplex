@@ -210,7 +210,7 @@ mod tests {
     fn dispatch_record(directory: &Path) -> std::path::PathBuf {
         fs::read_dir(directory)
             .unwrap()
-            .filter_map(|entry| entry.ok())
+            .filter_map(std::result::Result::ok)
             .find(|entry| dispatch_record_name(&entry.file_name().to_string_lossy()))
             .unwrap()
             .path()

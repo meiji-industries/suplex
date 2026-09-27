@@ -42,7 +42,7 @@ fn ensure_excluded(directory: &Path) -> io::Result<()> {
     fs::create_dir_all(exclude_path.parent().expect("exclude path has a parent"))?;
     let _guard = EXCLUDE_LOCK
         .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let current = match fs::read_to_string(&exclude_path) {
         Ok(text) => text,
         Err(error) if error.kind() == io::ErrorKind::NotFound => String::new(),

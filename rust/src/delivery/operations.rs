@@ -1313,7 +1313,7 @@ impl DeliveryOperations {
             .is_ok()
         {
             self.update_workflow_state(task_id, |state| {
-                state.accepted_delivery = Some(actual.clone())
+                state.accepted_delivery = Some(actual.clone());
             })?;
         }
         Ok(())
@@ -2091,7 +2091,7 @@ impl DeliveryOperations {
             .dependencies
             .iter()
             .filter(|dependency| dependency.status != TaskStatus::Delivered)
-            .map(|dependency| dependency.describe())
+            .map(super::super::tasks::control::DependencyRow::describe)
             .collect::<Vec<_>>();
         if !blockers.is_empty() {
             return Err(delivery_failure(
@@ -2894,7 +2894,7 @@ pub(crate) mod tests {
             async move {
                 let key = uri
                     .path_and_query()
-                    .map(|value| value.as_str())
+                    .map(axum::http::uri::PathAndQuery::as_str)
                     .unwrap_or("");
                 match replies.iter().find(|(path, _)| *path == key) {
                     Some((_, body)) => Json(body.clone()).into_response(),

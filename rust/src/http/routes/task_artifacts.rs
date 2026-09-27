@@ -115,23 +115,22 @@ async fn read(
         );
     }
     let mut response = Response::new(Body::from(bytes));
-    let content_type = match artifact.mime_type.parse() {
-        Ok(content_type) => content_type,
-        Err(_) => {
-            return with_cookies(
-                auth::error(StatusCode::INTERNAL_SERVER_ERROR, "Internal server error"),
-                cookies,
-            );
-        }
+    let Ok(content_type) = artifact.mime_type.parse() else {
+        return with_cookies(
+            auth::error(StatusCode::INTERNAL_SERVER_ERROR, "Internal server error"),
+            cookies,
+        );
     };
     response
         .headers_mut()
         .insert(header::CONTENT_TYPE, content_type);
-    response
-        .headers_mut()
-        .insert(header::CACHE_CONTROL, "private, no-store".parse().unwrap());
-    response
-        .headers_mut()
-        .insert("x-content-type-options", "nosniff".parse().unwrap());
+    response.headers_mut().insert(
+        header::CACHE_CONTROL,
+        axum::http::HeaderValue::from_static("private, no-store"),
+    );
+    response.headers_mut().insert(
+        "x-content-type-options",
+        axum::http::HeaderValue::from_static("nosniff"),
+    );
     with_cookies(response, cookies)
 }

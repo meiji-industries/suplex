@@ -201,7 +201,11 @@ fn missing_opencode_session(error: &(dyn Error + 'static)) -> bool {
         || error
             .downcast_ref::<std::io::Error>()
             .and_then(std::io::Error::get_ref)
-            .is_some_and(|source| source.is::<SessionNotFound>())
+            .is_some_and(
+                <dyn std::error::Error + std::marker::Send + std::marker::Sync + 'static>::is::<
+                    SessionNotFound,
+                >,
+            )
 }
 
 /// Collect now, then every 30 seconds until shutdown.

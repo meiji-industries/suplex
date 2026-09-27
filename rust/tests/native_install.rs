@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used, reason = "integration test helpers")]
+
 use std::{
     fs,
     path::{Path, PathBuf},

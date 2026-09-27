@@ -558,6 +558,7 @@ mod tests {
     fn archive_terminates_an_active_command_then_closes_its_workspace() {
         static RUNNING: AtomicBool = AtomicBool::new(true);
         static SIGNALS: AtomicUsize = AtomicUsize::new(0);
+        #[expect(clippy::unnecessary_wraps, reason = "stands in for the signal sender")]
         fn kill(pid: i32, signal: Signal) -> nix::Result<()> {
             assert_eq!((pid, signal), (-2, Signal::SIGTERM));
             SIGNALS.fetch_add(1, Ordering::SeqCst);
@@ -579,6 +580,7 @@ mod tests {
         static RUNNING: AtomicBool = AtomicBool::new(true);
         static TERM: AtomicUsize = AtomicUsize::new(0);
         static KILL: AtomicUsize = AtomicUsize::new(0);
+        #[expect(clippy::unnecessary_wraps, reason = "stands in for the signal sender")]
         fn signal(pid: i32, signal: Signal) -> nix::Result<()> {
             assert_eq!(pid, -2);
             match signal {

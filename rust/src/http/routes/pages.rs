@@ -151,12 +151,14 @@ async fn oauth_consent(
         Err(response) => return *response,
     };
     let mut response = page("oauth-consent", cookies);
-    response
-        .headers_mut()
-        .insert(header::CACHE_CONTROL, "no-store".parse().unwrap());
-    response
-        .headers_mut()
-        .insert(header::REFERRER_POLICY, "no-referrer".parse().unwrap());
+    response.headers_mut().insert(
+        header::CACHE_CONTROL,
+        axum::http::HeaderValue::from_static("no-store"),
+    );
+    response.headers_mut().insert(
+        header::REFERRER_POLICY,
+        axum::http::HeaderValue::from_static("no-referrer"),
+    );
     response
 }
 

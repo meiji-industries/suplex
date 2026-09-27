@@ -284,15 +284,13 @@ fn activity(
             started_at: previous.map_or(start.clone(), |previous| {
                 previous.started_at.clone().min(start)
             }),
-            finished_at: if previous.is_some_and(|previous| previous.finished_at.is_none())
-                || end.is_none()
-            {
-                None
-            } else {
-                previous
-                    .and_then(|previous| previous.finished_at.clone())
-                    .map_or(end.clone(), |prior_end| Some(prior_end.max(end.unwrap())))
-            },
+            finished_at: end.and_then(|end| match previous {
+                Some(previous) => previous
+                    .finished_at
+                    .clone()
+                    .map(|prior_end| prior_end.max(end)),
+                None => Some(end),
+            }),
         };
         if let Some(position) = prior {
             turns[position].1 = combined;

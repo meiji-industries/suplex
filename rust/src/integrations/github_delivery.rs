@@ -20,15 +20,17 @@ use crate::{
     tasks::worktree::{self, LocalRevisionObservation},
 };
 
-static SHA: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)^[a-f0-9]{40,64}$").unwrap());
+static SHA: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?i)^[a-f0-9]{40,64}$").expect("valid regex"));
 static REPOSITORY: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?i)^[a-z0-9][a-z0-9_.-]{0,99}/[a-z0-9][a-z0-9_.-]{0,99}$").unwrap()
+    Regex::new(r"(?i)^[a-z0-9][a-z0-9_.-]{0,99}/[a-z0-9][a-z0-9_.-]{0,99}$").expect("valid regex")
 });
 static PROVIDER_TOKEN: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"\b(?:gh[pousr]_[A-Za-z0-9_]{6,}|github_pat_[A-Za-z0-9_]{6,})\b").unwrap()
+    Regex::new(r"\b(?:gh[pousr]_[A-Za-z0-9_]{6,}|github_pat_[A-Za-z0-9_]{6,})\b")
+        .expect("valid regex")
 });
 static RATE_LIMIT: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(?i)rate limit|secondary rate|abuse").unwrap());
+    LazyLock::new(|| Regex::new(r"(?i)rate limit|secondary rate|abuse").expect("valid regex"));
 
 pub fn valid_sha(value: &str) -> bool {
     SHA.is_match(value)

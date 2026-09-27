@@ -750,7 +750,7 @@ fn list_page(
         principal,
         RowFilter {
             project_id: query.project_id.as_deref(),
-            status: query.status.map(|status| status.as_str()),
+            status: query.status.map(super::control::TaskStatus::as_str),
             pull_request_number: query.pull_request_number,
             source_branch: query.source_branch.as_deref(),
             title_contains: query.title_contains.as_deref(),
@@ -3058,23 +3058,21 @@ mod retirement_admission_tests {
             .with_database(|database| claim(database, &principal, id, &command))
             .unwrap();
         assert!(matches!(first, Claim::Claimed { .. }));
-        let replay = match fixture
+        let Err(replay) = fixture
             .server
             .state
             .with_database(|database| claim(database, &principal, id, &command))
-        {
-            Ok(_) => panic!("same key admitted twice"),
-            Err(error) => error,
+        else {
+            panic!("same key admitted twice");
         };
         assert!(replay.to_string().contains("still being processed"));
         let other: TaskCommandBody = serde_json::from_value(json!({"command":"cancel_task", "revision":task["revision"], "idempotencyKey":"in-flight-other-001"})).unwrap();
-        let loser = match fixture
+        let Err(loser) = fixture
             .server
             .state
             .with_database(|database| claim(database, &principal, id, &other))
-        {
-            Ok(_) => panic!("stale revision admitted"),
-            Err(error) => error,
+        else {
+            panic!("stale revision admitted");
         };
         assert!(loser.to_string().contains("revision is stale"));
         let count: i64 = fixture.server.state.with_database(|database| {

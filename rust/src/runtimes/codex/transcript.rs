@@ -104,7 +104,7 @@ pub fn unsettled_tool_ids(events: &[CodexEvent]) -> Vec<&str> {
                     Some("command_execution" | "mcp_tool_call" | "file_change")
                 ) =>
             {
-                started.push(id)
+                started.push(id);
             }
             _ => {}
         }

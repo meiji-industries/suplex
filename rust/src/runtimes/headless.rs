@@ -172,19 +172,19 @@ where
         }
         thread::sleep(Duration::from_millis(50));
     }
-    if let Some(found) = &inspection
-        && (found.owner_uid.is_none() || found.process_group != pid)
-    {
-        return Err(io::Error::other("Headless process identity could not be established").into());
-    }
     let identity = if let Some(found) = inspection {
+        let Some(owner_uid) = found.owner_uid.filter(|_| found.process_group == pid) else {
+            return Err(
+                io::Error::other("Headless process identity could not be established").into(),
+            );
+        };
         RecordedProcessIdentity {
             command: found.command,
             executable: found.executable,
             argv: found.argv,
             process_group: found.process_group,
             start_time: found.start_time,
-            owner_uid: found.owner_uid.unwrap(),
+            owner_uid,
         }
     } else {
         RecordedProcessIdentity {
@@ -453,7 +453,7 @@ fn macos_process_environment(pid: u32) -> io::Result<Vec<Vec<u8>>> {
         return Err(io::Error::last_os_error());
     }
     data.truncate(size);
-    let argc = i32::from_ne_bytes(data[..4].try_into().unwrap());
+    let argc = i32::from_ne_bytes([data[0], data[1], data[2], data[3]]);
     if !(0..=4096).contains(&argc) {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
@@ -485,7 +485,7 @@ fn macos_process_environment(pid: u32) -> io::Result<Vec<Vec<u8>>> {
     Ok(data[offset..]
         .split(|byte| *byte == 0)
         .take_while(|item| !item.is_empty())
-        .map(|item| item.to_vec())
+        .map(<[u8]>::to_vec)
         .collect())
 }
 

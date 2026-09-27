@@ -34,7 +34,7 @@ mod tests {
         )*};
     }
     with_path!("projectId": get_one, repository_defaults, provider_instances);
-    with_path!("companyId": list_company, repository_owners);
+    with_path!("companyId": list_company, repository_owners, recent_repositories);
 
     macro_rules! with_query {
         ($($name:ident),*) => {$(
@@ -345,7 +345,15 @@ mod tests {
             )
             .route(
                 "/user/repos",
-                axum::routing::post(|| async { axum::Json(json!({})) }),
+                axum::routing::post(|| async { axum::Json(json!({})) }).get(|| async {
+                    let days_ago = |days| (Utc::now() - chrono::Duration::days(days)).to_rfc3339();
+                    axum::Json(json!([
+                        {"full_name": "owner/fresh", "default_branch": "trunk", "pushed_at": days_ago(1), "archived": false},
+                        {"full_name": "owner/frozen", "default_branch": "main", "pushed_at": days_ago(2), "archived": true},
+                        {"full_name": "org/empty", "default_branch": null, "pushed_at": days_ago(3), "archived": false},
+                        {"full_name": "owner/old", "default_branch": "main", "pushed_at": days_ago(40), "archived": false}
+                    ]))
+                }),
             );
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let api_base = format!("http://{}/", listener.local_addr().unwrap());
@@ -472,6 +480,35 @@ mod tests {
             &repositories_body[..],
             br#"{"repositories":[{"name":"Alpha","defaultBranch":"release"},{"name":"zeta","defaultBranch":"main"}]}"#
         );
+        let recent = recent_repositories(
+            State(state.clone()),
+            Path(company.id.clone()),
+            headers.clone(),
+        )
+        .await;
+        assert_eq!(recent.status(), StatusCode::OK);
+        let recent: Value =
+            serde_json::from_slice(&to_bytes(recent.into_body(), 1024 * 1024).await.unwrap())
+                .unwrap();
+        let recent: Vec<(&str, &str)> = recent["repositories"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|row| {
+                (
+                    row["repository"].as_str().unwrap(),
+                    row["defaultBranch"].as_str().unwrap(),
+                )
+            })
+            .collect();
+        assert_eq!(recent, [("owner/fresh", "trunk"), ("org/empty", "main")]);
+        let denied_recent = recent_repositories(
+            State(state.clone()),
+            Path(company.id.clone()),
+            HeaderMap::new(),
+        )
+        .await;
+        assert_eq!(denied_recent.status(), StatusCode::UNAUTHORIZED);
         let bad_owner = owner_repositories(
             State(state.clone()),
             Path((company.id.clone(), "bad_name".to_owned())),

@@ -6,6 +6,7 @@ import type { ProfileResponse, ProjectResponse } from "../../contracts/projects.
 import { useSystemHealth } from "../../components/app/system-health.js";
 import type { ToolIconId } from "../../components/app/tool-icons.js";
 import { readJsonUnchecked, withCompany, type ApiCompany } from "../../lib/api.js";
+import { listProjects } from "../projects/lib/project-api.js";
 
 export type ApiProfile = ProfileResponse;
 export type ApiProject = ProjectResponse;
@@ -65,7 +66,7 @@ export function useOnboardingData(company: ApiCompany | undefined): OnboardingDa
         // A fresh install points its default agents at the installed CLI before the list is read.
         readJsonUnchecked("/api/admin/profiles/defaults", { method: "POST" }).catch(() => undefined)
           .then(() => readJsonUnchecked<{ profiles: ApiProfile[] }>("/api/profiles?includeArchived=true")).then(result => setProfiles(result.profiles)),
-        readJsonUnchecked<{ projects: ApiProject[] }>(`/api/companies/${encodeURIComponent(company.id)}/projects`).then(result => setProjects(result.projects)),
+        listProjects(company.id).then(setProjects),
       ]);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Suplex could not check the providers. Select Check again.");

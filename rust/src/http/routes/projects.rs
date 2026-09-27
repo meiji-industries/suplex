@@ -40,6 +40,10 @@ pub fn router() -> Router<AppState> {
             get(list_company).post(create),
         )
         .route(
+            "/api/companies/{company_id}/recent-repositories",
+            get(recent_repositories),
+        )
+        .route(
             "/api/companies/{company_id}/repository-owners",
             get(repository_owners),
         )
@@ -387,6 +391,40 @@ async fn repository_owners(
         Ok(owners) => axum::Json(json!({"owners": owners})).into_response(),
         Err(error) => ApiError::response(Box::new(error)),
     };
+    with_cookies(response, cookies)
+}
+
+#[derive(serde::Serialize, ts_rs::TS)]
+#[ts(export)]
+struct RecentRepositories {
+    repositories: Vec<provisioning::RecentRepository>,
+}
+
+/// Suggestions for a new project: repositories pushed to in the last 30 days.
+async fn recent_repositories(
+    State(state): State<AppState>,
+    ValidPath(CompanyIdParams { company_id }): ValidPath<CompanyIdParams>,
+    headers: HeaderMap,
+) -> Response {
+    let (user_id, cookies) = match authorize(&state, &headers) {
+        Ok(value) => value,
+        Err(response) => return *response,
+    };
+    if let Err(response) = state
+        .with_database(|database| {
+            crate::identity::companies::require_company_access(database, &user_id, &company_id)
+        })
+        .map(|_| ())
+        .map_err(ApiError::response)
+    {
+        return with_cookies(response, cookies);
+    }
+    let since = chrono::Utc::now() - chrono::Duration::days(30);
+    let response =
+        match provisioning::recent_github_repositories(&state.project_github, since).await {
+            Ok(repositories) => axum::Json(RecentRepositories { repositories }).into_response(),
+            Err(error) => ApiError::response(Box::new(error)),
+        };
     with_cookies(response, cookies)
 }
 

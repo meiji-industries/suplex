@@ -57,6 +57,7 @@
   "GET /api/companies/:companyId/github-triggers",
   "GET /api/companies/:companyId/github-triggers/:ruleId/activity",
   "GET /api/companies/:companyId/projects",
+  "GET /api/companies/:companyId/recent-repositories",
   "GET /api/companies/:companyId/repository-owners",
   "GET /api/companies/:companyId/repository-owners/:owner/repositories",
   "GET /api/companies/:companyId/task-agents",

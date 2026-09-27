@@ -11,6 +11,7 @@ import { SettingRow, SettingsContent, SettingsLayout, SettingsSection } from "..
 
 import { ProjectCards } from "./project-cards.js";
 import { LoadingState } from "../../components/app/loading-state.js";
+import { listProjects } from "./lib/project-api.js";
 
 export function ProjectsView(): ReactElement {
   const { currentCompany, loading, user, error: companyError, reloadCompanies } = useCompanyContext();
@@ -36,11 +37,11 @@ export function ProjectsView(): ReactElement {
     try {
       const [agentResult, projectResult] = await Promise.all([
         readJsonUnchecked<{ profiles: ApiProfile[] }>("/api/profiles"),
-        readJsonUnchecked<{ projects: ApiProject[] }>(`/api/companies/${encodeURIComponent(companyId)}/projects`),
+        listProjects(companyId),
       ]);
       if (token !== requestToken.current) return;
       loadedCompanyIdRef.current = companyId;
-      setAgents(agentResult.profiles); setProjects(projectResult.projects); setLoadedCompanyId(companyId);
+      setAgents(agentResult.profiles); setProjects(projectResult); setLoadedCompanyId(companyId);
     } catch (reason) {
       if (token !== requestToken.current) return;
       if (reason instanceof Error && reason.message === "Authentication required") window.location.assign("/auth");

@@ -8,11 +8,12 @@ import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput, InputGr
 import { RadioGroup, RadioGroupItem } from "../../components/ui/radio-group.js";
 import { NewButton } from "../../components/ui/new-button.js";
 import { readJsonUnchecked, type CompanyStatus } from "../../lib/api.js";
-import { reconcileScopedNotFound, type ApiProject } from "../../shell/view-shared.js";
+import { reconcileScopedNotFound } from "../../shell/view-shared.js";
 import { ChevronDown } from "lucide-react";
 import { useEffect, useState, type FormEvent, type ReactElement } from "react";
 import { ProjectConnections, REPOSITORY_HOSTS, withRepositoryHost } from "./project-connections.js";
 import { ProjectIntegrationSchema, type ProjectIntegration } from "../../contracts/project-integration.js";
+import { createProject } from "./lib/project-api.js";
 
 /** A picker inside the repository field, in front of the text, like a URL protocol. */
 function AddonMenu({ label, value, options, onChange }: { label: string; value: string; options: ReadonlyArray<{ value: string; label: string }>; onChange: (value: string) => void }): ReactElement {
@@ -96,10 +97,7 @@ export function CreateProjectDialog({
     setError("");
     setFindings([]);
     try {
-      await readJsonUnchecked<ApiProject>(`/api/companies/${companyId}/projects`, {
-        method: "POST",
-        body: JSON.stringify({ ...(source === "create" ? { repositoryName: ownerPicker && !repository.includes("/") ? `${owner}/${repository.trim()}` : repository.trim() } : { repositoryUrl: cloneUrl }), baseBranch, integration: ProjectIntegrationSchema.parse(integration) }),
-      });
+      await createProject(companyId, { ...(source === "create" ? { repositoryName: ownerPicker && !repository.includes("/") ? `${owner}/${repository.trim()}` : repository.trim() } : { repositoryUrl: cloneUrl }), baseBranch, integration: ProjectIntegrationSchema.parse(integration) });
       await onCreated();
       onOpenChange(false);
     } catch (reason) {

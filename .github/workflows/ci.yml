@@ -106,15 +106,30 @@ jobs:
       CI: "true"
       TEST_WORKERS: ${{ inputs.workers || '8' }}
       SUPLEX_BIN: ${{ github.workspace }}/rust/target/debug/suplex
+      TARGET_CACHE_MAX_KIB: 12582912
+      TARGET_CACHE_MAX_SIZE: 12GB
     steps:
       - uses: actions/checkout@v5
 
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: 1.93.1
-      - uses: Swatinem/rust-cache@v2
+      - name: Mount Cargo registry
+        continue-on-error: true
+        uses: useblacksmith/stickydisk@v1
         with:
-          workspaces: rust
+          key: ${{ github.repository }}-cargo-registry-${{ runner.arch }}
+          path: ~/.cargo/registry
+          commit: on-change
+      # The test server builds with other features than the Rust job, so it keeps its own target disk.
+      - name: Mount Rust target directory
+        id: rust-target
+        continue-on-error: true
+        uses: useblacksmith/stickydisk@v1
+        with:
+          key: ${{ github.repository }}-test-job-target-${{ hashFiles('rust/rust-toolchain.toml') }}-${{ runner.arch }}
+          path: ${{ github.workspace }}/rust/target
+          commit: on-change
 
       - uses: pnpm/action-setup@v4
 
@@ -175,3 +190,13 @@ jobs:
           for phase in deliver deliver_pr answer restart cancel deliver_claude direct_build independent_review competing_plans refine_pull_request; do
             SUPLEX_DETERMINISTIC_PHASE=$phase pnpm exec tsx tests/interop/real-codex-standard.ts
           done
+
+      - name: Enforce persistent target size limit
+        if: ${{ always() && steps.rust-target.outcome == 'success' }}
+        run: |
+          target_size_kib="$(du -sk rust/target | cut -f1)"
+          echo "Persistent target size: ${target_size_kib} KiB"
+          if (( target_size_kib > TARGET_CACHE_MAX_KIB )); then
+            cargo install cargo-sweep --version 0.8.0 --locked
+            cargo sweep --maxsize "${TARGET_CACHE_MAX_SIZE}" rust
+          fi

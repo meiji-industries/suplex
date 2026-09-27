@@ -66,15 +66,26 @@ fn temporary_path(parent: &Path, prefix: &str) -> std::io::Result<PathBuf> {
 }
 
 pub async fn github_owners(github: &Github) -> Result<Vec<String>, ProjectError> {
-    let unavailable = |reason: String| {
+    let auth_unavailable = || {
         failure(
             "Repository provisioning failed",
             422,
             finding(
                 "github-auth-unavailable",
                 "repositoryName",
+                "GitHub is not signed in.",
+            ),
+        )
+    };
+    let repository_unavailable = |reason: String| {
+        failure(
+            "Repository provisioning failed",
+            422,
+            finding(
+                "github-repository-unavailable",
+                "repositoryName",
                 format!(
-                    "GitHub CLI could not read the signed-in user: {}",
+                    "GitHub could not list repository owners: {}",
                     command_failure(&reason)
                 ),
             ),
@@ -83,11 +94,17 @@ pub async fn github_owners(github: &Github) -> Result<Vec<String>, ProjectError>
     let access = github
         .access()
         .await
-        .map_err(|error| unavailable(github_reason(&*error)))?;
-    let login = access
-        .current_user_login()
-        .await
-        .map_err(|error| unavailable(github_reason(&*error)))?;
+        .map_err(|error| repository_unavailable(github_reason(&*error)))?;
+    if access.token().is_none() {
+        return Err(auth_unavailable());
+    }
+    let login = access.current_user_login().await.map_err(|error| {
+        if matches!(error.downcast_ref::<octocrab::Error>(), Some(octocrab::Error::GitHub { source, .. }) if source.status_code.as_u16() == 401) {
+            auth_unavailable()
+        } else {
+            repository_unavailable(github_reason(&*error))
+        }
+    })?;
     let mut owners = vec![login];
     // Organizations need the read:org scope; without it the personal account still works.
     let mut organizations = Vec::new();
@@ -669,9 +686,47 @@ pub fn infer_commands(repository_path: &Path) -> (String, String) {
 
 #[cfg(test)]
 mod tests {
-    use axum::{Json, Router, routing::post};
+    use axum::{
+        Json, Router,
+        http::StatusCode,
+        routing::{get, post},
+    };
 
     use super::{super::git::fixtures::*, *};
+
+    #[tokio::test]
+    async fn repository_owner_errors_distinguish_signed_out_from_provider_failures() {
+        for (status, code, message) in [
+            (
+                StatusCode::UNAUTHORIZED,
+                "github-auth-unavailable",
+                "GitHub is not signed in.",
+            ),
+            (
+                StatusCode::FORBIDDEN,
+                "github-repository-unavailable",
+                "GitHub could not list repository owners",
+            ),
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "github-repository-unavailable",
+                "GitHub could not list repository owners",
+            ),
+        ] {
+            let api = github_api(Router::new().route(
+                "/user",
+                get(move || async move { (status, Json(json!({"message": status.to_string()}))) }),
+            ))
+            .await;
+            let github = Github {
+                api: Some((api, "fixture-token".to_owned())),
+                git: None,
+            };
+            let error = github_owners(&github).await.unwrap_err();
+            assert_eq!(error.findings()[0].code, code);
+            assert!(error.findings()[0].message.starts_with(message));
+        }
+    }
 
     #[test]
     fn oauth_clones_and_publishes_ssh_github_urls_over_https() {

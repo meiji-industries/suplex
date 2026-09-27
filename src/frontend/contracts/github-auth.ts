@@ -23,3 +23,4 @@ export const GitHubAuthStatusResponseSchema = z.discriminatedUnion("status", [
 export type GitHubDeviceStartResponse = z.infer<typeof GitHubDeviceStartResponseSchema>;
 
 export type GitHubDevicePollResponse = z.infer<typeof GitHubDevicePollResponseSchema>;
+export type GitHubAuthStatusResponse = z.infer<typeof GitHubAuthStatusResponseSchema>;

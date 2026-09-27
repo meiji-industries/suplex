@@ -1,7 +1,8 @@
 import { useEffect, useState, type ReactElement } from "react";
 
-import { GitHubAuthStatusResponseSchema, GitHubDevicePollResponseSchema, GitHubDeviceStartResponseSchema, type GitHubDevicePollResponse, type GitHubDeviceStartResponse } from "../../contracts/github-auth.js";
+import { GitHubDevicePollResponseSchema, GitHubDeviceStartResponseSchema, type GitHubDevicePollResponse, type GitHubDeviceStartResponse } from "../../contracts/github-auth.js";
 import { readJsonUnchecked } from "../../lib/api.js";
+import { getGitHubAuthStatus } from "../../features/settings/lib/github-auth-api.js";
 import { Button } from "../ui/button.js";
 import { Spinner } from "../ui/spinner.js";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "../ui/dialog.js";
@@ -14,6 +15,7 @@ export function GithubDeviceSignIn({ onConnected, label, primary = false }: { on
   const [copied, setCopied] = useState(false);
   const [waiting, setWaiting] = useState(false);
   const [message, setMessage] = useState("");
+  const [deviceUnavailable, setDeviceUnavailable] = useState(false);
 
   useEffect(() => {
     if (!flow || !nextPollAt) return undefined;
@@ -32,7 +34,7 @@ export function GithubDeviceSignIn({ onConnected, label, primary = false }: { on
           }));
         } catch {
           try {
-            const status = GitHubAuthStatusResponseSchema.parse(await readJsonUnchecked<unknown>("/api/github/auth"));
+            const status = await getGitHubAuthStatus();
             if (status.status === "connected") result = { status: "connected", login: status.login };
           } catch { /* The status check may fail with the same network error. */ }
         }
@@ -66,6 +68,7 @@ export function GithubDeviceSignIn({ onConnected, label, primary = false }: { on
   const start = async (): Promise<void> => {
     setBusy(true);
     setMessage("");
+    setDeviceUnavailable(false);
     try {
       const started = GitHubDeviceStartResponseSchema.parse(await readJsonUnchecked<unknown>("/api/github/device/start", { method: "POST" }));
       setFlow(started);
@@ -73,7 +76,8 @@ export function GithubDeviceSignIn({ onConnected, label, primary = false }: { on
       setCopied(false);
       setWaiting(false);
     } catch {
-      setMessage("Suplex could not start GitHub sign-in. Select Retry.");
+      setDeviceUnavailable(true);
+      setMessage("GitHub device sign-in is not available.");
     } finally {
       setBusy(false);
     }
@@ -87,6 +91,25 @@ export function GithubDeviceSignIn({ onConnected, label, primary = false }: { on
       setMessage("");
     } catch {
       setMessage("Select the code and copy it.");
+    }
+  };
+
+  const checkCliSignIn = async (): Promise<void> => {
+    setBusy(true);
+    try {
+      const status = await getGitHubAuthStatus();
+      if (status.status !== "connected") {
+        setMessage("GitHub is not signed in. Run gh auth login and select Check again.");
+        return;
+      }
+      setOpen(false);
+      setDeviceUnavailable(false);
+      setMessage(`GitHub is connected as ${status.login}.`);
+      try { await onConnected(); } catch { setMessage("GitHub is connected. Select Check again to refresh status."); }
+    } catch {
+      setMessage("Suplex could not check GitHub sign-in. Select Check again.");
+    } finally {
+      setBusy(false);
     }
   };
 
@@ -117,7 +140,11 @@ export function GithubDeviceSignIn({ onConnected, label, primary = false }: { on
               : <Button type="button" size="lg" className="rounded-md" onClick={() => void copy()}>Copy the code</Button>}
           </div>
           {!nextPollAt ? <Button type="button" size="xs" variant="outline" onClick={() => setNextPollAt(new Date().toISOString())}>Retry</Button> : null}
-        </> : busy ? <p role="status">Suplex starts sign-in</p> : <Button type="button" size="xs" variant="outline" onClick={() => void start()}>Retry</Button>}
+        </> : busy ? <p role="status">Suplex starts sign-in</p> : deviceUnavailable ? <>
+          <p>Sign in on the machine that runs Suplex with <code>gh auth login</code>.</p>
+          <Button type="button" size="xs" variant="outline" onClick={() => void checkCliSignIn()}>Check again</Button>
+          <Button type="button" size="xs" variant="outline" onClick={() => void start()}>Retry device sign-in</Button>
+        </> : <Button type="button" size="xs" variant="outline" onClick={() => void start()}>Retry</Button>}
         {message ? <p role="status" className="text-muted-foreground">{message}</p> : null}
       </div>
     </DialogContent>

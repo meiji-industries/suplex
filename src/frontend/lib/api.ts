@@ -4,13 +4,14 @@ import { clientTabId, reportApiActivity, reportAuthenticatedResume } from "../sh
 export type ApiUser = AuthUserResponse;
 export type ApiCompany = CompanyResponse;
 export type CompanyStatus = ApiCompany["status"];
+export type ApiFinding = { code?: string | undefined; field: string; message: string };
 
 export class ApiError extends Error {
   readonly statusCode: number;
-  readonly findings?: Array<{ field: string; message: string }>;
+  readonly findings?: ApiFinding[];
   readonly current?: unknown;
 
-  constructor(message: string, statusCode: number, findings?: Array<{ field: string; message: string }>, current?: unknown) {
+  constructor(message: string, statusCode: number, findings?: ApiFinding[], current?: unknown) {
     super(message);
     this.name = "ApiError";
     this.statusCode = statusCode;
@@ -28,6 +29,14 @@ function cookieValue(name: string): string | undefined {
 
 function errorField(value: unknown, key: string): unknown {
   return typeof value === "object" && value !== null && key in value ? Reflect.get(value, key) : undefined;
+}
+
+function parseFinding(value: unknown): ApiFinding | undefined {
+  const field = errorField(value, "field");
+  const message = errorField(value, "message");
+  const code = errorField(value, "code");
+  if (typeof field !== "string" || typeof message !== "string" || (code !== undefined && typeof code !== "string")) return undefined;
+  return { ...(code === undefined ? {} : { code }), field, message };
 }
 
 export async function readJson(url: string, init?: RequestInit): Promise<unknown> {
@@ -58,7 +67,10 @@ export async function readJson(url: string, init?: RequestInit): Promise<unknown
     throw new ApiError(
       typeof error === "string" ? error : "Request failed",
       response.status,
-      Array.isArray(findings) ? findings.filter((finding): finding is { field: string; message: string } => typeof finding === "object" && finding !== null && typeof Reflect.get(finding, "field") === "string" && typeof Reflect.get(finding, "message") === "string") : undefined,
+      Array.isArray(findings) ? findings.flatMap(finding => {
+        const parsed = parseFinding(finding);
+        return parsed ? [parsed] : [];
+      }) : undefined,
       errorField(body, "current"),
     );
   }
@@ -73,6 +85,10 @@ export function readJsonUnchecked<T>(url: string, init?: RequestInit): Promise<T
 
 export function isApiError(error: unknown, statusCode?: number): error is ApiError {
   return error instanceof ApiError && (statusCode === undefined || error.statusCode === statusCode);
+}
+
+export function hasApiFinding(error: unknown, code: string): error is ApiError {
+  return error instanceof ApiError && error.findings?.some(finding => finding.code === code) === true;
 }
 
 export function withCompany(path: string, companyId?: string): string {

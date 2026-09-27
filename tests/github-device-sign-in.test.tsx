@@ -14,6 +14,12 @@ vi.mock("../src/frontend/lib/api.js", () => ({
     intervalSeconds: 3600,
   }),
 }));
+vi.mock("../src/frontend/features/settings/lib/github-auth-api.js", async () => {
+  const { readJsonUnchecked } = await import("../src/frontend/lib/api.js");
+  return { getGitHubAuthStatus: () => readJsonUnchecked("/api/github/auth") };
+});
+
+Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 
 test("copies the complete code before showing the GitHub link and allows a failed copy to be retried", async () => {
   const container = document.createElement("div");

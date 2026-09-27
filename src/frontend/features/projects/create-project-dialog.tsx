@@ -1,4 +1,5 @@
 import { Alert, AlertDescription } from "../../components/ui/alert.js";
+import { Button } from "../../components/ui/button.js";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "../../components/ui/dialog.js";
 import { Field, FieldLabel } from "../../components/ui/field.js";
 import { Input } from "../../components/ui/input.js";
@@ -7,13 +8,21 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuRadioGroup, DropdownMenu
 import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput, InputGroupText } from "../../components/ui/input-group.js";
 import { RadioGroup, RadioGroupItem } from "../../components/ui/radio-group.js";
 import { NewButton } from "../../components/ui/new-button.js";
-import { readJsonUnchecked, type CompanyStatus } from "../../lib/api.js";
+import { GithubDeviceSignIn } from "../../components/app/github-device-sign-in.js";
+import { ApiError, hasApiFinding, readJsonUnchecked, type ApiFinding, type CompanyStatus } from "../../lib/api.js";
 import { reconcileScopedNotFound } from "../../shell/view-shared.js";
 import { ChevronDown } from "lucide-react";
-import { useEffect, useState, type FormEvent, type ReactElement } from "react";
+import { useCallback, useEffect, useState, type FormEvent, type ReactElement } from "react";
 import { ProjectConnections, REPOSITORY_HOSTS, withRepositoryHost } from "./project-connections.js";
 import { ProjectIntegrationSchema, type ProjectIntegration } from "../../contracts/project-integration.js";
 import { createProject } from "./lib/project-api.js";
+
+type RepositoryOwnersState =
+  | { kind: "idle" }
+  | { kind: "loading" }
+  | { kind: "loaded"; owners: string[] }
+  | { kind: "auth-required" }
+  | { kind: "failed" };
 
 /** A picker inside the repository field, in front of the text, like a URL protocol. */
 function AddonMenu({ label, value, options, onChange }: { label: string; value: string; options: ReadonlyArray<{ value: string; label: string }>; onChange: (value: string) => void }): ReactElement {
@@ -28,6 +37,7 @@ export function CreateProjectDialog({
   onOpenChange,
   companyId,
   companyStatus,
+  canSignInToGitHub,
   onCreated,
   reloadCompanies,
 }: {
@@ -35,6 +45,7 @@ export function CreateProjectDialog({
   onOpenChange: (open: boolean) => void;
   companyId: string;
   companyStatus: CompanyStatus | undefined;
+  canSignInToGitHub: boolean;
   onCreated: () => Promise<void>;
   reloadCompanies: () => Promise<void>;
 }): ReactElement {
@@ -42,10 +53,10 @@ export function CreateProjectDialog({
   const [repository, setRepository] = useState("");
   const [integration, setIntegration] = useState<ProjectIntegration>({ repository: { kind: "github" }, tracker: null });
   const [baseBranch, setBaseBranch] = useState("main");
-  const [owners, setOwners] = useState<string[] | null>(null);
+  const [ownersState, setOwnersState] = useState<RepositoryOwnersState>({ kind: "idle" });
   const [owner, setOwner] = useState("");
   const [repositories, setRepositories] = useState<{ owner: string; list: Array<{ name: string; defaultBranch: string }> | null } | null>(null);
-  const [findings, setFindings] = useState<Array<{ field: string; message: string }>>([]);
+  const [findings, setFindings] = useState<ApiFinding[]>([]);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
 
@@ -55,7 +66,9 @@ export function CreateProjectDialog({
       setRepository("");
       setIntegration({ repository: { kind: "github" }, tracker: null });
       setBaseBranch("main");
-      setOwners(null);
+      setOwnersState({ kind: "idle" });
+      setOwner("");
+      setRepositories(null);
       setFindings([]);
       setError("");
       setBusy(false);
@@ -63,15 +76,31 @@ export function CreateProjectDialog({
   }, [open]);
 
   const github = open && integration.repository.kind === "github";
+  const confirmGitHubAuthRequired = useCallback((reason: unknown): boolean => {
+    if (!hasApiFinding(reason, "github-auth-unavailable")) return false;
+    setOwnersState({ kind: "auth-required" });
+    return true;
+  }, []);
+  const loadOwners = useCallback(async (): Promise<void> => {
+    if (!companyId) return;
+    setOwnersState({ kind: "loading" });
+    try {
+      const result = await readJsonUnchecked<{ owners: string[] }>(`/api/companies/${encodeURIComponent(companyId)}/repository-owners`);
+      setOwnersState({ kind: "loaded", owners: result.owners });
+      setOwner(result.owners[0] ?? "");
+    } catch (reason) {
+      if (confirmGitHubAuthRequired(reason)) return;
+      setOwnersState({ kind: "failed" });
+    }
+  }, [companyId, confirmGitHubAuthRequired]);
   // GitHub repositories are picked by owner and name: the signed-in account first, then its organizations.
   useEffect(() => {
-    if (!github || owners !== null || !companyId) return;
-    setOwners([]);
-    readJsonUnchecked<{ owners: string[] }>(`/api/companies/${encodeURIComponent(companyId)}/repository-owners`)
-      .then(result => { setOwners(result.owners); setOwner(result.owners[0] ?? ""); })
-      .catch(() => undefined);
-  }, [github, owners, companyId]);
-  const ownerPicker = github && owner !== "";
+    if (!github || ownersState.kind !== "idle") return;
+    void loadOwners();
+  }, [github, loadOwners, ownersState.kind]);
+  const owners = ownersState.kind === "loaded" ? ownersState.owners : [];
+  const typedRepositoryLocation = repository.trim() !== "" && /[/:]/.test(repository);
+  const ownerPicker = github && owner !== "" && !typedRepositoryLocation;
   // Without the GitHub CLI there is no owner list, and a clone takes a typed URL as for Bitbucket.
   const repositoryPicker = ownerPicker && source === "clone";
   useEffect(() => {
@@ -98,12 +127,20 @@ export function CreateProjectDialog({
     setFindings([]);
     try {
       await createProject(companyId, { ...(source === "create" ? { repositoryName: ownerPicker && !repository.includes("/") ? `${owner}/${repository.trim()}` : repository.trim() } : { repositoryUrl: cloneUrl }), baseBranch, integration: ProjectIntegrationSchema.parse(integration) });
-      await onCreated();
       onOpenChange(false);
+      setRepository("");
+      setFindings([]);
+      setError("");
+      await onCreated().catch(() => undefined);
     } catch (reason) {
       if (await reconcileScopedNotFound(reason, reloadCompanies)) return;
+      if (github && confirmGitHubAuthRequired(reason)) {
+        setError("");
+        setFindings([]);
+        return;
+      }
       setError(reason instanceof Error ? reason.message : "Project configuration failed");
-      if (reason instanceof Error && "findings" in reason) setFindings((reason as Error & { findings?: Array<{ field: string; message: string }> }).findings ?? []);
+      if (reason instanceof ApiError) setFindings(reason.findings ?? []);
     } finally {
       setBusy(false);
     }
@@ -111,7 +148,7 @@ export function CreateProjectDialog({
 
   const repositoryPrefix = <InputGroupAddon>
     <AddonMenu label="Repository host" value={integration.repository.kind} options={REPOSITORY_HOSTS.map(host => ({ value: host.kind, label: host.label }))} onChange={kind => { setIntegration(withRepositoryHost(integration, kind)); setRepository(""); }} />
-    {ownerPicker ? <><AddonMenu label="Owner" value={owner} options={(owners ?? []).map(each => ({ value: each, label: each }))} onChange={chooseOwner} /><InputGroupText>/</InputGroupText></> : null}
+    {ownerPicker ? <><AddonMenu label="Owner" value={owner} options={owners.map(each => ({ value: each, label: each }))} onChange={chooseOwner} /><InputGroupText>/</InputGroupText></> : null}
   </InputGroupAddon>;
 
   return (
@@ -138,6 +175,8 @@ export function CreateProjectDialog({
               </Field>
               <Field><FieldLabel htmlFor="create-base-branch">Base branch</FieldLabel><Input id="create-base-branch" value={baseBranch} onChange={event => setBaseBranch(event.target.value)} /></Field>
               <ProjectConnections value={integration} onChange={setIntegration} repositoryHost={false} />
+              {github && ownersState.kind === "auth-required" ? <Alert><AlertDescription><div className="space-y-2"><p>GitHub is not signed in.</p>{canSignInToGitHub ? <GithubDeviceSignIn onConnected={async () => { setRepositories(null); await loadOwners(); }} /> : <p>An administrator must sign in to GitHub.</p>}</div></AlertDescription></Alert> : null}
+              {github && ownersState.kind === "failed" ? <Alert><AlertDescription><div className="space-y-2"><p>Suplex could not load GitHub repositories. Enter a repository URL or select Check again.</p><Button type="button" size="xs" variant="outline" onClick={() => void loadOwners()}>Check again</Button></div></AlertDescription></Alert> : null}
               <div className="grid"><NewButton type="submit" disabled={busy || !companyId || !repository.trim()}>{busy ? source === "clone" ? "Cloning…" : "Creating…" : "New project"}</NewButton></div>
             </form>
           )}

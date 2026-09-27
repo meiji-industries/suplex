@@ -716,7 +716,11 @@ pub async fn verify_github(access: Option<&Access>, repository: &str) -> Result<
         finding(
             code,
             "repository",
-            "GitHub repository identity could not be verified",
+            if code == "github-auth-unavailable" {
+                "GitHub is not signed in."
+            } else {
+                "GitHub repository identity could not be verified"
+            },
         )
     };
     let access = access
@@ -725,7 +729,13 @@ pub async fn verify_github(access: Option<&Access>, repository: &str) -> Result<
     access
         .current_user_login()
         .await
-        .map_err(|_| failure("github-auth-unavailable"))?;
+        .map_err(|error| {
+            failure(if matches!(error.downcast_ref::<octocrab::Error>(), Some(error) if github_status(error) == Some(401)) {
+                "github-auth-unavailable"
+            } else {
+                "github-repository-unavailable"
+            })
+        })?;
     let value: serde_json::Value = access
         .client()
         .get(format!("/repos/{repository}"), None::<&()>)

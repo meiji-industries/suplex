@@ -13,6 +13,7 @@ import { SettingsDataTable, SettingsTableCell, SettingsTableEmpty, SettingsTable
 import { useCompanyContext } from "../../shell/company-context.js";
 import { readJsonUnchecked, withCompany } from "../../lib/api.js";
 import { ProviderLoginTerminal, useProviderLogin } from "./provider-login.js";
+import { ProviderInstallationInstructions } from "../../components/app/provider-installation.js";
 
 const columns: SettingsTableColumn[] = [
   { key: "provider", label: "Provider", width: 170 },
@@ -96,7 +97,7 @@ export function ProviderSettingsView(): ReactElement {
           <SettingsTableCell className="text-muted-foreground">System</SettingsTableCell>
           <SettingsTableCell>{provider.status === "configured"
             ? <Badge variant="secondary">Configured</Badge>
-            : <div className="space-y-1"><Badge variant="destructive">Not installed</Badge><p className="text-xs text-muted-foreground">Set <code>{{ opencode: "SUPLEX_OPENCODE_COMMAND", devin: "SUPLEX_DEVIN_COMMAND", codex: "SUPLEX_CODEX_COMMAND", "claude-code": "SUPLEX_CLAUDE_COMMAND" }[provider.id]}</code>.</p></div>}</SettingsTableCell>
+            : <div className="space-y-2"><Badge variant="destructive">Not installed</Badge><ProviderInstallationInstructions provider={provider.id} checkLabel="Refresh" /></div>}</SettingsTableCell>
           <SettingsTableCell>{provider.modelCount}</SettingsTableCell>
           <SettingsTableCell><ConnectionBadge connection={provider.connection} /></SettingsTableCell>
           <SettingsTableCell>{provider.connection.status !== "connected" ? loginButton(`provider:${provider.id}`, provider.label, `/api/admin/providers/${encodeURIComponent(provider.id)}/login`) : null}</SettingsTableCell>

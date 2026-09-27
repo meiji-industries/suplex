@@ -270,12 +270,17 @@ fn label(kind: &str) -> &'static str {
     spec(kind).map_or("", |(label, _, _, _)| label)
 }
 
-// Sources: opencode.ai and claude.ai install scripts, https://www.npmjs.com/package/@openai/codex.
+// Sources: official OpenCode, Claude Code, Devin CLI, and Codex installation guides.
 fn install_remedy(kind: &str) -> (&'static str, &'static str) {
     match kind {
         "opencode" => ("curl -fsSL https://opencode.ai/install | bash", "command"),
         "claude-code" => ("curl -fsSL https://claude.ai/install.sh | bash", "command"),
-        _ => ("npm install -g @openai/codex", "command"),
+        "devin" => (
+            "curl -fsSL https://cli.devin.ai/install.sh | bash",
+            "command",
+        ),
+        "codex" => ("npm install -g @openai/codex", "command"),
+        _ => ("", "command"),
     }
 }
 

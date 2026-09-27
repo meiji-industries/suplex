@@ -69,7 +69,7 @@ export function ProjectsView(): ReactElement {
           ) : loading ? <LoadingState /> : <p className="text-xs text-muted-foreground">{companyError ? "Unable to load companies" : user?.role === "admin" ? "Add a company to begin." : "No company access. Ask an administrator to assign a company."}</p>}
           {loadError ? <div className="mt-3 text-xs text-destructive"><Alert variant="destructive"><AlertDescription>{loadError}</AlertDescription></Alert></div> : null}
         </SettingsContent>
-        <CreateProjectDialog open={createOpen} onOpenChange={setCreateOpen} companyId={companyId} companyStatus={currentCompany?.status} onCreated={reload} reloadCompanies={reloadCompanies} />
+        <CreateProjectDialog open={createOpen} onOpenChange={setCreateOpen} companyId={companyId} companyStatus={currentCompany?.status} canSignInToGitHub={user?.role === "admin"} onCreated={reload} reloadCompanies={reloadCompanies} />
     </SettingsLayout>
   );
 }

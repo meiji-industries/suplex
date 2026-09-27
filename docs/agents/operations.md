@@ -14,4 +14,8 @@ Run `mise run dev:status` before starting or restarting the stack. `mise run dev
 
 ## Claude Code provider
 
-Create an agent with provider **Claude Code**, select a Claude model, then assign that agent to the required role. The worker user must already be logged in with `claude`. Suplex pre-accepts `projects[realpath(cwd)].hasTrustDialogAccepted` and `bypassPermissionsModeAccepted` in `~/.claude.json`.
+Create an agent profile with provider **Claude Code**, select its model, and
+assign it to the required role. Authenticate the host account or the selected
+dedicated Claude login before starting work. Dedicated instances use separate
+configuration directories. See [project execution](../project-execution.md) for
+credential policies and MCP grants.

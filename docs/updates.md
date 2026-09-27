@@ -1,6 +1,8 @@
 # Suplex updates
 
-Suplex updates the host and desktop app independently.
+Suplex updates the host and desktop app independently. See
+[instances, clients, and distribution](architecture/deployment.md) for where
+each process runs.
 
 ## Host updates
 
@@ -24,8 +26,25 @@ The configured feed must host the generated `latest-mac.yml`, macOS ZIP, and ZIP
 
 After `mise run desktop:dist:signed`, publish with `mise run desktop:publish`. Both tasks fetch their Apple signing and R2 values through the Suplex 1Password service account. The publisher verifies the signed app and stapled DMG, uploads immutable versioned artifacts to `stable/mac/arm64` (Apple silicon) and `stable/mac/x64` (Intel), checks their public URLs, then uploads each folder's `latest-mac.yml` last with `no-cache`. Each build updates only from its own folder.
 
-`mise run release:major`, `release:minor`, and `release:patch` run the release pipeline: verify a clean checkout, fetch the service account, bump both package versions, sign and notarize, commit, tag, push, then publish. The manifest is published last.
+`mise run release:major`, `release:minor`, and `release:patch` run the release pipeline: verify a clean checkout, fetch the service account, bump both package versions, sign and notarize the Mac builds, build Linux archives for both architectures,
+commit, tag, push, then publish. The manifest is published last.
 
 A distributable macOS update requires a consistent Developer ID signature on the existing application and downloaded ZIP, plus notarization and stapling. Production distribution requires the external signing and feed inputs.
 
 Automatic checks stay silent when no feed is configured. A manual check explains that desktop app updates are not configured. When an update exists, Suplex asks before download and before restarting the desktop app. A bundled host started by Suplex.app restarts with it; an independent host remains untouched.
+
+## Linux binary distribution
+
+`mise run linux:dist` builds arm64 and x64 native binaries with embedded web
+assets and migrations. Each architecture produces a versioned tarball, SHA-256
+checksum file, and `latest-linux.yml` under `dist/linux/<arch>`.
+`mise run linux:publish` publishes them to `stable/linux/<arch>` using the
+configured release credentials. These are host binaries, not Linux Electron
+packages.
+
+The combined release publisher uploads immutable Mac and Linux artifacts before
+updating their download manifests. Linux's manifest describes the available
+archive; it does not implement automatic replacement of a running binary.
+The host's Git-based checkout updater is a separate mechanism and must not be
+presented as an archive updater. Preserve installation data when replacing a
+binary, and verify the destination host separately from artifact publication.

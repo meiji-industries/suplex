@@ -4,12 +4,15 @@
 [![Node](https://img.shields.io/badge/node-26.7.0-brightgreen)](package.json)
 [![pnpm](https://img.shields.io/badge/pnpm-11.22.0-orange)](package.json)
 
-Suplex runs repository tasks through OpenCode, Claude Code, Devin CLI, Codex CLI, Git, and GitHub. One continuing
-Root session plans and reviews the work. A scoped Worker edits, verifies, and
-commits in the task worktree. Herdr displays those native sessions.
+Suplex coordinates software-development tasks through existing coding agents,
+Git, and repository services. A Coordinator plans and reviews; a Worker implements
+in a task worktree. Suplex is a copilot: you can intervene directly, and it
+adapts to the work you change or merge.
 
-The [product guide](docs/product.md) describes the workflow. [CONTEXT.md](CONTEXT.md)
-defines its terms. [Architecture decisions](docs/adr/) record the history.
+Start with the [product guide](docs/product.md) for current capabilities,
+integration limits, and positioning. [CONTEXT.md](CONTEXT.md) defines the terms.
+[Current architecture](docs/architecture/README.md) records how the system works.
+[Architecture decisions](docs/adr/) explain why.
 
 An agent that never opens the web application starts at
 [machine discovery and the operator handoff](docs/agents/machine-discovery.md).
@@ -23,18 +26,18 @@ grants, and verify an agent integration after an upgrade.
 | Owner | Authoritative state |
 | --- | --- |
 | Suplex | Task objective, configuration, start and cancel intent, questions, session assignment, prompt dispatch ownership |
-| OpenCode | Native sessions, admitted messages, tool execution, and turn results |
+| Native agent provider | Sessions, admitted messages, tool execution, and turn results |
 | Git | Worktrees, branches, commits, and uncommitted changes |
 | GitHub | Remote branches, pull requests, checks, reviews, and merges |
 | Herdr | The visible attachment to a native session |
 
-Suplex runs a native API and task host beside a SQLite database. There is no
-phase engine, Temporal history, separate integrator agent, or completion-file
-protocol. Database records preserve Suplex-owned intent and correlate native
-observations. They do not require a second copy of GitHub progress.
+Suplex runs a native API and task host beside a SQLite database. Database records
+preserve Suplex-owned intent and correlate native observations. Delivery decisions read
+current Git and repository-provider state.
 
-Root delegates one Worker at a time and ends its turn. The Worker result wakes
-the same Root session. Root can request a normal push, pull request creation,
+Coordinator delegates work and ends its turn. Results wake the same session;
+Combined planning runs two independent Advisors before combining their results. Coordinator can request a normal push,
+pull request creation,
 review readiness, or an exact-head merge. GitHub enforces its own merge policy.
 Delivery targets also include a local worktree and a remote branch.
 
@@ -54,10 +57,10 @@ asks you to stop the old commands before explicitly confirming cleanup. It does
 not infer tool completion from server death. A restart without unfinished tool
 execution resumes automatically.
 
-Root's read-only policy and Worker's Git command guard are native tool policies,
-not an operating-system sandbox. Inherited MCP servers remain available except
-for the Worker's Suplex Root bridge. This installation is for owner-controlled
-repositories, not hostile code or untrusted multi-tenant execution.
+Coordinator's read-only policy and Worker's Git command guard are native tool
+policies, not an operating-system sandbox. MCP access depends on the provider
+and project configuration; see [project execution](docs/project-execution.md).
+This installation is for owner-controlled repositories and trusted local tools.
 
 ## Providers and defaults
 
@@ -71,15 +74,15 @@ id, such as `openai/gpt-5.6-sol`. The other three name their models directly.
 `/admin/providers` shows all four rows without making a paid model request.
 **Configured** means the executable is present, not that inference was tested.
 Agent dialogs and project defaults use that same catalog. New installations seed
-Codex CLI GPT-5.6 Sol with medium reasoning for Root and GPT-5.6 Luna with max
+Codex CLI GPT-5.6 Sol with medium reasoning for Coordinator and GPT-5.6 Luna with max
 reasoning and priority service for Worker. An installation with task history
 keeps its OpenCode profiles, converted to the vendor-qualified model id.
 
 Suplex discovers OpenCode on its process PATH or at `~/.opencode/bin/opencode`.
 `SUPLEX_OPENCODE_COMMAND`, `SUPLEX_CLAUDE_COMMAND`, `SUPLEX_DEVIN_COMMAND`, and
 `SUPLEX_CODEX_COMMAND` can each specify an absolute executable path. GitHub
-delivery uses the host's existing `gh` login. Suplex does not copy any provider's
-credentials into task records.
+delivery uses Suplex's GitHub sign-in or the host's available GitHub credentials.
+Suplex does not copy provider credentials into task records.
 
 ## Develop locally
 
@@ -99,6 +102,9 @@ An empty development database receives a company, native profiles, and a project
 for this checkout.
 
 ## Set up an installation
+
+See [instances, clients, and distribution](docs/architecture/deployment.md) for
+the host model, development-server access, and desktop/Linux binary options.
 
 The simplest install is the desktop app: open `Suplex-<version>-arm64.dmg`
 (Apple silicon) or `Suplex-<version>-x64.dmg` (Intel),
@@ -166,9 +172,9 @@ runtime under `Contents/Resources/runtime`, shows each stage's progress and
 log, and then starts the bundled server on `127.0.0.1` every time the app
 opens; quitting the app stops that server. Data, the env file, logs, and the
 install record live under `~/Library/Application Support/Suplex`; delete that
-directory to start over. If a Suplex from a checkout is already answering on
-the chosen port, the app uses it instead of starting its own and leaves it
-running on quit. **Remote access** takes a URL, tests it, and
+directory to start over. If an existing host reports the same installation identity, the app can adopt
+it and leaves it running on quit. An unrelated host on the preferred port
+causes the app to choose another port. **Remote access** takes a URL, tests it, and
 installs nothing.
 
 `mise run desktop:dev` opens the app from source, `mise run desktop:dist`
@@ -187,8 +193,8 @@ disabled. The Check for Desktop Update menu item runs only in the Electron
 main process. Local builds have no update feed. See
 [docs/updates.md](docs/updates.md) for feed and signing requirements.
 
-Create a task with **Start immediately** selected to start Root without another
-click. Clear the option to keep the task in Backlog. Backlog tasks support title
+Create a task with **Start immediately** selected to queue it. Suplex starts
+it when its prerequisites are complete. Clear the option to keep it in Backlog. Backlog tasks support title
 and description edits. Active tasks accept notes and question-specific answers.
 Cancellation stops Suplex's work but preserves local and published work.
 

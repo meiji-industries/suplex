@@ -221,3 +221,14 @@ HTTP-only. MCP exposes lifecycle task commands only. It does not expose runtime
 delivery or merge commands. Suplex can perform a task's configured delivery,
 including a merge after review, without an agent command. Suplex does not provide
 a generic MCP tool for arbitrary HTTP requests.
+
+## Paired-agent delivery approval
+
+When delivery capabilities are enabled, the HTTP API offers delivery observation,
+repair, merge-train inspection, and a separate merge-approval exchange. Approval
+issuance checks the current PR, head, prerequisites, and accepted review, then
+returns a single-use, expiring receipt bound to that task and agent. Merge
+consumes the receipt and rechecks eligibility. This is an API authorization
+exchange, not a universal human approval step in every task workflow. Human
+question answers remain unavailable to paired agents. See
+[the delivery implementation](../rust/src/delivery/agent_delivery.rs).

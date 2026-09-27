@@ -1,6 +1,7 @@
 # Suplex
 
 Suplex coordinates software delivery in owner-controlled repositories.
+See [the product guide](docs/product.md) for capabilities and integration limits.
 
 ## Language
 
@@ -47,14 +48,14 @@ commits in the task worktree, then returns its result to Coordinator.
 _Avoid_: Builder, Developer, nested agent.
 
 **Workflow**
-The selected sequence of agents and gates for one task: Standard, Direct build,
+A named preset selects one built-in sequence of agents and checks for a task: Standard, Direct build,
 Second opinion, Combined planning, or Pull request repair. A task captures its
 workflow and Advisor profiles at creation.
-_Avoid_: Phase engine, custom pipeline.
+_Avoid_: Arbitrary step graph.
 
 **Advisor**
-A read-only delegated session that reports to Coordinator and shares the one
-delegated slot with Worker. Its product label is Reviewer, Plan A, Plan B, or Rater.
+A read-only delegated session that reports to Coordinator. Individual Advisors
+share the delegated slot with Worker; Plan A and Plan B have separate slots. Its product label is Reviewer, Plan A, Plan B, or Rater.
 _Avoid_: Second Worker, writable reviewer.
 
 **Reviewer**
@@ -73,14 +74,15 @@ The Advisor in Pull request repair that rates the current pull request from 1 to
 _Avoid_: Score oracle, automatic approval.
 
 **Native session**
-The OpenCode or Claude Code conversation that owns admitted messages, tool
+The OpenCode, Claude Code, Devin CLI, or Codex CLI conversation that owns admitted messages, tool
 calls, and results. Suplex selects the harness from the agent profile provider.
 _Avoid_: Herdr session, completion receipt file.
 
 Suplex keeps one native session per task role: Coordinator, Worker, Reviewer,
 Plan A, Plan B, and Rater. Each assignment is an immutable turn in that role's
-conversation. Only one Worker or Advisor turn runs at a time, but switching
-roles does not end the inactive conversation. Missing display attachment data
+conversation. Worker and individual Advisor assignments use the shared delegated slot.
+Combined planning reserves separate Plan A and Plan B slots. Switching roles
+does not end the inactive conversation. Missing display attachment data
 does not prevent Suplex from resuming native work.
 
 **Turn**
@@ -100,8 +102,10 @@ _Avoid_: Disposable progress mirror, shared task directory.
 
 **Delivery target**
 The requested endpoint, such as a local worktree, remote branch, draft pull
-request, ready pull request, or merged pull request.
-_Avoid_: Universal merge requirement, release phase.
+request, ready pull request, or merged pull request. It guides agent work; it
+does not restrict a person from changing or merging work directly. Suplex
+observes those changes and adapts.
+_Avoid_: User-action fence, universal merge requirement, release phase.
 
 **Delivery operation**
 A Suplex-owned Git or GitHub action requested by Coordinator. The operation observes
@@ -144,9 +148,10 @@ A passkey-authenticated person with explicit company membership. An instance
 administrator also controls host setup and recovery.
 _Avoid_: Anonymous operator, provider identity.
 
-**Hermes agent**
-A machine identity limited to its company, granted projects, and tasks it
-created. It uses a revocable credential rather than a Suplex user session.
+**External agent**
+A paired machine identity, such as Hermes, with a revocable credential and
+company/project grants. It can read tasks in granted projects. Task mutations
+remain limited to tasks it created. Capabilities describe the available commands.
 _Avoid_: Coordinator, Worker, unscoped API key.
 
 **Owner-controlled pilot**

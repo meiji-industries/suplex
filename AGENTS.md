@@ -1,6 +1,19 @@
 # Suplex agent guidance
 
+For product claims, requirements discovery, or marketing research, read
+[the product guide](docs/product.md), then verify behavior in current code.
+Treat proposals and dated implementation records as context, not shipped requirements.
+For runtime, Herdr, coordination, or recovery changes, start with
+[the current architecture](docs/architecture/README.md) and follow its source links.
+
+Suplex is a copilot: users can edit, adjust, or merge work directly. Adapt to
+current intent and external state. Delivery targets guide agent work; do not add
+target-based enforcement or mandatory evidence packets from inferred requirements.
+
 ## No mirror gates
+
+Read [the engineering principles](docs/architecture/principles.md) before adding
+or reviewing guards, blockers, recovery paths, or human escalation.
 
 Never make a user action depend on a local copy of external state agreeing
 with its source. Observe the authoritative system when deciding whether to
@@ -131,7 +144,7 @@ Need a change? Create a new migration.
 ## Where new code goes
 
 - Task HTTP contracts and routes belong in `rust/src/http/contracts` and `rust/src/http/routes/tasks.rs`. Task authorization and commands belong in `rust/src/tasks/commands.rs`; metadata belongs in `rust/src/tasks/repository.rs`.
-- Durable task intent and prompt ownership belong in `rust/src/coordination/root_session_store.rs`. `rust/src/coordination/root_controller.rs` coordinates Root and Worker through `rust/src/runtimes/task_harness.rs`.
+- Durable task intent and prompt ownership belong in `rust/src/coordination/root_session_store.rs`. `rust/src/coordination/root_controller.rs` coordinates Coordinator and Worker through `rust/src/runtimes/task_harness.rs`.
 - Provider runtimes live under `rust/src/runtimes`; `task_harness_registry.rs` selects by profile provider. Read-only native observation belongs in the runtime's session reader.
 - `rust/src/delivery/operations.rs` observes Git and GitHub before delivery operations. Native and external evidence must not depend on a second progress receipt.
 - Keep backend code in its Rust domain module. Keep domain-neutral utilities in `rust/src/shared`. Keep browser wire contracts in `src/frontend/contracts`, feature-owned frontend code under `src/frontend/features`, and global application behavior under `src/frontend/shell`.

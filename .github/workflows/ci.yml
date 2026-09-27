@@ -24,6 +24,10 @@ on:
 permissions:
   contents: read
 
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_PROFILE_DEV_DEBUG: line-tables-only
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}-${{ inputs.runner }}-${{ inputs.workers }}
   cancel-in-progress: true
@@ -33,10 +37,14 @@ jobs:
     name: Rust fmt, clippy, and tests
     env:
       RUST_TEST_THREADS: "4"
+      TARGET_CACHE_MAX_KIB: 12582912
+      TARGET_CACHE_MAX_SIZE: 12GB
     runs-on: ${{ inputs.runner || 'blacksmith-8vcpu-ubuntu-2404' }}
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v5
+      - name: Validate GitHub Actions workflows
+        uses: docker://rhysd/actionlint:1.7.12
       - name: Install native lifecycle test dependencies
         run: command -v lsof || { sudo apt-get update && sudo apt-get install --yes --no-install-recommends lsof; }
       - uses: dtolnay/rust-toolchain@master
@@ -44,17 +52,22 @@ jobs:
           toolchain: 1.93.1
           components: rustfmt, clippy
       # Sticky disks keep the whole target directory, including the suplex
-      # crate, and persist even when a step fails.
+      # crate, and persist even when a step fails. A failed mount builds cold.
       - name: Mount Cargo registry
+        continue-on-error: true
         uses: useblacksmith/stickydisk@v1
         with:
           key: ${{ github.repository }}-cargo-registry-${{ runner.arch }}
           path: ~/.cargo/registry
+          commit: on-change
       - name: Mount Rust target directory
+        id: rust-target
+        continue-on-error: true
         uses: useblacksmith/stickydisk@v1
         with:
-          key: ${{ github.repository }}-rust-job-target-1.93.1-${{ runner.arch }}
+          key: ${{ github.repository }}-rust-job-target-${{ hashFiles('rust/rust-toolchain.toml') }}-${{ runner.arch }}
           path: ${{ github.workspace }}/rust/target
+          commit: on-change
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v6
         with:
@@ -71,6 +84,15 @@ jobs:
       - run: cargo test --manifest-path rust/Cargo.toml --all-targets
       - name: Generated TypeScript contracts are committed
         run: git diff --exit-code -- src/frontend/contracts/generated
+      - name: Enforce persistent target size limit
+        if: ${{ always() && steps.rust-target.outcome == 'success' }}
+        run: |
+          target_size_kib="$(du -sk rust/target | cut -f1)"
+          echo "Persistent target size: ${target_size_kib} KiB"
+          if (( target_size_kib > TARGET_CACHE_MAX_KIB )); then
+            cargo install cargo-sweep --version 0.8.0 --locked
+            cargo sweep --maxsize "${TARGET_CACHE_MAX_SIZE}" rust
+          fi
 
   test:
     name: Test suite

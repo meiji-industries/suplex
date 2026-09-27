@@ -102,6 +102,9 @@ export function OnboardingView(): ReactElement {
   const [projectsOpen, setProjectsOpen] = useState(false);
   const [customizeAgents, setCustomizeAgents] = useState(false);
   useEffect(() => { setName(currentCompany?.name || "My Company"); setCode(currentCompany?.issueCode ?? "SUPLEX"); }, [currentCompany?.id]);
+  useEffect(() => {
+    if (current === "done" && companyId && currentCompany?.status) requestNewTask();
+  }, [companyId, current, currentCompany?.status]);
   const { login, loginPending, startLogin, closeLogin } = useProviderLogin({ reload });
   const go = (id: OnboardingStepId): void => navigate(withCompany(`/onboarding?step=${id}`, companyId));
   const continueStep = async (): Promise<void> => {

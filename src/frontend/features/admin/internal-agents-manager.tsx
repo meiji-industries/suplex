@@ -48,6 +48,7 @@ export function InternalAgentsManager({ agents, onSaved }: { agents: readonly Ap
     })),
   ];
   useEffect(() => {
+    if (!agentOpen) return;
     const controller = new AbortController();
     const options = { signal: controller.signal };
     void Promise.all([
@@ -61,7 +62,7 @@ export function InternalAgentsManager({ agents, onSaved }: { agents: readonly Ap
       if (!controller.signal.aborted) setError(reason instanceof Error ? reason.message : "Suplex cannot load the agent configuration.");
     });
     return () => controller.abort();
-  }, []);
+  }, [agentOpen]);
   const openNewAgent = (): void => {
     setEditingAgentId(null);
     setAgentName("");

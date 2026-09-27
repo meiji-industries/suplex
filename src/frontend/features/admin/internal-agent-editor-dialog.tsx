@@ -36,6 +36,13 @@ import { modelHint } from "./model-hints.js";
 
 const SERVICE_PRIORITIES = ["default", "priority"] as const;
 
+const modelMatches = (model: ApiModel, query: string): boolean => {
+  const normalizedQuery = query.trim().toLocaleLowerCase();
+  return [model.id, model.displayName, model.providerLabel].some((value) =>
+    value.toLocaleLowerCase().includes(normalizedQuery),
+  );
+};
+
 export type AgentProviderOption = {
   id: string;
   label: string;
@@ -225,7 +232,7 @@ export function InternalAgentDialog({
                   // Closing without a listed selection clears the input. Keep the typed model.
                   if (details.reason !== "input-clear") onAgentModelChange(value.trim());
                 }}
-                filter={null}
+                filter={modelMatches}
               >
                 <ComboboxInput
                   id="agent-model"

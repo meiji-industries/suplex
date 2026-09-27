@@ -204,7 +204,7 @@ export function TimelineView(): ReactElement {
             value={preset}
             onValueChange={(value) => setPreset(value as RangePreset)}
           >
-            <TabsList>
+            <TabsList variant="pill">
               <TabsTrigger value="today">Today</TabsTrigger>
               <TabsTrigger value="7-days">7 days</TabsTrigger>
               <TabsTrigger value="30-days">30 days</TabsTrigger>

@@ -80,7 +80,7 @@ export function TaskSourcePicker({ projectId, value, disabled, pullRequestsOnly 
     </DropdownMenuTrigger>}
     <DropdownMenuContent align="end" className="w-[min(26rem,calc(100vw-2rem))] p-2">
       {pullRequestsOnly ? <p className="px-1 text-xs text-muted-foreground">Open pull requests</p> : <Tabs value={kind} onValueChange={(next) => { const selected = next as typeof kind; setKind(selected); setRows([]); void load(selected); }}>
-        <TabsList>{taskSourceTabs.map((tab) => <TabsTrigger key={tab.value} value={tab.value}>{tab.label}</TabsTrigger>)}</TabsList>
+        <TabsList variant="pill">{taskSourceTabs.map((tab) => <TabsTrigger key={tab.value} value={tab.value}>{tab.label}</TabsTrigger>)}</TabsList>
       </Tabs>}
       <div className="relative mt-2"><Search className="absolute left-2 top-2 size-3.5 text-muted-foreground" /><Input aria-label="Search task sources" value={query} onChange={(event) => { setQuery(event.target.value); if (kind === "issue") void load("issue", event.target.value); }} onKeyDown={(event) => { if (event.key !== "ArrowUp" && event.key !== "ArrowDown" && event.key !== "Escape") event.stopPropagation(); }} placeholder="Search" className="pl-7" /></div>
       <div className="mt-2 max-h-64 overflow-y-auto" aria-live="polite">

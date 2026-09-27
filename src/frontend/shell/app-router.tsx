@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactElement } from "react";
+import { lazy, Suspense, useEffect, useState, type ReactElement } from "react";
 
 import { CompanyProvider } from "./company-context.js";
 import { SystemHealthProvider } from "../components/app/system-health.js";
@@ -6,32 +6,34 @@ import { UpdateProvider } from "../components/app/update-provider.js";
 import { isApplicationPath, navigate, shouldNavigate } from "./navigation-state.js";
 import { AuthView } from "../features/auth/auth.js";
 import { OAuthConsentView } from "../features/auth/oauth-consent.js";
-import { AdminView } from "../features/admin/admin.js";
-import { CompanySettingsView } from "../features/settings/company-settings.js";
-import { ProfileView } from "../features/profiles/profile.js";
-import { Dashboard } from "../features/tasks/dashboard.js";
-import { ProjectsView } from "../features/projects/projects.js";
-import { ProjectDetails } from "../features/projects/project-details.js";
 import { TasksView } from "../features/tasks/tasks.js";
-import { TimelineView } from "../features/timeline/timeline.js";
-import { AnalyticsView } from "../features/analytics/analytics.js";
-import { TaskTemplateSettings } from "../features/settings/task-template-settings.js";
-import { ProviderSettingsView } from "../features/settings/provider-settings.js";
-import { BackupSettingsView } from "../features/settings/backup-settings.js";
-import { EnvironmentSettingsView } from "../features/settings/environment-settings.js";
-import { WorkflowSettingsView } from "../features/settings/workflow-settings.js";
-import { TriggerSettingsView } from "../features/settings/trigger-settings.js";
-import { OnboardingSettingsView } from "../features/settings/onboarding-settings.js";
-import { OnboardingView } from "../features/onboarding/onboarding-wizard.js";
 import { ApplicationShell } from "./application-frame.js";
 import { ServerStateProvider } from "./server-state.js";
 import { TaskDataProvider } from "../features/tasks/task-data.js";
+import { LoadingState } from "../components/app/loading-state.js";
+
+const AdminView = lazy(() => import("../features/admin/admin.js").then(module => ({ default: module.AdminView })));
+const CompanySettingsView = lazy(() => import("../features/settings/company-settings.js").then(module => ({ default: module.CompanySettingsView })));
+const ProfileView = lazy(() => import("../features/profiles/profile.js").then(module => ({ default: module.ProfileView })));
+const Dashboard = lazy(() => import("../features/tasks/dashboard.js").then(module => ({ default: module.Dashboard })));
+const ProjectsView = lazy(() => import("../features/projects/projects.js").then(module => ({ default: module.ProjectsView })));
+const ProjectDetails = lazy(() => import("../features/projects/project-details.js").then(module => ({ default: module.ProjectDetails })));
+const TimelineView = lazy(() => import("../features/timeline/timeline.js").then(module => ({ default: module.TimelineView })));
+const AnalyticsView = lazy(() => import("../features/analytics/analytics.js").then(module => ({ default: module.AnalyticsView })));
+const TaskTemplateSettings = lazy(() => import("../features/settings/task-template-settings.js").then(module => ({ default: module.TaskTemplateSettings })));
+const ProviderSettingsView = lazy(() => import("../features/settings/provider-settings.js").then(module => ({ default: module.ProviderSettingsView })));
+const BackupSettingsView = lazy(() => import("../features/settings/backup-settings.js").then(module => ({ default: module.BackupSettingsView })));
+const EnvironmentSettingsView = lazy(() => import("../features/settings/environment-settings.js").then(module => ({ default: module.EnvironmentSettingsView })));
+const WorkflowSettingsView = lazy(() => import("../features/settings/workflow-settings.js").then(module => ({ default: module.WorkflowSettingsView })));
+const TriggerSettingsView = lazy(() => import("../features/settings/trigger-settings.js").then(module => ({ default: module.TriggerSettingsView })));
+const OnboardingSettingsView = lazy(() => import("../features/settings/onboarding-settings.js").then(module => ({ default: module.OnboardingSettingsView })));
+const OnboardingView = lazy(() => import("../features/onboarding/onboarding-wizard.js").then(module => ({ default: module.OnboardingView })));
+const SetupView = lazy(() => import("../features/settings/setup.js").then(module => ({ default: module.SetupView })));
 
 export function activityShellKey(pathname: string): "activity" | undefined {
   if (pathname === "/tasks" || pathname.startsWith("/tasks/") || pathname === "/board" || pathname.startsWith("/board/") || pathname === "/timeline" || pathname === "/analytics") return "activity";
   return undefined;
 }
-import { SetupView } from "../features/settings/setup.js";
 
 function AppView(): ReactElement {
   const pathname = window.location.pathname;
@@ -87,7 +89,7 @@ export function AppRouter(): ReactElement {
   if (window.__SUPLEX_VIEW__ === "auth") return <AuthView />;
   if (window.__SUPLEX_VIEW__ === "oauth-consent") return <OAuthConsentView />;
   const shellKey = activityShellKey(window.location.pathname);
-  const view = <AppView key={route} />;
+  const view = <Suspense fallback={<LoadingState />}><AppView key={route} /></Suspense>;
   return <CompanyProvider><ServerStateProvider><TaskDataProvider><UpdateProvider><SystemHealthProvider initialSnapshot={window.__SUPLEX_HEALTH__}>{shellKey ? <ApplicationShell key={shellKey}>{view}</ApplicationShell> : view}</SystemHealthProvider></UpdateProvider></TaskDataProvider></ServerStateProvider></CompanyProvider>;
 }
 

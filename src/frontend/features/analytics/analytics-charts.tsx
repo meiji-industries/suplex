@@ -1,3 +1,4 @@
+import { memo } from "react";
 import { Area, AreaChart, CartesianGrid, Pie, PieChart, XAxis, YAxis } from "recharts";
 import type { TaskAnalytics } from "../../contracts/analytics.js";
 import { ChartContainer, ChartTooltip, ChartTooltipContent } from "../../components/ui/chart.js";
@@ -9,7 +10,7 @@ import { usageIsUnpriced } from "./lib/usage-metrics.js";
 const colors = { delivered: "#10b981", active: "#3b82f6", waiting_human: "#f59e0b", cancelled: "#ef4444", queued: "#0ea5e9", backlog: "#94a3b8" };
 const config = { root: { label: "Coordinator", color: "#3b82f6" }, worker: { label: "Delegated", color: "#8b5cf6" } };
 
-export function OutcomeChart({ tasks }: { tasks: TaskAnalytics[] }) {
+export const OutcomeChart = memo(function OutcomeChart({ tasks }: { tasks: TaskAnalytics[] }) {
   const data = TaskControlStatusSchema.options.map(status => ({ name: taskStatusLabels[status], value: tasks.filter(task => task.status === status).length, fill: colors[status] }));
   return <section className="min-w-0 border-b p-4 lg:border-b-0 lg:border-r" aria-label="Delivery outcomes">
     <h2 className="text-sm font-medium">Delivery outcomes</h2>
@@ -20,9 +21,9 @@ export function OutcomeChart({ tasks }: { tasks: TaskAnalytics[] }) {
       <dl className="grid gap-3 text-xs">{data.map(row => <div key={row.name} className="flex items-center gap-2"><span className="size-2 rounded-full" style={{ background: row.fill }} /><dt>{row.name}</dt><dd className="ml-auto pl-4 tabular-nums">{row.value} <span className="text-muted-foreground">{tasks.length ? Math.round(row.value / tasks.length * 100) : 0}%</span></dd></div>)}</dl>
     </div><p className="text-xs text-muted-foreground">Share of all {tasks.length} tasks in this cohort. Delivery follows each task's target.</p>
   </section>;
-}
+});
 
-export function SpendChart({ tasks }: { tasks: TaskAnalytics[] }) {
+export const SpendChart = memo(function SpendChart({ tasks }: { tasks: TaskAnalytics[] }) {
   const days = new Map<string, { date: string; root: number; worker: number }>();
   for (const task of tasks) for (const usage of task.usage) {
     if (usageIsUnpriced(usage)) continue;
@@ -38,4 +39,4 @@ export function SpendChart({ tasks }: { tasks: TaskAnalytics[] }) {
       <Area type="monotone" dataKey="root" stackId="cost" stroke="var(--color-root)" fill="var(--color-root)" fillOpacity={0.15} isAnimationActive={false} /><Area type="monotone" dataKey="worker" stackId="cost" stroke="var(--color-worker)" fill="var(--color-worker)" fillOpacity={0.15} isAnimationActive={false} />
     </AreaChart></ChartContainer><div className="flex gap-4 text-xs text-muted-foreground"><span><span className="text-blue-500">●</span> Coordinator</span><span><span className="text-violet-500">●</span> Delegated</span>{!data.length ? <span>No measured spend</span> : null}</div>
   </section>;
-}
+});

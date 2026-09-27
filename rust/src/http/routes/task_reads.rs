@@ -12,6 +12,7 @@ use axum::{
     response::{IntoResponse, Response},
     routing::get,
 };
+use serde::Serialize;
 use serde_json::{Value, json};
 
 use crate::{
@@ -20,7 +21,18 @@ use crate::{
         root_session_store::{self, RootObservationRows},
         workflows,
     },
-    http::{AppState, contracts::typed::tasks::TaskIdParams, validation::ValidPath},
+    http::{
+        AppState,
+        contracts::{
+            task_reads::{
+                TaskActivityResponse, TaskActivitySession, TaskActivityTurn, TaskDiffResponse,
+                TaskDiffSummaryResponse, TaskExecutionResponse, TaskExecutionSession,
+                TaskExecutionTool, TaskToolStatus,
+            },
+            typed::tasks::TaskIdParams,
+        },
+        validation::ValidPath,
+    },
     integrations::github::Access,
     platform::database::SuplexDatabase,
     runtimes::{task_harness::ReaderSession, task_harness_registry},
@@ -72,7 +84,7 @@ async fn checks(
     let (number, repository, branch) = match intent {
         Ok(Some(intent)) => intent,
         Ok(None) => return respond(Ok(json!({"available":false,"runs":[]})), cookies),
-        Err(error) => return respond(Err(error.into()), cookies),
+        Err(error) => return respond::<Value>(Err(error.into()), cookies),
     };
     // Check observations use GitHub for every repository connection.
     let observed = async {
@@ -83,7 +95,7 @@ async fn checks(
     };
     let observation = match observed.await {
         Ok(observation) => observation,
-        Err(error) => return respond(Err(Box::new(error)), cookies),
+        Err(error) => return respond::<Value>(Err(Box::new(error)), cookies),
     };
     let pull_request_state = match observation.state.as_deref() {
         Some("open") if observation.is_draft == Some(false) => json!("ready"),
@@ -111,7 +123,7 @@ fn read_task(
     Ok((rows, database_path))
 }
 
-fn respond(result: Result<Value, Box<dyn Error>>, cookies: Vec<String>) -> Response {
+fn respond<T: Serialize>(result: Result<T, Box<dyn Error>>, cookies: Vec<String>) -> Response {
     let mut response = match result {
         Ok(value) => {
             let mut response = Json(value).into_response();
@@ -134,51 +146,56 @@ fn role_label(session: &SessionRow) -> &'static str {
     )
 }
 
-fn activity_document(rows: &RootObservationRows) -> Value {
+fn activity_document(rows: &RootObservationRows) -> TaskActivityResponse {
     let sessions = rows
         .sessions
         .iter()
         .map(|session| {
             let profile = rows.profile_of(session);
-            json!({
-                "id":session.id, "kind":session.kind,
-                "advisorRole":session.advisor_role, "label":role_label(session),
-                "profileId":profile.profile_id, "generation":session.generation,
-                "nativeSessionId":session.native_session_id, "paneId":session.pane_id,
-                "current":session.current, "replacement":session.replacement,
-                "harness":profile.provider,
-            })
+            TaskActivitySession {
+                id: session.id.clone(),
+                kind: session.kind,
+                advisor_role: session.advisor_role,
+                label: role_label(session).into(),
+                profile_id: profile.profile_id.clone(),
+                generation: session.generation,
+                native_session_id: session.native_session_id.clone(),
+                pane_id: session.pane_id.clone(),
+                current: session.current,
+                replacement: session.replacement.clone(),
+                harness: profile.provider,
+            }
         })
         .collect::<Vec<_>>();
     let turns = rows
         .turns
         .iter()
-        .map(|turn| {
-            json!({
-                "id":turn.id, "sessionId":turn.session_id,
-                "prompt":turn.prompt_text, "status":turn.status,
-                "promptedAt":turn.prompted_at, "completedAt":turn.completed_at,
-                "result":turn.terminal_observation,
-            })
+        .map(|turn| TaskActivityTurn {
+            id: turn.id.clone(),
+            session_id: turn.session_id.clone(),
+            prompt: turn.prompt_text.clone(),
+            status: turn.status,
+            prompted_at: turn.prompted_at.clone(),
+            completed_at: turn.completed_at.clone(),
+            result: turn.terminal_observation.clone(),
         })
         .collect::<Vec<_>>();
-    json!({
-        "sessions":sessions, "turns":turns,
-        "shellPaneId":rows.control.shell_pane_id,
-    })
+    TaskActivityResponse {
+        sessions,
+        turns,
+        shell_pane_id: rows.control.shell_pane_id.clone(),
+    }
 }
 
-fn execution_document(rows: &RootObservationRows, database_path: &std::path::Path) -> Value {
+fn execution_document(
+    rows: &RootObservationRows,
+    database_path: &std::path::Path,
+) -> Result<TaskExecutionResponse, Box<dyn Error>> {
     let sessions = rows
         .sessions
         .iter()
         .filter(|session| session.native_session_id.is_some())
-        .map(|session| {
-            let mut entry = json!({
-                "id":session.id, "role":session.kind,
-                "advisorRole":session.advisor_role, "label":role_label(session),
-                "generation":session.generation,
-            });
+        .map(|session| -> Result<TaskExecutionSession, Box<dyn Error>> {
             let profile = rows.profile_of(session);
             let observed = session
                 .native_session_id
@@ -195,24 +212,41 @@ fn execution_document(rows: &RootObservationRows, database_path: &std::path::Pat
                     };
                     reader.execution(&session).ok()
                 });
-            match observed {
+            let available = observed.is_some();
+            let (tools, plan) = match observed {
                 Some((tools, plan)) => {
-                    entry["available"] = json!(true);
-                    entry["limited"] = json!(false);
-                    entry["tools"] = json!(tools);
-                    entry["plan"] = plan;
+                    let tools = tools
+                        .into_iter()
+                        .map(|tool| {
+                            Ok(TaskExecutionTool {
+                                id: tool.id,
+                                name: tool.name,
+                                status: TaskToolStatus::parse(tool.status)
+                                    .ok_or("Native tool status is invalid")?,
+                                input: Value::Object(tool.input),
+                                output: tool.output,
+                                error: tool.error,
+                            })
+                        })
+                        .collect::<Result<Vec<_>, Box<dyn Error>>>()?;
+                    (tools, serde_json::from_value(plan)?)
                 }
-                None => {
-                    entry["available"] = json!(false);
-                    entry["limited"] = json!(false);
-                    entry["tools"] = json!([]);
-                    entry["plan"] = Value::Null;
-                }
-            }
-            entry
+                None => (Vec::new(), None),
+            };
+            Ok(TaskExecutionSession {
+                id: session.id.clone(),
+                role: session.kind,
+                advisor_role: session.advisor_role,
+                label: role_label(session).into(),
+                generation: session.generation,
+                available,
+                limited: false,
+                tools,
+                plan,
+            })
         })
-        .collect::<Vec<_>>();
-    json!({"sessions":sessions})
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(TaskExecutionResponse { sessions })
 }
 
 async fn activity(
@@ -224,7 +258,7 @@ async fn activity(
         Ok(value) => value,
         Err(response) => return *response,
     };
-    let result = state.with_database(|database| -> Result<Value, Box<dyn Error>> {
+    let result = state.with_database(|database| -> Result<TaskActivityResponse, Box<dyn Error>> {
         let (rows, _) = read_task(database, &user_id, &task_id)?;
         Ok(activity_document(&rows))
     });
@@ -243,15 +277,16 @@ async fn execution(
     let (rows, database_path) =
         match state.with_database(|database| read_task(database, &user_id, &task_id)) {
             Ok(value) => value,
-            Err(error) => return respond(Err(error), cookies),
+            Err(error) => return respond::<Value>(Err(error), cookies),
         };
     let observation = match tokio::task::spawn_blocking(move || {
-        execution_document(&rows, &database_path)
+        execution_document(&rows, &database_path).map_err(|error| error.to_string())
     })
     .await
     {
-        Ok(value) => value,
-        Err(error) => return respond(Err(Box::new(error)), cookies),
+        Ok(Ok(value)) => value,
+        Ok(Err(error)) => return respond::<Value>(Err(error.into()), cookies),
+        Err(error) => return respond::<Value>(Err(Box::new(error)), cookies),
     };
     // Native files can change during observation; refresh user scope after it.
     let scope = state.with_database(|database| read_task(database, &user_id, &task_id));
@@ -278,6 +313,13 @@ async fn diff(
 enum DiffKind {
     Patch,
     Summary,
+}
+
+#[derive(Serialize)]
+#[serde(untagged)]
+enum DiffResponse {
+    Patch(TaskDiffResponse),
+    Summary(TaskDiffSummaryResponse),
 }
 
 async fn diff_summary_with_access(
@@ -340,13 +382,20 @@ async fn read_diff(
         })
     }) {
         Ok(intent) => intent,
-        Err(error) => return respond(Err(error), cookies),
+        Err(error) => return respond::<Value>(Err(error), cookies),
     };
     let (path, repository, mut base_branch, pull_request) = match intent {
         DiffIntent::NoWorktree => {
             let value = match kind {
-                DiffKind::Patch => json!({"available":false,"patch":"","truncated":false}),
-                DiffKind::Summary => json!({"available":false,"files":0}),
+                DiffKind::Patch => DiffResponse::Patch(TaskDiffResponse {
+                    available: false,
+                    patch: String::new(),
+                    truncated: false,
+                }),
+                DiffKind::Summary => DiffResponse::Summary(TaskDiffSummaryResponse {
+                    available: false,
+                    files: 0,
+                }),
             };
             return respond(Ok(value), cookies);
         }
@@ -364,7 +413,7 @@ async fn read_diff(
         };
         match pull.await {
             Ok(pull) => base_branch = pull.base_branch,
-            Err(error) => return respond(Err(Box::new(error)), cookies),
+            Err(error) => return respond::<Value>(Err(Box::new(error)), cookies),
         }
     }
     let access_result = match access_override {
@@ -373,20 +422,32 @@ async fn read_diff(
     };
     let access = match access_result {
         Ok(access) => access,
-        Err(error) => return respond(Err(error), cookies),
+        Err(error) => return respond::<Value>(Err(error), cookies),
     };
     let published_sha = match access.published_branch_sha(&repository, &base_branch).await {
         Ok(sha) => sha,
-        Err(error) => return respond(Err(error), cookies),
+        Err(error) => return respond::<Value>(Err(error), cookies),
     };
     let token = access.token().map(str::to_owned);
     let observed = tokio::task::spawn_blocking(move || {
         let result = match kind {
             DiffKind::Patch => worktree::local_diff_patch(&path, published_sha, token.as_deref())
-                .map(|patch| json!({"available":true,"patch":patch,"truncated":false})),
+                .map(|patch| {
+                    DiffResponse::Patch(TaskDiffResponse {
+                        available: true,
+                        patch,
+                        truncated: false,
+                    })
+                }),
             DiffKind::Summary => {
-                worktree::local_diff_file_count(&path, published_sha, token.as_deref())
-                    .map(|files| json!({"available":true,"files":files}))
+                worktree::local_diff_file_count(&path, published_sha, token.as_deref()).map(
+                    |files| {
+                        DiffResponse::Summary(TaskDiffSummaryResponse {
+                            available: true,
+                            files,
+                        })
+                    },
+                )
             }
         };
         result.map_err(|error| error.to_string())
@@ -394,8 +455,8 @@ async fn read_diff(
     .await;
     let value = match observed {
         Ok(Ok(value)) => value,
-        Ok(Err(error)) => return respond(Err(error.into()), cookies),
-        Err(error) => return respond(Err(Box::new(error)), cookies),
+        Ok(Err(error)) => return respond::<Value>(Err(error.into()), cookies),
+        Err(error) => return respond::<Value>(Err(Box::new(error)), cookies),
     };
     let scope = state.with_database(|database| read_task(database, &user_id, &task_id));
     respond(scope.map(|_| value), cookies)

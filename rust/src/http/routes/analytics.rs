@@ -12,7 +12,7 @@ use axum::{
     routing::get,
 };
 use chrono::Utc;
-use serde_json::{Value, json};
+use serde::Serialize;
 
 use crate::{
     http::{AppState, contracts::typed::auth::CompanyIdParams, validation::ValidPath},
@@ -37,35 +37,21 @@ pub fn router() -> Router<AppState> {
         )
 }
 
-fn respond(result: Result<Value, Box<dyn Error>>, cookies: Vec<String>) -> Response {
-    let mut response = match result {
-        Ok(value) => (
-            [
-                (header::CONTENT_TYPE, "application/json; charset=utf-8"),
-                (header::CACHE_CONTROL, "private, no-store"),
-            ],
-            js_json::stringify(&value),
-        )
-            .into_response(),
-        Err(error) => ApiError::response(error),
-    };
+fn respond<T: Serialize>(result: Result<T, Box<dyn Error>>, cookies: Vec<String>) -> Response {
+    let mut response =
+        match result.and_then(|value| serde_json::to_value(value).map_err(Into::into)) {
+            Ok(value) => (
+                [
+                    (header::CONTENT_TYPE, "application/json; charset=utf-8"),
+                    (header::CACHE_CONTROL, "private, no-store"),
+                ],
+                js_json::stringify(&value),
+            )
+                .into_response(),
+            Err(error) => ApiError::response(error),
+        };
     auth::append_cookies(&mut response, cookies);
     response
-}
-
-fn read(
-    state: &AppState,
-    headers: &HeaderMap,
-    company_id: &str,
-    project: fn(Value) -> Value,
-) -> Response {
-    let (user_id, cookies) = match authorize(state, headers, "GET", false) {
-        Ok(value) => value,
-        Err(response) => return *response,
-    };
-    let result = state
-        .with_database(|database| analytics::analytics(database, &user_id, company_id, Utc::now()));
-    respond(result.map(project), cookies)
 }
 
 async fn company_analytics(
@@ -73,7 +59,14 @@ async fn company_analytics(
     ValidPath(CompanyIdParams { company_id }): ValidPath<CompanyIdParams>,
     headers: HeaderMap,
 ) -> Response {
-    read(&state, &headers, &company_id, |value| value)
+    let (user_id, cookies) = match authorize(&state, &headers, "GET", false) {
+        Ok(value) => value,
+        Err(response) => return *response,
+    };
+    let result = state.with_database(|database| {
+        analytics::analytics(database, &user_id, &company_id, Utc::now())
+    });
+    respond(result, cookies)
 }
 
 async fn task_costs(
@@ -81,9 +74,15 @@ async fn task_costs(
     ValidPath(CompanyIdParams { company_id }): ValidPath<CompanyIdParams>,
     headers: HeaderMap,
 ) -> Response {
-    read(&state, &headers, &company_id, |value| {
-        analytics::task_costs(&value)
-    })
+    let (user_id, cookies) = match authorize(&state, &headers, "GET", false) {
+        Ok(value) => value,
+        Err(response) => return *response,
+    };
+    let result = state.with_database(|database| {
+        let analytics = analytics::analytics(database, &user_id, &company_id, Utc::now())?;
+        analytics::task_costs(&analytics)
+    });
+    respond(result, cookies)
 }
 
 fn saved_timelines(
@@ -119,22 +118,24 @@ async fn company_timeline(
     let (saved, database_path) =
         match state.with_database(|database| saved_timelines(database, &user_id, &company_id)) {
             Ok(value) => value,
-            Err(error) => return respond(Err(error), cookies),
+            Err(error) => return respond::<()>(Err(error), cookies),
         };
-    let observed = tokio::task::spawn_blocking(move || -> Result<Value, String> {
-        let mut tasks = Vec::new();
-        let mut unavailable = 0;
-        for task in saved {
-            let value = serde_json::to_value(
-                timeline::observe(&database_path, task).map_err(|error| error.to_string())?,
-            )
-            .map_err(|error| error.to_string())?;
-            tasks.extend(value["tasks"].as_array().cloned().unwrap_or_default());
-            unavailable += value["unavailableSessions"].as_u64().unwrap_or_default();
-        }
-        Ok(json!({"tasks": tasks, "unavailableSessions": unavailable}))
-    })
-    .await;
+    let observed =
+        tokio::task::spawn_blocking(move || -> Result<timeline::TimelineResponse, String> {
+            let mut tasks = Vec::new();
+            let mut unavailable = 0;
+            for task in saved {
+                let value =
+                    timeline::observe(&database_path, task).map_err(|error| error.to_string())?;
+                tasks.extend(value.tasks);
+                unavailable += value.unavailable_sessions;
+            }
+            Ok(timeline::TimelineResponse {
+                tasks,
+                unavailable_sessions: unavailable,
+            })
+        })
+        .await;
     let result = match observed {
         Ok(Ok(value)) => state
             .with_database(|database| {

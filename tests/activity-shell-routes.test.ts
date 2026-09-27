@@ -16,6 +16,7 @@ const state = vi.hoisted(() => ({
   sidebarUnmounts: 0,
   viewMounts: [] as string[],
   readTaskList: vi.fn<(companyId: string) => Promise<TaskRow[]>>(),
+  analyticsImport: undefined as Promise<void> | undefined,
 }));
 
 vi.mock("../src/frontend/components/ui/sidebar.js", async () => {
@@ -95,7 +96,10 @@ vi.mock("../src/frontend/features/tasks/dashboard.js", () => ({ Dashboard: view(
 vi.mock("../src/frontend/features/projects/projects.js", () => ({ ProjectsView: view("projects") }));
 vi.mock("../src/frontend/features/tasks/tasks.js", () => ({ TasksView: view("tasks") }));
 vi.mock("../src/frontend/features/timeline/timeline.js", () => ({ TimelineView: view("timeline") }));
-vi.mock("../src/frontend/features/analytics/analytics.js", () => ({ AnalyticsView: view("analytics") }));
+vi.mock("../src/frontend/features/analytics/analytics.js", async () => {
+  await state.analyticsImport;
+  return { AnalyticsView: view("analytics") };
+});
 vi.mock("../src/frontend/features/settings/task-template-settings.js", () => ({ TaskTemplateSettings: view("templates") }));
 vi.mock("../src/frontend/features/settings/provider-settings.js", () => ({ ProviderSettingsView: view("providers") }));
 vi.mock("../src/frontend/features/settings/environment-settings.js", () => ({ EnvironmentSettingsView: view("environment") }));
@@ -175,6 +179,31 @@ describe("Activity shell lifecycle", () => {
     expect(container.querySelector("[data-settings-sidebar=profile]")?.textContent).toBe("Settings sidebar");
     expect(container.textContent).not.toContain("First task");
     expect(state.sidebarUnmounts).toBe(1);
+  });
+
+  it("keeps Activity mounted while a secondary route chunk loads", async () => {
+    state.readTaskList.mockResolvedValue([task("task-a", "First task")]);
+    let resolveImport: (() => void) | undefined;
+    state.analyticsImport = new Promise(resolve => { resolveImport = resolve; });
+
+    await act(async () => root.render(createElement(AppRouter)));
+    const taskLink = container.querySelector('a[href*="/tasks/task-a"]');
+    expect(taskLink).not.toBeNull();
+
+    await act(async () => navigate("/analytics?company=company-a"));
+    expect(container.querySelector('[aria-busy="true"]')).not.toBeNull();
+    expect(container.querySelector('a[href*="/tasks/task-a"]')).toBe(taskLink);
+    expect(state.sidebarUnmounts).toBe(0);
+
+    await act(async () => resolveImport?.());
+    expect(container.querySelector('[aria-busy="true"]')).toBeNull();
+    expect(container.querySelector('main[data-view="analytics"]')?.textContent).toBe("/analytics");
+    expect(state.sidebarMounts).toBe(1);
+    expect(container.querySelector('a[href*="/tasks/task-a"]')).toBe(taskLink);
+
+    await act(async () => navigate("/tasks?company=company-a", "popstate"));
+    expect(container.querySelector('main[data-view="tasks"]')?.textContent).toBe("/tasks");
+    expect(state.sidebarMounts).toBe(1);
   });
 
   it("polls once after navigation, updates Activity, and discards an obsolete company response", async () => {

@@ -30,4 +30,4 @@ export const TaskExecutionResponseSchema = z.object({
   })),
 });
 
-export type TaskExecution = z.infer<typeof TaskExecutionResponseSchema>;
+export type { TaskExecutionResponse as TaskExecution } from "./generated/TaskExecutionResponse.js";

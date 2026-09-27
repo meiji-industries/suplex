@@ -4,9 +4,9 @@ import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { z } from "zod";
 import { CircleDashed } from "lucide-react";
 import type { Task } from "../../contracts/tasks.js";
-import { type TaskActivityResponseSchema, TaskDiffResponseSchema, TaskDiffSummaryResponseSchema } from "../../contracts/task-responses.js";
+import type { TaskActivityResponse } from "../../contracts/generated/TaskActivityResponse.js";
+import { useTaskDiff, useTaskDiffSummary } from "./lib/task-queries.js";
 import { useTaskChecks } from "./lib/task-checks.js";
-import { readJsonUnchecked } from "../../lib/api.js";
 import { Alert, AlertDescription } from "../../components/ui/alert.js";
 import { Spinner } from "../../components/ui/spinner.js";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../../components/ui/tabs.js";
@@ -20,7 +20,7 @@ import { PromptInput, PromptInputFooter, PromptInputSubmit, PromptInputTextarea 
 const DeveloperDiff = lazy(() => import("../../components/app/developer-diff.js").then(module => ({ default: module.DeveloperDiff })));
 const MAX_TASK_NOTE_LENGTH = 20_000;
 
-export type TaskActivity = z.infer<typeof TaskActivityResponseSchema>;
+export type TaskActivity = TaskActivityResponse;
 const turnLabels = { pending_prompt: "Queued", prompted: "In progress", unknown: "Observation not available", completed: "Turn ended", cancelled: "Cancelled" };
 const answerLabels = { pending_prompt: "Queued", prompted: "Sent to Coordinator", unknown: "Delivery not confirmed", completed: "Sent to Coordinator", cancelled: "Cancelled" };
 const ResultSchema = z.object({ text: z.string().optional() });
@@ -58,7 +58,8 @@ function humanMessage(prompt: string): string {
 export function TaskWork({ task, activity, onChange, onSelectWorker }: { task: Task; activity: TaskActivity; onChange: (task: Task) => void; onSelectWorker: () => void }) {
   const [tab, setTab] = useState("chat");
   const { execution, error: executionError } = useTaskExecution(task.id);
-  const diffSummary = useTaskDiffSummary(task);
+  const summaryQuery = useTaskDiffSummary(task);
+  const diffSummary = summaryQuery.isError ? null : summaryQuery.data;
   return <Tabs value={tab} onValueChange={value => setTab(String(value))} data-task-work-tabs>
     <TaskWorker key={task.id} task={task} activity={activity} onSelect={onSelectWorker} />
     <TaskActivityTimeline taskId={task.id} />
@@ -127,42 +128,10 @@ export function TaskNoteInput({ task, onChange }: { task: Task; onChange: (task:
   </section>;
 }
 
-function useTaskDiffSummary(task: Task) {
-  const [summary, setSummary] = useState<z.infer<typeof TaskDiffSummaryResponseSchema> | null>(null);
-  useEffect(() => {
-    let closed = false;
-    let reading = false;
-    const read = async () => {
-      if (closed || reading) return;
-      reading = true;
-      try { const value = TaskDiffSummaryResponseSchema.parse(await readJsonUnchecked(`/api/tasks/${task.id}/diff/summary`)); if (!closed) setSummary(value); }
-      catch { if (!closed) setSummary(null); }
-      finally { reading = false; }
-    };
-    void read();
-    const timer = setInterval(() => void read(), 5000);
-    return () => { closed = true; clearInterval(timer); };
-  }, [task.id, task.updatedAt]);
-  return summary;
-}
-
 function TaskDiff({ task }: { task: Task }) {
-  const [diff, setDiff] = useState<z.infer<typeof TaskDiffResponseSchema> | null>(null);
-  const [error, setError] = useState("");
-  useEffect(() => {
-    let closed = false;
-    let reading = false;
-    const read = async () => {
-      if (closed || reading) return;
-      reading = true;
-      try { const value = TaskDiffResponseSchema.parse(await readJsonUnchecked(`/api/tasks/${task.id}/diff`)); if (!closed) { setDiff(value); setError(""); } }
-      catch (error) { if (!closed) setError(error instanceof Error ? error.message : "Changes are not available"); }
-      finally { reading = false; }
-    };
-    void read();
-    const timer = setInterval(() => void read(), 5000);
-    return () => { closed = true; clearInterval(timer); };
-  }, [task.id, task.updatedAt]);
+  const query = useTaskDiff(task.id);
+  const diff = query.data;
+  const error = query.error?.message ?? "";
   return <div className="min-w-0 space-y-3 pt-3" data-task-diff-panel>{error ? <Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert> : !diff ? <p className="flex items-center gap-2 text-xs text-muted-foreground" aria-busy="true"><Spinner /><span>Loading changes…</span></p> : !diff.available ? <p className="text-xs text-muted-foreground">The worktree is not available.</p> : <Suspense fallback={null}><DeveloperDiff patch={diff.patch} /></Suspense>}</div>;
 }
 

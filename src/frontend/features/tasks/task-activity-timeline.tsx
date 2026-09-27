@@ -1,6 +1,5 @@
 import { useEffect, useState } from "react";
-import { TaskTimelineResponseSchema, type TimelineTask } from "../../contracts/timeline.js";
-import { readJsonUnchecked } from "../../lib/api.js";
+import { useTaskTimeline } from "./lib/task-queries.js";
 import { taskTimelineDuration } from "../timeline/lib/task-timeline-duration.js";
 import { Alert, AlertDescription } from "../../components/ui/alert.js";
 import { TimelineAgentLabel } from "../timeline/timeline-agent-label.js";
@@ -15,30 +14,13 @@ function timestamp(value: number): string {
 }
 
 export function TaskActivityTimeline({ taskId }: { taskId: string }) {
-  const [snapshot, setSnapshot] = useState<{ activity: TimelineTask["activity"]; readAt: number } | null>(null);
-  const [error, setError] = useState("");
+  const query = useTaskTimeline(taskId);
+  const snapshot = query.data ? { activity: query.data.tasks.find(task => task.id === taskId)?.activity ?? [], readAt: query.dataUpdatedAt } : null;
+  const error = query.isError ? "Timeline is not available." : "";
   const [now, setNow] = useState(Date.now);
   useEffect(() => {
-    let closed = false;
-    let reading = false;
-    setSnapshot(null);
-    setError("");
-    const read = async () => {
-      if (reading || closed) return;
-      reading = true;
-      try {
-        const result = TaskTimelineResponseSchema.parse(await readJsonUnchecked(`/api/tasks/${taskId}/timeline`));
-        if (!closed) {
-          setSnapshot({ activity: result.tasks.find(task => task.id === taskId)?.activity ?? [], readAt: Date.now() });
-          setError("");
-        }
-      } catch { if (!closed) setError("Timeline is not available."); }
-      finally { reading = false; }
-    };
-    void read();
-    const poll = setInterval(() => void read(), 5000);
     const clock = setInterval(() => setNow(Date.now()), 1000);
-    return () => { closed = true; clearInterval(poll); clearInterval(clock); };
+    return () => clearInterval(clock);
   }, [taskId]);
   const liveUntil = snapshot ? snapshot.readAt + freshnessMs : now;
   const asOf = Math.min(Math.max(now, snapshot?.readAt ?? now), error ? snapshot?.readAt ?? now : liveUntil);

@@ -2,6 +2,14 @@ import { readJsonUnchecked } from "../../../lib/api.js";
 import type { Task, TaskInput } from "../../../contracts/tasks.js";
 import type { TaskAgentSelectionRequest } from "../../../contracts/agent-selection.js";
 import type { IssueAssociation } from "../../../contracts/issues.js";
+import { TaskActivityResponseSchema, TaskDiffResponseSchema, TaskDiffSummaryResponseSchema } from "../../../contracts/task-responses.js";
+import { TaskExecutionResponseSchema } from "../../../contracts/task-execution.js";
+import { TaskTimelineResponseSchema } from "../../../contracts/timeline.js";
+import type { TaskActivityResponse } from "../../../contracts/generated/TaskActivityResponse.js";
+import type { TaskExecutionResponse } from "../../../contracts/generated/TaskExecutionResponse.js";
+import type { TaskDiffResponse } from "../../../contracts/generated/TaskDiffResponse.js";
+import type { TaskDiffSummaryResponse } from "../../../contracts/generated/TaskDiffSummaryResponse.js";
+import type { TimelineResponse } from "../../../contracts/generated/TimelineResponse.js";
 import type { ArchiveConfirmation } from "../../../contracts/generated/ArchiveConfirmation.js";
 
 export type TaskAction = "refresh" | "cancel" | "unarchive" | "disarm" | "start" | "answer";
@@ -97,4 +105,34 @@ export async function archiveTask(taskId: string, confirmDiscardDirty: boolean):
 
 export function isArchiveConfirmation(result: Task | ArchiveConfirmation): result is ArchiveConfirmation {
   return "dirtyFilePaths" in result;
+}
+
+export async function readTaskActivity(taskId: string, signal: AbortSignal): Promise<TaskActivityResponse> {
+  const result = await readJsonUnchecked<TaskActivityResponse>(taskPath(taskId, "/activity"), { signal });
+  TaskActivityResponseSchema.parse(result);
+  return result;
+}
+
+export async function readTaskExecution(taskId: string, signal: AbortSignal): Promise<TaskExecutionResponse> {
+  const result = await readJsonUnchecked<TaskExecutionResponse>(taskPath(taskId, "/execution"), { signal });
+  TaskExecutionResponseSchema.parse(result);
+  return result;
+}
+
+export async function readTaskTimeline(taskId: string, signal: AbortSignal): Promise<TimelineResponse> {
+  const result = await readJsonUnchecked<TimelineResponse>(taskPath(taskId, "/timeline"), { signal });
+  TaskTimelineResponseSchema.parse(result);
+  return result;
+}
+
+export async function readTaskDiffSummary(taskId: string, signal: AbortSignal): Promise<TaskDiffSummaryResponse> {
+  const result = await readJsonUnchecked<TaskDiffSummaryResponse>(taskPath(taskId, "/diff/summary"), { signal });
+  TaskDiffSummaryResponseSchema.parse(result);
+  return result;
+}
+
+export async function readTaskDiff(taskId: string, signal: AbortSignal): Promise<TaskDiffResponse> {
+  const result = await readJsonUnchecked<TaskDiffResponse>(taskPath(taskId, "/diff"), { signal });
+  TaskDiffResponseSchema.parse(result);
+  return result;
 }

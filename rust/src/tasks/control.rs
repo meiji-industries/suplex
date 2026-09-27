@@ -362,7 +362,7 @@ impl SessionRow {
 }
 
 /// The session a replacement session succeeded, and why.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionReplacement {
     pub session_id: String,

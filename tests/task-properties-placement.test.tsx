@@ -6,6 +6,7 @@ import type { Task } from "../src/frontend/contracts/tasks.js";
 
 vi.mock("../src/frontend/lib/api.js", async importOriginal => ({ ...(await importOriginal<Record<string, unknown>>()), readJsonUnchecked: () => new Promise(() => undefined) }));
 vi.mock("../src/frontend/features/analytics/lib/analytics.js", () => ({ useTaskCosts: () => new Map() }));
+vi.mock("../src/frontend/features/tasks/lib/task-queries.js", () => ({ useTaskActivity: () => ({ data: undefined, error: null, refresh: vi.fn() }) }));
 vi.mock("../src/frontend/features/tasks/task-work.js", () => ({ TaskWork: () => null }));
 vi.mock("../src/frontend/features/tasks/task-agent.js", () => ({ TaskAgent: () => null }));
 vi.mock("../src/frontend/features/tasks/workflow-history.js", () => ({ WorkflowHistory: () => null, WorkflowStatus: () => null }));

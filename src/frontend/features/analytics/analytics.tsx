@@ -60,30 +60,42 @@ export function AnalyticsView() {
   const tasks = useMemo(() => (data?.tasks ?? []).filter(task => (project === "all" || task.projectId === project)
     && (delivery === "all" || task.deliveryTarget === delivery)
     && (period === "all" || Date.parse(task.createdAt) >= Date.now() - Number(period) * 86_400_000)), [data, project, delivery, period]);
-  const usage = tasks.flatMap(task => task.usage);
-  const totals = usageMetrics(usage);
-  const delivered = tasks.filter(task => task.status === "delivered");
-  const pricedDelivered = delivered.map(task => ({ task, metrics: usageMetrics(task.usage) })).filter(value => value.metrics.cost !== null && value.metrics.unpricedMessages === 0);
-  const deliveredCost = pricedDelivered.length ? pricedDelivered.reduce((sum, value) => sum + (value.metrics.cost ?? 0), 0) / pricedDelivered.length : null;
-  const deliveredSubsidized = pricedDelivered.some(value => value.metrics.subsidized);
-  const deliveredPartial = pricedDelivered.some(value => taskUsageIsPartial(value.task) || value.metrics.incompleteMessages > 0);
-  const measuredDelivery = delivered.flatMap(task => task.deliveryMs === null ? [] : [task.deliveryMs]);
-  const measured = tasks.filter(task => task.usage.length);
-  const models = [...new Set(usage.map(entry => `${entry.provider}/${entry.model}`))].map(name => ({ name, ...usageMetrics(usage.filter(entry => `${entry.provider}/${entry.model}` === name)) })).sort((a, b) => (b.cost ?? 0) - (a.cost ?? 0));
-  const rows = tasks.map(task => ({ task, metrics: usageMetrics(task.usage) })).filter(row => `${row.task.title} ${row.task.issueKey ?? ""}`.toLowerCase().includes(query.toLowerCase())).sort((a, b) => sort === "turns" ? b.metrics.turns - a.metrics.turns : sort === "duration" ? b.metrics.durationMs - a.metrics.durationMs : sort === "newest" ? b.task.createdAt.localeCompare(a.task.createdAt) : (b.metrics.cost ?? -1) - (a.metrics.cost ?? -1));
-  const pendingTasks = tasks.filter(task => task.status !== "delivered");
-  const pendingMetrics = usageMetrics(pendingTasks.flatMap(task => task.usage));
-  const pendingSpend = pendingTasks.reduce((sum, task) => sum + (usageMetrics(task.usage).cost ?? 0), 0);
-  const pendingPartial = pendingTasks.some(taskUsageIsPartial) || pendingMetrics.incompleteMessages > 0;
-  const totalsPartial = tasks.some(taskUsageIsPartial) || totals.incompleteMessages > 0;
-  const coverage = tasks.reduce((sum, task) => sum + task.observedSessions, 0);
-  const sessions = tasks.reduce((sum, task) => sum + task.sessions, 0);
-  const stale = tasks.reduce((sum, task) => sum + task.staleSessions, 0);
+  const {
+    taskRows, totals, delivered, pricedDelivered, deliveredCost, deliveredSubsidized, deliveredPartial,
+    measuredDelivery, measured, models, pendingMetrics, pendingSpend, pendingPartial, totalsPartial,
+    coverage, sessions, stale, questions, observedWaitMs,
+  } = useMemo(() => {
+    const taskRows = tasks.map(task => ({ task, metrics: usageMetrics(task.usage) }));
+    const usage = tasks.flatMap(task => task.usage);
+    const totals = usageMetrics(usage);
+    const delivered = taskRows.filter(({ task }) => task.status === "delivered");
+    const pricedDelivered = delivered.filter(({ metrics }) => metrics.cost !== null && metrics.unpricedMessages === 0);
+    const pending = taskRows.filter(({ task }) => task.status !== "delivered");
+    const pendingMetrics = usageMetrics(pending.flatMap(({ task }) => task.usage));
+    return {
+      taskRows, totals, delivered, pricedDelivered, pendingMetrics,
+      deliveredCost: pricedDelivered.length ? pricedDelivered.reduce((sum, { metrics }) => sum + (metrics.cost ?? 0), 0) / pricedDelivered.length : null,
+      deliveredSubsidized: pricedDelivered.some(({ metrics }) => metrics.subsidized),
+      deliveredPartial: pricedDelivered.some(({ task, metrics }) => taskUsageIsPartial(task) || metrics.incompleteMessages > 0),
+      measuredDelivery: delivered.flatMap(({ task }) => task.deliveryMs === null ? [] : [task.deliveryMs]),
+      measured: tasks.filter(task => task.usage.length),
+      models: [...new Set(usage.map(entry => `${entry.provider}/${entry.model}`))].map(name => ({ name, ...usageMetrics(usage.filter(entry => `${entry.provider}/${entry.model}` === name)) })).sort((a, b) => (b.cost ?? 0) - (a.cost ?? 0)),
+      pendingSpend: pending.reduce((sum, { metrics }) => sum + (metrics.cost ?? 0), 0),
+      pendingPartial: pending.some(({ task }) => taskUsageIsPartial(task)) || pendingMetrics.incompleteMessages > 0,
+      totalsPartial: tasks.some(taskUsageIsPartial) || totals.incompleteMessages > 0,
+      coverage: tasks.reduce((sum, task) => sum + task.observedSessions, 0),
+      sessions: tasks.reduce((sum, task) => sum + task.sessions, 0),
+      stale: tasks.reduce((sum, task) => sum + task.staleSessions, 0),
+      questions: tasks.reduce((sum, task) => sum + task.questions, 0),
+      observedWaitMs: tasks.reduce((sum, task) => sum + task.observedWaitMs, 0),
+    };
+  }, [tasks]);
+  const rows = useMemo(() => taskRows.filter(({ task }) => `${task.title} ${task.issueKey ?? ""}`.toLowerCase().includes(query.toLowerCase())).sort((a, b) => sort === "turns" ? b.metrics.turns - a.metrics.turns : sort === "duration" ? b.metrics.durationMs - a.metrics.durationMs : sort === "newest" ? b.task.createdAt.localeCompare(a.task.createdAt) : (b.metrics.cost ?? -1) - (a.metrics.cost ?? -1)), [taskRows, query, sort]);
   const attention: Array<[string, ReactNode]> = [
     ["Spend on tasks not delivered", <CostValue value={totals.cost === null ? null : pendingSpend} subsidized={pendingMetrics.subsidized} partial={pendingPartial} />],
     ["Turns with an error", String(totals.failedTurns)], ["Messages without completion", String(totals.incompleteMessages)],
-    ["Questions observed", String(tasks.reduce((sum, task) => sum + task.questions, 0))],
-    ["Observed wait for answers", duration(tasks.reduce((sum, task) => sum + task.observedWaitMs, 0))],
+    ["Questions observed", String(questions)],
+    ["Observed wait for answers", duration(observedWaitMs)],
     ["Context summaries", String(totals.summaries)],
   ];
   const exportRows = () => {

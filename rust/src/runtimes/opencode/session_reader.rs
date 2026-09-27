@@ -29,16 +29,16 @@ pub struct ReaderSession<'a> {
     pub kind: &'a str,
 }
 
-#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum PlanStatus {
-    Pending,
-    InProgress,
-    Completed,
-    Cancelled,
+crate::shared::wire_enum! {
+    pub enum PlanStatus {
+        Pending = "pending",
+        InProgress = "in_progress",
+        Completed = "completed",
+        Cancelled = "cancelled",
+    }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, ts_rs::TS)]
 pub struct PlanItem {
     pub content: String,
     pub status: PlanStatus,

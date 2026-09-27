@@ -3,7 +3,6 @@ import { useEffect, useState } from "react";
 import type { Task } from "../../contracts/tasks.js";
 import type { TaskAgentSelectionRequest } from "../../contracts/agent-selection.js";
 import { ADVISOR_LABELS } from "./workflow-presentation.js";
-import { TaskActivityResponseSchema } from "../../contracts/task-responses.js";
 import { isProfileAllowed } from "../projects/lib/provider-policy.js";
 import type { ApiProfile } from "../../shell/view-shared.js";
 import { readJsonUnchecked } from "../../lib/api.js";
@@ -23,7 +22,7 @@ const roleProfile = (task: Task, role: TaskAgentRole) => role === "root" ? task.
 const roleSession = (activity: TaskActivity, role: TaskAgentRole) => activity.sessions.find(session => session.current && (role === "root" ? session.kind === "root" : session.kind === "worker" && session.advisorRole === (role === "worker" ? null : role)));
 
 export function TaskAgent({ task, role, onChange, onActivityChange, openRequest, onOpenRequestHandled }: {
-  task: Task; role: TaskAgentRole; onChange: (task: Task) => void; onActivityChange: (activity: TaskActivity) => void;
+  task: Task; role: TaskAgentRole; onChange: (task: Task) => void; onActivityChange: () => Promise<TaskActivity>;
   openRequest?: number; onOpenRequestHandled?: () => void;
 }) {
   const label = taskAgentLabel(role);
@@ -52,8 +51,8 @@ export function TaskAgent({ task, role, onChange, onActivityChange, openRequest,
     if (busy) return;
     setBusy(true); setError(""); setIntent(null);
     try {
-      const [freshTask, freshActivity] = await Promise.all([getTask(task.id), readJsonUnchecked(`/api/tasks/${task.id}/activity`).then(value => TaskActivityResponseSchema.parse(value))]);
-      onChange(freshTask); onActivityChange(freshActivity);
+      const [freshTask, freshActivity] = await Promise.all([getTask(task.id), onActivityChange()]);
+      onChange(freshTask);
       setIntent({ task: freshTask, sessionId: roleSession(freshActivity, role)?.id ?? null });
       setProfileId(roleProfile(freshTask, role).profileId); setDirection(""); setResume(false);
     } catch (cause) { setError(cause instanceof Error ? cause.message : "Task activity is not available."); }
@@ -69,8 +68,8 @@ export function TaskAgent({ task, role, onChange, onActivityChange, openRequest,
         : { role, expectedProfileId: roleProfile(intent.task, role).profileId, expectedSessionId: intent.sessionId, profileId: selected, direction, resume: false };
       const updated = await selectTaskAgent(task.id, body);
       onChange(updated);
-      await readJsonUnchecked(`/api/tasks/${task.id}/activity`).then(value => onActivityChange(TaskActivityResponseSchema.parse(value)), () => undefined);
       setOpen(false);
+      void onActivityChange().catch(() => undefined);
     } catch (cause) { setError(cause instanceof Error ? cause.message : `Suplex could not save the ${label}.`); }
     finally { setBusy(false); }
   };

@@ -7,8 +7,10 @@ use rusqlite::OptionalExtension;
 use serde::{Deserialize, Serialize};
 
 use crate::{
+    coordination::advisor_bridge::AdvisorRole,
     platform::database::{DatabaseResult, SuplexDatabase},
     runtimes::{task_harness::ReaderSession, task_harness_registry},
+    tasks::control::SessionKind,
 };
 
 #[derive(Clone, Debug, Deserialize)]
@@ -34,8 +36,8 @@ pub struct TimelineTask {
 #[derive(Clone, Debug)]
 pub struct TimelineSession {
     id: String,
-    kind: String,
-    advisor_role: Option<String>,
+    kind: SessionKind,
+    advisor_role: Option<AdvisorRole>,
     generation: i64,
     current: bool,
     lifecycle: String,
@@ -61,16 +63,17 @@ pub struct SavedTimeline {
     usage: Vec<TimelineUsage>,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, ts_rs::TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export)]
 pub struct TimelineResponse {
-    tasks: Vec<TimelineTaskResponse>,
-    unavailable_sessions: usize,
+    pub tasks: Vec<TimelineTaskResponse>,
+    pub unavailable_sessions: usize,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, ts_rs::TS)]
 #[serde(rename_all = "camelCase")]
-struct TimelineTaskResponse {
+pub struct TimelineTaskResponse {
     id: String,
     project_id: String,
     issue_key: Option<String>,
@@ -78,20 +81,29 @@ struct TimelineTaskResponse {
     activity: Vec<TimelineActivity>,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, ts_rs::TS)]
 #[serde(rename_all = "camelCase")]
 struct TimelineActivity {
     id: String,
-    role: String,
-    advisor_role: Option<String>,
+    role: SessionKind,
+    advisor_role: Option<AdvisorRole>,
     label: String,
     agent_id: String,
     agent_name: String,
     avatar_seed: String,
-    status: &'static str,
+    status: TimelineActivityStatus,
     attempt: i64,
     started_at: String,
     finished_at: Option<String>,
+}
+
+crate::shared::wire_enum! {
+    pub enum TimelineActivityStatus {
+        Completed = "completed",
+        Running = "running",
+        Failed = "failed",
+        Interrupted = "interrupted",
+    }
 }
 
 pub fn read_saved(
@@ -143,8 +155,8 @@ pub fn read_saved(
         .query_map([task_id], |row| {
             Ok((
                 row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, Option<String>>(2)?,
+                row.get::<_, SessionKind>(1)?,
+                row.get::<_, Option<AdvisorRole>>(2)?,
                 row.get::<_, i64>(3)?,
                 row.get::<_, bool>(4)?,
                 row.get::<_, String>(5)?,
@@ -219,9 +231,9 @@ fn activity(
     live_id: Option<&str>,
 ) -> Result<Vec<TimelineActivity>, Box<dyn Error>> {
     let profile = session.profile.as_ref().unwrap_or_else(|| {
-        if session.kind == "root" {
+        if session.kind == SessionKind::Root {
             &task.root_profile
-        } else if let Some(role) = session.advisor_role.as_deref() {
+        } else if let Some(role) = session.advisor_role.map(AdvisorRole::as_str) {
             task.advisor_profiles
                 .get(role)
                 .unwrap_or(&task.root_profile)
@@ -229,7 +241,10 @@ fn activity(
             &task.worker_profile
         }
     });
-    let role_key = session.advisor_role.as_deref().unwrap_or(&session.kind);
+    let role_key = session
+        .advisor_role
+        .map(AdvisorRole::as_str)
+        .unwrap_or(session.kind.as_str());
     usage.sort_by(|left, right| left.started_at.cmp(&right.started_at));
     let mut turns = Vec::<(String, TimelineActivity)>::new();
     let last = usage.len().saturating_sub(1);
@@ -243,12 +258,12 @@ fn activity(
             .position(|(turn_id, _)| turn_id == &entry.turn_id);
         if entry.completed_at.is_none() && !live {
             if let Some((_, previous)) = prior.and_then(|position| turns.get_mut(position))
-                && previous.status != "failed"
+                && previous.status != TimelineActivityStatus::Failed
             {
                 previous.status = if entry.failed {
-                    "failed"
+                    TimelineActivityStatus::Failed
                 } else {
-                    "interrupted"
+                    TimelineActivityStatus::Interrupted
                 };
             }
             continue;
@@ -266,19 +281,25 @@ fn activity(
         let previous = prior.and_then(|position| turns.get(position).map(|(_, value)| value));
         let combined = TimelineActivity {
             id: format!("{}:{}", session.id, entry.turn_id),
-            role: session.kind.clone(),
-            advisor_role: session.advisor_role.clone(),
-            label: role_label(&session.kind, session.advisor_role.as_deref()).into(),
+            role: session.kind,
+            advisor_role: session.advisor_role,
+            label: role_label(
+                session.kind.as_str(),
+                session.advisor_role.map(AdvisorRole::as_str),
+            )
+            .into(),
             agent_id: format!("{role_key}:{}", profile.profile_id),
             agent_name: profile.model.clone(),
             avatar_seed: profile.profile_id.clone(),
-            status: if entry.failed || previous.is_some_and(|previous| previous.status == "failed")
+            status: if entry.failed
+                || previous
+                    .is_some_and(|previous| previous.status == TimelineActivityStatus::Failed)
             {
-                "failed"
+                TimelineActivityStatus::Failed
             } else if live {
-                "running"
+                TimelineActivityStatus::Running
             } else {
-                "completed"
+                TimelineActivityStatus::Completed
             },
             attempt: session.generation,
             started_at: previous.map_or(start.clone(), |previous| {
@@ -426,7 +447,7 @@ mod tests {
             },
             TimelineSession {
                 id: "root".into(),
-                kind: "root".into(),
+                kind: SessionKind::Root,
                 advisor_role: None,
                 generation: 1,
                 current: true,
@@ -470,7 +491,7 @@ mod tests {
             Some("live"),
         )
         .unwrap();
-        assert_eq!(running[0].status, "running");
+        assert_eq!(running[0].status, TimelineActivityStatus::Running);
         assert_eq!(running[0].finished_at, None);
     }
 

@@ -1,7 +1,6 @@
-import { useEffect, useState } from "react";
 import { CheckCircle2, Circle, CircleDashed, CircleX } from "lucide-react";
-import { TaskExecutionResponseSchema, type TaskExecution } from "../../contracts/task-execution.js";
-import { readJsonUnchecked } from "../../lib/api.js";
+import type { TaskExecutionResponse as TaskExecution } from "../../contracts/generated/TaskExecutionResponse.js";
+import { useTaskExecutionQuery } from "./lib/task-queries.js";
 import { Plan, PlanHeader, PlanTitle, PlanDescription, PlanAction, PlanTrigger, PlanContent } from "../../components/ai-elements/plan.js";
 import { Tool, ToolHeader, ToolContent, ToolInput, ToolOutput, type ToolPart } from "../../components/ai-elements/tool.js";
 import { Alert, AlertDescription } from "../../components/ui/alert.js";
@@ -12,27 +11,8 @@ const planStates = { pending: "Pending", in_progress: "In progress", completed: 
 const planIcons = { pending: Circle, in_progress: CircleDashed, completed: CheckCircle2, cancelled: CircleX };
 
 export function useTaskExecution(taskId: string) {
-  const [execution, setExecution] = useState<TaskExecution | null>(null);
-  const [error, setError] = useState("");
-  useEffect(() => {
-    let closed = false;
-    let reading = false;
-    setExecution(null);
-    setError("");
-    const read = async () => {
-      if (reading || closed) return;
-      reading = true;
-      try {
-        const value = TaskExecutionResponseSchema.parse(await readJsonUnchecked(`/api/tasks/${taskId}/execution`));
-        if (!closed) { setExecution(value); setError(""); }
-      } catch { if (!closed) setError("Agent activity is not available."); }
-      finally { reading = false; }
-    };
-    void read();
-    const timer = setInterval(() => void read(), 5000);
-    return () => { closed = true; clearInterval(timer); };
-  }, [taskId]);
-  return { execution, error };
+  const query = useTaskExecutionQuery(taskId);
+  return { execution: query.data ?? null, error: query.isError ? "Agent activity is not available." : "" };
 }
 
 export function RootPlan({ execution }: { execution: TaskExecution | null }) {

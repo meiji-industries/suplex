@@ -5,7 +5,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { TaskSchema, type Task } from "../src/frontend/contracts/tasks.js";
 import { ServerStateProvider, useSignOut } from "../src/frontend/shell/server-state.js";
-import { TaskDataProvider, taskListKey, updateTaskCache, useTaskAgents, useTaskData } from "../src/frontend/features/tasks/task-data.js";
+import { TaskDataProvider, taskCostsKey, taskListKey, updateTaskCache, useTaskAgents, useTaskCosts, useTaskData } from "../src/frontend/features/tasks/task-data.js";
 
 const scope = vi.hoisted(() => ({ userId: "user-a" as string | undefined, companyId: "company-a" }));
 vi.mock("../src/frontend/shell/company-context.js", () => ({ useCompanyContext: () => ({ user: scope.userId ? { id: scope.userId } : undefined, currentCompany: { id: scope.companyId } }) }));
@@ -54,7 +54,7 @@ afterEach(async () => {
 });
 
 test("staggered consumers share one list timer and one agent batch, and hidden intervals stop", async () => {
-  const fetch = vi.fn(async (url: string) => new Response(JSON.stringify({ tasks: url.includes("task-agents") ? [] : [task("a"), task("b"), task("c"), task("d"), task("e")] })));
+  const fetch = vi.fn(async (url: string) => new Response(JSON.stringify({ tasks: (url.includes("task-agents") || url.includes("task-costs")) ? [] : [task("a"), task("b"), task("c"), task("d"), task("e")] })));
   vi.stubGlobal("fetch", fetch);
   const render = (second: boolean) => root.render(<QueryClientProvider client={client}><TaskDataProvider><Consumer agents />{second ? <Consumer /> : null}</TaskDataProvider></QueryClientProvider>);
   await act(async () => render(false));
@@ -94,7 +94,7 @@ test("a mutation response survives an older list response and updates, adds, and
 
 test("company and user changes isolate private data and cancel late responses", async () => {
   let release: ((response: Response) => void) | undefined;
-  vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>(resolve => { release = resolve; })));
+  vi.stubGlobal("fetch", vi.fn((url: string) => url.endsWith("/task-costs") ? Promise.resolve(new Response(JSON.stringify({ tasks: [] }))) : new Promise<Response>(resolve => { release = resolve; })));
   let scopedClient: QueryClient | undefined;
   function ClientCapture() { scopedClient = useQueryClient(); return <Consumer />; }
   const render = () => root.render(<ServerStateProvider><TaskDataProvider><ClientCapture /></TaskDataProvider></ServerStateProvider>);
@@ -187,4 +187,78 @@ test.each([
   await act(async () => vi.advanceTimersByTimeAsync(2500));
   expect(fetch.mock.calls.filter(([url]) => url.includes("/tasks?"))).toHaveLength(expected);
   expect(scopedClient?.getQueryState(taskListKey("user-a", "company-a"))).toMatchObject({ status: "error", fetchStatus: "idle" });
+});
+
+function Costs() {
+  const costs = useTaskCosts(scope.companyId);
+  return <span>{[...costs.values()].map(task => `${task.id}:${task.cost}`).join(",")}</span>;
+}
+
+test("staggered cost consumers share one timer, stable map, and visibility refresh", async () => {
+  const fetch = vi.fn(async (url: string) => new Response(JSON.stringify({ tasks: url.endsWith("/task-costs") ? [{ id: "a", cost: 2, partial: false, subsidized: false, unpriced: false }] : [] })));
+  vi.stubGlobal("fetch", fetch);
+  let map: ReturnType<typeof useTaskCosts> | undefined;
+  function Capture() { map = useTaskCosts(scope.companyId); return <Costs />; }
+  const render = (second: boolean) => root.render(<QueryClientProvider client={client}><TaskDataProvider><Capture />{second ? <Costs /> : null}</TaskDataProvider></QueryClientProvider>);
+  await act(async () => render(false));
+  const reads = () => fetch.mock.calls.filter(([url]) => url.endsWith("/task-costs")).length;
+  expect(reads()).toBe(1);
+  expect(container.textContent).toBe("a:2");
+  const firstMap = map;
+  await act(async () => vi.advanceTimersByTimeAsync(10_000));
+  await act(async () => render(true));
+  expect(map).toBe(firstMap);
+  await act(async () => vi.advanceTimersByTimeAsync(20_000));
+  expect(reads()).toBe(2);
+  await act(async () => focusManager.setFocused(false));
+  await act(async () => vi.advanceTimersByTimeAsync(60_000));
+  expect(reads()).toBe(2);
+  await act(async () => focusManager.setFocused(true));
+  expect(reads()).toBe(3);
+});
+
+test.each(["/admin", "/profile", "/companies/company-a/settings", "/projects", "/health", "/", "/templates", "/onboarding"])("%s does not poll costs", async path => {
+  window.history.replaceState({}, "", path);
+  const fetch = vi.fn(async (_url: string) => new Response(JSON.stringify({ tasks: [] })));
+  vi.stubGlobal("fetch", fetch);
+  await act(async () => root.render(<QueryClientProvider client={client}><TaskDataProvider><Costs /></TaskDataProvider></QueryClientProvider>));
+  await act(async () => vi.advanceTimersByTimeAsync(60_000));
+  expect(fetch.mock.calls.filter(([url]) => url.endsWith("/task-costs"))).toHaveLength(0);
+});
+
+test("costs cancel across company changes and unmount, and late responses remain isolated", async () => {
+  const pending: Array<{ signal: AbortSignal | null | undefined; resolve: (value: Response) => void }> = [];
+  vi.stubGlobal("fetch", vi.fn((url: string, options: RequestInit) => url.endsWith("/task-costs")
+    ? new Promise<Response>(resolve => pending.push({ signal: options.signal, resolve }))
+    : Promise.resolve(new Response(JSON.stringify({ tasks: [] })))));
+  const render = (mounted = true) => root.render(<QueryClientProvider client={client}>{mounted ? <TaskDataProvider><Costs /></TaskDataProvider> : null}</QueryClientProvider>);
+  await act(async () => render());
+  await act(async () => vi.advanceTimersByTimeAsync(60_000));
+  expect(pending).toHaveLength(1);
+  scope.companyId = "company-b";
+  await act(async () => render());
+  expect(pending[0]?.signal?.aborted).toBe(true);
+  const response = (id: string) => new Response(JSON.stringify({ tasks: [{ id, cost: 3, partial: false, subsidized: false, unpriced: false }] }));
+  await act(async () => pending[1]?.resolve(response("B")));
+  await act(async () => pending[0]?.resolve(response("A")));
+  expect(container.textContent).toBe("B:3");
+  expect(client.getQueryData(taskCostsKey("user-a", "company-a"))).toBeUndefined();
+  await act(async () => vi.advanceTimersByTimeAsync(30_000));
+  await act(async () => render(false));
+  expect(pending[2]?.signal?.aborted).toBe(true);
+});
+
+test("costs disappear after an error and return on recovery", async () => {
+  let failed = false;
+  vi.stubGlobal("fetch", vi.fn(async (url: string) => url.endsWith("/task-costs")
+    ? failed ? new Response('{"error":"No costs"}', { status: 500 }) : new Response(JSON.stringify({ tasks: [{ id: "a", cost: 1, partial: false, subsidized: false, unpriced: false }] }))
+    : new Response('{"tasks":[]}')));
+  await act(async () => root.render(<QueryClientProvider client={client}><TaskDataProvider><Costs /></TaskDataProvider></QueryClientProvider>));
+  expect(container.textContent).toBe("a:1");
+  failed = true;
+  await act(async () => vi.advanceTimersByTimeAsync(30_000));
+  expect(container.textContent).toBe("");
+  failed = false;
+  await act(async () => vi.advanceTimersByTimeAsync(30_000));
+  expect(container.textContent).toBe("a:1");
 });

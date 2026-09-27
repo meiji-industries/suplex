@@ -12,7 +12,7 @@ import { TaskDataProvider } from "../src/frontend/features/tasks/task-data.js";
 import type { Task } from "../src/frontend/contracts/tasks.js";
 
 const api = vi.hoisted(() => ({ readJsonUnchecked: vi.fn(), withCompany: (path: string) => path }));
-vi.mock("../src/frontend/lib/api.js", () => api);
+vi.mock("../src/frontend/lib/api.js", async importOriginal => ({ ...(await importOriginal<Record<string, unknown>>()), ...api }));
 vi.mock("../src/frontend/shell/company-context.js", () => ({ useCompanyContext: () => ({ user: { id: "user-1" }, currentCompany: { id: "company-1", status: "active" } }) }));
 vi.mock("../src/frontend/shell/application-frame.js", () => ({ ApplicationFrame: ({ children }: { children: ReactNode }) => children }));
 vi.mock("../src/frontend/shell/global-new-task-dialog.js", () => ({ requestNewTask: vi.fn() }));
@@ -90,7 +90,7 @@ test.each(["visible", "hidden"] as const)("a %s initial load fetches once, hidde
 
 test("the board keeps queued and backlog tasks in separate columns and filters", async () => {
   const tasks = [task("task-1", "Repair the poller", "active"), task("task-2", "Plan the migration", "backlog"), task("task-3", "Ship after review", "queued")];
-  api.readJsonUnchecked.mockImplementation(async (path: string) => path.includes("/projects") ? { projects: [] } : { tasks });
+  api.readJsonUnchecked.mockImplementation(async (path: string) => path.includes("/projects") ? { projects: [] } : { tasks: path.endsWith("/task-costs") ? [] : tasks });
   const container = document.createElement("div");
   document.body.append(container);
   const root = createRoot(container);
@@ -129,7 +129,7 @@ test("the board keeps queued and backlog tasks in separate columns and filters",
 test("board cards label every Blocked by task and list rows omit it", async () => {
   const blocked = { ...task("task-3", "Ship the release", "backlog"), dependsOn: ["task-1", "task-2"], blockedBy: [{ id: "task-1", title: "Repair the poller", status: "active" as const }, { id: "task-2", title: "Plan the migration", status: "delivered" as const }] };
   const tasks = [task("task-1", "Repair the poller", "active"), blocked];
-  api.readJsonUnchecked.mockImplementation(async (path: string) => path.includes("/projects") ? { projects: [] } : { tasks });
+  api.readJsonUnchecked.mockImplementation(async (path: string) => path.includes("/projects") ? { projects: [] } : { tasks: path.endsWith("/task-costs") ? [] : tasks });
   for (const mode of ["board", "list"] as const) {
     const container = document.createElement("div");
     document.body.append(container);

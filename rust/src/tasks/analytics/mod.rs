@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 
 use crate::{
+    http::contracts::task_reads::{TaskCost, TaskCostsResponse},
     identity::companies,
     platform::database::{DatabaseResult, SuplexDatabase},
     tasks::response as task_response,
@@ -493,26 +494,37 @@ pub fn analytics(
 }
 
 /// The task-costs projection of `analytics`.
-pub fn task_costs(analytics: &Value) -> Value {
+pub fn task_costs(analytics: &Value) -> DatabaseResult<TaskCostsResponse> {
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct CostSource {
+        id: String,
+        usage: Vec<TaskUsage>,
+        sessions: u64,
+        observed_sessions: u64,
+        stale_sessions: u64,
+    }
+
     let tasks = analytics["tasks"]
         .as_array()
         .into_iter()
         .flatten()
-        .map(|task| {
-            let usage: Vec<TaskUsage> =
-                serde_json::from_value(task["usage"].clone()).unwrap_or_default();
-            let metrics = usage_metrics(&usage);
-            let count = |key: &str| task[key].as_u64().unwrap_or_default();
-            json!({
-                "id": task["id"], "cost": metrics.cost, "unpriced": metrics.unpriced_messages > 0,
-                "subsidized": metrics.subsidized,
-                "partial": metrics.unpriced_messages > 0 || count("staleSessions") > 0
-                    || count("observedSessions") < count("sessions")
-                    || usage.iter().any(|entry| entry.completed_at.is_none()),
+        .map(|task| -> DatabaseResult<TaskCost> {
+            let task: CostSource = serde_json::from_value(task.clone())?;
+            let metrics = usage_metrics(&task.usage);
+            Ok(TaskCost {
+                id: task.id,
+                cost: metrics.cost,
+                unpriced: metrics.unpriced_messages > 0,
+                subsidized: metrics.subsidized,
+                partial: metrics.unpriced_messages > 0
+                    || task.stale_sessions > 0
+                    || task.observed_sessions < task.sessions
+                    || task.usage.iter().any(|entry| entry.completed_at.is_none()),
             })
         })
-        .collect::<Vec<_>>();
-    json!({"tasks": tasks})
+        .collect::<DatabaseResult<Vec<_>>>()?;
+    Ok(TaskCostsResponse { tasks })
 }
 
 #[cfg(test)]
@@ -541,6 +553,30 @@ pub(crate) mod tests {
             },
             source: "steps".into(),
         }
+    }
+
+    #[test]
+    fn task_cost_projection_preserves_missing_usage_and_partial_observations() {
+        let source = |id: &str, usage: Vec<TaskUsage>, observed: u64, stale: u64| json!({"id": id, "usage": usage, "sessions": 1, "observedSessions": observed, "staleSessions": stale});
+        let input = json!({"tasks": [
+            source("empty", vec![], 0, 0),
+            source("priced", vec![entry("priced", 3.0)], 1, 0),
+            source("unpriced", vec![entry("unpriced", 0.0)], 1, 0),
+            source("stale", vec![entry("stale", 2.0)], 1, 1),
+            source("running", vec![TaskUsage { completed_at: None, ..entry("running", 1.0) }], 1, 0),
+            source("subsidized", vec![TaskUsage { subsidized: true, ..entry("subsidized", 2.0) }], 1, 0),
+        ]});
+        assert_eq!(
+            serde_json::to_value(task_costs(&input).unwrap()).unwrap(),
+            json!({"tasks": [
+                {"id":"empty","cost":null,"unpriced":false,"subsidized":false,"partial":true},
+                {"id":"priced","cost":3.0,"unpriced":false,"subsidized":false,"partial":false},
+                {"id":"unpriced","cost":null,"unpriced":true,"subsidized":false,"partial":true},
+                {"id":"stale","cost":2.0,"unpriced":false,"subsidized":false,"partial":true},
+                {"id":"running","cost":1.0,"unpriced":false,"subsidized":false,"partial":true},
+                {"id":"subsidized","cost":2.0,"unpriced":false,"subsidized":true,"partial":false},
+            ]})
+        );
     }
 
     #[test]

@@ -13,6 +13,34 @@ again. A successful native session is retained across restart. Failed setup
 is supplied to the Coordinator as repair work, with a path to full output.
 Setup does not inherit provider tokens or routing overrides.
 
+## Project and credential boundaries
+
+A company groups projects and controls application access. A project selects its
+repository, instructions, integrations, and permitted agent credentials. These
+boundaries organize client work; they do not create separate host users or
+sandbox the native tools.
+
+A profile identifies an agent provider, model, and optional dedicated login.
+The project's provider policy permits system logins and dedicated instances
+separately. For example, a project can allow one dedicated Claude instance while
+leaving its allowed system-provider list empty. This prevents Suplex from
+selecting the host's general provider login for that project. Dedicated instances
+support Claude Code; the same credential-directory isolation is not implemented
+for every provider. See [profile eligibility](../rust/src/profiles/agent_profiles.rs)
+and [task profile selection](../rust/src/tasks/commands.rs).
+
+Model authentication, Git transport, repository APIs, issue trackers, and MCP
+servers have separate access paths. A successful model sign-in does not prove
+that a task can push a branch or read a Jira issue. Environment-variable
+references keep integration token values out of saved task configuration, but
+do not establish host-level secret isolation. Provider sign-in also does not
+prove subscription entitlement or successful model inference.
+
+The paired-agent task policy is another boundary: it controls what an external
+caller can request when creating work. It does not confer the human operator's
+permissions or create a universal fence around manual repository actions.
+See [external agent authorization](agent-api.md).
+
 ## Shared verification resources
 
 macOS and Linux need Python 3 with its standard `fcntl` module. Wrap every

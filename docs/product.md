@@ -1,86 +1,171 @@
 # Suplex product guide
 
-Suplex keeps repository work visible without requiring a second delivery process
-beside OpenCode, Git, and GitHub. The task is the place to describe the objective,
-observe work, answer questions, and inspect the delivery result.
+Start here for product research, requirements discovery, and landing-page copy.
+This guide translates Adam's walkthrough into claims checked against this
+checkout on 2026-09-27. Implementation links establish what the code supports;
+they do not establish successful live operation, availability in a released
+build, or a provider's subscription entitlement.
 
-## One continuing Root
+## Audience and problem
 
-Root plans and reviews within one native conversation. It delegates a scoped
-Worker when edits are necessary. Worker returns its native result to Root,
-which inspects the change and decides what comes next. Repairs follow this same
-path. There is no separate planner, reviewer, or integrator relay.
+Suplex is an orchestration layer for software-development professionals and solo
+agency owners using their existing coding agents and developer tools. It reduces
+the work of copying plans between agents, brokering revisions, and shepherding
+branches and checks through delivery.
 
-Suplex owns mechanical delivery operations. Root requests them with the current
-commit where appropriate. GitHub owns pull request and merge policy. A matching
-external push, pull request, or merge can satisfy the task without an extra
-Suplex receipt.
+A Coordinator investigates and specifies a task, delegates implementation to a
+Worker, reviews the result, and requests delivery operations. Projects organize
+repositories and configuration. Task worktrees let independent tasks progress
+in parallel. The current trust boundary is owner-controlled repositories and
+trusted local tools. Project organization and credential policies do not provide
+host-level isolation between clients.
 
-## Workflows
+Positioning to test: **Your agents do the work. Suplex runs the workflow.**
 
-Every task selects one workflow at creation. Standard is the default and keeps the
-Coordinator-plans, Worker-builds, Coordinator-reviews sequence above. Direct build
-lets Worker choose the approach from your instructions; Coordinator still reviews.
-Second opinion adds a read-only Reviewer that must approve the complete current
-change before delivery. Combined planning asks Plan A and Plan B for separate
-plans, which Coordinator combines before Worker builds. Pull request repair takes
-an existing open pull request: Rater scores it from 1 to 10 with a surgical repair
-plan, Worker repairs it, and a fresh Rater scores the result until a valid rating
-is at least 9 with no blocking findings. Suplex then pushes, waits for the checks,
-and merges the same pull request when GitHub reports it ready. The 9 threshold is
-fixed and cannot be waived.
+## Product direction: a copilot that steers
 
-Advisors are read-only sessions that reuse Coordinator profiles. The task captures
-each Advisor profile at creation. Review history in the task shows every Reviewer
-or Rater round with its reviewed revision, including invalid reports.
+[Engineering principles](architecture/principles.md) make this direction
+concrete for guards, blockers, recovery, and human escalation.
 
-## Task controls
+People remain in control. They can edit code, change a branch, adjust the work,
+or merge a pull request themselves. Suplex should observe what happened,
+preserve their work, and continue from the actual state. It should not demand
+that they repeat an action through Suplex or repair its bookkeeping first.
 
-**Start immediately** starts Root when the task is created. Otherwise, the task
-stays in Backlog until you select **Start task**. Backlog tasks support direct
-title and description edits. Active tasks accept notes to Root.
+A delivery target expresses the requested outcome for agent work. It is not a
+fence around what the user may do. Do not turn target selection into new refusal
+rules or prevent manual intervention because it differs from a saved target.
+When intent changes, adapt the work instead of forcing the original sequence.
 
-A task shows Active while Suplex pursues its objective, Answer necessary when
-it needs your input, and Delivered when its delivery target is reached.
-Cancellation preserves the worktree and published GitHub state. Archive controls
-keep finished or deferred work out of the normal list.
+The product value is less coordination work with the tools people already use.
+Logs, tests, reviews, and screenshots help people understand the work. An
+"evidence packet" or client receipt is not a product focus, a required output,
+or a launch prerequisite. Do not infer a receipt UI, mandatory export, or
+"reviewed before anything ships" promise from internal verification records.
 
-Task detail shows the objective, selected profiles, branch, native sessions,
-turn observations, questions, images, and delivery result. A live Herdr display
-attaches to the same session that owns the work. Display failures do not stop it.
+The workflow checks described below record current implementation behavior,
+not instructions to add more enforcement. Authentication, project permissions,
+and safeguards against destructive actions retain their specific purposes;
+they do not justify turning ordinary development changes into approval gates.
 
-## Configuration
+## Capabilities and limits
 
-Projects choose repository paths, worktree roots, verification commands,
-delivery targets, and Root and Worker defaults. Templates reuse task intent.
-An agent profile picks one of the four agent tools and one of its models.
-OpenCode models name their vendor, as in `openai/gpt-5.6-sol`.
+The rows below describe implemented support. Limits and publication checks are
+part of each claim, not optional qualifications.
 
-Claude Code profiles can use the global configuration or a local Suplex-owned
-instance. A local instance has its own sign-in. The provider page shows the
-exact `CLAUDE_CONFIG_DIR='<directory>' claude auth login` command for it.
+| Capability | Current support and limits | Implementation |
+| --- | --- | --- |
+| Existing agent tools | OpenCode, Claude Code, Devin CLI, and Codex CLI have native runtimes. Other tools need a runtime integration; compatibility is not automatic. | [Runtime selection](../rust/src/runtimes/task_harness_registry.rs) |
+| Existing accounts and subscriptions | Agent tools own model authentication. Suplex can use their configured access, but executable discovery and sign-in checks do not prove model access or subscription eligibility. Verify each advertised provider/account combination live. | [Provider configuration](../rust/src/profiles) |
+| Project credential policies | Projects can allow or deny system provider logins and dedicated login instances. Dedicated instances currently support Claude Code only. Integration secrets use environment-variable references. This is not an OS sandbox or a general API-key vault. | [Profile eligibility](../rust/src/profiles/agent_profiles.rs), [login instances](../rust/src/profiles/provider_instances.rs), [project execution](project-execution.md) |
+| Multiple projects | Projects hold repository, agent, execution, and integration settings within companies. Tasks capture their configuration. | [Project service](../rust/src/projects/service.rs), [task creation](../rust/src/tasks/creation.rs) |
+| Specification, implementation, and review | Coordinator plans and reviews; Worker edits and verifies. Roles can use different profiles, matching the senior/junior handoff in the brief without promising a model's seniority. | [Task controller](../rust/src/coordination/root_controller.rs) |
+| Reusable task templates | Project-scoped templates save task configuration and can be created from an existing task. | [Templates and tests](../rust/src/tasks/templates.rs), [HTTP routes](../rust/src/http/routes/task_templates.rs) |
+| Customizable workflows | Named, editable presets select a built-in workflow and agent, delivery, and check defaults. Project instructions and task descriptions customize the work. There is no arbitrary step-graph editor. | [Workflow presets](../rust/src/coordination/workflow_records.rs), [workflow catalog](../rust/src/coordination/workflows.rs) |
+| GitHub triggers | Enabled project rules poll labelled open pull requests and create tasks using a selected workflow. This is a specific PR-label trigger, not a general GitHub event or Actions workflow system. | [Trigger implementation and tests](../rust/src/integrations/github_triggers.rs), [HTTP routes](../rust/src/http/routes/github_triggers.rs) |
+| Parallel work | Tasks use separate Git worktrees and branches. Combined planning can run Plan A and Plan B independently; other delegated work uses the shared Worker/Advisor slot. Worktrees separate files, not host credentials or shared services. | [Worktrees and tests](../rust/src/tasks/worktree.rs), [task controller](../rust/src/coordination/root_controller.rs) |
+| Dependency-aware task chains | Queued tasks wait for prerequisite tasks or GitHub pull requests. Backlog tasks do not start automatically. Pull request prerequisites require a merge. | [Task dependencies](../rust/src/tasks/dependencies.rs), [PR dependencies](../rust/src/tasks/pull_request_dependencies.rs), [queue](../rust/src/tasks/commands.rs) |
+| Repository and delivery operations | Coordinator can request publication, observe checks, and pursue the selected delivery target. Agents can repair code and integration conflicts. Available targets depend on the repository host; see below. | [Delivery operations and tests](../rust/src/delivery/operations.rs) |
+| Paired bots | A paired external agent such as Hermes can create and follow tasks within its grants. A bot can supply meeting notes as task input; Suplex does not implement meeting capture or transcription. | [Agent routes](../rust/src/http/routes/agent_api.rs), [agent authorization and tests](../rust/src/tasks/agent_api.rs) |
 
-Each agent tool owns its own model authentication. Suplex's provider page reports
-configuration and sign-in, not a successful inference request. GitHub operations
-use the host's existing GitHub CLI authentication.
+## Integrations
 
-External agents can create tasks within explicitly granted project scopes.
-Passkey users manage companies, projects, and work through the web application.
+| Integration | Implemented scope | Boundary |
+| --- | --- | --- |
+| Git | Repository and task worktree operations. | Git transport authentication is separate from issue-tracker and repository API credentials. Validate clone and push with the actual host account. |
+| GitHub | Repository onboarding, issues, pull requests, check observation, delivery, and PR-label triggers. | Repository permissions, required checks, reviews, and merge policy still apply. See [GitHub delivery](../rust/src/integrations/github_delivery.rs). |
+| Bitbucket Cloud | Repository/PR API access and delivery to a local worktree, remote branch, or draft PR. | Automatic ready and merged targets are unsupported. See [Bitbucket integration](../rust/src/integrations/bitbucket.rs) and [target support](../rust/src/tasks/control.rs). |
+| Jira Cloud | A project can select Jira independently of its repository host, read issue context, and publish task artifacts/comments. | Configuration targets an Atlassian Cloud site and project. Publication does not change issue status, Sprint, or Fix Version. See [issue tracker](../rust/src/integrations/issue_tracker.rs) and [issue publication](../rust/src/delivery/issue_evidence.rs). |
+| MCP clients connecting to Suplex | HTTP MCP with approved project access and an advanced local stdio bridge expose task tools. | MCP task tools do not expose runtime delivery/merge commands or human answers. See [connection guide](agent-mcp.md) and [route implementation](../rust/src/http/routes/mcp.rs). |
+| Project MCP tools for agents | Project configuration grants exact tools by role and resolves credential references. | This project-managed configuration currently supports Claude Code agents only. It is distinct from MCP settings inherited by other native providers. See [project execution](project-execution.md) and [role grants](../rust/src/runtimes/project_mcp.rs). |
+| Linear | No native Linear connection is implemented in the current project integration contract. | An independently configured tool may provide access, but that is not a verified Suplex integration. See [connection contract](../src/frontend/contracts/project-integration.ts). |
+| Herdr | Displays native sessions or provider output through task panes. | Pane availability is not task completion or authorization. The spelling is **Herdr**. See [integration guide](herdr-integration.md). |
 
-## Recovery and boundaries
+## Workflows and delivery
 
-Suplex observes the current worktree and external delivery state after a restart.
-It preserves out-of-band work and does not repeat admitted prompts. Unavailable
-evidence remains unknown until Suplex can read it again.
+The five built-in workflows are:
 
-A hard OpenCode crash during a tool call can leave a command active outside
-the server process group. Suplex then retains the assignment and asks you to
-stop those commands before confirming cleanup. This is an execution-safety
-boundary, not a second progress record that GitHub must satisfy.
+- **Standard:** Coordinator plans, Worker implements, Coordinator reviews.
+- **Direct build:** Worker chooses the approach from the task instructions;
+  Coordinator reviews the result.
+- **Second opinion:** a read-only Reviewer checks the current change before delivery.
+- **Combined planning:** Plan A and Plan B produce independent plans; Coordinator
+  combines them before implementation.
+- **Pull request repair:** a Rater reviews an existing open PR, Worker repairs it,
+  and rating repeats until the current change earns at least 9 with no blocking
+  findings. Delivery then pursues merging that PR subject to GitHub checks and policy.
 
-Root's read-only policy and Worker's mutation restrictions are native tool
-policies. They do not isolate hostile code. The current operating boundary is
-owner-controlled repositories and trusted local tools.
+Named presets reuse these sequences; they do not introduce new step types.
+See [workflows and templates](architecture/workflows-and-templates.md) for
+how presets, project templates, and intake differ, and
+[parallel work and dependencies](architecture/parallel-work-and-dependencies.md)
+for worktree isolation and prerequisite semantics.
+The code and wire fields call Coordinator `root`. That is an implementation name
+for the same role, not another agent. Advisors are read-only. Individual Advisors share the delegated slot with
+Worker; Combined planning reserves separate Plan A and Plan B slots.
 
-See the [README](../README.md) for setup and operations, [CONTEXT.md](../CONTEXT.md)
-for terminology, and [interface principles](interface-principles.md) for UI rules.
+Delivery targets are local worktree, remote branch, draft PR, ready PR, and
+merged PR. GitHub supports all five; Bitbucket supports the first three. A
+completed task means its selected target was reached, which need not mean a
+production deployment. Suplex observes CI and requests delivery operations;
+project automation owns any deployment triggered by those operations.
+
+People can intervene directly in Git and the repository host. Suplex observes
+that work rather than requiring every change to pass through its own commands.
+For operations Suplex performs, the current implementation checks workflow
+reviews and configured verification; the repository host applies its own policy.
+These checks do not establish a product promise that nothing can ship without
+Suplex's approval. A specific unresolved decision can require a human answer.
+The separate paired-agent API's authorization exchange is documented in
+[the agent API guide](agent-api.md).
+
+Restart recovery reads native sessions and current Git/provider state. A missing
+Herdr pane does not block task progress. Some uncertain execution after a hard
+crash requires explicit cleanup confirmation. See [recovery](recovery-hardening.md).
+Checks, review records, command output, and optional screenshots remain useful
+verification artifacts. Their presence is not a second source of truth for Git
+or provider state.
+
+Usage and outcome reporting is described in [task analytics](analytics.md).
+
+## Before publishing a claim
+
+- Confirm the target release contains the linked implementation. This is a
+  source-checkout guide, not a release certification.
+- Verify the advertised provider, model, and subscription or API account with a
+  real authorized task. Configuration and login detection are insufficient.
+- For each integration, verify the required reads and writes with the intended
+  credentials. Check published artifacts from a reviewer's account.
+- Demonstrate the advertised delivery target, including CI failures, repair,
+  review requirements, and any human approval. Do not equate a merged PR with a
+  deployed application or promise automatic conflict resolution in every case.
+- Keep proposed capabilities separate from implemented claims. The walkthrough's
+  broad integration list, arbitrary workflows, and meeting-to-task story need the
+  qualifications above. This repository is `meiji-industries/suplex`; the unrelated
+  Python/Supabase/Reflex project is not a source for its features.
+
+## Market questions and positioning to test
+
+Potential themes are less agent babysitting, explicit planning and review,
+parallel tasks with prerequisites, existing tools and accounts, and project
+credential controls. Agency use must retain the owner-controlled trust boundary.
+
+- Which solo developers and small agencies already coordinate multiple coding agents?
+- How much time do they spend on handoffs, review, and CI/rebase cleanup?
+- Which integrations are must-have versus table stakes?
+- How do users want to pay when they already have agent subscriptions?
+- What credential-isolation or client-governance requirements block adoption?
+- Which delivery steps do buyers trust only after seeing a demo?
+
+## Reading the repository
+
+Use this guide for product claims, [CONTEXT.md](../CONTEXT.md) for terminology,
+and [README](../README.md) for setup. The [current architecture](architecture/README.md)
+records runtime and Herdr behavior. Follow implementation links to resolve
+behavior questions. [ADRs](adr/) explain retained engineering decisions; their
+dated observations are not current feature or release claims. Completed plans,
+superseded designs, and old reviews belong in Git history. The top-level
+[legacy prompt templates](../prompts/README.md) are not product requirements. New proposals must
+identify their unimplemented scope and must not be used as shipped requirements.
+A generated market or launch memo is a proposal, not an approved roadmap. It
+cannot establish launch dates, blockers, mandatory features, or product policy.

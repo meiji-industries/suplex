@@ -1,14 +1,20 @@
 # ADR 0008: External runtime authority
 
+Original decision amended 2026-09-27 to distinguish task intent from native
+execution and remove receipt language that could be read as a second authority.
+
 ## Decision
 
-Suplex owns durable task and workflow intent, exact bindings and coordinates,
-operation and turn ledgers, accepted artifacts, receipts, and audit.
+Suplex owns task intent, authorization, configuration, review records, native
+session assignment, and prompt dispatch ownership. Native agent runtimes own
+admitted messages, tool execution, and turn results. Git owns local repository
+facts. Repository providers own remote branches, pull requests, checks, and
+merges. Herdr owns display attachments and pane observations.
 
-Herdr owns current local pane, process, and agent status. GitHub owns current
-remote refs, pull requests, checks, and merge facts.
+UI and recovery combine Suplex-owned intent with observations from those
+systems. A saved observation can help locate work, but cannot replace an
+owner read when deciding whether an operation is safe. Display loss does not
+establish execution failure or prevent archive.
 
-Suplex UI and recovery derive projections from durable intent plus fresh
-observations. They do not maintain a second mutable runtime copy. External
-observations are persisted only as immutable evidence or receipts, never as a
-cache with command authority.
+See [the engineering rule](../../AGENTS.md#no-mirror-gates) and
+[recovery behavior](../recovery-hardening.md).

@@ -1,16 +1,19 @@
 # Herdr integration
 
-Suplex uses Herdr panes to display native OpenCode, Claude Code, and Devin CLI sessions. Herdr owns the pane and its current process observations. Suplex owns task intent, task status, and completion.
-
-A provider that only assigns its native session identity inside a turn cannot attach a display before work starts. For those providers Suplex runs one bounded no-op warm-up turn first so the pane can attach immediately; the warm-up runs at most once per session.
+Herdr displays task sessions and provides the interactive task Shell. Execution
+belongs to native provider runtimes. Read the [current architecture](architecture/herdr.md)
+for ownership, pane discovery, provider display differences, and recovery.
 
 ## Observe a task terminal
 
-The task terminal in Suplex opens a Herdr observer stream. Multiple browser views can observe the same pane at the same time. An observer cannot send input, resize the native terminal, scroll Herdr history, or take terminal control.
+Session views use read-only observer streams. They cannot send input, resize the
+native terminal, scroll Herdr history, or take control. The bridge follows the
+pane's dimensions and replaces its observer when the pane changes size or the
+observer exits. The separate Shell view accepts input, resize, and scroll.
 
-When a browser viewport changes size, Suplex replaces that browser's observer with one that uses the new dimensions. This replacement does not affect another observer or the native terminal. Use the task conversation to read historical work and use the native terminal to interact with the agent.
-
-Herdr can report an agent or pane as `idle`, `working`, `blocked`, `done`, or `unknown`. These states describe the pane and its detected agent. An idle or closed pane does not mean that the Suplex task is complete.
+Herdr pane states describe its detected process. An idle or closed pane does not
+mean the Suplex task is complete. Use the task conversation for agent instructions
+and historical work; a passive output viewer is not an interactive agent session.
 
 ## Check Herdr readiness
 

@@ -1,5 +1,10 @@
 # 8. Devin CLI provider
 
+This decision records dated provider probes. Consult the [product guide](../product.md)
+for current claims and the [native runtimes](../../rust/src/runtimes/) for the
+implemented invocation and recovery behavior. Probe results are not a current
+release or account verification.
+
 Date: 2026-09-12
 
 ## Status

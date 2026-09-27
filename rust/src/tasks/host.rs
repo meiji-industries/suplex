@@ -5,7 +5,7 @@ pub use crate::coordination::session_recovery::{recover_prepared_root, recover_p
 use crate::{
     coordination::{root_session_store, session_recovery::stop_retired_sessions},
     platform::database::{DatabaseResult, OpenMode, SuplexDatabase},
-    shared::time::{now_millis_rfc3339, rfc3339_millis},
+    shared::time::now_millis_rfc3339,
     tasks::{control::TaskStatus, limits::reconcile_limit_pause},
 };
 use chrono::Utc;
@@ -208,16 +208,7 @@ pub async fn sweep_task(
         inherited_environment,
     )
     .await;
-    let now = Utc::now();
-    let time = |seconds| rfc3339_millis(now + chrono::Duration::seconds(seconds));
-    database.connection().execute(
-        "UPDATE suplex_task_controls SET wake_at = CASE WHEN json_extract(workflow_state_json,'$.deliveryWait') IS NULL THEN ?1 ELSE ?2 END,updated_at = ?3 WHERE task_id = ?4 AND status IN ('active','waiting_human')",
-        rusqlite::params![time(15), time(30), time(0), task_id],
-    )?;
-    database.connection().execute(
-        "UPDATE suplex_task_controls SET wake_at = ?1 WHERE task_id = ?2 AND status NOT IN ('active','waiting_human') AND EXISTS (SELECT 1 FROM suplex_task_sessions s WHERE s.task_id = ?2 AND s.stopped_at IS NULL AND (s.stop_requested_at IS NOT NULL OR suplex_task_controls.status = 'delivered'))",
-        rusqlite::params![time(15), task_id],
-    )?;
+    super::repository::schedule_next_sweep(&database, task_id, Utc::now())?;
     swept
 }
 

@@ -687,7 +687,13 @@ mod tests {
                 "io.modelcontextprotocol/clientInfo":{"name":"claude-code","version":"2.1.283"},
                 "io.modelcontextprotocol/clientCapabilities":{}
         }}})).await;
-        assert_eq!(discover["error"]["code"], -32022);
+        assert_eq!(
+            discover,
+            json!({"jsonrpc":"2.0","id":"server-discover-probe-1","error":{
+                "code":-32022,"message":"Unsupported protocol version",
+                "data":{"requested":"2026-07-28","supported":["2024-11-05","2025-03-26","2025-06-18","2025-11-25"]}
+            }})
+        );
         let initialized = exchange(&mut writer, &mut reader, json!({
             "jsonrpc":"2.0","id":1,"method":"initialize","params":{
                 "protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"probe","version":"1"}

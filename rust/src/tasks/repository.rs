@@ -422,6 +422,26 @@ pub(crate) fn reconcile_dependency_release(
     Ok(false)
 }
 
+/// Observe an active or waiting task again in 15 seconds (30 during a delivery
+/// wait), and a finished task with a pending session stop in 15 seconds
+/// without touching its user-visible `updated_at`.
+pub(crate) fn schedule_next_sweep(
+    database: &SuplexDatabase,
+    task_id: &str,
+    now: DateTime<Utc>,
+) -> DatabaseResult<()> {
+    let time = |seconds| rfc3339_millis(now + chrono::Duration::seconds(seconds));
+    database.connection().execute(
+        "UPDATE suplex_task_controls SET wake_at = CASE WHEN json_extract(workflow_state_json,'$.deliveryWait') IS NULL THEN ?1 ELSE ?2 END,updated_at = ?3 WHERE task_id = ?4 AND status IN ('active','waiting_human')",
+        params![time(15), time(30), time(0), task_id],
+    )?;
+    database.connection().execute(
+        "UPDATE suplex_task_controls SET wake_at = ?1 WHERE task_id = ?2 AND status NOT IN ('active','waiting_human') AND EXISTS (SELECT 1 FROM suplex_task_sessions s WHERE s.task_id = ?2 AND s.stopped_at IS NULL AND (s.stop_requested_at IS NOT NULL OR suplex_task_controls.status = 'delivered'))",
+        params![time(15), task_id],
+    )?;
+    Ok(())
+}
+
 /// Return a queued task to the manual backlog. A manual backlog task is a no-op.
 pub fn disarm(
     database: &mut SuplexDatabase,

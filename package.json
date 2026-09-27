@@ -16,7 +16,7 @@
     "lint": "eslint .",
     "check": "pnpm run typecheck && pnpm run lint && pnpm run test && pnpm run test:rust",
     "check:full": "pnpm run check && pnpm run test:browser",
-    "test": "vitest run --project unit",
+    "test": "pnpm exec vite build && env -u RUSTUP_TOOLCHAIN cargo build --manifest-path rust/Cargo.toml --bin suplex --features github-test-endpoint && vitest run --project unit",
     "test:guarded": "env -u RUSTUP_TOOLCHAIN cargo run --quiet --manifest-path rust/Cargo.toml --example guarded-tests --",
     "test:real": "vitest run --project real",
     "test:packaged": "vitest run --project packaged",

@@ -1,6 +1,7 @@
 pub mod agent_api;
 pub mod analytics;
 pub mod archive;
+pub mod artifacts;
 pub mod commands;
 pub mod control;
 pub mod creation;

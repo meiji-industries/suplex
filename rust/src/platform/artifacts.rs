@@ -4,13 +4,14 @@ use crate::shared::hash::sha256_hex;
 use crate::shared::time::rfc3339_millis;
 use std::{
     fs,
-    io::Write,
+    io::{Read, Write},
     os::unix::fs::{DirBuilderExt, OpenOptionsExt},
     path::{Component, Path, PathBuf},
 };
 
 use chrono::{DateTime, Utc};
 use rusqlite::params;
+use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 use super::{
@@ -85,12 +86,17 @@ fn valid_company_id(company_id: &str) -> bool {
         && !company_id.is_empty()
 }
 
-fn validate(company_id: &str, kind: &str, input: &ArtifactInput<'_>) -> Result<(), PlatformError> {
+fn validate_with_limit(
+    company_id: &str,
+    kind: &str,
+    input: &ArtifactInput<'_>,
+    max_bytes: usize,
+) -> Result<(), PlatformError> {
     if kind.trim().is_empty()
         || input.mime_type.is_empty()
         || input.mime_type.contains(['\r', '\n'])
         || input.bytes.is_empty()
-        || input.bytes.len() > MAX_ARTIFACT_BYTES
+        || input.bytes.len() > max_bytes
         || input.filename.trim().is_empty()
         || Path::new(input.filename)
             .file_name()
@@ -136,7 +142,27 @@ pub fn put_in_transaction(
     input: &ArtifactInput<'_>,
     now: DateTime<Utc>,
 ) -> DatabaseResult<StoredArtifact> {
-    validate(company_id, kind, input)?;
+    put_in_transaction_with_limit(
+        database,
+        root,
+        company_id,
+        kind,
+        input,
+        now,
+        MAX_ARTIFACT_BYTES,
+    )
+}
+
+pub fn put_in_transaction_with_limit(
+    database: &SuplexDatabase,
+    root: &Path,
+    company_id: &str,
+    kind: &str,
+    input: &ArtifactInput<'_>,
+    now: DateTime<Utc>,
+    max_bytes: usize,
+) -> DatabaseResult<StoredArtifact> {
+    validate_with_limit(company_id, kind, input, max_bytes)?;
     let id = format!("artifact_{}", Uuid::new_v4().simple());
     let sha256 = sha256_hex(input.bytes);
     let storage_path = format!("{company_id}/objects/{}/{}.bin", &sha256[..2], id);
@@ -178,6 +204,35 @@ pub fn put_in_transaction(
 
 pub fn read(root: &Path, company_id: &str, storage_path: &str) -> DatabaseResult<Vec<u8>> {
     Ok(fs::read(checked(root, company_id, storage_path)?)?)
+}
+
+pub fn verified_path(
+    root: &Path,
+    company_id: &str,
+    storage_path: &str,
+    expected_sha256: &str,
+) -> DatabaseResult<Option<PathBuf>> {
+    let path = checked(root, company_id, storage_path)?;
+    let mut file = fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(&path)?;
+    if !file.metadata()?.is_file() {
+        return Err(PlatformError::invalid_artifact().into());
+    }
+    let mut digest = Sha256::new();
+    let mut buffer = [0_u8; 64 * 1024];
+    loop {
+        let read = file.read(&mut buffer)?;
+        if read == 0 {
+            break;
+        }
+        digest.update(&buffer[..read]);
+    }
+    if format!("{:x}", digest.finalize()) != expected_sha256 {
+        return Ok(None);
+    }
+    Ok(Some(path))
 }
 
 /// Best-effort cleanup only for files created by the failed transaction.
@@ -280,6 +335,45 @@ mod tests {
             0o700
         );
         assert!(read(&root, "company", "other/objects/aa/image.bin").is_err());
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn verified_path_rejects_changed_stored_bytes() {
+        let directory = std::env::temp_dir().join(format!("suplex-artifacts-{}", Uuid::new_v4()));
+        fs::create_dir_all(&directory).unwrap();
+        let root = directory.join("artifacts");
+        let mut database =
+            SuplexDatabase::open(&directory.join("suplex.sqlite"), OpenMode::Migrate).unwrap();
+        let now = Utc::now();
+        database.connection().execute(
+            "INSERT INTO suplex_companies (id, name, status, created_at) VALUES ('company', 'Company', 'active', ?1)",
+            [now.to_rfc3339()],
+        ).unwrap();
+        let stored = database
+            .transaction(true, |database| {
+                put_in_transaction(
+                    database,
+                    &root,
+                    "company",
+                    "delivery-image",
+                    &ArtifactInput {
+                        filename: "proof.png",
+                        mime_type: "image/png",
+                        bytes: b"original",
+                        task_id: "task_1",
+                    },
+                    now,
+                )
+            })
+            .unwrap();
+        let path = checked(&root, "company", &stored.storage_path).unwrap();
+        fs::write(path, b"changed").unwrap();
+        assert!(
+            verified_path(&root, "company", &stored.storage_path, &stored.sha256)
+                .unwrap()
+                .is_none()
+        );
         fs::remove_dir_all(directory).unwrap();
     }
 }

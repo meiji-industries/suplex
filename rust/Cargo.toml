@@ -9,7 +9,8 @@ github-test-endpoint = []
 
 [dependencies]
 axum = { version = "0.8", features = ["ws"] }
-tower-http = { version = "0.6", features = ["compression-gzip", "compression-br"] }
+tower-http = { version = "0.6", features = ["compression-gzip", "compression-br", "fs"] }
+mime = "0.3"
 base64 = "0.22"
 chrono = "0.4"
 garde = { version = "0.22", features = ["derive", "regex"] }

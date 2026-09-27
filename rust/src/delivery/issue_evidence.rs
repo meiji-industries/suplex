@@ -240,6 +240,18 @@ fn retain(
     mime_type: &str,
     bytes: &[u8],
 ) -> DatabaseResult<()> {
+    if let Some(media_type) = crate::tasks::artifacts::MediaType::from_mime_type(mime_type) {
+        crate::tasks::artifacts::store_media(
+            database,
+            root,
+            task_id,
+            name,
+            media_type,
+            bytes,
+            Utc::now(),
+        )?;
+        return Ok(());
+    }
     if retained(database, task_id, name)?
         .iter()
         .any(|item| item.sha256 == hash(bytes))
@@ -456,12 +468,10 @@ fn require_authorized(current: &TaskControlRow, head_sha: &str) -> DatabaseResul
 }
 
 fn screenshot_mime(extension: &str) -> Result<&'static str, Failure> {
-    match extension {
-        "png" => Ok("image/png"),
-        "jpg" | "jpeg" => Ok("image/jpeg"),
-        "webp" => Ok("image/webp"),
-        _ => Err("Evidence screenshots must be PNG, JPEG or WebP".into()),
-    }
+    crate::tasks::artifacts::MediaType::from_extension(extension)
+        .filter(|media_type| media_type.is_image())
+        .map(crate::tasks::artifacts::MediaType::mime_type)
+        .ok_or_else(|| "Evidence screenshots must be PNG, JPEG, WebP or GIF".into())
 }
 
 /// Replace this task's marked evidence block in the pull request body, or
@@ -552,10 +562,16 @@ impl Publisher<'_> {
         match read_generated(database_path, self.task_id, filename) {
             Ok(bytes) => Ok(bytes),
             Err(error) => {
-                let item = retained(&self.database(), self.task_id, retained_name)
+                let database = self.database();
+                let item = retained(&database, self.task_id, retained_name)
                     .map_err(|error| error.to_string())?
                     .into_iter()
                     .next()
+                    .or_else(|| {
+                        retained(&database, self.task_id, filename)
+                            .ok()
+                            .and_then(|items| items.into_iter().next())
+                    })
                     .ok_or(error)?;
                 Ok(retained_bytes(self.operations, &item)
                     .map_err(|_| "Stored screenshot is corrupt")?)
@@ -787,6 +803,55 @@ fn control_now(database: &SuplexDatabase, task_id: &str) -> DatabaseResult<TaskC
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn generated_collection_and_issue_retention_share_media_deduplication() {
+        let (directory, operations, task_id, head) =
+            crate::delivery::operations::tests::workflow_task("standard");
+        let generated = evidence_root(operations.database_path())
+            .join(&task_id)
+            .join("generated");
+        fs::create_dir_all(&generated).unwrap();
+        let screenshot = generated.join("shot.png");
+        let bytes = [0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a];
+        fs::write(&screenshot, bytes).unwrap();
+        fs::OpenOptions::new()
+            .write(true)
+            .open(&screenshot)
+            .unwrap()
+            .set_times(
+                fs::FileTimes::new()
+                    .set_modified(std::time::SystemTime::now() - std::time::Duration::from_secs(2)),
+            )
+            .unwrap();
+        let mut database =
+            SuplexDatabase::open(operations.database_path(), OpenMode::ReadWrite).unwrap();
+        let collected = crate::tasks::artifacts::collect_generated_media(
+            &mut database,
+            operations.database_path(),
+            operations.artifact_root(),
+            &task_id,
+        );
+        assert_eq!(collected.imported, 1);
+        retain(
+            &mut database,
+            operations.artifact_root(),
+            &task_id,
+            &format!("{head}-shot.png"),
+            "image/png",
+            &bytes,
+        )
+        .unwrap();
+        assert_eq!(
+            database.connection().query_row::<i64, _, _>(
+                "SELECT COUNT(*) FROM suplex_artifacts WHERE task_id = ?1 AND kind = 'delivery-image'",
+                [&task_id],
+                |row| row.get(0),
+            ).unwrap(),
+            1
+        );
+        fs::remove_dir_all(directory).unwrap();
+    }
 
     #[test]
     fn retained_manifest_survives_missing_generated_file_and_publication_keeps_captured_issue() {

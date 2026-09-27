@@ -10,6 +10,7 @@ import { CreateProjectDialog } from "./create-project-dialog.js";
 import { SettingRow, SettingsContent, SettingsLayout, SettingsSection } from "../settings/settings-layout.js";
 
 import { ProjectCards } from "./project-cards.js";
+import { RecentRepositories } from "./recent-repositories.js";
 import { LoadingState } from "../../components/app/loading-state.js";
 import { listProjects } from "./lib/project-api.js";
 
@@ -63,6 +64,7 @@ export function ProjectsView(): ReactElement {
               {!loadError && loadedCompanyId !== companyId ? <LoadingState /> : null}
               <ProjectCards projects={visibleProjects} agents={agents} />
               {!loading && loadedCompanyId === companyId && visibleProjects.length === 0 ? <SettingsSection><SettingRow label="No projects" description="Add a repository to create your first project."><Button variant="ghost" size="sm" disabled={currentCompany.status !== "active"} onClick={() => setCreateOpen(true)}><Plus />New project</Button></SettingRow></SettingsSection> : null}
+              <RecentRepositories companyId={companyId} projects={visibleProjects} onCreated={reload} />
             </div>
           ) : loading ? <LoadingState /> : <p className="text-xs text-muted-foreground">{companyError ? "Unable to load companies" : user?.role === "admin" ? "Add a company to begin." : "No company access. Ask an administrator to assign a company."}</p>}
           {loadError ? <div className="mt-3 text-xs text-destructive"><Alert variant="destructive"><AlertDescription>{loadError}</AlertDescription></Alert></div> : null}

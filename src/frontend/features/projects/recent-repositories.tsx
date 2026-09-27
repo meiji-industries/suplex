@@ -1,15 +1,24 @@
 import { useEffect, useState, type ReactNode } from "react";
 
 import { Alert, AlertDescription } from "../../components/ui/alert.js";
+import { SettingsDataTable, SettingsTableCell, SettingsTableGroup, SettingsTableRow, type SettingsTableColumn } from "../../components/app/settings-table.js";
 import { Button } from "../../components/ui/button.js";
 import { Spinner } from "../../components/ui/spinner.js";
 import type { RecentRepository } from "../../contracts/generated/RecentRepository.js";
 import { relativeTime, type ApiProject } from "../../shell/view-shared.js";
+import { SettingsSectionHeader } from "../settings/settings-layout.js";
 import { createProject, listRecentRepositories } from "./lib/project-api.js";
+import { Plus } from "lucide-react";
+
+const RECENT_REPOSITORY_COLUMNS: SettingsTableColumn[] = [
+  { key: "repository", label: "Repository", width: 145 },
+  { key: "pushed", label: "Pushed", width: 65 },
+  { key: "add", width: 100 },
+];
 
 function pushedAgo(timestamp: string): string {
   const days = Math.floor((Date.now() - Date.parse(timestamp)) / 86_400_000);
-  return days ? `${days}d ago` : relativeTime(timestamp);
+  return days ? `${days}d` : relativeTime(timestamp).replace(" ago", "");
 }
 
 /** GitHub repositories pushed to recently that are not projects yet, each with a one-click add. */
@@ -43,21 +52,23 @@ export function RecentRepositories({ companyId, projects, onCreated, fallback }:
   };
 
   return (
-    <section aria-label="Recent repositories" className="space-y-1">
-      <h3 className="text-xs font-medium text-muted-foreground">Recent repositories</h3>
+    <section aria-label="Recent repositories" className="mt-12 space-y-2">
+      <SettingsSectionHeader title="Add a recent repository" description="Add a GitHub repository that you recently used." />
       {error ? <Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert> : null}
-      <ul>
-        {suggestions.map(each => {
+      <SettingsDataTable label="Recent repositories" columns={RECENT_REPOSITORY_COLUMNS}>
+        <SettingsTableGroup label="Recent repositories" count={suggestions.length} columnCount={RECENT_REPOSITORY_COLUMNS.length}>
+          {suggestions.map(each => {
           const busy = adding.includes(each.repository);
           return (
-            <li key={each.repository} className="flex min-h-9 items-center gap-3 border-b">
-              <span className="min-w-0 flex-1 truncate text-sm">{each.repository}</span>
-              <span className="shrink-0 text-xs text-muted-foreground">{pushedAgo(each.pushedAt)}</span>
-              <Button size="xs" variant="outline" disabled={busy} onClick={() => void add(each)} aria-label={`Add ${each.repository}`}>{busy ? <Spinner /> : null}Add</Button>
-            </li>
+            <SettingsTableRow key={each.repository}>
+              <SettingsTableCell className="truncate font-medium">{each.repository}</SettingsTableCell>
+              <SettingsTableCell className="whitespace-nowrap text-xs text-muted-foreground">{pushedAgo(each.pushedAt)}</SettingsTableCell>
+              <SettingsTableCell className="text-right"><Button size="xs" variant="outline" disabled={busy} onClick={() => void add(each)} aria-label={`Add ${each.repository}`}>{busy ? <Spinner /> : <Plus />}Add Project</Button></SettingsTableCell>
+            </SettingsTableRow>
           );
-        })}
-      </ul>
+          })}
+        </SettingsTableGroup>
+      </SettingsDataTable>
     </section>
   );
 }

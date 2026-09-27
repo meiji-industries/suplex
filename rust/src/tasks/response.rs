@@ -110,7 +110,7 @@ fn workflow_state(row: &Row<'_>) -> DatabaseResult<PublicWorkflowState> {
     })
 }
 
-fn task_question(
+pub(crate) fn task_question(
     question: Option<String>,
     id: Option<String>,
     pause: Option<String>,

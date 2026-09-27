@@ -113,7 +113,7 @@ export const TaskQueueSchema = z.object({
 
 const TaskQuestionBaseSchema = z.object({ id, text: z.string(), options: HumanQuestionOptionsSchema.default([]), requiresCommandCleanup: z.boolean() });
 
-const TaskHumanQuestionSchema = z.discriminatedUnion("kind", [
+export const TaskHumanQuestionSchema = z.discriminatedUnion("kind", [
   TaskQuestionBaseSchema.extend({ kind: z.literal("question") }).strict(),
   TaskQuestionBaseSchema.extend({ kind: z.literal("task_limit"), pause: TaskLimitPauseSchema }).strict(),
 ]);

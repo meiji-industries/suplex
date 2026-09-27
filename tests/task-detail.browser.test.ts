@@ -1,5 +1,6 @@
 import { expect, test } from "vitest";
 import { nativeBrowser } from "./helpers/native-browser.js";
+import { seedTodayFixture } from "./helpers/today-fixture.js";
 
 const desktopViewport = 1280;
 
@@ -48,6 +49,36 @@ test("backlog details save through the interface", { timeout: 90_000 }, async ()
     await value.page.getByRole("button", { name: "Save task", exact: true }).click();
     await value.page.getByRole("heading", { name: "Updated title", level: 2, exact: true }).waitFor();
     expect((await value.api("GET", `/api/tasks/${task.id}`)).body).toMatchObject({ title: "Updated title", description: "Updated objective", status: "backlog", workflow: "direct_build" });
+    expect(value.errors).toEqual([]);
+  } finally { await value.close(); }
+});
+
+test("Today answers questions across company boundaries without leaving the view", { timeout: 90_000 }, async () => {
+  const value = await nativeBrowser(desktopViewport);
+  try {
+    const seeded = await seedTodayFixture(value);
+    await value.page.goto(`${value.base}/today`);
+    await value.page.getByRole("heading", { name: "Needs you", exact: true }).waitFor();
+    for (const task of seeded.questionTasks) {
+      const row = value.page.locator("article").filter({ hasText: task.title });
+      await row.getByLabel("Answer", { exact: true }).fill(`Use main for ${task.companyName}.`);
+      await row.getByRole("button", { name: "Answer and continue", exact: true }).click();
+      await expect.poll(() => {
+        const control = value.database.prepare("SELECT human_question_id FROM suplex_task_controls WHERE task_id = ?").get(task.id);
+        const turns = value.database.prepare("SELECT prompt_text FROM suplex_task_turns WHERE task_id = ?").all(task.id);
+        return {
+          originalQuestionGone: control?.human_question_id !== task.questionId,
+          answerPersisted: turns.some(turn => String(turn.prompt_text).includes(`Use main for ${task.companyName}.`)),
+        };
+      }, { timeout: 10_000 }).toEqual({ originalQuestionGone: true, answerPersisted: true });
+      expect(new URL(value.page.url()).pathname).toBe("/today");
+    }
+    for (const task of seeded.questionTasks) {
+      const control = value.database.prepare("SELECT human_question_id FROM suplex_task_controls WHERE task_id = ?").get(task.id);
+      expect(control?.human_question_id).not.toBe(task.questionId);
+      const turns = value.database.prepare("SELECT prompt_text FROM suplex_task_turns WHERE task_id = ?").all(task.id);
+      expect(turns.some(turn => String(turn.prompt_text).includes(`Use main for ${task.companyName}.`))).toBe(true);
+    }
     expect(value.errors).toEqual([]);
   } finally { await value.close(); }
 });

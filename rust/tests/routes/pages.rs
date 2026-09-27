@@ -80,10 +80,21 @@ mod tests {
             crate::identity::auth::development_sign_in(database, Utc::now()).unwrap()
         });
         let cookie = format!("sid_v1={}", signed_in.session_token);
+        state.with_database(|database| {
+            let time = crate::shared::time::now_millis_rfc3339();
+            database.connection().execute("INSERT INTO suplex_companies (id,name,status,created_at) VALUES ('company_today_root','Today company','active',?1)", [&time]).unwrap();
+            database.connection().execute("INSERT INTO suplex_projects (id,company_id,name,repository_path,worktree_root,repository_identity,base_branch,setup_command,verification_command,root_profile_id,worker_profile_id,agent_task_policy_json,created_at,updated_at) VALUES ('project_today_root','company_today_root','Today root','/tmp/today-root','/tmp/today-worktrees',NULL,'main','','','profile_native_root','profile_native_worker','{}',?1,?1)", [&time]).unwrap();
+        });
+        let mut authenticated_root_headers = loopback.clone();
+        authenticated_root_headers.insert(header::COOKIE, cookie.parse().unwrap());
+        let default_page = root(State(state.clone()), authenticated_root_headers).await;
+        assert_eq!(default_page.status(), StatusCode::FOUND);
+        assert_eq!(default_page.headers().get(header::LOCATION).unwrap(), "/today");
         // A database file cannot be an artifact directory. Broken optional host
         // resources must not redirect authenticated application pages to setup.
         let app = crate::http::router(state.clone().with_artifact_root(path.clone()));
         for uri in [
+            "/today",
             "/tasks",
             "/tasks/task-test",
             "/projects",

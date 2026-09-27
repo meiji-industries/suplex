@@ -30,9 +30,10 @@ const TriggerSettingsView = lazy(() => import("../features/settings/trigger-sett
 const OnboardingSettingsView = lazy(() => import("../features/settings/onboarding-settings.js").then(module => ({ default: module.OnboardingSettingsView })));
 const OnboardingView = lazy(() => import("../features/onboarding/onboarding-wizard.js").then(module => ({ default: module.OnboardingView })));
 const SetupView = lazy(() => import("../features/settings/setup.js").then(module => ({ default: module.SetupView })));
+const TodayView = lazy(() => import("../features/today/today.js").then(module => ({ default: module.TodayView })));
 
 export function activityShellKey(pathname: string): "activity" | undefined {
-  if (pathname === "/tasks" || pathname.startsWith("/tasks/") || pathname === "/board" || pathname.startsWith("/board/") || pathname === "/timeline" || pathname === "/analytics") return "activity";
+  if (pathname === "/today" || pathname === "/tasks" || pathname.startsWith("/tasks/") || pathname === "/board" || pathname.startsWith("/board/") || pathname === "/timeline" || pathname === "/analytics") return "activity";
   return undefined;
 }
 
@@ -57,6 +58,7 @@ function AppView(): ReactElement {
   if (/^\/projects\/[^/]+\/templates$/.test(pathname)) return <TaskTemplateSettings key={pathname} projectId={pathname.split("/")[2]!} />;
   if (/^\/projects\/[^/]+$/.test(pathname)) return <ProjectDetails projectId={pathname.split("/")[2]!} />;
   if (pathname === "/templates") return <TaskTemplateSettings />;
+  if (pathname === "/today") return <TodayView />;
   if (pathname === "/tasks" || pathname.startsWith("/tasks/")) return <TasksView />;
   if (pathname === "/board" || pathname.startsWith("/board/")) return <TasksView mode="board" />;
   if (pathname === "/timeline") return <TimelineView />;

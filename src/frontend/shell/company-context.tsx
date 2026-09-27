@@ -36,7 +36,7 @@ function sortCompanies(companies: ApiCompany[]): ApiCompany[] {
 function replaceCompanyLocation(companyId?: string, detailRoot?: string): void {
   const url = new URL(window.location.href);
   if (detailRoot) url.pathname = detailRoot;
-  if (companyId) url.searchParams.set("company", companyId);
+  if (companyId && url.pathname !== "/today") url.searchParams.set("company", companyId);
   else url.searchParams.delete("company");
   window.history.replaceState({}, "", `${url.pathname}${url.search}${url.hash}`);
 }

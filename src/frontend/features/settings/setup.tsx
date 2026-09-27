@@ -59,9 +59,9 @@ export function ProviderContextBar({ projectId, project, profiles, activeProfile
   </div>;
 }
 
-/** Setup never gates: Continue always leads to the task list. */
+/** Setup never gates: Continue always leads to Today. */
 export function SetupFooter({ status, refreshing, onCheckAgain }: { status: string; refreshing: boolean; onCheckAgain: () => void }): ReactElement {
-  return <footer className="flex flex-wrap items-center justify-between gap-4 border-t px-4 py-4 lg:px-6"><p role="status" className="flex max-w-xl items-center gap-2 text-xs text-muted-foreground">{refreshing ? <Spinner /> : null}{status}</p><div className="ml-auto flex items-center gap-2"><Button size="sm" variant="outline" aria-label="Check all tools again" onClick={onCheckAgain} disabled={refreshing}><RefreshCw />Check again</Button><Button size="sm" nativeButton={false} render={<a href="/tasks" />}>Continue<ArrowRight /></Button></div></footer>;
+  return <footer className="flex flex-wrap items-center justify-between gap-4 border-t px-4 py-4 lg:px-6"><p role="status" className="flex max-w-xl items-center gap-2 text-xs text-muted-foreground">{refreshing ? <Spinner /> : null}{status}</p><div className="ml-auto flex items-center gap-2"><Button size="sm" variant="outline" aria-label="Check all tools again" onClick={onCheckAgain} disabled={refreshing}><RefreshCw />Check again</Button><Button size="sm" nativeButton={false} render={<a href="/today" />}>Continue<ArrowRight /></Button></div></footer>;
 }
 
 export function SetupView(): ReactElement {

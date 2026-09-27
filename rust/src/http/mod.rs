@@ -54,6 +54,7 @@ pub mod routes {
     pub mod task_timeline;
     pub mod task_worktree;
     pub mod tasks;
+    pub mod today;
     pub mod update;
     pub mod workflows;
 }
@@ -189,6 +190,7 @@ pub fn router(state: AppState) -> Router {
         .merge(routes::task_worktree::router())
         .merge(routes::task_templates::router())
         .merge(routes::tasks::router())
+        .merge(routes::today::router())
         .merge(routes::workflows::router())
         .merge(routes::update::router())
         .route("/auth", get(auth_page))

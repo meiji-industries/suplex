@@ -72,6 +72,7 @@ pub fn application_page(view: &str) -> String {
         "projects" => "Projects",
         "project-prompts" => "Project prompts",
         "project-templates" => "Project templates",
+        "today" => "Today",
         "tasks" => "Tasks",
         "board" => "Board",
         "timeline" => "Timeline",

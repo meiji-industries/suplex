@@ -57,9 +57,9 @@ test("a project context names the project instead of offering a profile picker",
 test("Continue is always enabled and links to the task list", () => {
   for (const [status, refreshing] of [["All checks are healthy.", false], ["Suplex could not check the host. Select Check again.", false], ["2 checks need attention.", false], ["Suplex checks the host.", true]] as const) {
     const html = renderToStaticMarkup(createElement(SetupFooter, { status, refreshing, onCheckAgain: () => {} }));
-    expect(html).toContain('href="/tasks"');
+    expect(html).toContain('href="/today"');
     expect(html).toContain("Continue");
-    const anchor = /<a [^>]*href="\/tasks"[^>]*>/.exec(html)?.[0] ?? "";
+    const anchor = /<a [^>]*href="\/today"[^>]*>/.exec(html)?.[0] ?? "";
     expect(anchor).not.toMatch(/\sdisabled[=>]|aria-disabled/);
   }
 });

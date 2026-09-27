@@ -1,4 +1,4 @@
-import { ChartNoAxesGantt, Columns3, ClipboardList, EllipsisVertical, LogOut, Plus, Search, Settings, Shield, UserRound, type LucideIcon } from "lucide-react";
+import { CalendarDays, ChartNoAxesGantt, Columns3, ClipboardList, EllipsisVertical, LogOut, Plus, Search, Settings, Shield, UserRound, type LucideIcon } from "lucide-react";
 import { useEffect, useMemo, useState, type ReactElement } from "react";
 import { BarChart3 } from "lucide-react";
 
@@ -33,6 +33,7 @@ function MainNavigation({ close }: { close?: () => void }): ReactElement {
   const companyId = context?.currentCompany?.id;
   const items = useMemo<NavItem[]>(() => {
     return [
+      { href: "/today", label: "Today", icon: CalendarDays },
       { href: withCompany("/tasks", companyId), label: "Tasks", icon: ClipboardList },
       { href: withCompany("/board", companyId), label: "Board", icon: Columns3 },
       { href: withCompany("/timeline", companyId), label: "Timeline", icon: ChartNoAxesGantt },
@@ -58,6 +59,7 @@ function NavigationSearch({ close }: { close?: () => void }): ReactElement {
   const [query, setQuery] = useState("");
   const companyId = context?.currentCompany?.id;
   const items: NavItem[] = [
+    { href: "/today", label: "Today", icon: CalendarDays },
     { href: withCompany("/timeline", companyId), label: "Timeline", icon: ChartNoAxesGantt },
     { href: withCompany("/analytics", companyId), label: "Analytics", icon: BarChart3 },
     { href: withCompany("/tasks", companyId), label: "Tasks", icon: ClipboardList }, { href: withCompany("/board", companyId), label: "Board", icon: Columns3 }, { href: withCompany("/health", companyId), label: "Host health", icon: Shield },
@@ -68,7 +70,7 @@ function NavigationSearch({ close }: { close?: () => void }): ReactElement {
     window.addEventListener("suplex:command-menu", openMenu);
     return () => window.removeEventListener("suplex:command-menu", openMenu);
   }, []);
-  return <><Dialog open={open} onOpenChange={setOpen}><DialogContent><DialogHeader><DialogTitle>Command menu</DialogTitle></DialogHeader><Input autoFocus aria-label="Search Suplex" placeholder="Search the views" value={query} onChange={(event) => setQuery(event.target.value)} /><div className="space-y-1"><button type="button" className={buttonVariants({ variant: "ghost", className: "w-full justify-start" })} onClick={() => { setOpen(false); close?.(); requestNewTask(); }}><Plus />New task <kbd className="ml-auto text-xs text-muted-foreground">C</kbd></button>{visible.map(({ href, label, icon: Icon }) => <a className={buttonVariants({ variant: "ghost", className: "w-full justify-start" })} href={href} onClick={() => { setOpen(false); close?.(); }} key={href}><Icon />{label}</a>)}</div><p className="text-xs text-muted-foreground">⌘K or / search. G then T or B navigates. C starts a new task.</p></DialogContent></Dialog></>;
+  return <><Dialog open={open} onOpenChange={setOpen}><DialogContent><DialogHeader><DialogTitle>Command menu</DialogTitle></DialogHeader><Input autoFocus aria-label="Search Suplex" placeholder="Search the views" value={query} onChange={(event) => setQuery(event.target.value)} /><div className="space-y-1"><button type="button" className={buttonVariants({ variant: "ghost", className: "w-full justify-start" })} onClick={() => { setOpen(false); close?.(); requestNewTask(); }}><Plus />New task <kbd className="ml-auto text-xs text-muted-foreground">C</kbd></button>{visible.map(({ href, label, icon: Icon }) => <a className={buttonVariants({ variant: "ghost", className: "w-full justify-start" })} href={href} onClick={() => { setOpen(false); close?.(); }} key={href}><Icon />{label}</a>)}</div><p className="text-xs text-muted-foreground">⌘K or / search. G then H, T, or B navigates. C starts a new task.</p></DialogContent></Dialog></>;
 }
 
 function SecondaryNavigation(): ReactElement {
@@ -109,9 +111,9 @@ export function AppSidebar(): ReactElement {
         goPending = true; window.clearTimeout(goTimer); goTimer = window.setTimeout(() => { goPending = false; }, 750); return;
       }
       if (goPending && !event.metaKey && !event.ctrlKey && !event.altKey) {
-        const path = key === "t" ? "/tasks" : key === "b" ? "/board" : key === "l" ? "/timeline" : undefined;
+        const path = key === "h" ? "/today" : key === "t" ? "/tasks" : key === "b" ? "/board" : key === "l" ? "/timeline" : undefined;
         goPending = false; window.clearTimeout(goTimer);
-        if (path) { event.preventDefault(); navigate(withCompany(path, context?.currentCompany?.id)); }
+        if (path) { event.preventDefault(); navigate(path === "/today" ? path : withCompany(path, context?.currentCompany?.id)); }
       }
     };
     window.addEventListener("keydown", handleShortcut);

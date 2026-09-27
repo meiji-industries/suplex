@@ -63,13 +63,13 @@ export function AuthView(): ReactElement {
 }
 
 export function oauthReturnTo(value: string | null): string {
-  if (!value) return "/tasks";
+  if (!value) return "/";
   try {
     const url = new URL(value, window.location.origin);
     const requestId = url.searchParams.get("request") ?? "";
-    if (url.origin !== window.location.origin || url.pathname !== "/oauth/consent" || !/^oauth_request_[a-f0-9]{32}$/.test(requestId)) return "/tasks";
+    if (url.origin !== window.location.origin || url.pathname !== "/oauth/consent" || !/^oauth_request_[a-f0-9]{32}$/.test(requestId)) return "/";
     return `${url.pathname}?request=${encodeURIComponent(requestId)}`;
   } catch {
-    return "/tasks";
+    return "/";
   }
 }

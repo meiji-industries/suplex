@@ -83,7 +83,7 @@ function OnboardingSidebar({ companyId, current, state }: { companyId: string; c
           </Stepper>
         </div>
       </SidebarContent>
-      <SidebarFooter><SidebarMenu><SidebarMenuItem><SidebarMenuButton render={<a href={withCompany("/tasks", companyId)} />}><ArrowLeft />Back to app</SidebarMenuButton></SidebarMenuItem></SidebarMenu></SidebarFooter>
+      <SidebarFooter><SidebarMenu><SidebarMenuItem><SidebarMenuButton render={<a href="/today" />}><ArrowLeft />Back to app</SidebarMenuButton></SidebarMenuItem></SidebarMenu></SidebarFooter>
     </Sidebar>
   );
 }
@@ -186,7 +186,7 @@ export function OnboardingView(): ReactElement {
             {body}
             <footer className="mt-auto grid gap-2 pt-8">
               {current === "done" ? <>
-                <Button nativeButton={false} render={<a href={withCompany("/tasks", companyId)} />}>Finished</Button>
+                <Button nativeButton={false} render={<a href="/today" />}>Finished</Button>
               </> : <>
                 <Button disabled={continueDisabled} onClick={() => void continueStep()}>Continue</Button>
                 {current === "agents" && !customizeAgents ? <Button variant="outline" onClick={() => setCustomizeAgents(true)}>Customize</Button> : null}

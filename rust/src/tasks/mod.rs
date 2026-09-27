@@ -20,6 +20,7 @@ pub mod response;
 pub mod sources;
 pub mod templates;
 pub mod timeline;
+pub mod today_repository;
 pub mod worktree;
 pub mod worktree_open;
 

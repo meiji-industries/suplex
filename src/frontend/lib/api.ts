@@ -26,7 +26,11 @@ function cookieValue(name: string): string | undefined {
     .find(([key]) => key === name)?.[1];
 }
 
-export async function readJsonUnchecked<T>(url: string, init?: RequestInit): Promise<T> {
+function errorField(value: unknown, key: string): unknown {
+  return typeof value === "object" && value !== null && key in value ? Reflect.get(value, key) : undefined;
+}
+
+export async function readJson(url: string, init?: RequestInit): Promise<unknown> {
   const method = init?.method?.toUpperCase() ?? "GET";
   const isSafe = method === "GET" || method === "HEAD" || method === "OPTIONS";
   const originToken = !isSafe ? cookieValue("csrf_v1") : undefined;
@@ -42,18 +46,29 @@ export async function readJsonUnchecked<T>(url: string, init?: RequestInit): Pro
     },
   });
   const text = await response.text();
-  let body: T & { error?: string; findings?: Array<{ field: string; message: string }>; current?: unknown } = {} as T & { error?: string; findings?: Array<{ field: string; message: string }>; current?: unknown };
+  let body: unknown = {};
   try {
-    body = (text ? JSON.parse(text) : {}) as T & { error?: string; findings?: Array<{ field: string; message: string }>; current?: unknown };
+    body = text ? JSON.parse(text) : {};
   } catch {
-    body = {} as T & { error?: string; findings?: Array<{ field: string; message: string }>; current?: unknown };
+    body = {};
   }
   if (!response.ok) {
-    throw new ApiError(body.error ?? "Request failed", response.status, body.findings, body.current);
+    const error = errorField(body, "error");
+    const findings = errorField(body, "findings");
+    throw new ApiError(
+      typeof error === "string" ? error : "Request failed",
+      response.status,
+      Array.isArray(findings) ? findings.filter((finding): finding is { field: string; message: string } => typeof finding === "object" && finding !== null && typeof Reflect.get(finding, "field") === "string" && typeof Reflect.get(finding, "message") === "string") : undefined,
+      errorField(body, "current"),
+    );
   }
   if (url.startsWith("/api/auth/") && url.endsWith("/verify")) reportAuthenticatedResume(true);
   else if (url.startsWith("/api/")) reportApiActivity();
   return body;
+}
+
+export function readJsonUnchecked<T>(url: string, init?: RequestInit): Promise<T> {
+  return readJson(url, init) as Promise<T>;
 }
 
 export function isApiError(error: unknown, statusCode?: number): error is ApiError {

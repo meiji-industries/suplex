@@ -43,6 +43,7 @@ pub fn router() -> Router<AppState> {
         .route("/projects", get(projects))
         .route("/tasks/{task_id}", get(tasks))
         .route("/tasks", get(tasks))
+        .route("/today", get(today))
         .route("/board/{task_id}", get(board))
         .route("/board", get(board))
         .route("/timeline", get(timeline))
@@ -97,7 +98,7 @@ async fn root(State(state): State<AppState>, headers: HeaderMap) -> Response {
     let destination = match state.with_database(|database| service::list(database, &user.id, None))
     {
         Ok(projects) if projects.is_empty() => "/onboarding",
-        Ok(_) => "/tasks",
+        Ok(_) => "/today",
         Err(source) => {
             return with_cookies(ApiError::response(source), cookies);
         }
@@ -105,6 +106,10 @@ async fn root(State(state): State<AppState>, headers: HeaderMap) -> Response {
     let mut response = redirect(destination);
     auth::append_cookies(&mut response, cookies);
     response
+}
+
+async fn today(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    authenticated_page(state, headers, "today")
 }
 
 fn consent_request(raw_query: Option<&str>) -> Option<String> {

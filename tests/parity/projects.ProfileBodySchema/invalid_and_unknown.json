@@ -1,0 +1,29 @@
+{
+  "contract": "projects.ProfileBodySchema",
+  "case": "invalid_and_unknown",
+  "input": {
+    "provider": "bad",
+    "model": "gpt-6",
+    "reasoningLevel": "high",
+    "serviceTier": "priority",
+    "name": "Profile",
+    "role": "worker",
+    "avatarSeed": "0123456789abcdef0123456789abcdef",
+    "extra": true
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid-invalid_value",
+        "field": ".provider",
+        "message": "Request value is invalid"
+      },
+      {
+        "code": "invalid-unrecognized_keys",
+        "field": ".",
+        "message": "Request value is invalid"
+      }
+    ]
+  }
+}

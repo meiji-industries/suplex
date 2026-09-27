@@ -1,0 +1,17 @@
+{
+  "contract": "projects.ProjectNewRepositoryBodySchema",
+  "case": "astral_overlong_name",
+  "input": {
+    "repositoryName": "😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀"
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid-too_big",
+        "field": ".repositoryName",
+        "message": "Request value is invalid"
+      }
+    ]
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "contract": "common.IdSchema",
+  "case": "over_max_length",
+  "input": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid-too_big",
+        "field": ".",
+        "message": "Request value is invalid"
+      }
+    ]
+  }
+}

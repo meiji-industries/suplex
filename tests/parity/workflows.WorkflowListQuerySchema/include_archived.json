@@ -1,0 +1,13 @@
+{
+  "contract": "workflows.WorkflowListQuerySchema",
+  "case": "include_archived",
+  "input": {
+    "includeArchived": "true"
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "includeArchived": "true"
+    }
+  }
+}

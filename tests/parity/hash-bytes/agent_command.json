@@ -1,0 +1,7 @@
+{
+  "site": "src/tasks/tasks.ts:383",
+  "inputJson": "{\"command\":\"send_task_note\",\"revision\":\"revision-1\",\"idempotencyKey\":\"command-001\",\"note\":\"hello\"}",
+  "encoding": "hex",
+  "bytes": "{\"command\":\"send_task_note\",\"revision\":\"revision-1\",\"idempotencyKey\":\"command-001\",\"note\":\"hello\"}",
+  "digest": "a726cf8f2b93bed50ff611d469e11b51bbaeb8c131a0629e7e0c88c11565e9ff"
+}

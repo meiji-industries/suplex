@@ -1,0 +1,17 @@
+{
+  "contract": "projects.ProjectCreateBodySchema",
+  "case": "first_field_null",
+  "input": {
+    "repositoryUrl": null
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid-invalid_union",
+        "field": ".",
+        "message": "Request value is invalid"
+      }
+    ]
+  }
+}

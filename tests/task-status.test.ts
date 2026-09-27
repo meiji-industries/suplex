@@ -1,7 +1,7 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { expect, test } from "vitest";
-import { TaskControlStatusSchema } from "../src/tasks/control.js";
+import { TaskControlStatusSchema } from "../src/frontend/contracts/task-control.js";
 import { blockedByLabel, TaskStatus, TaskStatusIcon, taskStatusLabels, taskStatusTones } from "../src/frontend/features/tasks/task-status.js";
 
 test("Blocked by labels pull requests by number and observed state", () => {

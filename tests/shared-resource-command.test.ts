@@ -1,11 +1,12 @@
-// eslint-disable-next-line no-restricted-imports -- this test kills the caller to verify an orphaned command retains its OS lock.
 import { spawn } from "node:child_process";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { afterEach, expect, test } from "vitest";
-import { sharedResourceCommand } from "../src/tasks/preparation.js";
+import { fileURLToPath } from "node:url";
+
+const sharedResourceCommand = fileURLToPath(new URL("../scripts/shared-resource-command.py", import.meta.url));
 
 const directories: string[] = [];
 afterEach(async () => { await Promise.all(directories.splice(0).map(path => rm(path, { recursive: true, force: true }))); });
@@ -16,7 +17,7 @@ async function fixture() {
 }
 function run(resource: string, events: string, name: string, seconds: number, orphan = false) {
   const script = `import os,time,sys\np=sys.argv[1]\n${orphan ? "if os.fork(): os._exit(0)\n" : ""}with open(p,'a') as f: f.write(sys.argv[2]+' start\\n')\ntime.sleep(float(sys.argv[3]))\nwith open(p,'a') as f: f.write(sys.argv[2]+' end\\n')`;
-  const child = spawn("python3", [sharedResourceCommand(), "--resource", resource, "--", "python3", "-c", script, events, name, String(seconds)], { stdio: "ignore" });
+  const child = spawn("python3", [sharedResourceCommand, "--resource", resource, "--", "python3", "-c", script, events, name, String(seconds)], { stdio: "ignore" });
   const exit = new Promise<number | null>((resolve, reject) => { child.on("error", reject); child.on("exit", resolve); });
   return { child, exit };
 }

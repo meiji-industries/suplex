@@ -1,0 +1,23 @@
+{
+  "contract": "tasks.TaskAgentSelectionBodySchema",
+  "case": "false_with_question_unknown",
+  "input": {
+    "role": "root",
+    "expectedProfileId": "old",
+    "expectedSessionId": null,
+    "profileId": "new",
+    "direction": "go",
+    "resume": false,
+    "questionId": "question"
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid-unrecognized_keys",
+        "field": ".",
+        "message": "Request value is invalid"
+      }
+    ]
+  }
+}

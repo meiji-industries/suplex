@@ -1,7 +1,7 @@
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { runCommand } from "../../src/platform/command-runner.js";
+import { runCommand } from "./run-command.js";
 
 type Server = { command: string; args: string[]; environment: Record<string, string> };
 

@@ -1,0 +1,16 @@
+{
+  "contract": "common.CompanyStatusParamsSchema",
+  "case": "unknown_on_valid",
+  "input": {
+    "companyId": "x",
+    "status": "active",
+    "__parityUnknown": true
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "companyId": "x",
+      "status": "active"
+    }
+  }
+}

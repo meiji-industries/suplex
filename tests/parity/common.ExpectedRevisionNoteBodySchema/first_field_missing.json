@@ -1,0 +1,15 @@
+{
+  "contract": "common.ExpectedRevisionNoteBodySchema",
+  "case": "first_field_missing",
+  "input": {},
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid-invalid_type",
+        "field": ".expectedRevision",
+        "message": "Request value is invalid"
+      }
+    ]
+  }
+}

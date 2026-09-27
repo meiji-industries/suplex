@@ -25,10 +25,11 @@ describe("resolve", () => {
   test("a matching install record starts the local server, ahead of any remembered remote", () => {
     expect(resolveBoot({ record, stamp: "0.0.0-fixture", remote: "https://suplex.tail1234.ts.net/" })).toEqual({ name: "starting" });
   });
-  test("a runtime that no longer matches the record falls back to the remote, then to the choice screen", () => {
-    expect(resolveBoot({ record, stamp: "1.0.0", remote: "https://suplex.tail1234.ts.net/" })).toEqual({ name: "connecting-remote", url: "https://suplex.tail1234.ts.net/" });
-    expect(resolveBoot({ record, stamp: null, remote: null })).toEqual({ name: "bootstrap-needed" });
+  test("a new runtime reruns install automatically; a missing stamp still starts the installed binary", () => {
+    expect(resolveBoot({ record, stamp: "1.0.0", remote: "https://suplex.tail1234.ts.net/" })).toEqual({ name: "installing", from: null });
+    expect(resolveBoot({ record, stamp: null, remote: null })).toEqual({ name: "starting" });
     expect(resolveBoot({ record: null, stamp: "0.0.0-fixture", remote: null })).toEqual({ name: "bootstrap-needed" });
+    expect(resolveBoot({ record: null, stamp: null, remote: "https://suplex.tail1234.ts.net/" })).toEqual({ name: "connecting-remote", url: "https://suplex.tail1234.ts.net/" });
   });
 });
 
@@ -69,14 +70,14 @@ describe("transitions", () => {
 });
 
 describe("runtime location", () => {
-  test("the entry points are C2's, under the bundle's resources", () => {
-    expect(runtimePaths({}, "/r")).toEqual({ node: "/r/runtime/node/bin/node", app: "/r/runtime/app", cli: "/r/runtime/app/dist/src/cli.js", supervisor: "/r/runtime/app/dist/src/platform/updates/supervisor.js" });
+  test("the native binary is under the bundle's resources", () => {
+    expect(runtimePaths({}, "/r")).toEqual({ binary: "/r/runtime/bin/suplex", directory: "/r/runtime" });
   });
-  test("the environment points dev at another node and checkout", () => {
-    expect(runtimePaths({ SUPLEX_DESKTOP_NODE: "/n/bin/node", SUPLEX_DESKTOP_APP: "/checkout" }, "/r")).toMatchObject({ node: "/n/bin/node", app: "/checkout", cli: "/checkout/dist/src/cli.js" });
+  test("the environment points dev at a Rust build and manifest", () => {
+    expect(runtimePaths({ SUPLEX_DESKTOP_BINARY: "/checkout/rust/target/debug/suplex", SUPLEX_DESKTOP_RUNTIME: "/checkout/desktop/runtime" }, "/r")).toEqual({ binary: "/checkout/rust/target/debug/suplex", directory: "/checkout/desktop/runtime" });
   });
-  test("the stamp is the packaged app's version, and absent when there is no runtime", async () => {
-    expect(await runtimeStamp(join(FIXTURE, "app"))).toBe("0.0.0-fixture");
+  test("the stamp is the packaged runtime's version, and absent when there is no runtime", async () => {
+    expect(await runtimeStamp(FIXTURE)).toBe("0.0.0-fixture");
     expect(await runtimeStamp(join(FIXTURE, "missing"))).toBeNull();
   });
 });

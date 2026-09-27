@@ -24,11 +24,80 @@ on:
 permissions:
   contents: read
 
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_PROFILE_DEV_DEBUG: line-tables-only
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}-${{ inputs.runner }}-${{ inputs.workers }}
   cancel-in-progress: true
 
 jobs:
+  rust:
+    name: Rust fmt, clippy, and tests
+    env:
+      TARGET_CACHE_MAX_KIB: 12582912
+      TARGET_CACHE_MAX_SIZE: 12GB
+    runs-on: ${{ inputs.runner || 'blacksmith-8vcpu-ubuntu-2404' }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+      - name: Validate GitHub Actions workflows
+        uses: docker://rhysd/actionlint:1.7.12
+      - name: Install native lifecycle test dependencies
+        run: command -v lsof || { sudo apt-get update && sudo apt-get install --yes --no-install-recommends lsof; }
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.93.1
+          components: rustfmt, clippy
+      # Sticky disks keep the whole target directory, including the suplex
+      # crate, and persist even when a step fails. A failed mount builds cold.
+      - name: Mount Cargo registry
+        continue-on-error: true
+        uses: useblacksmith/stickydisk@v1
+        with:
+          key: ${{ github.repository }}-cargo-registry-${{ runner.arch }}
+          path: ~/.cargo/registry
+          commit: on-change
+      - name: Mount Rust target directory
+        id: rust-target
+        continue-on-error: true
+        uses: useblacksmith/stickydisk@v1
+        with:
+          key: ${{ github.repository }}-rust-job-target-${{ hashFiles('rust/rust-toolchain.toml') }}-${{ runner.arch }}
+          path: ${{ github.workspace }}/rust/target
+          commit: on-change
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest@0.9.146
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm exec tsx scripts/rust-ratchet.ts --self-test
+      - run: pnpm exec tsx scripts/rust-ratchet.ts
+      - run: pnpm exec tsx scripts/rust-route-coverage.ts
+      - run: pnpm exec vite build
+      - run: cargo fmt --manifest-path rust/Cargo.toml --check
+      - run: cargo clippy --manifest-path rust/Cargo.toml --all-targets -- -D warnings
+      # The crate has no doctests, which nextest does not run.
+      - run: cargo nextest run --manifest-path rust/Cargo.toml --all-targets --profile ci
+      - name: Generated TypeScript contracts are committed
+        run: git diff --exit-code -- src/frontend/contracts/generated
+      - name: Enforce persistent target size limit
+        if: ${{ always() && steps.rust-target.outcome == 'success' }}
+        run: |
+          target_size_kib="$(du -sk rust/target | cut -f1)"
+          echo "Persistent target size: ${target_size_kib} KiB"
+          if (( target_size_kib > TARGET_CACHE_MAX_KIB )); then
+            cargo install cargo-sweep --version 0.8.0 --locked
+            cargo sweep --maxsize "${TARGET_CACHE_MAX_SIZE}" rust
+          fi
+
   test:
     name: Test suite
     runs-on: ${{ inputs.runner || 'blacksmith-8vcpu-ubuntu-2404' }}
@@ -36,8 +105,31 @@ jobs:
     env:
       CI: "true"
       TEST_WORKERS: ${{ inputs.workers || '8' }}
+      SUPLEX_BIN: ${{ github.workspace }}/rust/target/debug/suplex
+      TARGET_CACHE_MAX_KIB: 12582912
+      TARGET_CACHE_MAX_SIZE: 12GB
     steps:
       - uses: actions/checkout@v5
+
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.93.1
+      - name: Mount Cargo registry
+        continue-on-error: true
+        uses: useblacksmith/stickydisk@v1
+        with:
+          key: ${{ github.repository }}-cargo-registry-${{ runner.arch }}
+          path: ~/.cargo/registry
+          commit: on-change
+      # The test server builds with other features than the Rust job, so it keeps its own target disk.
+      - name: Mount Rust target directory
+        id: rust-target
+        continue-on-error: true
+        uses: useblacksmith/stickydisk@v1
+        with:
+          key: ${{ github.repository }}-test-job-target-${{ hashFiles('rust/rust-toolchain.toml') }}-${{ runner.arch }}
+          path: ${{ github.workspace }}/rust/target
+          commit: on-change
 
       - uses: pnpm/action-setup@v4
 
@@ -47,11 +139,11 @@ jobs:
           cache: pnpm
           cache-dependency-path: pnpm-lock.yaml
 
-      - name: Install shell dependency
+      - name: Install test host dependencies
         run: |
-          command -v zsh || sudo apt-get install --yes --no-install-recommends zsh || {
+          command -v zsh && command -v lsof || sudo apt-get install --yes --no-install-recommends zsh lsof || {
             sudo apt-get update
-            sudo apt-get install --yes --no-install-recommends zsh
+            sudo apt-get install --yes --no-install-recommends zsh lsof
           }
 
       - name: Install dependencies
@@ -78,16 +170,37 @@ jobs:
           key: ${{ steps.browsers.outputs.cache-primary-key }}
           path: ~/.cache/ms-playwright
 
-      # The build runs the same TypeScript check as typecheck, then emits the app.
-      - name: Lint, typecheck and build
+      - name: Lint, typecheck and build the native test server
         run: |
-          pnpm lint &
-          lint_pid=$!
-          pnpm build
-          wait "$lint_pid"
+          pnpm lint
+          pnpm typecheck
+          pnpm exec vite build
+          cargo build --manifest-path rust/Cargo.toml --bin suplex --features github-test-endpoint
 
-      - name: Unit and integration tests
+      - name: Frontend, desktop, and protocol tests
         run: pnpm test --maxWorkers "$TEST_WORKERS" --reporter=default --reporter=junit --outputFile=test-results/unit-integration.xml
 
       - name: Browser tests
         run: pnpm exec vitest run --config vitest.browser.config.ts --maxWorkers "$TEST_WORKERS" --reporter=default --reporter=junit --outputFile=test-results/browser.xml
+
+      # Each journey has its own server, data directory and browser, so they run
+      # side by side. More than about half the vCPUs starves the UI waits.
+      - name: Native workflow journeys
+        env:
+          SUPLEX_DETERMINISTIC_CODEX_RUN: "1"
+          JOURNEY_PARALLELISM: "4"
+        run: |
+          mkdir -p test-results/journeys
+          printf '%s\n' deliver deliver_pr answer restart cancel deliver_claude direct_build independent_review competing_plans refine_pull_request |
+            xargs -P "$JOURNEY_PARALLELISM" -I{} sh -c 'SUPLEX_DETERMINISTIC_PHASE={} pnpm exec tsx tests/interop/real-codex-standard.ts > test-results/journeys/{}.log 2>&1 && echo "passed {}" || { echo "failed {}"; exit 1; }' ||
+            { for log in test-results/journeys/*.log; do echo "::group::$log"; cat "$log"; echo "::endgroup::"; done; exit 1; }
+
+      - name: Enforce persistent target size limit
+        if: ${{ always() && steps.rust-target.outcome == 'success' }}
+        run: |
+          target_size_kib="$(du -sk rust/target | cut -f1)"
+          echo "Persistent target size: ${target_size_kib} KiB"
+          if (( target_size_kib > TARGET_CACHE_MAX_KIB )); then
+            cargo install cargo-sweep --version 0.8.0 --locked
+            cargo sweep --maxsize "${TARGET_CACHE_MAX_SIZE}" rust
+          fi

@@ -1,0 +1,24 @@
+{
+  "contract": "task-templates.CreateTaskTemplateBodySchema",
+  "case": "invalid_profiles",
+  "input": {
+    "name": "Build",
+    "rootProfileId": "",
+    "workerProfileId": "😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀"
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid-too_small",
+        "field": ".rootProfileId",
+        "message": "Request value is invalid"
+      },
+      {
+        "code": "invalid-too_big",
+        "field": ".workerProfileId",
+        "message": "Request value is invalid"
+      }
+    ]
+  }
+}

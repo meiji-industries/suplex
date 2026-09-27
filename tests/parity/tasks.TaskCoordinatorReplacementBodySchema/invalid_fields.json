@@ -1,0 +1,42 @@
+{
+  "contract": "tasks.TaskCoordinatorReplacementBodySchema",
+  "case": "invalid_fields",
+  "input": {
+    "sessionId": "",
+    "rootProfileId": "",
+    "handoff": 1,
+    "resume": true,
+    "questionId": "",
+    "extra": true
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid-too_small",
+        "field": ".sessionId",
+        "message": "Request value is invalid"
+      },
+      {
+        "code": "invalid-too_small",
+        "field": ".rootProfileId",
+        "message": "Request value is invalid"
+      },
+      {
+        "code": "invalid-invalid_type",
+        "field": ".handoff",
+        "message": "Request value is invalid"
+      },
+      {
+        "code": "invalid-too_small",
+        "field": ".questionId",
+        "message": "Request value is invalid"
+      },
+      {
+        "code": "invalid-unrecognized_keys",
+        "field": ".",
+        "message": "Request value is invalid"
+      }
+    ]
+  }
+}

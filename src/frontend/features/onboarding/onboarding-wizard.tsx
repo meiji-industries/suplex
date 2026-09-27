@@ -2,6 +2,7 @@ import { ArrowLeft, Check, Copy, PartyPopper, RefreshCw } from "lucide-react";
 import { useEffect, useState, type ReactElement } from "react";
 
 import { CheckStatusIndicator, healthCheckPurpose, useSystemHealth } from "../../components/app/system-health.js";
+import { GithubDeviceSignIn } from "../../components/app/github-device-sign-in.js";
 import { ProviderIcon } from "../../components/app/provider-icons.js";
 import { ToolIcon } from "../../components/app/tool-icons.js";
 import { AvatarEditor } from "../../components/app/entity-avatar.js";
@@ -78,7 +79,7 @@ function OnboardingSidebar({ companyId, current, state }: { companyId: string; c
 }
 
 export function OnboardingView(): ReactElement {
-  const { currentCompany, renameCompany, setCompanyIssueCode, reloadCompanies } = useCompanyContext();
+  const { currentCompany, user, renameCompany, setCompanyIssueCode, reloadCompanies } = useCompanyContext();
   const companyId = currentCompany?.id ?? "";
   const { state, reload, loading, error: loadError } = useOnboardingData(currentCompany);
   const { refresh, freshness, refreshing } = useSystemHealth();
@@ -123,10 +124,10 @@ export function OnboardingView(): ReactElement {
                 {loading ? <div aria-label="Check in progress">
                   {id !== "herdr-readiness" ? <Skeleton className="h-4 w-32" /> : null}
                   {id === "gh-auth" ? <Skeleton className="h-4 w-44" /> : null}
-                </div> : !check ? "Check not available. Select Check again." : id === "gh-auth" ? check.status === "healthy" ? <>
+                </div> : !check ? "Check not available. Select Check again." : id === "gh-auth" && check.details.method === "device" ? check.status === "healthy" ? <span className="flex items-center gap-1"><Check aria-hidden="true" className="size-3" />{check.details.logins ? `Signed in as ${check.details.logins}` : "GitHub is connected"}</span> : check.summary : id === "gh-auth" ? check.status === "healthy" ? <>
                   <span className="flex items-center gap-1"><Check aria-hidden="true" className="size-3" />CLI tools installed</span>
                   <span className="flex items-center gap-1"><Check aria-hidden="true" className="size-3" />{check.details.logins ? `Signed in as ${check.details.logins}` : "Signed in"}</span>
-                </> : check.summary : id === "herdr-readiness" ? null : check.status === "healthy" ? <span className="flex items-center gap-1"><Check aria-hidden="true" className="size-3" />CLI tools installed</span> : healthCheckPurpose(id)}
+                </> : check.summary : id === "herdr-readiness" ? null : check.status === "healthy" ? <span className="flex items-center gap-1"><Check aria-hidden="true" className="size-3" />{id === "git" && check.details.engine === "libgit2" ? "Git is available" : "CLI tools installed"}</span> : healthCheckPurpose(id)}
               </div>
             </div>
             {check ? <CheckStatusIndicator check={check} healthyLabel="Done" /> : loading ? <Skeleton className="h-5 w-16 shrink-0" /> : <Badge variant="outline">Not available</Badge>}
@@ -134,6 +135,7 @@ export function OnboardingView(): ReactElement {
           {check && check.status !== "healthy" && check.remedy ? <div className="mt-2 flex gap-2">
             {check.remedyKind === "command" ? <><code className="min-w-0 flex-1 break-all text-xs">{check.remedy}</code><Button size="xs" variant="outline" onClick={() => void navigator.clipboard.writeText(check.remedy!)}><Copy />Copy</Button></> : <Button size="xs" variant="outline" nativeButton={false} render={<a href={check.remedy ?? "#"} target="_blank" rel="noreferrer" />}>Open the instructions</Button>}
           </div> : null}
+          {id === "gh-auth" && check?.details.method === "device" && check.status !== "healthy" && user?.role === "admin" ? <div className="mt-2"><GithubDeviceSignIn onConnected={async () => { await refresh(); await reload(); }} /></div> : null}
         </div>;
       })}
     </div>

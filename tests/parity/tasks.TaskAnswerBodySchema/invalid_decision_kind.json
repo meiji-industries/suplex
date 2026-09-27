@@ -1,0 +1,20 @@
+{
+  "contract": "tasks.TaskAnswerBodySchema",
+  "case": "invalid_decision_kind",
+  "input": {
+    "questionId": "question",
+    "limitDecision": {
+      "kind": "other"
+    }
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid-invalid_union",
+        "field": ".",
+        "message": "Request value is invalid"
+      }
+    ]
+  }
+}

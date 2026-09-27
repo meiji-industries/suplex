@@ -1,0 +1,32 @@
+{
+  "contract": "tasks.TaskBodySchema",
+  "case": "image_wrong_mime_unknown",
+  "input": {
+    "projectId": "project",
+    "title": "  Build  ",
+    "idempotencyKey": "task-0001",
+    "images": [
+      {
+        "filename": "x",
+        "mimeType": "text/plain",
+        "base64": "x",
+        "extra": true
+      }
+    ]
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid-invalid_value",
+        "field": ".images.0.mimeType",
+        "message": "Request value is invalid"
+      },
+      {
+        "code": "invalid-unrecognized_keys",
+        "field": ".images.0",
+        "message": "Request value is invalid"
+      }
+    ]
+  }
+}

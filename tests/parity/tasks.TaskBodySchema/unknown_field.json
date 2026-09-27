@@ -1,0 +1,32 @@
+{
+  "contract": "tasks.TaskBodySchema",
+  "case": "unknown_field",
+  "input": {
+    "unexpected": true
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid-invalid_type",
+        "field": ".projectId",
+        "message": "Request value is invalid"
+      },
+      {
+        "code": "invalid-invalid_type",
+        "field": ".title",
+        "message": "Request value is invalid"
+      },
+      {
+        "code": "invalid-invalid_type",
+        "field": ".idempotencyKey",
+        "message": "Request value is invalid"
+      },
+      {
+        "code": "invalid-unrecognized_keys",
+        "field": ".",
+        "message": "Request value is invalid"
+      }
+    ]
+  }
+}

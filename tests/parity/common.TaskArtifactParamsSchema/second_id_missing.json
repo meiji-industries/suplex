@@ -1,0 +1,17 @@
+{
+  "contract": "common.TaskArtifactParamsSchema",
+  "case": "second_id_missing",
+  "input": {
+    "taskId": "task"
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid-invalid_type",
+        "field": ".artifactId",
+        "message": "Request value is invalid"
+      }
+    ]
+  }
+}

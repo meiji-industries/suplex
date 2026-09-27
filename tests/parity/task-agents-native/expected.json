@@ -1,0 +1,198 @@
+[
+  {
+    "companyId": "company_a00a5a8d66372f6d95e783ae09eb26ad",
+    "firstId": "task_1bfa5d693de94807ba20b6dd0f5218e5",
+    "idleId": "task_c3cf1a285a254fdf88bf2cd93b0d66a7",
+    "batchPath": "/api/companies/company_a00a5a8d66372f6d95e783ae09eb26ad/task-agents?taskId=task_db685ad6da4d48309e3f7cce3127578b&taskId=task_1bfa5d693de94807ba20b6dd0f5218e5&taskId=task_c3cf1a285a254fdf88bf2cd93b0d66a7&taskId=task_0d4d68e6fc1b45cbb82c885a60627cb7&taskId=missing&taskId=task_1bfa5d693de94807ba20b6dd0f5218e5",
+    "batch": {
+      "status": 200,
+      "body": {
+        "tasks": [
+          {
+            "taskId": "task_1bfa5d693de94807ba20b6dd0f5218e5",
+            "agents": [
+              {
+                "id": "f955e804-8cde-4fd5-928e-3747d2eaec4d",
+                "role": "root",
+                "advisorRole": null,
+                "label": "Coordinator",
+                "paneId": null,
+                "status": "unknown",
+                "statusChangedAt": null
+              }
+            ]
+          },
+          {
+            "taskId": "task_c3cf1a285a254fdf88bf2cd93b0d66a7",
+            "agents": [
+              {
+                "id": "2cba0339-71cc-4bd4-8ce1-09d41215103f",
+                "role": "root",
+                "advisorRole": null,
+                "label": "Coordinator",
+                "paneId": null,
+                "status": "idle",
+                "statusChangedAt": "2026-09-25T12:34:56.000Z"
+              }
+            ]
+          },
+          {
+            "taskId": "task_db685ad6da4d48309e3f7cce3127578b",
+            "agents": [
+              {
+                "id": "e581e0a5-83bd-437b-a3c1-6f90452384d1",
+                "role": "root",
+                "advisorRole": null,
+                "label": "Coordinator",
+                "paneId": null,
+                "status": "queued",
+                "statusChangedAt": null
+              }
+            ]
+          }
+        ]
+      },
+      "cacheControl": "private, no-store"
+    },
+    "first": {
+      "status": 200,
+      "body": {
+        "agents": [
+          {
+            "id": "f955e804-8cde-4fd5-928e-3747d2eaec4d",
+            "role": "root",
+            "advisorRole": null,
+            "label": "Coordinator",
+            "paneId": null,
+            "status": "unknown",
+            "statusChangedAt": null
+          }
+        ]
+      },
+      "cacheControl": "private, no-store"
+    },
+    "idle": {
+      "status": 200,
+      "body": {
+        "agents": [
+          {
+            "id": "2cba0339-71cc-4bd4-8ce1-09d41215103f",
+            "role": "root",
+            "advisorRole": null,
+            "label": "Coordinator",
+            "paneId": null,
+            "status": "idle",
+            "statusChangedAt": "2026-09-25T12:34:56.000Z"
+          }
+        ]
+      },
+      "cacheControl": "private, no-store"
+    },
+    "empty": {
+      "status": 200,
+      "body": {
+        "tasks": []
+      },
+      "cacheControl": "private, no-store"
+    },
+    "invalid": {
+      "status": 400,
+      "body": {
+        "error": "Invalid request",
+        "findings": [
+          {
+            "code": "invalid-too_small",
+            "field": ".taskId",
+            "message": "Request value is invalid"
+          }
+        ]
+      },
+      "cacheControl": null
+    },
+    "tooMany": {
+      "status": 400,
+      "body": {
+        "error": "Invalid request",
+        "findings": [
+          {
+            "code": "invalid-too_big",
+            "field": ".taskId",
+            "message": "Request value is invalid"
+          }
+        ]
+      },
+      "cacheControl": null
+    }
+  },
+  {
+    "batch": {
+      "status": 200,
+      "body": {
+        "tasks": [
+          {
+            "taskId": "task_c3cf1a285a254fdf88bf2cd93b0d66a7",
+            "agents": [
+              {
+                "id": "2cba0339-71cc-4bd4-8ce1-09d41215103f",
+                "role": "root",
+                "advisorRole": null,
+                "label": "Coordinator",
+                "paneId": null,
+                "status": "unknown",
+                "statusChangedAt": null
+              }
+            ]
+          },
+          {
+            "taskId": "task_db685ad6da4d48309e3f7cce3127578b",
+            "agents": [
+              {
+                "id": "e581e0a5-83bd-437b-a3c1-6f90452384d1",
+                "role": "root",
+                "advisorRole": null,
+                "label": "Coordinator",
+                "paneId": null,
+                "status": "queued",
+                "statusChangedAt": null
+              }
+            ]
+          }
+        ]
+      },
+      "cacheControl": "private, no-store"
+    },
+    "idle": {
+      "status": 200,
+      "body": {
+        "agents": [
+          {
+            "id": "2cba0339-71cc-4bd4-8ce1-09d41215103f",
+            "role": "root",
+            "advisorRole": null,
+            "label": "Coordinator",
+            "paneId": null,
+            "status": "unknown",
+            "statusChangedAt": null
+          }
+        ]
+      },
+      "cacheControl": "private, no-store"
+    }
+  },
+  {
+    "batch": {
+      "status": 401,
+      "body": {
+        "error": "Authentication required"
+      },
+      "cacheControl": null
+    },
+    "idle": {
+      "status": 401,
+      "body": {
+        "error": "Authentication required"
+      },
+      "cacheControl": null
+    }
+  }
+]

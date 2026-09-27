@@ -1,0 +1,21 @@
+{
+  "contract": "tasks.TaskAgentSelectionBodySchema",
+  "case": "first_field_missing",
+  "input": {
+    "expectedProfileId": "x",
+    "expectedSessionId": null,
+    "profileId": "x",
+    "direction": "x",
+    "resume": false
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid-invalid_value",
+        "field": ".role",
+        "message": "Request value is invalid"
+      }
+    ]
+  }
+}

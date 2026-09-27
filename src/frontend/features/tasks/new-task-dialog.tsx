@@ -1,10 +1,13 @@
+import { updateTask, createTask } from "./lib/task-api.js";
 import { useEffect, useRef, useState, type ReactElement } from "react";
-import { isProfileAllowed } from "../../../projects/provider-policy.js";
+import { isProfileAllowed } from "../projects/lib/provider-policy.js";
 import { FileText, FolderKanban, MoreHorizontal, Workflow as WorkflowIcon, X } from "lucide-react";
-import { TaskImageInputSchema, DeliveryTargetSchema, VisualEvidenceSchema, type Task, type TaskInput } from "../../../tasks/contracts.js";
-import { ADVISOR_LABELS, workflowDefinition, type AdvisorProfileIds, type AdvisorRole, type WorkflowId } from "../../../coordination/workflows.js";
+import { TaskImageInputSchema, DeliveryTargetSchema, VisualEvidenceSchema, type Task, type TaskInput } from "../../contracts/tasks.js";
+import { ADVISOR_LABELS, workflowDefinition } from "./workflow-presentation.js";
+import type { AdvisorProfileIds, WorkflowId } from "../../contracts/workflows.js";
+import type { AdvisorRole } from "../../contracts/advisor-reports.js";
 import type { ApiProfile, ApiProject, ApiTaskTemplate, ApiWorkflow } from "../../shell/view-shared.js";
-import { ApiError, readJson, withCompany } from "../../lib/api.js";
+import { ApiError, readJsonUnchecked, withCompany } from "../../lib/api.js";
 import { useTaskCache } from "./task-data.js";
 import { Button } from "../../components/ui/button.js";
 import { NewButton } from "../../components/ui/new-button.js";
@@ -24,7 +27,7 @@ import { BlockedByPickerDialog } from "./blocked-by-picker.js";
 import { taskDeliveryTargetOptions } from "./task-delivery-target.js";
 import { readNewTaskMemory, writeNewTaskMemory, type NewTaskMemory } from "./new-task-memory.js";
 import { TaskRoleSelector } from "./task-role-selectors.js";
-import { supportsDeliveryTarget } from "../../../delivery/target-capabilities.js";
+import { supportsDeliveryTarget } from "./lib/delivery-target-capabilities.js";
 import type { NewTaskDraft } from "./lib/duplicate-task-prefill.js";
 
 type Delivery = { deliveryTarget: NonNullable<TaskInput["deliveryTarget"]>; runProjectTests: boolean };
@@ -123,7 +126,7 @@ export function NewTaskDialog({ open, onOpenChange, companyId, onCreated, initia
       setRunProjectTests(saved.runProjectTests ?? true);
     }
     let cancelled = false;
-    void Promise.all([readJson<{ projects: ApiProject[] }>(`/api/companies/${companyId}/projects`), readJson<{ profiles: ApiProfile[] }>("/api/profiles"), readJson<{ workflows: ApiWorkflow[] }>("/api/workflows?includeArchived=true")]).then(([projectResult, profileResult, workflowResult]) => {
+    void Promise.all([readJsonUnchecked<{ projects: ApiProject[] }>(`/api/companies/${companyId}/projects`), readJsonUnchecked<{ profiles: ApiProfile[] }>("/api/profiles"), readJsonUnchecked<{ workflows: ApiWorkflow[] }>("/api/workflows?includeArchived=true")]).then(([projectResult, profileResult, workflowResult]) => {
       if (cancelled) return;
       setProjects(projectResult.projects); setProfiles(profileResult.profiles); setWorkflows(workflowResult.workflows);
       // The workflow record supplies its engine and defaults once it is known; explicit draft fields still win.
@@ -141,7 +144,7 @@ export function NewTaskDialog({ open, onOpenChange, companyId, onCreated, initia
     setTemplates([]);
     if (!projectId || !open) return;
     let cancelled = false;
-    void readJson<{ templates: ApiTaskTemplate[] }>(`/api/projects/${projectId}/task-templates`).then(result => { if (!cancelled) setTemplates(result.templates); }).catch(error => { if (!cancelled) setError(String(error)); });
+    void readJsonUnchecked<{ templates: ApiTaskTemplate[] }>(`/api/projects/${projectId}/task-templates`).then(result => { if (!cancelled) setTemplates(result.templates); }).catch(error => { if (!cancelled) setError(String(error)); });
     return () => { cancelled = true; };
   }, [projectId, open]);
   useEffect(() => {
@@ -184,14 +187,14 @@ export function NewTaskDialog({ open, onOpenChange, companyId, onCreated, initia
     setBusy(true); setError(""); setProjectFindings([]);
     try {
       if (editTask) {
-        const saved = await readJson<Task>(`/api/tasks/${editTask.id}`, { method: "PATCH", body: JSON.stringify({ title, description, deliveryTarget, runProjectTests, visualEvidence, workflow, advisorProfileIds: admittedAdvisors(workflow, advisorProfileIds), ...(rootProfileId ? { rootProfileId } : {}), ...(workerProfileId ? { workerProfileId } : {}) }) });
+        const saved = await updateTask(editTask.id, { title, description, deliveryTarget, runProjectTests, visualEvidence, workflow, advisorProfileIds: admittedAdvisors(workflow, advisorProfileIds), ...(rootProfileId ? { rootProfileId } : {}), ...(workerProfileId ? { workerProfileId } : {}) });
         onCreated(saved);
         return;
       }
       const body = { projectId, title, description, startImmediately, deliveryTarget, runProjectTests, visualEvidence, images, workflow, advisorProfileIds: admittedAdvisors(workflow, advisorProfileIds), ...(rootProfileId ? { rootProfileId } : {}), ...(workerProfileId ? { workerProfileId } : {}), ...(sourceSummary?.kind === "issue" ? { issue: sourceSummary.issue } : {}), ...(source ? { source } : {}), ...(blockedBy.length ? { dependsOn: blockedBy.map(prerequisite => prerequisite.id) } : {}) };
       const serialized = JSON.stringify(body);
       if (request.current?.body !== serialized) request.current = { body: serialized, key: crypto.randomUUID() };
-      const task = await readJson<Task>(`/api/companies/${companyId}/tasks`, { method: "POST", body: JSON.stringify({ ...body, idempotencyKey: request.current.key }) });
+      const task = await createTask(companyId, { ...body, idempotencyKey: request.current.key });
       request.current = null;
       setTitle(""); setDescription(""); setImages([]); setSource(undefined); setSourceSummary(undefined); setBlockedBy([]);
       cacheTask(task);

@@ -1,0 +1,23 @@
+{
+  "contract": "projects.ProfileBodySchema",
+  "case": "overlong_model",
+  "input": {
+    "provider": "codex",
+    "model": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+    "reasoningLevel": "high",
+    "serviceTier": "priority",
+    "name": "Profile",
+    "role": "worker",
+    "avatarSeed": "0123456789abcdef0123456789abcdef"
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid-too_big",
+        "field": ".model",
+        "message": "Request value is invalid"
+      }
+    ]
+  }
+}

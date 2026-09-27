@@ -1,0 +1,23 @@
+{
+  "contract": "workflows.WorkflowListQuerySchema",
+  "case": "invalid_literal_and_unknown",
+  "input": {
+    "includeArchived": "false",
+    "extra": true
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid-invalid_value",
+        "field": ".includeArchived",
+        "message": "Request value is invalid"
+      },
+      {
+        "code": "invalid-unrecognized_keys",
+        "field": ".",
+        "message": "Request value is invalid"
+      }
+    ]
+  }
+}

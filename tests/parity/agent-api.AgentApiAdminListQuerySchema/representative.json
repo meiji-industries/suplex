@@ -1,0 +1,9 @@
+{
+  "contract": "agent-api.AgentApiAdminListQuerySchema",
+  "case": "representative",
+  "input": {},
+  "expected": {
+    "accepted": true,
+    "value": {}
+  }
+}

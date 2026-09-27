@@ -1,0 +1,18 @@
+{
+  "contract": "common.HttpPlanDecisionBodySchema",
+  "case": "first_field_null",
+  "input": {
+    "note": null,
+    "idempotencyKey": "xxxxxxxx"
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid-invalid_type",
+        "field": ".note",
+        "message": "Request value is invalid"
+      }
+    ]
+  }
+}

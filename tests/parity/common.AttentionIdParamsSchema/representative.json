@@ -1,0 +1,13 @@
+{
+  "contract": "common.AttentionIdParamsSchema",
+  "case": "representative",
+  "input": {
+    "attentionId": "x"
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "attentionId": "x"
+    }
+  }
+}

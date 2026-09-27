@@ -1,10 +1,10 @@
+import { continueTaskDelivery } from "./lib/task-api.js";
 import { useEffect, useState, type ReactElement } from "react";
 import { CheckCircle2, CircleMinus, ExternalLink, GitMerge, GitPullRequest, LoaderCircle, XCircle } from "lucide-react";
-import type { Task } from "../../../tasks/contracts.js";
-import { supportsDeliveryTarget } from "../../../delivery/target-capabilities.js";
+import type { Task } from "../../contracts/tasks.js";
+import { supportsDeliveryTarget } from "./lib/delivery-target-capabilities.js";
 import { Badge } from "../../components/ui/badge.js";
 import { Button } from "../../components/ui/button.js";
-import { readJson } from "../../lib/api.js";
 import { checkRunLabel, checkRunName, checkRunStatus, useTaskChecks, type CheckRun, type CheckRunStatus } from "./lib/task-checks.js";
 
 const runIcons = { passed: CheckCircle2, failed: XCircle, pending: LoaderCircle, skipped: CircleMinus, neutral: CircleMinus } satisfies Record<CheckRunStatus, typeof CheckCircle2>;
@@ -45,7 +45,7 @@ export function TaskPullRequestCard({ task, onChange }: { task: Task; onChange: 
   const continueDelivery = async (deliveryTarget: "pull_request_ready" | "merged") => {
     if (pending) return;
     setPending(true); setError("");
-    try { onChange(await readJson<Task>(`/api/tasks/${task.id}/continue-delivery`, { method: "POST", body: JSON.stringify({ deliveryTarget }) })); }
+    try { onChange(await continueTaskDelivery(task.id, deliveryTarget)); }
     catch (cause) { setError(cause instanceof Error ? cause.message : "Suplex could not continue delivery."); }
     finally { setPending(false); }
   };

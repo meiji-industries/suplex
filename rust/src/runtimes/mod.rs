@@ -1,0 +1,12 @@
+pub mod claude_code;
+pub mod codex;
+pub mod devin;
+pub mod git_guard;
+pub mod headless;
+pub mod native;
+pub mod opencode;
+pub mod process;
+pub mod project_mcp;
+pub mod task_display;
+pub mod task_harness;
+pub mod task_harness_registry;

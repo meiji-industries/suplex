@@ -4,18 +4,20 @@ import { expect, test } from "vitest";
 import { taskDeliveryTargetOptions } from "../src/frontend/features/tasks/task-delivery-target.js";
 import { nativeBrowser } from "./helpers/native-browser.js";
 
-const proof = resolve(".context/workflow-plan-proof");
+const proof = resolve(".context/typescript-retirement/browser-proof");
 const workflows = ["standard", "direct_build", "independent_review", "competing_plans", "refine_pull_request"] as const;
 
 test.each([1440, 900, 390])("workflow plans are prospective, connected, and independent at %ipx", { timeout: 120_000 }, async width => {
   const value = await nativeBrowser(width);
   const { page } = value;
   try {
+    let standardTaskId = "";
     await mkdir(proof, { recursive: true });
     await page.setViewportSize({ width, height: width < 768 ? 844 : 900 });
     for (const workflow of workflows) {
-      const { task } = await value.tasks.createTask(value.userId, value.company.id, { projectId: value.project.id, title: `${workflow} workflow map`, description: "Map fixture", idempotencyKey: `workflow-map-${workflow}-${width}`, startImmediately: false, workflow: workflow === "refine_pull_request" ? "independent_review" : workflow });
-      if (workflow === "refine_pull_request") value.database.authTransaction(db => db.prepare("UPDATE suplex_task_controls SET workflow = 'refine_pull_request', delivery_target = 'merged' WHERE task_id = ?").run(task.id));
+      const task = await value.createTask({ title: `${workflow} workflow map`, description: "Map fixture", idempotencyKey: `workflow-map-${workflow}-${width}`, startImmediately: false, workflow: workflow === "refine_pull_request" ? "independent_review" : workflow });
+      if (workflow === "refine_pull_request") value.database.prepare("UPDATE suplex_task_controls SET workflow = 'refine_pull_request', delivery_target = 'merged' WHERE task_id = ?").run(task.id);
+      if (workflow === "standard") standardTaskId = task.id;
       await page.goto(`${value.base}/tasks/${task.id}?company=${value.company.id}`);
       await page.getByRole("heading", { name: `${workflow} workflow map`, level: 2, exact: true }).waitFor();
       const plan = page.locator(`[data-workflow-plan="${workflow}"]`);
@@ -78,15 +80,14 @@ test.each([1440, 900, 390])("workflow plans are prospective, connected, and inde
       await plan.screenshot({ path: join(proof, `${workflow}-diagram-${width}.png`), animations: "disabled" });
     }
     for (const option of taskDeliveryTargetOptions) {
-      const { task } = await value.tasks.createTask(value.userId, value.company.id, { projectId: value.project.id, title: `${option.value} target map`, description: "Target fixture", idempotencyKey: `workflow-target-${option.value}-${width}`, startImmediately: false, workflow: "standard", deliveryTarget: option.value });
+      const task = await value.createTask({ title: `${option.value} target map`, description: "Target fixture", idempotencyKey: `workflow-target-${option.value}-${width}`, startImmediately: false, workflow: "standard", deliveryTarget: option.value });
       await page.goto(`${value.base}/tasks/${task.id}?company=${value.company.id}`);
       const targetPlan = page.locator('[data-workflow-plan="standard"]');
       await targetPlan.getByRole("button", { name: "Open or close the workflow plan" }).click();
       await targetPlan.getByText(option.label, { exact: true }).waitFor();
     }
-    const standard = value.tasks.listTasks(value.userId).find(task => task.title === "standard workflow map")!;
-    await page.route(`**/api/tasks/${standard.id}/execution`, route => route.fulfill({ json: { sessions: [{ id: "root", role: "root", generation: 1, available: true, limited: false, plan: [{ content: "Coordinator plan remains separate", status: "pending" }], tools: [] }] } }));
-    await page.goto(`${value.base}/tasks/${standard.id}?company=${value.company.id}`);
+    await page.route(`**/api/tasks/${standardTaskId}/execution`, route => route.fulfill({ json: { sessions: [{ id: "root", role: "root", generation: 1, available: true, limited: false, plan: [{ content: "Coordinator plan remains separate", status: "pending" }], tools: [] }] } }));
+    await page.goto(`${value.base}/tasks/${standardTaskId}?company=${value.company.id}`);
      const trigger = page.getByRole("button", { name: "Open or close the workflow plan", exact: true });
      await trigger.waitFor();
      expect(await trigger.getAttribute("aria-expanded")).toBe("false");

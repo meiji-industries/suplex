@@ -1,0 +1,23 @@
+{
+  "contract": "projects.ProfileBodySchema",
+  "case": "first_field_null",
+  "input": {
+    "provider": null,
+    "model": "x",
+    "reasoningLevel": "low",
+    "serviceTier": "default",
+    "name": "x",
+    "role": "root",
+    "avatarSeed": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid-invalid_value",
+        "field": ".provider",
+        "message": "Request value is invalid"
+      }
+    ]
+  }
+}

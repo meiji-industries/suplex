@@ -1,0 +1,15 @@
+{
+  "contract": "avatars.AvatarOwnerParamsSchema",
+  "case": "first_field_missing",
+  "input": {},
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid-invalid_type",
+        "field": ".ownerId",
+        "message": "Request value is invalid"
+      }
+    ]
+  }
+}

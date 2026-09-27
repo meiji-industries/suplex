@@ -1,0 +1,15 @@
+{
+  "contract": "tasks.TaskSessionHistoryParamsSchema",
+  "case": "representative",
+  "input": {
+    "taskId": "x",
+    "sessionId": "x"
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "taskId": "x",
+      "sessionId": "x"
+    }
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "contract": "tasks.TaskRenameBodySchema",
+  "case": "unknown_on_valid_title",
+  "input": {
+    "title": "Title",
+    "extra": true
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid-unrecognized_keys",
+        "field": ".",
+        "message": "Request value is invalid"
+      }
+    ]
+  }
+}

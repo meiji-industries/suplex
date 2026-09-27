@@ -6,7 +6,7 @@ import { Button } from "../../components/ui/button.js";
 import { Checkbox } from "../../components/ui/checkbox.js";
 import { Field, FieldGroup, FieldLabel } from "../../components/ui/field.js";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../components/ui/select.js";
-import { readJson } from "../../lib/api.js";
+import { readJsonUnchecked } from "../../lib/api.js";
 
 interface Consent {
   requestId: string;
@@ -27,7 +27,7 @@ export function OAuthConsentView(): ReactElement {
   const [error, setError] = useState("");
 
   useEffect(() => {
-    void readJson<Consent>(`/api/oauth/consent/${encodeURIComponent(requestId)}`).then((value) => {
+    void readJsonUnchecked<Consent>(`/api/oauth/consent/${encodeURIComponent(requestId)}`).then((value) => {
       setConsent(value);
       const firstCompany = value.companies[0]?.id ?? "";
       setCompanyId(firstCompany);
@@ -44,7 +44,7 @@ export function OAuthConsentView(): ReactElement {
     setBusy(true);
     setError("");
     try {
-      const result = await readJson<{ redirectTo: string }>(`/api/oauth/consent/${encodeURIComponent(requestId)}/${decision}`, {
+      const result = await readJsonUnchecked<{ redirectTo: string }>(`/api/oauth/consent/${encodeURIComponent(requestId)}/${decision}`, {
         method: "POST",
         body: decision === "approve" ? JSON.stringify({ companyId, projectIds }) : "{}",
       });

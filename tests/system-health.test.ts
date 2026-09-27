@@ -1,8 +1,13 @@
 import { expect, test } from "vitest";
 
 import { getSystemHealthLevel } from "../src/frontend/components/app/system-health.js";
-import { REQUIRED_HEALTH_CHECK_IDS } from "../src/platform/health-contract.js";
-import type { HealthSnapshot } from "../src/platform/health.js";
+import { REQUIRED_HEALTH_CHECK_IDS } from "../src/frontend/contracts/health-checks.js";
+import type { HealthSnapshot } from "../src/frontend/contracts/health.js";
+import { HealthSnapshotSchema } from "../src/frontend/contracts/health-schema.js";
+
+test("health boundary rejects malformed snapshots", () => {
+  expect(HealthSnapshotSchema.safeParse({ ready: "yes" }).success).toBe(false);
+});
 
 const snapshot: HealthSnapshot = {
   generatedAt: "2026-08-13T00:00:00.000Z",

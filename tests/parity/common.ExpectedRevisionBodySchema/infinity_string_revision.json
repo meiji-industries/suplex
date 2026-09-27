@@ -1,0 +1,17 @@
+{
+  "contract": "common.ExpectedRevisionBodySchema",
+  "case": "infinity_string_revision",
+  "input": {
+    "expectedRevision": "Infinity"
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid-invalid_type",
+        "field": ".expectedRevision",
+        "message": "Request value is invalid"
+      }
+    ]
+  }
+}

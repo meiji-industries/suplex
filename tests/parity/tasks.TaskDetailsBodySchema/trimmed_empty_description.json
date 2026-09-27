@@ -1,0 +1,13 @@
+{
+  "contract": "tasks.TaskDetailsBodySchema",
+  "case": "trimmed_empty_description",
+  "input": {
+    "description": "  "
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "description": ""
+    }
+  }
+}

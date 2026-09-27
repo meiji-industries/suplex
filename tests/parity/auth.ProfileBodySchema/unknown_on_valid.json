@@ -1,0 +1,18 @@
+{
+  "contract": "auth.ProfileBodySchema",
+  "case": "unknown_on_valid",
+  "input": {
+    "displayName": "x",
+    "username": "x",
+    "avatarSeed": "x",
+    "__parityUnknown": true
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "displayName": "x",
+      "username": "x",
+      "avatarSeed": "x"
+    }
+  }
+}

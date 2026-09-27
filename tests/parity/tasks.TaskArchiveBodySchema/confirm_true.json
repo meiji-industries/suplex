@@ -1,0 +1,13 @@
+{
+  "contract": "tasks.TaskArchiveBodySchema",
+  "case": "confirm_true",
+  "input": {
+    "confirmDiscardDirty": true
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "confirmDiscardDirty": true
+    }
+  }
+}

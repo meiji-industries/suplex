@@ -1,6 +1,6 @@
 # Database migrations
 
-Suplex migrations are immutable SQL files in `drizzle/`. Their names begin with
+Suplex migrations are immutable SQL files in `migrations/`. Their names begin with
 a unique UTC timestamp, which determines their logical order without requiring
 a shared journal or sequential number:
 
@@ -26,3 +26,7 @@ Separate statements with `--> statement-breakpoint`. Never rename or edit a
 migration after it has been applied. The runtime records each migration by its
 timestamp and SHA-256 hash, so independently-created migrations can merge and
 apply even when a newer migration has already reached a database.
+
+The ledger table keeps its original name, `__drizzle_migrations`, so databases
+and backups from the TypeScript backend upgrade in place. Suplex no longer uses
+Drizzle.

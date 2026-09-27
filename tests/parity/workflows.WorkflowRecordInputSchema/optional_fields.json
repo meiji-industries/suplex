@@ -1,0 +1,33 @@
+{
+  "contract": "workflows.WorkflowRecordInputSchema",
+  "case": "optional_fields",
+  "input": {
+    "name": "Build",
+    "description": "  A description  ",
+    "engine": "direct_build",
+    "rootProfileId": "root",
+    "workerProfileId": "worker",
+    "advisorProfileIds": {
+      "reviewer": "reviewer"
+    },
+    "deliveryTarget": "merged",
+    "runProjectTests": false,
+    "visualEvidence": "capture"
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "name": "Build",
+      "description": "A description",
+      "engine": "direct_build",
+      "rootProfileId": "root",
+      "workerProfileId": "worker",
+      "advisorProfileIds": {
+        "reviewer": "reviewer"
+      },
+      "deliveryTarget": "merged",
+      "runProjectTests": false,
+      "visualEvidence": "capture"
+    }
+  }
+}

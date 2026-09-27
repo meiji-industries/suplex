@@ -1,0 +1,15 @@
+{
+  "contract": "tasks.TaskAnswerBodySchema",
+  "case": "representative",
+  "input": {
+    "questionId": "x",
+    "answer": "x"
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "questionId": "x",
+      "answer": "x"
+    }
+  }
+}

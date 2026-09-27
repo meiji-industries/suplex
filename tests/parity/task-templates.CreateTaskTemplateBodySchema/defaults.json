@@ -1,0 +1,19 @@
+{
+  "contract": "task-templates.CreateTaskTemplateBodySchema",
+  "case": "defaults",
+  "input": {
+    "name": "  Build  "
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "description": "",
+      "deliveryTarget": "pull_request_draft",
+      "runProjectTests": true,
+      "visualEvidence": "off",
+      "workflow": "standard",
+      "advisorProfileIds": {},
+      "name": "Build"
+    }
+  }
+}

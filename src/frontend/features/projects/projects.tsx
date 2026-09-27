@@ -3,7 +3,7 @@ import { Alert, AlertDescription } from "../../components/ui/alert.js";
 import { Button } from "../../components/ui/button.js";
 import { NewButton } from "../../components/ui/new-button.js";
 import { useCompanyContext } from "../../shell/company-context.js";
-import { readJson, withCompany } from "../../lib/api.js";
+import { readJsonUnchecked, withCompany } from "../../lib/api.js";
 import { useCallback, useEffect, useRef, useState, type ReactElement } from "react";
 import { reconcileScopedNotFound, type ApiProfile, type ApiProject } from "../../shell/view-shared.js";
 import { CreateProjectDialog } from "./create-project-dialog.js";
@@ -35,8 +35,8 @@ export function ProjectsView(): ReactElement {
     if (!companyId || loading) return;
     try {
       const [agentResult, projectResult] = await Promise.all([
-        readJson<{ profiles: ApiProfile[] }>("/api/profiles"),
-        readJson<{ projects: ApiProject[] }>(`/api/companies/${encodeURIComponent(companyId)}/projects`),
+        readJsonUnchecked<{ profiles: ApiProfile[] }>("/api/profiles"),
+        readJsonUnchecked<{ projects: ApiProject[] }>(`/api/companies/${encodeURIComponent(companyId)}/projects`),
       ]);
       if (token !== requestToken.current) return;
       loadedCompanyIdRef.current = companyId;

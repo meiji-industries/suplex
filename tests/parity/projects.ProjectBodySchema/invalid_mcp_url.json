@@ -1,0 +1,45 @@
+{
+  "contract": "projects.ProjectBodySchema",
+  "case": "invalid_mcp_url",
+  "input": {
+    "name": "Project",
+    "repositoryPath": "/tmp/project",
+    "worktreeRoot": "/tmp/worktrees",
+    "repository": "team/project",
+    "baseBranch": "main",
+    "setupCommand": "pnpm install",
+    "verificationCommand": "pnpm test",
+    "rootProfileId": "root",
+    "workerProfileId": "worker",
+    "execution": {
+      "mcp": [
+        {
+          "name": "context7",
+          "transport": {
+            "type": "http",
+            "url": "not a URL"
+          },
+          "grants": {
+            "root": [
+              "query_docs"
+            ],
+            "advisor": [],
+            "worker": [
+              "query_docs"
+            ]
+          }
+        }
+      ]
+    }
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid-invalid_format",
+        "field": ".execution.mcp.0.transport.url",
+        "message": "Request value is invalid"
+      }
+    ]
+  }
+}

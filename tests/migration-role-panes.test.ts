@@ -1,11 +1,11 @@
 import { readFile } from "node:fs/promises";
 
-import Database from "better-sqlite3";
+import { DatabaseSync as Database } from "node:sqlite";
 import { expect, test } from "vitest";
 
 test("role panes migration maps legacy roles and keeps one current reviewer", async () => {
-  const database = new Database(":memory:");
-  database.pragma("foreign_keys = ON");
+  const database = new Database(":memory:", { enableForeignKeyConstraints: false });
+  database.exec("PRAGMA foreign_keys = ON");
   try {
     database.exec(`
       CREATE TABLE suplex_tasks (id TEXT PRIMARY KEY);
@@ -32,7 +32,7 @@ test("role panes migration maps legacy roles and keeps one current reviewer", as
         ('reviewer-0', 'task', 'reviewer', 0, 1, 'codex', 'live-reviewer-0', 'reviewer-pane-0', 'ready', '2026-08-29', '2026-08-29'),
         ('reviewer-1', 'task', 'reviewer', 1, 1, 'codex', 'live-reviewer-1', 'reviewer-pane-1', 'ready', '2026-08-29', '2026-08-29');
     `);
-    const migration = await readFile(new URL("../drizzle/20260829121040158_role_panes.sql", import.meta.url), "utf8");
+    const migration = await readFile(new URL("../migrations/20260829121040158_role_panes.sql", import.meta.url), "utf8");
     for (const statement of migration.split("--> statement-breakpoint").map((value) => value.trim()).filter(Boolean)) database.exec(statement);
 
     expect(database.prepare("SELECT id, session_role AS role, is_current AS current, agent_name AS agentName, pane_id AS paneId FROM suplex_herdr_role_sessions ORDER BY id").all()).toEqual([

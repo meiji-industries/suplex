@@ -297,7 +297,7 @@ describe("local install", () => {
     writeFileSync(join(fake.userData, "data", "fixture.json"), JSON.stringify(value));
   };
   const start = async (): Promise<FakeWindow> => {
-    await runSuplexDesktop({ argv: [], environment: { SUPLEX_DESKTOP_NODE: join(FIXTURE, "node", "bin", "node"), SUPLEX_DESKTOP_APP: join(FIXTURE, "app"), HOME: process.env.HOME, USER: process.env.USER } });
+    await runSuplexDesktop({ argv: [], environment: { SUPLEX_DESKTOP_BINARY: join(FIXTURE, "bin", "suplex"), SUPLEX_DESKTOP_RUNTIME: FIXTURE, HOME: process.env.HOME, USER: process.env.USER } });
     return fake.FakeWindow.all[0]!;
   };
   const onPage = async (win: FakeWindow, page: string, timeout = 20_000): Promise<void> => {
@@ -326,7 +326,7 @@ describe("local install", () => {
     const origin = new URL(win.webContents.url).origin;
     expect(await healthy(origin)).toBe(true);
     expect(JSON.parse(readFileSync(installFile, "utf8")).port, "the chosen port is remembered").toBe(Number(new URL(origin).port));
-    expect(readFileSync(join(fake.userData, "logs", "server.log"), "utf8")).toContain("fixture supervisor listening");
+    expect(readFileSync(join(fake.userData, "logs", "server.log"), "utf8")).toContain("fixture native runtime listening");
     await accountCleared(`${origin}/companies/c/settings`);
     expect(existsSync(installFile), "a cleared local Suplex starts at the choice screen next launch").toBe(false);
     const quit = preventable();

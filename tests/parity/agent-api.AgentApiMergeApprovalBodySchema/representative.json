@@ -1,0 +1,17 @@
+{
+  "contract": "agent-api.AgentApiMergeApprovalBodySchema",
+  "case": "representative",
+  "input": {
+    "pullRequestNumber": 1,
+    "headSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "baseSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "pullRequestNumber": 1,
+      "headSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "baseSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    }
+  }
+}

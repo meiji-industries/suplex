@@ -1,0 +1,17 @@
+{
+  "contract": "tasks.TaskWorkerReplacementBodySchema",
+  "case": "first_field_missing",
+  "input": {
+    "reason": "x"
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid-invalid_type",
+        "field": ".sessionId",
+        "message": "Request value is invalid"
+      }
+    ]
+  }
+}

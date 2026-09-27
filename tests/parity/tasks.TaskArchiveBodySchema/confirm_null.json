@@ -1,0 +1,17 @@
+{
+  "contract": "tasks.TaskArchiveBodySchema",
+  "case": "confirm_null",
+  "input": {
+    "confirmDiscardDirty": null
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid-invalid_type",
+        "field": ".confirmDiscardDirty",
+        "message": "Request value is invalid"
+      }
+    ]
+  }
+}

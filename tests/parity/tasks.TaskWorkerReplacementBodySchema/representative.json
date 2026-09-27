@@ -1,0 +1,15 @@
+{
+  "contract": "tasks.TaskWorkerReplacementBodySchema",
+  "case": "representative",
+  "input": {
+    "sessionId": "x",
+    "reason": "x"
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "sessionId": "x",
+      "reason": "x"
+    }
+  }
+}

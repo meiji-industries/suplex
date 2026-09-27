@@ -1,0 +1,19 @@
+{
+  "contract": "projects.ProjectExecutionSchema",
+  "case": "invalid_environment_key",
+  "input": {
+    "environment": {
+      "HOME": "value"
+    }
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid-invalid_key",
+        "field": ".environment.HOME",
+        "message": "Request value is invalid"
+      }
+    ]
+  }
+}

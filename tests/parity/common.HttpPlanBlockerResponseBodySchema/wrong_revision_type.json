@@ -1,0 +1,19 @@
+{
+  "contract": "common.HttpPlanBlockerResponseBodySchema",
+  "case": "wrong_revision_type",
+  "input": {
+    "expectedWorkflowRevision": "1",
+    "answer": "Yes",
+    "idempotencyKey": "abcdefghi"
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid-invalid_type",
+        "field": ".expectedWorkflowRevision",
+        "message": "Request value is invalid"
+      }
+    ]
+  }
+}

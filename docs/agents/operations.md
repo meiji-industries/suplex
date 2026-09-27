@@ -1,35 +1,17 @@
 # Operations
 
-See [recovery hardening](../recovery-hardening.md) for convergence, attention, and reconciliation operations.
+See [recovery](../recovery-hardening.md) for native session recovery and authoritative observations.
 
 ## Logs
 
-`mise run logs` prints the latest 200 merged API and worker records from
-`.suplex/logs/`, ordered by timestamp and formatted for scanning. The API and
-worker retain structured JSON in `api.log` and `worker.log`; each rotates at
-50 MB and keeps one `.log.1` predecessor.
+The native host writes structured lifecycle events to `system.log` in the installation's logs directory, `.suplex/logs`. Native agent transcripts remain in the provider's own storage.
 
-Use `mise run logs -- --follow` to keep tailing, `--errors` for warnings and
-errors, `--task <id>` to match task IDs, workflow IDs, and request URLs, or
-`--since 10m` to restrict the time window. Filters can be combined.
+`pnpm run suplex logs` reads the current log and retained `system-*.log` archives. Add `--follow` to tail, `--errors` for warnings and errors, `--task <id>` to filter a task, or `--since 10m` for a time window. Filters can be combined. See [system logging](../system-logging.md) for event fields and retention.
 
-## Remote development
+## Development
 
-For remote access over Tailscale, use `mise run dev:remote`. It builds the
-frontend once with Vite and serves the resulting `dist/web` files directly
-from Fastify, avoiding Vite's many development-module requests. It does not
-provide frontend HMR; rerun it after frontend changes. `mise run dev` remains
-the default local development mode with Vite HMR.
-
-`scripts/dev-restart.sh` waits up to three minutes for the worker's polling
-log signal, then confirms `/api/health`; its success output names the readiness
-signal used. The worker is hosted in the API process, and `mise run dev:idle`
-checks SQLite's in-flight engine activity ledger before allowing a restart.
+Run `mise run dev:status` before starting or restarting the stack. `mise run dev` runs the native host with Vite HMR; `mise run dev:watch` also rebuilds the native host on changes. Stop only this checkout's owned development processes with `mise run down`. A source checkout is not the installed host, and changing its server does not require stopping native agent sessions.
 
 ## Claude Code provider
 
-Create an agent with provider **Claude Code**, select a Claude model, then assign
-that agent to the required role. The worker user must already be logged in
-with `claude`. Suplex pre-accepts
-`projects[realpath(cwd)].hasTrustDialogAccepted` and
-`bypassPermissionsModeAccepted` in `~/.claude.json`.
+Create an agent with provider **Claude Code**, select a Claude model, then assign that agent to the required role. The worker user must already be logged in with `claude`. Suplex pre-accepts `projects[realpath(cwd)].hasTrustDialogAccepted` and `bypassPermissionsModeAccepted` in `~/.claude.json`.

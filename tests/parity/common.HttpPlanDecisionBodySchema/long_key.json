@@ -1,0 +1,18 @@
+{
+  "contract": "common.HttpPlanDecisionBodySchema",
+  "case": "long_key",
+  "input": {
+    "note": "Yes",
+    "idempotencyKey": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid-too_big",
+        "field": ".idempotencyKey",
+        "message": "Request value is invalid"
+      }
+    ]
+  }
+}

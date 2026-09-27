@@ -1,4 +1,4 @@
-import type { NativeHistoryMessage, SessionHistoryPage } from "../../../../tasks/history/contracts.js";
+import type { NativeHistoryMessage, SessionHistoryPage } from "../../../contracts/history.js";
 
 export function mergeNativeHistory(current: readonly NativeHistoryMessage[], incoming: readonly NativeHistoryMessage[], placement: "earlier" | "latest"): NativeHistoryMessage[] {
   const messages = new Map(current.map(message => [message.id, message]));

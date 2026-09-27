@@ -1,0 +1,24 @@
+{
+  "contract": "tasks.TaskAnswerBodySchema",
+  "case": "change_limits_invalid",
+  "input": {
+    "questionId": "question",
+    "limitDecision": {
+      "kind": "change_limits",
+      "limits": {
+        "budgetUsd": -1,
+        "maxTurns": 1.5
+      }
+    }
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid-invalid_union",
+        "field": ".",
+        "message": "Request value is invalid"
+      }
+    ]
+  }
+}

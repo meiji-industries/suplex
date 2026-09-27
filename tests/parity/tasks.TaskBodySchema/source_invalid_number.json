@@ -1,0 +1,29 @@
+{
+  "contract": "tasks.TaskBodySchema",
+  "case": "source_invalid_number",
+  "input": {
+    "projectId": "project",
+    "title": "  Build  ",
+    "idempotencyKey": "task-0001",
+    "source": {
+      "kind": "issue",
+      "number": 0,
+      "extra": true
+    }
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid-too_small",
+        "field": ".source.number",
+        "message": "Request value is invalid"
+      },
+      {
+        "code": "invalid-unrecognized_keys",
+        "field": ".source",
+        "message": "Request value is invalid"
+      }
+    ]
+  }
+}

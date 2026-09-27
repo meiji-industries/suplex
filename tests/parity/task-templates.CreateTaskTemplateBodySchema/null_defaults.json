@@ -1,0 +1,48 @@
+{
+  "contract": "task-templates.CreateTaskTemplateBodySchema",
+  "case": "null_defaults",
+  "input": {
+    "name": "Build",
+    "description": null,
+    "deliveryTarget": null,
+    "runProjectTests": null,
+    "visualEvidence": null,
+    "workflow": null,
+    "advisorProfileIds": null
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid-invalid_type",
+        "field": ".description",
+        "message": "Request value is invalid"
+      },
+      {
+        "code": "invalid-invalid_value",
+        "field": ".deliveryTarget",
+        "message": "Request value is invalid"
+      },
+      {
+        "code": "invalid-invalid_type",
+        "field": ".runProjectTests",
+        "message": "Request value is invalid"
+      },
+      {
+        "code": "invalid-invalid_value",
+        "field": ".visualEvidence",
+        "message": "Request value is invalid"
+      },
+      {
+        "code": "invalid-invalid_value",
+        "field": ".workflow",
+        "message": "Request value is invalid"
+      },
+      {
+        "code": "invalid-invalid_type",
+        "field": ".advisorProfileIds",
+        "message": "Request value is invalid"
+      }
+    ]
+  }
+}

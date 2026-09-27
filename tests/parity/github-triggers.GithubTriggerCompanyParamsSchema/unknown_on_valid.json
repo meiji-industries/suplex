@@ -1,0 +1,14 @@
+{
+  "contract": "github-triggers.GithubTriggerCompanyParamsSchema",
+  "case": "unknown_on_valid",
+  "input": {
+    "companyId": "x",
+    "__parityUnknown": true
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "companyId": "x"
+    }
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "contract": "task-templates.SaveTaskAsTemplateParamsSchema",
+  "case": "representative",
+  "input": {
+    "taskId": "x"
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "taskId": "x"
+    }
+  }
+}

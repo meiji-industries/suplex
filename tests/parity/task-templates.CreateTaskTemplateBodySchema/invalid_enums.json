@@ -1,0 +1,30 @@
+{
+  "contract": "task-templates.CreateTaskTemplateBodySchema",
+  "case": "invalid_enums",
+  "input": {
+    "name": "Build",
+    "deliveryTarget": "publish",
+    "visualEvidence": "screen",
+    "workflow": "other"
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid-invalid_value",
+        "field": ".deliveryTarget",
+        "message": "Request value is invalid"
+      },
+      {
+        "code": "invalid-invalid_value",
+        "field": ".visualEvidence",
+        "message": "Request value is invalid"
+      },
+      {
+        "code": "invalid-invalid_value",
+        "field": ".workflow",
+        "message": "Request value is invalid"
+      }
+    ]
+  }
+}

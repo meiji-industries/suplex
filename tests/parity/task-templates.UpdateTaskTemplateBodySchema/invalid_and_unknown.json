@@ -1,0 +1,49 @@
+{
+  "contract": "task-templates.UpdateTaskTemplateBodySchema",
+  "case": "invalid_and_unknown",
+  "input": {
+    "name": " ",
+    "description": " ",
+    "rootProfileId": "",
+    "deliveryTarget": "other",
+    "advisorProfileIds": {
+      "extra": true
+    },
+    "extra": true
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid-too_small",
+        "field": ".name",
+        "message": "Request value is invalid"
+      },
+      {
+        "code": "invalid-too_small",
+        "field": ".description",
+        "message": "Request value is invalid"
+      },
+      {
+        "code": "invalid-too_small",
+        "field": ".rootProfileId",
+        "message": "Request value is invalid"
+      },
+      {
+        "code": "invalid-invalid_value",
+        "field": ".deliveryTarget",
+        "message": "Request value is invalid"
+      },
+      {
+        "code": "invalid-unrecognized_keys",
+        "field": ".advisorProfileIds",
+        "message": "Request value is invalid"
+      },
+      {
+        "code": "invalid-unrecognized_keys",
+        "field": ".",
+        "message": "Request value is invalid"
+      }
+    ]
+  }
+}

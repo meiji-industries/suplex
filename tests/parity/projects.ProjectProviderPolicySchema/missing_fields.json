@@ -1,0 +1,20 @@
+{
+  "contract": "projects.ProjectProviderPolicySchema",
+  "case": "missing_fields",
+  "input": {},
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid-invalid_type",
+        "field": ".allowedProviders",
+        "message": "Request value is invalid"
+      },
+      {
+        "code": "invalid-invalid_type",
+        "field": ".allowedInstanceIds",
+        "message": "Request value is invalid"
+      }
+    ]
+  }
+}

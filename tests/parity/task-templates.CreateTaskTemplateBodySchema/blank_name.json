@@ -1,0 +1,17 @@
+{
+  "contract": "task-templates.CreateTaskTemplateBodySchema",
+  "case": "blank_name",
+  "input": {
+    "name": "  "
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid-too_small",
+        "field": ".name",
+        "message": "Request value is invalid"
+      }
+    ]
+  }
+}

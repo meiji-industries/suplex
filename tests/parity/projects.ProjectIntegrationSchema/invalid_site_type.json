@@ -1,0 +1,23 @@
+{
+  "contract": "projects.ProjectIntegrationSchema",
+  "case": "invalid_site_type",
+  "input": {
+    "tracker": {
+      "kind": "jira",
+      "site": 1,
+      "project": "APP",
+      "emailEnvironment": "JIRA_EMAIL",
+      "tokenEnvironment": "JIRA_TOKEN"
+    }
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid-invalid_type",
+        "field": ".tracker.site",
+        "message": "Request value is invalid"
+      }
+    ]
+  }
+}

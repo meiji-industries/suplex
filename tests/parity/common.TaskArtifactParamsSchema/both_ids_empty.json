@@ -1,0 +1,23 @@
+{
+  "contract": "common.TaskArtifactParamsSchema",
+  "case": "both_ids_empty",
+  "input": {
+    "taskId": "",
+    "artifactId": ""
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid-too_small",
+        "field": ".taskId",
+        "message": "Request value is invalid"
+      },
+      {
+        "code": "invalid-too_small",
+        "field": ".artifactId",
+        "message": "Request value is invalid"
+      }
+    ]
+  }
+}

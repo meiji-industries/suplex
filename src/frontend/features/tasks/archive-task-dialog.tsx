@@ -1,7 +1,6 @@
+import { archiveTask, isArchiveConfirmation } from "./lib/task-api.js";
 import { useEffect, useState, type ReactElement } from "react";
-import type { Task } from "../../../tasks/contracts.js";
-import { TaskArchiveResponseSchema } from "../../../http/contracts/tasks.js";
-import { readJson } from "../../lib/api.js";
+import type { Task } from "../../contracts/tasks.js";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "../../components/ui/alert-dialog.js";
 import { ScrollArea } from "../../components/ui/scroll-area.js";
 
@@ -27,8 +26,8 @@ export function ArchiveTaskDialog({ task, open, onOpenChange, onArchived, onErro
     setBusy(true);
     onError("");
     try {
-      const result = TaskArchiveResponseSchema.parse(await readJson<unknown>(`/api/tasks/${task.id}/archive`, { method: "POST", body: JSON.stringify({ confirmDiscardDirty: current.kind === "discard" }) }));
-      if (result.status === "confirmation_required") {
+      const result = await archiveTask(task.id, current.kind === "discard");
+      if (isArchiveConfirmation(result)) {
         setConfirmation({ kind: "discard", dirtyFileCount: result.dirtyFileCount, dirtyFilePaths: result.dirtyFilePaths });
         return;
       }

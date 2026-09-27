@@ -1,0 +1,17 @@
+{
+  "contract": "workflows.WorkflowRecordPatchSchema",
+  "case": "null_description",
+  "input": {
+    "description": null
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid-invalid_type",
+        "field": ".description",
+        "message": "Request value is invalid"
+      }
+    ]
+  }
+}

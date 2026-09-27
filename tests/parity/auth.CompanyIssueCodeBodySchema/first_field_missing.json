@@ -1,0 +1,15 @@
+{
+  "contract": "auth.CompanyIssueCodeBodySchema",
+  "case": "first_field_missing",
+  "input": {},
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid-invalid_type",
+        "field": ".issueCode",
+        "message": "Request value is invalid"
+      }
+    ]
+  }
+}

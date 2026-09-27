@@ -1,0 +1,15 @@
+{
+  "contract": "common.CompanyIdParamsSchema",
+  "case": "first_field_missing",
+  "input": {},
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid-invalid_type",
+        "field": ".companyId",
+        "message": "Request value is invalid"
+      }
+    ]
+  }
+}

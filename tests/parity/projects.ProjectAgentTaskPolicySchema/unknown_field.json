@@ -1,0 +1,37 @@
+{
+  "contract": "projects.ProjectAgentTaskPolicySchema",
+  "case": "unknown_field",
+  "input": {
+    "unexpected": true
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid-invalid_type",
+        "field": ".workflowIds",
+        "message": "Request value is invalid"
+      },
+      {
+        "code": "invalid-invalid_type",
+        "field": ".defaultWorkflowId",
+        "message": "Request value is invalid"
+      },
+      {
+        "code": "invalid-invalid_type",
+        "field": ".rootProfileIds",
+        "message": "Request value is invalid"
+      },
+      {
+        "code": "invalid-invalid_type",
+        "field": ".workerProfileIds",
+        "message": "Request value is invalid"
+      },
+      {
+        "code": "invalid-unrecognized_keys",
+        "field": ".",
+        "message": "Request value is invalid"
+      }
+    ]
+  }
+}

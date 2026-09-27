@@ -1,6 +1,9 @@
 # CI performance
 
-Measured on Blacksmith Ubuntu 24.04 on 2026-09-07. The workflow keeps the existing `Test suite` check and runs all of the checks in `pnpm check:full`: lint, TypeScript, the production build, unit/integration tests, and browser tests. The build performs the TypeScript check once. Lint runs beside the build, and both exit codes must succeed.
+Historical measurements of the September 2026 TypeScript-backed workflow. The
+current native CI gate and test counts must be read from `.github/workflows/ci.yml`.
+
+Measured on Blacksmith Ubuntu 24.04 on 2026-09-07. At the time, the workflow kept the `Test suite` check and ran lint, TypeScript, the production build, unit/integration tests, and browser tests.
 
 The default is 8 vCPUs with eight Vitest workers. Manual workflow dispatch accepts a runner and worker count for future comparisons. A smaller runner remains a lower-compute option; 16 vCPUs gave little additional browser-test improvement.
 

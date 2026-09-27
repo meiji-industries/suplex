@@ -1,0 +1,22 @@
+{
+  "contract": "tasks.TaskNoteBodySchema",
+  "case": "array_note",
+  "input": {
+    "note": []
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid-invalid_type",
+        "field": ".note",
+        "message": "Request value is invalid"
+      },
+      {
+        "code": "invalid-too_small",
+        "field": ".note",
+        "message": "Request value is invalid"
+      }
+    ]
+  }
+}

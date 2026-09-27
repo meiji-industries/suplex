@@ -1,0 +1,9 @@
+{
+  "contract": "tasks.WorktreeAppSchema",
+  "case": "known_app",
+  "input": "ghostty",
+  "expected": {
+    "accepted": true,
+    "value": "ghostty"
+  }
+}

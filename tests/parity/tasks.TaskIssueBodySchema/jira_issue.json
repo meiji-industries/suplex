@@ -1,0 +1,27 @@
+{
+  "contract": "tasks.TaskIssueBodySchema",
+  "case": "jira_issue",
+  "input": {
+    "issue": {
+      "kind": "jira",
+      "site": "https://team.atlassian.net",
+      "id": "123",
+      "key": "APP-12",
+      "title": "Issue",
+      "url": "https://team.atlassian.net/browse/APP-12"
+    }
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "issue": {
+        "kind": "jira",
+        "site": "https://team.atlassian.net",
+        "id": "123",
+        "key": "APP-12",
+        "title": "Issue",
+        "url": "https://team.atlassian.net/browse/APP-12"
+      }
+    }
+  }
+}

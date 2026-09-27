@@ -1,0 +1,9 @@
+{
+  "contract": "tasks.WorktreeAppSchema",
+  "case": "representative",
+  "input": "finder",
+  "expected": {
+    "accepted": true,
+    "value": "finder"
+  }
+}

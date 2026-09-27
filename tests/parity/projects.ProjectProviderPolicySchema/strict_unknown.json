@@ -1,0 +1,19 @@
+{
+  "contract": "projects.ProjectProviderPolicySchema",
+  "case": "strict_unknown",
+  "input": {
+    "allowedProviders": [],
+    "allowedInstanceIds": [],
+    "extra": true
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid-unrecognized_keys",
+        "field": ".",
+        "message": "Request value is invalid"
+      }
+    ]
+  }
+}

@@ -1,0 +1,26 @@
+{
+  "contract": "projects.ProjectBodySchema",
+  "case": "unknown_on_valid",
+  "input": {
+    "name": "x",
+    "repositoryPath": "x",
+    "worktreeRoot": "x",
+    "repository": "x",
+    "baseBranch": "x",
+    "setupCommand": "x",
+    "verificationCommand": "x",
+    "rootProfileId": "x",
+    "workerProfileId": "x",
+    "__parityUnknown": true
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid-unrecognized_keys",
+        "field": ".",
+        "message": "Request value is invalid"
+      }
+    ]
+  }
+}

@@ -1,0 +1,20 @@
+{
+  "contract": "tasks.TaskWorkerReplacementBodySchema",
+  "case": "empty_object",
+  "input": {},
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid-invalid_type",
+        "field": ".sessionId",
+        "message": "Request value is invalid"
+      },
+      {
+        "code": "invalid-invalid_type",
+        "field": ".reason",
+        "message": "Request value is invalid"
+      }
+    ]
+  }
+}

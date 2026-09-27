@@ -1,0 +1,12 @@
+{
+  "contract": "tasks.TaskDependenciesBodySchema",
+  "case": "empty_object",
+  "input": {},
+  "expected": {
+    "accepted": true,
+    "value": {
+      "dependsOn": [],
+      "blockedByPullRequests": []
+    }
+  }
+}

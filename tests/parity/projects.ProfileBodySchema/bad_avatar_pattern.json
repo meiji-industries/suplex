@@ -1,0 +1,23 @@
+{
+  "contract": "projects.ProfileBodySchema",
+  "case": "bad_avatar_pattern",
+  "input": {
+    "provider": "codex",
+    "model": "gpt-6",
+    "reasoningLevel": "high",
+    "serviceTier": "priority",
+    "name": "Profile",
+    "role": "worker",
+    "avatarSeed": "ABCDEF"
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid-invalid_format",
+        "field": ".avatarSeed",
+        "message": "Request value is invalid"
+      }
+    ]
+  }
+}

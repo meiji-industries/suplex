@@ -1,0 +1,15 @@
+{
+  "contract": "tasks.TaskIssueBodySchema",
+  "case": "empty_object",
+  "input": {},
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid-invalid_type",
+        "field": ".issue",
+        "message": "Request value is invalid"
+      }
+    ]
+  }
+}

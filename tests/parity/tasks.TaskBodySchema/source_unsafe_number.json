@@ -1,0 +1,23 @@
+{
+  "contract": "tasks.TaskBodySchema",
+  "case": "source_unsafe_number",
+  "input": {
+    "projectId": "project",
+    "title": "  Build  ",
+    "idempotencyKey": "task-0001",
+    "source": {
+      "kind": "issue",
+      "number": 9007199254740992
+    }
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid-too_big",
+        "field": ".source.number",
+        "message": "Request value is invalid"
+      }
+    ]
+  }
+}

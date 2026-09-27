@@ -1,0 +1,52 @@
+{
+  "contract": "tasks.TaskBodySchema",
+  "case": "invalid_advisor_and_dependencies",
+  "input": {
+    "projectId": "project",
+    "title": "  Build  ",
+    "idempotencyKey": "task-0001",
+    "advisorProfileIds": {
+      "reviewer": "",
+      "extra": true
+    },
+    "dependsOn": [
+      ""
+    ],
+    "blockedByPullRequests": [
+      {
+        "number": -1,
+        "extra": true
+      }
+    ]
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid-too_small",
+        "field": ".advisorProfileIds.reviewer",
+        "message": "Request value is invalid"
+      },
+      {
+        "code": "invalid-unrecognized_keys",
+        "field": ".advisorProfileIds",
+        "message": "Request value is invalid"
+      },
+      {
+        "code": "invalid-too_small",
+        "field": ".dependsOn.0",
+        "message": "Request value is invalid"
+      },
+      {
+        "code": "invalid-too_small",
+        "field": ".blockedByPullRequests.0.number",
+        "message": "Request value is invalid"
+      },
+      {
+        "code": "invalid-unrecognized_keys",
+        "field": ".blockedByPullRequests.0",
+        "message": "Request value is invalid"
+      }
+    ]
+  }
+}

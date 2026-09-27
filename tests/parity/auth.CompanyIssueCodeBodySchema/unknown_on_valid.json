@@ -1,0 +1,14 @@
+{
+  "contract": "auth.CompanyIssueCodeBodySchema",
+  "case": "unknown_on_valid",
+  "input": {
+    "issueCode": null,
+    "__parityUnknown": true
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "issueCode": null
+    }
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "contract": "avatars.AvatarOwnerParamsSchema",
+  "case": "unknown_on_valid",
+  "input": {
+    "ownerId": "x",
+    "__parityUnknown": true
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "ownerId": "x"
+    }
+  }
+}

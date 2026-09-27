@@ -1,11 +1,11 @@
 import { useEffect, useState } from "react";
-import { TaskTimelineResponseSchema, type TimelineTask } from "../../../tasks/timeline/contracts.js";
-import { readJson } from "../../lib/api.js";
+import { TaskTimelineResponseSchema, type TimelineTask } from "../../contracts/timeline.js";
+import { readJsonUnchecked } from "../../lib/api.js";
 import { taskTimelineDuration } from "../timeline/lib/task-timeline-duration.js";
 import { Alert, AlertDescription } from "../../components/ui/alert.js";
 import { TimelineAgentLabel } from "../timeline/timeline-agent-label.js";
 
-import { roleLabel } from "../../../coordination/workflows.js";
+import { roleLabel } from "./workflow-presentation.js";
 
 const statuses = { completed: "Completed", running: "In progress", failed: "Failed", interrupted: "Stopped" };
 const freshnessMs = 10_000;
@@ -27,7 +27,7 @@ export function TaskActivityTimeline({ taskId }: { taskId: string }) {
       if (reading || closed) return;
       reading = true;
       try {
-        const result = TaskTimelineResponseSchema.parse(await readJson(`/api/tasks/${taskId}/timeline`));
+        const result = TaskTimelineResponseSchema.parse(await readJsonUnchecked(`/api/tasks/${taskId}/timeline`));
         if (!closed) {
           setSnapshot({ activity: result.tasks.find(task => task.id === taskId)?.activity ?? [], readAt: Date.now() });
           setError("");

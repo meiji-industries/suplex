@@ -1,0 +1,19 @@
+{
+  "contract": "agent-api.AgentApiTaskCommandBodySchema",
+  "case": "first_field_null",
+  "input": {
+    "command": null,
+    "revision": "x",
+    "idempotencyKey": "x"
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid-invalid_value",
+        "field": ".command",
+        "message": "Request value is invalid"
+      }
+    ]
+  }
+}

@@ -1,0 +1,3 @@
+export const MAX_AVATAR_IMAGE_BYTES = 2 * 1024 * 1024;
+
+export const MAX_AVATAR_IMAGE_BASE64_LENGTH = Math.ceil(MAX_AVATAR_IMAGE_BYTES / 3) * 4;

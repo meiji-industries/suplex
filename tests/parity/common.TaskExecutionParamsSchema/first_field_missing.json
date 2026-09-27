@@ -1,0 +1,17 @@
+{
+  "contract": "common.TaskExecutionParamsSchema",
+  "case": "first_field_missing",
+  "input": {
+    "executionId": "x"
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid-invalid_type",
+        "field": ".taskId",
+        "message": "Request value is invalid"
+      }
+    ]
+  }
+}

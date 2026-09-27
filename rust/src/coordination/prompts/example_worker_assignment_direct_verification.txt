@@ -1,0 +1,12 @@
+Direct build: choose the implementation approach yourself within the objective and constraints below.
+
+Acceptance criteria:
+1. Checks pass
+
+Worker instructions:
+Run checks
+
+Screenshots:
+Screenshots are off for this task. Do not capture, request, or require browser screenshots or any other browser evidence; verify with source reading and the configured checks instead. Missing browser evidence is never a finding.
+
+Verification source: base aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa, head bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb. Verify this revision without intentional source edits.

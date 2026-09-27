@@ -1,0 +1,17 @@
+{
+  "contract": "github-triggers.GithubTriggerPatchSchema",
+  "case": "first_field_null",
+  "input": {
+    "expectedRevision": null
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid-invalid_type",
+        "field": ".expectedRevision",
+        "message": "Request value is invalid"
+      }
+    ]
+  }
+}

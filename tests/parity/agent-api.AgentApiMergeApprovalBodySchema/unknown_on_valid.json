@@ -1,0 +1,20 @@
+{
+  "contract": "agent-api.AgentApiMergeApprovalBodySchema",
+  "case": "unknown_on_valid",
+  "input": {
+    "pullRequestNumber": 1,
+    "headSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "baseSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "__parityUnknown": true
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid-unrecognized_keys",
+        "field": ".",
+        "message": "Request value is invalid"
+      }
+    ]
+  }
+}

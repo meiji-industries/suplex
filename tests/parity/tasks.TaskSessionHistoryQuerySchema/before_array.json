@@ -1,0 +1,22 @@
+{
+  "contract": "tasks.TaskSessionHistoryQuerySchema",
+  "case": "before_array",
+  "input": {
+    "before": []
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid-invalid_type",
+        "field": ".before",
+        "message": "Request value is invalid"
+      },
+      {
+        "code": "invalid-too_small",
+        "field": ".before",
+        "message": "Request value is invalid"
+      }
+    ]
+  }
+}

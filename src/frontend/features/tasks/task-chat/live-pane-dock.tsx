@@ -6,7 +6,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "../../../components/ui
 import { Avatar, AvatarFallback, AvatarGroup } from "../../../components/ui/avatar.js";
 import { EntityAvatar } from "../../../components/app/entity-avatar.js";
 import { ProviderIcon, providerIcons } from "../../../components/app/provider-icons.js";
-import { roleLabel } from "../../../../coordination/workflows.js";
+import { roleLabel } from "../workflow-presentation.js";
 import { SessionHistory } from "./session-history.js";
 import { sessionHistoryLabels } from "./session-history-state.js";
 

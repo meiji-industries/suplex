@@ -1,0 +1,19 @@
+{
+  "contract": "tasks.TaskBodySchema",
+  "case": "blank_title",
+  "input": {
+    "projectId": "project",
+    "title": " \t ",
+    "idempotencyKey": "task-0001"
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid-too_small",
+        "field": ".title",
+        "message": "Request value is invalid"
+      }
+    ]
+  }
+}

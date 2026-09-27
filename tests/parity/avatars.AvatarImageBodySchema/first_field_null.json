@@ -1,0 +1,18 @@
+{
+  "contract": "avatars.AvatarImageBodySchema",
+  "case": "first_field_null",
+  "input": {
+    "mimeType": null,
+    "base64": "x"
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid-invalid_value",
+        "field": ".mimeType",
+        "message": "Request value is invalid"
+      }
+    ]
+  }
+}

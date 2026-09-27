@@ -1,0 +1,19 @@
+{
+  "contract": "tasks.TaskWorkerReplacementBodySchema",
+  "case": "unknown_on_valid",
+  "input": {
+    "sessionId": "x",
+    "reason": "x",
+    "__parityUnknown": true
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid-unrecognized_keys",
+        "field": ".",
+        "message": "Request value is invalid"
+      }
+    ]
+  }
+}

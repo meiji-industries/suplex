@@ -1,0 +1,13 @@
+{
+  "contract": "common.TaskIdParamsSchema",
+  "case": "representative",
+  "input": {
+    "taskId": "x"
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "taskId": "x"
+    }
+  }
+}

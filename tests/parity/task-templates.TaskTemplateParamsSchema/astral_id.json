@@ -1,0 +1,13 @@
+{
+  "contract": "task-templates.TaskTemplateParamsSchema",
+  "case": "astral_id",
+  "input": {
+    "templateId": "😀"
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "templateId": "😀"
+    }
+  }
+}

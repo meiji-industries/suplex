@@ -1,0 +1,29 @@
+{
+  "contract": "projects.ProjectRepositoryBodySchema",
+  "case": "nested_unknown",
+  "input": {
+    "repositoryUrl": "repo",
+    "integration": {
+      "repository": {
+        "kind": "github",
+        "extra": true
+      },
+      "extra": true
+    }
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid-unrecognized_keys",
+        "field": ".integration.repository",
+        "message": "Request value is invalid"
+      },
+      {
+        "code": "invalid-unrecognized_keys",
+        "field": ".integration",
+        "message": "Request value is invalid"
+      }
+    ]
+  }
+}

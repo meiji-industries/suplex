@@ -1,0 +1,17 @@
+{
+  "contract": "oauth.OAuthClientRegistrationSchema",
+  "case": "unknown_on_valid",
+  "input": {
+    "client_name": "x",
+    "redirect_uris": [],
+    "__parityUnknown": true
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "client_name": "x",
+      "redirect_uris": [],
+      "__parityUnknown": true
+    }
+  }
+}

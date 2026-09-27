@@ -1,0 +1,35 @@
+{
+  "contract": "tasks.TaskWorkerReplacementBodySchema",
+  "case": "invalid_and_unknown",
+  "input": {
+    "sessionId": "",
+    "reason": null,
+    "workerProfileId": "",
+    "extra": true
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid-too_small",
+        "field": ".sessionId",
+        "message": "Request value is invalid"
+      },
+      {
+        "code": "invalid-invalid_type",
+        "field": ".reason",
+        "message": "Request value is invalid"
+      },
+      {
+        "code": "invalid-too_small",
+        "field": ".workerProfileId",
+        "message": "Request value is invalid"
+      },
+      {
+        "code": "invalid-unrecognized_keys",
+        "field": ".",
+        "message": "Request value is invalid"
+      }
+    ]
+  }
+}

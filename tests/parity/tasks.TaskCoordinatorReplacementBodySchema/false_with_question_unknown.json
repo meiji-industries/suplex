@@ -1,0 +1,20 @@
+{
+  "contract": "tasks.TaskCoordinatorReplacementBodySchema",
+  "case": "false_with_question_unknown",
+  "input": {
+    "sessionId": "session",
+    "rootProfileId": "root",
+    "resume": false,
+    "questionId": "question"
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid-unrecognized_keys",
+        "field": ".",
+        "message": "Request value is invalid"
+      }
+    ]
+  }
+}

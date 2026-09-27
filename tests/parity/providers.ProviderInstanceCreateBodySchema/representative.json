@@ -1,0 +1,15 @@
+{
+  "contract": "providers.ProviderInstanceCreateBodySchema",
+  "case": "representative",
+  "input": {
+    "provider": "opencode",
+    "label": "x"
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "provider": "opencode",
+      "label": "x"
+    }
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "contract": "projects.ProfilePatchBodySchema",
+  "case": "archived_only",
+  "input": {
+    "archived": true
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "archived": true
+    }
+  }
+}

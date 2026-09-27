@@ -1,0 +1,7 @@
+{
+  "site": "src/tasks/repository.ts:38",
+  "inputJson": "{\"input\":{\"projectId\":\"project-1\",\"title\":\"A task\",\"description\":\"\",\"idempotencyKey\":\"task-key-001\",\"images\":[],\"startImmediately\":false,\"deliveryTarget\":\"pull_request_draft\",\"runProjectTests\":true,\"visualEvidence\":\"off\"},\"creator\":{\"kind\":\"agent\",\"id\":\"agent-1\"}}",
+  "encoding": "hex",
+  "bytes": "{\"input\":{\"projectId\":\"project-1\",\"title\":\"A task\",\"description\":\"\",\"idempotencyKey\":\"task-key-001\",\"images\":[],\"startImmediately\":false,\"deliveryTarget\":\"pull_request_draft\",\"runProjectTests\":true,\"visualEvidence\":\"off\"},\"creator\":{\"kind\":\"agent\",\"id\":\"agent-1\"}}",
+  "digest": "9f8d2c7f4381db5f6dbbbab44333aedeb4acf701d7f9b1236b32031288015c26"
+}

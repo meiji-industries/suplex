@@ -1,0 +1,14 @@
+{
+  "contract": "agent-api.AgentApiTaskDependenciesBodySchema",
+  "case": "representative",
+  "input": {
+    "dependsOn": []
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "dependsOn": [],
+      "blockedByPullRequests": []
+    }
+  }
+}

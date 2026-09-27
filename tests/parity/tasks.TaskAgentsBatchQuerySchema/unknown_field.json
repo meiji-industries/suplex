@@ -1,0 +1,13 @@
+{
+  "contract": "tasks.TaskAgentsBatchQuerySchema",
+  "case": "unknown_field",
+  "input": {
+    "unexpected": true
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "taskId": []
+    }
+  }
+}

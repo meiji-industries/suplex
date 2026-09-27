@@ -1,0 +1,43 @@
+{
+  "contract": "projects.ProjectRepositoryBodySchema",
+  "case": "valid_bitbucket_and_jira",
+  "input": {
+    "repositoryUrl": "git@bitbucket.org:team/repo.git",
+    "integration": {
+      "repository": {
+        "kind": "bitbucket",
+        "tokenEnvironment": "BITBUCKET_TOKEN",
+        "usernameEnvironment": "BITBUCKET_USER"
+      },
+      "tracker": {
+        "kind": "jira",
+        "site": "https://team.atlassian.net/",
+        "project": "APP",
+        "emailEnvironment": "JIRA_EMAIL",
+        "tokenEnvironment": "JIRA_TOKEN"
+      }
+    },
+    "baseBranch": "main"
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "repositoryUrl": "git@bitbucket.org:team/repo.git",
+      "integration": {
+        "repository": {
+          "kind": "bitbucket",
+          "tokenEnvironment": "BITBUCKET_TOKEN",
+          "usernameEnvironment": "BITBUCKET_USER"
+        },
+        "tracker": {
+          "kind": "jira",
+          "site": "https://team.atlassian.net/",
+          "project": "APP",
+          "emailEnvironment": "JIRA_EMAIL",
+          "tokenEnvironment": "JIRA_TOKEN"
+        }
+      },
+      "baseBranch": "main"
+    }
+  }
+}

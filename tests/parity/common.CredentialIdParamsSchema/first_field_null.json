@@ -1,0 +1,17 @@
+{
+  "contract": "common.CredentialIdParamsSchema",
+  "case": "first_field_null",
+  "input": {
+    "credentialId": null
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid-invalid_type",
+        "field": ".credentialId",
+        "message": "Request value is invalid"
+      }
+    ]
+  }
+}

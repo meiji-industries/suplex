@@ -1,0 +1,23 @@
+{
+  "contract": "github-triggers.GithubTriggerCreateSchema",
+  "case": "representative",
+  "input": {
+    "projectId": "x",
+    "name": "x",
+    "label": "x",
+    "workflowId": "x",
+    "deliveryTarget": "local_worktree",
+    "protectedPaths": []
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "projectId": "x",
+      "name": "x",
+      "label": "x",
+      "workflowId": "x",
+      "deliveryTarget": "local_worktree",
+      "protectedPaths": []
+    }
+  }
+}

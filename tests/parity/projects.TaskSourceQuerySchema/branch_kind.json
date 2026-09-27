@@ -1,0 +1,13 @@
+{
+  "contract": "projects.TaskSourceQuerySchema",
+  "case": "branch_kind",
+  "input": {
+    "kind": "branch"
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "kind": "branch"
+    }
+  }
+}

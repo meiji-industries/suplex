@@ -1,0 +1,23 @@
+{
+  "contract": "providers.ProviderInstanceCreateBodySchema",
+  "case": "label_empty_array",
+  "input": {
+    "provider": "codex",
+    "label": []
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid-invalid_type",
+        "field": ".label",
+        "message": "Request value is invalid"
+      },
+      {
+        "code": "invalid-too_small",
+        "field": ".label",
+        "message": "Request value is invalid"
+      }
+    ]
+  }
+}

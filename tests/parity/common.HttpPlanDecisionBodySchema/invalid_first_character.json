@@ -1,0 +1,18 @@
+{
+  "contract": "common.HttpPlanDecisionBodySchema",
+  "case": "invalid_first_character",
+  "input": {
+    "note": "Yes",
+    "idempotencyKey": "_abcdefg"
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid-invalid_format",
+        "field": ".idempotencyKey",
+        "message": "Request value is invalid"
+      }
+    ]
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "contract": "agent-api.AgentApiAdminAgentParamsSchema",
+  "case": "unknown_field",
+  "input": {
+    "unexpected": true
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid-invalid_type",
+        "field": ".agentId",
+        "message": "Request value is invalid"
+      }
+    ]
+  }
+}

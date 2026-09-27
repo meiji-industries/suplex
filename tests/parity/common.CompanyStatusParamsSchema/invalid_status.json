@@ -1,0 +1,18 @@
+{
+  "contract": "common.CompanyStatusParamsSchema",
+  "case": "invalid_status",
+  "input": {
+    "companyId": "company",
+    "status": "inactive"
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid-invalid_value",
+        "field": ".status",
+        "message": "Request value is invalid"
+      }
+    ]
+  }
+}

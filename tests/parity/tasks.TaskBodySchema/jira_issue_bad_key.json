@@ -1,0 +1,32 @@
+{
+  "contract": "tasks.TaskBodySchema",
+  "case": "jira_issue_bad_key",
+  "input": {
+    "projectId": "project",
+    "title": "  Build  ",
+    "idempotencyKey": "task-0001",
+    "issue": {
+      "kind": "jira",
+      "site": "https://team.atlassian.net",
+      "id": "123",
+      "key": "bad",
+      "title": "Issue",
+      "url": "https://team.atlassian.net/browse/APP-12"
+    }
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid-invalid_format",
+        "field": ".issue.key",
+        "message": "Request value is invalid"
+      },
+      {
+        "code": "invalid-custom",
+        "field": ".issue.url",
+        "message": "Request value is invalid"
+      }
+    ]
+  }
+}

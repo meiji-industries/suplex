@@ -1,0 +1,11 @@
+{
+  "contract": "agent-api.AgentApiTaskListQuerySchema",
+  "case": "empty_object",
+  "input": {},
+  "expected": {
+    "accepted": true,
+    "value": {
+      "limit": 50
+    }
+  }
+}

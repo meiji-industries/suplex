@@ -1,0 +1,21 @@
+{
+  "contract": "tasks.TaskAnswerBodySchema",
+  "case": "both_branches",
+  "input": {
+    "questionId": "question",
+    "answer": "yes",
+    "limitDecision": {
+      "kind": "cancel_task"
+    }
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid-invalid_union",
+        "field": ".",
+        "message": "Request value is invalid"
+      }
+    ]
+  }
+}

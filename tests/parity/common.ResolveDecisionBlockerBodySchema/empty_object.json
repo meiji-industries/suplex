@@ -1,0 +1,20 @@
+{
+  "contract": "common.ResolveDecisionBlockerBodySchema",
+  "case": "empty_object",
+  "input": {},
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid-invalid_type",
+        "field": ".expectedRevision",
+        "message": "Request value is invalid"
+      },
+      {
+        "code": "invalid-invalid_type",
+        "field": ".answer",
+        "message": "Request value is invalid"
+      }
+    ]
+  }
+}

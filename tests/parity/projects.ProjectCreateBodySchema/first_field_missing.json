@@ -1,0 +1,15 @@
+{
+  "contract": "projects.ProjectCreateBodySchema",
+  "case": "first_field_missing",
+  "input": {},
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid-invalid_union",
+        "field": ".",
+        "message": "Request value is invalid"
+      }
+    ]
+  }
+}

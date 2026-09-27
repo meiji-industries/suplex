@@ -1,0 +1,20 @@
+{
+  "contract": "workflows.WorkflowRecordInputSchema",
+  "case": "empty_object",
+  "input": {},
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid-invalid_type",
+        "field": ".name",
+        "message": "Request value is invalid"
+      },
+      {
+        "code": "invalid-invalid_value",
+        "field": ".engine",
+        "message": "Request value is invalid"
+      }
+    ]
+  }
+}

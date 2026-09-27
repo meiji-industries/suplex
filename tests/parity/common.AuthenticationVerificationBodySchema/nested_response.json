@@ -1,0 +1,20 @@
+{
+  "contract": "common.AuthenticationVerificationBodySchema",
+  "case": "nested_response",
+  "input": {
+    "response": [
+      1,
+      "x"
+    ]
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "challengeId": "",
+      "response": [
+        1,
+        "x"
+      ]
+    }
+  }
+}

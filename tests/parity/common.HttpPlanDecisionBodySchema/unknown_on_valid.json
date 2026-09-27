@@ -1,0 +1,16 @@
+{
+  "contract": "common.HttpPlanDecisionBodySchema",
+  "case": "unknown_on_valid",
+  "input": {
+    "note": "x",
+    "idempotencyKey": "xxxxxxxx",
+    "__parityUnknown": true
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "note": "x",
+      "idempotencyKey": "xxxxxxxx"
+    }
+  }
+}

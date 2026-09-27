@@ -1,0 +1,17 @@
+{
+  "contract": "agent-api.AgentApiPairingExchangeBodySchema",
+  "case": "first_field_null",
+  "input": {
+    "pairingCode": null
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid-invalid_type",
+        "field": ".pairingCode",
+        "message": "Request value is invalid"
+      }
+    ]
+  }
+}

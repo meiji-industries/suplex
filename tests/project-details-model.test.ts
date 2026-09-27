@@ -2,7 +2,7 @@ import { expect, test } from "vitest";
 
 import type { ApiProfile } from "../src/frontend/shell/view-shared.js";
 import { agentsDraftFindings, agentsProjectPatch, generalProjectPatch, type AgentsDraft } from "../src/frontend/features/projects/project-details-model.js";
-import type { ProjectProviderPolicy } from "../src/projects/provider-policy.js";
+import type { ProjectProviderPolicy } from "../src/frontend/contracts/provider-policy.js";
 
 const profiles: ApiProfile[] = [
   { id: "root-claude-default", name: "Claude default", role: "root", provider: "claude-code", model: "claude-sonnet-4", reasoningLevel: "medium", serviceTier: "default", avatarSeed: "a".repeat(32), archivedAt: null, createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-01T00:00:00.000Z" },
@@ -13,11 +13,12 @@ const profiles: ApiProfile[] = [
 const unrestricted: AgentsDraft = { rootProfileId: "root-claude-default", workerProfileId: "worker-codex", providerPolicy: null };
 
 test("General saves send only edited project fields", () => {
-  const saved = { name: "Suplex", baseBranch: "main", repositoryPath: "/repos/suplex" };
+  const saved = { repository: "acme/suplex", name: "Suplex", baseBranch: "main", repositoryPath: "/repos/suplex" };
 
   expect(generalProjectPatch(saved, { ...saved, name: "Suplex renamed" })).toEqual({ name: "Suplex renamed" });
   expect(generalProjectPatch(saved, { ...saved, baseBranch: "release" })).toEqual({ baseBranch: "release" });
   expect(generalProjectPatch(saved, { ...saved, repositoryPath: "/repos/moved" })).toEqual({ repositoryPath: "/repos/moved" });
+  expect(generalProjectPatch(saved, { ...saved, repository: "acme/renamed" })).toEqual({ repository: "acme/renamed" });
   expect(generalProjectPatch(saved, saved)).toEqual({});
 });
 

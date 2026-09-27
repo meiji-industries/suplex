@@ -1,0 +1,22 @@
+{
+  "contract": "tasks.TaskIssueBodySchema",
+  "case": "missing_issue_with_unknown",
+  "input": {
+    "extra": true
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid-invalid_type",
+        "field": ".issue",
+        "message": "Request value is invalid"
+      },
+      {
+        "code": "invalid-unrecognized_keys",
+        "field": ".",
+        "message": "Request value is invalid"
+      }
+    ]
+  }
+}

@@ -3,7 +3,7 @@ import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
-const api = vi.hoisted(() => ({ readJson: vi.fn() }));
+const api = vi.hoisted(() => ({ readJsonUnchecked: vi.fn() }));
 vi.mock("../src/frontend/lib/api.js", () => api);
 
 import { TaskSourcePicker } from "../src/frontend/features/tasks/task-source-picker.js";
@@ -25,7 +25,7 @@ function deferred<T>() {
 
 beforeEach(() => {
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
-  api.readJson.mockResolvedValue({ available: true, sources: [
+  api.readJsonUnchecked.mockResolvedValue({ available: true, sources: [
     { kind: "pull_request", number: 42, title: "Fix picker search", body: "", author: "octo", headBranch: "fix/search", baseBranch: "main", isDraft: false },
     { kind: "pull_request", number: 17, title: "Improve task creation", body: "", author: "hubot", headBranch: "feature/tasks", baseBranch: "main", isDraft: false },
   ] });
@@ -81,7 +81,7 @@ test("task source search accepts keyboard input without menu typeahead taking fo
 });
 
 test("issue selection reads the configured Jira tracker and returns its association", async () => {
-  api.readJson.mockImplementation(async (url: string) => {
+  api.readJsonUnchecked.mockImplementation(async (url: string) => {
     if (url.includes("/issues?query=")) return { issues: [{ kind: "jira", site: "https://client.atlassian.net", id: "42", key: "APP-42", title: "Fix the picker", url: "https://client.atlassian.net/browse/APP-42" }] };
     return { available: true, sources: [] };
   });
@@ -96,7 +96,7 @@ test("issue selection reads the configured Jira tracker and returns its associat
   await act(async () => { Array.from(document.querySelectorAll<HTMLButtonElement>("button")).find(button => button.textContent === "Issues")!.click(); });
   await flush();
 
-  expect(api.readJson).toHaveBeenLastCalledWith("/api/projects/project-1/issues?query=");
+  expect(api.readJsonUnchecked).toHaveBeenLastCalledWith("/api/projects/project-1/issues?query=");
   expect(document.body.textContent).toContain("APP-42 Fix the picker");
   await act(async () => { Array.from(document.querySelectorAll<HTMLElement>('[role="menuitem"]')).find(row => row.textContent?.includes("APP-42"))!.click(); });
   expect(onSelect).toHaveBeenCalledWith({ kind: "issue", issue: { kind: "jira", site: "https://client.atlassian.net", id: "42", key: "APP-42", title: "Fix the picker", url: "https://client.atlassian.net/browse/APP-42" } });
@@ -105,7 +105,7 @@ test("issue selection reads the configured Jira tracker and returns its associat
 
 test("newer issue searches replace slower earlier results", async () => {
   const requests: Array<{ query: string; response: ReturnType<typeof deferred<{ issues: Array<{ kind: "jira"; site: string; id: string; key: string; title: string; url: string }> }>> }> = [];
-  api.readJson.mockImplementation((url: string) => {
+  api.readJsonUnchecked.mockImplementation((url: string) => {
     if (!url.includes("/issues?query=")) return Promise.resolve({ available: true, sources: [] });
     const response = deferred<{ issues: Array<{ kind: "jira"; site: string; id: string; key: string; title: string; url: string }> }>();
     requests.push({ query: new URL(url, "https://suplex.test").searchParams.get("query") ?? "", response });
@@ -136,7 +136,7 @@ test("newer issue searches replace slower earlier results", async () => {
 
 test("tab and project changes invalidate pending issue searches", async () => {
   const requests: Array<ReturnType<typeof deferred<{ issues: Array<{ kind: "jira"; site: string; id: string; key: string; title: string; url: string }> }>>> = [];
-  api.readJson.mockImplementation((url: string) => {
+  api.readJsonUnchecked.mockImplementation((url: string) => {
     if (!url.includes("/issues?query=")) return Promise.resolve({ available: true, sources: [{ kind: "pull_request", number: 7, title: "Current pull request", body: "", author: "octo", headBranch: "feature", baseBranch: "main", isDraft: false }] });
     const response = deferred<{ issues: Array<{ kind: "jira"; site: string; id: string; key: string; title: string; url: string }> }>();
     requests.push(response);
@@ -167,7 +167,7 @@ test("tab and project changes invalidate pending issue searches", async () => {
 });
 
 test("issue results keep tracker matches that do not contain the query", async () => {
-  api.readJson.mockImplementation(async (url: string) => url.includes("/issues?query=")
+  api.readJsonUnchecked.mockImplementation(async (url: string) => url.includes("/issues?query=")
     ? { issues: [{ kind: "jira", site: "https://client.atlassian.net", id: "42", key: "APP-42", title: "Fix the picker", url: "https://client.atlassian.net/browse/APP-42" }] }
     : { available: true, sources: [] });
   const container = document.createElement("div");

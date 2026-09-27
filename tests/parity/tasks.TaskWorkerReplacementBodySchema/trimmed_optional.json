@@ -1,0 +1,19 @@
+{
+  "contract": "tasks.TaskWorkerReplacementBodySchema",
+  "case": "trimmed_optional",
+  "input": {
+    "sessionId": "session",
+    "reason": "  Replace  ",
+    "handoff": "  Context  ",
+    "workerProfileId": "worker"
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "sessionId": "session",
+      "reason": "Replace",
+      "handoff": "Context",
+      "workerProfileId": "worker"
+    }
+  }
+}

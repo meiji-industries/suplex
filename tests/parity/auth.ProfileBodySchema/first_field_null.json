@@ -1,0 +1,19 @@
+{
+  "contract": "auth.ProfileBodySchema",
+  "case": "first_field_null",
+  "input": {
+    "displayName": null,
+    "username": "x",
+    "avatarSeed": "x"
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid-invalid_type",
+        "field": ".displayName",
+        "message": "Request value is invalid"
+      }
+    ]
+  }
+}

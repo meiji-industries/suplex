@@ -1,0 +1,13 @@
+{
+  "contract": "projects.ProjectPatchBodySchema",
+  "case": "execution_empty_object",
+  "input": {
+    "execution": {}
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "execution": {}
+    }
+  }
+}

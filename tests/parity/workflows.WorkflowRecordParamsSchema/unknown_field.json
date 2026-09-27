@@ -1,0 +1,17 @@
+{
+  "contract": "workflows.WorkflowRecordParamsSchema",
+  "case": "unknown_field",
+  "input": {
+    "unexpected": true
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid-invalid_type",
+        "field": ".workflowId",
+        "message": "Request value is invalid"
+      }
+    ]
+  }
+}

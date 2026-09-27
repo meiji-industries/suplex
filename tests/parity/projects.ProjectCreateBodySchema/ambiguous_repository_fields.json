@@ -1,0 +1,18 @@
+{
+  "contract": "projects.ProjectCreateBodySchema",
+  "case": "ambiguous_repository_fields",
+  "input": {
+    "repositoryUrl": "repo",
+    "repositoryName": "repo"
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid-invalid_union",
+        "field": ".",
+        "message": "Request value is invalid"
+      }
+    ]
+  }
+}

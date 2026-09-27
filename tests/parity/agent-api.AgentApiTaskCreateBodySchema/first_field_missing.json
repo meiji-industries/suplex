@@ -1,0 +1,18 @@
+{
+  "contract": "agent-api.AgentApiTaskCreateBodySchema",
+  "case": "first_field_missing",
+  "input": {
+    "title": "x",
+    "idempotencyKey": "x"
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid-invalid_type",
+        "field": ".projectId",
+        "message": "Request value is invalid"
+      }
+    ]
+  }
+}

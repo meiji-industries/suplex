@@ -1,0 +1,18 @@
+{
+  "contract": "tasks.TaskAnswerBodySchema",
+  "case": "blank_answer",
+  "input": {
+    "questionId": "question",
+    "answer": "  "
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid-too_small",
+        "field": ".answer",
+        "message": "Request value is invalid"
+      }
+    ]
+  }
+}

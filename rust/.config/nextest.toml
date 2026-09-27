@@ -1,0 +1,3 @@
+[profile.ci]
+# Report every failure in one run.
+fail-fast = false

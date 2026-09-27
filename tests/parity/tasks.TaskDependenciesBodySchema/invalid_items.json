@@ -1,0 +1,41 @@
+{
+  "contract": "tasks.TaskDependenciesBodySchema",
+  "case": "invalid_items",
+  "input": {
+    "dependsOn": [
+      "",
+      null
+    ],
+    "blockedByPullRequests": [
+      {
+        "number": 0,
+        "extra": true
+      }
+    ]
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid-too_small",
+        "field": ".dependsOn.0",
+        "message": "Request value is invalid"
+      },
+      {
+        "code": "invalid-invalid_type",
+        "field": ".dependsOn.1",
+        "message": "Request value is invalid"
+      },
+      {
+        "code": "invalid-too_small",
+        "field": ".blockedByPullRequests.0.number",
+        "message": "Request value is invalid"
+      },
+      {
+        "code": "invalid-unrecognized_keys",
+        "field": ".blockedByPullRequests.0",
+        "message": "Request value is invalid"
+      }
+    ]
+  }
+}

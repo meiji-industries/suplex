@@ -1,0 +1,24 @@
+{
+  "contract": "tasks.TaskAnswerBodySchema",
+  "case": "change_limits_unsafe",
+  "input": {
+    "questionId": "question",
+    "limitDecision": {
+      "kind": "change_limits",
+      "limits": {
+        "budgetUsd": 1,
+        "maxTurns": 9007199254740992
+      }
+    }
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid-too_big",
+        "field": ".limitDecision.limits.maxTurns",
+        "message": "Request value is invalid"
+      }
+    ]
+  }
+}

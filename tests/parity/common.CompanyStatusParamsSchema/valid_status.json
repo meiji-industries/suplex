@@ -1,0 +1,16 @@
+{
+  "contract": "common.CompanyStatusParamsSchema",
+  "case": "valid_status",
+  "input": {
+    "companyId": "company",
+    "status": "paused",
+    "extra": true
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "companyId": "company",
+      "status": "paused"
+    }
+  }
+}

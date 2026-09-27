@@ -1,0 +1,25 @@
+{
+  "contract": "projects.ProfileBodySchema",
+  "case": "byte_order_mark_name",
+  "input": {
+    "provider": "codex",
+    "model": "gpt-6",
+    "reasoningLevel": "high",
+    "serviceTier": "priority",
+    "name": "﻿Profile﻿",
+    "role": "worker",
+    "avatarSeed": "0123456789abcdef0123456789abcdef"
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "provider": "codex",
+      "model": "gpt-6",
+      "reasoningLevel": "high",
+      "serviceTier": "priority",
+      "name": "Profile",
+      "role": "worker",
+      "avatarSeed": "0123456789abcdef0123456789abcdef"
+    }
+  }
+}

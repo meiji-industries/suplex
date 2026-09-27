@@ -2,9 +2,9 @@
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
-import type { Task } from "../src/tasks/contracts.js";
+import type { Task } from "../src/frontend/contracts/tasks.js";
 
-const api = vi.hoisted(() => ({ readJson: vi.fn(), withCompany: (path: string) => path }));
+const api = vi.hoisted(() => ({ readJsonUnchecked: vi.fn(), withCompany: (path: string) => path }));
 vi.mock("../src/frontend/lib/api.js", () => api);
 vi.mock("../src/frontend/features/tasks/task-data.js", () => ({ useTaskCache: () => vi.fn() }));
 
@@ -89,8 +89,8 @@ async function flush() {
 
 beforeEach(() => {
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
-  api.readJson.mockReset();
-  api.readJson.mockImplementation(async (url: string, init?: RequestInit) => {
+  api.readJsonUnchecked.mockReset();
+  api.readJsonUnchecked.mockImplementation(async (url: string, init?: RequestInit) => {
     if (url === "/api/companies/company-1/tasks" && init?.method === "POST") return { id: "created" };
     if (url === "/api/companies/company-1/projects") return { projects: [project] };
     if (url === "/api/profiles") return { profiles: [profile, worker] };
@@ -129,7 +129,7 @@ test("New task Blocked by picker filters, selects several, removes one, and post
   await act(async () => { button(view.container, "Remove Active prerequisite from Blocked by").click(); });
   expect(view.container.querySelector('[data-blocked-by-selection]')).toBeNull();
   await act(async () => { setText(title, "Create without reference"); title.form?.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })); await Promise.resolve(); });
-  const posts = () => api.readJson.mock.calls.filter(([url, init]) => url === "/api/companies/company-1/tasks" && init?.method === "POST").map(([, init]) => JSON.parse(init.body));
+  const posts = () => api.readJsonUnchecked.mock.calls.filter(([url, init]) => url === "/api/companies/company-1/tasks" && init?.method === "POST").map(([, init]) => JSON.parse(init.body));
   expect(posts()[0]).not.toHaveProperty("dependsOn");
   expect(posts()[0]).not.toHaveProperty("blockedByTaskId");
 
@@ -160,7 +160,7 @@ test("New from stores the selected Jira issue on the create request", async () =
   const title = view.container.querySelector<HTMLInputElement>('[aria-label="Task title"]')!;
   expect(title.value).toBe("Fix the picker");
   await act(async () => { title.form?.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })); await Promise.resolve(); });
-  const post = api.readJson.mock.calls.filter(([url, init]) => url === "/api/companies/company-1/tasks" && init?.method === "POST").at(-1);
+  const post = api.readJsonUnchecked.mock.calls.filter(([url, init]) => url === "/api/companies/company-1/tasks" && init?.method === "POST").at(-1);
   expect(post).toBeDefined();
   expect(JSON.parse(post![1].body)).toMatchObject({
     title: "Fix the picker",
@@ -208,15 +208,15 @@ test("the picker reports an empty task result", async () => {
 
 test("Workflow picker shows a non-default workflow by name and clears back to Standard", async () => {
   const review = { ...workflow, id: "workflow_native_independent_review", name: "Second opinion", engine: "independent_review" };
-  const fallback = api.readJson.getMockImplementation()!;
-  api.readJson.mockImplementation(async (url: string, init?: RequestInit) => url === "/api/workflows?includeArchived=true" ? { workflows: [workflow, review] } : fallback(url, init));
+  const fallback = api.readJsonUnchecked.getMockImplementation()!;
+  api.readJsonUnchecked.mockImplementation(async (url: string, init?: RequestInit) => url === "/api/workflows?includeArchived=true" ? { workflows: [workflow, review] } : fallback(url, init));
   const view = mount();
   await flush();
   const trigger = () => view.container.querySelector<HTMLButtonElement>('[aria-label="Workflow"]')!;
   const clear = () => view.container.querySelector<HTMLButtonElement>('[aria-label="Clear workflow"]');
   const title = view.container.querySelector<HTMLInputElement>('[aria-label="Task title"]')!;
   const submit = async () => { await act(async () => { setText(title, "Pick a workflow"); title.form?.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })); await Promise.resolve(); }); };
-  const lastPost = () => JSON.parse(api.readJson.mock.calls.filter(([url, init]) => url === "/api/companies/company-1/tasks" && init?.method === "POST").at(-1)![1].body);
+  const lastPost = () => JSON.parse(api.readJsonUnchecked.mock.calls.filter(([url, init]) => url === "/api/companies/company-1/tasks" && init?.method === "POST").at(-1)![1].body);
   expect(trigger().textContent).toBe("Workflow");
   expect(clear()).toBeNull();
 

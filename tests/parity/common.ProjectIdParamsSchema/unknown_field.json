@@ -1,0 +1,17 @@
+{
+  "contract": "common.ProjectIdParamsSchema",
+  "case": "unknown_field",
+  "input": {
+    "unexpected": true
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid-invalid_type",
+        "field": ".projectId",
+        "message": "Request value is invalid"
+      }
+    ]
+  }
+}

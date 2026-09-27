@@ -1,0 +1,13 @@
+{
+  "contract": "projects.ProjectCreateBodySchema",
+  "case": "new_repository",
+  "input": {
+    "repositoryName": "repo"
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "repositoryName": "repo"
+    }
+  }
+}

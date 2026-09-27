@@ -1,0 +1,24 @@
+{
+  "contract": "projects.ProjectBodySchema",
+  "case": "first_field_missing",
+  "input": {
+    "repositoryPath": "x",
+    "worktreeRoot": "x",
+    "repository": "x",
+    "baseBranch": "x",
+    "setupCommand": "x",
+    "verificationCommand": "x",
+    "rootProfileId": "x",
+    "workerProfileId": "x"
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid-invalid_type",
+        "field": ".name",
+        "message": "Request value is invalid"
+      }
+    ]
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "contract": "github-triggers.GithubTriggerParamsSchema",
+  "case": "first_field_missing",
+  "input": {
+    "ruleId": "x"
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid-invalid_type",
+        "field": ".companyId",
+        "message": "Request value is invalid"
+      }
+    ]
+  }
+}

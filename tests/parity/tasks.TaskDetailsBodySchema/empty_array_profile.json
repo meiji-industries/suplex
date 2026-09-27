@@ -1,0 +1,22 @@
+{
+  "contract": "tasks.TaskDetailsBodySchema",
+  "case": "empty_array_profile",
+  "input": {
+    "rootProfileId": []
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid-invalid_type",
+        "field": ".rootProfileId",
+        "message": "Request value is invalid"
+      },
+      {
+        "code": "invalid-too_small",
+        "field": ".rootProfileId",
+        "message": "Request value is invalid"
+      }
+    ]
+  }
+}

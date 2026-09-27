@@ -1,0 +1,15 @@
+{
+  "contract": "tasks.TaskContinueDeliveryBodySchema",
+  "case": "first_field_missing",
+  "input": {},
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid-invalid_value",
+        "field": ".deliveryTarget",
+        "message": "Request value is invalid"
+      }
+    ]
+  }
+}

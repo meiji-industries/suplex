@@ -1,0 +1,23 @@
+{
+  "contract": "projects.ProfilePatchBodySchema",
+  "case": "invalid_and_unknown",
+  "input": {
+    "archived": null,
+    "extra": true
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid-invalid_type",
+        "field": ".archived",
+        "message": "Request value is invalid"
+      },
+      {
+        "code": "invalid-unrecognized_keys",
+        "field": ".",
+        "message": "Request value is invalid"
+      }
+    ]
+  }
+}

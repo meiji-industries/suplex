@@ -1,0 +1,22 @@
+{
+  "contract": "common.ExpectedRevisionBodySchema",
+  "case": "unsafe_revision",
+  "input": {
+    "expectedRevision": 9007199254740992
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid-too_big",
+        "field": ".expectedRevision",
+        "message": "Request value is invalid"
+      },
+      {
+        "code": "invalid-too_big",
+        "field": ".expectedRevision",
+        "message": "Request value is invalid"
+      }
+    ]
+  }
+}

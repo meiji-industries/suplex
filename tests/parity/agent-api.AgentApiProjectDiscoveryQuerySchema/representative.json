@@ -1,0 +1,13 @@
+{
+  "contract": "agent-api.AgentApiProjectDiscoveryQuerySchema",
+  "case": "representative",
+  "input": {
+    "projectId": "x"
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "projectId": "x"
+    }
+  }
+}

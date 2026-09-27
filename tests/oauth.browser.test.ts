@@ -10,15 +10,15 @@ test("OAuth consent grants one selected project and returns the client state and
   const origin = `http://127.0.0.1:${port}`;
   const value = await nativeBrowser(1100, "127.0.0.1", origin);
   try {
-    const registered = await value.app.inject({ method: "POST", url: "/oauth/register", payload: {
+    const registered = await value.api("POST", "/oauth/register", {
       client_name: "Claude browser test",
       redirect_uris: [`${origin}/oauth-test-callback`],
       grant_types: ["authorization_code", "refresh_token"],
       response_types: ["code"],
       token_endpoint_auth_method: "none",
-    } });
-    expect(registered.statusCode).toBe(201);
-    const clientId = (registered.json() as { client_id: string }).client_id;
+    });
+    expect(registered.status).toBe(201);
+    const clientId = (registered.body as { client_id: string }).client_id;
     const verifier = "v".repeat(43);
     const state = "browser-state";
     const query = new URLSearchParams({
@@ -45,7 +45,7 @@ test("OAuth consent grants one selected project and returns the client state and
     expect(callback.searchParams.get("state")).toBe(state);
     expect(callback.searchParams.get("iss")).toBe(origin);
     expect(callback.searchParams.get("code")).toMatch(/^foc_/);
-    expect(value.database.authQuery(db => (db.prepare("SELECT COUNT(*) AS count FROM suplex_external_agent_project_grants WHERE project_id = ?").get(value.project.id) as { count: number }).count)).toBe(1);
+    expect((value.database.prepare("SELECT COUNT(*) AS count FROM suplex_external_agent_project_grants WHERE project_id = ?").get(value.project.id) as { count: number }).count).toBe(1);
     expect(value.errors).toEqual([]);
   } finally {
     await value.close();

@@ -1,0 +1,15 @@
+{
+  "contract": "common.UserIdParamsSchema",
+  "case": "empty_object",
+  "input": {},
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid-invalid_type",
+        "field": ".userId",
+        "message": "Request value is invalid"
+      }
+    ]
+  }
+}

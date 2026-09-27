@@ -1,0 +1,9 @@
+{
+  "contract": "tasks.TaskArchiveBodySchema",
+  "case": "empty_object",
+  "input": {},
+  "expected": {
+    "accepted": true,
+    "value": {}
+  }
+}

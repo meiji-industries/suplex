@@ -1,0 +1,22 @@
+{
+  "contract": "tasks.TaskAgentSelectionBodySchema",
+  "case": "invalid_role",
+  "input": {
+    "role": "advisor",
+    "expectedProfileId": "old",
+    "expectedSessionId": null,
+    "profileId": "new",
+    "direction": "go",
+    "resume": false
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid-invalid_value",
+        "field": ".role",
+        "message": "Request value is invalid"
+      }
+    ]
+  }
+}

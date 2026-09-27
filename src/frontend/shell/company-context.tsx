@@ -1,8 +1,8 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactElement, type ReactNode } from "react";
 import { flushSync } from "react-dom";
 
-import { companySettingsPath, readJson, withCompany, type ApiCompany, type ApiUser, type CompanyStatus } from "../lib/api.js";
-import type { AvatarRecord, AvatarUpdateBody } from "../../http/contracts/avatars.js";
+import { companySettingsPath, readJsonUnchecked, withCompany, type ApiCompany, type ApiUser, type CompanyStatus } from "../lib/api.js";
+import type { AvatarRecord, AvatarUpdateBody } from "../contracts/avatars.js";
 import { navigate } from "./navigation-state.js";
 
 const activeCompanyStorageKey = "suplex.activeCompanyId";
@@ -80,7 +80,7 @@ export function CompanyProvider({ children }: { children: ReactNode }): ReactEle
     setLoading(true);
     setError(undefined);
     try {
-      const result = await readJson<{ companies: ApiCompany[] }>("/api/companies");
+      const result = await readJsonUnchecked<{ companies: ApiCompany[] }>("/api/companies");
       const sorted = sortCompanies(result.companies);
       setCompanies(sorted);
       resolveSelection(result.companies);
@@ -102,9 +102,9 @@ export function CompanyProvider({ children }: { children: ReactNode }): ReactEle
     window.localStorage.removeItem(userStorageKey);
     let cancelled = false;
     void Promise.all([
-      readJson<{ user: ApiUser }>("/api/auth/me"),
-      readJson<{ companies: ApiCompany[] }>("/api/companies"),
-      readJson<{ avatars: Record<string, AvatarRecord> }>("/api/avatars").catch(() => ({ avatars: {} })),
+      readJsonUnchecked<{ user: ApiUser }>("/api/auth/me"),
+      readJsonUnchecked<{ companies: ApiCompany[] }>("/api/companies"),
+      readJsonUnchecked<{ avatars: Record<string, AvatarRecord> }>("/api/avatars").catch(() => ({ avatars: {} })),
     ]).then(([me, result, directory]) => {
       if (cancelled) return;
       setUser(me.user);
@@ -140,38 +140,38 @@ export function CompanyProvider({ children }: { children: ReactNode }): ReactEle
   }, [companies, currentCompany?.id]);
 
   const createCompany = useCallback(async (name: string): Promise<ApiCompany> => {
-    const created = await readJson<ApiCompany>("/api/admin/companies", { method: "POST", body: JSON.stringify({ name }) });
+    const created = await readJsonUnchecked<ApiCompany>("/api/admin/companies", { method: "POST", body: JSON.stringify({ name }) });
     window.localStorage.setItem(activeCompanyStorageKey, created.id);
     await reloadCompanies();
     return created;
   }, [reloadCompanies]);
 
   const renameCompany = useCallback(async (companyId: string, name: string): Promise<ApiCompany> => {
-    const renamed = await readJson<ApiCompany>(`/api/admin/companies/${encodeURIComponent(companyId)}`, { method: "PATCH", body: JSON.stringify({ name }) });
+    const renamed = await readJsonUnchecked<ApiCompany>(`/api/admin/companies/${encodeURIComponent(companyId)}`, { method: "PATCH", body: JSON.stringify({ name }) });
     await reloadCompanies();
     return renamed;
   }, [reloadCompanies]);
 
   const setCompanyStatus = useCallback(async (companyId: string, status: CompanyStatus): Promise<ApiCompany> => {
-    const updated = await readJson<ApiCompany>(`/api/admin/companies/${encodeURIComponent(companyId)}/status/${status}`, { method: "POST", body: "{}" });
+    const updated = await readJsonUnchecked<ApiCompany>(`/api/admin/companies/${encodeURIComponent(companyId)}/status/${status}`, { method: "POST", body: "{}" });
     await reloadCompanies();
     return updated;
   }, [reloadCompanies]);
 
   const setCompanyIssueCode = useCallback(async (companyId: string, issueCode: string | null): Promise<ApiCompany> => {
-    const updated = await readJson<ApiCompany>(`/api/admin/companies/${encodeURIComponent(companyId)}/issue-code`, { method: "PATCH", body: JSON.stringify({ issueCode }) });
+    const updated = await readJsonUnchecked<ApiCompany>(`/api/admin/companies/${encodeURIComponent(companyId)}/issue-code`, { method: "PATCH", body: JSON.stringify({ issueCode }) });
     await reloadCompanies();
     return updated;
   }, [reloadCompanies]);
 
   const updateProfile = useCallback(async (profile: { displayName: string; username: string; avatarSeed: string }): Promise<ApiUser> => {
-    const result = await readJson<{ user: ApiUser }>("/api/auth/me", { method: "PATCH", body: JSON.stringify(profile) });
+    const result = await readJsonUnchecked<{ user: ApiUser }>("/api/auth/me", { method: "PATCH", body: JSON.stringify(profile) });
     setUser(result.user);
     return result.user;
   }, []);
 
   const saveAvatar = useCallback(async (ownerId: string, patch: AvatarUpdateBody): Promise<AvatarRecord> => {
-    const record = await readJson<AvatarRecord>(`/api/avatars/${encodeURIComponent(ownerId)}`, { method: "PUT", body: JSON.stringify(patch) });
+    const record = await readJsonUnchecked<AvatarRecord>(`/api/avatars/${encodeURIComponent(ownerId)}`, { method: "PUT", body: JSON.stringify(patch) });
     setAvatars((current) => {
       const next = { ...current };
       if (record.shape || record.imageVersion) next[ownerId] = record; else delete next[ownerId];

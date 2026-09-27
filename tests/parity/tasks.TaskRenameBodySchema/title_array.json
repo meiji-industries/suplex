@@ -1,0 +1,22 @@
+{
+  "contract": "tasks.TaskRenameBodySchema",
+  "case": "title_array",
+  "input": {
+    "title": []
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid-invalid_type",
+        "field": ".title",
+        "message": "Request value is invalid"
+      },
+      {
+        "code": "invalid-too_small",
+        "field": ".title",
+        "message": "Request value is invalid"
+      }
+    ]
+  }
+}

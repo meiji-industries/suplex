@@ -1,0 +1,15 @@
+{
+  "contract": "tasks.TaskCoordinatorReplacementBodySchema",
+  "case": "empty_object",
+  "input": {},
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid-invalid_union",
+        "field": ".resume",
+        "message": "Request value is invalid"
+      }
+    ]
+  }
+}

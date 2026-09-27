@@ -1,7 +1,7 @@
 import { Alert, AlertDescription } from "../../components/ui/alert.js";
 import { useCompanyContext } from "../../shell/company-context.js";
 import { SettingRow, SettingsContent, SettingsLayout, SettingsSection } from "../settings/settings-layout.js";
-import { readJson, withCompany, type ApiUser } from "../../lib/api.js";
+import { readJsonUnchecked, withCompany, type ApiUser } from "../../lib/api.js";
 import { useCallback, useEffect, useState, type ReactElement } from "react";
 import type {
   ApiProfile,
@@ -95,40 +95,40 @@ export function AdminView(): ReactElement {
           modelList,
         ] = await Promise.all([
           needsUsers
-            ? readJson<{ users: ApiUser[] }>("/api/admin/users", options)
+            ? readJsonUnchecked<{ users: ApiUser[] }>("/api/admin/users", options)
             : { users: [] },
           isInvitations
-            ? readJson<{ invitations: ApiInvitation[] }>(
+            ? readJsonUnchecked<{ invitations: ApiInvitation[] }>(
                 "/api/admin/invitations",
                 options,
               )
             : { invitations: [] },
           needsCredentials
-            ? readJson<{ credentials: ApiCredential[] }>(
+            ? readJsonUnchecked<{ credentials: ApiCredential[] }>(
                 "/api/admin/credentials",
                 options,
               )
             : { credentials: [] },
           isAgents
-            ? readJson<{ profiles: ApiProfile[] }>(
+            ? readJsonUnchecked<{ profiles: ApiProfile[] }>(
                 "/api/profiles?includeArchived=true",
                 options,
               )
             : { profiles: [] },
           isAgents
-            ? readJson<{ agents: ApiExternalAgent[] }>(
+            ? readJsonUnchecked<{ agents: ApiExternalAgent[] }>(
                 `/api/admin/external-agents${currentCompany ? `?companyId=${encodeURIComponent(currentCompany.id)}` : ""}`,
                 options,
               ).catch(() => ({ agents: [] }))
             : { agents: [] },
           isAgents && currentCompany
-            ? readJson<{ projects: ApiProject[] }>(
+            ? readJsonUnchecked<{ projects: ApiProject[] }>(
                 `/api/companies/${encodeURIComponent(currentCompany.id)}/projects`,
                 options,
               ).catch(() => ({ projects: [] }))
             : Promise.resolve({ projects: [] }),
           isModels
-            ? readJson<{ models: ApiModel[] }>(
+            ? readJsonUnchecked<{ models: ApiModel[] }>(
                 "/api/admin/models",
                 options,
               ).catch(() => {
@@ -191,7 +191,7 @@ export function AdminView(): ReactElement {
 
   const invite = async (): Promise<void> => {
     try {
-      const result = await readJson<{ token: string; expiresAt: string }>(
+      const result = await readJsonUnchecked<{ token: string; expiresAt: string }>(
         "/api/admin/invitations",
         {
           method: "POST",
@@ -267,7 +267,7 @@ export function AdminView(): ReactElement {
     try {
       const init: RequestInit = { method: add ? "POST" : "DELETE" };
       if (add) init.body = JSON.stringify({ userId: targetUserId });
-      await readJson(
+      await readJsonUnchecked(
         add
           ? `/api/admin/companies/${companyId}/members`
           : `/api/admin/companies/${companyId}/members/${targetUserId}`,
@@ -286,7 +286,7 @@ export function AdminView(): ReactElement {
       return;
     }
     try {
-      await readJson(`/api/admin/users/${candidate.id}/revoke`, {
+      await readJsonUnchecked(`/api/admin/users/${candidate.id}/revoke`, {
         method: "POST",
         body: "{}",
       });
@@ -303,7 +303,7 @@ export function AdminView(): ReactElement {
       return;
     }
     try {
-      await readJson(`/api/admin/credentials/${credential.id}/revoke`, {
+      await readJsonUnchecked(`/api/admin/credentials/${credential.id}/revoke`, {
         method: "POST",
         body: "{}",
       });

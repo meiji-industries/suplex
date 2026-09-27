@@ -1,10 +1,10 @@
 import { isApiError } from "../lib/api.js";
-import type { CredentialResponse, InvitationSummaryResponse } from "../../http/contracts/common.js";
-import type { ModelResponse, ProfileResponse, ProjectResponse } from "../../http/contracts/projects.js";
-import type { AgentApiAdminAgent } from "../../http/contracts/agent-api.js";
-import type { TaskListTask, TaskResponse } from "../../http/contracts/tasks.js";
-import type { TaskTemplateResponse } from "../../http/contracts/task-templates.js";
-import type { WorkflowRecord } from "../../http/contracts/workflows.js";
+import type { CredentialResponse, InvitationSummaryResponse } from "../contracts/common.js";
+import type { ModelResponse, ProfileResponse, ProjectResponse } from "../contracts/projects.js";
+import type { AgentApiAdminAgent } from "../contracts/agents.js";
+import type { TaskListTask, TaskResponse } from "../contracts/task-responses.js";
+import type { TaskTemplateResponse } from "../contracts/task-templates.js";
+import type { WorkflowRecord } from "../contracts/workflow-presets.js";
 
 export type ApiProfile = ProfileResponse;
 export type ApiWorkflow = WorkflowRecord;

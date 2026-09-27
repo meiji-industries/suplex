@@ -1,0 +1,23 @@
+{
+  "contract": "projects.ProjectRepositoryBodySchema",
+  "case": "github_tracker_repository_pattern",
+  "input": {
+    "repositoryUrl": "repo",
+    "integration": {
+      "tracker": {
+        "kind": "github",
+        "repository": "bad"
+      }
+    }
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid-invalid_format",
+        "field": ".integration.tracker.repository",
+        "message": "Request value is invalid"
+      }
+    ]
+  }
+}

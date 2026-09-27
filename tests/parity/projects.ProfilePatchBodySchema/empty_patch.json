@@ -1,0 +1,9 @@
+{
+  "contract": "projects.ProfilePatchBodySchema",
+  "case": "empty_patch",
+  "input": {},
+  "expected": {
+    "accepted": true,
+    "value": {}
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "contract": "agent-api.AgentApiDeliveryDecisionBodySchema",
+  "case": "first_field_null",
+  "input": {
+    "decision": null
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid-invalid_value",
+        "field": ".decision",
+        "message": "Request value is invalid"
+      }
+    ]
+  }
+}

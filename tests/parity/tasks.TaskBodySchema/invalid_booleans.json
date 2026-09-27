@@ -1,0 +1,26 @@
+{
+  "contract": "tasks.TaskBodySchema",
+  "case": "invalid_booleans",
+  "input": {
+    "projectId": "project",
+    "title": "  Build  ",
+    "idempotencyKey": "task-0001",
+    "startImmediately": "yes",
+    "runProjectTests": 1
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid-invalid_type",
+        "field": ".startImmediately",
+        "message": "Request value is invalid"
+      },
+      {
+        "code": "invalid-invalid_type",
+        "field": ".runProjectTests",
+        "message": "Request value is invalid"
+      }
+    ]
+  }
+}

@@ -1,15 +1,15 @@
 import { readFile } from "node:fs/promises";
 
-import Database from "better-sqlite3";
+import { DatabaseSync as Database } from "node:sqlite";
 import { expect, test } from "vitest";
 
 async function migrationSql(): Promise<string[]> {
-  const source = await readFile(new URL("../drizzle/20260812055304_plan_revision_successor.sql", import.meta.url), "utf8");
+  const source = await readFile(new URL("../migrations/20260812055304_plan_revision_successor.sql", import.meta.url), "utf8");
   return source.split("--> statement-breakpoint").map((statement) => statement.trim()).filter(Boolean);
 }
 
-function baseSchema(database: Database.Database): void {
-  database.pragma("foreign_keys = ON");
+function baseSchema(database: Database): void {
+  database.exec("PRAGMA foreign_keys = ON");
   database.exec(`
     CREATE TABLE suplex_companies (id TEXT PRIMARY KEY);
     CREATE TABLE suplex_projects (id TEXT PRIMARY KEY, company_id TEXT NOT NULL REFERENCES suplex_companies(id));
@@ -27,7 +27,7 @@ function baseSchema(database: Database.Database): void {
 }
 
 test("the plan revision and successor migration preserves existing task links and installs guarded coordinates", async () => {
-  const database = new Database(":memory:");
+  const database = new Database(":memory:", { enableForeignKeyConstraints: false });
   try {
     baseSchema(database);
     database.exec("INSERT INTO suplex_tasks VALUES ('task-a', NULL, 'task-b'), ('task-b', 'task-a', NULL)");
@@ -62,7 +62,7 @@ test("the plan revision and successor migration preserves existing task links an
 });
 
 test("the plan revision and successor migration refuses ambiguous historical task links", async () => {
-  const database = new Database(":memory:");
+  const database = new Database(":memory:", { enableForeignKeyConstraints: false });
   try {
     baseSchema(database);
     database.exec("INSERT INTO suplex_tasks VALUES ('task-a', NULL, 'task-b'), ('task-c', NULL, 'task-b')");

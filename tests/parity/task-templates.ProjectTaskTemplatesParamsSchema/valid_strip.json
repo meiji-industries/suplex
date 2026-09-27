@@ -1,0 +1,14 @@
+{
+  "contract": "task-templates.ProjectTaskTemplatesParamsSchema",
+  "case": "valid_strip",
+  "input": {
+    "projectId": "project",
+    "extra": true
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "projectId": "project"
+    }
+  }
+}

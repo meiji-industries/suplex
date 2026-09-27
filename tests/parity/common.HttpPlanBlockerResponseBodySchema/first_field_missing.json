@@ -1,0 +1,18 @@
+{
+  "contract": "common.HttpPlanBlockerResponseBodySchema",
+  "case": "first_field_missing",
+  "input": {
+    "answer": "x",
+    "idempotencyKey": "xxxxxxxx"
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid-invalid_type",
+        "field": ".expectedWorkflowRevision",
+        "message": "Request value is invalid"
+      }
+    ]
+  }
+}

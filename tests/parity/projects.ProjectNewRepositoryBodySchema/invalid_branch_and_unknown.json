@@ -1,0 +1,24 @@
+{
+  "contract": "projects.ProjectNewRepositoryBodySchema",
+  "case": "invalid_branch_and_unknown",
+  "input": {
+    "repositoryName": "repo",
+    "baseBranch": "",
+    "extra": true
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid-too_small",
+        "field": ".baseBranch",
+        "message": "Request value is invalid"
+      },
+      {
+        "code": "invalid-unrecognized_keys",
+        "field": ".",
+        "message": "Request value is invalid"
+      }
+    ]
+  }
+}

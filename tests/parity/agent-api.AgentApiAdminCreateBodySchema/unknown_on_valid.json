@@ -1,0 +1,22 @@
+{
+  "contract": "agent-api.AgentApiAdminCreateBodySchema",
+  "case": "unknown_on_valid",
+  "input": {
+    "name": "x",
+    "companyId": "x",
+    "projectIds": [
+      "x"
+    ],
+    "__parityUnknown": true
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "name": "x",
+      "companyId": "x",
+      "projectIds": [
+        "x"
+      ]
+    }
+  }
+}

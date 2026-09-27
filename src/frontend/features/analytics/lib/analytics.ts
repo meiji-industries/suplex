@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
-import { TaskCostsResponseSchema } from "../../../../tasks/analytics/contracts.js";
-import { readJson } from "../../../lib/api.js";
+import { TaskCostsResponseSchema } from "../../../contracts/analytics.js";
+import { readJsonUnchecked } from "../../../lib/api.js";
 
 export function money(value: number | null): string {
   if (value === null) return "Not available";
@@ -26,7 +26,7 @@ export function useTaskCosts(companyId: string | undefined) {
     let closed = false;
     const load = async () => {
       try {
-        const result = TaskCostsResponseSchema.parse(await readJson(`/api/companies/${encodeURIComponent(companyId)}/task-costs`));
+        const result = TaskCostsResponseSchema.parse(await readJsonUnchecked(`/api/companies/${encodeURIComponent(companyId)}/task-costs`));
         if (!closed) setState({ companyId, tasks: result.tasks });
       } catch { if (!closed) setState(undefined); }
     };

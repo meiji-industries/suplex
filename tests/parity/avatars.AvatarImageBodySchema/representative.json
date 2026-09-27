@@ -1,0 +1,15 @@
+{
+  "contract": "avatars.AvatarImageBodySchema",
+  "case": "representative",
+  "input": {
+    "mimeType": "image/png",
+    "base64": "x"
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "mimeType": "image/png",
+      "base64": "x"
+    }
+  }
+}

@@ -1,0 +1,21 @@
+{
+  "contract": "tasks.TaskIssueBodySchema",
+  "case": "github_invalid_url_throws",
+  "input": {
+    "issue": {
+      "kind": "github",
+      "repository": "team/repo",
+      "number": 12,
+      "id": "123",
+      "key": "GH-12",
+      "title": "Issue",
+      "url": "x"
+    }
+  },
+  "expected": {
+    "accepted": false,
+    "error": {
+      "kind": "thrown"
+    }
+  }
+}

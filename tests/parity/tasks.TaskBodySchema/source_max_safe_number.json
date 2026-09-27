@@ -1,0 +1,35 @@
+{
+  "contract": "tasks.TaskBodySchema",
+  "case": "source_max_safe_number",
+  "input": {
+    "projectId": "project",
+    "title": "  Build  ",
+    "idempotencyKey": "task-0001",
+    "source": {
+      "kind": "issue",
+      "number": 9007199254740991
+    }
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "projectId": "project",
+      "title": "Build",
+      "description": "",
+      "idempotencyKey": "task-0001",
+      "images": [],
+      "startImmediately": false,
+      "deliveryTarget": "pull_request_draft",
+      "runProjectTests": true,
+      "visualEvidence": "off",
+      "source": {
+        "kind": "issue",
+        "number": 9007199254740991
+      },
+      "workflow": "standard",
+      "advisorProfileIds": {},
+      "dependsOn": [],
+      "blockedByPullRequests": []
+    }
+  }
+}

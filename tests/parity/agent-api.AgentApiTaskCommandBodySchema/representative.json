@@ -1,0 +1,17 @@
+{
+  "contract": "agent-api.AgentApiTaskCommandBodySchema",
+  "case": "representative",
+  "input": {
+    "command": "start_task",
+    "revision": "x",
+    "idempotencyKey": "x"
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "command": "start_task",
+      "revision": "x",
+      "idempotencyKey": "x"
+    }
+  }
+}

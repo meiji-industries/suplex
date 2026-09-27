@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useState, type ReactElement } from "react";
 import { Archive, ArchiveRestore, Check, CircleAlert, Ellipsis, Pencil, Power, PowerOff } from "lucide-react";
-import type { GithubTriggerActivity, GithubTriggerRule } from "../../../http/contracts/github-triggers.js";
+import type { GithubTriggerActivity, GithubTriggerRule } from "../../contracts/github-triggers.js";
 import type { ApiProject, ApiWorkflow } from "../../shell/view-shared.js";
-import { readJson, withCompany } from "../../lib/api.js";
+import { readJsonUnchecked, withCompany } from "../../lib/api.js";
 import { useCompanyContext } from "../../shell/company-context.js";
 import { SettingRow, SettingsContent, SettingsLayout, SettingsSection } from "./settings-layout.js";
 import { SettingsDataTable, SettingsTableCell, SettingsTableEmpty, SettingsTableGroup, SettingsTableRow, SettingsToolbar, type SettingsTableColumn } from "../../components/app/settings-table.js";
@@ -56,9 +56,9 @@ export function TriggerSettingsView(): ReactElement {
 
   const reload = async (): Promise<GithubTriggerRule[]> => {
     const [ruleResult, projectResult, workflowResult] = await Promise.all([
-      readJson<{ rules: GithubTriggerRule[] }>(`/api/companies/${encodeURIComponent(companyId)}/github-triggers`),
-      readJson<{ projects: ApiProject[] }>(`/api/companies/${encodeURIComponent(companyId)}/projects`),
-      readJson<{ workflows: ApiWorkflow[] }>("/api/workflows?includeArchived=true"),
+      readJsonUnchecked<{ rules: GithubTriggerRule[] }>(`/api/companies/${encodeURIComponent(companyId)}/github-triggers`),
+      readJsonUnchecked<{ projects: ApiProject[] }>(`/api/companies/${encodeURIComponent(companyId)}/projects`),
+      readJsonUnchecked<{ workflows: ApiWorkflow[] }>("/api/workflows?includeArchived=true"),
     ]);
     setRules(ruleResult.rules);
     setProjects(projectResult.projects);
@@ -75,7 +75,7 @@ export function TriggerSettingsView(): ReactElement {
   const update = async (rule: GithubTriggerRule, patch: Record<string, unknown>, failure: string): Promise<void> => {
     setBusy(true); setError("");
     try {
-      await readJson(`/api/companies/${encodeURIComponent(companyId)}/github-triggers/${encodeURIComponent(rule.id)}`, { method: "PATCH", body: JSON.stringify({ ...patch, expectedRevision: rule.revision }) });
+      await readJsonUnchecked(`/api/companies/${encodeURIComponent(companyId)}/github-triggers/${encodeURIComponent(rule.id)}`, { method: "PATCH", body: JSON.stringify({ ...patch, expectedRevision: rule.revision }) });
       await reload();
     } catch (reason) { setError(reason instanceof Error ? reason.message : failure); throw reason; }
     finally { setBusy(false); }
@@ -85,8 +85,8 @@ export function TriggerSettingsView(): ReactElement {
     setBusy(true); setError("");
     try {
       const body = { ...editor.draft, protectedPaths: paths(editor.draft.protectedPaths) };
-      if (editor.kind === "edit") await readJson(`/api/companies/${encodeURIComponent(companyId)}/github-triggers/${encodeURIComponent(editor.rule.id)}`, { method: "PATCH", body: JSON.stringify({ ...body, expectedRevision: editor.rule.revision }) });
-      else await readJson(`/api/companies/${encodeURIComponent(companyId)}/github-triggers`, { method: "POST", body: JSON.stringify(body) });
+      if (editor.kind === "edit") await readJsonUnchecked(`/api/companies/${encodeURIComponent(companyId)}/github-triggers/${encodeURIComponent(editor.rule.id)}`, { method: "PATCH", body: JSON.stringify({ ...body, expectedRevision: editor.rule.revision }) });
+      else await readJsonUnchecked(`/api/companies/${encodeURIComponent(companyId)}/github-triggers`, { method: "POST", body: JSON.stringify(body) });
       await reload(); setEditor({ kind: "closed" });
     } catch (reason) { setError(reason instanceof Error ? reason.message : "Unable to save trigger"); }
     finally { setBusy(false); }
@@ -94,7 +94,7 @@ export function TriggerSettingsView(): ReactElement {
   const check = async (rule: GithubTriggerRule, preview = false): Promise<void> => {
     setBusy(true); setError("");
     try {
-      const result = await readJson<{ activity: GithubTriggerActivity[] }>(`/api/companies/${encodeURIComponent(companyId)}/github-triggers/${encodeURIComponent(rule.id)}/check`, { method: "POST", body: "{}" });
+      const result = await readJsonUnchecked<{ activity: GithubTriggerActivity[] }>(`/api/companies/${encodeURIComponent(companyId)}/github-triggers/${encodeURIComponent(rule.id)}/check`, { method: "POST", body: "{}" });
       const loaded = await reload();
       if (preview) setEnableTarget({ rule: loaded.find((candidate) => candidate.id === rule.id) ?? rule, activity: result.activity });
     } catch (reason) { setError(reason instanceof Error ? reason.message : "Unable to check trigger"); }
@@ -102,7 +102,7 @@ export function TriggerSettingsView(): ReactElement {
   };
   const viewActivity = async (rule: GithubTriggerRule): Promise<void> => {
     setActivityTarget(rule); setActivity([]); setError("");
-    try { const result = await readJson<{ activity: GithubTriggerActivity[] }>(`/api/companies/${encodeURIComponent(companyId)}/github-triggers/${encodeURIComponent(rule.id)}/activity`); setActivity(result.activity); }
+    try { const result = await readJsonUnchecked<{ activity: GithubTriggerActivity[] }>(`/api/companies/${encodeURIComponent(companyId)}/github-triggers/${encodeURIComponent(rule.id)}/activity`); setActivity(result.activity); }
     catch (reason) { setError(reason instanceof Error ? reason.message : "Unable to load activity"); }
   };
   const visible = useMemo(() => {

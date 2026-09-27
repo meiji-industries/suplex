@@ -1,0 +1,17 @@
+{
+  "contract": "tasks.TaskAgentSelectionBodySchema",
+  "case": "unknown_field",
+  "input": {
+    "unexpected": true
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid-invalid_union",
+        "field": ".resume",
+        "message": "Request value is invalid"
+      }
+    ]
+  }
+}

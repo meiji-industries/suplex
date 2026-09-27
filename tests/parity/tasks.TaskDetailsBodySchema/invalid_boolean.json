@@ -1,0 +1,17 @@
+{
+  "contract": "tasks.TaskDetailsBodySchema",
+  "case": "invalid_boolean",
+  "input": {
+    "runProjectTests": "false"
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid-invalid_type",
+        "field": ".runProjectTests",
+        "message": "Request value is invalid"
+      }
+    ]
+  }
+}

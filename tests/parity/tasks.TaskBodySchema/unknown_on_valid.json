@@ -1,0 +1,20 @@
+{
+  "contract": "tasks.TaskBodySchema",
+  "case": "unknown_on_valid",
+  "input": {
+    "projectId": "x",
+    "title": "x",
+    "idempotencyKey": "sample-001",
+    "__parityUnknown": true
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid-unrecognized_keys",
+        "field": ".",
+        "message": "Request value is invalid"
+      }
+    ]
+  }
+}

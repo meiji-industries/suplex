@@ -1,0 +1,17 @@
+{
+  "contract": "projects.ProjectRepositoryBodySchema",
+  "case": "empty_repository_url",
+  "input": {
+    "repositoryUrl": ""
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid-too_small",
+        "field": ".repositoryUrl",
+        "message": "Request value is invalid"
+      }
+    ]
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "contract": "workflows.WorkflowRecordInputSchema",
+  "case": "representative",
+  "input": {
+    "name": "x",
+    "engine": "standard"
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "name": "x",
+      "description": "",
+      "engine": "standard",
+      "advisorProfileIds": {}
+    }
+  }
+}

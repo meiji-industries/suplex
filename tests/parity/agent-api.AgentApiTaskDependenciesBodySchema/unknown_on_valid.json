@@ -1,0 +1,18 @@
+{
+  "contract": "agent-api.AgentApiTaskDependenciesBodySchema",
+  "case": "unknown_on_valid",
+  "input": {
+    "dependsOn": [],
+    "__parityUnknown": true
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid-unrecognized_keys",
+        "field": ".",
+        "message": "Request value is invalid"
+      }
+    ]
+  }
+}

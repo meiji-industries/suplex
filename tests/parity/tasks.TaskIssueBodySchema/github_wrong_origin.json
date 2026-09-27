@@ -1,0 +1,30 @@
+{
+  "contract": "tasks.TaskIssueBodySchema",
+  "case": "github_wrong_origin",
+  "input": {
+    "issue": {
+      "kind": "github",
+      "repository": "team/repo",
+      "number": 12,
+      "id": "123",
+      "key": "GH-12",
+      "title": "Issue",
+      "url": "https://example.com/x"
+    }
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid-custom",
+        "field": ".issue.url",
+        "message": "Request value is invalid"
+      },
+      {
+        "code": "invalid-custom",
+        "field": ".issue.url",
+        "message": "Request value is invalid"
+      }
+    ]
+  }
+}

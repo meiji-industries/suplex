@@ -1,0 +1,30 @@
+{
+  "contract": "projects.ProjectAgentTaskPolicySchema",
+  "case": "empty_object",
+  "input": {},
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid-invalid_type",
+        "field": ".workflowIds",
+        "message": "Request value is invalid"
+      },
+      {
+        "code": "invalid-invalid_type",
+        "field": ".defaultWorkflowId",
+        "message": "Request value is invalid"
+      },
+      {
+        "code": "invalid-invalid_type",
+        "field": ".rootProfileIds",
+        "message": "Request value is invalid"
+      },
+      {
+        "code": "invalid-invalid_type",
+        "field": ".workerProfileIds",
+        "message": "Request value is invalid"
+      }
+    ]
+  }
+}

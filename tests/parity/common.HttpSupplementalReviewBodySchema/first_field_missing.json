@@ -1,0 +1,17 @@
+{
+  "contract": "common.HttpSupplementalReviewBodySchema",
+  "case": "first_field_missing",
+  "input": {
+    "idempotencyKey": "xxxxxxxx"
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid-invalid_type",
+        "field": ".expectedRevision",
+        "message": "Request value is invalid"
+      }
+    ]
+  }
+}

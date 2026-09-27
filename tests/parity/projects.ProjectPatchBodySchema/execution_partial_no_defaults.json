@@ -1,0 +1,21 @@
+{
+  "contract": "projects.ProjectPatchBodySchema",
+  "case": "execution_partial_no_defaults",
+  "input": {
+    "execution": {
+      "environment": {
+        "CUSTOM": "value"
+      }
+    }
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "execution": {
+        "environment": {
+          "CUSTOM": "value"
+        }
+      }
+    }
+  }
+}

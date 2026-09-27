@@ -1,0 +1,17 @@
+{
+  "contract": "agent-api.AgentApiAdminProjectsBodySchema",
+  "case": "first_field_null",
+  "input": {
+    "projectIds": null
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid-invalid_type",
+        "field": ".projectIds",
+        "message": "Request value is invalid"
+      }
+    ]
+  }
+}

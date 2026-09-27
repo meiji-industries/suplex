@@ -1,0 +1,15 @@
+{
+  "contract": "task-templates.UpdateTaskTemplateBodySchema",
+  "case": "nullable_profiles",
+  "input": {
+    "rootProfileId": null,
+    "workerProfileId": null
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "rootProfileId": null,
+      "workerProfileId": null
+    }
+  }
+}

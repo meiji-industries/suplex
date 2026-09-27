@@ -1,0 +1,19 @@
+{
+  "contract": "tasks.TaskCoordinatorReplacementBodySchema",
+  "case": "first_field_null",
+  "input": {
+    "sessionId": null,
+    "rootProfileId": "x",
+    "resume": false
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid-invalid_type",
+        "field": ".sessionId",
+        "message": "Request value is invalid"
+      }
+    ]
+  }
+}

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { ArrowDownToLine, BarChart3, RefreshCw } from "lucide-react";
-import { AnalyticsResponseSchema, type AnalyticsResponse } from "../../../tasks/analytics/contracts.js";
-import { percentile, usageMetrics } from "../../../tasks/analytics/metrics.js";
+import { AnalyticsResponseSchema, type AnalyticsResponse } from "../../contracts/analytics.js";
+import { percentile, usageMetrics } from "./lib/usage-metrics.js";
 import { ApplicationFrame } from "../../shell/application-frame.js";
 import { useCompanyContext } from "../../shell/company-context.js";
 import { CostValue } from "../../components/app/cost-value.js";
@@ -12,7 +12,7 @@ import { Button } from "../../components/ui/button.js";
 import { Input } from "../../components/ui/input.js";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../components/ui/select.js";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../components/ui/table.js";
-import { readJson, withCompany } from "../../lib/api.js";
+import { readJsonUnchecked, withCompany } from "../../lib/api.js";
 import { compact, duration } from "./lib/analytics.js";
 import type { ApiProject } from "../../shell/view-shared.js";
 import { OutcomeChart, SpendChart } from "./analytics-charts.js";
@@ -46,8 +46,8 @@ export function AnalyticsView() {
     const load = async () => {
       try {
         const [result, projectResult] = await Promise.all([
-          readJson(`/api/companies/${encodeURIComponent(companyId)}/analytics`).then(value => AnalyticsResponseSchema.parse(value)),
-          readJson<{ projects: ApiProject[] }>(`/api/companies/${encodeURIComponent(companyId)}/projects`),
+          readJsonUnchecked(`/api/companies/${encodeURIComponent(companyId)}/analytics`).then(value => AnalyticsResponseSchema.parse(value)),
+          readJsonUnchecked<{ projects: ApiProject[] }>(`/api/companies/${encodeURIComponent(companyId)}/projects`),
         ]);
         if (!closed) { setData(result); setProjects(projectResult.projects); setError(""); }
       } catch (error) { if (!closed) setError(error instanceof Error ? error.message : "Analytics is not available"); }

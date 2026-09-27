@@ -1,0 +1,18 @@
+{
+  "contract": "common.TaskArtifactParamsSchema",
+  "case": "first_field_null",
+  "input": {
+    "taskId": null,
+    "artifactId": "x"
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid-invalid_type",
+        "field": ".taskId",
+        "message": "Request value is invalid"
+      }
+    ]
+  }
+}

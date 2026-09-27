@@ -105,16 +105,12 @@ cancelling, and archiving tasks.
 
 ## Dev workflow
 
-`mise run dev` runs the Suplex API and task host as one foreground
-command; Vite is embedded in Fastify. Frontend changes use Vite HMR and React
-Fast Refresh. Backend changes do NOT hot-reload under `mise run dev` — Ctrl-C
-and rerun it (this keeps native OpenCode sessions intact while `src/` is being
-edited). `mise run dev:watch` is the same stack with `tsx watch`, which restarts
-the API/worker on every save. Before runtime or browser
+`mise run dev` runs the native Rust host with Vite HMR and React Fast Refresh.
+Rust changes require a restart under `mise run dev`; `mise run dev:watch`
+rebuilds and restarts the native host on changes. Before runtime or browser
 verification, run `mise run dev:status` and reuse a stack that is already
-listening. Ctrl-C in the dev terminal stops everything; `mise run down` stops
-a stack from elsewhere; `mise run dev:recover` force-kills anything still
-holding the dev ports.
+listening. Ctrl-C in the dev terminal stops the stack; `mise run down` stops
+this checkout's owned development processes from elsewhere.
 
 Start the development stack with:
 
@@ -134,12 +130,15 @@ Need a change? Create a new migration.
 
 ## Where new code goes
 
-- Task HTTP contracts and routes belong in `src/http/contracts/tasks.ts` and `src/http/routes/tasks.ts`. `src/tasks/tasks.ts` owns user authorization and task commands. Task metadata belongs in `src/tasks/repository.ts`.
-- Durable task intent, assignments, and prompt ownership belong in `src/coordination/root-session-store.ts`. `src/coordination/root-controller.ts` coordinates Root and Worker through the `TaskHarness` seam in `src/runtimes/task-harness.ts`.
-- Provider runtimes live under `src/runtimes`. `src/runtimes/task-harness-registry.ts` selects one by profile provider. Read-only observation of a native session goes through `NativeSessionReader`, never through a harness client directly.
-- `src/delivery/operations.ts` observes Git and GitHub before deterministic delivery operations. Native and external evidence must not depend on a second progress receipt.
-- Keep backend code in its domain folder. Keep domain-neutral utilities in `src/shared`. Keep feature-owned frontend code under `src/frontend/features` and global application behavior under `src/frontend/shell`.
+- Task HTTP contracts and routes belong in `rust/src/http/contracts` and `rust/src/http/routes/tasks.rs`. Task authorization and commands belong in `rust/src/tasks/commands.rs`; metadata belongs in `rust/src/tasks/repository.rs`.
+- Durable task intent and prompt ownership belong in `rust/src/coordination/root_session_store.rs`. `rust/src/coordination/root_controller.rs` coordinates Root and Worker through `rust/src/runtimes/task_harness.rs`.
+- Provider runtimes live under `rust/src/runtimes`; `task_harness_registry.rs` selects by profile provider. Read-only native observation belongs in the runtime's session reader.
+- `rust/src/delivery/operations.rs` observes Git and GitHub before delivery operations. Native and external evidence must not depend on a second progress receipt.
+- Keep backend code in its Rust domain module. Keep domain-neutral utilities in `rust/src/shared`. Keep browser wire contracts in `src/frontend/contracts`, feature-owned frontend code under `src/frontend/features`, and global application behavior under `src/frontend/shell`.
 - There is no phase engine or Temporal. Preserve admitted native messages across restart instead of replaying them. Delete dead code when you find it.
+- HTTP response structs use concrete Rust types. Use `serde_json::Value` only for a payload Suplex stores without interpreting it, such as raw Advisor output, and mark that field `#[ts(type = "unknown")]`. Model every fixed string vocabulary with `wire_enum!` from `rust/src/shared/mod.rs`. Deserialize stored JSON into its Rust type before reading it.
+- Browser types for a server response come from `src/frontend/contracts/generated`, written by `ts-rs` when `cargo test` runs. Add `#[derive(ts_rs::TS)]` to a response type and `#[ts(export)]` to the root type. Dependencies export automatically. Commit the generated files. CI fails on drift. Never edit a generated file. Zod schemas under `src/frontend/contracts` validate requests and serve as test-side checks of server output. Do not hand-write a response type.
+- Each endpoint's fetch lives in a feature `*-api.ts` module, such as `src/frontend/features/tasks/lib/task-api.ts`, as one function typed to the generated response. `readJsonUnchecked<T>()` in `src/frontend/lib/api.ts` casts JSON to `T` without checking it. Call it only inside such a module. Do not add new direct calls from components. `scripts/rust-ratchet.ts` counts these calls and fails when the count rises.
 
 ## Agent skills
 
@@ -147,7 +146,7 @@ Need a change? Create a new migration.
 
 Public discovery artifacts, the paired-agent runtime, and the operator handoff:
 `docs/agents/machine-discovery.md`. Serve new public artifacts from
-`src/http/routes/discovery.ts`. Keep them free of task and company data.
+`rust/src/http/routes/discovery.rs`. Keep them free of task and company data.
 
 ### Issue tracker
 

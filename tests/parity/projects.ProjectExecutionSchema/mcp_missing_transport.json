@@ -1,0 +1,26 @@
+{
+  "contract": "projects.ProjectExecutionSchema",
+  "case": "mcp_missing_transport",
+  "input": {
+    "mcp": [
+      {
+        "name": "server",
+        "grants": {
+          "root": [],
+          "advisor": [],
+          "worker": []
+        }
+      }
+    ]
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid-invalid_type",
+        "field": ".mcp.0.transport",
+        "message": "Request value is invalid"
+      }
+    ]
+  }
+}

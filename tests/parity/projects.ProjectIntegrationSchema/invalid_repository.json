@@ -1,0 +1,20 @@
+{
+  "contract": "projects.ProjectIntegrationSchema",
+  "case": "invalid_repository",
+  "input": {
+    "repository": {
+      "kind": "bitbucket",
+      "tokenEnvironment": "bad"
+    }
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid-invalid_format",
+        "field": ".repository.tokenEnvironment",
+        "message": "Request value is invalid"
+      }
+    ]
+  }
+}

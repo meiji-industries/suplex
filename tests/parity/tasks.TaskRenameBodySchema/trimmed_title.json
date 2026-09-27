@@ -1,0 +1,13 @@
+{
+  "contract": "tasks.TaskRenameBodySchema",
+  "case": "trimmed_title",
+  "input": {
+    "title": "  New title  "
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "title": "New title"
+    }
+  }
+}

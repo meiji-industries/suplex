@@ -1,0 +1,17 @@
+{
+  "contract": "tasks.TaskAnswerBodySchema",
+  "case": "first_field_missing",
+  "input": {
+    "answer": "x"
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid-invalid_union",
+        "field": ".",
+        "message": "Request value is invalid"
+      }
+    ]
+  }
+}

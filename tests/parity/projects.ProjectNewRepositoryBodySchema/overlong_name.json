@@ -1,0 +1,17 @@
+{
+  "contract": "projects.ProjectNewRepositoryBodySchema",
+  "case": "overlong_name",
+  "input": {
+    "repositoryName": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid-too_big",
+        "field": ".repositoryName",
+        "message": "Request value is invalid"
+      }
+    ]
+  }
+}

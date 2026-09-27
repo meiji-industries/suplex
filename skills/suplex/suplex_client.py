@@ -135,7 +135,7 @@ class SuplexClient:
             )
         raise SuplexError(message, status, code, safe.get("findings"))
 
-    # Routes that exist in src/http/routes/agent-api.ts.
+    # Routes served by rust/src/http/routes/agent_api.rs.
 
     def whoami(self) -> dict:
         return self.call("GET", "/api/agent/me")

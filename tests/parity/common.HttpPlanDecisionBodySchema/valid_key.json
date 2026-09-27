@@ -1,0 +1,15 @@
+{
+  "contract": "common.HttpPlanDecisionBodySchema",
+  "case": "valid_key",
+  "input": {
+    "note": "  Yes  ",
+    "idempotencyKey": "A_b:c-123"
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "note": "Yes",
+      "idempotencyKey": "A_b:c-123"
+    }
+  }
+}

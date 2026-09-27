@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useState } from "react";
 
-import type { HealthCheck } from "../../../platform/health.js";
-import type { ProviderSummary, ProviderListResponse } from "../../../http/contracts/providers.js";
-import type { ProfileResponse, ProjectResponse } from "../../../http/contracts/projects.js";
+import type { HealthCheck } from "../../contracts/health.js";
+import type { ProviderSummary, ProviderListResponse } from "../../contracts/providers.js";
+import type { ProfileResponse, ProjectResponse } from "../../contracts/projects.js";
 import { useSystemHealth } from "../../components/app/system-health.js";
 import type { ToolIconId } from "../../components/app/tool-icons.js";
-import { readJson, withCompany, type ApiCompany } from "../../lib/api.js";
+import { readJsonUnchecked, withCompany, type ApiCompany } from "../../lib/api.js";
 
 export type ApiProfile = ProfileResponse;
 export type ApiProject = ProjectResponse;
@@ -61,11 +61,11 @@ export function useOnboardingData(company: ApiCompany | undefined): OnboardingDa
     try {
       // Show each list when it arrives: the provider checks take seconds, the agents and projects do not.
       await Promise.all([
-        readJson<ProviderListResponse>("/api/admin/providers").then(result => setProviders(result.providers)),
+        readJsonUnchecked<ProviderListResponse>("/api/admin/providers").then(result => setProviders(result.providers)),
         // A fresh install points its default agents at the installed CLI before the list is read.
-        readJson("/api/admin/profiles/defaults", { method: "POST" }).catch(() => undefined)
-          .then(() => readJson<{ profiles: ApiProfile[] }>("/api/profiles?includeArchived=true")).then(result => setProfiles(result.profiles)),
-        readJson<{ projects: ApiProject[] }>(`/api/companies/${encodeURIComponent(company.id)}/projects`).then(result => setProjects(result.projects)),
+        readJsonUnchecked("/api/admin/profiles/defaults", { method: "POST" }).catch(() => undefined)
+          .then(() => readJsonUnchecked<{ profiles: ApiProfile[] }>("/api/profiles?includeArchived=true")).then(result => setProfiles(result.profiles)),
+        readJsonUnchecked<{ projects: ApiProject[] }>(`/api/companies/${encodeURIComponent(company.id)}/projects`).then(result => setProjects(result.projects)),
       ]);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Suplex could not check the providers. Select Check again.");

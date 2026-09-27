@@ -1,0 +1,9 @@
+{
+  "contract": "tasks.DeliveryTargetSchema",
+  "case": "representative",
+  "input": "local_worktree",
+  "expected": {
+    "accepted": true,
+    "value": "local_worktree"
+  }
+}

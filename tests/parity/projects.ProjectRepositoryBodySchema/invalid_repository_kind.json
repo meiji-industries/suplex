@@ -1,0 +1,22 @@
+{
+  "contract": "projects.ProjectRepositoryBodySchema",
+  "case": "invalid_repository_kind",
+  "input": {
+    "repositoryUrl": "repo",
+    "integration": {
+      "repository": {
+        "kind": "gitlab"
+      }
+    }
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid-invalid_union",
+        "field": ".integration.repository.kind",
+        "message": "Request value is invalid"
+      }
+    ]
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "contract": "projects.ProfilePatchBodySchema",
+  "case": "invalid_archived",
+  "input": {
+    "archived": "true"
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid-invalid_type",
+        "field": ".archived",
+        "message": "Request value is invalid"
+      }
+    ]
+  }
+}

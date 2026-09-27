@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type ReactElement } from "react";
 import { ChevronDown, Copy, FolderOpen } from "lucide-react";
-import { WorktreeAppsResponseSchema, type WorktreeAppSchema } from "../../../http/contracts/tasks.js";
-import { readJson } from "../../lib/api.js";
+import { WorktreeAppsResponseSchema, type WorktreeAppSchema } from "../../contracts/task-responses.js";
+import { readJsonUnchecked } from "../../lib/api.js";
 import { Button } from "../../components/ui/button.js";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "../../components/ui/dropdown-menu.js";
 
@@ -21,7 +21,7 @@ export function TaskWorktreeMenu({ taskId, path, onError }: { taskId: string; pa
     setApps(null);
     setCopyState("");
     if (!localOrigin()) return;
-    void readJson(`/api/tasks/${taskId}/worktree/apps`).then(value => {
+    void readJsonUnchecked(`/api/tasks/${taskId}/worktree/apps`).then(value => {
       const result = WorktreeAppsResponseSchema.parse(value);
       if (current) setApps(result.apps);
     }).catch(() => { if (current) setApps([]); });
@@ -40,7 +40,7 @@ export function TaskWorktreeMenu({ taskId, path, onError }: { taskId: string; pa
   };
   const open = async (app: WorktreeApp["id"]) => {
     try {
-      const result = await readJson<{ ok: boolean; error?: string }>(`/api/tasks/${taskId}/worktree/open`, { method: "POST", body: JSON.stringify({ app }) });
+      const result = await readJsonUnchecked<{ ok: boolean; error?: string }>(`/api/tasks/${taskId}/worktree/open`, { method: "POST", body: JSON.stringify({ app }) });
       if (!result.ok) onError(result.error ?? "The worktree could not be opened");
     } catch (error) { onError(error instanceof Error ? error.message : "The worktree could not be opened"); }
   };

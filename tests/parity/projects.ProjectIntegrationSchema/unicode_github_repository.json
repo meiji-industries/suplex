@@ -1,0 +1,20 @@
+{
+  "contract": "projects.ProjectIntegrationSchema",
+  "case": "unicode_github_repository",
+  "input": {
+    "tracker": {
+      "kind": "github",
+      "repository": "é/repo"
+    }
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid-invalid_format",
+        "field": ".tracker.repository",
+        "message": "Request value is invalid"
+      }
+    ]
+  }
+}

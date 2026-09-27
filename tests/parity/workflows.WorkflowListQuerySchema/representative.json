@@ -1,0 +1,9 @@
+{
+  "contract": "workflows.WorkflowListQuerySchema",
+  "case": "representative",
+  "input": {},
+  "expected": {
+    "accepted": true,
+    "value": {}
+  }
+}

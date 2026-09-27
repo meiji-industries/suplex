@@ -1,0 +1,39 @@
+{
+  "contract": "projects.ProjectAgentTaskPolicySchema",
+  "case": "wrong_enum_and_unknown",
+  "input": {
+    "workflowIds": [
+      "workflow"
+    ],
+    "defaultWorkflowId": "workflow",
+    "rootProfileIds": [
+      "root"
+    ],
+    "workerProfileIds": [
+      "worker"
+    ],
+    "deliveryTarget": "publish",
+    "visualEvidence": "screenshots",
+    "extra": true
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid-invalid_value",
+        "field": ".deliveryTarget",
+        "message": "Request value is invalid"
+      },
+      {
+        "code": "invalid-invalid_value",
+        "field": ".visualEvidence",
+        "message": "Request value is invalid"
+      },
+      {
+        "code": "invalid-unrecognized_keys",
+        "field": ".",
+        "message": "Request value is invalid"
+      }
+    ]
+  }
+}

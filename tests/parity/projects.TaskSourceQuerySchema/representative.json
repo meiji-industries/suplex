@@ -1,0 +1,13 @@
+{
+  "contract": "projects.TaskSourceQuerySchema",
+  "case": "representative",
+  "input": {
+    "kind": "pull_request"
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "kind": "pull_request"
+    }
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "contract": "common.ExpectedRevisionBodySchema",
+  "case": "array_command_id",
+  "input": {
+    "expectedRevision": 1,
+    "commandId": []
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid-invalid_type",
+        "field": ".commandId",
+        "message": "Request value is invalid"
+      },
+      {
+        "code": "invalid-too_small",
+        "field": ".commandId",
+        "message": "Request value is invalid"
+      }
+    ]
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "contract": "avatars.AvatarShapeSchema",
+  "case": "unknown_field",
+  "input": {
+    "unexpected": true
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid-invalid_value",
+        "field": ".",
+        "message": "Request value is invalid"
+      }
+    ]
+  }
+}

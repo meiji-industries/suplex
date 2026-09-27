@@ -1,0 +1,17 @@
+{
+  "contract": "common.CompanyIdParamsSchema",
+  "case": "empty_id",
+  "input": {
+    "companyId": ""
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid-too_small",
+        "field": ".companyId",
+        "message": "Request value is invalid"
+      }
+    ]
+  }
+}

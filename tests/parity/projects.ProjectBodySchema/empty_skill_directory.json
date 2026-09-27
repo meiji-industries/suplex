@@ -1,0 +1,30 @@
+{
+  "contract": "projects.ProjectBodySchema",
+  "case": "empty_skill_directory",
+  "input": {
+    "name": "Project",
+    "repositoryPath": "/tmp/project",
+    "worktreeRoot": "/tmp/worktrees",
+    "repository": "team/project",
+    "baseBranch": "main",
+    "setupCommand": "pnpm install",
+    "verificationCommand": "pnpm test",
+    "rootProfileId": "root",
+    "workerProfileId": "worker",
+    "execution": {
+      "skillDirectories": [
+        ""
+      ]
+    }
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid-too_small",
+        "field": ".execution.skillDirectories.0",
+        "message": "Request value is invalid"
+      }
+    ]
+  }
+}

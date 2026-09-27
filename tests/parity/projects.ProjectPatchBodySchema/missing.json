@@ -1,0 +1,14 @@
+{
+  "contract": "projects.ProjectPatchBodySchema",
+  "case": "missing",
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid-invalid_type",
+        "field": ".",
+        "message": "Request value is invalid"
+      }
+    ]
+  }
+}

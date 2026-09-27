@@ -1,0 +1,9 @@
+{
+  "contract": "common.IdSchema",
+  "case": "representative",
+  "input": "x",
+  "expected": {
+    "accepted": true,
+    "value": "x"
+  }
+}

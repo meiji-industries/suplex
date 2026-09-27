@@ -1,0 +1,23 @@
+{
+  "contract": "tasks.TaskBodySchema",
+  "case": "source_wrong_kind",
+  "input": {
+    "projectId": "project",
+    "title": "  Build  ",
+    "idempotencyKey": "task-0001",
+    "source": {
+      "kind": "other",
+      "number": 1
+    }
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid-invalid_union",
+        "field": ".source.kind",
+        "message": "Request value is invalid"
+      }
+    ]
+  }
+}

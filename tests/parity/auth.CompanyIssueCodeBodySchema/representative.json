@@ -1,0 +1,13 @@
+{
+  "contract": "auth.CompanyIssueCodeBodySchema",
+  "case": "representative",
+  "input": {
+    "issueCode": null
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "issueCode": null
+    }
+  }
+}

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState, type ReactElement } from "react";
 import type { z } from "zod";
-import type { ProviderConnection, ProviderInstanceListResponseSchema, ProviderListResponse } from "../../../http/contracts/providers.js";
+import type { ProviderConnection, ProviderInstanceListResponseSchema, ProviderListResponse } from "../../contracts/providers.js";
 import { Button } from "../../components/ui/button.js";
 import { Input } from "../../components/ui/input.js";
 import { NewButton } from "../../components/ui/new-button.js";
@@ -11,7 +11,7 @@ import { Field, FieldGroup, FieldLabel } from "../../components/ui/field.js";
 import { SettingsContent, SettingsLayout } from "./settings-layout.js";
 import { SettingsDataTable, SettingsTableCell, SettingsTableEmpty, SettingsTableGroup, SettingsTableLoading, SettingsTableRow, type SettingsTableColumn } from "../../components/app/settings-table.js";
 import { useCompanyContext } from "../../shell/company-context.js";
-import { readJson, withCompany } from "../../lib/api.js";
+import { readJsonUnchecked, withCompany } from "../../lib/api.js";
 import { ProviderLoginTerminal, useProviderLogin } from "./provider-login.js";
 
 const columns: SettingsTableColumn[] = [
@@ -45,7 +45,7 @@ export function ProviderSettingsView(): ReactElement {
   const load = useCallback(async (silent = false): Promise<void> => {
     if (!silent) setView({ status: "loading" });
     try {
-      const [providers, instanceList] = await Promise.all([readJson<ProviderListResponse>("/api/admin/providers"), readJson<{ instances: ProviderInstance[] }>("/api/admin/provider-instances")]);
+      const [providers, instanceList] = await Promise.all([readJsonUnchecked<ProviderListResponse>("/api/admin/providers"), readJsonUnchecked<{ instances: ProviderInstance[] }>("/api/admin/provider-instances")]);
       setInstances(instanceList.instances);
       setView({ status: "loaded", data: providers });
     } catch (reason) {
@@ -60,7 +60,7 @@ export function ProviderSettingsView(): ReactElement {
     setBusy(true);
     setError("");
     try {
-      await readJson("/api/admin/provider-instances", { method: "POST", body: JSON.stringify({ provider: "claude-code", label }) });
+      await readJsonUnchecked("/api/admin/provider-instances", { method: "POST", body: JSON.stringify({ provider: "claude-code", label }) });
       setLabel("");
       setAddOpen(false);
       await load(true);
@@ -74,7 +74,7 @@ export function ProviderSettingsView(): ReactElement {
     setDeleteTarget(null);
     setError("");
     try {
-      await readJson(`/api/admin/provider-instances/${encodeURIComponent(id)}`, { method: "DELETE" });
+      await readJsonUnchecked(`/api/admin/provider-instances/${encodeURIComponent(id)}`, { method: "DELETE" });
       await load();
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Suplex could not delete the provider.");

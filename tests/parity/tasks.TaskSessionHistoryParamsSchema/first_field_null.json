@@ -1,0 +1,18 @@
+{
+  "contract": "tasks.TaskSessionHistoryParamsSchema",
+  "case": "first_field_null",
+  "input": {
+    "taskId": null,
+    "sessionId": "x"
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid-invalid_type",
+        "field": ".taskId",
+        "message": "Request value is invalid"
+      }
+    ]
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "contract": "github-triggers.GithubTriggerParamsSchema",
+  "case": "representative",
+  "input": {
+    "companyId": "x",
+    "ruleId": "x"
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "companyId": "x",
+      "ruleId": "x"
+    }
+  }
+}

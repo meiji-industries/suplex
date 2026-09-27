@@ -30,11 +30,8 @@ import {
   type AgentRole,
   type TimelineRange,
 } from "./timeline-model.js";
-import { readJson } from "../../lib/api.js";
-import {
-  TaskTimelineResponseSchema,
-  type TimelineTask,
-} from "../../../tasks/timeline/contracts.js";
+import { readJsonUnchecked } from "../../lib/api.js";
+import { TaskTimelineResponseSchema, type TimelineTask } from "../../contracts/timeline.js";
 import type { ApiProject } from "../../shell/view-shared.js";
 import { addDays, formatDuration, titleCase } from "./timeline-format.js";
 
@@ -74,10 +71,10 @@ export function TimelineView(): ReactElement {
     }
     try {
       const [taskResult, projectResult] = await Promise.all([
-        readJson(
+        readJsonUnchecked(
           `/api/companies/${encodeURIComponent(companyId)}/timeline`,
         ).then((value) => TaskTimelineResponseSchema.parse(value)),
-        readJson<{ projects: ApiProject[] }>(
+        readJsonUnchecked<{ projects: ApiProject[] }>(
           `/api/companies/${encodeURIComponent(companyId)}/projects`,
         ),
       ]);

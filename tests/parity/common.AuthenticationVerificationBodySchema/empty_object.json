@@ -1,0 +1,15 @@
+{
+  "contract": "common.AuthenticationVerificationBodySchema",
+  "case": "empty_object",
+  "input": {},
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid-invalid_type",
+        "field": ".response",
+        "message": "Request value is invalid"
+      }
+    ]
+  }
+}

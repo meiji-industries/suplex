@@ -1,0 +1,20 @@
+{
+  "contract": "tasks.TaskAgentsBatchQuerySchema",
+  "case": "sorted_deduplicated",
+  "input": {
+    "taskId": [
+      "task-b",
+      "task-a",
+      "task-b"
+    ]
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "taskId": [
+        "task-a",
+        "task-b"
+      ]
+    }
+  }
+}

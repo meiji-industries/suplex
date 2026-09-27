@@ -1,0 +1,20 @@
+{
+  "contract": "agent-api.AgentApiAdminCreateBodySchema",
+  "case": "first_field_missing",
+  "input": {
+    "companyId": "x",
+    "projectIds": [
+      "x"
+    ]
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid-invalid_type",
+        "field": ".name",
+        "message": "Request value is invalid"
+      }
+    ]
+  }
+}

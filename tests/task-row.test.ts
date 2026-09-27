@@ -2,7 +2,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { expect, test } from "vitest";
 
-import type { Task } from "../src/tasks/contracts.js";
+import type { Task } from "../src/frontend/contracts/tasks.js";
 import { TaskRow } from "../src/frontend/features/tasks/tasks.js";
 
 const profile = { profileId: "profile", provider: "opencode", model: "model", reasoningLevel: "medium", serviceTier: "default" } as const;
@@ -10,7 +10,7 @@ const task = {
   id: "task-1",
   companyId: "company-1",
   projectId: "project-1",
-  issueKey: "FOR-1",
+  issue: null, artifacts: [], issueKey: "FOR-1",
   title: "Repair task links",
   description: "Keep task and pull request navigation separate.",
   status: "active",

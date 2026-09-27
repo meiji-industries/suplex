@@ -1,0 +1,17 @@
+{
+  "contract": "providers.ProviderInstanceCreateBodySchema",
+  "case": "first_field_missing",
+  "input": {
+    "label": "x"
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid-invalid_value",
+        "field": ".provider",
+        "message": "Request value is invalid"
+      }
+    ]
+  }
+}

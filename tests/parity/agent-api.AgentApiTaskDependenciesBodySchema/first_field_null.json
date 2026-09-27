@@ -1,0 +1,17 @@
+{
+  "contract": "agent-api.AgentApiTaskDependenciesBodySchema",
+  "case": "first_field_null",
+  "input": {
+    "dependsOn": null
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid-invalid_type",
+        "field": ".dependsOn",
+        "message": "Request value is invalid"
+      }
+    ]
+  }
+}

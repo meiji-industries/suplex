@@ -1,0 +1,15 @@
+{
+  "contract": "projects.ProjectPatchBodySchema",
+  "case": "empty_object",
+  "input": {},
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid-custom",
+        "field": ".",
+        "message": "Request value is invalid"
+      }
+    ]
+  }
+}

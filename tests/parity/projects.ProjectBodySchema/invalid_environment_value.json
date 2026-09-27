@@ -1,0 +1,30 @@
+{
+  "contract": "projects.ProjectBodySchema",
+  "case": "invalid_environment_value",
+  "input": {
+    "name": "Project",
+    "repositoryPath": "/tmp/project",
+    "worktreeRoot": "/tmp/worktrees",
+    "repository": "team/project",
+    "baseBranch": "main",
+    "setupCommand": "pnpm install",
+    "verificationCommand": "pnpm test",
+    "rootProfileId": "root",
+    "workerProfileId": "worker",
+    "execution": {
+      "environment": {
+        "CUSTOM": 1
+      }
+    }
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid-invalid_type",
+        "field": ".execution.environment.CUSTOM",
+        "message": "Request value is invalid"
+      }
+    ]
+  }
+}

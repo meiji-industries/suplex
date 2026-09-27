@@ -1,0 +1,18 @@
+{
+  "contract": "common.RequiredRevisionNoteBodySchema",
+  "case": "empty_trimmed_note",
+  "input": {
+    "expectedRevision": 1,
+    "note": " \t "
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid-too_small",
+        "field": ".note",
+        "message": "Request value is invalid"
+      }
+    ]
+  }
+}

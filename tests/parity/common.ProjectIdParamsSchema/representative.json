@@ -1,0 +1,13 @@
+{
+  "contract": "common.ProjectIdParamsSchema",
+  "case": "representative",
+  "input": {
+    "projectId": "x"
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "projectId": "x"
+    }
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "contract": "tasks.TaskAnswerBodySchema",
+  "case": "empty_array",
+  "input": [],
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid-invalid_union",
+        "field": ".",
+        "message": "Request value is invalid"
+      }
+    ]
+  }
+}

@@ -1,8 +1,10 @@
 import { useEffect, useState, type ReactElement } from "react";
 import { Pencil, Plus } from "lucide-react";
-import type { TaskTemplateInput } from "../../../tasks/templates.js";
-import { DeliveryTargetSchema, VisualEvidenceSchema } from "../../../tasks/contracts.js";
-import { ADVISOR_LABELS, WORKFLOWS, WorkflowIdSchema, workflowDefinition, type AdvisorRole } from "../../../coordination/workflows.js";
+import type { TaskTemplateInput } from "../../contracts/task-templates.js";
+import { DeliveryTargetSchema, VisualEvidenceSchema } from "../../contracts/tasks.js";
+import { ADVISOR_LABELS, WORKFLOWS, workflowDefinition } from "../tasks/workflow-presentation.js";
+import { WorkflowIdSchema } from "../../contracts/workflows.js";
+import type { AdvisorRole } from "../../contracts/advisor-reports.js";
 import { SettingRow, SettingsContent, SettingsLayout, SettingsSection } from "./settings-layout.js";
 import { ProjectDetailsLayout } from "../projects/project-details-layout.js";
 import { useCompanyContext } from "../../shell/company-context.js";
@@ -17,7 +19,7 @@ import { Field, FieldGroup, FieldLabel, FieldLegend, FieldSet } from "../../comp
 import { Input } from "../../components/ui/input.js";
 import { Textarea } from "../../components/ui/textarea.js";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../components/ui/select.js";
-import { readJson, withCompany } from "../../lib/api.js";
+import { readJsonUnchecked, withCompany } from "../../lib/api.js";
 import type { ApiProfile, ApiProject, ApiTaskTemplate } from "../../shell/view-shared.js";
 
 type EditorState =
@@ -61,8 +63,8 @@ export function TaskTemplateSettings({ projectId: initialProjectId }: { projectI
     setLoadingProjects(true);
     setProjectError("");
     void Promise.all([
-      readJson<{ projects: ApiProject[] }>(`/api/companies/${encodeURIComponent(companyId)}/projects`),
-      readJson<{ profiles: ApiProfile[] }>("/api/profiles"),
+      readJsonUnchecked<{ projects: ApiProject[] }>(`/api/companies/${encodeURIComponent(companyId)}/projects`),
+      readJsonUnchecked<{ profiles: ApiProfile[] }>("/api/profiles"),
     ]).then(([projectResult, profileResult]) => {
       if (closed) return;
       setProjects(projectResult.projects);
@@ -83,7 +85,7 @@ export function TaskTemplateSettings({ projectId: initialProjectId }: { projectI
     setDeleteError("");
     setError("");
     if (!projectId) return () => { closed = true; };
-    void readJson<{ templates: ApiTaskTemplate[] }>(`/api/projects/${projectId}/task-templates`)
+    void readJsonUnchecked<{ templates: ApiTaskTemplate[] }>(`/api/projects/${projectId}/task-templates`)
       .then((result) => { if (!closed) setTemplates(result.templates); })
       .catch((reason) => { if (!closed) setError(String(reason)); });
     return () => { closed = true; };
@@ -104,7 +106,7 @@ export function TaskTemplateSettings({ projectId: initialProjectId }: { projectI
     setError("");
     try {
       const editing = editor.kind === "edit";
-      const result = await readJson<ApiTaskTemplate>(editing ? `/api/task-templates/${editor.templateId}` : `/api/projects/${projectId}/task-templates`, {
+      const result = await readJsonUnchecked<ApiTaskTemplate>(editing ? `/api/task-templates/${editor.templateId}` : `/api/projects/${projectId}/task-templates`, {
         method: editing ? "PATCH" : "POST",
         body: JSON.stringify(editing ? { ...editor.draft, rootProfileId: editor.draft.rootProfileId ?? null, workerProfileId: editor.draft.workerProfileId ?? null } : editor.draft),
       });
@@ -122,7 +124,7 @@ export function TaskTemplateSettings({ projectId: initialProjectId }: { projectI
     setBusy(true);
     setDeleteError("");
     try {
-      await readJson(`/api/task-templates/${editor.templateId}`, { method: "DELETE" });
+      await readJsonUnchecked(`/api/task-templates/${editor.templateId}`, { method: "DELETE" });
       setTemplates((current) => current.filter((template) => template.id !== editor.templateId));
       setDeleteOpen(false);
       setEditor({ kind: "closed" });

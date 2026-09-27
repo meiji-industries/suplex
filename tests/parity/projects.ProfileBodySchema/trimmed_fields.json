@@ -1,0 +1,27 @@
+{
+  "contract": "projects.ProfileBodySchema",
+  "case": "trimmed_fields",
+  "input": {
+    "provider": "codex",
+    "model": "  codex/gpt-6  ",
+    "reasoningLevel": "high",
+    "serviceTier": "priority",
+    "name": "  Profile  ",
+    "role": "worker",
+    "avatarSeed": "0123456789abcdef0123456789abcdef",
+    "providerInstanceId": null
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "provider": "codex",
+      "model": "codex/gpt-6",
+      "reasoningLevel": "high",
+      "serviceTier": "priority",
+      "providerInstanceId": null,
+      "name": "Profile",
+      "role": "worker",
+      "avatarSeed": "0123456789abcdef0123456789abcdef"
+    }
+  }
+}

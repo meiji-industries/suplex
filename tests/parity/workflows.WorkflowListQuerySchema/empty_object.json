@@ -1,0 +1,9 @@
+{
+  "contract": "workflows.WorkflowListQuerySchema",
+  "case": "empty_object",
+  "input": {},
+  "expected": {
+    "accepted": true,
+    "value": {}
+  }
+}

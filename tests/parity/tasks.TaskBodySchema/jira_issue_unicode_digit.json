@@ -1,0 +1,27 @@
+{
+  "contract": "tasks.TaskBodySchema",
+  "case": "jira_issue_unicode_digit",
+  "input": {
+    "projectId": "project",
+    "title": "  Build  ",
+    "idempotencyKey": "task-0001",
+    "issue": {
+      "kind": "jira",
+      "site": "https://team.atlassian.net",
+      "id": "١٢",
+      "key": "APP-12",
+      "title": "Issue",
+      "url": "https://team.atlassian.net/browse/APP-12"
+    }
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid-invalid_format",
+        "field": ".issue.id",
+        "message": "Request value is invalid"
+      }
+    ]
+  }
+}

@@ -1,5 +1,5 @@
-import type { TaskAnalytics } from "../../../tasks/analytics/contracts.js";
-import { usageMetrics } from "../../../tasks/analytics/metrics.js";
+import type { TaskAnalytics } from "../../contracts/analytics.js";
+import { usageMetrics } from "./lib/usage-metrics.js";
 import { Button } from "../../components/ui/button.js";
 import { CostValue } from "../../components/app/cost-value.js";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../components/ui/table.js";

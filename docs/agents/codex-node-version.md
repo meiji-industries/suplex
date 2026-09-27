@@ -1,9 +1,12 @@
 # Codex Node version
 
+This records a historical environment issue from the TypeScript backend.
+The current Suplex server is a native binary; Node and pnpm remain build
+and development tools.
+
 ## Symptom
 
-Codex/Herdr pane commands selected Homebrew Node 25.8.1, causing the Node-26-built
-`better-sqlite3` module to fail.
+Codex/Herdr pane commands selected Homebrew Node 25.8.1, causing the then-current Node-26-built `better-sqlite3` module to fail.
 
 ## Root cause and fix
 
@@ -29,6 +32,4 @@ reproduces CI's clean global Git configuration without changing user settings.
 
 ## Verify
 
-From the repository, run `zsh -c 'node --version'` or:
-`codex exec -C /Users/dev/code/suplex -- 'Run: node --version && node -e "require(\"better-sqlite3\")"'`.
-Expected Node version: `v26.7.0`.
+From the repository, run `zsh -c 'node --version'`. The pinned development version is in `mise.toml`.

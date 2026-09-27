@@ -1,9 +1,9 @@
 import { globSync, readFileSync } from "node:fs";
 
 import { expect, test } from "vitest";
-import { nativeApp } from "./helpers/native-app.js";
-import { TaskResponseSchema, TaskNoteBodySchema } from "../src/http/contracts/tasks.js";
-import { ProjectResponseSchema, ProfileResponseSchema } from "../src/http/contracts/projects.js";
+import { TaskResponseSchema } from "../src/frontend/contracts/task-responses.js";
+import { TaskInputSchema } from "../src/frontend/contracts/tasks.js";
+import { ProjectResponseSchema, ProfileResponseSchema } from "../src/frontend/contracts/projects.js";
 
 type Finding = { file: string; line: number; text: string };
 
@@ -14,26 +14,22 @@ const VOCABULARY_ALLOWLIST: Record<string, string> = {
   "src/frontend/features/projects/projects.tsx": "legacy provider-check copy",
   "src/frontend/features/tasks/task-details.tsx": "legacy diagnostics copy",
   "src/frontend/features/timeline/timeline.tsx": "legacy timeline copy",
-  "src/engine/activities/context.ts": "legacy provider failure summaries",
-  "src/engine/workflow/register-ci.ts": "legacy CI retry labels",
-  "src/engine/workflow/register-planning.ts": "legacy cancellation summary",
-  "src/engine/workflow/runtime.ts": "legacy capacity summary",
 };
 
 const lines = (pattern: string): Finding[] => globSync(pattern).flatMap((file) => readFileSync(file, "utf8").split("\n").map((text, index) => ({ file, line: index + 1, text })));
 const describe = (findings: Finding[]) => findings.map(({ file, line, text }) => `${file}:${line}: ${text.trim()}`).join("\n");
 const source = (pattern: string) => globSync(pattern).map((file) => ({ file, text: readFileSync(file, "utf8") }));
 
-test("public responses strip extra keys while mutation requests reject them", async () => {
-  const value = await nativeApp();
-  try {
-    const { task } = await value.tasks.createTask(value.userId, value.company.id, { projectId: value.project.id, title: "Contract", description: "Check response parsing", idempotencyKey: "response-contract", startImmediately: false });
-    expect(TaskResponseSchema.parse({ ...task, extra: "future" })).toEqual(task);
-    expect(ProjectResponseSchema.parse({ ...value.project, extra: "future" })).toEqual(value.project);
-    const profile = value.profiles.list(value.userId)[0]!;
-    expect(ProfileResponseSchema.parse({ ...profile, extra: "future" })).toEqual(profile);
-    expect(TaskNoteBodySchema.safeParse({ note: "Useful note", extra: "not allowed" }).success).toBe(false);
-  } finally { await value.close(); }
+test("public responses strip extra keys while mutation requests reject them", () => {
+  const frozen = JSON.parse(readFileSync("tests/parity/task-response-native/expected.json", "utf8")) as { body: string };
+  const task: unknown = JSON.parse(frozen.body);
+  const parsed = TaskResponseSchema.parse(task);
+  expect(TaskResponseSchema.parse({ ...parsed, extra: "future" })).toEqual(parsed);
+  const project = ProjectResponseSchema.parse({ id: "p", companyId: "c", name: "Project", repositoryPath: "/repo", worktreeRoot: "/worktrees", repository: "owner/repo", baseBranch: "main", setupCommand: "", verificationCommand: "", rootProfileId: "root", workerProfileId: "worker", createdAt: "now", updatedAt: "now" });
+  expect(ProjectResponseSchema.parse({ ...project, extra: "future" })).toEqual(project);
+  const profile = ProfileResponseSchema.parse({ id: "root", name: "Root", role: "root", avatarSeed: "a".repeat(32), provider: "codex", model: "gpt-6-sol", reasoningLevel: "medium", serviceTier: "priority", providerInstanceId: null, archivedAt: null, createdAt: "now", updatedAt: "now" });
+  expect(ProfileResponseSchema.parse({ ...profile, extra: "future" })).toEqual(profile);
+  expect(TaskInputSchema.safeParse({ projectId: "p", title: "Useful task", idempotencyKey: "contract-test", extra: "not allowed" }).success).toBe(false);
 });
 
 test("free-text schemas do not cap an agent or operator's message", () => {
@@ -73,7 +69,7 @@ test("error wrappers retain the caught failure as diagnostic context", () => {
 test("workflow and UI strings avoid proof-language that users cannot act on", () => {
   const banned = /\b(?:exact|recorded|authoritative|bounded|reconcil\w*|ownership|sha256|integrity|lineage)\b/i;
   const findings: Finding[] = [];
-  for (const { file, text } of source("{src/engine/workflow,src/engine/activities,src/frontend}/**/*.{ts,tsx}")) {
+  for (const { file, text } of source("src/frontend/**/*.{ts,tsx}")) {
     for (const [index, raw] of text.split("\n").entries()) {
       const line = raw.replace(/\/\/.*$/, "");
       const values = [...line.matchAll(/(?:\b(?:pendingAction|summary|blocker|label|title|description|placeholder)\s*[:=]\s*)(["'](?:\\.|[^"'\\])*["']|`(?:\\.|[^`\\])*`)|>([^<{]+)</g)].map((match) => match[1] ?? match[2] ?? "");
@@ -82,10 +78,4 @@ test("workflow and UI strings avoid proof-language that users cannot act on", ()
   }
 
   expect(findings, `Rewrite user-facing string text without banned proof-language:\n${describe(findings)}`).toEqual([]);
-});
-
-test("production source has no phase-engine dependencies or replay patch gates", () => {
-  expect(globSync("src/engine/**/*.{ts,tsx}")).toEqual([]);
-  const findings = lines("src/**/*.{ts,tsx}").filter(({ text }) => text.includes("patched(") || /from\s+["'][^"']*engine\//.test(text));
-  expect(findings, describe(findings)).toEqual([]);
 });

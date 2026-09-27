@@ -1,0 +1,13 @@
+{
+  "contract": "agent-api.AgentApiAdminProjectsBodySchema",
+  "case": "representative",
+  "input": {
+    "projectIds": []
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "projectIds": []
+    }
+  }
+}

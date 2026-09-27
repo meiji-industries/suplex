@@ -1,0 +1,13 @@
+{
+  "contract": "github-auth.GitHubDevicePollBodySchema",
+  "case": "representative",
+  "input": {
+    "flowId": "x"
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "flowId": "x"
+    }
+  }
+}

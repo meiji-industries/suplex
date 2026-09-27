@@ -1,115 +1,66 @@
-import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { execFile } from "node:child_process";
-import type { OutgoingHttpHeaders } from "node:http";
-import { tmpdir } from "node:os";
+import { mkdir } from "node:fs/promises";
+import { createServer } from "node:http";
 import { join } from "node:path";
 import { promisify } from "node:util";
-
-import { chromium } from "playwright";
 import { expect, test } from "vitest";
+import { nativeBrowser } from "./helpers/native-browser.js";
 
-import { AuthService, type WebAuthnAdapter } from "../src/identity/auth.js";
-import { createApp } from "../src/app.js";
-import { AgentProfileService } from "../src/profiles/agent-profiles.js";
-import { createTestConfig } from "../src/platform/config.js";
-import { SuplexDatabase } from "../src/platform/database.js";
-import { ProjectService } from "../src/projects/projects.js";
-import type { GithubAdapter } from "../src/integrations/github/client.js";
-import { CSRF_COOKIE_NAME, SESSION_COOKIE_NAME } from "../src/identity/auth-identifiers.js";
+const git = promisify(execFile);
 
-const execFileAsync = promisify(execFile);
-
-function webAuthn(): WebAuthnAdapter {
-  let sequence = 0;
-  return {
-    async generateRegistrationOptions(input) { sequence += 1; return { rp: { name: "Suplex", id: input.rpId }, user: { id: input.userId, name: input.userName, displayName: input.displayName }, challenge: Buffer.from(`registration-${sequence}`).toString("base64url"), pubKeyCredParams: [{ type: "public-key", alg: -7 }], attestation: "none" }; },
-    async verifyRegistrationResponse(input) { return { verified: true, credential: { id: input.response.id, publicKey: Uint8Array.from([4, 5, 6]), counter: 0 } }; },
-    async generateAuthenticationOptions(input) { return { challenge: Buffer.from("authentication").toString("base64url"), rpId: input.rpId, allowCredentials: input.allowCredentials.map((credential) => ({ type: "public-key" as const, ...credential })), userVerification: "required" }; },
-    async verifyAuthenticationResponse() { return { verified: true, newCounter: 1 }; },
-  };
-}
-
-const github: GithubAdapter = {
-  async checkAuthentication() {},
-  async getRepository(input) { return { nameWithOwner: input.nameWithOwner, url: `https://github.com/${input.nameWithOwner}` }; },
-};
-
-function responseCookie(response: { headers: OutgoingHttpHeaders }, name: string): { name: string; value: string } {
-  const values = Array.isArray(response.headers["set-cookie"]) ? response.headers["set-cookie"] : [response.headers["set-cookie"] ?? ""];
-  const raw = values.find((value) => value.split("=", 1)[0] === name) ?? "";
-  const [cookieName, cookieValue] = raw.split(";", 1)[0]?.split("=", 2) ?? [];
-  return { name: cookieName ?? name, value: cookieValue ?? "" };
-}
-
-test("projects desktop flow creates a project and opens its configuration", async () => {
-  const root = await mkdtemp(join(tmpdir(), "suplex-project-browser-test-"));
-  const repositoryRoot = join(root, "repositories");
-  const worktreeRoot = join(root, "worktrees");
-  const repositoryPath = join(repositoryRoot, "acme", "suplex");
-  await mkdir(repositoryPath, { recursive: true });
-  await mkdir(worktreeRoot, { recursive: true });
-  await execFileAsync("git", ["init", "-b", "main", repositoryPath]);
-
-  await execFileAsync("git", ["-C", repositoryPath, "config", "user.name", "Suplex browser test"]);
-  await execFileAsync("git", ["-C", repositoryPath, "config", "user.email", "suplex-browser@example.invalid"]);
-  await execFileAsync("git", ["-c", "commit.gpgsign=false", "-C", repositoryPath, "commit", "--allow-empty", "-m", "Initial fixture"]);
-  await execFileAsync("git", ["-C", repositoryPath, "remote", "add", "origin", "https://github.com/acme/suplex.git"]);
-
-  const database = new SuplexDatabase(join(root, "suplex.sqlite"));
-  const config = createTestConfig(root, { reachableAddress: "http://127.0.0.1:4111", repositoryRoot, worktreeRoot });
-  const auth = new AuthService(database, config, { webAuthn: webAuthn() });
-  const projects = new ProjectService(database, auth, config, {
-    github,
-    repositoryProvisioner: { async ensure(input) { await mkdir(input.repositoryPath, { recursive: true }); await mkdir(input.worktreeRoot, { recursive: true }); }, githubOwners: async () => ["acme"], githubRepositories: async () => [{ name: "suplex", defaultBranch: "main" }], async create() { throw new Error("Browser tests clone"); } },
+test("projects desktop flow creates a project and opens its configuration", { timeout: 45_000 }, async () => {
+  const github = createServer((request, response) => {
+    const body = request.url === "/user" ? { login: "acme" }
+      : request.url === "/user/orgs?per_page=100&page=1" ? []
+      : request.url === "/graphql" ? { data: { repositoryOwner: { repositories: { nodes: [{ name: "suplex", defaultBranchRef: { name: "main" } }], pageInfo: { hasNextPage: false, endCursor: null } } } } }
+      : request.url === "/repos/acme/suplex" ? { full_name: "acme/suplex", html_url: "https://github.com/acme/suplex" }
+      : null;
+    response.writeHead(body === null ? 404 : 200, { "content-type": "application/json" });
+    response.end(JSON.stringify(body));
   });
-  const app = createApp({ config, auth, projects, profiles: new AgentProfileService(database, auth), health: {
-    database: async () => ({ id: "database", label: "Database", status: "healthy", summary: "Ready", details: {} }),
-    artifactRoot: async () => ({ id: "artifact-root", label: "Artifacts", status: "healthy", summary: "Ready", details: {} }),
-    ghAuth: async () => ({ id: "gh-auth", label: "GitHub", status: "healthy", summary: "Ready", details: {} }),
-  } });
-  await app.listen({ host: "127.0.0.1", port: 0 });
-  const address = app.server.address();
-  if (!address || typeof address !== "object") throw new Error("Test server did not expose a TCP address");
-  const baseUrl = `http://127.0.0.1:${address.port}`;
+  await new Promise<void>(accept => github.listen(0, "127.0.0.1", accept));
+  const address = github.address();
+  if (!address || typeof address === "string") throw new Error("Fake GitHub did not listen");
+  const previousGithubApi = process.env.SUPLEX_TEST_GITHUB_API;
+  process.env.SUPLEX_TEST_GITHUB_API = `http://127.0.0.1:${address.port}`;
+  const fixture = await nativeBrowser();
   try {
-    const invitation = auth.ensureBootstrapInvitation()!;
-    const options = await app.inject({ method: "POST", url: "/api/auth/bootstrap/options", payload: { token: invitation.token } });
-    const enrolled = await app.inject({ method: "POST", url: "/api/auth/bootstrap/verify", payload: { token: invitation.token, challengeId: options.json().challengeId, response: { id: "project-browser-admin", type: "public-key" } } });
-    const browser = await chromium.launch({ headless: true });
-    try {
-      const context = await browser.newContext({ viewport: { width: 1100, height: 800 } });
-      const session = responseCookie(enrolled, SESSION_COOKIE_NAME);
-      const csrf = responseCookie(enrolled, CSRF_COOKIE_NAME);
-      await context.addCookies([{ ...session, domain: "127.0.0.1", path: "/" }, { ...csrf, domain: "127.0.0.1", path: "/" }]);
-      const adminId = (await auth.getUserBySession(session.value))!.id;
-      auth.createCompany(adminId, "Browser Projects");
-      const page = await context.newPage();
-      await page.goto(`${baseUrl}/projects`);
-      await page.getByRole("heading", { name: "Projects", exact: true, level: 2 }).waitFor();
-      const newProject = page.getByRole("button", { name: "New project", exact: true });
-      await newProject.click();
-      await page.getByLabel("Repository", { exact: true }).click();
-      await page.getByRole("option", { name: "suplex", exact: true }).click();
-      await page.getByRole("dialog", { name: "New project", exact: true }).getByRole("button", { name: "New project", exact: true }).click();
-      await page.getByText("suplex", { exact: true }).waitFor();
-      const suplexProject = page.locator("article").filter({ hasText: "suplex" });
-      await suplexProject.getByRole("link", { name: "Configure" }).click();
-      await page.reload();
-      expect(await page.getByLabel("Base branch").inputValue()).toBe("main");
-      await page.getByLabel("Project name").fill("Suplex renamed");
-      await page.getByRole("button", { name: "Save changes", exact: true }).click();
-      await page.getByText("Saved", { exact: true }).waitFor();
-      await page.getByRole("link", { name: "Back to projects", exact: true }).click();
-      await page.getByRole("heading", { name: "Projects", exact: true, level: 2 }).waitFor();
-      await page.getByText("Suplex renamed", { exact: true }).waitFor();
-      await page.close();
-      await context.close();
-    } finally {
-      await browser.close();
-    }
+    // An existing checkout exercises native project admission without network credentials.
+    const checkout = join(fixture.directory, "repositories", "acme", "suplex");
+    await mkdir(checkout, { recursive: true });
+    await git("git", ["init", "--quiet", "--initial-branch=main", checkout]);
+    await git("git", ["-C", checkout, "config", "user.name", "Suplex browser test"]);
+    await git("git", ["-C", checkout, "config", "user.email", "suplex-browser@example.invalid"]);
+    await git("git", ["-C", checkout, "commit", "--quiet", "--allow-empty", "-m", "Initial fixture"]);
+    await git("git", ["-C", checkout, "remote", "add", "origin", "https://github.com/acme/suplex.git"]);
+    const bare = join(fixture.directory, "suplex-origin.git");
+    await git("git", ["init", "--quiet", "--bare", "--initial-branch=main", bare]);
+    await git("git", ["-C", checkout, "config", `url.file://${bare}.insteadOf`, "https://github.com/acme/suplex.git"]);
+    await git("git", ["-C", checkout, "push", "--quiet", "origin", "main"]);
+
+    const page = fixture.page;
+    await page.goto(`${fixture.base}/projects?company=${fixture.company.id}`);
+    await page.getByRole("heading", { name: "Projects", exact: true, level: 2 }).waitFor();
+    await page.getByRole("button", { name: "New project", exact: true }).click();
+    await page.getByLabel("Repository", { exact: true }).click();
+    await page.getByRole("option", { name: "suplex", exact: true }).click();
+    await page.getByRole("dialog", { name: "New project", exact: true }).getByRole("button", { name: "New project", exact: true }).click();
+    await page.getByText("suplex", { exact: true }).waitFor();
+    const project = page.locator("article").filter({ has: page.getByText("suplex", { exact: true }) });
+    await project.getByRole("link", { name: "Configure" }).click();
+    await page.reload();
+    expect(await page.getByLabel("Base branch").inputValue()).toBe("main");
+    await page.getByLabel("Project name").fill("Suplex renamed");
+    await page.getByRole("button", { name: "Save changes", exact: true }).click();
+    await page.getByText("Saved", { exact: true }).waitFor();
+    await page.getByRole("link", { name: "Back to projects", exact: true }).click();
+    await page.getByRole("heading", { name: "Projects", exact: true, level: 2 }).waitFor();
+    await page.getByText("Suplex renamed", { exact: true }).waitFor();
+    expect(fixture.errors).toEqual([]);
   } finally {
-    await app.close();
-    database.close();
-    await rm(root, { recursive: true, force: true });
+    await fixture.close();
+    if (previousGithubApi === undefined) delete process.env.SUPLEX_TEST_GITHUB_API;
+    else process.env.SUPLEX_TEST_GITHUB_API = previousGithubApi;
+    await new Promise<void>(accept => github.close(() => accept()));
   }
 });

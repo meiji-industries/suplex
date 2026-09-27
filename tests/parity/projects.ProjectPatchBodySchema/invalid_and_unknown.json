@@ -1,0 +1,23 @@
+{
+  "contract": "projects.ProjectPatchBodySchema",
+  "case": "invalid_and_unknown",
+  "input": {
+    "name": "",
+    "extra": true
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid-too_small",
+        "field": ".name",
+        "message": "Request value is invalid"
+      },
+      {
+        "code": "invalid-unrecognized_keys",
+        "field": ".",
+        "message": "Request value is invalid"
+      }
+    ]
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "contract": "tasks.TaskWorkerReplacementBodySchema",
+  "case": "empty_handoff",
+  "input": {
+    "sessionId": "session",
+    "reason": "reason",
+    "handoff": "   "
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "sessionId": "session",
+      "reason": "reason",
+      "handoff": ""
+    }
+  }
+}

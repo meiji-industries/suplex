@@ -1,0 +1,15 @@
+{
+  "contract": "task-templates.TaskTemplateParamsSchema",
+  "case": "empty_object",
+  "input": {},
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid-invalid_type",
+        "field": ".templateId",
+        "message": "Request value is invalid"
+      }
+    ]
+  }
+}

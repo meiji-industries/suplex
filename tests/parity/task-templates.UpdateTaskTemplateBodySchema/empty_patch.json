@@ -1,0 +1,9 @@
+{
+  "contract": "task-templates.UpdateTaskTemplateBodySchema",
+  "case": "empty_patch",
+  "input": {},
+  "expected": {
+    "accepted": true,
+    "value": {}
+  }
+}

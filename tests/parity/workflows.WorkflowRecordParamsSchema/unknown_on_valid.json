@@ -1,0 +1,14 @@
+{
+  "contract": "workflows.WorkflowRecordParamsSchema",
+  "case": "unknown_on_valid",
+  "input": {
+    "workflowId": "x",
+    "__parityUnknown": true
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "workflowId": "x"
+    }
+  }
+}

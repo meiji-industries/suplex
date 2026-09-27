@@ -1,0 +1,7 @@
+{
+  "site": "src/tasks/tasks.ts:984",
+  "inputJson": "{\"creator\":{\"id\":\"agent-1\",\"kind\":\"agent\"},\"input\":{\"advisorProfileIds\":{},\"extra\":{\"a\":1,\"b\":2},\"idempotencyKey\":\"agent-key-001\",\"images\":[],\"projectId\":\"project-1\",\"title\":\"A task\"}}",
+  "encoding": "hex",
+  "bytes": "{\"creator\":{\"id\":\"agent-1\",\"kind\":\"agent\"},\"input\":{\"advisorProfileIds\":{},\"extra\":{\"a\":1,\"b\":2},\"idempotencyKey\":\"agent-key-001\",\"images\":[],\"projectId\":\"project-1\",\"title\":\"A task\"}}",
+  "digest": "538729f9a46def3cef9f2ca226228f49c254642c012368f99c20ff14f72c3c2f"
+}

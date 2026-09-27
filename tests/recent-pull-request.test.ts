@@ -1,6 +1,6 @@
 import { expect, test } from "vitest";
 import { canQuickArchive, pullRequestColor } from "../src/frontend/features/tasks/recent-pull-request.js";
-import { TaskChecksResponseSchema } from "../src/http/contracts/tasks.js";
+import { TaskChecksResponseSchema } from "../src/frontend/contracts/task-responses.js";
 
 test.each([
   ["merged", "ready", ["failing", "pending"], "purple"],

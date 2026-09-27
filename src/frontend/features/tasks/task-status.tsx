@@ -1,6 +1,7 @@
+import type { PullRequestState } from "../../contracts/generated/PullRequestState.js";
 import { useId } from "react";
 import { CheckCircle2, CircleDashed, CircleDotDashed, CircleHelp, CircleSlash, Clock } from "lucide-react";
-import type { PullRequestReference, TaskControlStatus } from "../../../tasks/control.js";
+import type { PullRequestReference, TaskControlStatus } from "../../contracts/task-control.js";
 import { Badge } from "../../components/ui/badge.js";
 import { withCompany } from "../../lib/api.js";
 
@@ -44,7 +45,7 @@ export function TaskStatus({ status, pullRequestState }: TaskStatusProps) {
 }
 
 /** "Blocked by First · Active, Second · Backlog", or null when the task has no prerequisites. */
-type PullRequestBlockerState = "open" | "closed" | "merged";
+type PullRequestBlockerState = PullRequestState;
 type BlockedByLabelInput = { title: string; status: TaskControlStatus; kind?: "task" | "pull_request" | undefined; number?: number | undefined; state?: PullRequestBlockerState | undefined };
 const pullRequestBlockerStateLabels = { open: "Open", closed: "Closed", merged: "Merged" } satisfies Record<PullRequestBlockerState, string>;
 

@@ -1,0 +1,25 @@
+{
+  "contract": "projects.ProjectExecutionSchema",
+  "case": "environment_issue_order",
+  "input": {
+    "environment": {
+      "Z_BAD": 1,
+      "A_BAD": 2
+    }
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid-invalid_type",
+        "field": ".environment.Z_BAD",
+        "message": "Request value is invalid"
+      },
+      {
+        "code": "invalid-invalid_type",
+        "field": ".environment.A_BAD",
+        "message": "Request value is invalid"
+      }
+    ]
+  }
+}

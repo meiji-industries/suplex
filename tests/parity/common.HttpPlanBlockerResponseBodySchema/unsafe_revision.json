@@ -1,0 +1,19 @@
+{
+  "contract": "common.HttpPlanBlockerResponseBodySchema",
+  "case": "unsafe_revision",
+  "input": {
+    "expectedWorkflowRevision": 9007199254740992,
+    "answer": "Yes",
+    "idempotencyKey": "abcdefghi"
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid-too_big",
+        "field": ".expectedWorkflowRevision",
+        "message": "Request value is invalid"
+      }
+    ]
+  }
+}

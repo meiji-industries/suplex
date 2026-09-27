@@ -1,0 +1,19 @@
+{
+  "contract": "agent-api.AgentApiMergeApprovalBodySchema",
+  "case": "first_field_null",
+  "input": {
+    "pullRequestNumber": null,
+    "headSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "baseSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid-invalid_type",
+        "field": ".pullRequestNumber",
+        "message": "Request value is invalid"
+      }
+    ]
+  }
+}

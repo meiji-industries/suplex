@@ -1,0 +1,17 @@
+{
+  "contract": "projects.ProfileListQuerySchema",
+  "case": "false_string",
+  "input": {
+    "includeArchived": "false"
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid-invalid_value",
+        "field": ".includeArchived",
+        "message": "Request value is invalid"
+      }
+    ]
+  }
+}

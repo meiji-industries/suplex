@@ -1,0 +1,17 @@
+{
+  "contract": "tasks.TaskDetailsBodySchema",
+  "case": "trimmed_empty_title",
+  "input": {
+    "title": "  "
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid-too_small",
+        "field": ".title",
+        "message": "Request value is invalid"
+      }
+    ]
+  }
+}

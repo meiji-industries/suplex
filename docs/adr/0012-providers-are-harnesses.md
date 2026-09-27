@@ -1,5 +1,9 @@
 # 12. Providers are harnesses
 
+The provider vocabulary remains the decision. TypeScript module paths,
+Fastify serialization details, and migration code below describe the original
+implementation; the current runtime is under `rust/src/runtimes`.
+
 Date: 2026-09-15
 
 ## Status

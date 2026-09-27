@@ -4,7 +4,7 @@ import { createRoot } from "react-dom/client";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
-const api = vi.hoisted(() => ({ readJson: vi.fn(), withCompany: (path: string) => path }));
+const api = vi.hoisted(() => ({ readJsonUnchecked: vi.fn(), withCompany: (path: string) => path }));
 vi.mock("../src/frontend/lib/api.js", () => api);
 vi.mock("../src/frontend/shell/company-context.js", () => ({ useCompanyContext: () => ({ currentCompany: { id: "company-1", status: "active" } }) }));
 vi.mock("../src/frontend/features/settings/settings-layout.js", () => ({ SettingsLayout: ({ children }: { children: ReactNode }) => children, SettingsContent: ({ actions, children }: { actions?: ReactNode; children: ReactNode }) => <>{actions}{children}</> }));
@@ -22,7 +22,7 @@ const providersResponse = {
 const instance = { id: "instance_1", provider: "claude-code", label: "Work laptop", homeDirectory: "/home/instance_1", createdAt: "2026-09-13T00:00:00.000Z", updatedAt: "2026-09-13T00:00:00.000Z", readiness: { status: "unhealthy", summary: "Not signed in" }, connection: { status: "not-connected", summary: "Not signed in" } };
 
 function mockReads(overrides: { providers?: typeof providersResponse; instances?: typeof instance[] } = {}) {
-  api.readJson.mockImplementation(async (url: string, init?: RequestInit) => {
+  api.readJsonUnchecked.mockImplementation(async (url: string, init?: RequestInit) => {
     if (init?.method === "POST" && url.endsWith("/login")) return { paneId: "pane-9" };
     if (init?.method === "POST" && url === "/api/admin/provider-instances") return { id: "instance_new" };
     if (init?.method === "DELETE") return {};
@@ -32,7 +32,7 @@ function mockReads(overrides: { providers?: typeof providersResponse; instances?
   });
 }
 
-beforeEach(() => { vi.useFakeTimers(); api.readJson.mockReset(); });
+beforeEach(() => { vi.useFakeTimers(); api.readJsonUnchecked.mockReset(); });
 afterEach(async () => { vi.useRealTimers(); await act(async () => { document.body.replaceChildren(); }); });
 
 test("one table lists system providers and company instances with sign-in status", async () => {
@@ -66,12 +66,12 @@ test("sign in opens the sticky terminal, polls status, and Done closes it", asyn
   document.body.append(container);
   await act(async () => { createRoot(container).render(<ProviderSettingsView />); });
 
-  const providerReads = () => api.readJson.mock.calls.filter(([url]) => url === "/api/admin/providers").length;
+  const providerReads = () => api.readJsonUnchecked.mock.calls.filter(([url]) => url === "/api/admin/providers").length;
   const before = providerReads();
   const signIn = container.querySelector<HTMLButtonElement>('[aria-label="Login to Claude Code"]');
   expect(signIn).not.toBeNull();
   await act(async () => { signIn!.click(); });
-  expect(api.readJson).toHaveBeenCalledWith("/api/admin/providers/claude-code/login", { method: "POST" });
+  expect(api.readJsonUnchecked).toHaveBeenCalledWith("/api/admin/providers/claude-code/login", { method: "POST" });
   const terminal = container.querySelector<HTMLElement>("[data-pane-terminal]");
   expect(terminal?.dataset.paneTerminal).toBe("/api/admin/provider-login/pane-9/terminal");
   expect(terminal?.dataset.paneId).toBe("pane-9");
@@ -82,13 +82,13 @@ test("sign in opens the sticky terminal, polls status, and Done closes it", asyn
   const done = Array.from(container.querySelectorAll("button")).find(button => button.textContent === "Done");
   expect(done).not.toBeNull();
   await act(async () => { done!.click(); });
-  expect(api.readJson).toHaveBeenCalledWith("/api/admin/provider-login/pane-9", { method: "DELETE" });
+  expect(api.readJsonUnchecked).toHaveBeenCalledWith("/api/admin/provider-login/pane-9", { method: "DELETE" });
   expect(container.querySelector("[data-pane-terminal]")).toBeNull();
 });
 
 test("starting another sign-in replaces the open terminal", async () => {
   let seq = 0;
-  api.readJson.mockImplementation(async (url: string, init?: RequestInit) => {
+  api.readJsonUnchecked.mockImplementation(async (url: string, init?: RequestInit) => {
     if (init?.method === "POST" && url.endsWith("/login")) return { paneId: `pane-${++seq}` };
     if (init?.method === "DELETE") return {};
     if (url === "/api/admin/providers") return providersResponse;
@@ -103,12 +103,12 @@ test("starting another sign-in replaces the open terminal", async () => {
   expect(container.querySelector<HTMLElement>("[data-pane-terminal]")?.dataset.paneId).toBe("pane-1");
 
   await act(async () => { container.querySelector<HTMLButtonElement>('[aria-label="Login to Work laptop"]')!.click(); });
-  expect(api.readJson).toHaveBeenCalledWith("/api/admin/provider-instances/instance_1/login", { method: "POST" });
+  expect(api.readJsonUnchecked).toHaveBeenCalledWith("/api/admin/provider-instances/instance_1/login", { method: "POST" });
   const terminals = container.querySelectorAll<HTMLElement>("[data-pane-terminal]");
   expect(terminals).toHaveLength(1);
   expect(terminals[0]!.dataset.paneId).toBe("pane-2");
   // The server closed the first session; the page does not need a second receipt.
-  expect(api.readJson.mock.calls.some(([url, init]) => init?.method === "DELETE" && String(url).includes("pane-1"))).toBe(false);
+  expect(api.readJsonUnchecked.mock.calls.some(([url, init]) => init?.method === "DELETE" && String(url).includes("pane-1"))).toBe(false);
 });
 
 test("Add Provider creates a Claude Code instance through the dialog", async () => {
@@ -130,12 +130,12 @@ test("Add Provider creates a Claude Code instance through the dialog", async () 
   const submit = input!.form?.querySelector<HTMLButtonElement>('button[type="submit"]');
   expect(submit).not.toBeNull();
   await act(async () => { submit!.click(); });
-  expect(api.readJson).toHaveBeenCalledWith("/api/admin/provider-instances", { method: "POST", body: JSON.stringify({ provider: "claude-code", label: "Work laptop" }) });
+  expect(api.readJsonUnchecked).toHaveBeenCalledWith("/api/admin/provider-instances", { method: "POST", body: JSON.stringify({ provider: "claude-code", label: "Work laptop" }) });
 });
 
 test("a provider deletion conflict closes the dialog and shows the server error", async () => {
   mockReads();
-  api.readJson.mockImplementation(async (url: string, init?: RequestInit) => {
+  api.readJsonUnchecked.mockImplementation(async (url: string, init?: RequestInit) => {
     if (init?.method === "DELETE" && url === "/api/admin/provider-instances/instance_1") throw new Error("Provider instance is used by a project provider restriction.");
     if (url === "/api/admin/providers") return providersResponse;
     if (url === "/api/admin/provider-instances") return { instances: [instance] };

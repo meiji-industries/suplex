@@ -1,0 +1,19 @@
+{
+  "contract": "tasks.TaskAnswerBodySchema",
+  "case": "invalid_confirm",
+  "input": {
+    "questionId": "question",
+    "answer": "yes",
+    "confirmCommandsStopped": 1
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid-invalid_union",
+        "field": ".",
+        "message": "Request value is invalid"
+      }
+    ]
+  }
+}

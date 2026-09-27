@@ -1,0 +1,23 @@
+{
+  "contract": "tasks.TaskAgentSelectionBodySchema",
+  "case": "select_root",
+  "input": {
+    "role": "root",
+    "expectedProfileId": "old",
+    "expectedSessionId": null,
+    "profileId": "new",
+    "direction": "  Build  ",
+    "resume": false
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "role": "root",
+      "expectedProfileId": "old",
+      "expectedSessionId": null,
+      "profileId": "new",
+      "direction": "Build",
+      "resume": false
+    }
+  }
+}

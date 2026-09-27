@@ -1,0 +1,20 @@
+{
+  "contract": "agent-api.AgentApiTaskCommandBodySchema",
+  "case": "unknown_on_valid",
+  "input": {
+    "command": "start_task",
+    "revision": "x",
+    "idempotencyKey": "x",
+    "__parityUnknown": true
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid-unrecognized_keys",
+        "field": ".",
+        "message": "Request value is invalid"
+      }
+    ]
+  }
+}

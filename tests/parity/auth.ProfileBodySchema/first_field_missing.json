@@ -1,0 +1,15 @@
+{
+  "contract": "auth.ProfileBodySchema",
+  "case": "first_field_missing",
+  "input": {
+    "username": "x",
+    "avatarSeed": "x"
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "username": "x",
+      "avatarSeed": "x"
+    }
+  }
+}

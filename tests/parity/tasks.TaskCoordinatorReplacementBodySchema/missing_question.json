@@ -1,0 +1,19 @@
+{
+  "contract": "tasks.TaskCoordinatorReplacementBodySchema",
+  "case": "missing_question",
+  "input": {
+    "sessionId": "session",
+    "rootProfileId": "root",
+    "resume": true
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid-invalid_type",
+        "field": ".questionId",
+        "message": "Request value is invalid"
+      }
+    ]
+  }
+}

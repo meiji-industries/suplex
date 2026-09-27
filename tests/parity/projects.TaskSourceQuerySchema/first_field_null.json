@@ -1,0 +1,17 @@
+{
+  "contract": "projects.TaskSourceQuerySchema",
+  "case": "first_field_null",
+  "input": {
+    "kind": null
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid-invalid_value",
+        "field": ".kind",
+        "message": "Request value is invalid"
+      }
+    ]
+  }
+}

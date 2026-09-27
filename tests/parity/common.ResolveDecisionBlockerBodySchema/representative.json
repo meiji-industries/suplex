@@ -1,0 +1,15 @@
+{
+  "contract": "common.ResolveDecisionBlockerBodySchema",
+  "case": "representative",
+  "input": {
+    "expectedRevision": 1,
+    "answer": "x"
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "expectedRevision": 1,
+      "answer": "x"
+    }
+  }
+}

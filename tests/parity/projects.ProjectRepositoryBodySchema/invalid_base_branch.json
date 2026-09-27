@@ -1,0 +1,18 @@
+{
+  "contract": "projects.ProjectRepositoryBodySchema",
+  "case": "invalid_base_branch",
+  "input": {
+    "repositoryUrl": "repo",
+    "baseBranch": ""
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid-too_small",
+        "field": ".baseBranch",
+        "message": "Request value is invalid"
+      }
+    ]
+  }
+}

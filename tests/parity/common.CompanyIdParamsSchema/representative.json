@@ -1,0 +1,13 @@
+{
+  "contract": "common.CompanyIdParamsSchema",
+  "case": "representative",
+  "input": {
+    "companyId": "x"
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "companyId": "x"
+    }
+  }
+}

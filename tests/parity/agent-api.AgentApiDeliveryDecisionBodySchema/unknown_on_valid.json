@@ -1,0 +1,18 @@
+{
+  "contract": "agent-api.AgentApiDeliveryDecisionBodySchema",
+  "case": "unknown_on_valid",
+  "input": {
+    "decision": "wait_for_dependency",
+    "__parityUnknown": true
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid-unrecognized_keys",
+        "field": ".",
+        "message": "Request value is invalid"
+      }
+    ]
+  }
+}

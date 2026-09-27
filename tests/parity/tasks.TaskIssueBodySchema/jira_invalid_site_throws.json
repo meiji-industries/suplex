@@ -1,0 +1,20 @@
+{
+  "contract": "tasks.TaskIssueBodySchema",
+  "case": "jira_invalid_site_throws",
+  "input": {
+    "issue": {
+      "kind": "jira",
+      "site": "x",
+      "id": "123",
+      "key": "APP-12",
+      "title": "Issue",
+      "url": "https://team.atlassian.net/browse/APP-12"
+    }
+  },
+  "expected": {
+    "accepted": false,
+    "error": {
+      "kind": "thrown"
+    }
+  }
+}

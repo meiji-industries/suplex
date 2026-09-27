@@ -1,0 +1,15 @@
+{
+  "contract": "tasks.DeliveryTargetSchema",
+  "case": "empty_object",
+  "input": {},
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid-invalid_value",
+        "field": ".",
+        "message": "Request value is invalid"
+      }
+    ]
+  }
+}

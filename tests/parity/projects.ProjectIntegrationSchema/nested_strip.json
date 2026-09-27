@@ -1,0 +1,21 @@
+{
+  "contract": "projects.ProjectIntegrationSchema",
+  "case": "nested_strip",
+  "input": {
+    "repository": {
+      "kind": "github",
+      "extra": true
+    },
+    "tracker": null
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid-unrecognized_keys",
+        "field": ".repository",
+        "message": "Request value is invalid"
+      }
+    ]
+  }
+}

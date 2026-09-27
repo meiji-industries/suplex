@@ -1,0 +1,21 @@
+{
+  "contract": "projects.ProjectPatchBodySchema",
+  "case": "execution_invalid",
+  "input": {
+    "execution": {
+      "skillDirectories": [
+        ""
+      ]
+    }
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid-too_small",
+        "field": ".execution.skillDirectories.0",
+        "message": "Request value is invalid"
+      }
+    ]
+  }
+}

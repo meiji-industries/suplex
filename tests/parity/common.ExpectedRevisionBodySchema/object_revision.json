@@ -1,0 +1,17 @@
+{
+  "contract": "common.ExpectedRevisionBodySchema",
+  "case": "object_revision",
+  "input": {
+    "expectedRevision": {}
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid-invalid_type",
+        "field": ".expectedRevision",
+        "message": "Request value is invalid"
+      }
+    ]
+  }
+}

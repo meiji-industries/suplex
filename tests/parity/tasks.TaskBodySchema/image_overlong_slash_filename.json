@@ -1,0 +1,31 @@
+{
+  "contract": "tasks.TaskBodySchema",
+  "case": "image_overlong_slash_filename",
+  "input": {
+    "projectId": "project",
+    "title": "  Build  ",
+    "idempotencyKey": "task-0001",
+    "images": [
+      {
+        "filename": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx/",
+        "mimeType": "image/png",
+        "base64": "x"
+      }
+    ]
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid-too_big",
+        "field": ".images.0.filename",
+        "message": "Request value is invalid"
+      },
+      {
+        "code": "invalid-custom",
+        "field": ".images.0.filename",
+        "message": "Request value is invalid"
+      }
+    ]
+  }
+}

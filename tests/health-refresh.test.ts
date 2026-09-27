@@ -1,7 +1,7 @@
 import { expect, test, vi } from "vitest";
 
 import { createHealthRefresher, healthContextKey, healthContextQuery, type HealthContextSelector } from "../src/frontend/lib/health-refresh.js";
-import type { HealthCheck, HealthSnapshot } from "../src/platform/health.js";
+import type { HealthCheck, HealthSnapshot } from "../src/frontend/contracts/health.js";
 
 const check = (id: HealthCheck["id"], provider?: HealthCheck["provider"]): HealthCheck => ({ id, label: id, status: "healthy", summary: "Ready", details: {}, ...(provider ? { provider } : {}) });
 

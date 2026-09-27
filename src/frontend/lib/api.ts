@@ -1,4 +1,4 @@
-import type { AuthUserResponse, CompanyResponse } from "../../http/contracts/common.js";
+import type { AuthUserResponse, CompanyResponse } from "../contracts/common.js";
 import { clientTabId, reportApiActivity, reportAuthenticatedResume } from "../shell/client-lifecycle.js";
 
 export type ApiUser = AuthUserResponse;
@@ -26,7 +26,7 @@ function cookieValue(name: string): string | undefined {
     .find(([key]) => key === name)?.[1];
 }
 
-export async function readJson<T>(url: string, init?: RequestInit): Promise<T> {
+export async function readJsonUnchecked<T>(url: string, init?: RequestInit): Promise<T> {
   const method = init?.method?.toUpperCase() ?? "GET";
   const isSafe = method === "GET" || method === "HEAD" || method === "OPTIONS";
   const originToken = !isSafe ? cookieValue("csrf_v1") : undefined;

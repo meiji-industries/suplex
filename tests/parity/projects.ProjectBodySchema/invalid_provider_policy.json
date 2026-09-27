@@ -1,0 +1,38 @@
+{
+  "contract": "projects.ProjectBodySchema",
+  "case": "invalid_provider_policy",
+  "input": {
+    "name": "Project",
+    "repositoryPath": "/tmp/project",
+    "worktreeRoot": "/tmp/worktrees",
+    "repository": "team/project",
+    "baseBranch": "main",
+    "setupCommand": "pnpm install",
+    "verificationCommand": "pnpm test",
+    "rootProfileId": "root",
+    "workerProfileId": "worker",
+    "providerPolicy": {
+      "allowedProviders": [
+        "bad"
+      ],
+      "allowedInstanceIds": [
+        ""
+      ]
+    }
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid-invalid_value",
+        "field": ".providerPolicy.allowedProviders.0",
+        "message": "Request value is invalid"
+      },
+      {
+        "code": "invalid-too_small",
+        "field": ".providerPolicy.allowedInstanceIds.0",
+        "message": "Request value is invalid"
+      }
+    ]
+  }
+}

@@ -1,0 +1,20 @@
+{
+  "contract": "projects.ProjectProviderPolicySchema",
+  "case": "invalid_instance",
+  "input": {
+    "allowedProviders": [],
+    "allowedInstanceIds": [
+      ""
+    ]
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid-too_small",
+        "field": ".allowedInstanceIds.0",
+        "message": "Request value is invalid"
+      }
+    ]
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "contract": "task-templates.ProjectTaskTemplatesParamsSchema",
+  "case": "unknown_on_valid",
+  "input": {
+    "projectId": "x",
+    "__parityUnknown": true
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "projectId": "x"
+    }
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "contract": "projects.ProfilePatchBodySchema",
+  "case": "bad_partial_model",
+  "input": {
+    "model": "/bad"
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid-invalid_format",
+        "field": ".model",
+        "message": "Request value is invalid"
+      }
+    ]
+  }
+}

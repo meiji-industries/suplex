@@ -1,0 +1,23 @@
+{
+  "contract": "tasks.TaskSessionHistoryParamsSchema",
+  "case": "empty_ids",
+  "input": {
+    "taskId": "",
+    "sessionId": ""
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid-too_small",
+        "field": ".taskId",
+        "message": "Request value is invalid"
+      },
+      {
+        "code": "invalid-too_small",
+        "field": ".sessionId",
+        "message": "Request value is invalid"
+      }
+    ]
+  }
+}

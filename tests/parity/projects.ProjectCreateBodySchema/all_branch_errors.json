@@ -1,0 +1,19 @@
+{
+  "contract": "projects.ProjectCreateBodySchema",
+  "case": "all_branch_errors",
+  "input": {
+    "repositoryUrl": "",
+    "repositoryName": "",
+    "name": ""
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid-invalid_union",
+        "field": ".",
+        "message": "Request value is invalid"
+      }
+    ]
+  }
+}

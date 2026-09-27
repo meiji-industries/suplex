@@ -1,0 +1,18 @@
+{
+  "contract": "tasks.TaskContinueDeliveryBodySchema",
+  "case": "unknown_target",
+  "input": {
+    "deliveryTarget": "merged",
+    "extra": true
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid-unrecognized_keys",
+        "field": ".",
+        "message": "Request value is invalid"
+      }
+    ]
+  }
+}

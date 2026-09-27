@@ -1,0 +1,9 @@
+{
+  "contract": "tasks.TaskDetailsBodySchema",
+  "case": "empty_partial",
+  "input": {},
+  "expected": {
+    "accepted": true,
+    "value": {}
+  }
+}

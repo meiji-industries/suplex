@@ -1,9 +1,10 @@
+import { setTaskDependencies, setTaskIssue, runTaskAction, type TaskAction } from "./lib/task-api.js";
 import { useEffect, useState, type ReactElement } from "react";
 import { ChevronRight, ClipboardCopy, X } from "lucide-react";
 import { Collapsible } from "../../components/ui/collapsible.js";
-import type { Task } from "../../../tasks/contracts.js";
-import { TaskActivityResponseSchema } from "../../../http/contracts/tasks.js";
-import { readJson } from "../../lib/api.js";
+import type { Task } from "../../contracts/tasks.js";
+import { TaskActivityResponseSchema } from "../../contracts/task-responses.js";
+import { readJsonUnchecked } from "../../lib/api.js";
 import { adminDate, type ApiProject } from "../../shell/view-shared.js";
 import { Button } from "../../components/ui/button.js";
 import { BlockedByPickerDialog } from "./blocked-by-picker.js";
@@ -27,7 +28,7 @@ import { Progress, ProgressLabel, ProgressValue } from "../../components/ui/prog
 import { WorkflowHistory, WorkflowStatus } from "./workflow-history.js";
 import { TaskPullRequestCard } from "./pull-request-card.js";
 import { TaskWorktreeMenu } from "./task-worktree-menu.js";
-import { workflowDefinition } from "../../../coordination/workflows.js";
+import { workflowDefinition } from "./workflow-presentation.js";
 
 function CopyValue({ label, value, children }: { label: string; value: string; children: ReactElement }): ReactElement {
   const [copied, setCopied] = useState(false);
@@ -60,7 +61,7 @@ export function TaskBlockedByProperty({ task, onChange }: { task: Pick<Task, "id
   const submit = async (dependsOn: string[], pullRequestNumbers = pullRequests.map(prerequisite => prerequisite.number!)) => {
     if (busy) return;
     setBusy(true); setError("");
-    try { onChange(await readJson<Task>(`/api/tasks/${task.id}/dependencies`, { method: "PUT", body: JSON.stringify({ dependsOn, blockedByPullRequests: pullRequestNumbers.map(number => ({ number })) }) })); }
+    try { onChange(await setTaskDependencies(task.id, dependsOn, pullRequestNumbers)); }
     catch (error) { setError(error instanceof Error ? error.message : "The Blocked by tasks could not be saved"); }
     finally { setBusy(false); }
   };
@@ -78,19 +79,19 @@ export function TaskDetailsPage({ task, project, onChange }: { task: Task; proje
   const [edit, setEdit] = useState<NewTaskDraft | null>(null);
   const [openWorkerSelection, setOpenWorkerSelection] = useState(0);
   const blockedBy = <TaskBlockedByProperty task={task} onChange={onChange} />;
-  const issue = <div className="space-y-1.5"><dt className="text-muted-foreground">Issue</dt><dd><IssuePicker projectId={task.projectId} issue={task.issue} onChange={async issue => onChange(await readJson<Task>(`/api/tasks/${task.id}/issue`, { method: "PATCH", body: JSON.stringify({ issue }) }))} /></dd></div>;
+  const issue = <div className="space-y-1.5"><dt className="text-muted-foreground">Issue</dt><dd><IssuePicker projectId={task.projectId} issue={task.issue} onChange={async issue => onChange(await setTaskIssue(task.id, issue))} /></dd></div>;
   const editable = ["backlog", "queued"].includes(task.status) && !task.archivedAt;
   useEffect(() => {
     let closed = false;
-    const load = async () => { try { const result = TaskActivityResponseSchema.parse(await readJson(`/api/tasks/${task.id}/activity`)); if (!closed) setActivity(result); } catch (error) { if (!closed) setError(error instanceof Error ? error.message : "Task activity is not available"); } };
+    const load = async () => { try { const result = TaskActivityResponseSchema.parse(await readJsonUnchecked(`/api/tasks/${task.id}/activity`)); if (!closed) setActivity(result); } catch (error) { if (!closed) setError(error instanceof Error ? error.message : "Task activity is not available"); } };
     void load();
     const timer = setInterval(() => void load(), 3000);
     return () => { closed = true; clearInterval(timer); };
   }, [task.id]);
-  const act = async (action: string, body?: unknown) => {
+  const act = async (action: TaskAction, body?: unknown) => {
     if (busy) return;
     setBusy(true); setError("");
-    try { onChange(await readJson<Task>(`/api/tasks/${task.id}/${action}`, { method: "POST", ...(body ? { body: JSON.stringify(body) } : {}) })); }
+    try { onChange(await runTaskAction(task.id, action, body)); }
     catch (error) { setError(error instanceof Error ? error.message : "The action failed"); }
     finally { setBusy(false); }
   };

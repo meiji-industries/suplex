@@ -1,15 +1,15 @@
 import { readFile } from "node:fs/promises";
 
-import Database from "better-sqlite3";
+import { DatabaseSync as Database } from "node:sqlite";
 import { expect, test } from "vitest";
 
 async function migrationSql(): Promise<string[]> {
-  const source = await readFile(new URL("../drizzle/20260813022954564_company_scoped_issue_keys.sql", import.meta.url), "utf8");
+  const source = await readFile(new URL("../migrations/20260813022954564_company_scoped_issue_keys.sql", import.meta.url), "utf8");
   return source.split("--> statement-breakpoint").map((statement) => statement.trim()).filter(Boolean);
 }
 
 test("company issue numbers backfill deterministically and allocate without reuse", async () => {
-  const database = new Database(":memory:");
+  const database = new Database(":memory:", { enableForeignKeyConstraints: false });
   try {
     database.exec(`
       CREATE TABLE suplex_companies (id TEXT PRIMARY KEY, name TEXT NOT NULL, status TEXT NOT NULL, created_at TEXT NOT NULL);

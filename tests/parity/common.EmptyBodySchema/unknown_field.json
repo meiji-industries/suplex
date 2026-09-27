@@ -1,0 +1,13 @@
+{
+  "contract": "common.EmptyBodySchema",
+  "case": "unknown_field",
+  "input": {
+    "unexpected": true
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "unexpected": true
+    }
+  }
+}

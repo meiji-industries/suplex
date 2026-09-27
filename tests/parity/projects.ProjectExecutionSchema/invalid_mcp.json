@@ -1,0 +1,56 @@
+{
+  "contract": "projects.ProjectExecutionSchema",
+  "case": "invalid_mcp",
+  "input": {
+    "mcp": [
+      {
+        "name": "suplex",
+        "transport": {
+          "type": "http",
+          "url": "https://example.test/mcp",
+          "headers": {
+            "Authorization": "CONTEXT7_TOKEN"
+          }
+        },
+        "grants": {
+          "root": [
+            "query_docs"
+          ],
+          "advisor": [],
+          "worker": [
+            "query_docs"
+          ]
+        }
+      }
+    ]
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "instructions": "",
+      "skillDirectories": [],
+      "environment": {},
+      "mcp": [
+        {
+          "name": "suplex",
+          "transport": {
+            "type": "http",
+            "url": "https://example.test/mcp",
+            "headers": {
+              "Authorization": "CONTEXT7_TOKEN"
+            }
+          },
+          "grants": {
+            "root": [
+              "query_docs"
+            ],
+            "advisor": [],
+            "worker": [
+              "query_docs"
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "contract": "tasks.TaskIssueBodySchema",
+  "case": "null_issue",
+  "input": {
+    "issue": null
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "issue": null
+    }
+  }
+}

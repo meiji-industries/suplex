@@ -1,0 +1,15 @@
+{
+  "contract": "common.CompanyStatusParamsSchema",
+  "case": "representative",
+  "input": {
+    "companyId": "x",
+    "status": "active"
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "companyId": "x",
+      "status": "active"
+    }
+  }
+}

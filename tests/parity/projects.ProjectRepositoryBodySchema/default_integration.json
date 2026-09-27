@@ -1,0 +1,20 @@
+{
+  "contract": "projects.ProjectRepositoryBodySchema",
+  "case": "default_integration",
+  "input": {
+    "repositoryUrl": "repo",
+    "integration": {}
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "repositoryUrl": "repo",
+      "integration": {
+        "repository": {
+          "kind": "github"
+        },
+        "tracker": null
+      }
+    }
+  }
+}

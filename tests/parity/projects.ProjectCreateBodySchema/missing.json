@@ -1,0 +1,14 @@
+{
+  "contract": "projects.ProjectCreateBodySchema",
+  "case": "missing",
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid-invalid_union",
+        "field": ".",
+        "message": "Request value is invalid"
+      }
+    ]
+  }
+}

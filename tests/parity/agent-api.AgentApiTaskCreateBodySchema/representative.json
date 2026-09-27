@@ -1,0 +1,19 @@
+{
+  "contract": "agent-api.AgentApiTaskCreateBodySchema",
+  "case": "representative",
+  "input": {
+    "projectId": "x",
+    "title": "x",
+    "idempotencyKey": "x"
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "projectId": "x",
+      "title": "x",
+      "idempotencyKey": "x",
+      "images": [],
+      "advisorProfileIds": {}
+    }
+  }
+}

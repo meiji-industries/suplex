@@ -1,0 +1,20 @@
+{
+  "contract": "oauth.OAuthConsentApprovalSchema",
+  "case": "first_field_null",
+  "input": {
+    "companyId": null,
+    "projectIds": [
+      "x"
+    ]
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid-invalid_type",
+        "field": ".companyId",
+        "message": "Request value is invalid"
+      }
+    ]
+  }
+}

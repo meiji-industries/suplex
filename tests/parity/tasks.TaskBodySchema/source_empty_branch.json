@@ -1,0 +1,23 @@
+{
+  "contract": "tasks.TaskBodySchema",
+  "case": "source_empty_branch",
+  "input": {
+    "projectId": "project",
+    "title": "  Build  ",
+    "idempotencyKey": "task-0001",
+    "source": {
+      "kind": "branch",
+      "branch": ""
+    }
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid-too_small",
+        "field": ".source.branch",
+        "message": "Request value is invalid"
+      }
+    ]
+  }
+}

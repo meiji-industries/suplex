@@ -1,0 +1,18 @@
+{
+  "contract": "task-templates.SaveTaskAsTemplateBodySchema",
+  "case": "unknown",
+  "input": {
+    "name": "Build",
+    "extra": true
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid-unrecognized_keys",
+        "field": ".",
+        "message": "Request value is invalid"
+      }
+    ]
+  }
+}

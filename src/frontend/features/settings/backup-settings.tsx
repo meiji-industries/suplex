@@ -4,7 +4,7 @@ import { SettingsContent, SettingsLayout, SettingRow, SettingsSection } from "./
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "../../components/ui/alert-dialog.js";
 import { Button, buttonVariants } from "../../components/ui/button.js";
 import { useCompanyContext } from "../../shell/company-context.js";
-import { readJson, withCompany } from "../../lib/api.js";
+import { readJsonUnchecked, withCompany } from "../../lib/api.js";
 
 type Backup = { name: string; bytes: number; createdAt: string };
 
@@ -22,7 +22,7 @@ export function BackupSettingsView(): ReactElement {
   const [restoring, setRestoring] = useState(false);
 
   useEffect(() => {
-    void readJson<{ backups: Backup[] }>("/api/admin/backups")
+    void readJsonUnchecked<{ backups: Backup[] }>("/api/admin/backups")
       .then((response) => setBackups(response.backups))
       .catch((error: unknown) => setMessage(error instanceof Error ? error.message : "Backups could not be loaded"));
   }, []);
@@ -31,7 +31,7 @@ export function BackupSettingsView(): ReactElement {
     setCreating(true);
     setMessage("");
     try {
-      const backup = await readJson<Backup>("/api/admin/backups", { method: "POST" });
+      const backup = await readJsonUnchecked<Backup>("/api/admin/backups", { method: "POST" });
       setBackups((current) => [backup, ...(current ?? [])]);
       window.location.assign(downloadUrl(backup.name));
     } catch (error) {
@@ -44,7 +44,7 @@ export function BackupSettingsView(): ReactElement {
     setRestoring(true);
     setMessage("");
     try {
-      await readJson("/api/admin/backups/restore", { method: "POST", body: file, headers: { "Content-Type": "application/gzip" } });
+      await readJsonUnchecked("/api/admin/backups/restore", { method: "POST", body: file, headers: { "Content-Type": "application/gzip" } });
       window.location.reload(); // every page now shows restored data
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "The backup could not be restored");

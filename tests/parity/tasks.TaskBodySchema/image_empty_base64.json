@@ -1,0 +1,26 @@
+{
+  "contract": "tasks.TaskBodySchema",
+  "case": "image_empty_base64",
+  "input": {
+    "projectId": "project",
+    "title": "  Build  ",
+    "idempotencyKey": "task-0001",
+    "images": [
+      {
+        "filename": "x",
+        "mimeType": "image/png",
+        "base64": ""
+      }
+    ]
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid-too_small",
+        "field": ".images.0.base64",
+        "message": "Request value is invalid"
+      }
+    ]
+  }
+}

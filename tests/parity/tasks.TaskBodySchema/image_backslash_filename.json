@@ -1,0 +1,26 @@
+{
+  "contract": "tasks.TaskBodySchema",
+  "case": "image_backslash_filename",
+  "input": {
+    "projectId": "project",
+    "title": "  Build  ",
+    "idempotencyKey": "task-0001",
+    "images": [
+      {
+        "filename": "a\\b",
+        "mimeType": "image/png",
+        "base64": "eA=="
+      }
+    ]
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid-custom",
+        "field": ".images.0.filename",
+        "message": "Request value is invalid"
+      }
+    ]
+  }
+}

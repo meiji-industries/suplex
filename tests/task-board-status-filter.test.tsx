@@ -9,9 +9,9 @@ import { notifyManager } from "@tanstack/react-query";
 import { ServerStateProvider } from "../src/frontend/shell/server-state.js";
 import { TaskDataProvider } from "../src/frontend/features/tasks/task-data.js";
 
-import type { Task } from "../src/tasks/contracts.js";
+import type { Task } from "../src/frontend/contracts/tasks.js";
 
-const api = vi.hoisted(() => ({ readJson: vi.fn(), withCompany: (path: string) => path }));
+const api = vi.hoisted(() => ({ readJsonUnchecked: vi.fn(), withCompany: (path: string) => path }));
 vi.mock("../src/frontend/lib/api.js", () => api);
 vi.mock("../src/frontend/shell/company-context.js", () => ({ useCompanyContext: () => ({ user: { id: "user-1" }, currentCompany: { id: "company-1", status: "active" } }) }));
 vi.mock("../src/frontend/shell/application-frame.js", () => ({ ApplicationFrame: ({ children }: { children: ReactNode }) => children }));
@@ -48,7 +48,7 @@ import { TasksView } from "../src/frontend/features/tasks/tasks.js";
 const profile = { profileId: "profile", provider: "opencode", model: "model", reasoningLevel: "medium", serviceTier: "default" } as const;
 function task(id: string, title: string, status: Task["status"]): Task {
   return {
-    id, companyId: "company-1", projectId: "project-1", issueKey: null, title, description: "", status, deliveryTarget: "pull_request_draft",
+    id, companyId: "company-1", projectId: "project-1", issue: null, artifacts: [], issueKey: null, title, description: "", status, deliveryTarget: "pull_request_draft",
     rootProfile: profile, workerProfile: profile, workflow: "standard", advisorProfiles: {}, workflowState: { version: 1, reviews: [], acceptedDelivery: null, deliveryWait: null, completion: null },
     configuration: { repository: "meiji-industries/suplex", repositoryPath: "/repo", worktreeRoot: "/worktrees", branch: id, baseBranch: "main", baselineSha: "a".repeat(40), startingSha: "a".repeat(40), setupCommand: "", verificationCommand: "", runProjectTests: true, visualEvidence: "off", source: null, capturedAt: "2026-09-08T00:00:00.000Z" },
     worktree: null, pullRequest: null, humanQuestion: null, blockedBy: [], queue: { waitingOn: [] }, limits: { budgetUsd: 15, maxTurns: 40, admittedTurns: 0 }, wakeAt: null, images: [],
@@ -70,14 +70,14 @@ afterEach(async () => {
 test.each(["visible", "hidden"] as const)("a %s initial load fetches once, hidden intervals stop, and visible intervals resume", async initialVisibility => {
   vi.useFakeTimers();
   const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue(initialVisibility);
-  api.readJson.mockClear();
-  api.readJson.mockImplementation(async (path: string) => path.endsWith("/projects") ? { projects: [] } : { tasks: [] });
+  api.readJsonUnchecked.mockClear();
+  api.readJsonUnchecked.mockImplementation(async (path: string) => path.endsWith("/projects") ? { projects: [] } : { tasks: [] });
   const container = document.createElement("div");
   document.body.append(container);
   const root = createRoot(container);
   try {
     await act(async () => root.render(<ServerStateProvider><TaskDataProvider><TasksView mode="list" /></TaskDataProvider></ServerStateProvider>));
-    const projectReads = () => api.readJson.mock.calls.filter(([path]) => path.endsWith("/projects")).length;
+    const projectReads = () => api.readJsonUnchecked.mock.calls.filter(([path]) => path.endsWith("/projects")).length;
     expect(projectReads()).toBe(1);
     visibility.mockReturnValue("hidden");
     await act(async () => vi.advanceTimersByTimeAsync(9000));
@@ -90,7 +90,7 @@ test.each(["visible", "hidden"] as const)("a %s initial load fetches once, hidde
 
 test("the board keeps queued and backlog tasks in separate columns and filters", async () => {
   const tasks = [task("task-1", "Repair the poller", "active"), task("task-2", "Plan the migration", "backlog"), task("task-3", "Ship after review", "queued")];
-  api.readJson.mockImplementation(async (path: string) => path.includes("/projects") ? { projects: [] } : { tasks });
+  api.readJsonUnchecked.mockImplementation(async (path: string) => path.includes("/projects") ? { projects: [] } : { tasks });
   const container = document.createElement("div");
   document.body.append(container);
   const root = createRoot(container);
@@ -129,7 +129,7 @@ test("the board keeps queued and backlog tasks in separate columns and filters",
 test("board cards label every Blocked by task and list rows omit it", async () => {
   const blocked = { ...task("task-3", "Ship the release", "backlog"), dependsOn: ["task-1", "task-2"], blockedBy: [{ id: "task-1", title: "Repair the poller", status: "active" as const }, { id: "task-2", title: "Plan the migration", status: "delivered" as const }] };
   const tasks = [task("task-1", "Repair the poller", "active"), blocked];
-  api.readJson.mockImplementation(async (path: string) => path.includes("/projects") ? { projects: [] } : { tasks });
+  api.readJsonUnchecked.mockImplementation(async (path: string) => path.includes("/projects") ? { projects: [] } : { tasks });
   for (const mode of ["board", "list"] as const) {
     const container = document.createElement("div");
     document.body.append(container);

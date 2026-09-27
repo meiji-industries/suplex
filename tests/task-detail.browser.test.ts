@@ -6,11 +6,16 @@ const desktopViewport = 1280;
 test("native task detail supports answering a question and cancelling", { timeout: 90_000 }, async () => {
   const value = await nativeBrowser(desktopViewport);
   try {
-    const { task } = await value.tasks.createTask(value.userId, value.company.id, { projectId: value.project.id, title: "Native task detail", description: "Preserve the existing branch changes.", startImmediately: true, idempotencyKey: "native-detail" });
-    const store = value.tasks.repository.controls;
-    const root = store.claimRoot({ taskId: task.id });
-    store.bindHarnessSession({ sessionId: root.id, generation: root.generation, nativeSessionId: "ses_browser_root" });
-    store.askHuman(task.id, "Which base branch should I use?");
+    const task = await value.createTask({ title: "Native task detail", description: "Preserve the existing branch changes.", startImmediately: false, idempotencyKey: "native-detail" });
+    const root = "fixture-root";
+    const stamp = new Date().toISOString();
+    value.database.exec("BEGIN");
+    try {
+      value.database.prepare("INSERT INTO suplex_task_sessions (id,task_id,kind,generation,is_current,lifecycle,created_at,updated_at,profile_json) VALUES (?,?,'root',1,1,'reserved',?,?,?)")
+        .run(root, task.id, stamp, stamp, JSON.stringify(task.rootProfile));
+      value.database.prepare("UPDATE suplex_task_controls SET status = 'waiting_human', root_session_id = ?, human_question = 'Which base branch should I use?', human_question_id = 'fixture-question' WHERE task_id = ?").run(root, task.id);
+      value.database.exec("COMMIT");
+    } catch (error) { value.database.exec("ROLLBACK"); throw error; }
     const { page } = value;
     await page.goto(`${value.base}/tasks/${task.id}?company=${value.company.id}`);
     await page.getByRole("heading", { name: "Native task detail", level: 2, exact: true }).waitFor();
@@ -19,12 +24,12 @@ test("native task detail supports answering a question and cancelling", { timeou
     await page.getByLabel("Answer", { exact: true }).fill("Use main and preserve local work.");
     await page.getByRole("button", { name: "Answer and continue", exact: true }).click();
     await page.getByRole("region", { name: "Question" }).waitFor({ state: "hidden" });
-    expect(store.get(task.id).status).toBe("active");
-    expect(store.pendingTurns(root.id).some(turn => turn.promptText.includes("Use main and preserve local work."))).toBe(true);
+    expect((await value.api("GET", `/api/tasks/${task.id}`)).body).toMatchObject({ status: "active" });
+    expect(value.database.prepare("SELECT prompt_text FROM suplex_task_turns WHERE session_id = ?").all(root).some(row => String(row.prompt_text).includes("Use main and preserve local work."))).toBe(true);
     await page.getByRole("button", { name: "Task options", exact: true }).click();
     await page.getByRole("menuitem", { name: "Cancel task", exact: true }).click();
     await page.getByText("Cancelled", { exact: true }).first().waitFor();
-    expect(store.get(task.id).status).toBe("cancelled");
+    expect((await value.api("GET", `/api/tasks/${task.id}`)).body).toMatchObject({ status: "cancelled" });
     expect(value.errors).toEqual([]);
   } finally { await value.close(); }
 });
@@ -32,7 +37,7 @@ test("native task detail supports answering a question and cancelling", { timeou
 test("backlog details save through the interface", { timeout: 90_000 }, async () => {
   const value = await nativeBrowser(desktopViewport);
   try {
-    const { task } = await value.tasks.createTask(value.userId, value.company.id, { projectId: value.project.id, title: "Original title", description: "Original description", startImmediately: false, idempotencyKey: "backlog-edit" });
+    const task = await value.createTask({ title: "Original title", description: "Original description", startImmediately: false, idempotencyKey: "backlog-edit" });
     await value.page.goto(`${value.base}/tasks/${task.id}?company=${value.company.id}`);
     await value.page.getByRole("button", { name: "Edit task", exact: true }).click();
     await value.page.getByRole("dialog").getByText("Edit task", { exact: true }).waitFor();
@@ -40,7 +45,7 @@ test("backlog details save through the interface", { timeout: 90_000 }, async ()
     await value.page.getByLabel("Task description", { exact: true }).fill("Updated objective");
     await value.page.getByRole("button", { name: "Save task", exact: true }).click();
     await value.page.getByRole("heading", { name: "Updated title", level: 2, exact: true }).waitFor();
-    expect(value.tasks.getTask(value.userId, task.id)).toMatchObject({ title: "Updated title", description: "Updated objective", status: "backlog" });
+    expect((await value.api("GET", `/api/tasks/${task.id}`)).body).toMatchObject({ title: "Updated title", description: "Updated objective", status: "backlog" });
     expect(value.errors).toEqual([]);
   } finally { await value.close(); }
 });

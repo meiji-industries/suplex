@@ -1,0 +1,17 @@
+{
+  "contract": "common.TokenBodySchema",
+  "case": "invalid_token",
+  "input": {
+    "token": null
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid-invalid_type",
+        "field": ".token",
+        "message": "Request value is invalid"
+      }
+    ]
+  }
+}

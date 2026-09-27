@@ -1,0 +1,9 @@
+{
+  "contract": "update.UpdateQuerySchema",
+  "case": "representative",
+  "input": {},
+  "expected": {
+    "accepted": true,
+    "value": {}
+  }
+}

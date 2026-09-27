@@ -1,0 +1,21 @@
+{
+  "contract": "workflows.WorkflowRecordPatchSchema",
+  "case": "nullable_settings",
+  "input": {
+    "rootProfileId": null,
+    "workerProfileId": null,
+    "deliveryTarget": null,
+    "runProjectTests": null,
+    "visualEvidence": null
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "rootProfileId": null,
+      "workerProfileId": null,
+      "deliveryTarget": null,
+      "runProjectTests": null,
+      "visualEvidence": null
+    }
+  }
+}

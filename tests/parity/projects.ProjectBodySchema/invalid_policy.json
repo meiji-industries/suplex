@@ -1,0 +1,37 @@
+{
+  "contract": "projects.ProjectBodySchema",
+  "case": "invalid_policy",
+  "input": {
+    "name": "Project",
+    "repositoryPath": "/tmp/project",
+    "worktreeRoot": "/tmp/worktrees",
+    "repository": "team/project",
+    "baseBranch": "main",
+    "setupCommand": "pnpm install",
+    "verificationCommand": "pnpm test",
+    "rootProfileId": "root",
+    "workerProfileId": "worker",
+    "agentTaskPolicy": {
+      "workflowIds": [
+        "workflow"
+      ],
+      "defaultWorkflowId": "",
+      "rootProfileIds": [
+        "root"
+      ],
+      "workerProfileIds": [
+        "worker"
+      ]
+    }
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid-too_small",
+        "field": ".agentTaskPolicy.defaultWorkflowId",
+        "message": "Request value is invalid"
+      }
+    ]
+  }
+}

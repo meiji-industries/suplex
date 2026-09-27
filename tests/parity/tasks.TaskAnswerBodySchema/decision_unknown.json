@@ -1,0 +1,21 @@
+{
+  "contract": "tasks.TaskAnswerBodySchema",
+  "case": "decision_unknown",
+  "input": {
+    "questionId": "question",
+    "limitDecision": {
+      "kind": "add_allowance",
+      "extra": true
+    }
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid-invalid_union",
+        "field": ".",
+        "message": "Request value is invalid"
+      }
+    ]
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "contract": "projects.ProjectExecutionSchema",
+  "case": "invalid_environment_value",
+  "input": {
+    "environment": {
+      "KEY": 1
+    }
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid-invalid_type",
+        "field": ".environment.KEY",
+        "message": "Request value is invalid"
+      }
+    ]
+  }
+}

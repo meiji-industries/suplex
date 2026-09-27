@@ -54,7 +54,7 @@ starts the task.
 
 ## Contract maintenance
 
-Every route the template references exists in `src/http/routes/agent-api.ts`
-or `src/http/routes/agent-pairing.ts`. Request shapes come from
-`src/http/contracts/agent-api.ts`. Keep `SKILL.md` aligned with those contracts.
+Every route the template references exists in `rust/src/http/routes/agent_api.rs`
+or `rust/src/http/routes/agent_pairing.rs`. Request shapes come from
+`rust/src/http/contracts/typed/agent_api.rs`. Keep `SKILL.md` aligned with those contracts.
 Do not approximate capabilities that the served contract omits.

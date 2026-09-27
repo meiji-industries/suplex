@@ -1,0 +1,15 @@
+{
+  "contract": "common.HttpPlanDecisionBodySchema",
+  "case": "representative",
+  "input": {
+    "note": "x",
+    "idempotencyKey": "xxxxxxxx"
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "note": "x",
+      "idempotencyKey": "xxxxxxxx"
+    }
+  }
+}

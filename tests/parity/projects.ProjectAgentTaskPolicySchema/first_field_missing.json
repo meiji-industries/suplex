@@ -1,0 +1,23 @@
+{
+  "contract": "projects.ProjectAgentTaskPolicySchema",
+  "case": "first_field_missing",
+  "input": {
+    "defaultWorkflowId": "x",
+    "rootProfileIds": [
+      "x"
+    ],
+    "workerProfileIds": [
+      "x"
+    ]
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid-invalid_type",
+        "field": ".workflowIds",
+        "message": "Request value is invalid"
+      }
+    ]
+  }
+}

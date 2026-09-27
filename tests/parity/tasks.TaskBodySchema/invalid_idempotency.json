@@ -1,0 +1,19 @@
+{
+  "contract": "tasks.TaskBodySchema",
+  "case": "invalid_idempotency",
+  "input": {
+    "projectId": "project",
+    "title": "  Build  ",
+    "idempotencyKey": "bad key"
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid-invalid_format",
+        "field": ".idempotencyKey",
+        "message": "Request value is invalid"
+      }
+    ]
+  }
+}

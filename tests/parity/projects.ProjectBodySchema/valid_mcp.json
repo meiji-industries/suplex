@@ -1,0 +1,88 @@
+{
+  "contract": "projects.ProjectBodySchema",
+  "case": "valid_mcp",
+  "input": {
+    "name": "Project",
+    "repositoryPath": "/tmp/project",
+    "worktreeRoot": "/tmp/worktrees",
+    "repository": "team/project",
+    "baseBranch": "main",
+    "setupCommand": "pnpm install",
+    "verificationCommand": "pnpm test",
+    "rootProfileId": "root",
+    "workerProfileId": "worker",
+    "execution": {
+      "mcp": [
+        {
+          "name": "context7",
+          "transport": {
+            "type": "http",
+            "url": "https://example.test/mcp",
+            "headers": {
+              "Authorization": "CONTEXT7_TOKEN"
+            }
+          },
+          "grants": {
+            "root": [
+              "query_docs"
+            ],
+            "advisor": [],
+            "worker": [
+              "query_docs"
+            ]
+          }
+        }
+      ],
+      "environment": {
+        "CUSTOM_TOKEN": "value"
+      },
+      "skillDirectories": [
+        "/tmp/skills"
+      ]
+    }
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "execution": {
+        "instructions": "",
+        "skillDirectories": [
+          "/tmp/skills"
+        ],
+        "environment": {
+          "CUSTOM_TOKEN": "value"
+        },
+        "mcp": [
+          {
+            "name": "context7",
+            "transport": {
+              "type": "http",
+              "url": "https://example.test/mcp",
+              "headers": {
+                "Authorization": "CONTEXT7_TOKEN"
+              }
+            },
+            "grants": {
+              "root": [
+                "query_docs"
+              ],
+              "advisor": [],
+              "worker": [
+                "query_docs"
+              ]
+            }
+          }
+        ]
+      },
+      "name": "Project",
+      "repositoryPath": "/tmp/project",
+      "worktreeRoot": "/tmp/worktrees",
+      "repository": "team/project",
+      "baseBranch": "main",
+      "setupCommand": "pnpm install",
+      "verificationCommand": "pnpm test",
+      "rootProfileId": "root",
+      "workerProfileId": "worker"
+    }
+  }
+}

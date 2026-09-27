@@ -1,0 +1,15 @@
+{
+  "contract": "projects.ProjectNewRepositoryBodySchema",
+  "case": "valid_with_branch",
+  "input": {
+    "repositoryName": "new-repo",
+    "baseBranch": "main"
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "repositoryName": "new-repo",
+      "baseBranch": "main"
+    }
+  }
+}

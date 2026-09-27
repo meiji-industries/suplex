@@ -1,4 +1,4 @@
-import { readJson } from "../../lib/api.js";
+import { readJsonUnchecked } from "../../lib/api.js";
 import type { ApiExternalAgent } from "../../shell/view-shared.js";
 import { externalAgentSetupInstructions } from "./external-agent-setup-instructions.js";
 import type { Dispatch, SetStateAction } from "react";
@@ -87,7 +87,7 @@ export function createExternalAgentActions({
     if (!currentCompany) return;
     setExternalAgentError("");
     try {
-      const result = await readJson<{
+      const result = await readJsonUnchecked<{
         agent: ApiExternalAgent;
         pairingCode: string;
         expiresAt: string;
@@ -111,7 +111,7 @@ export function createExternalAgentActions({
   };
   const reissueExternalAgentPairing = async (agent: ApiExternalAgent): Promise<void> => {
     try {
-      const result = await readJson<{ pairingCode: string; expiresAt: string }>(
+      const result = await readJsonUnchecked<{ pairingCode: string; expiresAt: string }>(
         `/api/admin/external-agents/${encodeURIComponent(agent.id)}/pairing-code`,
         { method: "POST", body: "{}" },
       );
@@ -123,7 +123,7 @@ export function createExternalAgentActions({
   };
   const rotateExternalAgent = async (agent: ApiExternalAgent): Promise<void> => {
     try {
-      const result = await readJson<{ pairingCode: string; expiresAt: string }>(
+      const result = await readJsonUnchecked<{ pairingCode: string; expiresAt: string }>(
         `/api/admin/external-agents/${encodeURIComponent(agent.id)}/rotate`,
         { method: "POST", body: "{}" },
       );
@@ -140,7 +140,7 @@ export function createExternalAgentActions({
       return;
     }
     try {
-      await readJson(
+      await readJsonUnchecked(
         `/api/admin/external-agents/${encodeURIComponent(agent.id)}/revoke`,
         { method: "POST", body: "{}" },
       );
@@ -158,7 +158,7 @@ export function createExternalAgentActions({
   const saveExternalAgentProjects = async (): Promise<void> => {
     if (!editingExternalAgent) return;
     try {
-      await readJson<{ agent: ApiExternalAgent }>(
+      await readJsonUnchecked<{ agent: ApiExternalAgent }>(
         `/api/admin/external-agents/${encodeURIComponent(editingExternalAgent.id)}/projects`,
         {
           method: "PUT",

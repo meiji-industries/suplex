@@ -1,0 +1,76 @@
+[
+  {
+    "path": "activity",
+    "status": 200,
+    "body": {
+      "sessions": [
+        {
+          "id": "$SESSION",
+          "kind": "root",
+          "advisorRole": null,
+          "label": "Coordinator",
+          "profileId": "profile_native_root",
+          "harness": "codex",
+          "generation": 1,
+          "nativeSessionId": "codex-ui-read",
+          "paneId": null,
+          "current": true,
+          "replacement": null
+        }
+      ],
+      "turns": [
+        {
+          "id": "msg_ui_read",
+          "sessionId": "$SESSION",
+          "prompt": "Inspect the worktree",
+          "status": "completed",
+          "promptedAt": "2026-09-25T12:00:00.000Z",
+          "completedAt": "2026-09-25T12:00:00.000Z",
+          "result": null
+        }
+      ],
+      "shellPaneId": null
+    },
+    "cacheControl": "private, no-store"
+  },
+  {
+    "path": "execution",
+    "status": 200,
+    "body": {
+      "sessions": [
+        {
+          "id": "$SESSION",
+          "role": "root",
+          "advisorRole": null,
+          "label": "Coordinator",
+          "generation": 1,
+          "available": true,
+          "limited": false,
+          "tools": [
+            {
+              "id": "msg_ui_read:item_0",
+              "name": "command_execution",
+              "status": "completed",
+              "input": {
+                "command": "pnpm test"
+              },
+              "output": "2 passed",
+              "error": null
+            }
+          ],
+          "plan": null
+        }
+      ]
+    },
+    "cacheControl": "private, no-store"
+  },
+  {
+    "path": "diff/summary",
+    "status": 200,
+    "body": {
+      "available": false,
+      "files": 0
+    },
+    "cacheControl": "private, no-store"
+  }
+]

@@ -1,0 +1,18 @@
+{
+  "contract": "providers.ProviderInstanceCreateBodySchema",
+  "case": "wrong_provider",
+  "input": {
+    "provider": "other",
+    "label": "Codex"
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid-invalid_value",
+        "field": ".provider",
+        "message": "Request value is invalid"
+      }
+    ]
+  }
+}

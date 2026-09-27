@@ -1,3 +1,4 @@
+import { getTask, listTasks } from "./lib/task-api.js";
 import { useCallback, useEffect, useRef, useState, type ReactElement } from "react";
 import { ClipboardList, Layers3, ListFilter, Plus, RefreshCw, Search } from "lucide-react";
 import { ApplicationFrame } from "../../shell/application-frame.js";
@@ -10,9 +11,9 @@ import { Kbd } from "../../components/ui/kbd.js";
 import { Spinner } from "../../components/ui/spinner.js";
 import { Alert, AlertDescription } from "../../components/ui/alert.js";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../components/ui/select.js";
-import { readJson, withCompany } from "../../lib/api.js";
-import type { Task } from "../../../tasks/contracts.js";
-import { TaskControlStatusSchema, type TaskControlStatus } from "../../../tasks/control.js";
+import { readJsonUnchecked, withCompany } from "../../lib/api.js";
+import type { Task } from "../../contracts/tasks.js";
+import { TaskControlStatusSchema, type TaskControlStatus } from "../../contracts/task-control.js";
 import { requestNewTask } from "../../shell/global-new-task-dialog.js";
 import { useCommandKFocus } from "../../shell/shortcuts.js";
 import { TaskOptions } from "./task-options.js";
@@ -60,13 +61,13 @@ export function TasksView({ mode = "list" }: { mode?: "list" | "board" }): React
   const reload = useCallback(async () => {
     if (!companyId) { setLoaded(true); return; }
     const [result, task, projectResult] = await Promise.all([
-      archived ? readJson<{ tasks: Task[] }>(`/api/companies/${encodeURIComponent(companyId)}/tasks?archived=true`) : Promise.resolve(null),
-      selectedId ? readJson<Task>(`/api/tasks/${encodeURIComponent(selectedId)}`) : Promise.resolve(null),
-      readJson<{ projects: ApiProject[] }>(`/api/companies/${encodeURIComponent(companyId)}/projects`),
+      archived ? listTasks(companyId, { archived: true }) : Promise.resolve(null),
+      selectedId ? getTask(selectedId) : Promise.resolve(null),
+      readJsonUnchecked<{ projects: ApiProject[] }>(`/api/companies/${encodeURIComponent(companyId)}/projects`),
     ]);
     if (currentScope.current !== scope) return;
     if (task && task.companyId !== companyId) throw new Error("This task is not in the selected company");
-    if (result) setArchivedTasks(result.tasks);
+    if (result) setArchivedTasks(result);
     setSelected(task);
     setProjects(projectResult.projects);
     setLoaded(true);

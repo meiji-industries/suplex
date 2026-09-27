@@ -1,0 +1,17 @@
+{
+  "contract": "projects.ProjectNewRepositoryBodySchema",
+  "case": "first_field_null",
+  "input": {
+    "repositoryName": null
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid-invalid_type",
+        "field": ".repositoryName",
+        "message": "Request value is invalid"
+      }
+    ]
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "contract": "workflows.WorkflowRecordInputSchema",
+  "case": "blank_name",
+  "input": {
+    "name": " \t ",
+    "engine": "standard"
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid-too_small",
+        "field": ".name",
+        "message": "Request value is invalid"
+      }
+    ]
+  }
+}

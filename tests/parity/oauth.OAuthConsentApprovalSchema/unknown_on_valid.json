@@ -1,0 +1,21 @@
+{
+  "contract": "oauth.OAuthConsentApprovalSchema",
+  "case": "unknown_on_valid",
+  "input": {
+    "companyId": "x",
+    "projectIds": [
+      "x"
+    ],
+    "__parityUnknown": true
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid-unrecognized_keys",
+        "field": ".",
+        "message": "Request value is invalid"
+      }
+    ]
+  }
+}

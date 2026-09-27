@@ -3,7 +3,7 @@ import { QueryClient, QueryClientProvider, focusManager, notifyManager, useQuery
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
-import { TaskSchema } from "../src/tasks/contracts.js";
+import { TaskSchema, type Task } from "../src/frontend/contracts/tasks.js";
 import { ServerStateProvider, useSignOut } from "../src/frontend/shell/server-state.js";
 import { TaskDataProvider, taskListKey, updateTaskCache, useTaskAgents, useTaskData } from "../src/frontend/features/tasks/task-data.js";
 
@@ -11,14 +11,16 @@ const scope = vi.hoisted(() => ({ userId: "user-a" as string | undefined, compan
 vi.mock("../src/frontend/shell/company-context.js", () => ({ useCompanyContext: () => ({ user: scope.userId ? { id: scope.userId } : undefined, currentCompany: { id: scope.companyId } }) }));
 
 function task(id: string, title = id) {
-  const profile = { profileId: "profile", provider: "opencode", model: "model", reasoningLevel: "medium", serviceTier: "default" };
-  return TaskSchema.parse({
-    id, title, companyId: "company-a", projectId: "project", issueKey: null, description: "", status: "backlog", deliveryTarget: "pull_request_draft",
+  const profile: Task["rootProfile"] = { profileId: "profile", provider: "opencode", model: "model", reasoningLevel: "medium", serviceTier: "default" };
+  const fixture: Task = {
+    id, title, companyId: "company-a", projectId: "project", issueKey: null, issue: null, artifacts: [], description: "", status: "backlog", deliveryTarget: "pull_request_draft",
     rootProfile: profile, workerProfile: profile, workflow: "standard", advisorProfiles: {}, workflowState: { version: 1, reviews: [], acceptedDelivery: null, deliveryWait: null, completion: null },
     configuration: { repository: "owner/repo", repositoryPath: "/repo", worktreeRoot: "/worktrees", branch: id, baseBranch: "main", baselineSha: "a".repeat(40), startingSha: "a".repeat(40), setupCommand: "", verificationCommand: "", runProjectTests: true, visualEvidence: "off", source: null, capturedAt: "2026-09-08T00:00:00.000Z" },
     worktree: null, pullRequest: null, humanQuestion: null, blockedBy: [], queue: { waitingOn: [] }, limits: { budgetUsd: 15, maxTurns: 40, admittedTurns: 0 }, wakeAt: null, images: [], dependsOn: [],
     createdAt: "2026-09-08T00:00:00.000Z", updatedAt: "2026-09-08T00:00:00.000Z", statusChangedAt: "2026-09-08T00:00:00.000Z", archivedAt: null,
-  });
+  };
+  TaskSchema.parse(fixture);
+  return fixture;
 }
 
 function Consumer({ agents = false }: { agents?: boolean }) {

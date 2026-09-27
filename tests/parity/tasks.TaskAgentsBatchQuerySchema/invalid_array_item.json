@@ -1,0 +1,20 @@
+{
+  "contract": "tasks.TaskAgentsBatchQuerySchema",
+  "case": "invalid_array_item",
+  "input": {
+    "taskId": [
+      "task-a",
+      null
+    ]
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid-invalid_union",
+        "field": ".taskId",
+        "message": "Request value is invalid"
+      }
+    ]
+  }
+}

@@ -1,0 +1,26 @@
+{
+  "contract": "projects.ProjectRepositoryBodySchema",
+  "case": "invalid_jira_host",
+  "input": {
+    "repositoryUrl": "repo",
+    "integration": {
+      "tracker": {
+        "kind": "jira",
+        "site": "https://attacker.example/",
+        "project": "APP",
+        "emailEnvironment": "JIRA_EMAIL",
+        "tokenEnvironment": "JIRA_TOKEN"
+      }
+    }
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid-custom",
+        "field": ".integration.tracker.site",
+        "message": "Request value is invalid"
+      }
+    ]
+  }
+}

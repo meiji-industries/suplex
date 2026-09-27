@@ -1,6 +1,6 @@
 import { spawn as spawnChild, type ChildProcess } from "node:child_process";
 import { createWriteStream } from "node:fs";
-import { mkdir } from "node:fs/promises";
+import { mkdir, readFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import { join } from "node:path";
 import { runtimeEnvironment, type RuntimePaths } from "./boot";
@@ -14,6 +14,7 @@ export type LocalServer = { readonly port: number; readonly adopted: boolean };
 export type LocalRuntimePorts = {
   readonly spawn: (command: string, args: readonly string[], options: { cwd: string; env: Record<string, string>; detached: boolean; stdio: ["ignore", "pipe", "pipe"] }) => ChildProcess;
   readonly healthy: (origin: string) => Promise<boolean>;
+  readonly servedInstallation: (origin: string) => Promise<string | null>;
   readonly freePort: (preferred: number) => Promise<number>;
   readonly kill: (pid: number, signal: NodeJS.Signals) => void;
   readonly wait: (ms: number) => Promise<void>;
@@ -31,6 +32,16 @@ export async function healthy(origin: string): Promise<boolean> {
     return response.status === 200;
   } catch {
     return false;
+  }
+}
+
+/** The installation id a healthy server at `origin` reports, or null. */
+export async function servedInstallation(origin: string): Promise<string | null> {
+  try {
+    const response = await fetch(new URL("/health", origin), { signal: AbortSignal.timeout(2_000), redirect: "manual" });
+    return response.status === 200 ? response.headers.get("x-suplex-installation-id") : null;
+  } catch {
+    return null;
   }
 }
 
@@ -54,7 +65,7 @@ export async function freePort(preferred: number): Promise<number> {
 
 /**
  * Starts, adopts, and stops the packaged server. Detached so the whole process group can be
- * signalled; a server we did not start (a dev checkout on the port) is never signalled at all.
+ * signalled; an adopted server of this installation that we did not start is never signalled at all.
  */
 export function createLocalRuntime(options: {
   readonly runtime: RuntimePaths;
@@ -65,6 +76,7 @@ export function createLocalRuntime(options: {
 }): LocalRuntime {
   const spawn = options.ports?.spawn ?? spawnChild;
   const probe = options.ports?.healthy ?? healthy;
+  const served = options.ports?.servedInstallation ?? servedInstallation;
   const choosePort = options.ports?.freePort ?? freePort;
   const kill = options.ports?.kill ?? ((pid: number, signal: NodeJS.Signals) => { process.kill(pid, signal); });
   const wait = options.ports?.wait ?? ((ms: number) => new Promise<void>((resolve) => { setTimeout(resolve, ms); }));
@@ -83,14 +95,16 @@ export function createLocalRuntime(options: {
 
   return {
     async start(): Promise<LocalServer> {
-      if (await probe(origin(options.port))) return { port: options.port, adopted: true };
+      // A server left over from a deleted data folder, or a dev checkout, can hold the port; adopt only ours.
+      const own = (await readFile(join(options.userData, "installation-id"), "utf8").catch(() => "")).trim();
+      if (own !== "" && (await served(origin(options.port))) === own) return { port: options.port, adopted: true };
       const port = await choosePort(options.port);
       const paths = options.runtime;
       await mkdir(join(options.userData, "logs"), { recursive: true });
       const log = createWriteStream(join(options.userData, "logs", "server.log"), { flags: "a" });
       exited = null;
-      child = spawn(paths.node, [paths.supervisor], {
-        cwd: paths.app,
+      child = spawn(paths.binary, ["start", "--foreground"], {
+        cwd: paths.directory,
         env: runtimeEnvironment({ userData: options.userData, port, base: options.base }),
         detached: true,
         stdio: ["ignore", "pipe", "pipe"],

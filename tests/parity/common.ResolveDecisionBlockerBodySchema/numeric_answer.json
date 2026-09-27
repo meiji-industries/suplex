@@ -1,0 +1,18 @@
+{
+  "contract": "common.ResolveDecisionBlockerBodySchema",
+  "case": "numeric_answer",
+  "input": {
+    "expectedRevision": 1,
+    "answer": 1
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid-invalid_type",
+        "field": ".answer",
+        "message": "Request value is invalid"
+      }
+    ]
+  }
+}

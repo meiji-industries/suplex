@@ -1,5 +1,8 @@
 # ADR 0007: OpenRouter provider
 
+Historical decision, superseded by [ADR 0012](0012-providers-are-harnesses.md).
+The OpenRouter/omp and Temporal details below are not current runtime behavior.
+
 ## Decision
 
 OpenRouter is a third agent provider. It uses omp (oh-my-pi) in the existing

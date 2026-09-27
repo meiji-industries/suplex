@@ -1,0 +1,13 @@
+{
+  "contract": "projects.ProjectPatchBodySchema",
+  "case": "one_name",
+  "input": {
+    "name": "Renamed"
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "name": "Renamed"
+    }
+  }
+}

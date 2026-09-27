@@ -1,0 +1,15 @@
+{
+  "contract": "agent-api.AgentApiTaskFilterSchema",
+  "case": "empty_array",
+  "input": [],
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid-invalid_value",
+        "field": ".",
+        "message": "Request value is invalid"
+      }
+    ]
+  }
+}

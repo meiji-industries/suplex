@@ -1,4 +1,4 @@
-import type { HarnessKind } from "../../../runtimes/harness-kind.js";
+import type { HarnessKind } from "../../contracts/harness-kind.js";
 
 export const providerIcons = {
   "claude-code": { label: "Claude Code", src: new URL("./provider-icons/claude-code.svg", import.meta.url).href },

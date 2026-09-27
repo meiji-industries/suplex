@@ -4,7 +4,7 @@ import { SettingsContent, SettingsLayout, SettingRow, SettingsSection } from "./
 import { Button } from "../../components/ui/button.js";
 import { Input } from "../../components/ui/input.js";
 import { useCompanyContext } from "../../shell/company-context.js";
-import { readJson, withCompany } from "../../lib/api.js";
+import { readJsonUnchecked, withCompany } from "../../lib/api.js";
 
 type EnvironmentSettings = { minFreeDiskGb: number; defaultBudgetUsd: number; defaultMaxTurns: number };
 
@@ -21,7 +21,7 @@ export function EnvironmentSettingsView(): ReactElement {
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
-    void readJson<EnvironmentSettings>("/api/admin/environment")
+    void readJsonUnchecked<EnvironmentSettings>("/api/admin/environment")
       .then((settings) => { setMinFreeDiskGb(String(settings.minFreeDiskGb)); setSavedMinFreeDiskGb(settings.minFreeDiskGb); setDefaultBudgetUsd(String(settings.defaultBudgetUsd)); setSavedDefaultBudgetUsd(settings.defaultBudgetUsd); setDefaultMaxTurns(String(settings.defaultMaxTurns)); setSavedDefaultMaxTurns(settings.defaultMaxTurns); })
       .catch((error: unknown) => setMessage(error instanceof Error ? error.message : "Environment settings could not be loaded"));
   }, []);
@@ -40,7 +40,7 @@ export function EnvironmentSettingsView(): ReactElement {
     setSaving(true);
     setMessage("");
     try {
-      const settings = await readJson<EnvironmentSettings>("/api/admin/environment", { method: "PATCH", body: JSON.stringify({ minFreeDiskGb: parsed, defaultBudgetUsd: parsedBudget, defaultMaxTurns: parsedMaxTurns }) });
+      const settings = await readJsonUnchecked<EnvironmentSettings>("/api/admin/environment", { method: "PATCH", body: JSON.stringify({ minFreeDiskGb: parsed, defaultBudgetUsd: parsedBudget, defaultMaxTurns: parsedMaxTurns }) });
       setMinFreeDiskGb(String(settings.minFreeDiskGb));
       setSavedMinFreeDiskGb(settings.minFreeDiskGb);
       setDefaultBudgetUsd(String(settings.defaultBudgetUsd));

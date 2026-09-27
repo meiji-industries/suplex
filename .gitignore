@@ -2,6 +2,9 @@ node_modules/
 dist/
 .suplex
 .suplex/
+# Legacy development installation; never commit it.
+.suplex-rust/
+rust/target/
 .scratch/
 .audit/
 logs/
@@ -22,4 +25,3 @@ desktop/.electron-dev/
 /.opencode/bun.lock
 /.opencode/bun.lockb
 __pycache__/
-!desktop/tests/fixtures/runtime/app/dist/

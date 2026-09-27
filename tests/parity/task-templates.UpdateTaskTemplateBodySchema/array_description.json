@@ -1,0 +1,22 @@
+{
+  "contract": "task-templates.UpdateTaskTemplateBodySchema",
+  "case": "array_description",
+  "input": {
+    "description": []
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid-invalid_type",
+        "field": ".description",
+        "message": "Request value is invalid"
+      },
+      {
+        "code": "invalid-too_small",
+        "field": ".description",
+        "message": "Request value is invalid"
+      }
+    ]
+  }
+}

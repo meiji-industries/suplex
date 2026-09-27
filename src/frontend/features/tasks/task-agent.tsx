@@ -1,11 +1,12 @@
+import { getTask, selectTaskAgent } from "./lib/task-api.js";
 import { useEffect, useState } from "react";
-import type { Task } from "../../../tasks/contracts.js";
-import type { TaskAgentSelectionRequest } from "../../../coordination/task-agent-selection-contracts.js";
-import { ADVISOR_LABELS } from "../../../coordination/workflows.js";
-import { TaskActivityResponseSchema } from "../../../http/contracts/tasks.js";
-import { isProfileAllowed } from "../../../projects/provider-policy.js";
+import type { Task } from "../../contracts/tasks.js";
+import type { TaskAgentSelectionRequest } from "../../contracts/agent-selection.js";
+import { ADVISOR_LABELS } from "./workflow-presentation.js";
+import { TaskActivityResponseSchema } from "../../contracts/task-responses.js";
+import { isProfileAllowed } from "../projects/lib/provider-policy.js";
 import type { ApiProfile } from "../../shell/view-shared.js";
-import { readJson } from "../../lib/api.js";
+import { readJsonUnchecked } from "../../lib/api.js";
 import { EntityAvatar } from "../../components/app/entity-avatar.js";
 import { Alert, AlertDescription } from "../../components/ui/alert.js";
 import { Button } from "../../components/ui/button.js";
@@ -43,7 +44,7 @@ export function TaskAgent({ task, role, onChange, onActivityChange, openRequest,
   useEffect(() => {
     if (!open) return;
     let cancelled = false;
-    void readJson<{ profiles: ApiProfile[] }>("/api/profiles").then(result => { if (!cancelled) setProfiles(result.profiles); }).catch(cause => { if (!cancelled) setError(cause instanceof Error ? cause.message : "Agent profiles are not available."); });
+    void readJsonUnchecked<{ profiles: ApiProfile[] }>("/api/profiles").then(result => { if (!cancelled) setProfiles(result.profiles); }).catch(cause => { if (!cancelled) setError(cause instanceof Error ? cause.message : "Agent profiles are not available."); });
     return () => { cancelled = true; };
   }, [open]);
   const allowed = profiles.filter(item => item.role === (role === "worker" ? "worker" : "root") && !item.archivedAt && isProfileAllowed(intent?.task.configuration.providerPolicy, item));
@@ -51,7 +52,7 @@ export function TaskAgent({ task, role, onChange, onActivityChange, openRequest,
     if (busy) return;
     setBusy(true); setError(""); setIntent(null);
     try {
-      const [freshTask, freshActivity] = await Promise.all([readJson<Task>(`/api/tasks/${task.id}`), readJson(`/api/tasks/${task.id}/activity`).then(value => TaskActivityResponseSchema.parse(value))]);
+      const [freshTask, freshActivity] = await Promise.all([getTask(task.id), readJsonUnchecked(`/api/tasks/${task.id}/activity`).then(value => TaskActivityResponseSchema.parse(value))]);
       onChange(freshTask); onActivityChange(freshActivity);
       setIntent({ task: freshTask, sessionId: roleSession(freshActivity, role)?.id ?? null });
       setProfileId(roleProfile(freshTask, role).profileId); setDirection(""); setResume(false);
@@ -66,9 +67,9 @@ export function TaskAgent({ task, role, onChange, onActivityChange, openRequest,
       const body: TaskAgentSelectionRequest = resume && question
         ? { role, expectedProfileId: roleProfile(intent.task, role).profileId, expectedSessionId: intent.sessionId, profileId: selected, direction, resume: true, questionId: question.id }
         : { role, expectedProfileId: roleProfile(intent.task, role).profileId, expectedSessionId: intent.sessionId, profileId: selected, direction, resume: false };
-      const updated = await readJson<Task>(`/api/tasks/${task.id}/select-agent`, { method: "POST", body: JSON.stringify(body) });
+      const updated = await selectTaskAgent(task.id, body);
       onChange(updated);
-      await readJson(`/api/tasks/${task.id}/activity`).then(value => onActivityChange(TaskActivityResponseSchema.parse(value)), () => undefined);
+      await readJsonUnchecked(`/api/tasks/${task.id}/activity`).then(value => onActivityChange(TaskActivityResponseSchema.parse(value)), () => undefined);
       setOpen(false);
     } catch (cause) { setError(cause instanceof Error ? cause.message : `Suplex could not save the ${label}.`); }
     finally { setBusy(false); }

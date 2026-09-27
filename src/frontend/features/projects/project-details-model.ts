@@ -1,8 +1,9 @@
-import type { ProjectExecution } from "../../../projects/execution-configuration.js";
-import type { ProjectIntegration } from "../../../projects/integration-configuration.js";
-import { isProfileAllowed, type ProjectProviderPolicy } from "../../../projects/provider-policy.js";
-import type { AgentProfile } from "../../../profiles/agent-profile-contracts.js";
-import type { ProjectPatchBody } from "../../../http/contracts/projects.js";
+import type { ProjectExecution } from "../../contracts/project-execution.js";
+import type { ProjectIntegration } from "../../contracts/project-integration.js";
+import { isProfileAllowed } from "./lib/provider-policy.js";
+import type { ProjectProviderPolicy } from "../../contracts/provider-policy.js";
+import type { AgentProfile } from "../../contracts/profiles.js";
+import type { ProjectPatchBody } from "../../contracts/projects.js";
 import type { ApiProject } from "../../shell/view-shared.js";
 
 export type ProjectSection = "general" | "agents" | "execution" | "connections";
@@ -14,14 +15,14 @@ export const PROJECT_SECTIONS = [
   { id: "connections", label: "Connections" },
 ] as const satisfies ReadonlyArray<{ id: ProjectSection; label: string }>;
 
-export type GeneralDraft = Pick<ApiProject, "name" | "baseBranch" | "repositoryPath">;
+export type GeneralDraft = Pick<ApiProject, "name" | "baseBranch" | "repositoryPath"> & { repository: string };
 export type AgentsDraft = Pick<ApiProject, "rootProfileId" | "workerProfileId"> & { providerPolicy: ProjectProviderPolicy | null };
 export type AgentsDraftFinding = { field: "rootProfileId" | "workerProfileId"; message: string };
 export type ExecutionDraft = Pick<ApiProject, "setupCommand" | "verificationCommand"> & Pick<ProjectExecution, "instructions"> & { skillDirectories: string };
 export type ConnectionsDraft = { integration: ProjectIntegration; environment: string; mcp: string };
 
 export function generalDraft(project: ApiProject): GeneralDraft {
-  return { name: project.name, baseBranch: project.baseBranch, repositoryPath: project.repositoryPath };
+  return { repository: project.repository ?? "", name: project.name, baseBranch: project.baseBranch, repositoryPath: project.repositoryPath };
 }
 
 export function agentsDraft(project: ApiProject): AgentsDraft {
@@ -47,6 +48,7 @@ export function connectionsDraft(project: ApiProject): ConnectionsDraft {
 
 export function generalProjectPatch(saved: GeneralDraft, draft: GeneralDraft): ProjectPatchBody {
   return {
+    ...(draft.repository !== saved.repository ? { repository: draft.repository } : {}),
     ...(draft.name !== saved.name ? { name: draft.name } : {}),
     ...(draft.baseBranch !== saved.baseBranch ? { baseBranch: draft.baseBranch } : {}),
     ...(draft.repositoryPath !== saved.repositoryPath ? { repositoryPath: draft.repositoryPath } : {}),

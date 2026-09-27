@@ -41,7 +41,8 @@ fn development_html(html: &str, dev_url: Option<&str>) -> String {
     else {
         return html.to_owned();
     };
-    let origin = url.origin().ascii_serialization();
+    // Resolve Vite on the host the browser used, so remote access (such as Tailscale) reaches it.
+    let port = url.port_or_known_default().unwrap_or(80);
     html.replace(
         "    <link rel=\"stylesheet\" href=\"/assets/suplex-ui.css\">\n",
         "",
@@ -50,14 +51,15 @@ fn development_html(html: &str, dev_url: Option<&str>) -> String {
         "<script type=\"module\" src=\"/assets/suplex-ui.js\"></script>",
         &format!(
             r#"<script type="module">
-import RefreshRuntime from "{origin}/@react-refresh";
+const origin = `${{location.protocol}}//${{location.hostname}}:{port}`;
+const {{ default: RefreshRuntime }} = await import(`${{origin}}/@react-refresh`);
 RefreshRuntime.injectIntoGlobalHook(window);
 window.$RefreshReg$ = () => {{}};
 window.$RefreshSig$ = () => (type) => type;
 window.__vite_plugin_react_preamble_installed__ = true;
-</script>
-    <script type="module" src="{origin}/@vite/client"></script>
-    <script type="module" src="{origin}/src/frontend/main.tsx"></script>"#
+await import(`${{origin}}/@vite/client`);
+await import(`${{origin}}/src/frontend/main.tsx`);
+</script>"#
         ),
     )
 }
@@ -114,10 +116,11 @@ mod tests {
     }
 
     #[test]
-    fn development_page_loads_vite_and_react_refresh_from_loopback() {
+    fn development_page_loads_vite_and_react_refresh_from_the_page_host() {
         let html = development_html(page_template(), Some("http://127.0.0.1:55013"));
-        assert!(html.contains("http://127.0.0.1:55013/@vite/client"));
-        assert!(html.contains("http://127.0.0.1:55013/src/frontend/main.tsx"));
+        assert!(html.contains("${location.hostname}:55013`"));
+        assert!(html.contains("${origin}/@vite/client"));
+        assert!(html.contains("${origin}/src/frontend/main.tsx"));
         assert!(html.contains("__vite_plugin_react_preamble_installed__"));
         assert!(!html.contains("/assets/suplex-ui"));
         for invalid in [

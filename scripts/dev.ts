@@ -46,7 +46,8 @@ if (command === "--stop" || command === "--desktop" || command === "--migrate") 
 const vite = await createServer({
   root,
   appType: "custom",
-  server: { host: "127.0.0.1", port: port + 1, strictPort: true, cors: { origin: /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(?::\d+)?$/ } },
+  // Tailscale Serve can forward https://<machine>.ts.net:<port + 1> to Vite for remote development.
+  server: { host: "127.0.0.1", port: port + 1, strictPort: true, allowedHosts: [".ts.net"], cors: { origin: /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\]|[\w-]+\.[\w-]+\.ts\.net)(?::\d+)?$/ } },
 });
 await vite.listen();
 let server: ChildProcess;

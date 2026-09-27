@@ -90,7 +90,7 @@ export function AnalyticsView() {
       observedWaitMs: tasks.reduce((sum, task) => sum + task.observedWaitMs, 0),
     };
   }, [tasks]);
-  const rows = useMemo(() => taskRows.filter(({ task }) => `${task.title} ${task.issueKey ?? ""}`.toLowerCase().includes(query.toLowerCase())).sort((a, b) => sort === "turns" ? b.metrics.turns - a.metrics.turns : sort === "duration" ? b.metrics.durationMs - a.metrics.durationMs : sort === "newest" ? b.task.createdAt.localeCompare(a.task.createdAt) : (b.metrics.cost ?? -1) - (a.metrics.cost ?? -1)), [taskRows, query, sort]);
+  const rows = useMemo(() => taskRows.filter(({ task }) => `${task.title} ${task.issueKey ?? ""}`.toLowerCase().includes(query.toLowerCase())).sort((a, b) => sort === "turns" ? b.metrics.turns - a.metrics.turns : sort === "duration" ? (b.metrics.durationMs ?? -1) - (a.metrics.durationMs ?? -1) : sort === "newest" ? b.task.createdAt.localeCompare(a.task.createdAt) : (b.metrics.cost ?? -1) - (a.metrics.cost ?? -1)), [taskRows, query, sort]);
   const attention: Array<[string, ReactNode]> = [
     ["Spend on tasks not delivered", <CostValue value={totals.cost === null ? null : pendingSpend} subsidized={pendingMetrics.subsidized} partial={pendingPartial} />],
     ["Turns with an error", String(totals.failedTurns)], ["Messages without completion", String(totals.incompleteMessages)],
@@ -100,7 +100,7 @@ export function AnalyticsView() {
   ];
   const exportRows = () => {
     const cell = (value: string | number) => `"${String(value).replace(/^[=+@-]/, "'$&").replaceAll('"', '""')}"`;
-    const csv = ["Task,Status,Estimated USD,Coordinator turns,Delegated turns,Tokens,Agent seconds", ...rows.map(({ task, metrics }) => [task.title, task.status, metrics.cost ?? "", metrics.rootTurns, metrics.workerTurns, metrics.totalTokens, metrics.durationMs / 1000].map(cell).join(","))].join("\r\n");
+    const csv = ["Task,Status,Estimated USD,Coordinator turns,Delegated turns,Tokens,Agent seconds", ...rows.map(({ task, metrics }) => [task.title, task.status, metrics.cost ?? "", metrics.rootTurns, metrics.workerTurns, metrics.totalTokens, metrics.durationMs === null ? "" : metrics.durationMs / 1000].map(cell).join(","))].join("\r\n");
     const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" })); const anchor = document.createElement("a"); anchor.href = url; anchor.download = "suplex-task-analytics.csv"; anchor.click(); URL.revokeObjectURL(url);
   };
   return <ApplicationFrame title="Analytics" headerActions={<BarChart3 className="size-4 text-muted-foreground" />} headerRight={<><Button size="sm" variant="outline" onClick={exportRows} disabled={!rows.length}><ArrowDownToLine />Export CSV</Button><Button size="icon-sm" variant="ghost" aria-label="Refresh analytics" onClick={() => setRefresh(value => value + 1)}><RefreshCw /></Button></>}>

@@ -1,4 +1,4 @@
-import { createContext, useContext, type ReactElement, type ReactNode } from "react";
+import { createContext, useContext, useEffect, type ReactElement, type ReactNode } from "react";
 
 import { cn } from "../lib/utils.js";
 import { Separator } from "../components/ui/separator.js";
@@ -23,6 +23,7 @@ export function ApplicationShell({ children }: { children: ReactNode }): ReactEl
 
 export function ApplicationFrame({ title, headerActions, headerRight, sidebar, viewportBound = false, children }: { title: string; headerActions?: ReactElement | null | undefined; headerRight?: ReactElement | null | undefined; sidebar?: ReactElement; viewportBound?: boolean; children: ReactNode }): ReactElement {
   const withinShell = useContext(ApplicationShellContext);
+  useEffect(() => { document.title = `Suplex · ${title}`; }, [title]);
   const content = <SidebarInset className={cn("min-w-0", viewportBound && "max-h-[calc(100dvh-var(--desktop-status-height,0px))] min-h-0 overflow-hidden md:max-h-[calc(100dvh-(--spacing(4))-var(--desktop-status-height,0px))]")}>
         <header data-app-header className="titlebar-drag titlebar-inset flex h-(--header-height) shrink-0 items-center gap-2 border-b transition-[width,height] ease-linear group-has-data-[collapsible=icon]/sidebar-wrapper:h-(--header-height)">
           <div className="flex w-full items-center gap-1 px-4 lg:gap-2 lg:px-6">

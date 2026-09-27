@@ -76,6 +76,7 @@ pub fn application_page(view: &str) -> String {
         "tasks" => "Tasks",
         "board" => "Board",
         "timeline" => "Timeline",
+        "analytics" => "Analytics",
         "profile" => "Profile",
         "setup" => "Set up",
         "onboarding" => "Onboarding",
@@ -136,5 +137,10 @@ mod tests {
             );
         }
         assert_eq!(development_html(page_template(), None), page_template());
+    }
+
+    #[test]
+    fn analytics_page_has_its_initial_document_title() {
+        assert!(application_page("analytics").contains("<title>Suplex · Analytics</title>"));
     }
 }

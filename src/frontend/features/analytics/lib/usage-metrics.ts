@@ -12,7 +12,7 @@ export function usageMetrics(usage: TaskUsage[]) {
   const root = new Set<string>();
   const worker = new Set<string>();
   const failed = new Set<string>();
-  const intervals = new Map<string, Array<[number, number]>>();
+  const turns = new Map<string, Map<string, [number, number]>>();
   let cost = 0;
   let steps = 0;
   let unpricedMessages = 0;
@@ -25,23 +25,30 @@ export function usageMetrics(usage: TaskUsage[]) {
     (entry.role === "root" ? root : worker).add(turn);
     if (entry.failed) failed.add(turn);
     if (entry.completedAt !== null) {
-      const list = intervals.get(entry.sessionId) ?? [];
-      list.push([entry.startedAt, Math.max(entry.startedAt, entry.completedAt)]);
-      intervals.set(entry.sessionId, list);
+      const session = turns.get(entry.sessionId) ?? new Map<string, [number, number]>();
+      const current = session.get(entry.turnId);
+      const finish = Math.max(entry.startedAt, entry.completedAt);
+      session.set(entry.turnId, current
+        ? [Math.min(current[0], entry.startedAt), Math.max(current[1], finish)]
+        : [entry.startedAt, finish]);
+      turns.set(entry.sessionId, session);
     }
   }
   let durationMs = 0;
-  for (const list of intervals.values()) {
+  let measuredDuration = false;
+  for (const session of turns.values()) {
+    const list = [...session.values()].filter(([start, finish]) => finish > start);
     let end = -Infinity;
     for (const [start, finish] of list.sort((a, b) => a[0] - b[0])) {
       durationMs += Math.max(0, finish - Math.max(start, end));
       end = Math.max(end, finish);
+      measuredDuration = true;
     }
   }
   return { cost: usage.length && (cost > 0 || unpricedMessages === 0) ? cost : null, measuredMessages: usage.length, unpricedMessages, subsidized: subsidizedMessages > 0 && usage.every(entry => entry.subsidized || entry.cost <= 0), subsidizedMessages, tokens, totalTokens: tokens.input + tokens.output + tokens.reasoning + tokens.cache.read + tokens.cache.write,
     turns: root.size + worker.size, rootTurns: root.size, workerTurns: worker.size, steps, failedTurns: failed.size,
     incompleteMessages: usage.filter(entry => entry.completedAt === null).length,
-    summaries: usage.filter(entry => entry.summary).length, durationMs };
+    summaries: usage.filter(entry => entry.summary).length, durationMs: measuredDuration ? durationMs : null };
 }
 
 export function percentile(values: number[], percent: number): number | null {

@@ -1,15 +1,34 @@
 import { expect, test } from "vitest";
 
-import { clampTimelineRange, trimTimelineRange, summarizeAgentTime } from "../src/frontend/features/timeline/timeline-model.js";
+import { agentRoleLabel, clampTimelineRange, trimTimelineRange, summarizeAgentTime } from "../src/frontend/features/timeline/timeline-model.js";
 import type { TimelineTask } from "../src/frontend/contracts/timeline.js";
 
 function at(day: number, hour: number, minute = 0): string {
   return new Date(2026, 7, day, hour, minute).toISOString();
 }
 
-function invocation(id: string, role: "root" | "worker", startedAt: string, finishedAt: string | null, agentId: string, agentName: string, avatarSeed: string): TimelineTask["activity"][number] {
-  return { id, role, status: finishedAt ? "completed" : "running", attempt: 1, startedAt, finishedAt, agentId, agentName, avatarSeed };
+function invocation(id: string, role: "root" | "worker", startedAt: string, finishedAt: string | null, agentId: string, agentName: string, avatarSeed: string, label?: string): TimelineTask["activity"][number] {
+  return { id, role, label, status: finishedAt ? "completed" : "running", attempt: 1, startedAt, finishedAt, agentId, agentName, avatarSeed };
 }
+
+test("timeline presents internal roles with product terminology", () => {
+  expect(agentRoleLabel("root")).toBe("Coordinator");
+  expect(agentRoleLabel("worker")).toBe("Worker");
+});
+
+test("timeline preserves a canonical advisor label", () => {
+  const task: TimelineTask = {
+    id: "ticket",
+    projectId: "project",
+    issueKey: null,
+    title: "Reviewed task",
+    activity: [invocation("review", "worker", at(10, 9), at(10, 10), "reviewer", "Review agent", "a".repeat(32), "Reviewer")],
+  };
+
+  const summary = summarizeAgentTime([task], [], { start: new Date(2026, 7, 10).getTime(), end: new Date(2026, 7, 11).getTime() }, new Date(2026, 7, 11).getTime());
+  expect(summary.intervals[0]?.roleLabel).toBe("Reviewer");
+  expect(summary.lanes[0]?.roleLabels).toEqual(["Reviewer"]);
+});
 
 test("agent time is split by local day and summed per ticket", () => {
   const tasks: TimelineTask[] = [

@@ -17,7 +17,7 @@ import {
   type PointerEvent as ReactPointerEvent,
   type ReactElement,
 } from "react";
-import { formatDuration, titleCase } from "./timeline-format.js";
+import { formatDuration } from "./timeline-format.js";
 import { TimelineMiniMap } from "./timeline-minimap.js";
 
 type AgentRole = "root" | "worker";
@@ -182,7 +182,7 @@ export function WorkChart({
                   <TimelineAgentLabel
                     avatarSeed={lane.avatarSeed}
                     name={lane.name}
-                    role={lane.roles.map(titleCase).join(" / ")}
+                    role={lane.roleLabels.join(" / ")}
                     executionCount={lane.intervals.length}
                     duration={formatDuration(lane.durationMs)}
                   />
@@ -237,7 +237,7 @@ export function WorkChart({
                                 {interval.taskTitle}
                               </span>
                               <span>
-                                {titleCase(interval.role)} · {interval.status} ·
+                                {interval.roleLabel} · {interval.status} ·
                                 attempt {interval.attempt}
                               </span>
                               <span>

@@ -20,6 +20,7 @@ import { TimelineTotals } from "./timeline-totals.js";
 import { WorkChart } from "./timeline-chart.js";
 import {
   clampTimelineRange,
+  agentRoleLabel,
   customRange,
   dateFromInput,
   dateInputValue,
@@ -33,7 +34,7 @@ import {
 import { readJsonUnchecked } from "../../lib/api.js";
 import { TaskTimelineResponseSchema, type TimelineTask } from "../../contracts/timeline.js";
 import type { ApiProject } from "../../shell/view-shared.js";
-import { addDays, formatDuration, titleCase } from "./timeline-format.js";
+import { addDays, formatDuration } from "./timeline-format.js";
 
 type RangePreset = "today" | "7-days" | "30-days" | "custom";
 
@@ -237,7 +238,7 @@ export function TimelineView(): ReactElement {
           {(Object.keys(roleColors) as AgentRole[]).map((role) => (
             <span key={role} className="flex items-center gap-1.5">
               <span className={`size-2 rounded-sm ${roleColors[role]}`} />
-              {titleCase(role)}
+              {agentRoleLabel(role)}
             </span>
           ))}
           <span className="flex items-center gap-1.5">

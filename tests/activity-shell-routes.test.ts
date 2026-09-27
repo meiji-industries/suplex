@@ -158,6 +158,7 @@ describe("Activity shell lifecycle", () => {
     state.readTaskList.mockResolvedValue([task("task-a", "First task")]);
 
     await act(async () => root.render(createElement(AppRouter)));
+    expect(document.title).toBe("Suplex · tasks");
     expect(container.textContent).toContain("First task");
     expect(container.querySelector("main")?.textContent).toBe("/tasks");
     expect(state.sidebarMounts).toBe(1);
@@ -165,7 +166,9 @@ describe("Activity shell lifecycle", () => {
     await act(async () => navigate("/tasks/task-a?company=company-a"));
     await act(async () => navigate("/tasks/task-b?company=company-a"));
     await act(async () => navigate("/timeline?company=company-a"));
+    expect(document.title).toBe("Suplex · timeline");
     await act(async () => navigate("/tasks/task-a?company=company-a", "popstate"));
+    expect(document.title).toBe("Suplex · tasks");
 
     expect(container.textContent).toContain("First task");
     expect(container.querySelector("main")?.textContent).toBe("/tasks/task-a");

@@ -1,6 +1,7 @@
 import type { TimelineTask } from "../../contracts/timeline.js";
 import { addDays } from "./timeline-format.js";
 import type { ApiProject } from "../../shell/view-shared.js";
+import { roleLabel } from "../tasks/workflow-presentation.js";
 
 export type { TimelineTask } from "../../contracts/timeline.js";
 export type AgentRole = "root" | "worker";
@@ -16,6 +17,7 @@ export type WorkInterval = {
   agentName: string;
   avatarSeed: string;
   role: AgentRole;
+  roleLabel: string;
   status: string;
   attempt: number;
   start: number;
@@ -28,7 +30,7 @@ export type WorkLane = {
   key: string;
   name: string;
   avatarSeed: string;
-  roles: AgentRole[];
+  roleLabels: string[];
   intervals: WorkInterval[];
   durationMs: number;
   trackCount: number;
@@ -61,6 +63,10 @@ export type WorkTimelineSummary = {
 };
 
 export const minimumVisibleMs = 15 * 60_000;
+
+export function agentRoleLabel(role: AgentRole): string {
+  return roleLabel({ kind: role });
+}
 
 export function trimTimelineRange(
   bounds: TimelineRange,
@@ -231,6 +237,7 @@ export function summarizeAgentTime(
         agentName: invocation.agentName,
         avatarSeed: invocation.avatarSeed,
         role: invocation.role,
+        roleLabel: invocation.label ?? roleLabel({ kind: invocation.role, advisorRole: invocation.advisorRole ?? null }),
         status: invocation.status,
         attempt: invocation.attempt,
         start,
@@ -303,12 +310,12 @@ export function summarizeAgentTime(
       key: interval.agentKey,
       name: interval.agentName,
       avatarSeed: interval.avatarSeed,
-      roles: [],
+      roleLabels: [],
       intervals: [],
       durationMs: 0,
       trackCount: 1,
     };
-    if (!lane.roles.includes(interval.role)) lane.roles.push(interval.role);
+    if (!lane.roleLabels.includes(interval.roleLabel)) lane.roleLabels.push(interval.roleLabel);
     lane.intervals.push(interval);
     lane.durationMs += interval.durationMs;
     laneMap.set(interval.agentKey, lane);

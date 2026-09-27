@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { lazy, Suspense, useEffect, useMemo, useState, type ReactNode } from "react";
 import { ArrowDownToLine, BarChart3, RefreshCw } from "lucide-react";
 import { AnalyticsResponseSchema, type AnalyticsResponse } from "../../contracts/analytics.js";
 import { percentile, usageMetrics } from "./lib/usage-metrics.js";
@@ -15,8 +15,10 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from ".
 import { readJsonUnchecked, withCompany } from "../../lib/api.js";
 import { compact, duration } from "./lib/analytics.js";
 import type { ApiProject } from "../../shell/view-shared.js";
-import { OutcomeChart, SpendChart } from "./analytics-charts.js";
 import { AnalyticsProjects } from "./analytics-projects.js";
+
+const OutcomeChart = lazy(() => import("./analytics-charts.js").then(module => ({ default: module.OutcomeChart })));
+const SpendChart = lazy(() => import("./analytics-charts.js").then(module => ({ default: module.SpendChart })));
 
 function Filter({ label, value, options, onChange }: { label: string; value: string; options: Array<{ value: string; label: string }>; onChange: (value: string) => void }) {
   return <Select value={value} onValueChange={value => { if (value !== null) onChange(value); }}><SelectTrigger aria-label={label} size="sm"><SelectValue /></SelectTrigger><SelectContent>{options.map(option => <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>)}</SelectContent></Select>;
@@ -105,7 +107,7 @@ export function AnalyticsView() {
         <Metric label="Agent turns" value={compact(totals.turns)} detail={`${totals.rootTurns} Coordinator · ${totals.workerTurns} Delegated · ${totals.steps} model steps`} />
         <Metric label="Agent time" value={duration(totals.durationMs)} detail="Summed measured time, not wall-clock time" />
       </dl>
-      <div className="grid min-w-0 border-b lg:grid-cols-[minmax(320px,2fr)_minmax(0,3fr)]"><OutcomeChart tasks={tasks} /><SpendChart tasks={tasks} /></div>
+      <div className="grid min-w-0 border-b lg:grid-cols-[minmax(320px,2fr)_minmax(0,3fr)]"><Suspense fallback={null}><OutcomeChart tasks={tasks} /><SpendChart tasks={tasks} /></Suspense></div>
       <dl className="grid grid-cols-2 xl:grid-cols-4">
         <Metric label="Tokens" value={compact(totals.totalTokens)} detail={`${compact(totals.tokens.input)} input · ${compact(totals.tokens.output)} output · ${compact(totals.tokens.reasoning)} reasoning`} />
         <Metric label="Cache tokens" value={compact(totals.tokens.cache.read)} detail={`${compact(totals.tokens.cache.write)} written · ${totals.tokens.input + totals.tokens.cache.read + totals.tokens.cache.write ? Math.round(totals.tokens.cache.read / (totals.tokens.input + totals.tokens.cache.read + totals.tokens.cache.write) * 100) : 0}% input cache reads`} />

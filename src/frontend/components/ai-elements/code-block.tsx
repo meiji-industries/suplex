@@ -11,7 +11,7 @@ import {
   useEffect,
   useState,
 } from "react";
-import { type BundledLanguage, codeToHtml, type ShikiTransformer } from "shiki";
+import type { BundledLanguage, ShikiTransformer } from "shiki";
 
 type CodeBlockProps = HTMLAttributes<HTMLDivElement> & {
   code: string;
@@ -56,6 +56,7 @@ export async function highlightCode(
   const transformers: ShikiTransformer[] = showLineNumbers
     ? [lineNumberTransformer]
     : [];
+  const { codeToHtml } = await import("shiki");
 
   return await Promise.all([
     codeToHtml(code, {

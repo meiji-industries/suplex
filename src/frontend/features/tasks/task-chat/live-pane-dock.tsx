@@ -1,7 +1,6 @@
-import { useRef, useState, type KeyboardEvent, type PointerEvent } from "react";
+import { lazy, Suspense, useRef, useState, type KeyboardEvent, type PointerEvent } from "react";
 import { SquareTerminal } from "lucide-react";
 import type { TaskActivity } from "../task-work.js";
-import { LivePaneTerminal } from "./live-pane-terminal.js";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../../../components/ui/tabs.js";
 import { Avatar, AvatarFallback, AvatarGroup } from "../../../components/ui/avatar.js";
 import { EntityAvatar } from "../../../components/app/entity-avatar.js";
@@ -10,6 +9,7 @@ import { roleLabel } from "../workflow-presentation.js";
 import { SessionHistory } from "./session-history.js";
 import { sessionHistoryLabels } from "./session-history-state.js";
 
+const LivePaneTerminal = lazy(() => import("./live-pane-terminal.js").then(module => ({ default: module.LivePaneTerminal })));
 const storageKey = "suplex.live-pane-height";
 const clampHeight = (height: number) => Math.min(720, Math.max(160, height));
 const shellTabId = "shell";
@@ -87,11 +87,11 @@ export function LivePaneDock({ taskId, activity }: { taskId: string; activity: T
         </div> : null}
       </div>
       {shell ? <TabsContent className="mt-0 flex min-h-0 min-w-0 overflow-hidden" value={shellTabId}>
-        <LivePaneTerminal taskId={taskId} role="shell" paneId={activity.shellPaneId} />
+        <Suspense fallback={null}><LivePaneTerminal taskId={taskId} role="shell" paneId={activity.shellPaneId} /></Suspense>
       </TabsContent> : null}
       {sessions.map(session => <TabsContent key={session.id} className="mt-0 flex min-h-0 min-w-0 overflow-hidden" value={session.id}>
         {view === "mirror" && session.current && session.paneId
-          ? <LivePaneTerminal taskId={taskId} role={session.kind} paneId={session.paneId} />
+          ? <Suspense fallback={null}><LivePaneTerminal taskId={taskId} role={session.kind} paneId={session.paneId} /></Suspense>
           : <SessionHistory taskId={taskId} sessionId={session.id} />}
       </TabsContent>)}
     </Tabs>

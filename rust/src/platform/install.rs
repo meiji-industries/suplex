@@ -12,7 +12,7 @@ use std::{
 };
 
 const STAGES: [(&str, &str); 5] = [
-    ("prerequisites", "Check this Mac"),
+    ("prerequisites", "Check this computer"),
     ("developer-tools", "Set up Git"),
     ("herdr", "Install Herdr terminals"),
     ("data", "Prepare Suplex data"),
@@ -46,35 +46,40 @@ fn free_bytes(path: &Path) -> u64 {
     }
 }
 fn prerequisites() -> Value {
-    if env::consts::OS != "macos" {
-        return failure(
-            format!(
-                "Suplex runs on macOS and this computer reports {}.",
-                env::consts::OS
-            ),
-            "Install Suplex on a Mac.",
-        );
-    }
     let release = command("uname", &["-r"])
         .ok()
         .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_owned())
         .unwrap_or_default();
-    let major = release
-        .split('.')
-        .next()
-        .and_then(|value| value.parse::<u32>().ok())
-        .unwrap_or(0);
-    if major < 22 {
-        return failure(
-            format!("Suplex needs macOS 13 or newer and this Mac reports Darwin {release}."),
-            "Update macOS in System Settings, then try again.",
-        );
-    }
+    let platform = match env::consts::OS {
+        "macos" => {
+            let major = release
+                .split('.')
+                .next()
+                .and_then(|value| value.parse::<u32>().ok())
+                .unwrap_or(0);
+            if major < 22 {
+                return failure(
+                    format!(
+                        "Suplex needs macOS 13 or newer and this Mac reports Darwin {release}."
+                    ),
+                    "Update macOS in System Settings, then try again.",
+                );
+            }
+            "macOS"
+        }
+        "linux" => "Linux",
+        other => {
+            return failure(
+                format!("Suplex runs on macOS and Linux and this computer reports {other}."),
+                "Install Suplex on a Mac or a Linux computer.",
+            );
+        }
+    };
     let arch = env::consts::ARCH;
     if !matches!(arch, "aarch64" | "x86_64") {
         return failure(
-            format!("Suplex needs an Apple silicon or Intel Mac and this Mac reports {arch}."),
-            "Run Suplex on an Apple silicon or Intel Mac.",
+            format!("Suplex needs a 64-bit Arm or x86 processor and this computer reports {arch}."),
+            "Run Suplex on a 64-bit Arm or x86 computer.",
         );
     }
     let path = env::var("SUPLEX_DATA_ROOT")
@@ -92,7 +97,7 @@ fn prerequisites() -> Value {
     }
     success(
         format!(
-            "macOS {release} on {arch} with {:.1} GB free",
+            "{platform} {release} on {arch} with {:.1} GB free",
             free as f64 / 1024_f64.powi(3)
         ),
         false,
@@ -109,6 +114,13 @@ async fn developer_tools() -> Value {
                 String::from_utf8_lossy(&git.stdout).trim()
             ),
             true,
+        );
+    }
+    // The Xcode license and developer tools steps below exist only on macOS.
+    if env::consts::OS != "macos" {
+        return failure(
+            "git is not installed.",
+            "Install git with your package manager, for example: sudo apt install git. Then try again.",
         );
     }
     if let Ok(git) = &git

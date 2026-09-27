@@ -92,7 +92,7 @@ mise run dev
 Reuse an existing stack when `dev:status` reports one. Frontend changes use Vite
 HMR. Native host changes require a restart under `mise run dev`; `mise run dev:watch`
 rebuilds and restarts the native host on changes. `mise run down` stops this
-checkout's owned development processes. The default development port is 4113.
+checkout's owned development processes. The default development port is 4111.
 
 Loopback and tailnet requests receive the Operator administrator session.
 An empty development database receives a company, native profiles, and a project

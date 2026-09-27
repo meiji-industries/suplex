@@ -5,7 +5,7 @@ import { createServer } from "vite";
 
 // This process owns development tooling; the native supervisor owns the engine.
 const root = resolve(import.meta.dirname, "..");
-const port = Number(process.env.SUPLEX_PORT ?? Number(process.env.CONDUCTOR_PORT ?? 4111) + 2);
+const port = Number(process.env.SUPLEX_PORT ?? process.env.CONDUCTOR_PORT ?? 4111);
 if (!Number.isInteger(port) || port < 1 || port > 65534) throw new Error("Development port must be between 1 and 65534 (Vite uses port + 1).");
 const installation = resolve(process.env.SUPLEX_ROOT ?? `${root}/.suplex`);
 const environment: NodeJS.ProcessEnv = {

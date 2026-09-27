@@ -60,8 +60,6 @@ impl Installation {
             value("CONDUCTOR_PORT")
                 .and_then(|port| port.parse::<u16>().ok())
                 .unwrap_or(4111)
-                .checked_add(2)
-                .ok_or("Rust port exceeds 65535")?
                 .to_string()
         } else {
             "4111".into()

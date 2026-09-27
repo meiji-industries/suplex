@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -5,11 +6,13 @@ use std::sync::{Arc, Mutex};
 use axum::{
     Router,
     extract::{Path, State},
-    http::{StatusCode, header},
+    http::{HeaderMap, StatusCode, header},
     response::{IntoResponse, Response},
     routing::get,
 };
+use sha2::{Digest, Sha256};
 use tokio_util::sync::CancellationToken;
+use tower_http::compression::CompressionLayer;
 
 use crate::integrations::{github_device::DeviceAuth, herdr::Herdr};
 use crate::platform::{config::Installation, database::SuplexDatabase, embedded};
@@ -189,7 +192,10 @@ pub fn router(state: AppState) -> Router {
         .merge(routes::workflows::router())
         .merge(routes::update::router())
         .route("/auth", get(auth_page))
-        .route("/assets/{filename}", get(asset))
+        .route(
+            "/assets/{filename}",
+            get(asset).layer(CompressionLayer::new()),
+        )
         .method_not_allowed_fallback(not_found)
         .fallback(not_found)
         .layer(axum::middleware::from_fn(access::cookie_refresh))
@@ -204,7 +210,11 @@ async fn auth_page() -> impl IntoResponse {
     )
 }
 
-async fn asset(State(state): State<AppState>, Path(filename): Path<String>) -> Response {
+async fn asset(
+    State(state): State<AppState>,
+    Path(filename): Path<String>,
+    request_headers: HeaderMap,
+) -> Response {
     if !filename
         .bytes()
         .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
@@ -216,6 +226,12 @@ async fn asset(State(state): State<AppState>, Path(filename): Path<String>) -> R
         .dev_assets_dir
         .as_ref()
         .and_then(|directory| std::fs::read(directory.join(&filename)).ok());
+    let Some(body) = disk_body
+        .map(Cow::Owned)
+        .or_else(|| embedded::frontend_asset(&filename).map(Cow::Borrowed))
+    else {
+        return (StatusCode::NOT_FOUND, "Suplex UI asset is not built").into_response();
+    };
     let content_type = if filename.ends_with(".js") {
         "text/javascript; charset=utf-8"
     } else if filename.ends_with(".woff2") {
@@ -225,13 +241,32 @@ async fn asset(State(state): State<AppState>, Path(filename): Path<String>) -> R
     } else {
         "application/octet-stream"
     };
-    if let Some(body) = disk_body {
-        return ([(header::CONTENT_TYPE, content_type)], body).into_response();
+    // Vite hashes chunk names, so only the fixed suplex-ui.* entry files change under one name.
+    let cache_control = if filename.starts_with("suplex-ui.") {
+        "no-cache"
+    } else {
+        "public, max-age=31536000, immutable"
+    };
+    let etag = format!(
+        "\"{}\"",
+        Sha256::digest(&body)[..8]
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>()
+    );
+    let headers = [
+        (header::CONTENT_TYPE, content_type),
+        (header::CACHE_CONTROL, cache_control),
+        (header::ETAG, etag.as_str()),
+    ];
+    if request_headers
+        .get(header::IF_NONE_MATCH)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| value.split(',').any(|tag| tag.trim() == etag))
+    {
+        return (StatusCode::NOT_MODIFIED, headers).into_response();
     }
-    match embedded::frontend_asset(&filename) {
-        Some(body) => ([(header::CONTENT_TYPE, content_type)], body).into_response(),
-        None => (StatusCode::NOT_FOUND, "Suplex UI asset is not built").into_response(),
-    }
+    (headers, body).into_response()
 }
 
 async fn not_found(State(_state): State<AppState>, uri: axum::http::Uri) -> Response {
@@ -281,16 +316,44 @@ mod tests {
         .with_dev_assets_dir(directory.clone());
         let filename = "suplex-ui.js".to_owned();
         std::fs::write(directory.join(&filename), b"first build").unwrap();
-        let first = asset(State(state.clone()), Path(filename.clone())).await;
+        let first = asset(
+            State(state.clone()),
+            Path(filename.clone()),
+            HeaderMap::new(),
+        )
+        .await;
+        assert_eq!(first.headers()[header::CACHE_CONTROL], "no-cache");
+        let etag = first.headers()[header::ETAG].clone();
         assert_eq!(
             to_bytes(first.into_body(), 1024).await.unwrap(),
             "first build"
         );
+        let mut revalidate = HeaderMap::new();
+        revalidate.insert(header::IF_NONE_MATCH, etag);
+        let unchanged = asset(
+            State(state.clone()),
+            Path(filename.clone()),
+            revalidate.clone(),
+        )
+        .await;
+        assert_eq!(unchanged.status(), StatusCode::NOT_MODIFIED);
         std::fs::write(directory.join(&filename), b"second build").unwrap();
-        let second = asset(State(state), Path(filename.clone())).await;
+        let second = asset(State(state.clone()), Path(filename.clone()), revalidate).await;
+        assert_eq!(second.status(), StatusCode::OK);
         assert_eq!(
             to_bytes(second.into_body(), 1024).await.unwrap(),
             "second build"
+        );
+        std::fs::write(directory.join("cpp-D7oTDj03.js"), b"chunk").unwrap();
+        let chunk = asset(
+            State(state),
+            Path("cpp-D7oTDj03.js".to_owned()),
+            HeaderMap::new(),
+        )
+        .await;
+        assert_eq!(
+            chunk.headers()[header::CACHE_CONTROL],
+            "public, max-age=31536000, immutable"
         );
         let _ = std::fs::remove_dir_all(directory);
     }

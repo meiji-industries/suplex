@@ -1,6 +1,6 @@
 import { addTaskNote } from "./lib/task-api.js";
 import { TaskWorker } from "./task-worker.js";
-import { useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { z } from "zod";
 import { CircleDashed } from "lucide-react";
 import type { Task } from "../../contracts/tasks.js";
@@ -15,9 +15,9 @@ import { EntityAvatar } from "../../components/app/entity-avatar.js";
 import { RootPlan, TaskTools, useTaskExecution } from "./task-execution.js";
 import { WorkflowPlan } from "./workflow-plan.js";
 import { TaskCheckResults } from "./task-check-results.js";
-import { DeveloperDiff } from "../../components/app/developer-diff.js";
 import { TaskActivityTimeline } from "./task-activity-timeline.js";
 import { PromptInput, PromptInputFooter, PromptInputSubmit, PromptInputTextarea } from "../../components/ai-elements/prompt-input.js";
+const DeveloperDiff = lazy(() => import("../../components/app/developer-diff.js").then(module => ({ default: module.DeveloperDiff })));
 const MAX_TASK_NOTE_LENGTH = 20_000;
 
 export type TaskActivity = z.infer<typeof TaskActivityResponseSchema>;
@@ -163,7 +163,7 @@ function TaskDiff({ task }: { task: Task }) {
     const timer = setInterval(() => void read(), 5000);
     return () => { closed = true; clearInterval(timer); };
   }, [task.id, task.updatedAt]);
-  return <div className="min-w-0 space-y-3 pt-3" data-task-diff-panel>{error ? <Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert> : !diff ? <p className="flex items-center gap-2 text-xs text-muted-foreground" aria-busy="true"><Spinner /><span>Loading changes…</span></p> : !diff.available ? <p className="text-xs text-muted-foreground">The worktree is not available.</p> : <DeveloperDiff patch={diff.patch} />}</div>;
+  return <div className="min-w-0 space-y-3 pt-3" data-task-diff-panel>{error ? <Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert> : !diff ? <p className="flex items-center gap-2 text-xs text-muted-foreground" aria-busy="true"><Spinner /><span>Loading changes…</span></p> : !diff.available ? <p className="text-xs text-muted-foreground">The worktree is not available.</p> : <Suspense fallback={null}><DeveloperDiff patch={diff.patch} /></Suspense>}</div>;
 }
 
 function TaskChecks({ task }: { task: Task }) {

@@ -1,8 +1,9 @@
-import { useEffect, useState, type ReactElement } from "react";
+import { lazy, Suspense, useEffect, useState, type ReactElement } from "react";
 
-import { PaneTerminal } from "../tasks/task-chat/live-pane-terminal.js";
 import { Button } from "../../components/ui/button.js";
 import { readJsonUnchecked } from "../../lib/api.js";
+
+const PaneTerminal = lazy(() => import("../tasks/task-chat/live-pane-terminal.js").then(module => ({ default: module.PaneTerminal })));
 
 export type ProviderLoginSession = { paneId: string; label: string };
 
@@ -49,7 +50,7 @@ export function ProviderLoginTerminal({ login, onClose }: { login: ProviderLogin
       <Button size="sm" variant="outline" onClick={onClose}>Done</Button>
     </div>
     <div className="min-h-0 flex-1 px-2 pb-2">
-      <PaneTerminal path={`/api/admin/provider-login/${encodeURIComponent(login.paneId)}/terminal`} interactive paneId={login.paneId} label={`Sign-in pane for ${login.label}`} />
+      <Suspense fallback={null}><PaneTerminal path={`/api/admin/provider-login/${encodeURIComponent(login.paneId)}/terminal`} interactive paneId={login.paneId} label={`Sign-in pane for ${login.label}`} /></Suspense>
     </div>
   </div>;
 }

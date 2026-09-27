@@ -424,7 +424,13 @@ fn prepare_local_task_worktree_once(
                 published_base_commit(&repository, oid, github_token)?;
             }
             let commit = repository.find_commit(oid)?;
-            repository.branch(&intent.branch, &commit, false)?
+            match repository.branch(&intent.branch, &commit, false) {
+                // A concurrent preparation created it first; use it as an existing branch.
+                Err(error) if error.code() == git2::ErrorCode::Exists => {
+                    repository.find_branch(&intent.branch, BranchType::Local)?
+                }
+                result => result?,
+            }
         }
         Err(error) => return Err(error.into()),
     };

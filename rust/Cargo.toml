@@ -45,6 +45,11 @@ security-framework-sys = "2.17"
 [dev-dependencies]
 webauthn-authenticator-rs = { version = "=0.5.4", features = ["softtoken"] }
 
+[profile.dev]
+debug = "line-tables-only"
+# sccache cannot cache incremental compilations; avoid per-worktree incremental data.
+incremental = false
+
 [lints.clippy]
 too_many_arguments = "deny"
 dbg_macro = "deny"

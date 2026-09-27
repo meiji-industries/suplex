@@ -96,6 +96,21 @@ Reuse an existing stack when `dev:status` reports one. Frontend changes use Vite
 HMR. Native host changes require a restart under `mise run dev`; `mise run dev:watch`
 rebuilds and restarts the native host on changes. `mise run down` stops this
 checkout's owned development processes. The default development port is 4111.
+Conductor's Run command uses `http://127.0.0.1:<port>` with its assigned port.
+Other development launches keep the default Tailscale access mode.
+
+Mise keeps Rust build artifacts in each checkout's `rust/target` and uses
+`sccache` when it is on `PATH` to reuse compiled dependencies across worktrees.
+Install it with `cargo install sccache --locked`; without it, builds use rustc
+directly. Cargo downloads remain in the normal shared `CARGO_HOME` cache.
+Leave `CARGO_TARGET_DIR` unset for cross-worktree cache hits: sccache hashes
+that variable, so a different absolute path in every checkout causes misses.
+The compiler cache uses sccache's machine-wide configuration and defaults to
+a 10 GiB limit. Run `sccache --show-stats` to inspect hits and storage.
+Development and test builds keep backtrace line numbers but omit full debugger
+data and incremental artifacts to reduce disk use. The first build with these
+settings warms the cache; new worktrees still link their own binaries.
+Check the wrapper with `mise run test:sccache-wrapper`.
 
 Loopback and tailnet requests receive the Operator administrator session.
 An empty development database receives a company, native profiles, and a project

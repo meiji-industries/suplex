@@ -10,6 +10,9 @@ experimental = true
 activate_aggressive = true
 
 [env]
+# Keep Cargo's default per-checkout target; absolute CARGO_TARGET_DIR values
+# enter sccache's Rust cache key and prevent dependency reuse across worktrees.
+RUSTC_WRAPPER = "{{config_root}}/scripts/sccache-wrapper.sh"
 NODE_ENV = "development"
 SUPLEX_TAILSCALE_ADDRESS = "{{ exec(command='sh scripts/resolve-magicdns.sh') | trim }}"
 SUPLEX_TAILSCALE_EXPOSURE = "serve"
@@ -43,6 +46,10 @@ cd rust
 unset RUSTUP_TOOLCHAIN
 RUST_TEST_THREADS=4 cargo test --all-targets
 '''
+
+[tasks."test:sccache-wrapper"]
+description = "Check compiler-cache forwarding and the fallback without sccache"
+run = "sh scripts/test-sccache-wrapper.sh"
 
 [tasks."test:parity"]
 run = '''

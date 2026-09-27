@@ -6,7 +6,7 @@ run_mode = "concurrent"
 
 [scripts.run.dev]
 available_in = [ "local" ]
-command = "mise run dev"
+command = "SUPLEX_ACCESS_MODE=local mise run dev"
 default = true
 icon = "play"
 

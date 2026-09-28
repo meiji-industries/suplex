@@ -178,7 +178,7 @@ jobs:
           cargo build --manifest-path rust/Cargo.toml --bin suplex --features github-test-endpoint
 
       - name: Frontend, desktop, and protocol tests
-        run: pnpm test --maxWorkers "$TEST_WORKERS" --reporter=default --reporter=junit --outputFile=test-results/unit-integration.xml
+        run: pnpm exec vitest run --project unit --maxWorkers "$TEST_WORKERS" --reporter=default --reporter=junit --outputFile=test-results/unit-integration.xml
 
       - name: Browser tests
         run: pnpm exec vitest run --config vitest.browser.config.ts --maxWorkers "$TEST_WORKERS" --reporter=default --reporter=junit --outputFile=test-results/browser.xml
@@ -191,9 +191,10 @@ jobs:
           JOURNEY_PARALLELISM: "4"
         run: |
           mkdir -p test-results/journeys
-          printf '%s\n' deliver deliver_pr answer restart cancel deliver_claude direct_build independent_review competing_plans refine_pull_request |
+          printf '%s\n' competing_plans refine_pull_request independent_review deliver deliver_pr answer restart cancel deliver_claude direct_build |
             xargs -P "$JOURNEY_PARALLELISM" -I{} sh -c 'SUPLEX_DETERMINISTIC_PHASE={} pnpm exec tsx tests/interop/real-codex-standard.ts > test-results/journeys/{}.log 2>&1 && echo "passed {}" || { echo "failed {}"; exit 1; }' ||
             { for log in test-results/journeys/*.log; do echo "::group::$log"; cat "$log"; echo "::endgroup::"; done; exit 1; }
+          grep -h '^\[journey ' test-results/journeys/*.log
 
       - name: Enforce persistent target size limit
         if: ${{ always() && steps.rust-target.outcome == 'success' }}

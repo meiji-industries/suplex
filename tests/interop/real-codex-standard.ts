@@ -16,6 +16,7 @@ import { nativeBrowser } from "../helpers/native-browser.js";
 import { runCommand } from "../helpers/run-command.js";
 import { TaskSchema } from "../../src/frontend/contracts/tasks.js";
 
+const journeyStartedAt = performance.now();
 const model = process.env.SUPLEX_REAL_CODEX_MODEL ?? "gpt-6-sol";
 const deterministic = process.env.SUPLEX_DETERMINISTIC_CODEX_RUN === "1";
 if (deterministic && process.env.SUPLEX_REAL_CODEX_RUN === "1") throw new Error("Choose one Codex run mode");
@@ -38,8 +39,9 @@ const timeoutMs = Number(process.env.SUPLEX_JOURNEY_TIMEOUT_MS ?? 300_000);
 let lastStep = "script started";
 const progress = (step: string) => {
   lastStep = step;
-  console.error(`[journey ${phase}] ${step}`);
+  console.error(`[journey ${phase}] +${((performance.now() - journeyStartedAt) / 1_000).toFixed(2)}s ${step}`);
 };
+progress("setup started");
 let closeOnTimeout: (() => Promise<void>) | undefined;
 const journeyDeadline = globalThis.setTimeout(() => {
   console.error(`[journey ${phase}] timed out after ${timeoutMs} ms; last step: ${lastStep}`);
@@ -240,9 +242,11 @@ try {
   }
   equal(await dialog.getByRole("button", { name: "Task start mode", exact: true }).isEnabled(), true);
   equal(fixture.errors.length, 0, fixture.errors.join("; "));
+  progress("setup complete");
   if (process.env.SUPLEX_REAL_CODEX_RUN !== "1" && !deterministic) {
     console.log(JSON.stringify({ backend: "rust", taskPage: response?.status(), dialog: "ready", project: fixture.project.id, revision }));
   } else {
+    progress("execution started");
     preserveData = true;
     const proof = resolve(deterministic ? phase === "deliver" ? ".context/deterministic-codex-standard" : claude ? ".context/deterministic-claude-standard" : `.context/deterministic-codex-${phase}` : ".context/real-codex-standard");
     await mkdir(proof, { recursive: true });
@@ -398,14 +402,16 @@ try {
     if (deterministic && phase !== "cancel") await fixture.page.locator('[aria-label="Conversation"]').getByText("README line committed after pnpm test passed.").waitFor({ timeout: 15_000 });
     await fixture.page.screenshot({ path: `${proof}/${phase === "cancel" ? "cancelled" : "delivered"}.png`, fullPage: true });
     equal(fixture.errors.length, 0, fixture.errors.join("; "));
-    progress("done");
+    progress("execution complete");
     console.log(JSON.stringify({ mode: deterministic ? `deterministic_process_mcp_ui_${phase}` : "real_codex", taskId: task.id, status: delivered.status, head, sessions: sessions.map(({ kind, lifecycle }) => ({ kind, lifecycle })), proof }));
     preserveData = false;
   }
 } finally {
+  progress("cleanup started");
   globalThis.clearTimeout(journeyDeadline);
   githubApi?.close();
   await fixture.close({ preserveData });
   if (controlDirectory && !preserveData) await rm(controlDirectory, { recursive: true, force: true });
   if (preserveData) console.error(`Fixture data preserved for native recovery: ${fixture.directory}`);
+  progress("cleanup complete");
 }

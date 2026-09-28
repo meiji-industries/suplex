@@ -2,7 +2,7 @@
 
 use crate::shared::time::now_millis_rfc3339;
 use std::{
-    io::{self, Write},
+    io::{self, IsTerminal, Write},
     path::{Path, PathBuf},
 };
 
@@ -21,13 +21,41 @@ use crate::{
 
 pub type CliResult = Result<i32, Box<dyn std::error::Error>>;
 
-const USAGE: &str = "Usage: suplex <setup [--local]|onboard|install|recover|start|stop|restart|desktop|serve|migrate|doctor|task|backup|verify-backup|restore|logs|mcp> [options]\n";
+pub const HELP: &str = "\
+Usage:  suplex COMMAND [OPTIONS]
+
+Run and manage a Suplex installation.
+
+Common Commands:
+  up          Start Suplex in the background (alias: start)
+  down        Stop Suplex (alias: stop)
+  restart     Stop Suplex, then start it again
+  update      Check for a new Suplex.app version (alias: upgrade)
+  logs        Show the server log
+  doctor      Check the installation and database
+  desktop     Open Suplex.app
+
+Setup Commands:
+  setup       Configure this installation (alias: onboard)
+  install     Install the tools that Suplex needs
+  migrate     Apply database migrations
+  recover     Issue an administrator recovery link
+
+Diagnostic Commands:
+  task        Show the stored state of one task
+  serve       Run the server in the foreground
+
+Backup Commands:
+  backup          Write a backup archive
+  verify-backup   Check a backup archive
+  restore         Restore a backup archive to a new directory
+";
 
 /// Runs a command other than `serve` and `mcp`. Returns the exit code.
 pub async fn run(command: &str, arguments: &[String]) -> CliResult {
     match command {
-        "help" => {
-            print!("{USAGE}");
+        "help" | "-h" | "--help" => {
+            print!("{HELP}");
             Ok(0)
         }
         "logs" => logs(arguments),
@@ -38,7 +66,7 @@ pub async fn run(command: &str, arguments: &[String]) -> CliResult {
         "recover" => recover(arguments),
         "desktop" => desktop(),
         "install" => Ok(install::run(arguments).await),
-        "start" => {
+        "start" | "up" => {
             let installation = Installation::load()?;
             let pid = supervisor::start(&installation)?;
             println!(
@@ -47,7 +75,7 @@ pub async fn run(command: &str, arguments: &[String]) -> CliResult {
             );
             Ok(0)
         }
-        "stop" => {
+        "stop" | "down" => {
             let installation = Installation::load()?;
             println!("{}", supervisor::stop(&installation)?);
             Ok(0)
@@ -62,11 +90,12 @@ pub async fn run(command: &str, arguments: &[String]) -> CliResult {
             );
             Ok(0)
         }
+        "update" | "upgrade" => update(),
         "migrate" => migrate(),
         "doctor" => doctor(arguments).await,
         "task" => task(arguments),
         "backup" | "verify-backup" | "restore" => backup(command, arguments),
-        _ => Err(format!("Unknown Suplex command: {command}").into()),
+        _ => Err(format!("Unknown command: {command}. Run 'suplex help'.").into()),
     }
 }
 
@@ -88,6 +117,32 @@ fn recover(arguments: &[String]) -> CliResult {
         "Recovery enrollment (showing once): {}/auth?mode=recovery&invite={token}",
         installation.reachable_address
     );
+    Ok(0)
+}
+
+/// Suplex.app owns its updates, so this asks the app to check. A second
+/// launch forwards its arguments to a running app.
+fn update() -> CliResult {
+    let executable = std::env::current_exe()?.canonicalize()?;
+    let Some(app) = executable
+        .ancestors()
+        .find(|path| path.extension().is_some_and(|extension| extension == "app"))
+    else {
+        return Err("This Suplex runs from a source checkout. Update it with 'git pull', then run 'suplex restart'.".into());
+    };
+    let output = std::process::Command::new("open")
+        .arg("-na")
+        .arg(app)
+        .args(["--args", "--check-for-updates"])
+        .output()?;
+    if !output.status.success() {
+        return Err(format!(
+            "Suplex.app did not open: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        )
+        .into());
+    }
+    println!("Suplex.app checks for updates. Follow the prompt in the app.");
     Ok(0)
 }
 
@@ -195,15 +250,281 @@ fn migrate() -> CliResult {
 
 pub struct DoctorCheck {
     pub status: &'static str,
+    pub section: &'static str,
     pub name: String,
     pub detail: String,
+    pub details: Vec<(String, String)>,
+    pub remedy: Option<String>,
 }
 
-pub fn format_doctor(checks: &[DoctorCheck]) -> String {
-    checks
-        .iter()
-        .map(|check| format!("{:<4} {}: {}\n", check.status, check.name, check.detail))
+impl DoctorCheck {
+    fn new(
+        status: &'static str,
+        section: &'static str,
+        name: impl Into<String>,
+        detail: impl Into<String>,
+    ) -> Self {
+        Self {
+            status,
+            section,
+            name: name.into(),
+            detail: detail.into(),
+            details: Vec::new(),
+            remedy: None,
+        }
+    }
+}
+
+const SECTIONS: [&str; 6] = [
+    "Installation",
+    "Database",
+    "Storage",
+    "Integrations",
+    "Agents",
+    "Tasks",
+];
+
+fn section_for(id: &str) -> &'static str {
+    match id {
+        "database" => "Database",
+        "artifact-root" | "disk-space" | "backup" => "Storage",
+        id if id.starts_with("provider:") => "Agents",
+        _ => "Integrations",
+    }
+}
+
+/// `walMode: true` becomes `("wal mode", "yes")`.
+fn detail_rows(details: &Value) -> Vec<(String, String)> {
+    let label = |key: &str| {
+        key.chars().fold(String::new(), |mut label, c| {
+            if c.is_ascii_uppercase() {
+                label.push(' ');
+            }
+            label.push(c.to_ascii_lowercase());
+            label
+        })
+    };
+    details
+        .as_object()
+        .into_iter()
+        .flatten()
+        .map(|(key, value)| {
+            let value = match value {
+                Value::String(text) if text.is_empty() => "none".into(),
+                Value::String(text) => home_relative(Path::new(text)),
+                Value::Bool(true) => "yes".into(),
+                Value::Bool(false) => "no".into(),
+                Value::Null => "none".into(),
+                Value::Number(number) if key.ends_with("Bytes") => {
+                    format!(
+                        "{:.1} GiB",
+                        number.as_f64().unwrap_or(0.0) / 1_073_741_824.0
+                    )
+                }
+                Value::Number(number)
+                    if key.ends_with("Ms") && number.as_i64().is_some_and(|ms| ms >= 0) =>
+                {
+                    let minutes = number.as_i64().unwrap_or(0) / 60_000;
+                    format!("{}h {}m", minutes / 60, minutes % 60)
+                }
+                other => other.to_string(),
+            };
+            let key = key
+                .strip_suffix("Bytes")
+                .or_else(|| key.strip_suffix("Ms"))
+                .filter(|_| value.ends_with("GiB") || value.ends_with('m'))
+                .unwrap_or(key);
+            (label(key), value)
+        })
         .collect()
+}
+
+fn paint(color: bool, code: &str, text: &str) -> String {
+    if color {
+        format!("\x1b[{code}m{text}\x1b[0m")
+    } else {
+        text.to_owned()
+    }
+}
+
+/// `codex doctor` style: a notes digest, then each check grouped by section.
+pub fn format_doctor(checks: &[DoctorCheck], color: bool, summary: bool) -> String {
+    let marker = |status: &str| match status {
+        "PASS" => paint(color, "32", "✓"),
+        "WARN" => paint(color, "33", "⚠"),
+        _ => paint(color, "31", "✗"),
+    };
+    let line = |check: &DoctorCheck| {
+        format!(
+            "  {} {:<22} {}\n",
+            marker(check.status),
+            check.name,
+            check.detail
+        )
+    };
+    let rule = paint(color, "2", &"─".repeat(61));
+    let mut text = format!(
+        "{} {}\n\n",
+        paint(
+            color,
+            "1",
+            &format!("Suplex Doctor v{}", env!("CARGO_PKG_VERSION"))
+        ),
+        paint(
+            color,
+            "2",
+            &format!(
+                "· {} · {}-{}",
+                env!("SUPLEX_REVISION")
+                    .get(..7)
+                    .unwrap_or(env!("SUPLEX_REVISION")),
+                std::env::consts::OS,
+                std::env::consts::ARCH
+            )
+        )
+    );
+    let notes = checks
+        .iter()
+        .filter(|check| check.status != "PASS")
+        .collect::<Vec<_>>();
+    if !notes.is_empty() {
+        text.push_str(&paint(color, "1", "Notes"));
+        text.push('\n');
+        notes.iter().for_each(|check| text.push_str(&line(check)));
+        text.push_str(&rule);
+        text.push_str("\n\n");
+    }
+    for section in SECTIONS {
+        let grouped = checks
+            .iter()
+            .filter(|check| check.section == section)
+            .collect::<Vec<_>>();
+        if grouped.is_empty() {
+            continue;
+        }
+        text.push_str(&paint(color, "1", section));
+        text.push('\n');
+        for check in grouped {
+            text.push_str(&line(check));
+            if !summary {
+                let width = check
+                    .details
+                    .iter()
+                    .map(|(label, _)| label.len() + 1)
+                    .fold(24, usize::max);
+                for (label, value) in &check.details {
+                    text.push_str(&paint(
+                        color,
+                        "2",
+                        &format!("      {label:<width$} {value}"),
+                    ));
+                    text.push('\n');
+                }
+            }
+            if let Some(remedy) = &check.remedy {
+                text.push_str(&format!("    {} {remedy}\n", paint(color, "36", "→")));
+            }
+        }
+        text.push('\n');
+    }
+    let count = |status: &str| checks.iter().filter(|check| check.status == status).count();
+    let (ok, warn, fail) = (count("PASS"), count("WARN"), count("FAIL"));
+    let verdict = if fail > 0 {
+        paint(color, "31", "failing")
+    } else if warn > 0 {
+        paint(color, "33", "degraded")
+    } else {
+        paint(color, "32", "healthy")
+    };
+    text.push_str(&rule);
+    text.push_str(&format!(
+        "\n{ok} ok · {warn} warn · {fail} fail {verdict}\n"
+    ));
+    if !summary {
+        text.push_str(&paint(color, "2", "\n--summary hide details"));
+        text.push('\n');
+    }
+    text
+}
+
+fn home_relative(path: &Path) -> String {
+    match std::env::var_os("HOME")
+        .and_then(|home| path.strip_prefix(home).ok().map(Path::to_path_buf))
+    {
+        Some(relative) => format!("~/{}", relative.display()),
+        None => path.display().to_string(),
+    }
+}
+
+fn installation_checks(installation: &Installation) -> Vec<DoctorCheck> {
+    let mut config = DoctorCheck::new(
+        "PASS",
+        "Installation",
+        "config",
+        home_relative(&installation.configuration),
+    );
+    config.details = [
+        ("data", &installation.data),
+        ("database", &installation.database),
+        ("logs", &installation.logs),
+        ("repositories", &installation.repositories),
+        ("worktrees", &installation.worktrees),
+    ]
+    .map(|(label, path)| (label.to_owned(), home_relative(path)))
+    .to_vec();
+    let mut access = DoctorCheck::new(
+        "PASS",
+        "Installation",
+        "access",
+        format!(
+            "{} · {}",
+            installation.access_mode, installation.reachable_address
+        ),
+    );
+    access.details = vec![
+        ("bind address".into(), installation.bind_address.clone()),
+        ("port".into(), installation.port.to_string()),
+    ];
+    if installation.access_mode == "tailscale" {
+        access.details.push((
+            "tailscale exposure".into(),
+            installation.tailscale_exposure.clone(),
+        ));
+    }
+    let server = if supervisor::host_running(installation) {
+        DoctorCheck::new("PASS", "Installation", "server", "running")
+    } else {
+        let listener = std::process::Command::new("lsof")
+            .args([
+                "-nP",
+                &format!("-iTCP:{}", installation.port),
+                "-sTCP:LISTEN",
+                "-t",
+            ])
+            .output()
+            .ok()
+            .and_then(|output| String::from_utf8(output.stdout).ok())
+            .and_then(|pids| pids.lines().next().map(str::to_owned));
+        let mut server = DoctorCheck::new("WARN", "Installation", "server", "not running");
+        server.remedy = Some(match listener {
+            Some(pid) => {
+                let command = std::process::Command::new("ps")
+                    .args(["-o", "command=", "-p", &pid])
+                    .output()
+                    .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_owned())
+                    .unwrap_or_default();
+                server.detail = format!("not running; port {} is in use", installation.port);
+                server.details = vec![
+                    ("port owner".into(), format!("pid {pid}")),
+                    ("command".into(), home_relative(Path::new(&command))),
+                ];
+                "Stop the other process, or set SUPLEX_PORT to a free port.".into()
+            }
+            None => "Run 'suplex up' or open Suplex.app.".into(),
+        });
+        server
+    };
+    vec![config, access, server]
 }
 
 /// `platform/diagnostics/doctor.ts`: schema, references, host health with
@@ -224,28 +545,30 @@ pub async fn run_doctor(state: &AppState) -> Result<Vec<DoctorCheck>, Box<dyn st
         };
         Ok::<_, Box<dyn std::error::Error>>((schema, references))
     })?;
-    let mut checks = vec![DoctorCheck {
-        status: if schema.state == SchemaState::Current {
+    let mut checks = vec![DoctorCheck::new(
+        if schema.state == SchemaState::Current {
             "PASS"
         } else {
             "FAIL"
         },
-        name: "database schema".into(),
-        detail: format!(
+        "Database",
+        "schema",
+        format!(
             "{} ({}/{} migrations)",
             state_label(schema.state),
             schema.applied.len(),
             schema.expected.len()
         ),
-    }];
+    )];
     if schema.state != SchemaState::Current {
         return Ok(checks);
     }
-    checks.push(DoctorCheck {
-        status: if references == 0 { "PASS" } else { "FAIL" },
-        name: "database references".into(),
-        detail: format!("{references} invalid references"),
-    });
+    checks.push(DoctorCheck::new(
+        if references == 0 { "PASS" } else { "FAIL" },
+        "Database",
+        "references",
+        format!("{references} invalid references"),
+    ));
     let providers = ["opencode", "claude-code", "codex"]
         .map(str::to_owned)
         .to_vec();
@@ -253,10 +576,6 @@ pub async fn run_doctor(state: &AppState) -> Result<Vec<DoctorCheck>, Box<dyn st
     for check in snapshot["checks"].as_array().into_iter().flatten() {
         let id = check["id"].as_str().unwrap_or_default();
         let required = ["database", "artifact-root", "git", "herdr-readiness"].contains(&id);
-        let remedy = check["remedy"]
-            .as_str()
-            .map(|remedy| format!(" ({remedy})"))
-            .unwrap_or_default();
         checks.push(DoctorCheck {
             status: if check["status"] == "healthy" {
                 "PASS"
@@ -265,8 +584,11 @@ pub async fn run_doctor(state: &AppState) -> Result<Vec<DoctorCheck>, Box<dyn st
             } else {
                 "WARN"
             },
+            section: section_for(id),
             name: check["label"].as_str().unwrap_or_default().to_owned(),
-            detail: format!("{}{remedy}", check["summary"].as_str().unwrap_or_default()),
+            detail: check["summary"].as_str().unwrap_or_default().to_owned(),
+            details: detail_rows(&check["details"]),
+            remedy: check["remedy"].as_str().map(str::to_owned),
         });
     }
     let waiting = state.with_database(|database| {
@@ -284,16 +606,18 @@ pub async fn run_doctor(state: &AppState) -> Result<Vec<DoctorCheck>, Box<dyn st
     })?;
     for (id, status, question) in waiting {
         match status.as_deref() {
-            None => checks.push(DoctorCheck {
-                status: "FAIL",
-                name: id,
-                detail: "Task control is not available".into(),
-            }),
-            Some("waiting_human") => checks.push(DoctorCheck {
-                status: "WARN",
-                name: id,
-                detail: question.unwrap_or_else(|| "Answer the task question".into()),
-            }),
+            None => checks.push(DoctorCheck::new(
+                "FAIL",
+                "Tasks",
+                id,
+                "Task control is not available",
+            )),
+            Some("waiting_human") => checks.push(DoctorCheck::new(
+                "WARN",
+                "Tasks",
+                id,
+                question.unwrap_or_else(|| "Answer the task question".into()),
+            )),
             Some(_) => {}
         }
     }
@@ -325,8 +649,11 @@ async fn doctor(arguments: &[String]) -> CliResult {
         &installation,
         arguments.iter().any(|value| value == "--verbose"),
     )?;
-    let checks = run_doctor(&diagnostic_state(&installation, database)).await?;
-    print!("{}", format_doctor(&checks));
+    let mut checks = installation_checks(&installation);
+    checks.extend(run_doctor(&diagnostic_state(&installation, database)).await?);
+    let color = io::stdout().is_terminal() && std::env::var_os("NO_COLOR").is_none();
+    let summary = arguments.iter().any(|value| value == "--summary");
+    print!("{}", format_doctor(&checks, color, summary));
     Ok(if checks.iter().any(|check| check.status == "FAIL") {
         1
     } else {
@@ -603,11 +930,24 @@ mod tests {
         .with_artifact_root(root.join("artifacts"))
         .with_project_roots(root.join("repositories"), root.join("worktrees"));
         let checks = run_doctor(&state).await.unwrap();
-        let text = format_doctor(&checks);
-        assert!(text.starts_with("PASS database schema: current ("));
-        assert!(text.contains("PASS database references: 0 invalid references\n"));
-        assert!(text.contains("PASS SQLite database: Schema is current and WAL is enabled\n"));
-        assert!(text.contains(" Backup verification: No backup has been made yet (Create a backup in Settings → Backups)\n"));
+        let text = format_doctor(&checks, false, false);
+        assert!(text.starts_with("Suplex Doctor v"));
+        assert!(text.contains("\nDatabase\n  ✓ schema                 current ("));
+        assert!(text.contains("  ✓ references             0 invalid references\n"));
+        assert!(text.contains("  ✓ SQLite database        Schema is current and WAL is enabled\n"));
+        assert!(text.contains("      wal mode                 yes\n"));
+        assert_eq!(
+            detail_rows(&json!({"freeBytes": 1_073_741_824u64, "ageMs": 3_660_000, "path": ""})),
+            [
+                ("free".into(), "1.0 GiB".into()),
+                ("age".into(), "1h 1m".into()),
+                ("path".into(), "none".into())
+            ]
+        );
+        assert!(text.contains("  ⚠ Backup verification    No backup has been made yet\n"));
+        assert!(text.contains("    → Create a backup in Settings → Backups\n"));
+        assert!(!format_doctor(&checks, false, true).contains("wal mode"));
+        assert!(!format_doctor(&checks, true, false).is_empty());
         assert!(
             checks
                 .iter()

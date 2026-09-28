@@ -1,8 +1,8 @@
 #!/bin/sh
 set -eu
 cd "$(dirname "$0")/.."
-case "${1:-serve}" in
-  start|restart|serve) pnpm exec vite build ;;
+case "${1:-}" in
+  start|up|restart|serve) pnpm exec vite build ;;
 esac
 cd rust
 unset RUSTUP_TOOLCHAIN

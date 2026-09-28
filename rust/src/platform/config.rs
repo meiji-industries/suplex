@@ -28,12 +28,26 @@ pub struct Installation {
 impl Installation {
     pub fn load() -> Result<Self, Box<dyn std::error::Error>> {
         let current = env::current_dir()?;
-        let configuration = absolute(
-            &current,
-            Path::new(&env::var("SUPLEX_ENV_FILE").unwrap_or_else(|_| ".suplex/suplex.env".into())),
-        );
+        let home = env::var_os("HOME")
+            .map(PathBuf::from)
+            .ok_or("HOME is required for default repository paths")?;
+        let explicit = env::var_os("SUPLEX_ENV_FILE").map(PathBuf::from);
+        let (configuration, desktop_root) =
+            locate_configuration(&current, &home, explicit.as_deref());
         let file = read_environment(&configuration);
         let value = |key: &str| env::var(key).ok().or_else(|| file.get(key).cloned());
+        if explicit.is_none()
+            && !configuration.exists()
+            && value("SUPLEX_ROOT").is_none()
+            && value("SUPLEX_ACCESS_MODE").is_none()
+        {
+            return Err(format!(
+                "No Suplex installation found. Looked for {} and {}. Run 'suplex setup' or open Suplex.app.",
+                configuration.display(),
+                desktop_configuration(&home).display()
+            )
+            .into());
+        }
         for key in [
             "SUPLEX_TAILSCALE_ADDRESS",
             "SUPLEX_BIND_ADDRESS",
@@ -51,6 +65,7 @@ impl Installation {
         let experimental = value("SUPLEX_ROOT").map(|root| absolute(&current, Path::new(&root)));
         let default_root = experimental
             .clone()
+            .or(desktop_root)
             .unwrap_or_else(|| current.join(".suplex"));
         let data = value("SUPLEX_DATA_ROOT")
             .map(|path| absolute(&current, Path::new(&path)))
@@ -170,9 +185,6 @@ impl Installation {
             Some(_) => return Err("SUPLEX_INSTALLATION_ID is invalid".into()),
             None => persistent_installation_id(&data)?,
         };
-        let home = env::var_os("HOME")
-            .map(PathBuf::from)
-            .ok_or("HOME is required for default repository paths")?;
         let path = |key: &str, default: PathBuf| {
             value(key)
                 .map(|path| absolute(&current, Path::new(&path)))
@@ -212,6 +224,30 @@ impl Installation {
         })
     }
 }
+/// The configuration file and, for the Suplex.app installation, its root.
+/// An explicit `SUPLEX_ENV_FILE` wins. Otherwise a `.suplex` in the current
+/// directory wins over the Suplex.app installation.
+fn locate_configuration(
+    current: &Path,
+    home: &Path,
+    explicit: Option<&Path>,
+) -> (PathBuf, Option<PathBuf>) {
+    if let Some(explicit) = explicit {
+        return (absolute(current, explicit), None);
+    }
+    let local = current.join(".suplex/suplex.env");
+    let desktop = desktop_configuration(home);
+    if !local.exists() && desktop.exists() {
+        let root = desktop.parent().map(Path::to_path_buf);
+        return (desktop, root);
+    }
+    (local, None)
+}
+
+fn desktop_configuration(home: &Path) -> PathBuf {
+    home.join("Library/Application Support/Suplex/suplex.env")
+}
+
 fn valid_installation_id(id: &str) -> bool {
     (8..=64).contains(&id.len())
         && id
@@ -308,6 +344,32 @@ fn persistent_installation_id(data: &Path) -> Result<String, Box<dyn std::error:
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn configuration_prefers_explicit_then_local_then_desktop() {
+        let base = std::env::temp_dir().join(format!("suplex-config-{}", uuid::Uuid::new_v4()));
+        let (current, home) = (base.join("project"), base.join("home"));
+        let desktop = home.join("Library/Application Support/Suplex");
+        fs::create_dir_all(&current).unwrap();
+        let local = current.join(".suplex/suplex.env");
+        assert_eq!(
+            locate_configuration(&current, &home, None),
+            (local.clone(), None)
+        );
+        fs::create_dir_all(&desktop).unwrap();
+        fs::write(desktop.join("suplex.env"), "").unwrap();
+        assert_eq!(
+            locate_configuration(&current, &home, None),
+            (desktop.join("suplex.env"), Some(desktop.clone()))
+        );
+        fs::create_dir_all(local.parent().unwrap()).unwrap();
+        fs::write(&local, "").unwrap();
+        assert_eq!(locate_configuration(&current, &home, None), (local, None));
+        assert_eq!(
+            locate_configuration(&current, &home, Some(Path::new("custom.env"))),
+            (current.join("custom.env"), None)
+        );
+        fs::remove_dir_all(base).unwrap();
+    }
     #[test]
     fn tailscale_binding_rejects_public_addresses() {
         assert!(is_tailscale_address("100.64.0.1"));

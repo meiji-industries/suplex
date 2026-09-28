@@ -54,8 +54,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )?);
     }
     match command.first().map(String::as_str) {
-        None | Some("serve") => serve().await,
-        Some("start") if command.iter().any(|arg| arg == "--foreground") => {
+        None => {
+            print!("{}", suplex::cli::HELP);
+            Ok(())
+        }
+        Some("serve") => serve().await,
+        Some("start" | "up") if command.iter().any(|arg| arg == "--foreground") => {
             suplex::platform::supervisor::run_foreground().await
         }
         Some(name) => match suplex::cli::run(name, &command[1..]).await {

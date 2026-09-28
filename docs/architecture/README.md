@@ -17,6 +17,7 @@ force the person back through a prescribed workflow.
 | --- | --- |
 | Copilot behavior, no mirror gates, repair, and narrow safeguards | [Engineering principles](principles.md) |
 | Local and remote instances, thin clients, and binary distribution | [Deployment](deployment.md) |
+| The `suplex` command, installation lookup, doctor, and CLI updates | [Command-line interface](cli.md) |
 | Instance, project, and task settings; resource allowances | [Settings and limits](settings-and-limits.md) |
 | Backup contents, restore, and native-state boundaries | [Backup and restore](backup-and-restore.md) |
 | Host processes, scheduling, and state ownership | [Runtime](runtime.md) |

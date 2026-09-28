@@ -34,7 +34,7 @@ async function startRustServer(root: string, port: number, options: FixtureOptio
   await writeFile(unavailableHerdr, "#!/bin/sh\nexit 127\n");
   await chmod(unavailableHerdr, 0o700);
   const data = join(root, "data");
-  const child = spawn(executable, [], { detached: isolated, env: {
+  const child = spawn(executable, ["serve"], { detached: isolated, env: {
     ...process.env,
     PATH: `${fixtureBin}:${process.env.PATH ?? "/usr/bin:/bin"}`,
     ...(isolated ? {

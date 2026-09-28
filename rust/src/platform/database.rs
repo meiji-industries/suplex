@@ -56,6 +56,8 @@ pub struct DatabaseHealth {
     pub applied_migrations: usize,
     pub readable: bool,
     pub writable: bool,
+    /// A read-only connection does not probe writes.
+    pub read_only: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -373,9 +375,22 @@ impl SuplexDatabase {
                     applied_migrations: 0,
                     readable: false,
                     writable: false,
+                    read_only: self.mode == OpenMode::ReadOnly,
                 };
             }
         };
+        let read_only = self.mode == OpenMode::ReadOnly;
+        if read_only {
+            return DatabaseHealth {
+                wal_mode: status.wal_mode,
+                schema_state: status.state,
+                expected_migrations: status.expected.len(),
+                applied_migrations: status.applied.len(),
+                readable: true,
+                writable: false,
+                read_only,
+            };
+        }
         let write = self.connection.execute_batch("CREATE TABLE IF NOT EXISTS health_write_probe (id INTEGER PRIMARY KEY, checked_at TEXT NOT NULL)")
             .and_then(|_| self.connection.execute_batch("DROP TABLE health_write_probe"));
         DatabaseHealth {
@@ -389,6 +404,7 @@ impl SuplexDatabase {
             applied_migrations: status.applied.len(),
             readable: true,
             writable: write.is_ok(),
+            read_only,
         }
     }
 }

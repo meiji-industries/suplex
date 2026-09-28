@@ -32,7 +32,7 @@ pub(crate) fn check(id: &str, label: &str, status: &str, summary: &str, details:
 
 pub(crate) fn database_check(health: DatabaseHealth) -> Value {
     let current = health.schema_state == SchemaState::Current;
-    let usable = health.wal_mode && health.readable && health.writable;
+    let usable = health.wal_mode && health.readable && (health.writable || health.read_only);
     let status = if current && usable {
         "healthy"
     } else if health.schema_state == SchemaState::Ahead && usable {
@@ -41,6 +41,10 @@ pub(crate) fn database_check(health: DatabaseHealth) -> Value {
         "unhealthy"
     };
     let summary = match status {
+        "healthy" if health.read_only => {
+            "Schema is current and WAL is enabled. Writes are not tested in read-only mode"
+                .to_owned()
+        }
         "healthy" => "Schema is current and WAL is enabled".to_owned(),
         "warning" => {
             let unknown = health
@@ -497,6 +501,7 @@ mod tests {
             applied_migrations: 1,
             readable: true,
             writable: false,
+            read_only: false,
         };
         assert_eq!(database_check(unavailable)["status"], "unhealthy");
     }

@@ -1,20 +1,22 @@
 import { useEffect, useMemo, useState, type ReactElement } from "react";
-import { Archive, ArchiveRestore, CirclePlus, Copy, Ellipsis, Pencil } from "lucide-react";
+import { Archive, ArchiveRestore, CirclePlus, Copy, Ellipsis } from "lucide-react";
 import { DeliveryTargetSchema, VisualEvidenceSchema } from "../../contracts/tasks.js";
 import type { WorkflowRecordInput } from "../../contracts/workflow-presets.js";
 import { ADVISOR_LABELS, WORKFLOWS, workflowDefinition } from "../tasks/workflow-presentation.js";
 import { WorkflowIdSchema } from "../../contracts/workflows.js";
 import type { AdvisorRole } from "../../contracts/advisor-reports.js";
 import { SettingsContent, SettingsLayout } from "./settings-layout.js";
-import { SettingsDataTable, SettingsTableCell, SettingsTableEmpty, SettingsTableGroup, SettingsTableRow, SettingsToolbar, type SettingsTableColumn } from "../../components/app/settings-table.js";
+import { SettingsToolbar } from "../../components/app/settings-table.js";
 import { useCompanyContext } from "../../shell/company-context.js";
 import { EntityAvatar } from "../../components/app/entity-avatar.js";
 import { requestNewTask } from "../../shell/global-new-task-dialog.js";
+import { WorkflowIllustration } from "../tasks/workflow-illustration.js";
 import { taskDeliveryTargetOptions } from "../tasks/task-delivery-target.js";
 import { Alert, AlertDescription } from "../../components/ui/alert.js";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "../../components/ui/alert-dialog.js";
 import { Badge } from "../../components/ui/badge.js";
 import { Button } from "../../components/ui/button.js";
+import { Card, CardAction, CardContent, CardHeader, CardTitle } from "../../components/ui/card.js";
 import { NewButton } from "../../components/ui/new-button.js";
 import { Checkbox } from "../../components/ui/checkbox.js";
 import { Dialog, DialogClose, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "../../components/ui/dialog.js";
@@ -25,16 +27,6 @@ import { Textarea } from "../../components/ui/textarea.js";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../components/ui/select.js";
 import { readJsonUnchecked, withCompany } from "../../lib/api.js";
 import type { ApiProfile, ApiWorkflow } from "../../shell/view-shared.js";
-
-const columns: SettingsTableColumn[] = [
-  { key: "name", label: "Name", width: 200 },
-  { key: "engine", label: "Built-in workflow", width: 150 },
-  { key: "agents", label: "Default agents", width: 260 },
-  { key: "delivery", label: "Delivery", width: 150 },
-  { key: "status", label: "Status", width: 90 },
-  { key: "menu", width: 36 },
-  { key: "edit", width: 36 },
-];
 
 type EditorState =
   | { kind: "closed" }
@@ -141,33 +133,44 @@ export function WorkflowSettingsView(): ReactElement {
     <SettingsContent width="wide" title="Workflows" description="A workflow sets the steps, default agents, and delivery that Suplex uses for a task.">
       <SettingsToolbar searchLabel="Filter workflows by name" searchPlaceholder="Filter by name" searchWidth="compact" searchValue={search} onSearchChange={setSearch} actions={admin ? <NewButton disabled={busy} onClick={() => { setError(""); setEditor({ kind: "create", draft: emptyDraft() }); }}>New workflow</NewButton> : null} />
       {error && editor.kind === "closed" ? <div className="mt-3"><Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert></div> : null}
-      <SettingsDataTable label="Workflows" columns={columns} className="mt-4">
-        <SettingsTableGroup label="Workflows" count={visible.length} columnCount={columns.length}>
-          {visible.map((workflow) => <SettingsTableRow key={workflow.id} data-workflow-row={workflow.id} aria-label={`Edit ${workflow.name}`} tabIndex={0} onClick={(event) => { if (admin && !(event.target as HTMLElement).closest("button, input, label, [data-base-ui-portal]")) edit(workflow); }}>
-            <SettingsTableCell className="font-medium"><span className="flex min-w-0 items-center gap-2"><Button variant="link" size="sm" aria-label={`Edit ${workflow.name}`} onClick={() => edit(workflow)}>{workflow.name}</Button>{workflow.archivedAt ? <Badge variant="secondary">Archived</Badge> : null}</span></SettingsTableCell>
-            <SettingsTableCell className="truncate text-muted-foreground">{workflowDefinition(workflow.engine).name}</SettingsTableCell>
-            <SettingsTableCell className="text-muted-foreground"><span className="grid gap-1" aria-label="Default agents">{agentLines(workflow).map(({ label, agent, fallback }) => <span key={label} className="flex min-w-0 items-center gap-1.5 text-xs" title={`${label}: ${agent?.name ?? fallback}`}>{agent ? <EntityAvatar kind="agent" id={agent.id} name={agent.name} seed={agent.avatarSeed} size="xs" /> : null}<span className={agent ? "truncate text-foreground" : "truncate"}>{agent?.name ?? fallback}</span></span>)}</span></SettingsTableCell>
-            <SettingsTableCell className="truncate text-muted-foreground">{workflow.engine === REPAIR ? "Merged pull request" : deliveryLabel(workflow.deliveryTarget)}</SettingsTableCell>
-            <SettingsTableCell><span className="flex items-center gap-1.5 text-muted-foreground"><span className={workflow.archivedAt ? "size-1.5 rounded-full bg-muted-foreground" : "size-1.5 rounded-full bg-emerald-500"} />{workflow.archivedAt ? "archived" : "active"}</span></SettingsTableCell>
-            <SettingsTableCell className="p-0">
-              <DropdownMenu>
-                <DropdownMenuTrigger render={<Button variant="ghost" size="icon-xs" aria-label={`${workflow.name} actions`} title={`${workflow.name} actions`} />}><Ellipsis /></DropdownMenuTrigger>
-                <DropdownMenuContent align="end">
-                  <DropdownMenuItem disabled={Boolean(workflow.archivedAt) || currentCompany?.status !== "active"} onClick={() => requestNewTask({ workflowId: workflow.id })}><CirclePlus />Create task</DropdownMenuItem>
-                  {admin ? <>
-                    <DropdownMenuItem onClick={() => void duplicate(workflow)}><Copy />Duplicate</DropdownMenuItem>
-                    {workflow.archivedAt
-                      ? <DropdownMenuItem onClick={() => void patch(workflow, { archived: false }, "Unable to unarchive workflow")}><ArchiveRestore />Unarchive</DropdownMenuItem>
-                      : <DropdownMenuItem onClick={() => setArchiveTarget(workflow)}><Archive />Archive</DropdownMenuItem>}
-                  </> : null}
-                </DropdownMenuContent>
-              </DropdownMenu>
-            </SettingsTableCell>
-            <SettingsTableCell className="p-0">{admin ? <Button variant="ghost" size="icon-xs" aria-label={`Edit ${workflow.name} details`} title={`Edit ${workflow.name}`} onClick={() => edit(workflow)}><Pencil /></Button> : null}</SettingsTableCell>
-          </SettingsTableRow>)}
-        </SettingsTableGroup>
-        {workflows.length > 0 && visible.length === 0 ? <SettingsTableEmpty columnCount={columns.length}>No workflows match the search.</SettingsTableEmpty> : null}
-      </SettingsDataTable>
+      <div className="mt-4 grid gap-3" aria-label="Workflows">
+        {visible.map((workflow) => <article key={workflow.id} data-workflow-card={workflow.id}>
+          <Card size="sm">
+            <CardHeader>
+              <CardTitle><span className="flex min-w-0 flex-wrap items-center gap-2">{workflow.name}{workflow.archivedAt ? <Badge variant="secondary">Archived</Badge> : null}</span></CardTitle>
+              <CardAction className="flex items-center gap-1">
+                {admin ? <Button variant="ghost" size="sm" aria-label={`Configure ${workflow.name}`} disabled={busy} onClick={() => edit(workflow)}>Configure</Button> : null}
+                <DropdownMenu>
+                  <DropdownMenuTrigger render={<Button variant="ghost" size="icon-xs" aria-label={`${workflow.name} actions`} title={`${workflow.name} actions`} />}><Ellipsis /></DropdownMenuTrigger>
+                  <DropdownMenuContent align="end">
+                    <DropdownMenuItem disabled={Boolean(workflow.archivedAt) || currentCompany?.status !== "active"} onClick={() => requestNewTask({ workflowId: workflow.id })}><CirclePlus />Create task</DropdownMenuItem>
+                    {admin ? <>
+                      <DropdownMenuItem onClick={() => void duplicate(workflow)}><Copy />Duplicate</DropdownMenuItem>
+                      {workflow.archivedAt
+                        ? <DropdownMenuItem onClick={() => void patch(workflow, { archived: false }, "Unable to unarchive workflow")}><ArchiveRestore />Unarchive</DropdownMenuItem>
+                        : <DropdownMenuItem onClick={() => setArchiveTarget(workflow)}><Archive />Archive</DropdownMenuItem>}
+                    </> : null}
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              </CardAction>
+            </CardHeader>
+            <CardContent>
+              {workflow.description ? <p className="text-xs text-muted-foreground">{workflow.description}</p> : null}
+              <WorkflowIllustration workflow={workflow.engine} delivery={workflow.engine === REPAIR ? "Merged pull request" : deliveryLabel(workflow.deliveryTarget)} />
+              <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 text-xs text-muted-foreground">
+                {workflow.name !== workflowDefinition(workflow.engine).name ? <span>Built-in workflow <span className="text-foreground">{workflowDefinition(workflow.engine).name}</span></span> : null}
+                <span>Delivery <span className="text-foreground">{workflow.engine === REPAIR ? "Merged pull request" : deliveryLabel(workflow.deliveryTarget)}</span></span>
+              </div>
+              <div className="flex flex-wrap gap-x-4 gap-y-1.5" aria-label="Default agents">
+                {agentLines(workflow).map(({ label, agent, fallback }) => <span key={label} className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground" title={`${label}: ${agent?.name ?? fallback}`}>
+                  {agent ? <EntityAvatar kind="agent" id={agent.id} name={agent.name} seed={agent.avatarSeed} size="xs" /> : null}<span>{label}</span><span className="text-foreground">{agent?.name ?? fallback}</span>
+                </span>)}
+              </div>
+            </CardContent>
+          </Card>
+        </article>)}
+        {workflows.length > 0 && visible.length === 0 ? <p role="status" className="text-sm text-muted-foreground">No workflows match the search.</p> : null}
+      </div>
     </SettingsContent>
 
     <Dialog open={editor.kind !== "closed"} onOpenChange={(open) => { if (!open && !busy) { setEditor({ kind: "closed" }); setError(""); } }}>

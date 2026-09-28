@@ -4,6 +4,8 @@ import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import type { Task } from "../src/frontend/contracts/tasks.js";
 
+const storage = vi.hoisted(() => ({ getItem: vi.fn(), setItem: vi.fn() }));
+const roots: ReturnType<typeof createRoot>[] = [];
 const api = vi.hoisted(() => ({ readJsonUnchecked: vi.fn(), withCompany: (path: string) => path }));
 vi.mock("../src/frontend/lib/api.js", () => api);
 vi.mock("../src/frontend/features/tasks/task-data.js", () => ({ useTaskCache: () => vi.fn() }));
@@ -36,15 +38,27 @@ vi.mock("../src/frontend/components/ui/button.js", () => ({ Button: ({ children,
 vi.mock("../src/frontend/components/ui/new-button.js", () => ({ NewButton: ({ children, ...props }: React.ButtonHTMLAttributes<HTMLButtonElement>) => <button {...props}>{children}</button> }));
 vi.mock("../src/frontend/components/ui/input.js", () => ({ Input: (props: React.InputHTMLAttributes<HTMLInputElement>) => <input {...props} /> }));
 vi.mock("../src/frontend/components/ui/textarea.js", () => ({ Textarea: (props: React.TextareaHTMLAttributes<HTMLTextAreaElement>) => <textarea {...props} /> }));
-vi.mock("../src/frontend/components/ui/checkbox.js", () => ({ Checkbox: () => <input type="checkbox" /> }));
-vi.mock("../src/frontend/components/ui/select.js", () => ({ Select: ({ children }: { children: React.ReactNode }) => <>{children}</>, SelectContent: ({ children }: { children: React.ReactNode }) => <>{children}</>, SelectItem: ({ children }: { children: React.ReactNode }) => <>{children}</>, SelectTrigger: ({ children }: { children: React.ReactNode }) => <button type="button">{children}</button>, SelectValue: () => null }));
+vi.mock("../src/frontend/components/ui/checkbox.js", () => ({ Checkbox: ({ checked, disabled, onCheckedChange }: { checked: boolean; disabled?: boolean; onCheckedChange: (value: boolean) => void }) => <input type="checkbox" checked={checked} disabled={disabled} onChange={event => onCheckedChange(event.target.checked)} /> }));
+vi.mock("../src/frontend/components/ui/select.js", async () => {
+  const React = await import("react");
+  const Context = React.createContext({ value: "", disabled: false, open: false, setOpen: (_open: boolean): void => undefined, onValueChange: (_value: string): void => undefined });
+  return {
+    Select: ({ value, disabled = false, onValueChange, children }: { value: string; disabled?: boolean; onValueChange: (value: string) => void; children: React.ReactNode }) => {
+      const [open, setOpen] = React.useState(false);
+      return <Context.Provider value={{ value, disabled, onValueChange, open, setOpen }}>{children}</Context.Provider>;
+    },
+    SelectTrigger: ({ children, ...props }: React.ButtonHTMLAttributes<HTMLButtonElement>) => { const context = React.useContext(Context); return <button {...props} type="button" disabled={context.disabled} onClick={() => context.setOpen(true)}>{children}</button>; },
+    SelectContent: ({ children }: { children: React.ReactNode }) => React.useContext(Context).open ? <div role="listbox">{children}</div> : null,
+    SelectItem: ({ value, children }: { value: string; children: React.ReactNode }) => { const context = React.useContext(Context); return <button type="button" role="option" aria-selected={value === context.value} onClick={() => { context.onValueChange(value); context.setOpen(false); }}>{children}</button>; },
+    SelectValue: ({ children }: { children?: React.ReactNode }) => { const context = React.useContext(Context); return children ?? context.value; },
+  };
+});
 vi.mock("../src/frontend/components/ui/inline-attachment-picker.js", () => ({ InlineAttachmentPicker: () => null }));
 vi.mock("../src/frontend/components/ui/alert.js", () => ({ Alert: ({ children }: { children: React.ReactNode }) => <div>{children}</div>, AlertDescription: ({ children }: { children: React.ReactNode }) => <div>{children}</div> }));
 vi.mock("../src/frontend/components/app/entity-avatar.js", () => ({ EntityAvatar: () => null }));
 vi.mock("../src/frontend/components/ui/breadcrumb.js", () => ({ Breadcrumb: ({ children }: { children: React.ReactNode }) => <>{children}</>, BreadcrumbItem: ({ children }: { children: React.ReactNode }) => <>{children}</>, BreadcrumbList: ({ children }: { children: React.ReactNode }) => <>{children}</>, BreadcrumbSeparator: () => null }));
-vi.mock("../src/frontend/components/ui/radio-group.js", () => ({ RadioGroup: ({ children }: { children: React.ReactNode }) => <>{children}</>, RadioGroupItem: () => <input type="radio" /> }));
 vi.mock("../src/frontend/features/tasks/task-source-picker.js", () => ({
-  TaskSourcePicker: ({ onSelect }: { onSelect: (source: unknown) => void }) => <button type="button" onClick={() => onSelect({ kind: "issue", issue: { kind: "jira", site: "https://client.atlassian.net", id: "42", key: "APP-42", title: "Fix the picker", url: "https://client.atlassian.net/browse/APP-42" } })}>Select Jira issue</button>,
+  TaskSourcePicker: ({ onSelect, pullRequestsOnly, onClear }: { onSelect: (source: unknown, selector?: unknown) => void; pullRequestsOnly: boolean; onClear: () => void }) => <><button type="button" onClick={() => pullRequestsOnly ? onSelect({ kind: "pull_request", title: "Repair the picker", number: 42 }, { kind: "pull_request", number: 42 }) : onSelect({ kind: "issue", issue: { kind: "jira", site: "https://client.atlassian.net", id: "42", key: "APP-42", title: "Fix the picker", url: "https://client.atlassian.net/browse/APP-42" } })}>{pullRequestsOnly ? "Select a pull request" : "Select Jira issue"}</button><button type="button" onClick={onClear}>Clear source</button></>,
   issueTaskSource: (issue: unknown) => ({ kind: "issue", issue }),
   prefillForTaskSource: (source: { kind: string; issue?: { title: string; key: string; url: string } }) => source.kind === "issue" ? { title: source.issue!.title, description: `Work on ${source.issue!.key}: ${source.issue!.url}` } : { title: "", description: "" },
 }));
@@ -75,11 +89,12 @@ function button(container: HTMLElement, label: string) {
   return value;
 }
 
-function mount(editing = false) {
+function mount(editing = false, initialDraft?: React.ComponentProps<typeof NewTaskDialog>["initialDraft"]) {
   const container = document.createElement("div");
   document.body.append(container);
   const root = createRoot(container);
-  act(() => { root.render(<NewTaskDialog open companyId="company-1" onOpenChange={() => undefined} onCreated={() => undefined} {...(editing ? { editTask: { id: "task-edit", configuration: {} } as Task } : {})} />); });
+  roots.push(root);
+  act(() => { root.render(<NewTaskDialog initialDraft={initialDraft} open companyId="company-1" onOpenChange={() => undefined} onCreated={() => undefined} {...(editing ? { editTask: { id: "task-edit", configuration: {} } as Task } : {})} />); });
   return { container, root };
 }
 
@@ -89,6 +104,9 @@ async function flush() {
 
 beforeEach(() => {
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+  storage.getItem.mockReturnValue(null);
+  storage.setItem.mockClear();
+  vi.stubGlobal("localStorage", storage);
   api.readJsonUnchecked.mockReset();
   api.readJsonUnchecked.mockImplementation(async (url: string, init?: RequestInit) => {
     if (url === "/api/companies/company-1/tasks" && init?.method === "POST") return { id: "created" };
@@ -100,14 +118,12 @@ beforeEach(() => {
     throw new Error(`Unexpected request: ${url}`);
   });
 });
-afterEach(async () => { await act(async () => { document.body.replaceChildren(); }); });
+afterEach(async () => { await act(async () => { roots.splice(0).forEach(root => root.unmount()); document.body.replaceChildren(); }); vi.unstubAllGlobals(); });
 
 test("New task Blocked by picker filters, selects several, removes one, and posts the rest as dependsOn", async () => {
   const view = mount();
   await flush();
-  expect(view.container.querySelector('[aria-label="More options"]')).not.toBeNull();
-  await act(async () => { button(view.container, "More options").click(); });
-  expect(view.container.querySelectorAll('[role="menuitem"]')).toHaveLength(1);
+  expect(view.container.querySelector('[aria-label="More options"]')).toBeNull();
   await act(async () => { button(view.container, "Blocked by...").click(); });
   await flush();
   expect(view.container.textContent).toContain("Active prerequisite");
@@ -134,18 +150,18 @@ test("New task Blocked by picker filters, selects several, removes one, and post
   expect(posts()[0]).not.toHaveProperty("blockedByTaskId");
 
   for (const name of ["Active prerequisite", "Backlog task"]) {
-    await act(async () => { button(view.container, "More options").click(); button(view.container, "Blocked by...").click(); });
+    await act(async () => { button(view.container, "Blocked by...").click(); });
     await flush();
     await act(async () => { button(view.container, name).click(); });
   }
   expect(view.container.querySelectorAll("[data-blocked-by-selection]")).toHaveLength(2);
   // A selected task is not offered again.
-  await act(async () => { button(view.container, "More options").click(); button(view.container, "Blocked by...").click(); });
+  await act(async () => { button(view.container, "Blocked by...").click(); });
   await flush();
   expect(view.container.querySelector('[aria-label="Search tasks"]')!.parentElement!.textContent).not.toContain("Backlog task");
   await act(async () => { button(view.container, "Close").click(); });
   await act(async () => { button(view.container, "Remove Active prerequisite from Blocked by").click(); });
-  await act(async () => { button(view.container, "More options").click(); button(view.container, "Blocked by...").click(); });
+  await act(async () => { button(view.container, "Blocked by...").click(); });
   await flush();
   await act(async () => { button(view.container, "Active prerequisite").click(); setText(title, "Create dependent"); title.form?.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })); await Promise.resolve(); });
   expect(posts()[1].dependsOn).toEqual(["task-backlog", "task-active"]);
@@ -174,11 +190,9 @@ test("closing the Blocked by picker preserves the new task dialog state", async 
   const title = view.container.querySelector<HTMLInputElement>('[aria-label="Task title"]')!;
   const description = view.container.querySelector<HTMLTextAreaElement>('[aria-label="Task description"]')!;
   await act(async () => { setText(title, "Dependent task"); setText(description, "Wait for the prerequisite"); });
-  await act(async () => { button(view.container, "More options").click(); });
   await act(async () => { button(view.container, "Blocked by...").click(); });
   await flush();
   await act(async () => { button(view.container, "Active prerequisite").click(); });
-  await act(async () => { button(view.container, "More options").click(); });
   await act(async () => { button(view.container, "Blocked by...").click(); });
   await flush();
   expect(view.container.querySelector('[aria-label="Search tasks"]')).not.toBeNull();
@@ -189,16 +203,15 @@ test("closing the Blocked by picker preserves the new task dialog state", async 
   expect(view.container.textContent).toContain("Blocked by Active prerequisite");
 });
 
-test("More options is absent when editing a task", async () => {
+test("Blocked by is absent when editing a task", async () => {
   const view = mount(true);
   await flush();
-  expect(view.container.querySelector('[aria-label="More options"]')).toBeNull();
+  expect(Array.from(view.container.querySelectorAll("button")).some(element => element.textContent === "Blocked by...")).toBe(false);
 });
 
 test("the picker reports an empty task result", async () => {
   const view = mount();
   await flush();
-  await act(async () => { button(view.container, "More options").click(); });
   await act(async () => { button(view.container, "Blocked by...").click(); });
   await flush();
   const search = view.container.querySelector<HTMLInputElement>('[aria-label="Search tasks"]')!;
@@ -206,30 +219,137 @@ test("the picker reports an empty task result", async () => {
   expect(view.container.textContent).toContain("No matching backlog, queued, or active tasks.");
 });
 
-test("Workflow picker shows a non-default workflow by name and clears back to Standard", async () => {
+test("Workflow stays selected by name, previews the selected engine, and posts it", async () => {
   const review = { ...workflow, id: "workflow_native_independent_review", name: "Second opinion", engine: "independent_review" };
   const fallback = api.readJsonUnchecked.getMockImplementation()!;
   api.readJsonUnchecked.mockImplementation(async (url: string, init?: RequestInit) => url === "/api/workflows?includeArchived=true" ? { workflows: [workflow, review] } : fallback(url, init));
   const view = mount();
   await flush();
-  const trigger = () => view.container.querySelector<HTMLButtonElement>('[aria-label="Workflow"]')!;
+  const trigger = () => view.container.querySelector<HTMLButtonElement>('button[aria-label="Workflow"]')!;
   const clear = () => view.container.querySelector<HTMLButtonElement>('[aria-label="Clear workflow"]');
   const title = view.container.querySelector<HTMLInputElement>('[aria-label="Task title"]')!;
   const submit = async () => { await act(async () => { setText(title, "Pick a workflow"); title.form?.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })); await Promise.resolve(); }); };
   const lastPost = () => JSON.parse(api.readJsonUnchecked.mock.calls.filter(([url, init]) => url === "/api/companies/company-1/tasks" && init?.method === "POST").at(-1)![1].body);
-  expect(trigger().textContent).toBe("Workflow");
+  expect(trigger().textContent).toBe("Standard");
   expect(clear()).toBeNull();
 
   await act(async () => { trigger().click(); });
   await act(async () => { button(view.container, "Second opinion").click(); });
   expect(trigger().textContent).toBe("Second opinion");
-  expect(clear()).not.toBeNull();
+  expect(clear()).toBeNull();
+  expect(view.container.querySelector('[data-workflow-illustration="independent_review"]')).not.toBeNull();
+  expect(view.container.textContent).toContain("Reviewer");
   await submit();
   expect(lastPost().workflow).toBe("independent_review");
 
-  await act(async () => { clear()!.click(); });
-  expect(trigger().textContent).toBe("Workflow");
+  await act(async () => { trigger().click(); });
+  await act(async () => { button(view.container, "Standard").click(); });
+  expect(trigger().textContent).toBe("Standard");
   expect(clear()).toBeNull();
   await submit();
   expect(lastPost().workflow).toBe("standard");
+});
+
+async function selectOption(container: HTMLElement, label: string, option: string) {
+  await act(async () => { button(container, label).click(); });
+  await act(async () => { button(container, option).click(); });
+}
+
+function latestRequest(method: string) {
+  const call = api.readJsonUnchecked.mock.calls.filter(([, init]) => init?.method === method).at(-1);
+  return call ? JSON.parse(call[1].body) : undefined;
+}
+
+async function submitTask(container: HTMLElement) {
+  const title = container.querySelector<HTMLInputElement>('[aria-label="Task title"]')!;
+  await act(async () => { setText(title, "Workflow task"); title.form?.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })); await Promise.resolve(); });
+}
+
+test("shows disabled project tests when the project has no test command", async () => {
+  const { container } = mount();
+  await flush();
+  const projectTests = button(container, "Tests");
+  expect(projectTests.textContent).toBe("run");
+  expect(projectTests.disabled).toBe(true);
+  expect(container.textContent).not.toContain("No project test command configured.");
+});
+
+test("repair keeps its source requirement and restores the prior delivery", async () => {
+  const repair = { ...workflow, id: "repair", name: "Pull request repair", engine: "refine_pull_request" };
+  const standard = { ...workflow, deliveryTarget: undefined, runProjectTests: undefined };
+  const fallback = api.readJsonUnchecked.getMockImplementation()!;
+  api.readJsonUnchecked.mockImplementation(async (url: string, init?: RequestInit) => url === "/api/workflows?includeArchived=true" ? { workflows: [standard, repair] } : fallback(url, init));
+  const { container } = mount();
+  await flush();
+  await selectOption(container, "Delivery target", "Push branch");
+  await selectOption(container, "Workflow", "Pull request repair");
+  expect(button(container, "Delivery target").textContent).toBe("merged");
+  expect(button(container, "Delivery target").disabled).toBe(true);
+  expect(container.querySelector('[data-repair-note]')?.textContent).toBe("Needs a PR");
+  expect(container.querySelector('[data-repair-note]')?.classList.contains("text-destructive")).toBe(true);
+  await submitTask(container);
+  expect(latestRequest("POST")).toBeUndefined();
+  await act(async () => { button(container, "Select a pull request").click(); });
+  await submitTask(container);
+  expect(latestRequest("POST")).toMatchObject({ workflow: "refine_pull_request", deliveryTarget: "merged", runProjectTests: true, source: { kind: "pull_request", number: 42 } });
+  await selectOption(container, "Workflow", "Standard");
+  expect(button(container, "Delivery target").textContent).toBe("remote_branch");
+  expect(button(container, "Delivery target").disabled).toBe(false);
+  await submitTask(container);
+  expect(latestRequest("POST")).toMatchObject({ workflow: "standard", deliveryTarget: "remote_branch" });
+  const diagram = container.querySelector('[data-workflow-illustration="standard"] svg')!;
+  expect(diagram.querySelectorAll('[data-role-selector="root"]')).toHaveLength(2);
+  expect(diagram.querySelectorAll('[data-role-selector="worker"]')).toHaveLength(1);
+});
+
+test("saved variants and explicit edit drafts keep their settings with the engine illustration", async () => {
+  const saved = { ...workflow, id: "custom", name: "Team review", description: "Check the complete change.", engine: "independent_review", deliveryTarget: "pull_request_ready", advisorProfileIds: { reviewer: "root" } };
+  const fallback = api.readJsonUnchecked.getMockImplementation()!;
+  api.readJsonUnchecked.mockImplementation(async (url: string, init?: RequestInit) => {
+    if (url === "/api/workflows?includeArchived=true") return { workflows: [workflow, saved] };
+    if (url === "/api/tasks/task-edit" && init?.method === "PATCH") return { id: "task-edit" };
+    return fallback(url, init);
+  });
+  const { container } = mount(true, { workflowId: saved.id, deliveryTarget: "local_worktree", source: { kind: "pull_request", number: 42 } });
+  await flush();
+  expect(button(container, "Workflow").textContent).toBe("Team review");
+  expect(container.querySelector('[data-workflow-illustration="independent_review"]')).not.toBeNull();
+  expect(container.textContent).not.toContain("Check the complete change.");
+  expect(button(container, "Delivery target").textContent).toBe("local_worktree");
+  await submitTask(container);
+  expect(latestRequest("PATCH")).toMatchObject({ workflow: "independent_review", deliveryTarget: "local_worktree", advisorProfileIds: { reviewer: "root" } });
+  expect(latestRequest("PATCH")).not.toHaveProperty("source");
+  expect(storage.setItem).not.toHaveBeenCalled();
+});
+
+test("Standard remains visible and usable when the workflow catalog is empty", async () => {
+  const fallback = api.readJsonUnchecked.getMockImplementation()!;
+  api.readJsonUnchecked.mockImplementation(async (url: string, init?: RequestInit) => url === "/api/workflows?includeArchived=true" ? { workflows: [] } : fallback(url, init));
+  const { container } = mount();
+  await flush();
+  expect(button(container, "Workflow").textContent).toBe("Standard");
+  expect(container.querySelector('[data-workflow-illustration="standard"]')).not.toBeNull();
+  await submitTask(container);
+  expect(latestRequest("POST")).toMatchObject({ workflow: "standard" });
+});
+
+test("templates replace the selected workflow, illustration, and admitted Advisors", async () => {
+  const combined = { ...workflow, id: "combined", name: "Combined planning", engine: "competing_plans", advisorProfileIds: { planner_a: "root", planner_b: "root" } };
+  const template = { id: "template", name: "Plan the feature", description: "Compare approaches.", workflow: "competing_plans", advisorProfileIds: combined.advisorProfileIds, deliveryTarget: "remote_branch", runProjectTests: false, visualEvidence: "capture" };
+  const fallback = api.readJsonUnchecked.getMockImplementation()!;
+  api.readJsonUnchecked.mockImplementation(async (url: string, init?: RequestInit) => {
+    if (url === "/api/workflows?includeArchived=true") return { workflows: [workflow, combined] };
+    if (url === "/api/projects/project-1/task-templates") return { templates: [template] };
+    return fallback(url, init);
+  });
+  const { container } = mount();
+  await flush();
+  await selectOption(container, "Template", "Plan the feature");
+  expect(button(container, "Workflow").textContent).toBe("Combined planning");
+  expect(container.querySelector('[data-workflow-illustration="competing_plans"]')).not.toBeNull();
+  await submitTask(container);
+  expect(latestRequest("POST")).toMatchObject({ workflow: "competing_plans", description: "Compare approaches.", advisorProfileIds: { planner_a: "root", planner_b: "root" }, deliveryTarget: "remote_branch", visualEvidence: "capture" });
+  await selectOption(container, "Workflow", "Standard");
+  await submitTask(container);
+  expect(latestRequest("POST").advisorProfileIds).toEqual({});
 });

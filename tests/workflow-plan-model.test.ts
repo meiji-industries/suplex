@@ -10,6 +10,10 @@ test("combined planning explicitly forks and joins both planner lanes", () => {
   ]);
 });
 
+test("direct build gives Worker the same action label as the New Task preview", () => {
+  expect(workflowTopology("direct_build", "Delivery target").nodes.find(node => node.id === "build")?.label).toBe("Worker does the work");
+});
+
 test("second opinion approves directly and sends blocking work through a fresh review", () => {
   expect(edge("independent_review", "reviewer", "target")?.condition).toBe("Approve");
   expect(edge("independent_review", "reviewer", "repair")?.condition).toBe("Blocking findings");
@@ -24,6 +28,11 @@ test("pull request repair bypasses repair only after a qualifying rating and ret
   expect(edge("refine_pull_request", "repair", "rater")?.condition).toBe("Fresh rating");
   expect(edge("refine_pull_request", "push", "rater")?.condition).toBe("CI fails");
   expect(edge("refine_pull_request", "repair", "push")).toBeUndefined();
+});
+
+test("pull request repair names the task pull request when available", () => {
+  expect(workflowTopology("refine_pull_request", "Delivery target", 285).nodes[0]?.label).toBe("PR #285");
+  expect(workflowTopology("refine_pull_request", "Delivery target").nodes[0]?.label).toBe("Existing pull request");
 });
 
 test("every graph has compact in-bounds stations and paths that meet station boundaries", () => {

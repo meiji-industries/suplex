@@ -110,10 +110,11 @@ async function createTaskInUi(title: string, description: string) {
   await dialog.waitFor();
   await dialog.getByLabel("Task title", { exact: true }).fill(title);
   await dialog.getByLabel("Task description", { exact: true }).fill(description);
-  await dialog.getByRole("radio", { name: "Keep in worktree" }).check();
-  await dialog.getByRole("checkbox", { name: "Start immediately", exact: true }).uncheck();
+  await dialog.getByRole("combobox", { name: "Delivery target", exact: true }).click();
+  await fixture.page.getByRole("option", { name: "Keep in worktree", exact: true }).click();
   const createdResponse = fixture.page.waitForResponse(candidate => candidate.request().method() === "POST" && candidate.url().endsWith(`/api/companies/${fixture.company.id}/tasks`));
-  await dialog.getByRole("button", { name: "New task", exact: true }).click();
+  await dialog.getByRole("button", { name: "Task start options", exact: true }).click();
+  await fixture.page.getByRole("menuitem", { name: "Create in backlog", exact: true }).click();
   const created = await createdResponse;
   equal(created.status(), 201, await created.text());
   const task = TaskSchema.parse(await created.json());

@@ -43,9 +43,11 @@ test("backlog details save through the interface", { timeout: 90_000 }, async ()
     await value.page.getByRole("dialog").getByText("Edit task", { exact: true }).waitFor();
     await value.page.getByLabel("Task title", { exact: true }).fill("Updated title");
     await value.page.getByLabel("Task description", { exact: true }).fill("Updated objective");
+    await value.page.getByRole("combobox", { name: "Workflow", exact: true }).click();
+    await value.page.getByRole("option", { name: "Direct build", exact: true }).click();
     await value.page.getByRole("button", { name: "Save task", exact: true }).click();
     await value.page.getByRole("heading", { name: "Updated title", level: 2, exact: true }).waitFor();
-    expect((await value.api("GET", `/api/tasks/${task.id}`)).body).toMatchObject({ title: "Updated title", description: "Updated objective", status: "backlog" });
+    expect((await value.api("GET", `/api/tasks/${task.id}`)).body).toMatchObject({ title: "Updated title", description: "Updated objective", status: "backlog", workflow: "direct_build" });
     expect(value.errors).toEqual([]);
   } finally { await value.close(); }
 });

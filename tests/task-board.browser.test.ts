@@ -1,11 +1,15 @@
 import { expect, test } from "vitest";
 import { TaskSchema } from "../src/frontend/contracts/tasks.js";
+import { AgentProfileSchema } from "../src/frontend/contracts/profiles.js";
 import { nativeBrowser } from "./helpers/native-browser.js";
 
 test.each([1280, 390])("tasks can be created, started and viewed on the board at %ipx", { timeout: 90_000 }, async width => {
   const value = await nativeBrowser(width);
   try {
     const { page } = value;
+    const duplicate = await value.api("POST", "/api/admin/profiles/profile_native_root/duplicate");
+    expect(duplicate.status).toBe(201);
+    const alternate = AgentProfileSchema.parse(duplicate.body);
     const createdIds: string[] = [];
     await page.goto(`${value.base}/tasks?company=${value.company.id}`);
     for (const immediate of [true, false]) {
@@ -16,14 +20,34 @@ test.each([1280, 390])("tasks can be created, started and viewed on the board at
       const dialog = page.getByRole("dialog", { name: "New task", exact: true });
       await dialog.getByLabel("Task title", { exact: true }).fill(`Task ${immediate}`);
       await dialog.getByLabel("Task description", { exact: true }).fill("Use the native Coordinator and Worker");
-      await dialog.getByRole("checkbox", { name: "Start immediately", exact: true }).setChecked(immediate);
+      if (immediate) {
+        const diagram = dialog.getByRole("group", { name: "Standard workflow", exact: true });
+        await diagram.getByRole("button", { name: /^Coordinator assignee:/ }).first().press("Enter");
+        await page.getByRole("menuitemradio").filter({ hasText: alternate.name }).press("Enter");
+        expect(await diagram.getByRole("button", { name: `Coordinator assignee: ${alternate.name}`, exact: true }).count()).toBe(2);
+      } else {
+        await dialog.getByRole("combobox", { name: "Workflow", exact: true }).click();
+        await page.getByRole("option", { name: "Combined planning", exact: true }).click();
+        const diagram = dialog.getByRole("group", { name: "Combined planning workflow", exact: true });
+        await diagram.getByRole("button", { name: /^Plan A assignee:/ }).click();
+        await page.getByRole("menuitemradio").filter({ hasText: alternate.name }).click();
+        await dialog.getByRole("combobox", { name: "Delivery target", exact: true }).click();
+        await page.getByRole("option", { name: "Push branch", exact: true }).click();
+        expect(await diagram.textContent()).toContain("Push branch");
+      }
       const response = page.waitForResponse(candidate => candidate.request().method() === "POST" && candidate.url().endsWith(`/api/companies/${value.company.id}/tasks`));
       if (immediate) await dialog.getByLabel("Task description", { exact: true }).press("Control+Enter");
-      else await dialog.getByRole("button", { name: "New task", exact: true }).click();
+      else {
+        await dialog.getByRole("button", { name: "Task start options", exact: true }).click();
+        await page.getByRole("menuitem", { name: "Create in backlog", exact: true }).click();
+      }
       const created = await response;
       expect(created.status(), await created.text()).toBe(201);
       const task = TaskSchema.parse(await created.json());
+      expect(created.request().postDataJSON()).toMatchObject({ startImmediately: immediate, ...(immediate ? { rootProfileId: alternate.id } : { advisorProfileIds: { planner_a: alternate.id } }) });
+      expect(task.deliveryTarget).toBe(immediate ? "pull_request_draft" : "remote_branch");
       createdIds.push(task.id);
+      expect(task.workflow).toBe(immediate ? "standard" : "competing_plans");
       expect(task.status).toBe(immediate ? "active" : "backlog");
       await page.getByRole("heading", { name: `Task ${immediate}`, level: 2, exact: true }).waitFor();
       expect(await page.getByRole("button", { name: "Start task", exact: true }).count()).toBe(immediate ? 0 : 1);

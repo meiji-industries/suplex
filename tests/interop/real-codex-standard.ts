@@ -226,17 +226,19 @@ try {
   await dialog.getByLabel("Task description", { exact: true }).fill("Append `Verified by Suplex Standard task.` to README.md, run pnpm test, commit the change, and deliver the local worktree.");
   if (workflowPhase) {
     const workflowName = workflowNames[phase] ?? phase;
-    await dialog.getByRole("button", { name: "Workflow", exact: true }).click();
-    await fixture.page.getByRole("menuitem", { name: workflowName }).click();
-    await dialog.getByRole("button", { name: "Workflow", exact: true }).filter({ hasText: workflowName }).waitFor();
+    await dialog.getByRole("combobox", { name: "Workflow", exact: true }).click();
+    await fixture.page.getByRole("option", { name: workflowName }).click();
+    await dialog.getByRole("combobox", { name: "Workflow", exact: true }).filter({ hasText: workflowName }).waitFor();
   }
   if (repair) {
     await dialog.getByRole("button", { name: "New from source", exact: true }).click();
     await fixture.page.getByRole("menuitem").filter({ hasText: "#1 Repair the README" }).click();
     await dialog.getByRole("button", { name: "New from source", exact: true }).filter({ hasText: "PR #1" }).waitFor();
-  } else await dialog.getByRole("radio", { name: phase === "deliver_pr" ? "Draft pull request" : "Keep in worktree" }).check();
-  await dialog.getByRole("checkbox", { name: "Start immediately", exact: true }).uncheck();
-  equal(await dialog.getByRole("button", { name: "New task", exact: true }).isEnabled(), true);
+  } else {
+    await dialog.getByRole("combobox", { name: "Delivery target", exact: true }).click();
+    await fixture.page.getByRole("option", { name: phase === "deliver_pr" ? "Draft pull request" : "Keep in worktree" }).click();
+  }
+  equal(await dialog.getByRole("button", { name: "Task start options", exact: true }).isEnabled(), true);
   equal(fixture.errors.length, 0, fixture.errors.join("; "));
   if (process.env.SUPLEX_REAL_CODEX_RUN !== "1" && !deterministic) {
     console.log(JSON.stringify({ backend: "rust", taskPage: response?.status(), dialog: "ready", project: fixture.project.id, revision }));
@@ -246,7 +248,8 @@ try {
     await mkdir(proof, { recursive: true });
     await fixture.page.screenshot({ path: `${proof}/new-task.png`, fullPage: true });
     const createdResponse = fixture.page.waitForResponse(candidate => candidate.request().method() === "POST" && candidate.url().endsWith(`/api/companies/${fixture.company.id}/tasks`));
-    await dialog.getByRole("button", { name: "New task", exact: true }).click();
+    await dialog.getByRole("button", { name: "Task start options", exact: true }).click();
+    await fixture.page.getByRole("menuitem", { name: "Create in backlog", exact: true }).click();
     const created = await createdResponse;
     equal(created.status(), 201, await created.text());
     const task = TaskSchema.parse(await created.json());

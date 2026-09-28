@@ -62,7 +62,10 @@ fn ask(question: &str, fallback: &str) -> io::Result<String> {
 }
 
 pub fn tailscale(command: &str, args: &[&str]) -> io::Result<std::process::Output> {
-    Command::new(command).args(args).output()
+    Command::new(command)
+        .args(args)
+        .env("TAILSCALE_BE_CLI", "1")
+        .output()
 }
 pub fn tailscale_hostname(raw: &[u8]) -> Option<String> {
     serde_json::from_slice::<Value>(raw).ok()?["Self"]["DNSName"]
@@ -212,6 +215,22 @@ pub fn run(local: bool) -> Result<(), Box<dyn std::error::Error>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tailscale_runs_the_app_store_binary_in_cli_mode() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = std::env::temp_dir().join(format!("suplex-tailscale-cli-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&root).unwrap();
+        let command = root.join("tailscale");
+        fs::write(&command, "#!/bin/sh\nprintf '%s' \"$TAILSCALE_BE_CLI\"\n").unwrap();
+        fs::set_permissions(&command, fs::Permissions::from_mode(0o700)).unwrap();
+
+        let output = tailscale(command.to_str().unwrap(), &["status", "--json"]).unwrap();
+
+        assert!(output.status.success());
+        assert_eq!(output.stdout, b"1");
+        fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn environment_updates_preserve_unrelated_settings_and_private_permissions() {

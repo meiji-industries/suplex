@@ -95,8 +95,8 @@ describe("install record", () => {
   });
 });
 
-test("the runtime environment is C2's, with the PATH exactly as written", () => {
-  expect(runtimeEnvironment({ userData: "/data/Suplex", port: 4222, base: { HOME: "/Users/ada", USER: "ada", TMPDIR: "/tmp/x" } })).toEqual({
+test("the local runtime environment is C2's, with the PATH exactly as written", () => {
+  expect(runtimeEnvironment({ userData: "/data/Suplex", port: 4222, base: { HOME: "/Users/ada", USER: "ada", TMPDIR: "/tmp/x" }, access: { kind: "local" } })).toEqual({
     SUPLEX_PACKAGED: "1",
     SUPLEX_ACCESS_MODE: "local",
     SUPLEX_BIND_ADDRESS: "127.0.0.1",
@@ -109,5 +109,16 @@ test("the runtime environment is C2's, with the PATH exactly as written", () => 
     USER: "ada",
     TMPDIR: "/tmp/x",
     PATH: "/Users/ada/.local/bin:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+  });
+});
+
+test("the Tailscale runtime keeps loopback binding and receives the fresh hostname and executable", () => {
+  expect(runtimeEnvironment({ userData: "/data/Suplex", port: 4333, base: { HOME: "/Users/ada" }, access: { kind: "tailscale", hostname: "mac.example.ts.net", command: "/Applications/Tailscale.app/Contents/MacOS/Tailscale" } })).toMatchObject({
+    SUPLEX_ACCESS_MODE: "tailscale",
+    SUPLEX_BIND_ADDRESS: "127.0.0.1",
+    SUPLEX_PORT: "4333",
+    SUPLEX_TAILSCALE_EXPOSURE: "serve",
+    SUPLEX_TAILSCALE_ADDRESS: "mac.example.ts.net",
+    SUPLEX_TAILSCALE_COMMAND: "/Applications/Tailscale.app/Contents/MacOS/Tailscale",
   });
 });

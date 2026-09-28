@@ -128,8 +128,9 @@ ships the native server and web assets inside the bundle. It
 checks the Mac, installs Apple's developer tools if Git is missing, installs
 Herdr if it is missing, prepares a database under `~/Library/Application Support/Suplex`,
 and starts Suplex on `127.0.0.1`. You do not need to install Git before setup.
-Homebrew, a GitHub account, and Tailscale are optional. See the [Desktop app](#desktop-app)
-section below.
+Homebrew, a GitHub account, and Tailscale are optional. Install and connect
+Tailscale only if you select **Tailscale** under **Network access**. See the
+[Desktop app](#desktop-app) section below.
 
 To run Suplex on a host from a checkout instead:
 
@@ -185,9 +186,15 @@ or connects to a Suplex host elsewhere. On first launch it offers those two
 choices. **Run locally** runs the install stages from the bundled
 runtime under `Contents/Resources/runtime`, shows each stage's progress and
 log, and then starts the bundled server on `127.0.0.1` every time the app
-opens; quitting the app stops that server. Data, the env file, logs, and the
-install record live under `~/Library/Application Support/Suplex`; delete that
-directory to start over. If an existing host reports the same installation identity, the app can adopt
+opens. Quitting the app stops that server. Use **Suplex > Settings > Network
+access** or the tray menu to select **This Mac only** or **Tailscale**. The
+Tailscale option keeps the server on loopback and creates an HTTPS Serve route.
+Tailnet users permitted by Tailscale can access and manage this Suplex instance.
+The menu can copy the active Tailscale URL.
+
+Data, the env file, logs, the install record, and network access files live
+under `~/Library/Application Support/Suplex`; delete that directory to start
+over. If an existing host reports the same installation identity, the app can adopt
 it and leaves it running on quit. An unrelated host on the preferred port
 causes the app to choose another port. **Remote access** takes a URL, tests it, and
 installs nothing.

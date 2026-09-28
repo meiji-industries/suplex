@@ -1,8 +1,8 @@
 import { chmodSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { expect, test } from "vitest";
-import { parseTailscaleStatus, tailscaleStatus, turnOnTailscale } from "../src/tailscale";
+import { expect, test, vi } from "vitest";
+import { findTailscaleServeRoute, parseTailscaleStatus, removeTailscaleServeRoute, resolveTailscaleAccess, tailscaleStatus, turnOnTailscale } from "../src/tailscale";
 
 const status = (backend: string, peers: Record<string, unknown>): string =>
   JSON.stringify({ BackendState: backend, CurrentTailnet: { Name: "example.com" }, Self: { HostName: "this-mac", DNSName: "this-mac.tail1.ts.net." }, Peer: peers });
@@ -55,6 +55,47 @@ test("moves on when a CLI exits 0 without status JSON", async () => {
 test("runs the App Store binary as a CLI", async () => {
   const cli = script(`[ "$TAILSCALE_BE_CLI" = 1 ] && echo '${status("Stopped", {})}'`);
   expect((await tailscaleStatus([cli])).state).toBe("off");
+});
+
+test("resolves the working CLI and current self DNS name from the same fresh status", async () => {
+  const first = script("echo not-json");
+  const second = script(`echo '${status("Running", {})}'`);
+  expect(await resolveTailscaleAccess([first, second])).toEqual({ hostname: "this-mac.tail1.ts.net", command: second });
+  const changed = script(`echo '${JSON.stringify({ BackendState: "Running", Self: { DNSName: "renamed.tail1.ts.net." } })}'`);
+  expect(await resolveTailscaleAccess([changed])).toEqual({ hostname: "renamed.tail1.ts.net", command: changed });
+});
+
+test("route cleanup follows the live hostname and preserves sibling paths and ports", async () => {
+  const before = JSON.stringify({ Web: {
+    "renamed.tail1.ts.net:4111": { Handlers: { "/": { Proxy: "http://127.0.0.1:4111" }, "/docs": { Proxy: "http://127.0.0.1:9000" } } },
+    "renamed.tail1.ts.net:443": { Handlers: { "/": { Proxy: "http://127.0.0.1:3100" } } },
+  } });
+  const after = JSON.stringify({ Web: {
+    "renamed.tail1.ts.net:4111": { Handlers: { "/docs": { Proxy: "http://127.0.0.1:9000" } } },
+    "renamed.tail1.ts.net:443": { Handlers: { "/": { Proxy: "http://127.0.0.1:3100" } } },
+  } });
+  const execute = vi.fn()
+    .mockResolvedValueOnce(before)
+    .mockResolvedValueOnce("")
+    .mockResolvedValueOnce(after);
+  await removeTailscaleServeRoute({ hostname: "old.tail1.ts.net", command: "/tailscale" }, 4111, execute);
+  expect(execute.mock.calls[1]).toEqual(["/tailscale", ["serve", "--https=4111", "--set-path=/", "http://127.0.0.1:4111", "off"], 10_000]);
+  expect(findTailscaleServeRoute(after, 4111, "http://127.0.0.1:4111")).toBeNull();
+  expect(JSON.parse(after).Web["renamed.tail1.ts.net:4111"].Handlers["/docs"]).toEqual({ Proxy: "http://127.0.0.1:9000" });
+});
+
+test("route cleanup rejects malformed status instead of treating it as safe absence", async () => {
+  for (const raw of ["null", "[]", "not json", JSON.stringify({ Web: "invalid" })]) {
+    await expect(removeTailscaleServeRoute({ hostname: "mac.tail1.ts.net", command: "/tailscale" }, 4111, async () => raw)).rejects.toThrow("invalid Serve status");
+  }
+});
+
+test("valid TCP-only status has no matching HTTP route", async () => {
+  for (const raw of ["{}", JSON.stringify({ Web: null }), JSON.stringify({ TCP: { "4111": { TCPForward: "127.0.0.1:9000" } } }), JSON.stringify({ TCP: { "4111": { TCPForward: "127.0.0.1:9000" } }, Web: null })]) {
+    const execute = vi.fn(async () => raw);
+    await removeTailscaleServeRoute({ hostname: "mac.tail1.ts.net", command: "/tailscale" }, 4111, execute);
+    expect(execute).toHaveBeenCalledTimes(1);
+  }
 });
 
 test("turns Tailscale on with a bare `tailscale up`, and reports why it did not", async () => {

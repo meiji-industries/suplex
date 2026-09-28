@@ -4,6 +4,7 @@ import { mkdir, readFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import { join } from "node:path";
 import { runtimeEnvironment, type RuntimePaths } from "./boot";
+import type { ResolvedNetworkAccess } from "./network-access";
 
 const POLL_MS = 500;
 const READY_TIMEOUT_MS = 60_000;
@@ -24,6 +25,13 @@ export type LocalRuntime = {
   start(): Promise<LocalServer>;
   stop(): Promise<void>;
 };
+
+export class LocalRuntimeStartError extends Error {
+  constructor(message: string, readonly port: number, options?: ErrorOptions) {
+    super(message, options);
+    this.name = "LocalRuntimeStartError";
+  }
+}
 
 /** `GET <origin>/health` answering 200. Also the remote target's Test connection. */
 export async function healthy(origin: string): Promise<boolean> {
@@ -72,6 +80,7 @@ export function createLocalRuntime(options: {
   readonly userData: string;
   readonly port: number;
   readonly base: NodeJS.ProcessEnv;
+  readonly access: ResolvedNetworkAccess;
   readonly ports?: Partial<LocalRuntimePorts>;
 }): LocalRuntime {
   const spawn = options.ports?.spawn ?? spawnChild;
@@ -105,21 +114,35 @@ export function createLocalRuntime(options: {
       exited = null;
       child = spawn(paths.binary, ["start", "--foreground"], {
         cwd: paths.directory,
-        env: runtimeEnvironment({ userData: options.userData, port, base: options.base }),
+        env: runtimeEnvironment({ userData: options.userData, port, base: options.base, access: options.access }),
         detached: true,
         stdio: ["ignore", "pipe", "pipe"],
       });
       child.stdout?.pipe(log, { end: false });
       child.stderr?.pipe(log, { end: false });
-      child.once("exit", (code) => { exited = code ?? 0; });
-      child.once("error", () => { exited = -1; });
-      for (let waited = 0; waited < READY_TIMEOUT_MS; waited += POLL_MS) {
-        await wait(POLL_MS);
-        if (await probe(origin(port))) return { port, adopted: false };
-        if (exited !== null) throw new Error(`The Suplex server stopped while starting (exit ${exited}). The log is in logs/server.log.`);
+      let logClosed = false;
+      const closeLog = (): void => {
+        if (logClosed) return;
+        logClosed = true;
+        child?.stdout?.unpipe(log);
+        child?.stderr?.unpipe(log);
+        log.end();
+      };
+      child.once("exit", (code) => { exited = code ?? 0; closeLog(); });
+      child.once("error", () => { exited = -1; closeLog(); });
+      try {
+        for (let waited = 0; waited < READY_TIMEOUT_MS; waited += POLL_MS) {
+          await wait(POLL_MS);
+          if (await probe(origin(port))) return { port, adopted: false };
+          if (exited !== null) throw new Error(`The Suplex server stopped while starting (exit ${exited}). The log is in logs/server.log.`);
+        }
+        throw new Error(`The Suplex server did not answer ${origin(port)}/health within 60 seconds. The log is in logs/server.log.`);
+      } catch (error) {
+        groupSignal("SIGKILL");
+        closeLog();
+        child = undefined;
+        throw new LocalRuntimeStartError((error as Error).message, port, { cause: error });
       }
-      groupSignal("SIGKILL");
-      throw new Error(`The Suplex server did not answer ${origin(port)}/health within 60 seconds. The log is in logs/server.log.`);
     },
     async stop(): Promise<void> {
       if (child === undefined) return;

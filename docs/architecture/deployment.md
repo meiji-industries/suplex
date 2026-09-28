@@ -41,10 +41,27 @@ host. See [runtime ownership](runtime.md) for scheduling and state authorities.
 
 ## Local and remote connections
 
-Local access binds to loopback. Desktop **Run locally** uses `127.0.0.1` and
-keeps installation data under `~/Library/Application Support/Suplex`. Local
-requests receive the built-in Operator session. This is an owner-controlled
-host trust model, not isolation from other local processes.
+Local access binds to loopback. The desktop app always keeps its bundled host
+on `127.0.0.1` and stores installation data under
+`~/Library/Application Support/Suplex`. Local requests receive the built-in
+Operator session. This is an owner-controlled host trust model, not isolation
+from other local processes.
+
+The desktop **Network access** setting controls who can reach that bundled
+host. **This Mac only** exposes no remote route. **Tailscale** creates an HTTPS
+Serve route to the loopback host. Tailnet users permitted by Tailscale receive
+the same Operator access as other trusted Tailscale requests. The desktop
+window continues to use the loopback URL in both modes.
+
+The app stores only the selected mode in `network-access.json`. When Tailscale
+is selected, the app asks the current Tailscale CLI for this Mac's MagicDNS
+name and passes that observation to the host process. It does not store the hostname.
+When the app disables Tailscale access, it removes and verifies only the root
+Serve handler that points to the active Suplex port. Other Serve ports and paths
+remain unchanged. If that verification cannot finish, the app stores only the
+port in `network-access-cleanup.json`. Before a later local start, it rediscovers
+Tailscale and checks the live Serve configuration. The cleanup record does not
+act as proof that a route exists or that cleanup succeeded.
 
 Remote access connects to an existing instance URL. The desktop app installs
 nothing on the remote host and does not start or stop that host. The same web
@@ -92,8 +109,12 @@ that a particular version has been published or installed successfully.
 ## Process ownership and updates
 
 In local desktop mode, the app starts its bundled host and stops the process
-group it owns on quit. It can adopt an already running host only when that host
-reports the same installation identity. It leaves an adopted host running.
+group it owns on quit. A mode change stops the owned host before it starts the
+same database in the new mode. If the new start fails, the app restores the
+previous working mode when it can do so safely. It can adopt an already running
+host only when that host reports the same installation identity. It leaves an
+adopted host running and saves a changed network setting for the next managed
+start.
 An unrelated server occupying the preferred port causes another local port to
 be selected; answering a health check is not enough to claim ownership.
 

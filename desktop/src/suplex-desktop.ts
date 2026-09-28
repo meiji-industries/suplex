@@ -7,8 +7,9 @@ import { forgetTarget, readTargets, rememberTarget, type TargetRegistry } from "
 import { createDesktopUpdater } from "./desktop-updater";
 import { DEFAULT_PORT, next, readInstallRecord, resolveBoot, runtimePaths, runtimeStamp, writeInstallRecord, type BootEvent, type BootState } from "./boot";
 import { createInstaller, type InstallEvent, type InstallStage, type Installer } from "./installer";
-import { createLocalRuntime, healthy, type LocalRuntime } from "./local-runtime";
-import { openTailscale, tailscaleStatus, turnOnTailscale } from "./tailscale";
+import { createLocalRuntime, healthy, LocalRuntimeStartError, type LocalRuntime } from "./local-runtime";
+import { createNetworkAccessController, NetworkAccessCleanupError, type NetworkAccess, type NetworkAccessState, type ResolvedNetworkAccess } from "./network-access";
+import { openTailscale, removeTailscaleServeRoute, tailscaleStatus, turnOnTailscale } from "./tailscale";
 import type { DesktopMessage, DesktopSnapshot } from "./preload";
 
 const KEYCHAIN_ACCESS_GROUP = "6KY6743H52.dev.suplex.desktop.webauthn"; // inert until build/entitlements.mac.plist grants it via a provisioning profile
@@ -123,6 +124,7 @@ export async function runSuplexDesktop(input: { readonly argv: readonly string[]
   const targetFile = (): string => join(app.getPath("userData"), "desktop.json");
   const stateFile = (): string => join(app.getPath("userData"), "window-state.json");
   const installFile = (): string => join(app.getPath("userData"), "install.json");
+  const networkAccessFile = (): string => join(app.getPath("userData"), "network-access.json");
   const logsDirectory = (): string => join(app.getPath("userData"), "logs");
   const runtime = runtimePaths(input.environment, typeof process.resourcesPath === "string" ? process.resourcesPath : "");
   let window: BrowserWindow | undefined;
@@ -133,13 +135,61 @@ export async function runSuplexDesktop(input: { readonly argv: readonly string[]
   /** The origin of the server this app supervises, so its failures never show the remote host's retry page. */
   let localOrigin: string | null = null;
   let server: LocalRuntime | undefined;
-  let adopted = false;
   let localInstalled = false;
-  let localBusy = false;
+  let networkState: NetworkAccessState = { preference: "local", active: null, busy: false };
   let installer: Installer | undefined;
   let quitting = false;
   const progress: { stages: readonly InstallStage[]; finished: { stage: string; skipped: boolean; elapsedMs: number }[]; current: string | null; log: string[] } =
     { stages: [], finished: [], current: null, log: [] };
+
+  const networkAccess = createNetworkAccessController({
+    file: networkAccessFile(),
+    ports: {
+      start: async (access: ResolvedNetworkAccess) => {
+        const record = await readInstallRecord(installFile());
+        const port = record?.port ?? defaultPort;
+        const candidate = createLocalRuntime({ runtime, userData: app.getPath("userData"), port, base: input.environment, access });
+        let startedPort: number | null = null;
+        try {
+          const started = await candidate.start();
+          startedPort = started.port;
+          if (record && started.port !== record.port) await writeInstallRecord(installFile(), { ...record, port: started.port });
+          server = candidate;
+          localOrigin = `http://127.0.0.1:${started.port}`;
+          return started;
+        } catch (error) {
+          await candidate.stop().catch(() => undefined);
+          server = undefined;
+          localOrigin = null;
+          const cleanupPort = error instanceof LocalRuntimeStartError ? error.port : startedPort;
+          if (access.kind === "tailscale" && cleanupPort !== null) {
+            try {
+              await removeTailscaleServeRoute(access, cleanupPort);
+            } catch (cleanupError) {
+              throw new NetworkAccessCleanupError(
+                "Suplex could not verify removal of its Tailscale Serve route.",
+                access,
+                cleanupPort,
+                { cause: new AggregateError([error, cleanupError]) },
+              );
+            }
+          }
+          throw error;
+        }
+      },
+      stop: async () => {
+        const stopping = server;
+        if (stopping === undefined) return;
+        await stopping.stop();
+        server = undefined;
+        localOrigin = null;
+      },
+    },
+    onStateChange: (nextState) => {
+      networkState = nextState;
+      queueMicrotask(() => { rebuildMenu(); });
+    },
+  });
 
   const fail = (message: string): void => {
     if (probe) process.stderr.write(`${INVALID_TITLE}: ${message}\n`);
@@ -229,42 +279,32 @@ export async function runSuplexDesktop(input: { readonly argv: readonly string[]
     go({ name: "installed" });
   };
   const startLocal = async (): Promise<void> => {
-    if (localBusy || localOrigin) return;
-    localBusy = true;
+    if (networkState.busy || localOrigin) return;
     rebuildMenu();
     try {
-      const record = await readInstallRecord(installFile());
-      const port = record?.port ?? defaultPort;
-      server = createLocalRuntime({ runtime, userData: app.getPath("userData"), port, base: input.environment });
-      const started = await server.start();
-      adopted = started.adopted;
-      localOrigin = `http://127.0.0.1:${started.port}`;
-      if (record && started.port !== record.port) await writeInstallRecord(installFile(), { ...record, port: started.port });
+      const started = await networkAccess.startPreferred();
       go({ name: "connected", url: `http://127.0.0.1:${started.port}/` });
     } catch (error) {
       server = undefined;
+      localOrigin = null;
       go({ name: "failed", failure: { from: "starting", title: "Start Suplex on this Mac", reason: (error as Error).message, remedy: "Open the logs for the server's own words, then retry.", stage: null, log: await tail(join(logsDirectory(), "server.log")) } });
     } finally {
-      localBusy = false;
       rebuildMenu();
     }
   };
   const stopLocal = async (): Promise<void> => {
-    if (!server || adopted || localBusy) return;
-    localBusy = true;
+    if (!server || networkState.active?.kind === "adopted" || networkState.busy) return;
     rebuildMenu();
-    const stopping = server;
     const stoppedOrigin = localOrigin;
     try {
-      await stopping.stop();
-      server = undefined;
-      localOrigin = null;
+      await networkAccess.shutdown();
       if (origin === stoppedOrigin) {
         if (window) await openManager();
         else { origin = null; state = { name: "choosing" }; }
       }
+    } catch (error) {
+      warn((error as Error).message);
     } finally {
-      localBusy = false;
       rebuildMenu();
     }
   };
@@ -331,7 +371,7 @@ export async function runSuplexDesktop(input: { readonly argv: readonly string[]
     rebuildMenu();
   };
   const selectLocal = async (): Promise<void> => {
-    if (localBusy) return;
+    if (networkState.busy) return;
     if (localOrigin) {
       await open("defer");
       if (window) await switchTo(window, parseSuplexTarget(`${localOrigin}/`));
@@ -342,6 +382,62 @@ export async function runSuplexDesktop(input: { readonly argv: readonly string[]
     state = { name: "starting" };
     if (window) await showPage(window, "connecting.html");
     await startLocal();
+  };
+  const tailscaleUrl = (): string | null => {
+    const active = networkState.active;
+    return active?.kind === "owned" && active.access.kind === "tailscale" ? `https://${active.access.hostname}:${active.port}` : null;
+  };
+  const copyTailscaleUrl = (): void => {
+    const url = tailscaleUrl();
+    if (url !== null) clipboard.writeText(url);
+  };
+  const changeNetworkAccess = async (requested: NetworkAccess): Promise<void> => {
+    if (networkState.busy) return;
+    try {
+      const changed = await networkAccess.change(requested);
+      if (changed.kind === "pending") {
+        await dialog.showMessageBox({
+          type: "info",
+          message: changed.reason === "adopted" ? "Restart Suplex to apply network access" : "Start Suplex to apply network access",
+          detail: changed.reason === "adopted"
+            ? "Another process manages this Suplex host. The setting applies the next time this app starts the host."
+            : "Suplex saved the setting. The setting applies when this app starts the host.",
+        });
+        return;
+      }
+      if (window && localOrigin !== null) await switchTo(window, parseSuplexTarget(`${localOrigin}/`));
+      if (changed.active.kind === "owned" && changed.active.access.kind === "tailscale") {
+        const result = await dialog.showMessageBox({
+          type: "info",
+          message: "Tailscale access is on",
+          detail: "Tailnet users permitted by Tailscale can access and manage this Suplex instance.",
+          buttons: ["Copy Tailscale URL", "OK"],
+          defaultId: 0,
+          cancelId: 1,
+        });
+        if (result.response === 0) copyTailscaleUrl();
+      }
+    } catch (error) {
+      await dialog.showMessageBox({
+        type: "error",
+        message: "Suplex could not change network access",
+        detail: (error as Error).message,
+      });
+    } finally {
+      rebuildMenu();
+    }
+  };
+  const networkAccessItems = (): Electron.MenuItemConstructorOptions[] => {
+    const selected = networkState.active === null ? networkState.preference : networkState.active.kind === "owned" ? networkState.active.access.kind : null;
+    const url = tailscaleUrl();
+    return [
+      { id: "network-access-local", label: "This Mac only", type: "radio", checked: selected === "local", enabled: localInstalled && !networkState.busy, click: () => { void changeNetworkAccess("local"); } },
+      { id: "network-access-tailscale", label: "Tailscale", type: "radio", checked: selected === "tailscale", enabled: localInstalled && !networkState.busy, click: () => { void changeNetworkAccess("tailscale"); } },
+      ...(url === null ? [] : [
+        { type: "separator" as const },
+        { id: "network-access-copy-url", label: "Copy Tailscale URL", enabled: !networkState.busy, click: copyTailscaleUrl },
+      ]),
+    ];
   };
   const selectHost = async (selectedOrigin: string): Promise<void> => {
     registry = await readTargets(targetFile());
@@ -374,6 +470,8 @@ export async function runSuplexDesktop(input: { readonly argv: readonly string[]
     Menu.setApplicationMenu(Menu.buildFromTemplate([
       { label: "Suplex", submenu: [{ role: "about" }, { type: "separator" },
         { label: "Settings", submenu: [
+          { label: "Network access", submenu: networkAccessItems() },
+          { type: "separator" },
           ...targets,
           ...(targets.length > 0 ? [{ type: "separator" as const }] : []),
           { label: "Manage Suplex hosts…", click: () => { void openManager(); } },
@@ -383,7 +481,7 @@ export async function runSuplexDesktop(input: { readonly argv: readonly string[]
       { role: "viewMenu" },
       { role: "windowMenu" },
     ]));
-    const status = !localInstalled ? "Not installed" : localBusy ? "Suplex is busy" : localOrigin === null ? "Stopped" : adopted ? "Managed by another Suplex" : "Running";
+    const status = !localInstalled ? "Not installed" : networkState.busy ? "Suplex is busy" : localOrigin === null ? "Stopped" : networkState.active?.kind === "adopted" ? "Managed by another Suplex" : "Running";
     if (!tray) return;
     const trayMenu = Menu.buildFromTemplate([
       { label: "Open Suplex", click: () => { void open(); } },
@@ -392,10 +490,12 @@ export async function runSuplexDesktop(input: { readonly argv: readonly string[]
       { type: "separator" },
       { label: "Manage Suplex hosts…", click: () => { void openManager(); } },
       { type: "separator" },
+      { label: "Network access", submenu: networkAccessItems() },
+      { type: "separator" },
       { label: status, enabled: false },
       { type: "separator" },
-      { label: "Start Suplex", enabled: localInstalled && localOrigin === null && !localBusy, click: () => { void selectLocal(); } },
-      { label: "Stop Suplex", enabled: localOrigin !== null && !adopted && !localBusy, click: () => { void stopLocal(); } },
+      { label: "Start Suplex", enabled: localInstalled && localOrigin === null && !networkState.busy, click: () => { void selectLocal(); } },
+      { label: "Stop Suplex", enabled: localOrigin !== null && networkState.active?.kind !== "adopted" && !networkState.busy, click: () => { void stopLocal(); } },
       { type: "separator" },
       {
         id: "start-on-login", label: "Start Suplex on Login", type: "checkbox",
@@ -612,10 +712,12 @@ export async function runSuplexDesktop(input: { readonly argv: readonly string[]
     app.quit();
   });
   app.on("before-quit", (event) => {
-    if (quitting || server === undefined || adopted) return; // an adopted server outlives this window
+    if (quitting) return;
     quitting = true;
     event.preventDefault();
-    void server.stop().finally(() => { app.quit(); });
+    void networkAccess.shutdown().catch((error: unknown) => {
+      process.stderr.write(`Suplex could not finish network cleanup: ${(error as Error).message}\n`);
+    }).finally(() => { app.quit(); });
   });
   app.on("second-instance", (_event, argv) => { void openWith(argv); });
   app.on("window-all-closed", () => { if (process.platform !== "darwin") app.quit(); });

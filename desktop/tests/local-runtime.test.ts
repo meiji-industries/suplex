@@ -28,6 +28,7 @@ const subject = (ports: Partial<LocalRuntimePorts> = {}, port = 4111): ReturnTyp
     userData: mkdtempSync(join(tmpdir(), "suplex-desktop-local-")),
     port,
     base: { HOME: "/Users/ada", USER: "ada", TMPDIR: "/tmp/x" },
+    access: { kind: "local" },
     ports: { spawn, kill, wait, healthy, freePort: async (preferred) => preferred, ...ports },
   });
 
@@ -44,7 +45,7 @@ const installed = (id: string): string => {
 };
 
 test("a server of this installation already answering on the port is adopted, never spawned and never signalled", async () => {
-  const runtime = createLocalRuntime({ runtime: FIXTURE, userData: installed("ours"), port: 4111, base: { HOME: "/Users/ada" }, ports: { spawn, kill, wait, healthy, servedInstallation: async () => "ours", freePort: async (preferred) => preferred } });
+  const runtime = createLocalRuntime({ runtime: FIXTURE, userData: installed("ours"), port: 4111, base: { HOME: "/Users/ada" }, access: { kind: "local" }, ports: { spawn, kill, wait, healthy, servedInstallation: async () => "ours", freePort: async (preferred) => preferred } });
   expect(await runtime.start()).toEqual({ port: 4111, adopted: true });
   expect(spawn).not.toHaveBeenCalled();
   await runtime.stop();
@@ -52,7 +53,7 @@ test("a server of this installation already answering on the port is adopted, ne
 });
 
 test("a server of another installation on the port is left alone and ours starts on a free port", async () => {
-  const runtime = createLocalRuntime({ runtime: FIXTURE, userData: installed("ours"), port: 4111, base: { HOME: "/Users/ada" }, ports: { spawn, kill, wait, healthy: async (origin: string) => origin === "http://127.0.0.1:4222", servedInstallation: async () => "deleted-folder", freePort: async () => 4222 } });
+  const runtime = createLocalRuntime({ runtime: FIXTURE, userData: installed("ours"), port: 4111, base: { HOME: "/Users/ada" }, access: { kind: "local" }, ports: { spawn, kill, wait, healthy: async (origin: string) => origin === "http://127.0.0.1:4222", servedInstallation: async () => "deleted-folder", freePort: async () => 4222 } });
   expect(await runtime.start()).toEqual({ port: 4222, adopted: false });
   expect(spawn.mock.lastCall?.[2].env.SUPLEX_PORT).toBe("4222");
 });
@@ -60,7 +61,7 @@ test("a server of another installation on the port is left alone and ours starts
 test("the native server is spawned detached with its foreground command, cwd, and environment", async () => {
   healthy.mockResolvedValueOnce(false).mockResolvedValue(true);
   const userData = mkdtempSync(join(tmpdir(), "suplex-desktop-local-"));
-  const runtime = createLocalRuntime({ runtime: FIXTURE, userData, port: 4111, base: { HOME: "/Users/ada" }, ports: { spawn, kill, wait, healthy, freePort: async (preferred) => preferred } });
+  const runtime = createLocalRuntime({ runtime: FIXTURE, userData, port: 4111, base: { HOME: "/Users/ada" }, access: { kind: "local" }, ports: { spawn, kill, wait, healthy, freePort: async (preferred) => preferred } });
   expect(await runtime.start()).toEqual({ port: 4111, adopted: false });
   expect(spawn).toHaveBeenCalledWith(
     FIXTURE.binary,

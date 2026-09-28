@@ -230,6 +230,15 @@ fn serve_status(installation: &Installation) -> io::Result<bool> {
     let output = setup::tailscale(&command, &["serve", "status", "--json"])?;
     Ok(output.status.success() && setup::serve_route_matches(installation, &output.stdout))
 }
+fn stop_serve_arguments(port: u16, proxy: &str) -> Vec<String> {
+    vec![
+        "serve".into(),
+        format!("--https={port}"),
+        "--set-path=/".into(),
+        proxy.into(),
+        "off".into(),
+    ]
+}
 fn stop_serve(installation: &Installation) -> io::Result<()> {
     if installation.access_mode != "tailscale"
         || installation.tailscale_exposure != "serve"
@@ -238,8 +247,11 @@ fn stop_serve(installation: &Installation) -> io::Result<()> {
         return Ok(());
     }
     let command = std::env::var("SUPLEX_TAILSCALE_COMMAND").unwrap_or_else(|_| "tailscale".into());
-    let port = format!("--https={}", installation.port);
-    let output = setup::tailscale(&command, &["serve", &port, "off"])?;
+    let arguments = stop_serve_arguments(installation.port, &setup::serve_proxy(installation));
+    let output = setup::tailscale(
+        &command,
+        &arguments.iter().map(String::as_str).collect::<Vec<_>>(),
+    )?;
     if !output.status.success() {
         return Err(io::Error::other(
             String::from_utf8_lossy(&output.stderr).to_string(),
@@ -532,6 +544,19 @@ pub fn stop(installation: &Installation) -> Result<serde_json::Value, Box<dyn st
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn serve_cleanup_removes_only_the_matching_root_handler() {
+        assert_eq!(
+            stop_serve_arguments(4222, "http://127.0.0.1:4222"),
+            [
+                "serve",
+                "--https=4222",
+                "--set-path=/",
+                "http://127.0.0.1:4222",
+                "off"
+            ]
+        );
+    }
     #[test]
     fn readiness_requires_an_http_response_from_the_application() {
         for (status, expected) in [("500 Broken", false), ("200 OK", true)] {

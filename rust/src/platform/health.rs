@@ -18,7 +18,12 @@ use crate::{
 };
 use chrono::Utc;
 use serde_json::{Value, json};
-use std::{ffi::CString, fs::OpenOptions, os::unix::ffi::OsStrExt, path::Path};
+use std::{
+    ffi::{CString, OsStr},
+    fs::OpenOptions,
+    os::unix::ffi::OsStrExt,
+    path::Path,
+};
 const MINIMUM_ARTIFACT_FREE_BYTES: u64 = 100 * 1024 * 1024;
 
 pub(crate) fn check(id: &str, label: &str, status: &str, summary: &str, details: Value) -> Value {
@@ -196,10 +201,15 @@ fn disk_check(worktree: Option<&Path>, artifact: Option<&Path>, minimum_gb: Opti
 async fn tailscale_check() -> Value {
     let command =
         std::env::var_os("SUPLEX_TAILSCALE_COMMAND").unwrap_or_else(|| "tailscale".into());
+    tailscale_check_with_command(&command).await
+}
+
+async fn tailscale_check_with_command(command: &OsStr) -> Value {
     let output = tokio::time::timeout(
         std::time::Duration::from_secs(5),
         tokio::process::Command::new(command)
             .args(["status", "--json"])
+            .env("TAILSCALE_BE_CLI", "1")
             .kill_on_drop(true)
             .output(),
     )
@@ -434,6 +444,35 @@ pub fn provider_context(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn tailscale_health_runs_the_cli_in_cli_mode() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root =
+            std::env::temp_dir().join(format!("suplex-tailscale-health-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let command = root.join("tailscale");
+        std::fs::write(
+            &command,
+            concat!(
+                "#!/bin/sh\n",
+                "if [ \"$TAILSCALE_BE_CLI\" != 1 ]; then\n",
+                "  printf 'GUI failed to start'\n",
+                "  exit 0\n",
+                "fi\n",
+                "printf '%s' '{\"Self\":{\"DNSName\":\"host.test-tailnet.ts.net.\"}}'\n",
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&command, std::fs::Permissions::from_mode(0o700)).unwrap();
+
+        let health = tailscale_check_with_command(command.as_os_str()).await;
+
+        assert_eq!(health["status"], "healthy");
+        assert_eq!(health["details"]["hostname"], "host.test-tailnet.ts.net");
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn malformed_tailnet_observations_and_unreadable_storage_are_not_healthy() {

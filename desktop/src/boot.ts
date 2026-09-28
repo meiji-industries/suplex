@@ -1,6 +1,7 @@
 import { readFile, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
+import type { ResolvedNetworkAccess } from "./network-access";
 
 export const DEFAULT_PORT = 4111;
 
@@ -113,11 +114,10 @@ export async function writeInstallRecord(file: string, record: InstallRecord): P
 }
 
 /** C2's environment for both the supervisor and the install CLI. */
-export function runtimeEnvironment(input: { readonly userData: string; readonly port: number; readonly base: NodeJS.ProcessEnv }): Record<string, string> {
+export function runtimeEnvironment(input: { readonly userData: string; readonly port: number; readonly base: NodeJS.ProcessEnv; readonly access: ResolvedNetworkAccess }): Record<string, string> {
   const home = input.base.HOME ?? homedir();
-  return {
+  const common = {
     SUPLEX_PACKAGED: "1",
-    SUPLEX_ACCESS_MODE: "local",
     SUPLEX_BIND_ADDRESS: "127.0.0.1",
     SUPLEX_PORT: String(input.port),
     SUPLEX_DATA_ROOT: join(input.userData, "data"),
@@ -128,5 +128,12 @@ export function runtimeEnvironment(input: { readonly userData: string; readonly 
     USER: input.base.USER ?? "",
     TMPDIR: input.base.TMPDIR ?? tmpdir(),
     PATH: `${home}/.local/bin:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin`,
+  };
+  return input.access.kind === "local" ? { ...common, SUPLEX_ACCESS_MODE: "local" } : {
+    ...common,
+    SUPLEX_ACCESS_MODE: "tailscale",
+    SUPLEX_TAILSCALE_EXPOSURE: "serve",
+    SUPLEX_TAILSCALE_ADDRESS: input.access.hostname,
+    SUPLEX_TAILSCALE_COMMAND: input.access.command,
   };
 }

@@ -51,7 +51,7 @@ export function createInstaller(options: {
     new Promise((resolve) => {
       const process_ = spawn(paths.binary, args, {
         cwd: paths.directory,
-        env: runtimeEnvironment({ userData: options.userData, port: options.port ?? DEFAULT_PORT, base: options.base }),
+        env: runtimeEnvironment({ userData: options.userData, port: options.port ?? DEFAULT_PORT, base: options.base, access: { kind: "local" } }),
         detached: true,
         stdio: ["ignore", "pipe", "pipe"],
       });

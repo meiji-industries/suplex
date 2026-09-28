@@ -19,6 +19,79 @@ const COMMANDS = ["/Applications/Tailscale.app/Contents/MacOS/Tailscale", "/opt/
 const run = async (command: string, args: readonly string[], timeout: number): Promise<string> =>
   (await execFileAsync(command, args, { timeout, maxBuffer: 16 * 1024 * 1024, env: { ...process.env, TAILSCALE_BE_CLI: "1" } })).stdout;
 
+export type TailscaleAccess = { readonly hostname: string; readonly command: string };
+
+export type TailscaleRun = (command: string, args: readonly string[], timeout: number) => Promise<string>;
+
+const selfHostname = (raw: string): string | null => {
+  let value: unknown;
+  try { value = JSON.parse(raw) as unknown; } catch { return null; }
+  if (typeof value !== "object" || value === null) return null;
+  const status = value as { BackendState?: unknown; Self?: unknown };
+  if (typeof status.Self !== "object" || status.Self === null) return null;
+  const dnsName = (status.Self as { DNSName?: unknown }).DNSName;
+  const hostname = typeof dnsName === "string" ? dnsName.replace(/\.$/, "") : "";
+  return status.BackendState === "Running" && hostname.endsWith(".ts.net") ? hostname : null;
+};
+
+/** Resolves the executable and this Mac's current MagicDNS name from one fresh status response. */
+export async function resolveTailscaleAccess(commands: readonly string[] = COMMANDS, execute: TailscaleRun = run): Promise<TailscaleAccess> {
+  let installed = false;
+  for (const command of commands) {
+    try {
+      const hostname = selfHostname(await execute(command, ["status", "--json"], 5_000));
+      installed = true;
+      if (hostname !== null) return { hostname, command };
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") installed = true;
+    }
+  }
+  throw new Error(installed
+    ? "Tailscale is not connected. Open Tailscale, connect this Mac, and retry."
+    : "Tailscale is not installed. Install Tailscale, connect this Mac, and retry.");
+}
+
+type ServeRoute = { readonly hostname: string; readonly port: number; readonly proxy: string };
+
+export function tailscaleServeRouteMatches(raw: string, route: ServeRoute): boolean {
+  return findTailscaleServeRoute(raw, route.port, route.proxy) === `${route.hostname}:${route.port}`;
+}
+
+export function findTailscaleServeRoute(raw: string, port: number, proxy: string): string | null {
+  let value: unknown;
+  try { value = JSON.parse(raw) as unknown; } catch { throw new Error("Tailscale returned invalid Serve status."); }
+  if (typeof value !== "object" || value === null || Array.isArray(value)) throw new Error("Tailscale returned invalid Serve status.");
+  const status = value as { TCP?: unknown; Web?: unknown };
+  if (status.Web === undefined || status.Web === null) {
+    if (status.TCP !== undefined && (typeof status.TCP !== "object" || status.TCP === null || Array.isArray(status.TCP))) throw new Error("Tailscale returned invalid Serve status.");
+    return null;
+  }
+  const web = status.Web;
+  if (typeof web !== "object" || Array.isArray(web)) throw new Error("Tailscale returned invalid Serve status.");
+  for (const [host, server] of Object.entries(web)) {
+    if (!host.endsWith(`:${port}`) || typeof server !== "object" || server === null) continue;
+    const handlers = (server as { Handlers?: unknown }).Handlers;
+    if (typeof handlers !== "object" || handlers === null || Array.isArray(handlers)) continue;
+    const root = (handlers as Record<string, unknown>)["/"];
+    if (typeof root === "object" && root !== null && (root as { Proxy?: unknown }).Proxy === proxy) return host;
+  }
+  return null;
+}
+
+/** Removes only the root handler that points at this desktop host, then observes the authoritative Serve status again. */
+export async function removeTailscaleServeRoute(
+  access: TailscaleAccess,
+  port: number,
+  execute: TailscaleRun = run,
+): Promise<void> {
+  const route = { port, proxy: `http://127.0.0.1:${port}` };
+  const status = await execute(access.command, ["serve", "status", "--json"], 5_000);
+  if (findTailscaleServeRoute(status, route.port, route.proxy) === null) return;
+  await execute(access.command, ["serve", `--https=${port}`, "--set-path=/", route.proxy, "off"], 10_000);
+  const observed = await execute(access.command, ["serve", "status", "--json"], 5_000);
+  if (findTailscaleServeRoute(observed, route.port, route.proxy) !== null) throw new Error("Tailscale still exposes this Suplex instance. Open Tailscale and remove the matching Serve route.");
+}
+
 /** Phones and tablets cannot run Suplex, and Mullvad exit nodes (the peers with a Location) are not machines you own. */
 const HANDHELD = new Set(["ios", "android"]);
 

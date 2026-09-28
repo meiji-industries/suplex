@@ -16,9 +16,7 @@ mod tests {
         let (state, filename) = auth::tests::state();
         let now = Utc::now();
         let time = rfc3339_millis(now);
-        let admin = state
-            .with_database(|database| identity_auth::development_sign_in(database, now))
-            .unwrap();
+        let admin = auth::tests::operator_passkey(&state, now);
         let member = state.with_database(|database| {
             let connection = database.connection();
             connection.execute("INSERT INTO suplex_companies (id,name,status,created_at) VALUES ('c','C','active',?1)", [&time]).unwrap();
@@ -39,8 +37,9 @@ mod tests {
             };
             record(database, "active_task", "s", &[usage], &time).unwrap();
         });
+        auth::tests::require_passkeys(&state);
         let app = crate::http::router(state.clone());
-        let cookie = format!("sid_v1={}", admin.session_token);
+        let cookie = format!("sid_v1={admin}");
         let cookie = Some(cookie.as_str());
 
         let (status, headers, body) =

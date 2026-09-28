@@ -59,6 +59,20 @@ pub struct AuthenticationVerificationBody {
     pub response: Value,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SelfRegistrationVerificationBody {
+    #[serde(default)]
+    pub challenge_id: String,
+    #[serde(default)]
+    pub label: String,
+    pub response: Value,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CredentialLabelBody {
+    #[serde(default)]
+    pub label: String,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EmptyBody {
     #[serde(flatten)]
     pub fields: Map<String, Value>,
@@ -154,6 +168,22 @@ impl Contract for AuthenticationVerificationBody {
         Fields::new(input)?
             .or("challengeId", json!(""), text(0, MAX))
             .req("response", present)
+            .finish()
+    }
+}
+impl Contract for SelfRegistrationVerificationBody {
+    fn schema(input: Option<&Value>) -> ContractResult<Value> {
+        Fields::new(input)?
+            .or("challengeId", json!(""), text(0, MAX))
+            .or("label", json!(""), text(0, 120))
+            .req("response", present)
+            .finish()
+    }
+}
+impl Contract for CredentialLabelBody {
+    fn schema(input: Option<&Value>) -> ContractResult<Value> {
+        Fields::new(input)?
+            .or("label", json!(""), text(0, MAX))
             .finish()
     }
 }

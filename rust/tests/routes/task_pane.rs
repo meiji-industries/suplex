@@ -34,7 +34,8 @@ pub(crate) mod tests {
         let mut database =
             SuplexDatabase::open(&root.join("suplex.sqlite"), OpenMode::Migrate).unwrap();
         let now = chrono::Utc::now();
-        let admin = identity_auth::development_sign_in(&mut database, now).unwrap();
+        identity_auth::development_sign_in(&mut database, now).unwrap();
+        let admin = identity_auth::create_session(&database, "user_development", now).unwrap();
         let stamp = now.to_rfc3339();
         database.connection().execute("INSERT INTO suplex_companies (id,name,status,created_at) VALUES ('pane_company','Pane','active',?1)", [&stamp]).unwrap();
         database.connection().execute("INSERT INTO suplex_projects (id,company_id,name,repository_path,worktree_root,repository_identity,base_branch,setup_command,verification_command,root_profile_id,worker_profile_id,agent_task_policy_json,created_at,updated_at) VALUES ('pane_project','pane_company','Pane','/tmp/repo','/tmp/worktrees',NULL,'main','','','profile_root','profile_worker','{}',?1,?1)", [&stamp]).unwrap();
@@ -50,7 +51,7 @@ pub(crate) mod tests {
                 configuration: json!({"repository":"owner/repo","repositoryPath":"/tmp/repo","worktreeRoot":"/tmp/worktrees","baselineSha":"head","startingSha":"head","capturedAt":stamp,"branch":"task-pane","baseBranch":"main"}),
                 idempotency_key: "pane-1".into(),
                 request_hash: "pane-hash".into(),
-                creator: TaskCreator::User(admin.user.id.clone()),
+                creator: TaskCreator::User("user_development".into()),
                 delivery_target: "local_worktree".into(),
                 delivery_intent: serde_json::from_value(json!({"repository":"owner/repo","headBranch":"task-pane","baseBranch":"main","baselineSha":"head","pullRequestNumber":null})).unwrap(),
                 root_profile: serde_json::from_value(profile.clone()).unwrap(),
@@ -79,7 +80,7 @@ pub(crate) mod tests {
             state,
             task_id: task.id,
             root_session_id: session.id,
-            cookie: format!("sid_v1={}", admin.session_token),
+            cookie: format!("sid_v1={admin}"),
             root,
         }
     }
@@ -251,9 +252,10 @@ pub(crate) mod tests {
             "UPDATE suplex_task_sessions SET pane_id = 'pane-root' WHERE id = ?1",
             &[&fixture.root_session_id],
         );
+        crate::http::routes::auth::tests::require_passkeys(&fixture.state);
         let address = fixture.serve().await;
         let path = format!("/api/tasks/{}/pane/root/terminal", fixture.task_id);
-        let (status, _) = connect(address, &path, &[("host", "suplex.example.test:4113")]).await;
+        let (status, _) = connect(address, &path, &[("host", "suplex.example.test:4113"), ("x-forwarded-host", "suplex.example.test:4111"), ("x-forwarded-proto", "https")]).await;
         assert_eq!(status, 401);
         let (status, mut observer) = connect(address, &path, &[("cookie", &fixture.cookie)]).await;
         assert_eq!(status, 101);

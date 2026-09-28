@@ -35,14 +35,15 @@ pub struct InvitationSummary {
     pub created_at: String,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, ts_rs::TS)]
 #[serde(rename_all = "camelCase")]
 pub struct CredentialSummary {
     pub id: String,
     pub user_id: String,
     pub credential_id: String,
+    pub label: String,
+    pub rp_id: Option<String>,
     pub created_at: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub revoked_at: Option<String>,
 }
 
@@ -181,15 +182,17 @@ pub fn list_credentials(
     actor_user_id: &str,
 ) -> DatabaseResult<Vec<CredentialSummary>> {
     companies::require_admin(database, actor_user_id)?;
-    let mut statement = database.connection().prepare("SELECT id, user_id, credential_id, created_at, revoked_at FROM suplex_credentials ORDER BY created_at ASC, id ASC")?;
+    let mut statement = database.connection().prepare("SELECT id, user_id, credential_id, label, rp_id, created_at, revoked_at FROM suplex_credentials ORDER BY created_at ASC, id ASC")?;
     Ok(statement
         .query_map([], |row| {
             Ok(CredentialSummary {
                 id: row.get(0)?,
                 user_id: row.get(1)?,
                 credential_id: row.get(2)?,
-                created_at: row.get(3)?,
-                revoked_at: row.get(4)?,
+                label: row.get(3)?,
+                rp_id: row.get(4)?,
+                created_at: row.get(5)?,
+                revoked_at: row.get(6)?,
             })
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?)
@@ -230,6 +233,40 @@ pub fn revoke_credential(
             now,
         )
     })
+}
+
+pub fn rename_own_credential(
+    database: &mut SuplexDatabase,
+    user_id: &str,
+    credential_id: &str,
+    raw_label: &str,
+) -> DatabaseResult<()> {
+    let label = auth::js_trim(raw_label);
+    if label.is_empty() || label.encode_utf16().count() > 120 {
+        return Err(
+            IdentityError::auth("Passkey name is invalid", 400, "passkey_label_invalid").into(),
+        );
+    }
+    let updated =
+        super::passkey_repository::rename_own_credential(database, user_id, credential_id, &label)?;
+    if updated != 1 {
+        return Err(IdentityError::not_found().into());
+    }
+    Ok(())
+}
+
+pub fn revoke_own_credential(
+    database: &mut SuplexDatabase,
+    user_id: &str,
+    credential_id: &str,
+    now: DateTime<Utc>,
+) -> DatabaseResult<()> {
+    let updated =
+        super::passkey_repository::revoke_own_credential(database, user_id, credential_id, now)?;
+    if updated != 1 {
+        return Err(IdentityError::not_found().into());
+    }
+    Ok(())
 }
 
 pub fn revoke_user(
@@ -386,8 +423,13 @@ mod tests {
             404
         );
         revoke_user(&mut database, &admin.user.id, &issued.user.id, now).unwrap();
+        let users = list_users(&database, &admin.user.id).unwrap();
         assert_eq!(
-            list_users(&database, &admin.user.id).unwrap()[1].status,
+            users
+                .iter()
+                .find(|user| user.id == issued.user.id)
+                .unwrap()
+                .status,
             "revoked"
         );
         assert_eq!(

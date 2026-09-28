@@ -2,10 +2,11 @@ import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { resolveTailscaleAccess, removeTailscaleServeRoute } from "./tailscale";
 
-export type NetworkAccess = "local" | "tailscale";
+export type NetworkAccess = "local" | "tailscale" | "all";
 
 export type ResolvedNetworkAccess =
   | { readonly kind: "local" }
+  | { readonly kind: "all" }
   | { readonly kind: "tailscale"; readonly hostname: string; readonly command: string };
 
 export type ActiveNetworkAccess = {
@@ -49,7 +50,7 @@ export class NetworkAccessCleanupError extends Error {
 export async function readNetworkAccess(file: string): Promise<NetworkAccess> {
   try {
     const value: unknown = JSON.parse(await readFile(file, "utf8"));
-    return value === "tailscale" ? "tailscale" : "local";
+    return value === "tailscale" || value === "all" ? value : "local";
   } catch {
     return "local";
   }
@@ -85,6 +86,7 @@ async function writeCleanupPort(file: string, port: number): Promise<void> {
 
 export async function resolveNetworkAccess(preference: NetworkAccess): Promise<ResolvedNetworkAccess> {
   if (preference === "local") return { kind: "local" };
+  if (preference === "all") return { kind: "all" };
   const tailscale = await resolveTailscaleAccess();
   return { kind: "tailscale", ...tailscale };
 }

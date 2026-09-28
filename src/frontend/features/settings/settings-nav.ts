@@ -30,7 +30,7 @@ export function buildSettingsGroups(companyId: string, user?: ApiUser): Settings
       ...(admin ? [
         { label: "Users", href: withCompany("/admin", companyId), icon: Users },
         { label: "Companies", href: withCompany("/admin/companies", companyId), icon: Building2 },
-        { label: "Passkeys", href: withCompany("/admin/passkeys", companyId), icon: KeyRound },
+        { label: "Access", href: withCompany("/admin/access", companyId), icon: KeyRound },
         { label: "Invitations", href: withCompany("/admin/invitations", companyId), icon: Mail },
         { label: "Environment", href: withCompany("/admin/environment", companyId), icon: HardDrive },
         { label: "Backups", href: withCompany("/admin/backups", companyId), icon: Archive },

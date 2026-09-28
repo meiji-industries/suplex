@@ -29,7 +29,7 @@ mod tests {
         let prior = rfc3339_millis(start - Duration::days(8));
         let current = rfc3339_millis(start + Duration::days(1));
         let boundary = "2026-09-21T08:00:00+08:00";
-        let admin = state.with_database(|database| identity_auth::development_sign_in(database, Utc::now()).unwrap());
+        let admin = auth::tests::operator_passkey(&state, Utc::now());
         let member = state.with_database(|database| {
             let connection = database.connection();
             for index in 1..=3 {
@@ -76,10 +76,11 @@ mod tests {
                 connection.execute("INSERT INTO suplex_task_usage (task_id,session_id,message_id,snapshot,observed_at) VALUES (?1,?2,?3,?4,?5)", rusqlite::params![task, entry.session_id, entry.message_id, crate::tasks::analytics::js(&entry), current]).unwrap();
             }
         });
+        auth::tests::require_passkeys(&state);
         let app = crate::http::router(state.clone());
         let path = "/api/today?weekStartsAt=2026-09-21T00%3A00%3A00Z&weekEndsAt=2026-09-28T00%3A00%3A00Z";
         assert_eq!(call(&app, "GET", path, None, None).await.0, StatusCode::UNAUTHORIZED);
-        let cookie = format!("sid_v1={}", admin.session_token);
+        let cookie = format!("sid_v1={admin}");
         let (status, _, body) = call(&app, "GET", path, Some(&cookie), None).await;
         assert_eq!(status, StatusCode::OK);
         let body = json_body(&body);

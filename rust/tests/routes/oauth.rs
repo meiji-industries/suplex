@@ -354,6 +354,7 @@ pub(crate) mod tests {
         let client = register(&server, "Claude").await;
         let verifier = "v".repeat(43);
         let request = start(&server, &client, &verifier, "deny-state").await;
+        crate::http::routes::auth::tests::require_passkeys(&server.state);
         let page = server
             .request(
                 reqwest::Method::GET,

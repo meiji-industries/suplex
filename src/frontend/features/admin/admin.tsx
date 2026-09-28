@@ -13,7 +13,6 @@ import type {
 import { UsersSection } from "./users-section.js";
 import { CompaniesSection } from "./companies-section.js";
 import { InvitationsSection } from "./invitations-section.js";
-import { PasskeysSection } from "./passkeys-section.js";
 import { InternalAgentsManager } from "./internal-agents-manager.js";
 import { ExternalAgentsSection } from "./external-agents-section.js";
 import { ExternalAgentAvatarDialog } from "./external-agent-avatar-dialog.js";
@@ -68,15 +67,12 @@ export function AdminView(): ReactElement {
   const isAgents = window.location.pathname.endsWith("/agents");
   const isCompanies = window.location.pathname.endsWith("/companies");
   const isInvitations = window.location.pathname.endsWith("/invitations");
-  const isPasskeys = window.location.pathname.endsWith("/passkeys");
 
   const reload = useCallback(
     async (signal?: AbortSignal): Promise<void> => {
       const options = signal ? { signal } : {};
-      const needsUsers =
-        isCompanies || isPasskeys || (!isAgents && !isInvitations);
-      const needsCredentials =
-        isPasskeys || (!isAgents && !isCompanies && !isInvitations);
+      const needsUsers = isCompanies || (!isAgents && !isInvitations);
+      const needsCredentials = !isAgents && !isCompanies && !isInvitations;
       try {
         setError("");
         const [
@@ -152,7 +148,6 @@ export function AdminView(): ReactElement {
       isAgents,
       isCompanies,
       isInvitations,
-      isPasskeys,
     ],
   );
 
@@ -275,42 +270,20 @@ export function AdminView(): ReactElement {
       setError("Unable to revoke user");
     }
   };
-  const revokeCredential = async (credential: ApiCredential): Promise<void> => {
-    const action = `credential:${credential.id}`;
-    if (pendingAction !== action) {
-      setPendingAction(action);
-      return;
-    }
-    try {
-      await readJsonUnchecked(`/api/admin/credentials/${credential.id}/revoke`, {
-        method: "POST",
-        body: "{}",
-      });
-      setPendingAction("");
-      await reload();
-    } catch {
-      setError("Unable to revoke passkey");
-    }
-  };
-
   const viewTitle = isAgents
     ? "Agents"
     : isCompanies
       ? "Companies"
       : isInvitations
         ? "Invitations"
-        : isPasskeys
-          ? "Passkeys"
-          : "Users";
+        : "Users";
   const viewDescription = isAgents
     ? "Agents plan and build the work of each task. Suplex runs internal agents. External agents connect to Suplex."
     : isCompanies
       ? "Each company has its own projects and tasks. Select the accounts that can open each company."
       : isInvitations
         ? "An invitation lets a person create an account on this Suplex host."
-        : isPasskeys
-          ? "A passkey lets an account sign in to Suplex without a password."
-          : "These accounts can sign in to this Suplex host.";
+        : "These accounts can sign in to this Suplex host.";
   const activeHref = withCompany(window.location.pathname, currentCompany?.id);
   const backHref = withCompany("/projects", currentCompany?.id);
 
@@ -356,8 +329,7 @@ export function AdminView(): ReactElement {
       <SettingsContent width="wide" title={viewTitle} description={viewDescription}>
         {!isAgents &&
         !isCompanies &&
-        !isInvitations &&
-        !isPasskeys ? (
+        !isInvitations ? (
           <UsersSection
             users={users}
             credentials={credentials}
@@ -463,19 +435,6 @@ export function AdminView(): ReactElement {
             onDisplayNameChange={setDisplayName}
             onInvite={() => void invite()}
             onCopyInvitation={() => void copyInvitation()}
-          />
-        ) : null}
-
-        {isPasskeys ? (
-          <PasskeysSection
-            credentials={credentials}
-            users={users}
-            currentUserId={user.id}
-            pendingAction={pendingAction}
-            onRevokeCredential={(credential) =>
-              void revokeCredential(credential)
-            }
-            onClearPendingAction={() => setPendingAction("")}
           />
         ) : null}
 

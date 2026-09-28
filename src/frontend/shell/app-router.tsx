@@ -29,6 +29,7 @@ const EnvironmentSettingsView = lazy(() => import("../features/settings/environm
 const WorkflowSettingsView = lazy(() => import("../features/settings/workflow-settings.js").then(module => ({ default: module.WorkflowSettingsView })));
 const TriggerSettingsView = lazy(() => import("../features/settings/trigger-settings.js").then(module => ({ default: module.TriggerSettingsView })));
 const OnboardingSettingsView = lazy(() => import("../features/settings/onboarding-settings.js").then(module => ({ default: module.OnboardingSettingsView })));
+const AccessView = lazy(() => import("../features/access/access.js").then(module => ({ default: module.AccessView })));
 const OnboardingView = lazy(() => import("../features/onboarding/onboarding-wizard.js").then(module => ({ default: module.OnboardingView })));
 const SetupView = lazy(() => import("../features/settings/setup.js").then(module => ({ default: module.SetupView })));
 const TodayView = lazy(() => import("../features/today/today.js").then(module => ({ default: module.TodayView })));
@@ -53,7 +54,9 @@ function AppView(): ReactElement {
   if (pathname === "/admin/backups") return <BackupSettingsView />;
   if (pathname === "/admin/workflows") return <WorkflowSettingsView />;
   if (pathname === "/admin/triggers") return <TriggerSettingsView />;
-  if (pathname === "/admin" || pathname === "/admin/agents" || pathname === "/admin/companies" || pathname === "/admin/invitations" || pathname === "/admin/passkeys") return <AdminView />;
+  if (pathname === "/admin/passkeys") window.history.replaceState({}, "", `/admin/access${window.location.search}`);
+  if (pathname === "/admin/access" || pathname === "/admin/passkeys") return <AccessView />;
+  if (pathname === "/admin" || pathname === "/admin/agents" || pathname === "/admin/companies" || pathname === "/admin/invitations") return <AdminView />;
   if (/^\/companies\/[^/]+\/settings$/.test(pathname)) return <CompanySettingsView />;
   if (pathname === "/profile") return <ProfileView />;
   if (pathname === "/projects") return <ProjectsView />;

@@ -37,7 +37,7 @@ pub(crate) fn metadata_with_string(raw: &str, name: &str, value: &str) -> String
     Value::Object(fields).to_string()
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, ts_rs::TS)]
 #[serde(rename_all = "camelCase")]
 pub struct AuthUser {
     pub id: String,
@@ -141,6 +141,26 @@ pub fn get_user_by_session(
         .map(Option::flatten)
 }
 
+pub fn get_user_by_session_with_provenance(
+    database: &SuplexDatabase,
+    raw_token: &str,
+    now: DateTime<Utc>,
+) -> DatabaseResult<Option<(AuthUser, String)>> {
+    if raw_token.is_empty() {
+        return Ok(None);
+    }
+    let now_iso = rfc3339_millis(now);
+    let row: Option<(String, String)> = database.connection().query_row(
+        "SELECT suplex_users.id, suplex_sessions.provenance FROM suplex_sessions INNER JOIN suplex_users ON suplex_sessions.user_id = suplex_users.id WHERE (suplex_sessions.token_hash = ?1 OR (suplex_sessions.legacy_token_hash = ?1 AND suplex_sessions.legacy_token_expires_at > ?2)) AND suplex_sessions.revoked_at IS NULL AND suplex_users.status = 'active' AND suplex_sessions.expires_at > ?2",
+        params![sha256_hex(raw_token), now_iso],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    ).optional()?;
+    let Some((user_id, provenance)) = row else {
+        return Ok(None);
+    };
+    Ok(public_user(database, &user_id)?.map(|user| (user, provenance)))
+}
+
 pub fn bootstrap_required(database: &SuplexDatabase) -> DatabaseResult<bool> {
     let active_admins: i64 = database.connection().query_row(
         "SELECT COUNT(*) FROM suplex_users WHERE role = 'admin' AND status != 'revoked'",
@@ -185,23 +205,33 @@ pub fn issue_administrator_invitation(
     })
 }
 
-pub(crate) fn create_session(
+pub(crate) fn create_session_with_provenance(
     database: &SuplexDatabase,
     user_id: &str,
+    provenance: &str,
     now: DateTime<Utc>,
 ) -> DatabaseResult<String> {
     let token = crate::shared::ids::random_secret("session_v1")?;
     database.connection().execute(
-        "INSERT INTO suplex_sessions (id, token_hash, user_id, expires_at, created_at, revoked_at, token_version, legacy_token_hash, legacy_token_expires_at) VALUES (?1, ?2, ?3, ?4, ?5, NULL, 1, NULL, NULL)",
+        "INSERT INTO suplex_sessions (id, token_hash, user_id, expires_at, created_at, revoked_at, token_version, legacy_token_hash, legacy_token_expires_at, provenance) VALUES (?1, ?2, ?3, ?4, ?5, NULL, 1, NULL, NULL, ?6)",
         params![
             random_hex_id("session")?,
             sha256_hex(&token),
             user_id,
             rfc3339_millis(now + Duration::days(SESSION_TTL_DAYS)),
             rfc3339_millis(now),
+            provenance,
         ],
     )?;
     Ok(token)
+}
+
+pub(crate) fn create_session(
+    database: &SuplexDatabase,
+    user_id: &str,
+    now: DateTime<Utc>,
+) -> DatabaseResult<String> {
+    create_session_with_provenance(database, user_id, "passkey", now)
 }
 
 pub fn development_sign_in(
@@ -222,7 +252,7 @@ pub fn development_sign_in(
                 "auth_failure",
             ).into());
         }
-        let session_token = create_session(database, &user.id, now)?;
+        let session_token = create_session_with_provenance(database, &user.id, "automatic", now)?;
         Ok(AuthResult {
             user,
             session_token,

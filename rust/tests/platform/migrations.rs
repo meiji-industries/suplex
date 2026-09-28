@@ -423,7 +423,7 @@ mod migration_regressions {
         let database = SuplexDatabase::open(&path, OpenMode::Migrate).unwrap();
         assert_eq!(
             rows(&database, "SELECT id FROM suplex_users"),
-            json!([{"id":"user_1"}])
+            json!([{"id":"user_1"},{"id":"user_development"}])
         );
         assert_eq!(
             rows(

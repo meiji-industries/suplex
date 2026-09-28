@@ -666,7 +666,7 @@ mod tests {
             &database_path,
         )
         .unwrap();
-        let database = SuplexDatabase::open(&database_path, OpenMode::ReadWrite).unwrap();
+        let database = SuplexDatabase::open(&database_path, OpenMode::Migrate).unwrap();
         let (task_id, session_id, user_id): (String, String, String) = database.connection().query_row(
             "SELECT s.task_id, s.id, t.creator_user_id FROM suplex_task_sessions s JOIN suplex_tasks t ON t.id = s.task_id LIMIT 1",
             [], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),

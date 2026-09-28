@@ -14,10 +14,12 @@ use serde_json::json;
 
 use crate::{
     http::{
+        access::with_cookies,
         contracts::typed::auth::{
-            AuthenticationVerificationBody, ProfileBody, RegistrationVerificationBody, TokenBody,
+            AuthenticationVerificationBody, CredentialIdParams, CredentialLabelBody, ProfileBody,
+            RegistrationVerificationBody, SelfRegistrationVerificationBody, TokenBody,
         },
-        validation::Valid,
+        validation::{Valid, ValidPath},
     },
     identity::{
         auth::{self, AuthUser, ProfileUpdate},
@@ -57,6 +59,15 @@ pub fn router(state: &AppState) -> Router<AppState> {
         .route("/api/auth/verify", post(authentication_verify))
         .route("/api/auth/me", get(me).patch(update_me))
         .route("/api/auth/sign-out", post(sign_out))
+        .route(
+            "/api/auth/passkeys/options",
+            post(self_registration_options),
+        )
+        .route("/api/auth/passkeys/verify", post(self_registration_verify))
+        .route(
+            "/api/auth/passkeys/{credential_id}",
+            axum::routing::patch(rename_passkey).delete(remove_passkey),
+        )
 }
 
 fn site(config: &session::SessionConfig) -> Result<url::Url, Box<Response>> {
@@ -68,6 +79,43 @@ fn site(config: &session::SessionConfig) -> Result<url::Url, Box<Response>> {
     })
 }
 
+fn ceremony_site(state: &AppState, headers: &HeaderMap) -> Result<url::Url, Box<Response>> {
+    let origin = state
+        .with_database(|database| {
+            let policy = crate::identity::remote_access_repository::read(database)?;
+            crate::identity::remote_access_repository::effective_https_origin(
+                &policy,
+                &state.session_config.reachable_address,
+            )
+            .or_else(|| {
+                site(&state.session_config)
+                    .ok()
+                    .map(|url| url.origin().ascii_serialization())
+            })
+            .ok_or_else(|| -> Box<dyn Error> { "WebAuthn origin is not configured".into() })
+        })
+        .map_err(|error| Box::new(ApiError::response(error)))?;
+    let supplied = headers.get("origin").and_then(|value| value.to_str().ok());
+    let parsed = url::Url::parse(&origin).map_err(|_| {
+        Box::new(error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Internal server error",
+        ))
+    })?;
+    let trusted_transport = if parsed.scheme() == "https" {
+        session::is_verified_https(headers)
+    } else {
+        session::is_local_recovery(headers)
+    };
+    if !trusted_transport || supplied != Some(parsed.origin().ascii_serialization().as_str()) {
+        return Err(Box::new(error(
+            StatusCode::FORBIDDEN,
+            "Open the configured HTTPS address to manage passkeys",
+        )));
+    }
+    Ok(parsed)
+}
+
 async fn registration_options(
     state: AppState,
     headers: HeaderMap,
@@ -77,7 +125,7 @@ async fn registration_options(
     if !session::csrf_allowed(&state.session_config, &headers, "POST", false) {
         return error(StatusCode::FORBIDDEN, "request_origin_invalid");
     }
-    let reachable = match site(&state.session_config) {
+    let reachable = match ceremony_site(&state, &headers) {
         Ok(reachable) => reachable,
         Err(response) => return *response,
     };
@@ -110,7 +158,7 @@ async fn registration_verify(
     if !session::csrf_allowed(&state.session_config, &headers, "POST", false) {
         return error(StatusCode::FORBIDDEN, "request_origin_invalid");
     }
-    let reachable = match site(&state.session_config) {
+    let reachable = match ceremony_site(&state, &headers) {
         Ok(reachable) => reachable,
         Err(response) => return *response,
     };
@@ -129,6 +177,7 @@ async fn registration_verify(
             response,
             origin,
             rp_id,
+            secure_cookie: reachable.scheme() == "https",
         })
     });
     match task.await {
@@ -145,6 +194,7 @@ struct RegistrationAttempt {
     response: PreparedCredential,
     origin: String,
     rp_id: String,
+    secure_cookie: bool,
 }
 
 fn run_registration_ceremony(attempt: RegistrationAttempt) -> Response {
@@ -156,6 +206,7 @@ fn run_registration_ceremony(attempt: RegistrationAttempt) -> Response {
         response,
         origin,
         rp_id,
+        secure_cookie,
     } = attempt;
     let challenge = match state.with_database(|database| {
         ceremony::consume_registration_challenge(
@@ -184,14 +235,21 @@ fn run_registration_ceremony(attempt: RegistrationAttempt) -> Response {
     let result = state.with_database(|database| {
         ceremony::finish_registration(database, kind, &token, verified, Utc::now())
     });
-    auth_result(&state, result)
+    auth_result(&state, result, secure_cookie)
 }
 
-fn auth_result(state: &AppState, result: Result<auth::AuthResult, Box<dyn Error>>) -> Response {
+fn auth_result(
+    state: &AppState,
+    result: Result<auth::AuthResult, Box<dyn Error>>,
+    secure_cookie: bool,
+) -> Response {
     match result {
         Ok(result) => {
-            let cookies =
-                session::set_session_cookies(&state.session_config, &result.session_token, None);
+            let cookies = session::set_session_cookies(
+                &state.session_config,
+                &result.session_token,
+                Some(secure_cookie),
+            );
             match cookies {
                 Ok(cookies) => {
                     let mut response = Json(AuthEnvelope { user: result.user }).into_response();
@@ -253,8 +311,8 @@ async fn recovery_verify(
     registration_verify(state, headers, body, "recovery").await
 }
 
-async fn authentication_options(State(state): State<AppState>) -> Response {
-    let reachable = match site(&state.session_config) {
+async fn authentication_options(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    let reachable = match ceremony_site(&state, &headers) {
         Ok(reachable) => reachable,
         Err(response) => return *response,
     };
@@ -283,7 +341,7 @@ async fn authentication_verify(
     if !session::csrf_allowed(&state.session_config, &headers, "POST", false) {
         return error(StatusCode::FORBIDDEN, "request_origin_invalid");
     }
-    let reachable = match site(&state.session_config) {
+    let reachable = match ceremony_site(&state, &headers) {
         Ok(reachable) => reachable,
         Err(response) => return *response,
     };
@@ -300,7 +358,120 @@ async fn authentication_verify(
             Utc::now(),
         )
     });
-    auth_result(&state, result)
+    auth_result(&state, result, reachable.scheme() == "https")
+}
+
+async fn self_registration_options(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    let (user_id, cookies) = match crate::http::access::authorize_method(&state, &headers, "POST") {
+        Ok(value) => value,
+        Err(response) => return *response,
+    };
+    let reachable = match ceremony_site(&state, &headers) {
+        Ok(value) => value,
+        Err(response) => return *response,
+    };
+    let origin = reachable.origin().ascii_serialization();
+    let result = state.with_database(|database| {
+        ceremony::begin_self_registration(
+            database,
+            &user_id,
+            WebAuthnSite {
+                origin: &origin,
+                rp_id: reachable.host_str().unwrap_or_default(),
+            },
+            Utc::now(),
+        )
+    });
+    with_cookies(
+        result
+            .map(Json)
+            .map(IntoResponse::into_response)
+            .unwrap_or_else(ApiError::response),
+        cookies,
+    )
+}
+
+async fn self_registration_verify(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Valid(body): Valid<SelfRegistrationVerificationBody>,
+) -> Response {
+    let (user_id, cookies) = match crate::http::access::authorize_method(&state, &headers, "POST") {
+        Ok(value) => value,
+        Err(response) => return *response,
+    };
+    let reachable = match ceremony_site(&state, &headers) {
+        Ok(value) => value,
+        Err(response) => return *response,
+    };
+    let origin = reachable.origin().ascii_serialization();
+    let result = state.with_database(|database| {
+        ceremony::complete_self_registration(
+            database,
+            &user_id,
+            &body.challenge_id,
+            prepared_response(body.response),
+            &body.label,
+            WebAuthnSite {
+                origin: &origin,
+                rp_id: reachable.host_str().unwrap_or_default(),
+            },
+            Utc::now(),
+        )
+    });
+    let response = result
+        .map(|_| StatusCode::NO_CONTENT.into_response())
+        .unwrap_or_else(ApiError::response);
+    with_cookies(response, cookies)
+}
+
+async fn rename_passkey(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    ValidPath(CredentialIdParams { credential_id }): ValidPath<CredentialIdParams>,
+    Valid(body): Valid<CredentialLabelBody>,
+) -> Response {
+    let (user_id, cookies) = match crate::http::access::authorize_method(&state, &headers, "PATCH")
+    {
+        Ok(value) => value,
+        Err(response) => return *response,
+    };
+    let response = state
+        .with_database(|database| {
+            crate::identity::admin::rename_own_credential(
+                database,
+                &user_id,
+                &credential_id,
+                &body.label,
+            )
+        })
+        .map(|_| StatusCode::NO_CONTENT.into_response())
+        .unwrap_or_else(ApiError::response);
+    with_cookies(response, cookies)
+}
+
+async fn remove_passkey(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    ValidPath(CredentialIdParams { credential_id }): ValidPath<CredentialIdParams>,
+) -> Response {
+    let (user_id, cookies) = match crate::http::access::authorize_method(&state, &headers, "DELETE")
+    {
+        Ok(value) => value,
+        Err(response) => return *response,
+    };
+    let response = state
+        .with_database(|database| {
+            crate::identity::admin::revoke_own_credential(
+                database,
+                &user_id,
+                &credential_id,
+                Utc::now(),
+            )
+        })
+        .map(|_| StatusCode::NO_CONTENT.into_response())
+        .unwrap_or_else(ApiError::response);
+    with_cookies(response, cookies)
 }
 
 pub(crate) fn error(status: StatusCode, message: &str) -> Response {

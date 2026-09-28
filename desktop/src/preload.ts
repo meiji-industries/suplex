@@ -49,6 +49,11 @@ export type DesktopApi = {
   on(listener: (event: InstallEvent) => void): void;
 };
 
+export type NetworkAccessMode = "local" | "tailscale" | "all";
+export type AppNetworkAccess =
+  | { readonly managed: false }
+  | { readonly managed: true; readonly mode: NetworkAccessMode; readonly busy: boolean; readonly httpsUrl: string | null };
+
 declare const location: { readonly protocol: string }; // the preload runs in the renderer; this package compiles without the DOM lib
 
 const send = async (message: DesktopMessage): Promise<unknown> => ipcRenderer.invoke("suplex:desktop", message);
@@ -77,4 +82,6 @@ if (location.protocol === "file:") contextBridge.exposeInMainWorld("suplexDeskto
 else contextBridge.exposeInMainWorld("suplexApp", {
   accountCleared: async () => { await ipcRenderer.invoke("suplex:account-cleared"); },
   openHostPicker: async () => { await ipcRenderer.invoke("suplex:host-picker"); },
+  networkAccess: async () => (await ipcRenderer.invoke("suplex:access", { action: "read" })) as AppNetworkAccess,
+  setNetworkAccess: async (mode: NetworkAccessMode) => (await ipcRenderer.invoke("suplex:access", { action: "change", mode })) as AppNetworkAccess,
 });

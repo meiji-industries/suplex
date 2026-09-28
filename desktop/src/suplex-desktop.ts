@@ -410,7 +410,7 @@ export async function runSuplexDesktop(input: { readonly argv: readonly string[]
         const result = await dialog.showMessageBox({
           type: "info",
           message: "Tailscale access is on",
-          detail: "Tailnet users permitted by Tailscale can access and manage this Suplex instance.",
+          detail: "Tailscale access is ready. Access settings determine who can use this Suplex instance.",
           buttons: ["Copy Tailscale URL", "OK"],
           defaultId: 0,
           cancelId: 1,
@@ -427,12 +427,37 @@ export async function runSuplexDesktop(input: { readonly argv: readonly string[]
       rebuildMenu();
     }
   };
+  const accessSnapshot = (): import("./preload").AppNetworkAccess => {
+    const active = networkState.active;
+    if (active?.kind !== "owned") return { managed: false };
+    return { managed: true, mode: active.access.kind, busy: networkState.busy, httpsUrl: tailscaleUrl() };
+  };
+  const localAdminFrame = async (event: Electron.IpcMainInvokeEvent): Promise<boolean> => {
+    const sender = event.sender;
+    const frame = event.senderFrame;
+    if (!window || !localOrigin || sender !== window.webContents || frame !== sender.mainFrame) return false;
+    if (!URL.canParse(frame.url) || new URL(frame.url).origin !== localOrigin) return false;
+    const expectedFrame = frame;
+    const expectedOrigin = localOrigin;
+    try {
+      const response = await sender.session.fetch(new URL("/api/auth/me", expectedOrigin).href, { credentials: "include" });
+      const body: unknown = response.ok ? await response.json() : null;
+      if (!window || window.isDestroyed() || sender !== window.webContents || sender.mainFrame !== expectedFrame) return false;
+      if (!URL.canParse(expectedFrame.url) || new URL(expectedFrame.url).origin !== expectedOrigin) return false;
+      if (typeof body !== "object" || body === null || !("user" in body)) return false;
+      const candidate: unknown = Reflect.get(body, "user");
+      return typeof candidate === "object" && candidate !== null && Reflect.get(candidate, "role") === "admin";
+    } catch {
+      return false;
+    }
+  };
   const networkAccessItems = (): Electron.MenuItemConstructorOptions[] => {
     const selected = networkState.active === null ? networkState.preference : networkState.active.kind === "owned" ? networkState.active.access.kind : null;
     const url = tailscaleUrl();
     return [
       { id: "network-access-local", label: "This Mac only", type: "radio", checked: selected === "local", enabled: localInstalled && !networkState.busy, click: () => { void changeNetworkAccess("local"); } },
       { id: "network-access-tailscale", label: "Tailscale", type: "radio", checked: selected === "tailscale", enabled: localInstalled && !networkState.busy, click: () => { void changeNetworkAccess("tailscale"); } },
+      { id: "network-access-all", label: "All networks", type: "radio", checked: selected === "all", enabled: localInstalled && !networkState.busy, click: () => { void changeNetworkAccess("all"); } },
       ...(url === null ? [] : [
         { type: "separator" as const },
         { id: "network-access-copy-url", label: "Copy Tailscale URL", enabled: !networkState.busy, click: copyTailscaleUrl },
@@ -470,6 +495,7 @@ export async function runSuplexDesktop(input: { readonly argv: readonly string[]
     Menu.setApplicationMenu(Menu.buildFromTemplate([
       { label: "Suplex", submenu: [{ role: "about" }, { type: "separator" },
         { label: "Settings", submenu: [
+          { label: "Access…", click: () => { if (window && origin) void load(window, parseSuplexTarget(`${origin}/admin/access`)); } },
           { label: "Network access", submenu: networkAccessItems() },
           { type: "separator" },
           ...targets,
@@ -702,6 +728,16 @@ export async function runSuplexDesktop(input: { readonly argv: readonly string[]
     }
     registry = await readTargets(targetFile());
     hostPicker().popup({ window });
+  });
+  ipcMain.removeHandler("suplex:access");
+  ipcMain.handle("suplex:access", async (event: Electron.IpcMainInvokeEvent, message: unknown): Promise<import("./preload").AppNetworkAccess> => {
+    if (!await localAdminFrame(event)) return { managed: false };
+    if (typeof message === "object" && message !== null && Reflect.get(message, "action") === "change") {
+      const mode = Reflect.get(message, "mode");
+      if (mode !== "local" && mode !== "tailscale" && mode !== "all") return accessSnapshot();
+      await changeNetworkAccess(mode);
+    }
+    return accessSnapshot();
   });
   ipcMain.removeHandler("suplex:account-cleared");
   ipcMain.handle("suplex:account-cleared", async (event: Electron.IpcMainInvokeEvent): Promise<void> => {

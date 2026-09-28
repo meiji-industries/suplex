@@ -106,11 +106,39 @@ pub(crate) mod tests {
         (AppState::new(database, config), filename)
     }
 
+    pub(crate) fn require_passkeys(state: &AppState) {
+        state
+            .with_database(|database| {
+                crate::identity::remote_access_repository::update(
+                    database,
+                    crate::identity::remote_access_repository::RemoteAccessPolicy::Passkeys {
+                        external_https_origin: Some(
+                            "https://suplex.example.test:4111".to_owned(),
+                        ),
+                    },
+                )
+            })
+            .unwrap();
+    }
+
+    pub(crate) fn operator_passkey(state: &AppState, now: chrono::DateTime<Utc>) -> String {
+        state
+            .with_database(|database| {
+                auth::development_sign_in(database, now)?;
+                auth::create_session(database, "user_development", now)
+            })
+            .unwrap()
+    }
+
     #[tokio::test]
     async fn status_cookie_and_sign_out_follow_existing_order() {
         let (state, filename) = state();
         let mut headers = HeaderMap::new();
         headers.insert("host", HeaderValue::from_static("localhost:4111"));
+        headers.insert(
+            session::REQUEST_CLASS_HEADER,
+            HeaderValue::from_static("local"),
+        );
         let response = status(State(state.clone()), headers.clone()).await;
         assert_eq!(response.status(), StatusCode::OK);
         let cookies = response
@@ -125,7 +153,7 @@ pub(crate) mod tests {
         let body = to_bytes(response.into_body(), 1024).await.unwrap();
         assert_eq!(
             serde_json::from_slice::<serde_json::Value>(&body).unwrap(),
-            json!({ "required": true, "authenticated": true })
+            json!({ "required": false, "authenticated": true })
         );
 
         let without_cookie = sign_out(State(state.clone()), headers.clone()).await;
@@ -155,6 +183,7 @@ pub(crate) mod tests {
             3
         );
         headers.insert("host", HeaderValue::from_static("suplex.example.test:4111"));
+        headers.remove(session::REQUEST_CLASS_HEADER);
         let after = request_me(State(state.clone()), headers).await;
         assert_eq!(after.status(), StatusCode::UNAUTHORIZED);
         drop(state);
@@ -194,7 +223,10 @@ pub(crate) mod tests {
         )
         .await;
         assert_eq!(csrf.status(), StatusCode::FORBIDDEN);
-        let no_credentials = authentication_options(State(state.clone())).await;
+        let mut authentication_headers = HeaderMap::new();
+        authentication_headers.insert(session::VERIFIED_HTTPS_HEADER, HeaderValue::from_static("1"));
+        authentication_headers.insert("origin", HeaderValue::from_static("https://suplex.example.test:4111"));
+        let no_credentials = authentication_options(State(state.clone()), authentication_headers).await;
         assert_eq!(no_credentials.status(), StatusCode::BAD_REQUEST);
         let no_credentials_body = to_bytes(no_credentials.into_body(), 1024).await.unwrap();
         assert_eq!(no_credentials_body, r#"{"error":"No passkey is enrolled"}"#);
@@ -215,7 +247,7 @@ pub(crate) mod tests {
         async fn post(address: std::net::SocketAddr, path: &str, body: String) -> String {
             let mut stream = tokio::net::TcpStream::connect(address).await.unwrap();
             let request = format!(
-                "POST {path} HTTP/1.1\r\nHost: suplex.example.test:4111\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                "POST {path} HTTP/1.1\r\nHost: suplex.example.test:4111\r\nOrigin: https://suplex.example.test:4111\r\nX-Forwarded-Host: suplex.example.test:4111\r\nX-Forwarded-Proto: https\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
                 body.len()
             );
             stream.write_all(request.as_bytes()).await.unwrap();
@@ -238,7 +270,7 @@ pub(crate) mod tests {
         let address = listener.local_addr().unwrap();
         let server_state = state.clone();
         let server = tokio::spawn(async move {
-            axum::serve(listener, crate::http::router(server_state))
+            axum::serve(listener, crate::http::router(server_state).into_make_service_with_connect_info::<std::net::SocketAddr>())
                 .await
                 .unwrap();
         });
@@ -339,6 +371,7 @@ pub(crate) mod tests {
                 },
                 origin: "https://suplex.example.test:4111".into(),
                 rp_id: "suplex.example.test".into(),
+                secure_cookie: true,
             })
         });
         drop(detached);
@@ -374,6 +407,10 @@ pub(crate) mod tests {
         let (state, filename) = state();
         let mut headers = HeaderMap::new();
         headers.insert("host", HeaderValue::from_static("localhost:4111"));
+        headers.insert(
+            session::REQUEST_CLASS_HEADER,
+            HeaderValue::from_static("local"),
+        );
         let signin = status(State(state.clone()), headers.clone()).await;
         let cookie = signin
             .headers()
@@ -449,6 +486,8 @@ pub(crate) mod tests {
             r#"{"user":{"id":"user_development","displayName":"Updated Operator","username":"updated-operator","avatarSeed":"updated-avatar","role":"admin","status":"active","companyIds":[]}}"#
         );
         headers.remove("cookie");
+        headers.remove("origin");
+        headers.remove(session::REQUEST_CLASS_HEADER);
         headers.insert("host", HeaderValue::from_static("suplex.example.test:4111"));
         let anonymous = update_me(
             State(state.clone()),

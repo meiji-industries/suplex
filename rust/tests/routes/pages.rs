@@ -61,6 +61,10 @@ mod tests {
 
         let mut loopback = HeaderMap::new();
         loopback.insert(header::HOST, "127.0.0.1:4113".parse().unwrap());
+        loopback.insert(
+            session::REQUEST_CLASS_HEADER,
+            "local".parse().unwrap(),
+        );
         let onboarding = root(State(state.clone()), loopback.clone()).await;
         assert_eq!(onboarding.status(), StatusCode::FOUND);
         assert_eq!(
@@ -162,6 +166,10 @@ mod tests {
         let (state, path) = test_state();
         let mut loopback = HeaderMap::new();
         loopback.insert(header::HOST, "127.0.0.1:4113".parse().unwrap());
+        loopback.insert(
+            session::REQUEST_CLASS_HEADER,
+            "local".parse().unwrap(),
+        );
         let denied = company_settings(
             State(state.clone()),
             Path("company_missing".to_owned()),

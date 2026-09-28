@@ -1,6 +1,5 @@
 #[cfg(test)]
 pub(crate) mod tests {
-    use crate::shared::hash::sha256_hex;
     use crate::shared::time::rfc3339_millis;
     use rusqlite::params;
     use serde_json::{Value, json};
@@ -37,18 +36,15 @@ pub(crate) mod tests {
         let (state, path) = state.unwrap_or_else(auth::tests::state);
         let now = chrono::Utc::now();
         let stamp = rfc3339_millis(now);
-        let admin = state
-            .with_database(|database| identity_auth::development_sign_in(database, now))
-            .unwrap();
-        state.with_database(|database| {
+        let admin = auth::tests::operator_passkey(&state, now);
+        let member = state.with_database(|database| {
             let connection = database.connection();
             connection.execute("INSERT INTO suplex_users (id, display_name, username, role, status, created_at, updated_at, identity_version) VALUES ('member_user', 'Member', 'user_v1_member_user', 'member', 'active', ?1, ?1, 1)", [&stamp]).unwrap();
-            let hash = sha256_hex(b"member_session_token");
-            connection.execute("INSERT INTO suplex_sessions (id, token_hash, user_id, expires_at, created_at, token_version) VALUES ('member_session', ?1, 'member_user', ?2, ?3, 1)", params![hash, (now + chrono::Duration::days(1)).to_rfc3339(), stamp]).unwrap();
             connection.execute("INSERT INTO suplex_companies (id, name, status, created_at) VALUES ('company_api', 'Agent API Company', 'active', ?1)", [&stamp]).unwrap();
             for (id, name) in [("project_api", "API Project"), ("project_api_2", "API Project 2")] {
                 connection.execute("INSERT INTO suplex_projects (id, company_id, name, repository_path, worktree_root, repository_identity, base_branch, setup_command, verification_command, created_at, updated_at) VALUES (?1, 'company_api', ?2, ?3, ?4, ?5, 'main', '', '', ?6, ?6)", params![id, name, format!("/tmp/{id}"), format!("/tmp/{id}-worktrees"), format!("meiji/{id}"), stamp]).unwrap();
             }
+            identity_auth::create_session(database, "member_user", now).unwrap()
         });
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let base = format!("http://{}", listener.local_addr().unwrap());
@@ -60,8 +56,8 @@ pub(crate) mod tests {
         Server {
             base,
             state,
-            admin_cookie: format!("sid_v1={}", admin.session_token),
-            member_cookie: "sid_v1=member_session_token".into(),
+            admin_cookie: format!("sid_v1={admin}"),
+            member_cookie: format!("sid_v1={member}"),
             client: reqwest::Client::builder()
                 .redirect(reqwest::redirect::Policy::none())
                 .build()
@@ -82,7 +78,9 @@ pub(crate) mod tests {
             let mut request = self
                 .client
                 .request(method, format!("{}{path}", self.base))
-                .header("host", HOST);
+                .header("host", HOST)
+                .header("x-forwarded-host", HOST)
+                .header("x-forwarded-proto", "https");
             for (name, value) in headers {
                 request = request.header(*name, *value);
             }
@@ -249,6 +247,7 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn only_live_administrators_manage_agents_and_validation_precedes_authority() {
         let server = server(None).await;
+        auth::tests::require_passkeys(&server.state);
         let body =
             json!({"name": "Anon", "companyId": "company_api", "projectIds": ["project_api"]});
         assert_eq!(

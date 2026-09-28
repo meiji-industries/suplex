@@ -4,7 +4,10 @@ use chrono::{DateTime, Utc};
 use getrandom::fill as rand_bytes;
 
 use crate::{
-    identity::auth::{self, AuthUser},
+    identity::{
+        auth::{self, AuthUser},
+        remote_access_repository as remote_access,
+    },
     platform::database::{DatabaseResult, SuplexDatabase},
 };
 
@@ -23,6 +26,24 @@ pub struct SessionConfig {
 pub struct SessionUser {
     pub user: Option<AuthUser>,
     pub set_cookies: Vec<String>,
+}
+
+pub const REQUEST_CLASS_HEADER: &str = "x-suplex-internal-request-class";
+pub const VERIFIED_HTTPS_HEADER: &str = "x-suplex-internal-verified-https";
+pub const VERIFIED_ORIGIN_HEADER: &str = "x-suplex-internal-verified-origin";
+
+pub fn is_local_recovery(headers: &HeaderMap) -> bool {
+    headers
+        .get(REQUEST_CLASS_HEADER)
+        .and_then(|value| value.to_str().ok())
+        == Some("local")
+}
+
+pub fn is_verified_https(headers: &HeaderMap) -> bool {
+    headers
+        .get(VERIFIED_HTTPS_HEADER)
+        .and_then(|value| value.to_str().ok())
+        == Some("1")
 }
 
 pub(crate) fn cookie(headers: &HeaderMap, name: &str) -> Option<String> {
@@ -83,30 +104,6 @@ pub fn is_loopback_host(config: &SessionConfig, host: Option<&str>) -> bool {
     .contains(&host)
 }
 
-pub fn is_trusted_network_request(config: &SessionConfig, headers: &HeaderMap) -> bool {
-    if headers.contains_key("tailscale-user-login") {
-        return true;
-    }
-    let host = headers.get("host").and_then(|value| value.to_str().ok());
-    if is_loopback_host(config, host) {
-        return true;
-    }
-    if config.tailscale_exposure != "direct" {
-        return false;
-    }
-    let Ok(reachable) = url::Url::parse(&config.reachable_address) else {
-        return false;
-    };
-    let Some(reachable_host) = reachable.host_str() else {
-        return false;
-    };
-    let reachable_host = match reachable.port() {
-        Some(port) => format!("{reachable_host}:{port}"),
-        None => reachable_host.to_owned(),
-    };
-    host.is_some_and(|host| host.eq_ignore_ascii_case(&reachable_host))
-}
-
 pub fn set_session_cookies(
     config: &SessionConfig,
     session_token: &str,
@@ -144,32 +141,85 @@ pub fn session_user(
     config: Option<&SessionConfig>,
     now: DateTime<Utc>,
 ) -> DatabaseResult<SessionUser> {
+    let policy = remote_access::read(database)?;
     let current_token = cookie(headers, SESSION_COOKIE_NAME).unwrap_or_default();
-    if let Some(user) = auth::get_user_by_session(database, &current_token, now)? {
-        return Ok(SessionUser {
-            user: Some(user),
-            set_cookies: Vec::new(),
-        });
-    }
-    if let Some(config) = config
-        && is_trusted_network_request(config, headers)
-    {
+    if is_local_recovery(headers) {
+        if let Some((user, _)) =
+            auth::get_user_by_session_with_provenance(database, &current_token, now)?
+            && user.id == "user_development"
+        {
+            return Ok(SessionUser {
+                user: Some(user),
+                set_cookies: Vec::new(),
+            });
+        }
+        let Some(config) = config else {
+            return Ok(SessionUser {
+                user: None,
+                set_cookies: Vec::new(),
+            });
+        };
         let signed_in = auth::development_sign_in(database, now)?;
         return Ok(SessionUser {
             user: Some(signed_in.user),
             set_cookies: set_session_cookies(config, &signed_in.session_token, Some(false))?,
         });
     }
+    if let Some((user, provenance)) =
+        auth::get_user_by_session_with_provenance(database, &current_token, now)?
+        && (!policy.requires_passkeys() || provenance == "passkey")
+    {
+        return Ok(SessionUser {
+            user: Some(user),
+            set_cookies: Vec::new(),
+        });
+    }
     let legacy_token = cookie(headers, LEGACY_SESSION_COOKIE_NAME).unwrap_or_default();
-    let user = auth::get_user_by_session(database, &legacy_token, now)?;
+    let user = if policy.requires_passkeys() {
+        None
+    } else {
+        auth::get_user_by_session(database, &legacy_token, now)?
+    };
     let set_cookies = match (user.as_ref(), config) {
         (Some(_), Some(config)) => auth::rollover_legacy_session(database, &legacy_token, now)?
-            .map(|replacement| set_session_cookies(config, &replacement, None))
+            .map(|replacement| {
+                set_session_cookies(config, &replacement, Some(is_verified_https(headers)))
+            })
             .transpose()?
             .unwrap_or_default(),
         _ => Vec::new(),
     };
-    Ok(SessionUser { user, set_cookies })
+    if user.is_some() {
+        return Ok(SessionUser { user, set_cookies });
+    }
+    if !headers
+        .get(REQUEST_CLASS_HEADER)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| matches!(value, "local" | "remote"))
+    {
+        return Ok(SessionUser {
+            user: None,
+            set_cookies: Vec::new(),
+        });
+    }
+    if let Some(config) = config
+        && let Some(user) = remote_access::default_user(database, &policy)?
+    {
+        let session_token =
+            auth::create_session_with_provenance(database, &user.id, "automatic", now)?;
+        return Ok(SessionUser {
+            user: Some(user),
+            set_cookies: set_session_cookies(
+                config,
+                &session_token,
+                Some(is_verified_https(headers)),
+            )?,
+        });
+    }
+    Ok(SessionUser {
+        user: None,
+        set_cookies: Vec::new(),
+    })
 }
 
 pub fn csrf_allowed(
@@ -181,6 +231,34 @@ pub fn csrf_allowed(
     if exempt || matches!(method, "GET" | "HEAD" | "OPTIONS") {
         return true;
     }
+    let origin = headers.get("origin").and_then(|value| value.to_str().ok());
+    if let Some(origin) = origin {
+        let host = headers
+            .get("host")
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or_default();
+        let scheme = if is_verified_https(headers) {
+            "https"
+        } else {
+            "http"
+        };
+        let verified_origin = headers
+            .get(VERIFIED_ORIGIN_HEADER)
+            .and_then(|value| value.to_str().ok());
+        let same_origin = verified_origin == Some(origin)
+            || url::Url::parse(origin).ok().is_some_and(|value| {
+                value
+                    .origin()
+                    .ascii_serialization()
+                    .eq_ignore_ascii_case(&format!("{scheme}://{host}"))
+            });
+        let reachable_origin = url::Url::parse(&config.reachable_address)
+            .ok()
+            .is_some_and(|value| value.origin().ascii_serialization() == origin);
+        if !same_origin && !reachable_origin {
+            return false;
+        }
+    }
     if cookie(headers, SESSION_COOKIE_NAME)
         .unwrap_or_default()
         .is_empty()
@@ -190,7 +268,6 @@ pub fn csrf_allowed(
     {
         return true;
     }
-    let origin = headers.get("origin").and_then(|value| value.to_str().ok());
     if let Ok(reachable) = url::Url::parse(&config.reachable_address)
         && origin.is_some_and(|origin| origin == reachable.origin().ascii_serialization())
     {
@@ -235,13 +312,6 @@ mod tests {
         let mut headers = HeaderMap::new();
         assert!(csrf_allowed(&config, &headers, "POST", false));
         headers.insert("host", HeaderValue::from_static("localhost:4111"));
-        assert!(is_trusted_network_request(&config, &headers));
-        headers.insert("host", HeaderValue::from_static("suplex.example.test:4111"));
-        assert!(!is_trusted_network_request(&config, &headers));
-        let mut direct = config.clone();
-        direct.tailscale_exposure = "direct".to_owned();
-        assert!(is_trusted_network_request(&direct, &headers));
-        headers.insert("host", HeaderValue::from_static("localhost:4111"));
         headers.insert("cookie", HeaderValue::from_static("sid_v1=token"));
         assert!(!csrf_allowed(&config, &headers, "POST", false));
         headers.insert("origin", HeaderValue::from_static("http://localhost:4111"));
@@ -256,7 +326,7 @@ mod tests {
             "cookie",
             HeaderValue::from_static("sid_v1=token; csrf_v1=12345678901234567890123456789012"),
         );
-        assert!(csrf_allowed(&config, &headers, "POST", false));
+        assert!(!csrf_allowed(&config, &headers, "POST", false));
         assert!(csrf_allowed(&config, &headers, "POST", true));
     }
 
@@ -270,6 +340,7 @@ mod tests {
             .with_timezone(&Utc);
         let mut headers = HeaderMap::new();
         headers.insert("host", HeaderValue::from_static("localhost:4111"));
+        headers.insert(REQUEST_CLASS_HEADER, HeaderValue::from_static("local"));
         let result = session_user(&mut database, &headers, Some(&config()), now).unwrap();
         assert_eq!(result.user.unwrap().id, "user_development");
         assert_eq!(result.set_cookies.len(), 2);
@@ -289,6 +360,7 @@ mod tests {
         assert_eq!(existing.user.unwrap().id, "user_development");
         assert!(existing.set_cookies.is_empty());
         headers.insert("host", HeaderValue::from_static("suplex.example.test:4111"));
+        headers.insert(REQUEST_CLASS_HEADER, HeaderValue::from_static("remote"));
         let encoded = format!(
             "sid_v1={}",
             session_token.replace("session_v1_", "session%5Fv1%5F")
@@ -303,11 +375,13 @@ mod tests {
             "user_development"
         );
         headers.append("cookie", HeaderValue::from_static("other=value"));
-        assert!(
+        assert_eq!(
             session_user(&mut database, &headers, Some(&config()), now)
                 .unwrap()
                 .user
-                .is_none()
+                .unwrap()
+                .id,
+            "user_development"
         );
         headers.remove("cookie");
         let no_reply = session_user(&mut database, &headers, None, now).unwrap();

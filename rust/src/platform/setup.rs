@@ -219,7 +219,8 @@ mod tests {
     #[test]
     fn tailscale_runs_the_app_store_binary_in_cli_mode() {
         use std::os::unix::fs::PermissionsExt;
-        let root = std::env::temp_dir().join(format!("suplex-tailscale-cli-{}", uuid::Uuid::new_v4()));
+        let root =
+            std::env::temp_dir().join(format!("suplex-tailscale-cli-{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(&root).unwrap();
         let command = root.join("tailscale");
         fs::write(&command, "#!/bin/sh\nprintf '%s' \"$TAILSCALE_BE_CLI\"\n").unwrap();

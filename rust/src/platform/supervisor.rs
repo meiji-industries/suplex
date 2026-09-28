@@ -100,6 +100,11 @@ pub fn host_running(installation: &Installation) -> bool {
 
 // The public page proves HTTP readiness without waiting on optional provider probes.
 fn http_ready(host: &str, port: u16) -> bool {
+    let host = match host {
+        "0.0.0.0" => "127.0.0.1",
+        "::" => "::1",
+        value => value,
+    };
     let timeout = Duration::from_millis(500);
     let Some(mut stream) = (host, port).to_socket_addrs().ok().and_then(|addresses| {
         addresses
@@ -572,7 +577,10 @@ mod tests {
                 assert!(request.starts_with("GET /auth HTTP/1.1\r\n"));
                 write!(stream, "HTTP/1.1 {status}\r\nContent-Length: 0\r\n\r\n").unwrap();
             });
-            assert_eq!(http_ready("127.0.0.1", port), expected);
+            assert_eq!(
+                http_ready(if expected { "0.0.0.0" } else { "127.0.0.1" }, port),
+                expected
+            );
             server.join().unwrap();
         }
     }

@@ -6,7 +6,7 @@ export const CompanyResponseSchema = z.object({ id: z.string(), name: z.string()
 
 export const InvitationSummaryResponseSchema = z.object({ id: z.string(), kind: z.enum(["bootstrap", "user", "recovery"]), displayName: z.string(), expiresAt: z.string(), status: z.enum(["active", "expired", "consumed", "replaced"]), createdAt: z.string() });
 
-export const CredentialResponseSchema = z.object({ id: z.string(), userId: z.string(), credentialId: z.string(), createdAt: z.string(), revokedAt: z.string().optional() });
+export const CredentialResponseSchema = z.object({ id: z.string(), userId: z.string(), credentialId: z.string(), label: z.string(), rpId: z.string().nullable(), createdAt: z.string(), revokedAt: z.string().nullable() });
 
 export type AuthUserResponse = z.infer<typeof AuthUserResponseSchema>;
 

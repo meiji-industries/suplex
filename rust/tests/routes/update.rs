@@ -8,7 +8,11 @@ mod tests {
         let address = listener.local_addr().unwrap();
         let router = crate::http::router(state);
         let server = tokio::spawn(async move {
-            let _ = axum::serve(listener, router).await;
+            let _ = axum::serve(
+                listener,
+                router.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+            )
+            .await;
         });
         (address, server)
     }
@@ -16,13 +20,17 @@ mod tests {
     #[tokio::test]
     async fn update_reports_the_current_build_and_restart_needs_an_administrator() {
         let (state, filename) = state();
+        crate::http::routes::auth::tests::require_passkeys(&state);
         let (address, server) = serve(state.clone()).await;
         let client = reqwest::Client::new();
         let get = |path: &str, host: Option<&str>| {
             let request = client.get(format!("http://{address}{path}"));
             match host {
                 Some(host) => request.header("host", host),
-                None => request,
+                None => request
+                    .header("host", "suplex.example.test:4111")
+                    .header("x-forwarded-host", "suplex.example.test:4111")
+                    .header("x-forwarded-proto", "https"),
             }
         };
         assert_eq!(get("/api/update", None).send().await.unwrap().status(), 401);
@@ -98,6 +106,7 @@ mod tests {
     async fn client_lifecycle_reports_are_bounded_and_authenticated() {
         let logs = system_events::install_for_test();
         let (state, filename) = state();
+        crate::http::routes::auth::tests::require_passkeys(&state);
         let (address, server) = serve(state).await;
         let client = reqwest::Client::new();
         let tab = uuid::Uuid::new_v4().to_string();
@@ -109,7 +118,10 @@ mod tests {
                 .json(body);
             match host {
                 Some(host) => request.header("host", host),
-                None => request,
+                None => request
+                    .header("host", "suplex.example.test:4111")
+                    .header("x-forwarded-host", "suplex.example.test:4111")
+                    .header("x-forwarded-proto", "https"),
             }
         };
         assert_eq!(post(&body, None).send().await.unwrap().status(), 401);

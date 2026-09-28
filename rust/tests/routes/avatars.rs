@@ -20,14 +20,24 @@ pub(crate) mod tests {
     ) -> (StatusCode, reqwest::header::HeaderMap, Vec<u8>) {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
-        let server = tokio::spawn(axum::serve(listener, app.clone()).into_future());
+        let server = tokio::spawn(
+            axum::serve(
+                listener,
+                app.clone()
+                    .into_make_service_with_connect_info::<std::net::SocketAddr>(),
+            )
+            .into_future(),
+        );
         let client = reqwest::Client::builder()
             .redirect(reqwest::redirect::Policy::none())
             .build()
             .unwrap();
         let mut request = client
             .request(method.parse().unwrap(), format!("http://{address}{uri}"))
-            .header("origin", ORIGIN);
+            .header("host", "suplex.example.test:4111")
+            .header("origin", ORIGIN)
+            .header("x-forwarded-host", "suplex.example.test:4111")
+            .header("x-forwarded-proto", "https");
         if let Some(cookie) = cookie {
             request = request.header("cookie", cookie);
         }
@@ -53,9 +63,7 @@ pub(crate) mod tests {
         let (state, filename) = auth::tests::state();
         let now = Utc::now();
         let time = now.to_rfc3339();
-        let admin = state
-            .with_database(|database| identity_auth::development_sign_in(database, now))
-            .unwrap();
+        let admin = auth::tests::operator_passkey(&state, now);
         let root = std::env::temp_dir().join(format!("suplex-avatars-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(root.join("repo/public")).unwrap();
         std::fs::write(root.join("repo/public/favicon.ico"), b"icon").unwrap();
@@ -66,8 +74,9 @@ pub(crate) mod tests {
             connection.execute("INSERT INTO suplex_users (id, display_name, username, role, status, created_at, updated_at, identity_version) VALUES ('member', 'Member', 'member', 'member', 'active', ?1, ?1, 1)", [&time]).unwrap();
             identity_auth::create_session(database, "member", now).unwrap()
         });
+        auth::tests::require_passkeys(&state);
         let app = crate::http::router(state.clone());
-        let admin_cookie = format!("sid_v1={}", admin.session_token);
+        let admin_cookie = format!("sid_v1={admin}");
         let member_cookie = format!("sid_v1={member_token}");
         let admin_cookie = Some(admin_cookie.as_str());
         let member_cookie = Some(member_cookie.as_str());
@@ -133,7 +142,7 @@ pub(crate) mod tests {
         let (status, headers, _) = call(
             &app,
             "GET",
-            &format!("/api/avatars/{}", admin.user.id),
+            "/api/avatars/user_development",
             admin_cookie,
             None,
         )
@@ -172,7 +181,7 @@ pub(crate) mod tests {
             call(
                 &app,
                 "PUT",
-                &format!("/api/avatars/{}", admin.user.id),
+                "/api/avatars/user_development",
                 member_cookie,
                 Some(json!({"shape":"square"}))
             )

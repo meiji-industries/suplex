@@ -1405,7 +1405,7 @@ mod tests {
             &database_path,
         )
         .unwrap();
-        let database = SuplexDatabase::open(&database_path, OpenMode::ReadWrite).unwrap();
+        let database = SuplexDatabase::open(&database_path, OpenMode::Migrate).unwrap();
         let user_id: String = database
             .connection()
             .query_row("SELECT id FROM suplex_users LIMIT 1", [], |row| row.get(0))

@@ -12,11 +12,21 @@ mod tests {
                     Err::<(), ApiError>(PublicFailure::new(409, "Rejected").into())
                 }),
             )
+            .layer(axum::middleware::from_fn_with_state(
+                state.clone(),
+                remote_access_boundary,
+            ))
             .layer(axum::middleware::from_fn(cookie_refresh))
             .with_state(state.clone());
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
-        let server = tokio::spawn(axum::serve(listener, app).into_future());
+        let server = tokio::spawn(
+            axum::serve(
+                listener,
+                app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+            )
+            .into_future(),
+        );
         let client = reqwest::Client::new();
         let response = client
             .get(format!("http://{address}/"))
@@ -43,8 +53,8 @@ mod tests {
             .send()
             .await
             .unwrap();
-        assert_eq!(response.status(), 401);
-        assert!(!response.headers().contains_key(header::SET_COOKIE));
+        assert_eq!(response.status(), 409);
+        assert_eq!(response.headers().get_all(header::SET_COOKIE).iter().count(), 2);
         server.abort();
         drop(state);
         let _ = std::fs::remove_file(path);
@@ -56,7 +66,7 @@ mod tests {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let server =
-            tokio::spawn(axum::serve(listener, crate::http::router(state.clone())).into_future());
+            tokio::spawn(axum::serve(listener, crate::http::router(state.clone()).into_make_service_with_connect_info::<std::net::SocketAddr>()).into_future());
         let client = reqwest::Client::new();
         let response = client
             .get(format!("http://{address}/api/auth/me"))
@@ -84,6 +94,97 @@ mod tests {
         assert_eq!(
             response.json::<serde_json::Value>().await.unwrap(),
             serde_json::json!({"error":"request_origin_invalid"})
+        );
+        server.abort();
+        drop(state);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[tokio::test]
+    async fn serve_requests_are_remote_and_tightening_rejects_automatic_cookies() {
+        let (state, path) = crate::http::routes::auth::tests::state();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(axum::serve(listener, crate::http::router(state.clone()).into_make_service_with_connect_info::<std::net::SocketAddr>()).into_future());
+        let client = reqwest::Client::new();
+        let automatic = client.get(format!("http://{address}/api/auth/me"))
+            .header("host", "remote.example.test:4111")
+            .send().await.unwrap();
+        assert_eq!(automatic.status(), 200);
+        let cookie = automatic.headers().get(header::SET_COOKIE).unwrap().to_str().unwrap()
+            .split(';').next().unwrap().to_owned();
+        state.with_database(|database| crate::identity::remote_access_repository::update(
+            database,
+            crate::identity::remote_access_repository::RemoteAccessPolicy::Passkeys { external_https_origin: None },
+        )).unwrap();
+        let serve = client.get(format!("http://{address}/api/auth/me"))
+            .header("host", "suplex.example.test:4111")
+            .header("x-forwarded-host", "suplex.example.test:4111")
+            .header("x-forwarded-proto", "https")
+            .header("x-forwarded-for", "100.64.0.2")
+            .header("cookie", cookie)
+            .send().await.unwrap();
+        let serve_status = serve.status();
+        let serve_has_cookie = serve.headers().contains_key(header::SET_COOKIE);
+        let serve_body = serve.text().await.unwrap();
+        assert_eq!(serve_status, 401, "{serve_body}");
+        assert!(!serve_has_cookie);
+        server.abort();
+        drop(state);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[tokio::test]
+    async fn foreign_origin_without_cookie_cannot_use_automatic_access() {
+        let (state, path) = crate::http::routes::auth::tests::state();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(axum::serve(listener, crate::http::router(state.clone()).into_make_service_with_connect_info::<std::net::SocketAddr>()).into_future());
+        let response = reqwest::Client::new().put(format!("http://{address}/api/admin/access"))
+            .header("host", "remote.example.test:4111")
+            .header("origin", "https://foreign.example.test")
+            .json(&serde_json::json!({"kind":"open","requireHttps":false,"defaultUserId":"user_development","externalHttpsOrigin":null}))
+            .send().await.unwrap();
+        assert_eq!(response.status(), 403);
+        server.abort();
+        drop(state);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[tokio::test]
+    async fn whitespace_https_origin_is_rejected_without_changing_policy() {
+        let (mut state, path) = crate::http::routes::auth::tests::state();
+        state.session_config.reachable_address = "http://127.0.0.1:4111".into();
+        let before = state
+            .with_database(|database| crate::identity::remote_access_repository::read(database))
+            .unwrap();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(
+            axum::serve(
+                listener,
+                crate::http::router(state.clone())
+                    .into_make_service_with_connect_info::<std::net::SocketAddr>(),
+            )
+            .into_future(),
+        );
+        let response = reqwest::Client::new()
+            .put(format!("http://{address}/api/admin/access"))
+            .header("host", "localhost:4111")
+            .header("origin", "http://localhost:4111")
+            .json(&serde_json::json!({
+                "kind": "passkeys",
+                "externalHttpsOrigin": "   "
+            }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 400);
+        assert_eq!(
+            state
+                .with_database(|database| crate::identity::remote_access_repository::read(database))
+                .unwrap(),
+            before
         );
         server.abort();
         drop(state);

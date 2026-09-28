@@ -26,6 +26,7 @@ pub mod contracts;
 pub mod error;
 mod logging;
 pub mod routes {
+    pub mod access;
     pub mod admin_identity;
     pub mod admin_platform;
     pub mod agent_api;
@@ -162,6 +163,7 @@ impl AppState {
 
 pub fn router(state: AppState) -> Router {
     Router::new()
+        .merge(routes::access::router())
         .merge(routes::admin_identity::router())
         .merge(routes::agent_pairing::router())
         .merge(routes::external_agent_administration::router())
@@ -202,6 +204,10 @@ pub fn router(state: AppState) -> Router {
         .fallback(not_found)
         .layer(axum::middleware::from_fn(access::cookie_refresh))
         .layer(axum::middleware::from_fn(logging::request))
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            access::remote_access_boundary,
+        ))
         .with_state(state)
 }
 

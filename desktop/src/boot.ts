@@ -129,7 +129,9 @@ export function runtimeEnvironment(input: { readonly userData: string; readonly 
     TMPDIR: input.base.TMPDIR ?? tmpdir(),
     PATH: `${home}/.local/bin:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin`,
   };
-  return input.access.kind === "local" ? { ...common, SUPLEX_ACCESS_MODE: "local" } : {
+  if (input.access.kind === "local") return { ...common, SUPLEX_ACCESS_MODE: "local" };
+  if (input.access.kind === "all") return { ...common, SUPLEX_ACCESS_MODE: "all", SUPLEX_BIND_ADDRESS: "0.0.0.0" };
+  return {
     ...common,
     SUPLEX_ACCESS_MODE: "tailscale",
     SUPLEX_TAILSCALE_EXPOSURE: "serve",

@@ -205,15 +205,14 @@ mod tests {
         use axum::http::StatusCode;
         let (state, filename) = crate::http::routes::auth::tests::state();
         let now = Utc::now();
-        let admin = state
-            .with_database(|database| crate::identity::auth::development_sign_in(database, now))
-            .unwrap();
+        let admin = crate::http::routes::auth::tests::operator_passkey(&state, now);
         let member = state.with_database(|database| {
             database.connection().execute("INSERT INTO suplex_users (id, display_name, username, role, status, created_at, updated_at, identity_version) VALUES ('member', 'M', 'member', 'member', 'active', ?1, ?1, 1)", [now.to_rfc3339()]).unwrap();
             crate::identity::auth::create_session(database, "member", now).unwrap()
         });
+        crate::http::routes::auth::tests::require_passkeys(&state);
         let app = crate::http::router(state.clone());
-        let admin = format!("sid_v1={}", admin.session_token);
+        let admin = format!("sid_v1={admin}");
         let member = format!("sid_v1={member}");
         let (status, headers, body) =
             call(&app, "GET", "/api/admin/providers", Some(&admin), None).await;

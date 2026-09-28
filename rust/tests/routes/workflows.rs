@@ -14,18 +14,20 @@ mod tests {
     #[tokio::test]
     async fn workflow_api_edits_default_agents_validates_them_and_archives() {
         let (state, filename) = super::super::auth::tests::state();
-        let admin = state
-            .with_database(|database| identity_auth::development_sign_in(database, Utc::now()))
-            .unwrap();
+        let admin = super::super::auth::tests::operator_passkey(&state, Utc::now());
+        super::super::auth::tests::require_passkeys(&state);
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let server =
-            tokio::spawn(axum::serve(listener, crate::http::router(state.clone())).into_future());
+            tokio::spawn(axum::serve(listener, crate::http::router(state.clone()).into_make_service_with_connect_info::<std::net::SocketAddr>()).into_future());
         let client = reqwest::Client::new();
-        let cookie = format!("sid_v1={}", admin.session_token);
+        let cookie = format!("sid_v1={admin}");
         let send = |method: reqwest::Method, path: &str, body: Option<Value>| {
             let request = client
                 .request(method, format!("http://{address}{path}"))
+                .header("host", "suplex.example.test:4111")
+                .header("x-forwarded-host", "suplex.example.test:4111")
+                .header("x-forwarded-proto", "https")
                 .header("origin", "https://suplex.example.test:4111")
                 .header("cookie", &cookie);
             match body {
@@ -163,6 +165,9 @@ mod tests {
         assert_eq!(audits, 5);
         let anonymous = client
             .post(format!("http://{address}/api/admin/workflows"))
+            .header("host", "suplex.example.test:4111")
+            .header("x-forwarded-host", "suplex.example.test:4111")
+            .header("x-forwarded-proto", "https")
             .json(&json!({"name":"x","engine":"standard"}))
             .send()
             .await

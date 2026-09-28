@@ -115,9 +115,12 @@ mod tests {
             invalid.json::<Value>().await.unwrap()["findings"][0]["field"],
             ".app"
         );
+        crate::http::routes::auth::tests::require_passkeys(&fixture.state);
         let anonymous = client
             .get(&apps)
             .header("host", "suplex.tailnet.ts.net:4113")
+            .header("x-forwarded-host", "suplex.example.test:4111")
+            .header("x-forwarded-proto", "https")
             .send()
             .await
             .unwrap();

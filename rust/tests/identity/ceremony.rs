@@ -1,6 +1,7 @@
 #[test]
 fn bootstrap_and_recovery_revoke_prior_authority_without_leaking_tokens() {
     let (mut database, path, _, now) = setup();
+    crate::identity::test_repository::revoke_seed_operator(&database).unwrap();
     let first = auth::issue_administrator_invitation(&mut database, "bootstrap", "{}", now)
         .unwrap()
         .unwrap();

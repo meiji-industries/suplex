@@ -11,13 +11,16 @@ use crate::platform::database::{DatabaseResult, SuplexDatabase};
 
 use super::{
     auth::{self, AuthResult},
+    passkey_repository,
     webauthn::{self, StoredCredential},
 };
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, ts_rs::TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export)]
 pub struct AuthOptions {
     pub challenge_id: String,
+    #[ts(type = "unknown")]
     pub options: Value,
 }
 
@@ -196,6 +199,67 @@ pub fn begin_registration(
         challenge_id,
         options,
     })
+}
+
+pub fn begin_self_registration(
+    database: &mut SuplexDatabase,
+    user_id: &str,
+    site: WebAuthnSite<'_>,
+    now: DateTime<Utc>,
+) -> DatabaseResult<AuthOptions> {
+    let user = auth::public_user(database, user_id)?
+        .filter(|user| user.status == "active")
+        .ok_or_else(passkey_failure)?;
+    let excluded_ids = credentials_for_user(database, user_id)?
+        .into_iter()
+        .filter_map(|item| item.get("id").and_then(Value::as_str).map(str::to_owned))
+        .collect::<Vec<_>>();
+    let started = webauthn::start_registration(
+        site.origin,
+        site.rp_id,
+        &user.username,
+        &user.display_name,
+        &excluded_ids,
+    )
+    .map_err(|_| passkey_failure())?;
+    let challenge_id = random_hex_id("challenge")?;
+    passkey_repository::insert_self_challenge(
+        database,
+        &challenge_id,
+        &started.state,
+        user_id,
+        now,
+    )?;
+    Ok(AuthOptions {
+        challenge_id,
+        options: started.options,
+    })
+}
+
+pub fn complete_self_registration(
+    database: &mut SuplexDatabase,
+    user_id: &str,
+    challenge_id: &str,
+    response: PreparedCredential,
+    label: &str,
+    site: WebAuthnSite<'_>,
+    now: DateTime<Utc>,
+) -> DatabaseResult<()> {
+    if !valid_challenge_id(challenge_id) || !response.shape_valid {
+        return Err(passkey_failure());
+    }
+    let label = auth::js_trim(label);
+    if label.is_empty() || label.encode_utf16().count() > 120 {
+        return Err(
+            IdentityError::auth("Passkey name is invalid", 400, "passkey_label_invalid").into(),
+        );
+    }
+    let challenge =
+        passkey_repository::consume_self_challenge(database, challenge_id, user_id, now)?;
+    let payload = response.payload.as_ref().ok_or_else(passkey_failure)?;
+    let verified = webauthn::finish_registration(payload, &challenge, site.origin, site.rp_id)
+        .map_err(|_| passkey_failure())?;
+    passkey_repository::insert_self_credential(database, user_id, &verified, label, site.rp_id, now)
 }
 
 fn valid_response(response: &Value) -> bool {
@@ -415,7 +479,10 @@ pub fn complete_authentication_prepared(
         Ok(challenge)
     })?;
     let response = response.payload.as_ref().ok_or_else(passkey_failure)?;
-    let response_id = response["id"].as_str().ok_or_else(passkey_failure)?;
+    let response_id = response
+        .get("id")
+        .and_then(Value::as_str)
+        .ok_or_else(passkey_failure)?;
     let row = database.connection().query_row("SELECT suplex_credentials.id, suplex_credentials.user_id, suplex_credentials.public_key, suplex_credentials.counter, suplex_credentials.transports FROM suplex_credentials INNER JOIN suplex_users ON suplex_users.id = suplex_credentials.user_id WHERE suplex_credentials.credential_id = ?1 AND suplex_credentials.revoked_at IS NULL AND suplex_users.status = 'active'", [response_id], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, Vec<u8>>(2)?, row.get::<_, u32>(3)?, row.get::<_, String>(4)?))).optional()?;
     let Some((credential_row_id, user_id, public_key, counter, stored_transports)) = row else {
         return Err(passkey_failure());
@@ -482,7 +549,7 @@ mod tests {
     fn highlevel_options_store_state_with_none_attestation_and_required_uv() {
         let (mut database, path, token, now) = setup();
         let offered = begin_registration(&mut database, "user", &token, site(), now).unwrap();
-        assert_eq!(offered.options["attestation"], "none");
+        assert_eq!(offered.options.get("attestation"), Some(&json!("none")));
         assert_eq!(
             offered.options["authenticatorSelection"]["userVerification"],
             "required"
@@ -508,6 +575,53 @@ mod tests {
     }
 
     #[test]
+    fn self_registration_binds_the_challenge_to_the_session_user_and_rp() {
+        let (mut database, path, _token, now) = setup();
+        passkey_repository::activate_user(&database, "user_existing").unwrap();
+        let offered = begin_self_registration(&mut database, "user_existing", site(), now).unwrap();
+        let signed = synthetic(&json!({
+            "mode":"register", "options":offered.options, "origin":site().origin
+        }));
+        let prepared = PreparedCredential {
+            shape_valid: true,
+            payload: signed.get("response").cloned(),
+        };
+        assert!(
+            complete_self_registration(
+                &mut database,
+                "user_other",
+                &offered.challenge_id,
+                PreparedCredential {
+                    shape_valid: prepared.shape_valid,
+                    payload: prepared.payload.clone()
+                },
+                "Laptop",
+                site(),
+                now
+            )
+            .is_err()
+        );
+        complete_self_registration(
+            &mut database,
+            "user_existing",
+            &offered.challenge_id,
+            prepared,
+            "Laptop",
+            site(),
+            now,
+        )
+        .unwrap();
+        let stored =
+            passkey_repository::active_credential_identity(&database, "user_existing").unwrap();
+        assert_eq!(
+            stored,
+            ("Laptop".into(), Some("suplex.example.test".into()))
+        );
+        drop(database);
+        cleanup(&path);
+    }
+
+    #[test]
     fn signed_fresh_passkey_survives_reopen_and_updates_counter() {
         let (mut database, path, token, now) = setup();
         let offered = begin_registration(&mut database, "user", &token, site(), now).unwrap();
@@ -525,7 +639,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(enrolled.user.id, "user_existing");
-        let credential_id = signed["credentialId"].as_str().unwrap();
+        let credential_id = signed.get("credentialId").and_then(Value::as_str).unwrap();
         let (stored, counter): (Vec<u8>, u32) = database
             .connection()
             .query_row(
@@ -548,7 +662,10 @@ mod tests {
                 .len(),
             1
         );
-        assert_eq!(offered_auth.options["userVerification"], "required");
+        assert_eq!(
+            offered_auth.options.get("userVerification"),
+            Some(&json!("required"))
+        );
         let assertion = synthetic(&json!({
             "mode":"authenticate", "options":offered_auth.options,
             "origin":site().origin, "credentialId":credential_id,

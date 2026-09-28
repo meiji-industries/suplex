@@ -34,7 +34,7 @@ mod tests {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let server =
-            tokio::spawn(axum::serve(listener, crate::http::router(state.clone())).into_future());
+            tokio::spawn(axum::serve(listener, crate::http::router(state.clone()).into_make_service_with_connect_info::<std::net::SocketAddr>()).into_future());
         let client = reqwest::Client::new();
         let cookie = format!("sid_v1={}", admin.session_token);
         let send = |method: reqwest::Method, path: &str, body: Option<Value>| {
@@ -247,7 +247,7 @@ mod tests {
             &database_path,
         )
         .unwrap();
-        let database = SuplexDatabase::open(&database_path, OpenMode::ReadWrite).unwrap();
+        let database = SuplexDatabase::open(&database_path, OpenMode::Migrate).unwrap();
         let user_id: String = database
             .connection()
             .query_row("SELECT id FROM suplex_users LIMIT 1", [], |row| row.get(0))

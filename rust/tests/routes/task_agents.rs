@@ -71,7 +71,7 @@ mod tests {
                 &path,
             )
             .unwrap();
-            let mut database = SuplexDatabase::open(&path, OpenMode::ReadWrite).unwrap();
+            let mut database = SuplexDatabase::open(&path, OpenMode::Migrate).unwrap();
             let admin =
                 crate::identity::auth::development_sign_in(&mut database, Utc::now()).unwrap();
             let (session_id, task_id, company_id): (String,String,String) = database.connection().query_row("SELECT s.id,s.task_id,t.company_id FROM suplex_task_sessions s JOIN suplex_tasks t ON t.id=s.task_id WHERE s.native_session_id='codex-idle'", [], |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?))).unwrap();
@@ -222,7 +222,7 @@ mod tests {
         ))
         .unwrap();
         let initial = &expected[0];
-        let database = SuplexDatabase::open(&database_path, OpenMode::ReadWrite).unwrap();
+        let database = SuplexDatabase::open(&database_path, OpenMode::Migrate).unwrap();
         let user_id: String = database
             .connection()
             .query_row("SELECT id FROM suplex_users LIMIT 1", [], |row| row.get(0))

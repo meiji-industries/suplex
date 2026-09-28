@@ -208,7 +208,7 @@ mod tests {
         ))
         .unwrap();
         let initial = &expected[0];
-        let database = SuplexDatabase::open(&database_path, OpenMode::ReadWrite).unwrap();
+        let database = SuplexDatabase::open(&database_path, OpenMode::Migrate).unwrap();
         let user_id: String = database
             .connection()
             .query_row("SELECT id FROM suplex_users LIMIT 1", [], |row| row.get(0))
@@ -259,7 +259,7 @@ mod tests {
         );
         let server_state = state.clone();
         let server = tokio::spawn(async move {
-            axum::serve(listener, crate::http::router(server_state))
+            axum::serve(listener, crate::http::router(server_state).into_make_service_with_connect_info::<std::net::SocketAddr>())
                 .await
                 .unwrap();
         });

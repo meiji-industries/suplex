@@ -6,6 +6,7 @@ import { createNetworkAccessController, NetworkAccessCleanupError, readNetworkAc
 
 const root = (): string => mkdtempSync(join(tmpdir(), "suplex-network-access-"));
 const local: ResolvedNetworkAccess = { kind: "local" };
+const all: ResolvedNetworkAccess = { kind: "all" };
 const tailscale = (hostname = "mac.one.ts.net"): ResolvedNetworkAccess => ({ kind: "tailscale", hostname, command: "/tailscale" });
 
 test("missing, corrupt, and unknown preferences default to local, and valid preferences round trip", async () => {
@@ -30,7 +31,7 @@ const setup = (input: {
 } = {}) => {
   const operations: string[] = [];
   const file = input.file ?? join(root(), "network-access.json");
-  const resolve = input.resolve ?? (async (preference) => preference === "local" ? local : tailscale());
+  const resolve = input.resolve ?? (async (preference) => preference === "local" ? local : preference === "all" ? all : tailscale());
   const start = input.start ?? (async (access) => { operations.push(`start:${access.kind}`); return { port: 4111, adopted: input.adopted ?? false }; });
   const stop = input.stop ?? (async () => { operations.push("stop"); });
   const removeServeRoute = input.removeServeRoute ?? (async () => { operations.push("remove-route"); });
@@ -50,6 +51,16 @@ test("enabling Tailscale preflights before stopping and keeps local running when
   expect(resolutions).toEqual(["resolve:local", "resolve:tailscale"]);
   expect(operations).toEqual(["start:local"]);
   expect(controller.state().active).toMatchObject({ kind: "owned", access: local });
+});
+
+test("all-network access persists and never resolves Tailscale", async () => {
+  const resolve = vi.fn(async (preference: "local" | "tailscale" | "all") => preference === "all" ? all : local);
+  const { controller, file, operations } = setup({ resolve });
+  await controller.startPreferred();
+  await controller.change("all");
+  expect(resolve).toHaveBeenNthCalledWith(2, "all");
+  expect(operations).toEqual(["start:local", "stop", "start:all"]);
+  expect(await readNetworkAccess(file)).toBe("all");
 });
 
 test("an owned host transitions modes and saves only the active mode", async () => {

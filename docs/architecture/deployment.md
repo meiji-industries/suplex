@@ -47,11 +47,36 @@ on `127.0.0.1` and stores installation data under
 Operator session. This is an owner-controlled host trust model, not isolation
 from other local processes.
 
-The desktop **Network access** setting controls who can reach that bundled
-host. **This Mac only** exposes no remote route. **Tailscale** creates an HTTPS
-Serve route to the loopback host. Tailnet users permitted by Tailscale receive
-the same Operator access as other trusted Tailscale requests. The desktop
-window continues to use the loopback URL in both modes.
+The **Access** settings control both network reachability and Suplex sign-in
+policy. **This Mac only** binds the bundled host to loopback. **Tailscale**
+creates an HTTPS Serve route to the loopback host. **All networks** binds the
+host to all IPv4 interfaces and does not terminate TLS. The desktop window
+continues to use the loopback URL in every mode.
+
+An open policy assigns requests without a credential to the selected active
+account. Its current role and company memberships apply. **Require HTTPS**
+rejects remote HTTP requests; it does not claim that Suplex terminates TLS.
+Tailscale mode supplies its HTTPS address automatically. For a loopback reverse
+proxy, save the external HTTPS origin in Access settings. **Require sign-in**
+also requires HTTPS and accepts only passkey-authenticated sessions from remote
+clients. Existing automatic and legacy sessions lose remote authority when
+this policy is enabled.
+
+Passkeys are scoped to the configured HTTPS origin. Open that address from the
+Access page before enrolling or authenticating with a passkey. Existing
+passkeys can be renamed or removed from local Access settings. A hostname
+change can require enrollment at the new relying-party hostname; credentials
+without matching relying-party metadata are not presented as universally
+portable.
+
+Local recovery is separate from remote policy. It requires an actual loopback
+peer, a loopback Host at the active port, and no forwarding or Tailscale proxy
+indicators. Reverse proxies and Tailscale Serve connect from loopback but are
+classified as remote before session authorization. A configured reverse proxy
+is accepted as HTTPS only when its forwarded HTTPS authority matches the saved
+external origin. Tailscale Serve is accepted only for its configured canonical
+authority and HTTPS forwarding metadata. Identity headers alone do not prove
+HTTPS or local recovery.
 
 The app stores only the selected mode in `network-access.json`. When Tailscale
 is selected, the app asks the current Tailscale CLI for this Mac's MagicDNS

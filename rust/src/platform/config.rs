@@ -74,10 +74,10 @@ impl Installation {
             }
             .into()
         });
-        if !matches!(access_mode.as_str(), "local" | "tailscale") {
-            return Err("SUPLEX_ACCESS_MODE must be local or tailscale".into());
+        if !matches!(access_mode.as_str(), "local" | "tailscale" | "all") {
+            return Err("SUPLEX_ACCESS_MODE must be local, tailscale, or all".into());
         }
-        let tailscale_exposure = if access_mode == "local" {
+        let tailscale_exposure = if access_mode != "tailscale" {
             "direct".to_owned()
         } else {
             value("SUPLEX_TAILSCALE_EXPOSURE").unwrap_or_else(|| "direct".into())
@@ -90,12 +90,10 @@ impl Installation {
             .trim()
             .to_owned();
         let bind_address = value("SUPLEX_BIND_ADDRESS")
-            .unwrap_or_else(|| {
-                if access_mode == "local" {
-                    "127.0.0.1".into()
-                } else {
-                    tailscale_address.clone()
-                }
+            .unwrap_or_else(|| match access_mode.as_str() {
+                "local" => "127.0.0.1".into(),
+                "all" => "0.0.0.0".into(),
+                _ => tailscale_address.clone(),
             })
             .trim()
             .to_owned();
@@ -104,6 +102,14 @@ impl Installation {
                 return Err(
                     format!("Local access binds loopback only; received {bind_address}").into(),
                 );
+            }
+            (bind_address.clone(), "http")
+        } else if access_mode == "all" {
+            if bind_address != "0.0.0.0" {
+                return Err(format!(
+                    "All-network access requires 0.0.0.0; received {bind_address}"
+                )
+                .into());
             }
             (bind_address.clone(), "http")
         } else {

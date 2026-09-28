@@ -65,6 +65,10 @@ mod tests {
         std::fs::create_dir_all(root.join("worktrees")).unwrap();
         let mut headers = HeaderMap::new();
         headers.insert(header::HOST, "127.0.0.1:4113".parse().unwrap());
+        headers.insert(
+            crate::http::session::REQUEST_CLASS_HEADER,
+            "local".parse().unwrap(),
+        );
         let fake_github = check(
             "gh-auth",
             "GitHub",

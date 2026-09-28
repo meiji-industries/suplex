@@ -17,7 +17,7 @@ test("admin sees Company, AI, and System groups in order", () => {
   expect(titles(groups)).toEqual(["Company", "Features", "System"]);
   expect(items(groups, "Company")).toEqual(["Profile", "Projects", "Templates", "Workspace", "Onboarding"]);
   expect(items(groups, "Features")).toEqual(["Agents", "Providers", "API & MCP", "Workflows", "Triggers"]);
-  expect(items(groups, "System")).toEqual(["Users", "Companies", "Passkeys", "Invitations", "Environment", "Backups", "Host health"]);
+  expect(items(groups, "System")).toEqual(["Users", "Companies", "Access", "Invitations", "Environment", "Backups", "Host health"]);
 });
 
 test("member sees Profile, Projects, Templates, and Host health only", () => {
@@ -47,7 +47,7 @@ test("items keep their existing hrefs", () => {
     "API & MCP": "/admin/api-mcp?company=company-1",
     Users: "/admin?company=company-1",
     Companies: "/admin/companies?company=company-1",
-    Passkeys: "/admin/passkeys?company=company-1",
+    Access: "/admin/access?company=company-1",
     Invitations: "/admin/invitations?company=company-1",
     Environment: "/admin/environment?company=company-1",
     Backups: "/admin/backups?company=company-1",

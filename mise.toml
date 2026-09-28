@@ -188,28 +188,7 @@ done
 '''
 [tasks."_release:bump"]
 hide = true
-run = '''
-node --input-type=module <<'NODE'
-import { readFile, writeFile } from "node:fs/promises";
-
-const files = ["package.json", "desktop/package.json"];
-const rustFiles = ["rust/Cargo.toml", "rust/Cargo.lock"];
-const rustPackages = await Promise.all(rustFiles.map(async (file) => ({ file, text: await readFile(file, "utf8") })));
-const packages = await Promise.all(files.map(async (file) => ({ file, value: JSON.parse(await readFile(file, "utf8")) })));
-const current = packages[0].value.version;
-if (!packages.every(({ value }) => value.version === current) || !rustPackages.every(({ text }) => text.includes(`name = "suplex"\nversion = "${current}"`))) throw new Error("Desktop, frontend, and native versions must match before release.");
-const match = /^(\d+)\.(\d+)\.(\d+)$/.exec(current);
-if (!match) throw new Error(`Expected a semantic version, got ${current}.`);
-const [major, minor, patch] = match.slice(1).map(Number);
-const next = process.env.RELEASE_BUMP === "major" ? `${major + 1}.0.0`
-  : process.env.RELEASE_BUMP === "minor" ? `${major}.${minor + 1}.0`
-  : process.env.RELEASE_BUMP === "patch" ? `${major}.${minor}.${patch + 1}`
-  : (() => { throw new Error("RELEASE_BUMP must be major, minor, or patch."); })();
-await Promise.all(packages.map(({ file, value }) => writeFile(file, `${JSON.stringify({ ...value, version: next }, null, 2)}\n`)));
-await Promise.all(rustPackages.map(({ file, text }) => writeFile(file, text.replace(`name = "suplex"\nversion = "${current}"`, `name = "suplex"\nversion = "${next}"`))));
-console.log(`${current} -> ${next}`);
-NODE
-'''
+run = "node scripts/release-version.mjs bump"
 [tasks."_release:check"]
 hide = true
 description = "Verify the checkout and Docker are ready for a desktop and Linux release"
@@ -230,11 +209,11 @@ hide = true
 description = "Commit, tag, and push the released desktop version"
 run = '''
 version="$(node -p "require('./package.json').version")"
+node scripts/release-version.mjs check-tag
 git add package.json desktop/package.json rust/Cargo.toml rust/Cargo.lock
 git commit -m "release: v$version"
 git tag "v$version"
-git push
-git push origin "v$version"
+git push --atomic origin HEAD "refs/tags/v$version"
 '''
 [tasks."_release:run"]
 hide = true

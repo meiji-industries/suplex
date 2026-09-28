@@ -26,8 +26,16 @@ The configured feed must host the generated `latest-mac.yml`, macOS ZIP, and ZIP
 
 After `mise run desktop:dist:signed`, publish with `mise run desktop:publish`. Both tasks fetch their Apple signing and R2 values through the Suplex 1Password service account. The publisher verifies the signed app and stapled DMG, uploads immutable versioned artifacts to `stable/mac/arm64` (Apple silicon) and `stable/mac/x64` (Intel), checks their public URLs, then uploads each folder's `latest-mac.yml` last with `no-cache`. Each build updates only from its own folder.
 
-`mise run release:major`, `release:minor`, and `release:patch` run the release pipeline: verify a clean checkout, fetch the service account, bump both package versions, sign and notarize the Mac builds, build Linux archives for both architectures,
-commit, tag, push, then publish. The manifest is published last.
+`mise run release:major`, `release:minor`, and `release:patch` run the release pipeline: verify a clean checkout, fetch the service account, bump the frontend, desktop, and native versions, sign and notarize the Mac builds, build Linux archives for both architectures,
+commit, tag, push, then publish. The bump starts from the highest stable version
+in the checkout, local tags, and live `origin` tags. Remote lookup failures stop
+the release before version files change or builds start. The pipeline rechecks
+that the tag is unused before committing, then pushes the branch and tag
+atomically. A concurrent tag collision stops the push and publication; it never
+replaces an existing tag. The manifest is published last.
+
+Run `node scripts/test-release-version.mjs` to check version selection and tag
+collisions with temporary Git repositories.
 
 A distributable macOS update requires a consistent Developer ID signature on the existing application and downloaded ZIP, plus notarization and stapling. Production distribution requires the external signing and feed inputs.
 

@@ -10,6 +10,9 @@ export type DesktopSnapshot = {
   readonly current: string | null;
   readonly log: readonly string[];
   readonly failure: BootFailure | null;
+  readonly hosts: readonly string[];
+  readonly currentHost: string | null;
+  readonly localHost: string | null;
 };
 
 export type DesktopMessage =
@@ -24,7 +27,9 @@ export type DesktopMessage =
   | { readonly action: "test-connection"; readonly url: string }
   | { readonly action: "tailscale-status" }
   | { readonly action: "turn-on-tailscale" }
-  | { readonly action: "open-tailscale" };
+  | { readonly action: "open-tailscale" }
+  | { readonly action: "remove-host"; readonly origin: string }
+  | { readonly action: "select-host"; readonly origin: string };
 
 export type DesktopApi = {
   snapshot(): Promise<DesktopSnapshot>;
@@ -39,6 +44,8 @@ export type DesktopApi = {
   tailscaleStatus(): Promise<TailscaleStatus>;
   turnOnTailscale(): Promise<string | null>;
   openTailscale(): Promise<void>;
+  removeHost(origin: string): Promise<void>;
+  selectHost(origin: string): Promise<void>;
   on(listener: (event: InstallEvent) => void): void;
 };
 
@@ -59,10 +66,15 @@ const api: DesktopApi = {
   tailscaleStatus: async () => (await send({ action: "tailscale-status" })) as TailscaleStatus,
   turnOnTailscale: async () => (await send({ action: "turn-on-tailscale" })) as string | null,
   openTailscale: async () => { await send({ action: "open-tailscale" }); },
+  removeHost: async (origin) => { await send({ action: "remove-host", origin }); },
+  selectHost: async (origin) => { await send({ action: "select-host", origin }); },
   on: (listener) => { ipcRenderer.on("suplex:event", (_event, payload: InstallEvent) => { listener(payload); }); },
 };
 
 // Only the app's own onboarding pages get the bridge; a loaded Suplex origin must never see it.
 // A Suplex origin gets one action: report that it cleared its account, which closes the app.
 if (location.protocol === "file:") contextBridge.exposeInMainWorld("suplexDesktop", api);
-else contextBridge.exposeInMainWorld("suplexApp", { accountCleared: async () => { await ipcRenderer.invoke("suplex:account-cleared"); } });
+else contextBridge.exposeInMainWorld("suplexApp", {
+  accountCleared: async () => { await ipcRenderer.invoke("suplex:account-cleared"); },
+  openHostPicker: async () => { await ipcRenderer.invoke("suplex:host-picker"); },
+});

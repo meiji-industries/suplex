@@ -41,6 +41,13 @@ describe("choice", () => {
     expect(html).toContain(".cards { display: flex; flex-wrap: wrap; justify-content: center;");
     expect(html).toContain("aspect-ratio: 1;");
   });
+  test("prepends saved hosts as cards with direct open and delete actions", () => {
+    expect(html).not.toContain('id="saved-hosts"');
+    expect(html).toContain('card.className = "card saved";');
+    expect(html).toContain('cards.insertBefore(card, cards.querySelector(".instance, label"));');
+    expect(html).toContain('window.suplexDesktop.selectHost(origin)');
+    expect(html).toContain('window.suplexDesktop.removeHost(origin)');
+  });
   test("shows the URL field only for remote, and proves health before Continue", () => {
     expect(html).toContain('<fieldset id="remote" disabled>');
     expect(html).toContain("remote.disabled = chosen() !== \"remote\";");

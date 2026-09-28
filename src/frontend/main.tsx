@@ -6,4 +6,5 @@ import { installClientLifecycle } from "./shell/client-lifecycle.js";
 import "./styles.css";
 
 installClientLifecycle();
+if (window.suplexApp) document.documentElement.classList.add("suplex-desktop");
 createRoot(document.getElementById("suplex-app")!).render(<ThemeProvider><AppRouter /></ThemeProvider>);

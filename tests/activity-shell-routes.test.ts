@@ -42,7 +42,12 @@ vi.mock("../src/frontend/features/tasks/task-status.js", () => ({ TaskStatusIcon
 vi.mock("../src/frontend/components/app/cost-value.js", () => ({ CostValue: () => null }));
 vi.mock("../src/frontend/components/app/system-health.js", async () => {
   const React = await import("react");
-  return { SystemHealthProvider: ({ children }: { children: ReactNode }) => React.createElement(React.Fragment, null, children), SystemHealthAlert: () => null };
+  return {
+    SystemHealthProvider: ({ children }: { children: ReactNode }) => React.createElement(React.Fragment, null, children),
+    SystemHealthAlert: () => null,
+    useSystemHealth: () => ({ watch: () => undefined, snapshot: undefined, freshness: "stale" }),
+    getSystemHealthLevel: () => "red",
+  };
 });
 vi.mock("../src/frontend/components/app/update-provider.js", async () => {
   const React = await import("react");

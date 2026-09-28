@@ -1,4 +1,4 @@
-import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, screen, session, shell } from "electron";
+import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, screen, session, shell, Tray } from "electron";
 import { existsSync } from "node:fs";
 import { readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -14,6 +14,9 @@ import type { DesktopMessage, DesktopSnapshot } from "./preload";
 const KEYCHAIN_ACCESS_GROUP = "6KY6743H52.dev.suplex.desktop.webauthn"; // inert until build/entitlements.mac.plist grants it via a provisioning profile
 const INVALID_TITLE = "The Suplex URL is not valid";
 const UPDATE_CHECK_INTERVAL_MS = 60 * 60 * 1000;
+const TRAY_GUID = "60c7c87a-8444-4492-9b7b-1c6651965a98"; // macOS restores the user's menu-bar position for this identity.
+// Electron requires a process-lifetime reference or macOS can collect the menu-bar item.
+let tray: Tray | undefined;
 /** The CONNECTING page (pages/connecting.html) as an overlay on a Suplex page that has not finished loading. */
 const CONNECTING_COVER = "html::after { content: \"CONNECTING\"; position: fixed; inset: 0; z-index: 2147483647; display: grid; place-items: center; background: #0a0a0a; color: #737373; font: 500 12px/1.5 -apple-system, system-ui, sans-serif; letter-spacing: 0.32em; animation: suplex-connecting 1.6s ease-in-out infinite; } @keyframes suplex-connecting { 50% { color: #e5e5e5; } }";
 
@@ -26,7 +29,7 @@ export function retryPage(origin: string): string {
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Connect to Suplex</title>
 <style>
   * { box-sizing: border-box; }
-  body { margin: 0; min-height: 100vh; display: grid; place-items: center; padding: max(48px, env(titlebar-area-height, 0px)) 24px 32px; background: #0a0a0a; color: #e5e5e5; font: 13px/1.5 -apple-system, system-ui, sans-serif; -webkit-app-region: drag; }
+  body { margin: 0; min-height: 100vh; display: grid; place-items: center; padding: max(48px, env(titlebar-area-height, 0px)) 24px 64px; background: #0a0a0a; color: #e5e5e5; font: 13px/1.5 -apple-system, system-ui, sans-serif; -webkit-app-region: drag; }
   main { width: min(100%, 560px); }
   h1, h2, p { margin: 0; }
   h1 { font-size: 14px; font-weight: 600; }
@@ -58,6 +61,8 @@ export function retryPage(origin: string): string {
   footer { margin-top: 24px; padding-top: 16px; border-top: 1px solid #262626; }
   footer a { color: #d4d4d4; text-underline-offset: 3px; }
   footer p { margin-top: 8px; }
+  #hostbar { position: fixed; inset: auto 0 0; display: flex; align-items: center; gap: 12px; height: 32px; padding: 0 8px; border-top: 1px solid #303030; background: #0a0a0a; color: #a3a3a3; font-size: 12px; }
+  #hostbar button { height: 24px; min-height: 24px; padding: 0 6px; border: 0; background: none; color: inherit; font-size: 12px; }
   @media (max-width: 480px) { body { padding-left: 18px; padding-right: 18px; } .connection { grid-template-columns: minmax(0, 1fr) 36px minmax(0, 1fr); } }
 </style></head><body><main>
   <div class="connection" role="img" aria-label="This Suplex window cannot reach the Suplex host">
@@ -70,8 +75,8 @@ export function retryPage(origin: string): string {
   <div class="command"><code id="command" tabindex="0">pnpm run suplex start</code><button id="copy" type="button">Copy</button></div>
   <p id="copy-status" role="status" aria-live="polite"></p>
   <div class="actions"><a class="retry" id="retry" href="${address}">Retry</a><p>Suplex retries every 5 seconds.</p></div>
-  <footer><a href="https://github.com/meiji-industries/suplex#set-up-an-installation">Open the install guide</a><p>To use another host, select Navigate &gt; Add a Suplex URL.</p></footer>
-</main><script>
+  <footer><a href="https://github.com/meiji-industries/suplex#set-up-an-installation">Open the install guide</a><p>Use the host selector below to open another Suplex host.</p></footer>
+</main><div id="hostbar"><button type="button" aria-label="Select a Suplex host" onclick="window.suplexApp?.openHostPicker()">${address}⌄</button><span>Not available</span></div><script>
   const command = document.getElementById("command");
   const copy = document.getElementById("copy");
   const feedback = document.getElementById("copy-status");
@@ -122,12 +127,15 @@ export async function runSuplexDesktop(input: { readonly argv: readonly string[]
   const runtime = runtimePaths(input.environment, typeof process.resourcesPath === "string" ? process.resourcesPath : "");
   let window: BrowserWindow | undefined;
   let origin: string | null = null;
+  let retryUrl: string | null = null;
   let registry: TargetRegistry = { current: null, targets: [] };
   let state: BootState = { name: "resolve" };
   /** The origin of the server this app supervises, so its failures never show the remote host's retry page. */
   let localOrigin: string | null = null;
   let server: LocalRuntime | undefined;
   let adopted = false;
+  let localInstalled = false;
+  let localBusy = false;
   let installer: Installer | undefined;
   let quitting = false;
   const progress: { stages: readonly InstallStage[]; finished: { stage: string; skipped: boolean; elapsedMs: number }[]; current: string | null; log: string[] } =
@@ -158,6 +166,7 @@ export async function runSuplexDesktop(input: { readonly argv: readonly string[]
   };
   const load = async (win: BrowserWindow, target: SuplexTarget): Promise<void> => {
     origin = target.origin;
+    retryUrl = null;
     await win.loadFile(join(__dirname, "pages", "connecting.html")).catch(() => undefined); // shown while the target answers
     await win.loadURL(target.url).catch(() => undefined); // did-fail-load shows the retry page
   };
@@ -170,14 +179,9 @@ export async function runSuplexDesktop(input: { readonly argv: readonly string[]
   const switchTo = async (win: BrowserWindow, target: SuplexTarget): Promise<void> => {
     if (!probe) registry = await rememberTarget(targetFile(), target);
     origin = target.origin;
+    state = { name: "connected", url: target.url };
     rebuildMenu();
     await load(win, target);
-  };
-  const forgetCurrent = async (): Promise<void> => {
-    if (origin) registry = await forgetTarget(targetFile(), origin);
-    state = { name: "choosing" }; // back to the first screen, where you can run Suplex here or add another
-    await enter();
-    rebuildMenu();
   };
   const showPage = async (win: BrowserWindow, page: string): Promise<void> => {
     origin = null;
@@ -192,11 +196,15 @@ export async function runSuplexDesktop(input: { readonly argv: readonly string[]
     current: progress.current,
     log: progress.log,
     failure: state.name === "failed" ? state.failure : null,
+    hosts: registry.targets.map((target) => target.origin),
+    currentHost: registry.current?.origin ?? null,
+    localHost: localOrigin,
   });
   const go = (event: BootEvent): void => {
     const previous = state;
     state = next(state, event);
     if (state !== previous) void enter();
+    rebuildMenu();
   };
   const emit = (event: InstallEvent): void => {
     if (event.name === "stages") progress.stages = event.stages;
@@ -217,19 +225,47 @@ export async function runSuplexDesktop(input: { readonly argv: readonly string[]
     if (outcome === "cancelled") { state = { name: "choosing" }; await enter(); return; }
     if (outcome !== "complete") return;
     await writeInstallRecord(installFile(), { completedAt: new Date().toISOString(), runtimeStamp: (await runtimeStamp(runtime.directory)) ?? "", port: record?.port ?? defaultPort });
+    localInstalled = true;
     go({ name: "installed" });
   };
   const startLocal = async (): Promise<void> => {
-    const record = await readInstallRecord(installFile());
-    const port = record?.port ?? defaultPort;
-    server = createLocalRuntime({ runtime, userData: app.getPath("userData"), port, base: input.environment });
+    if (localBusy || localOrigin) return;
+    localBusy = true;
+    rebuildMenu();
     try {
+      const record = await readInstallRecord(installFile());
+      const port = record?.port ?? defaultPort;
+      server = createLocalRuntime({ runtime, userData: app.getPath("userData"), port, base: input.environment });
       const started = await server.start();
       adopted = started.adopted;
+      localOrigin = `http://127.0.0.1:${started.port}`;
       if (record && started.port !== record.port) await writeInstallRecord(installFile(), { ...record, port: started.port });
       go({ name: "connected", url: `http://127.0.0.1:${started.port}/` });
     } catch (error) {
+      server = undefined;
       go({ name: "failed", failure: { from: "starting", title: "Start Suplex on this Mac", reason: (error as Error).message, remedy: "Open the logs for the server's own words, then retry.", stage: null, log: await tail(join(logsDirectory(), "server.log")) } });
+    } finally {
+      localBusy = false;
+      rebuildMenu();
+    }
+  };
+  const stopLocal = async (): Promise<void> => {
+    if (!server || adopted || localBusy) return;
+    localBusy = true;
+    rebuildMenu();
+    const stopping = server;
+    const stoppedOrigin = localOrigin;
+    try {
+      await stopping.stop();
+      server = undefined;
+      localOrigin = null;
+      if (origin === stoppedOrigin) {
+        if (window) await openManager();
+        else { origin = null; state = { name: "choosing" }; }
+      }
+    } finally {
+      localBusy = false;
+      rebuildMenu();
     }
   };
   const connectRemote = async (win: BrowserWindow, value: string, report: boolean): Promise<void> => {
@@ -241,7 +277,6 @@ export async function runSuplexDesktop(input: { readonly argv: readonly string[]
       else await showConnectPage(win);
       return;
     }
-    localOrigin = null;
     await switchTo(win, target);
     state = { name: "connected", url: target.url };
   };
@@ -276,9 +311,8 @@ export async function runSuplexDesktop(input: { readonly argv: readonly string[]
         return;
       }
       case "connected": {
-        localOrigin = new URL(state.url).origin;
         rebuildMenu();
-        await load(win, parseSuplexTarget(state.url));
+        await switchTo(win, parseSuplexTarget(state.url));
         return;
       }
       case "failed":
@@ -288,26 +322,106 @@ export async function runSuplexDesktop(input: { readonly argv: readonly string[]
         return;
     }
   };
+  const openManager = async (): Promise<void> => {
+    await open("defer");
+    if (!window) return;
+    state = { name: "choosing" };
+    origin = null;
+    await window.loadFile(join(__dirname, "pages", "choice.html"), { query: { manage: "1" } });
+    rebuildMenu();
+  };
+  const selectLocal = async (): Promise<void> => {
+    if (localBusy) return;
+    if (localOrigin) {
+      await open("defer");
+      if (window) await switchTo(window, parseSuplexTarget(`${localOrigin}/`));
+      return;
+    }
+    if (!localInstalled) { await openManager(); return; }
+    await open("defer");
+    state = { name: "starting" };
+    if (window) await showPage(window, "connecting.html");
+    await startLocal();
+  };
+  const selectHost = async (selectedOrigin: string): Promise<void> => {
+    registry = await readTargets(targetFile());
+    const target = registry.targets.find((item) => item.origin === selectedOrigin);
+    if (!target) return;
+    await open("defer");
+    if (window) await switchTo(window, target);
+  };
+  const hostPicker = (): Electron.Menu => Menu.buildFromTemplate([
+    { label: "This Mac", type: "radio", checked: localOrigin !== null && origin === localOrigin, click: () => { void selectLocal(); } },
+    { type: "separator" },
+    ...registry.targets.filter((target) => target.origin !== localOrigin).map((target): Electron.MenuItemConstructorOptions => ({
+      label: new URL(target.origin).host,
+      type: "radio",
+      checked: target.origin === origin,
+      click: () => { void selectHost(target.origin); },
+    })),
+    { type: "separator" },
+    { label: "Manage Suplex hosts…", click: () => { void openManager(); } },
+  ]);
   const rebuildMenu = (): void => {
     const targets: Electron.MenuItemConstructorOptions[] = registry.targets.map((target) => ({
       label: new URL(target.origin).host,
       type: "radio",
       checked: target.origin === origin,
-      click: () => { if (window) void switchTo(window, target); },
+      click: () => { void selectHost(target.origin); },
     }));
     Menu.setApplicationMenu(Menu.buildFromTemplate([
       { label: "Suplex", submenu: [{ role: "about" }, { type: "separator" },
         { label: "Settings", submenu: [
           ...targets,
           ...(targets.length > 0 ? [{ type: "separator" as const }] : []),
-          { label: "Add a Suplex URL", click: () => { if (window) void showConnectPage(window); } },
-          { label: "Forget this Suplex", enabled: origin !== null && origin !== localOrigin, click: () => { void forgetCurrent(); } },
+          { label: "Manage Suplex hosts…", click: () => { void openManager(); } },
         ] },
         { type: "separator" }, { role: "services" }, { type: "separator" }, { role: "hide" }, { role: "hideOthers" }, { role: "unhide" }, { type: "separator" }, desktopUpdater.menuItem(), { type: "separator" }, { role: "quit" }] },
       { role: "editMenu" },
       { role: "viewMenu" },
       { role: "windowMenu" },
     ]));
+    const status = !localInstalled ? "Not installed" : localBusy ? "Suplex is busy" : localOrigin === null ? "Stopped" : adopted ? "Managed by another Suplex" : "Running";
+    if (!tray) return;
+    const trayMenu = Menu.buildFromTemplate([
+      { label: "Open Suplex", click: () => { void open(); } },
+      { label: "Manage Suplex hosts…", click: () => { void openManager(); } },
+      { label: "Suplex on this Mac", submenu: [
+        { label: status, enabled: false },
+        { type: "separator" },
+        { label: "Start Suplex", enabled: localInstalled && localOrigin === null && !localBusy, click: () => { void selectLocal(); } },
+        { label: "Stop Suplex", enabled: localOrigin !== null && !adopted && !localBusy, click: () => { void stopLocal(); } },
+      ] },
+      { type: "separator" },
+      {
+        id: "start-on-login", label: "Start Suplex on Login", type: "checkbox",
+        checked: app.getLoginItemSettings().openAtLogin,
+        enabled: app.isPackaged,
+        ...(!app.isPackaged ? { sublabel: "Available in the installed app" } : {}),
+        click: (item) => {
+          const requested = item.checked;
+          app.setLoginItemSettings({ openAtLogin: requested });
+          const actual = app.getLoginItemSettings();
+          item.checked = actual.openAtLogin;
+          if (actual.openAtLogin !== requested) void dialog.showMessageBox({
+            type: "warning", message: "Suplex could not change the login setting",
+            detail: actual.status === "requires-approval"
+              ? "Allow Suplex in System Settings > General > Login Items."
+              : "Open the installed Suplex app, then retry.",
+          });
+        },
+      },
+      { type: "separator" },
+      { label: "Open Logs", click: () => { void shell.openPath(logsDirectory()); } },
+      desktopUpdater.menuItem(),
+      { type: "separator" },
+      { label: "Quit Suplex", role: "quit" },
+    ]);
+    trayMenu.on("menu-will-show", () => {
+      const login = trayMenu.getMenuItemById("start-on-login");
+      if (login) login.checked = app.getLoginItemSettings().openAtLogin;
+    });
+    tray.setContextMenu(trayMenu);
   };
   const runProbe = async (win: BrowserWindow): Promise<void> => {
     const [navigatorCredentials, platformAuthenticator] = (await win.webContents.executeJavaScript(
@@ -376,21 +490,25 @@ export async function runSuplexDesktop(input: { readonly argv: readonly string[]
         });
         return;
       }
-      void win.loadURL(retryPage(origin));
+      retryUrl = retryPage(origin);
+      void win.loadURL(retryUrl);
     });
     return win;
   };
 
   /** Idempotent: focuses the live window, or resolves the target and creates one. */
-  const open = async (): Promise<void> => {
+  const open = async (mode: "normal" | "defer" = "normal"): Promise<void> => {
     if (window && !window.isDestroyed()) {
       if (window.isMinimized()) window.restore();
       window.focus();
       return;
     }
     let resolved: ReturnType<typeof resolveSuplexTarget>;
+    let record: Awaited<ReturnType<typeof readInstallRecord>>;
     try {
       registry = await readTargets(targetFile());
+      record = await readInstallRecord(installFile());
+      localInstalled = record !== null;
       resolved = resolveSuplexTarget({ argv: input.argv, environment: input.environment, persisted: null });
     } catch (error) {
       fail((error as Error).message);
@@ -398,15 +516,21 @@ export async function runSuplexDesktop(input: { readonly argv: readonly string[]
       return;
     }
     const win = await createWindow();
-    if (resolved) {
+    if (mode === "defer") {
+      state = { name: "choosing" };
+    } else if (resolved) {
       await switchTo(win, resolved.target);
-      state = { name: "connected", url: resolved.target.url };
+    } else if (localOrigin) {
+      await switchTo(win, registry.current ?? parseSuplexTarget(`${localOrigin}/`));
+    } else if (record && registry.current && registry.current.origin !== `http://127.0.0.1:${record.port}`) {
+      await switchTo(win, registry.current);
     } else if (probe) {
       await showConnectPage(win);
     } else {
-      state = resolveBoot({ record: await readInstallRecord(installFile()), stamp: await runtimeStamp(runtime.directory), remote: registry.current?.url ?? null });
+      state = resolveBoot({ record, stamp: await runtimeStamp(runtime.directory), remote: registry.current?.url ?? null });
       await enter();
     }
+    rebuildMenu();
     if (probe) await runProbe(win);
   };
   /** A second launch (for example `open -a Suplex --args --url …`) may carry a target; otherwise it just focuses the window. */
@@ -427,7 +551,10 @@ export async function runSuplexDesktop(input: { readonly argv: readonly string[]
     if (event.senderFrame?.url.startsWith("file:") !== true) return null; // only this app's own pages drive the boot sequence
     switch (message.action) {
       case "snapshot": return snapshot();
-      case "choose": go({ name: "choose", mode: message.mode }); return null;
+      case "choose":
+        if (message.mode === "local" && localInstalled) await selectLocal();
+        else go({ name: "choose", mode: message.mode });
+        return null;
       case "cancel": installer?.cancel(); return null;
       case "retry": go({ name: "retry" }); return null;
       case "launch": go({ name: "launch" }); return null;
@@ -450,8 +577,27 @@ export async function runSuplexDesktop(input: { readonly argv: readonly string[]
       case "tailscale-status": return tailscaleStatus();
       case "turn-on-tailscale": return turnOnTailscale();
       case "open-tailscale": await openTailscale(); return null;
+      case "remove-host": {
+        registry = await forgetTarget(targetFile(), message.origin);
+        rebuildMenu();
+        return null;
+      }
+      case "select-host": await selectHost(message.origin); return null;
       default: return null;
     }
+  });
+  ipcMain.removeHandler("suplex:host-picker");
+  ipcMain.handle("suplex:host-picker", async (event: Electron.IpcMainInvokeEvent): Promise<void> => {
+    if (!window || event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame) return;
+    const url = event.senderFrame.url;
+    if (!origin) return;
+    if (url !== retryUrl) {
+      if (!URL.canParse(url)) return;
+      const page = new URL(url);
+      if (!/^https?:$/.test(page.protocol) || page.origin !== origin) return;
+    }
+    registry = await readTargets(targetFile());
+    hostPicker().popup({ window });
   });
   ipcMain.removeHandler("suplex:account-cleared");
   ipcMain.handle("suplex:account-cleared", async (event: Electron.IpcMainInvokeEvent): Promise<void> => {
@@ -472,6 +618,10 @@ export async function runSuplexDesktop(input: { readonly argv: readonly string[]
   app.on("activate", () => { void open(); });
   app.setAboutPanelOptions({ applicationName: "Suplex", applicationVersion: app.getVersion() });
   await app.whenReady();
+  if (process.platform === "darwin") {
+    tray = new Tray(join(__dirname, "statusTemplate.png"), TRAY_GUID);
+    tray.setToolTip("Suplex");
+  }
   // Packaged builds get build/icon.png via electron-builder; `pnpm dev` would otherwise show the stock Electron icon.
   if (!app.isPackaged) app.dock?.setIcon(join(__dirname, "../../build/icon.png"));
   app.configureWebAuthn({ touchID: { keychainAccessGroup: KEYCHAIN_ACCESS_GROUP, promptReason: "verify your identity on $1" } });

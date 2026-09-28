@@ -5,15 +5,21 @@ set -eu
 cd "$(dirname "$0")/.."
 
 # `electron .` shows "Electron" in the menu bar and Cmd+Tab (macOS reads the bundle's plist).
-# Launch an APFS clone renamed to Suplex; never edit node_modules, pnpm hardlinks it to the store.
+# Launch a signed APFS clone with its own identity so macOS can register its menu bar item.
+# Never edit node_modules, pnpm hardlinks it to the store.
 node -e "require('electron')" >&2  # first require downloads the binary and logs to stdout
 stock="$(dirname "$(dirname "$(dirname "$(node -p "require('electron')")")")")"
 app=.electron-dev/Suplex.app
-if [ ! -d "$app" ] || [ "$(cat .electron-dev/source 2>/dev/null)" != "$stock" ]; then
+app_id=dev.suplex.desktop.dev
+if [ ! -d "$app" ] || [ "$(cat .electron-dev/source 2>/dev/null)" != "$stock" ] ||
+   [ "$(plutil -extract CFBundleIdentifier raw "$app/Contents/Info.plist" 2>/dev/null)" != "$app_id" ] ||
+   ! codesign --verify "$app" >/dev/null 2>&1; then
   rm -rf .electron-dev && mkdir .electron-dev
   cp -Rc "$stock" "$app"
   plutil -replace CFBundleName -string Suplex "$app/Contents/Info.plist"
   plutil -replace CFBundleDisplayName -string Suplex "$app/Contents/Info.plist"
+  plutil -replace CFBundleIdentifier -string "$app_id" "$app/Contents/Info.plist"
+  codesign --force --deep --sign - "$app"
   echo "$stock" > .electron-dev/source
 fi
 

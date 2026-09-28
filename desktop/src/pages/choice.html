@@ -68,6 +68,13 @@
   .instance .where { display: flex; align-items: center; min-width: 0; }
   .instance .host { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .instance .where + p { margin-top: -6px; }
+  .saved { position: relative; }
+  .saved .select { display: grid; gap: 8px; align-content: start; width: 100%; height: 100%; padding: 0; border: 0; background: none; color: inherit; text-align: left; cursor: pointer; }
+  .saved .select:hover { background: none; }
+  .saved strong { max-height: 2.6em; overflow: hidden; overflow-wrap: anywhere; line-height: 1.3; }
+  .saved p { color: #a3a3a3; font-size: 12px; }
+  .saved .delete { position: absolute; right: 10px; bottom: 10px; padding: 4px; border: 0; background: none; color: #a3a3a3; font-size: 12px; }
+  .saved .delete:hover { background: none; color: #e5e5e5; }
   .live { flex: none; width: 6px; height: 6px; margin-right: 6px; border-radius: 50%; background: #22c55e; animation: pulse 1.6s ease-out infinite; }
   @keyframes pulse { from { box-shadow: 0 0 0 0 rgb(34 197 94 / 0.6); } to { box-shadow: 0 0 0 6px rgb(34 197 94 / 0); } }
   @media (prefers-reduced-motion: reduce) { .live { animation: none; } }
@@ -88,7 +95,7 @@
 </style>
 <script>
   // Play the intro unless the viewer asks the system for less motion.
-  if (!matchMedia("(prefers-reduced-motion: reduce)").matches) document.documentElement.classList.add("intro");
+  if (!location.search.includes("manage=1") && !matchMedia("(prefers-reduced-motion: reduce)").matches) document.documentElement.classList.add("intro");
 </script>
 </head>
 <body>
@@ -141,6 +148,37 @@
   const test = document.getElementById("test");
   const status = document.getElementById("status");
   const next = document.getElementById("continue");
+  const cards = document.getElementById("cards");
+  const refreshHosts = async () => {
+    const snapshot = await window.suplexDesktop.snapshot();
+    for (const card of cards.querySelectorAll(".saved")) card.remove();
+    for (const origin of snapshot.hosts) {
+      const target = new URL(origin);
+      const card = document.createElement("div");
+      card.className = "card saved";
+      const select = document.createElement("button");
+      select.className = "select";
+      select.type = "button";
+      select.setAttribute("aria-label", `Open ${target.host}`);
+      select.title = origin;
+      select.addEventListener("click", () => { void window.suplexDesktop.selectHost(origin); });
+      const icon = document.getElementById("instance").content.querySelector("svg").cloneNode(true);
+      const name = document.createElement("strong");
+      name.textContent = target.hostname;
+      const detail = document.createElement("p");
+      detail.textContent = `${origin === snapshot.currentHost ? "Current host" : "Saved host"}${target.port ? ` · ${target.port}` : ""}`;
+      select.append(icon, name, detail);
+      const remove = document.createElement("button");
+      remove.className = "delete";
+      remove.type = "button";
+      remove.textContent = "Delete";
+      remove.setAttribute("aria-label", `Delete ${target.host} from saved hosts`);
+      remove.addEventListener("click", async () => { await window.suplexDesktop.removeHost(origin); await refreshHosts(); });
+      card.append(select, remove);
+      cards.insertBefore(card, cards.querySelector(".instance, label"));
+    }
+  };
+  void refreshHosts();
   const selected = () => modes.querySelector('input[name="mode"]:checked');
   const chosen = () => selected()?.value ?? null;
   let proven = "";
@@ -221,7 +259,6 @@
     // A scan finds nothing unless Tailscale is on.
     scanButton.hidden = status.state !== "on";
   };
-  const cards = document.getElementById("cards");
   // Find the tailnet machines, then probe every online one where `tailscale serve` publishes Suplex, and offer the ones that answer.
   const scan = async () => {
     scanButton.disabled = true;

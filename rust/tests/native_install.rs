@@ -1,10 +1,11 @@
 #![allow(clippy::unwrap_used, reason = "integration test helpers")]
 
+#[cfg(target_os = "macos")]
+use std::time::{Duration, Instant};
 use std::{
     fs,
     path::{Path, PathBuf},
     process::{Command, Output},
-    time::{Duration, Instant},
 };
 
 struct Fixture {
@@ -73,6 +74,7 @@ fn developer_tools_accepts_existing_git_without_apple_tools() {
 }
 
 #[test]
+#[cfg(target_os = "macos")]
 fn developer_tools_accepts_xcode_license_then_retries_git() {
     let fixture = Fixture::new();
     fixture.script("git", "#!/bin/sh\nif [ -f \"$SUPLEX_TEST_ROOT/license-accepted\" ]; then echo 'git version 2.50.1 (Apple Git-155)'; exit 0; fi\necho 'You have not agreed to the Xcode and Apple SDKs license.'\nexit 69\n");
@@ -96,6 +98,7 @@ fn developer_tools_accepts_xcode_license_then_retries_git() {
 }
 
 #[test]
+#[cfg(target_os = "macos")]
 fn developer_tools_reports_cancelled_license_dialog_and_installed_but_broken_git() {
     let fixture = Fixture::new();
     fixture.script(

@@ -38,3 +38,10 @@ test("the bundle builds the native runtime without deploying the TypeScript engi
   expect(bundle).toContain("pnpm exec vite build");
   expect(bundle).not.toMatch(/pnpm .*deploy|better-sqlite3|node-gyp|runtime\/app|runtime\/node/);
 });
+
+test("the macOS development app has its own signed bundle identity for the menu bar", () => {
+  const script = readFileSync(join(__dirname, "..", "scripts", "dev.sh"), "utf8");
+  expect(script).toContain("app_id=dev.suplex.desktop.dev");
+  expect(script).toContain('plutil -replace CFBundleIdentifier -string "$app_id"');
+  expect(script).toContain('codesign --force --deep --sign - "$app"');
+});

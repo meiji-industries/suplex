@@ -181,6 +181,11 @@
   }
 }
 
+.suplex-desktop { --desktop-status-height: 2rem; }
+.suplex-desktop body { padding-bottom: 2rem; }
+.suplex-desktop [data-slot="sidebar-container"] { height: calc(100svh - 2rem); bottom: 2rem; }
+.suplex-desktop [data-slot="sidebar-wrapper"] { min-height: calc(100svh - 2rem); }
+
 /*
  * A desktop window with a hidden title bar draws its traffic lights over the page. Browsers define
  * none of the titlebar-area-* variables, so the inset is zero and nothing moves there. The main

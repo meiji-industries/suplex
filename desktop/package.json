@@ -5,7 +5,7 @@
   "version": "0.6.0",
   "main": "dist/src/main.js",
   "scripts": {
-    "build": "tsc -p tsconfig.json && cp src/connect.html dist/src/ && mkdir -p dist/src/pages && cp src/pages/* dist/src/pages/",
+    "build": "tsc -p tsconfig.json && cp src/connect.html src/statusTemplate*.png dist/src/ && mkdir -p dist/src/pages && cp src/pages/* dist/src/pages/",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "dev": "sh scripts/dev.sh",
     "dist": "sh ../scripts/bundle-runtime.sh && pnpm build && electron-builder --config electron-builder.config.cjs --mac --publish never",

@@ -42,6 +42,9 @@ test("retry page has the connection diagram, host command, internal retry, and e
   expect(html()).toContain('href="https://github.com/meiji-industries/suplex#set-up-an-installation"');
   expect(html()).toContain("pnpm run suplex start");
   expect(html()).toContain("Suplex retries every 5 seconds.");
+  expect(html()).toContain('aria-label="Select a Suplex host"');
+  expect(html()).toContain('window.suplexApp?.openHostPicker()');
+  expect(html()).toContain('<span>Not available</span>');
   expect(html()).toContain("-webkit-app-region: no-drag");
   expect(html()).not.toMatch(/(?:href|src)="file:/);
 });

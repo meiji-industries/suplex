@@ -11,6 +11,7 @@ import { ApplicationShell } from "./application-frame.js";
 import { ServerStateProvider } from "./server-state.js";
 import { TaskDataProvider } from "../features/tasks/task-data.js";
 import { LoadingState } from "../components/app/loading-state.js";
+import { DesktopHostBar } from "./desktop-host-bar.js";
 
 const AdminView = lazy(() => import("../features/admin/admin.js").then(module => ({ default: module.AdminView })));
 const CompanySettingsView = lazy(() => import("../features/settings/company-settings.js").then(module => ({ default: module.CompanySettingsView })));
@@ -86,11 +87,11 @@ export function AppRouter(): ReactElement {
       document.removeEventListener("click", intercept);
     };
   }, []);
-  if (window.__SUPLEX_VIEW__ === "auth") return <AuthView />;
-  if (window.__SUPLEX_VIEW__ === "oauth-consent") return <OAuthConsentView />;
+  if (window.__SUPLEX_VIEW__ === "auth") return <SystemHealthProvider initialSnapshot={window.__SUPLEX_HEALTH__}><AuthView /><DesktopHostBar /></SystemHealthProvider>;
+  if (window.__SUPLEX_VIEW__ === "oauth-consent") return <SystemHealthProvider initialSnapshot={window.__SUPLEX_HEALTH__}><OAuthConsentView /><DesktopHostBar /></SystemHealthProvider>;
   const shellKey = activityShellKey(window.location.pathname);
   const view = <Suspense fallback={<LoadingState />}><AppView key={route} /></Suspense>;
-  return <CompanyProvider><ServerStateProvider><TaskDataProvider><UpdateProvider><SystemHealthProvider initialSnapshot={window.__SUPLEX_HEALTH__}>{shellKey ? <ApplicationShell key={shellKey}>{view}</ApplicationShell> : view}</SystemHealthProvider></UpdateProvider></TaskDataProvider></ServerStateProvider></CompanyProvider>;
+  return <CompanyProvider><ServerStateProvider><TaskDataProvider><UpdateProvider><SystemHealthProvider initialSnapshot={window.__SUPLEX_HEALTH__}>{shellKey ? <ApplicationShell key={shellKey}>{view}</ApplicationShell> : view}<DesktopHostBar /></SystemHealthProvider></UpdateProvider></TaskDataProvider></ServerStateProvider></CompanyProvider>;
 }
 
 export { isApplicationPath };

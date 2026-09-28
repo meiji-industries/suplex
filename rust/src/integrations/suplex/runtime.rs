@@ -182,7 +182,11 @@ impl ServerHandler for SuplexMcpRuntime {
         _request: Option<PaginatedRequestParams>,
         _context: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, McpError> {
-        Ok(ListToolsResult::with_all_items(TOOLS.clone()))
+        // 2026-07-28 clients require a cache policy on list results. The tools
+        // depend on this paired agent's delivery grant, so nothing is shared.
+        Ok(ListToolsResult::with_all_items(TOOLS.clone())
+            .with_ttl_ms(0)
+            .with_cache_scope(rmcp::model::CacheScope::Private))
     }
 
     async fn call_tool(

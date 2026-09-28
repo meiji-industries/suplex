@@ -423,6 +423,48 @@ pub(crate) mod tests {
         );
     }
 
+    /// Claude Code 2.1.283 lists tools statelessly (2026-07-28) and rejects a
+    /// result without a numeric ttlMs and a public or private cacheScope.
+    #[tokio::test]
+    async fn a_stateless_tool_list_carries_its_cache_policy() {
+        let server = server(None).await;
+        let client = register(&server, "Claude").await;
+        let verifier = "q".repeat(43);
+        let code = authorize(&server, &client, &verifier, "state").await;
+        let token = exchange(&server, &client, &code, &verifier).await.1["access_token"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let bearer = format!("Bearer {token}");
+        let listed = server
+            .request(
+                reqwest::Method::POST,
+                "/mcp",
+                &[
+                    ("authorization", bearer.as_str()),
+                    ("accept", "application/json, text/event-stream"),
+                    ("mcp-protocol-version", "2026-07-28"),
+                    ("mcp-method", "tools/list"),
+                ],
+                Some(json!({"jsonrpc": "2.0", "id": 0, "method": "tools/list", "params": {"_meta": {
+                    "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+                    "io.modelcontextprotocol/clientInfo": {"name": "claude-code", "version": "2.1.283"},
+                    "io.modelcontextprotocol/clientCapabilities": {}
+                }}})),
+            )
+            .await
+            .json::<Value>()
+            .await
+            .unwrap();
+        let result = &listed["result"];
+        assert!(!result["tools"].as_array().unwrap().is_empty(), "{listed}");
+        assert!(result["ttlMs"].is_u64(), "{listed}");
+        assert!(
+            ["public", "private"].contains(&result["cacheScope"].as_str().unwrap_or("")),
+            "{listed}"
+        );
+    }
+
     #[tokio::test]
     async fn bearer_checks_follow_live_host_authority_grants_and_token_state() {
         let server = server(None).await;

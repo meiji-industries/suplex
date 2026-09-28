@@ -16,7 +16,6 @@ import { InvitationsSection } from "./invitations-section.js";
 import { PasskeysSection } from "./passkeys-section.js";
 import { InternalAgentsManager } from "./internal-agents-manager.js";
 import { ExternalAgentsSection } from "./external-agents-section.js";
-import { ExternalAgentConnectionGuide } from "./external-agent-connection-guide.js";
 import { ExternalAgentAvatarDialog } from "./external-agent-avatar-dialog.js";
 import { ExternalAgentNewAgentDialog } from "./external-agent-new-dialog.js";
 import { ExternalAgentPairingCodeDialog } from "./external-agent-pairing-code-dialog.js";
@@ -383,7 +382,6 @@ export function AdminView(): ReactElement {
               onRevokeAgent={revokeExternalAgent}
               onClearPendingAction={() => setPendingAction("")}
             />
-            <ExternalAgentConnectionGuide />
             <ExternalAgentAvatarDialog
               target={externalAgentAvatarTarget}
               onTargetChange={setExternalAgentAvatarTarget}

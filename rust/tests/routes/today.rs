@@ -29,7 +29,7 @@ mod tests {
         let prior = rfc3339_millis(start - Duration::days(8));
         let current = rfc3339_millis(start + Duration::days(1));
         let boundary = "2026-09-21T08:00:00+08:00";
-        let admin = state.with_database(|database| identity_auth::development_sign_in(database, start).unwrap());
+        let admin = state.with_database(|database| identity_auth::development_sign_in(database, Utc::now()).unwrap());
         let member = state.with_database(|database| {
             let connection = database.connection();
             for index in 1..=3 {
@@ -40,7 +40,7 @@ mod tests {
             for company in ["today_c1", "today_c2"] {
                 connection.execute("INSERT INTO suplex_memberships (user_id,company_id,created_at) VALUES ('today_member',?1,?2)", rusqlite::params![company, prior]).unwrap();
             }
-            identity_auth::create_session(database, "today_member", start).unwrap()
+            identity_auth::create_session(database, "today_member", Utc::now()).unwrap()
         });
         state.with_database(|database| {
             let connection = database.connection();

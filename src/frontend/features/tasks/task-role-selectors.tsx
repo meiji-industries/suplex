@@ -1,4 +1,4 @@
-import { Bot, ChevronDown } from "lucide-react";
+import { ChevronDown } from "lucide-react";
 import { useState } from "react";
 import type { ApiProfile } from "../../shell/view-shared.js";
 import { Button } from "../../components/ui/button.js";
@@ -27,8 +27,8 @@ export function TaskRoleSelector({ role, label: providedLabel, profiles, assignm
   const [open, setOpen] = useState(false);
   return <DropdownMenu open={open} onOpenChange={setOpen}>
     <DropdownMenuTrigger render={<Button type="button" variant={inline ? "ghost" : "outline"} size={compact ? "xs" : "sm"} aria-label={`${label} assignee: ${choice}`} title={compact ? `${label}: ${choice}` : undefined} disabled={busy} />}>
-      {selected ? <EntityAvatar kind="agent" id={selected.id} name={selected.name} seed={selected.avatarSeed} size="xs" /> : inline ? <Bot /> : null}
-      <span className={inline ? "max-w-28 truncate text-[11px]" : "truncate"}>{compact ? choice : `${label}: ${choice}`}</span>{inline ? null : <ChevronDown />}
+      {selected && !inline ? <EntityAvatar kind="agent" id={selected.id} name={selected.name} seed={selected.avatarSeed} size="xs" /> : null}
+      <span className={inline ? "max-w-28 truncate text-[11px]" : "truncate"}>{compact ? choice : `${label}: ${choice}`}</span><ChevronDown aria-hidden="true" className={inline ? "size-3" : undefined} />
     </DropdownMenuTrigger>
     <DropdownMenuContent align="start" className="w-96 max-w-[calc(100vw-2rem)]"><DropdownMenuRadioGroup value={assignment} onValueChange={value => { onChange(value); setOpen(false); }}>
       <DropdownMenuLabel>{label}</DropdownMenuLabel>

@@ -1553,7 +1553,7 @@ fn check_permitted_profiles(raw: &TaskCreateBody, project: &Project) -> Database
 }
 
 /// Every Advisor role of the workflow resolves to a permitted profile; one the
-/// caller named must exist. An unnamed role follows the Coordinator profile.
+/// caller named must exist. An unnamed role follows its project default.
 fn check_advisor_profiles(
     database: &SuplexDatabase,
     raw: &TaskCreateBody,
@@ -1564,17 +1564,23 @@ fn check_advisor_profiles(
     let raw_advisors = serde_json::to_value(&raw.advisor_profile_ids)?;
     let requested_advisors = serde_json::to_value(&request.advisor_profile_ids)?;
     let permitted_advisors = serde_json::to_value(&project.agent_task_policy.advisor_profile_ids)?;
-    for role in advisor_roles(request.workflow.as_str()) {
-        let profile_id = requested_advisors[*role]
+    for role in crate::coordination::workflows::advisor_roles(request.workflow.as_str()) {
+        let default = crate::coordination::workflows::advisor_default_profile_id(
+            role,
+            root_id,
+            &project.alt_profile_id,
+        );
+        let role = role.as_str();
+        let profile_id = requested_advisors[role]
             .as_str()
-            .unwrap_or(root_id)
+            .unwrap_or(default)
             .to_owned();
         let field = format!("advisorProfileIds.{role}");
-        if raw_advisors.get(*role).is_some() {
+        if raw_advisors.get(role).is_some() {
             crate::profiles::agent_profiles::read_profile(database, &profile_id, "root")?
                 .ok_or_else(|| profile_not_available(&profile_id, "root", &field))?;
         }
-        if !permitted_advisors[*role]
+        if !permitted_advisors[role]
             .as_array()
             .is_some_and(|ids| ids.iter().any(|id| id == &json!(profile_id)))
         {

@@ -555,13 +555,17 @@ fn local(
     for role in
         workflow_definition(&view.engine).map_or(&[][..], |definition| definition.advisor_roles)
     {
-        let id = view
-            .advisor_profile_ids
-            .get(*role)
-            .map_or(root_default, String::as_str);
-        let profile = profile_snapshot(database, id, "root")?;
         if let Some(role) = AdvisorRole::parse(role) {
-            advisors.insert(role, profile);
+            let default = crate::coordination::workflows::advisor_default_profile_id(
+                role,
+                root_default,
+                &project.alt_profile_id,
+            );
+            let id = view
+                .advisor_profile_ids
+                .get(role.as_str())
+                .map_or(default, String::as_str);
+            advisors.insert(role, profile_snapshot(database, id, "root")?);
         }
     }
     validate_protected_paths(&config.protected_paths)

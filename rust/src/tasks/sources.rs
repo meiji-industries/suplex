@@ -726,6 +726,7 @@ mod tests {
             verification_command: String::new(),
             root_profile_id: "root".into(),
             worker_profile_id: "worker".into(),
+            alt_profile_id: "alt".into(),
             agent_task_policy: serde_json::from_value(json!({
                 "workflowIds": ["standard"], "defaultWorkflowId": "standard",
                 "rootProfileIds": ["root"], "workerProfileIds": ["worker"]

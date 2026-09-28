@@ -350,15 +350,17 @@ export async function runSuplexDesktop(input: { readonly argv: readonly string[]
     await open("defer");
     if (window) await switchTo(window, target);
   };
-  const hostPicker = (): Electron.Menu => Menu.buildFromTemplate([
+  const hostItems = (): Electron.MenuItemConstructorOptions[] => [
     { label: "This Mac", type: "radio", checked: localOrigin !== null && origin === localOrigin, click: () => { void selectLocal(); } },
-    { type: "separator" },
     ...registry.targets.filter((target) => target.origin !== localOrigin).map((target): Electron.MenuItemConstructorOptions => ({
       label: new URL(target.origin).host,
       type: "radio",
       checked: target.origin === origin,
       click: () => { void selectHost(target.origin); },
     })),
+  ];
+  const hostPicker = (): Electron.Menu => Menu.buildFromTemplate([
+    ...hostItems(),
     { type: "separator" },
     { label: "Manage Suplex hosts…", click: () => { void openManager(); } },
   ]);
@@ -385,13 +387,15 @@ export async function runSuplexDesktop(input: { readonly argv: readonly string[]
     if (!tray) return;
     const trayMenu = Menu.buildFromTemplate([
       { label: "Open Suplex", click: () => { void open(); } },
+      { type: "separator" },
+      ...hostItems(),
+      { type: "separator" },
       { label: "Manage Suplex hosts…", click: () => { void openManager(); } },
-      { label: "Suplex on this Mac", submenu: [
-        { label: status, enabled: false },
-        { type: "separator" },
-        { label: "Start Suplex", enabled: localInstalled && localOrigin === null && !localBusy, click: () => { void selectLocal(); } },
-        { label: "Stop Suplex", enabled: localOrigin !== null && !adopted && !localBusy, click: () => { void stopLocal(); } },
-      ] },
+      { type: "separator" },
+      { label: status, enabled: false },
+      { type: "separator" },
+      { label: "Start Suplex", enabled: localInstalled && localOrigin === null && !localBusy, click: () => { void selectLocal(); } },
+      { label: "Stop Suplex", enabled: localOrigin !== null && !adopted && !localBusy, click: () => { void stopLocal(); } },
       { type: "separator" },
       {
         id: "start-on-login", label: "Start Suplex on Login", type: "checkbox",

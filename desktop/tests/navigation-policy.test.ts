@@ -265,15 +265,22 @@ describe("remembered targets", () => {
     entries.find((item) => item.label === "meiji.tail1234.ts.net:4111")!.click!();
     await vi.waitFor(() => expect(win.webContents.url).toBe(`${OTHER}/`));
   });
-  test("the Navigate menu lists every remembered Suplex, checks the current one, and switches on click", async () => {
+  test("the menus list remembered hosts, check the current one, and switch on click", async () => {
     writeFileSync(targetFile, JSON.stringify({ current: `${OTHER}/`, targets: [`${OTHER}/`, "http://localhost:4211/"] }));
     await runSuplexDesktop({ argv: [], environment: {} });
     const win = fake.FakeWindow.all[0]!;
     expect(win.webContents.url).toBe(`${OTHER}/`);
     expect(settingsMenu().filter((entry) => entry.type === "radio").map((entry) => [entry.label, entry.checked])).toEqual([["meiji.tail1234.ts.net:4111", true], ["localhost:4211", false]]);
-    menuItem("localhost:4211").click!();
+    if (process.platform === "darwin") {
+      expect(trayMenu().filter((entry) => entry.type === "radio").map((entry) => [entry.label, entry.checked])).toEqual([["This Mac", false], ["meiji.tail1234.ts.net:4111", true], ["localhost:4211", false]]);
+      trayItem("localhost:4211").click!();
+    } else {
+      expect(fake.Tray.all).toHaveLength(0);
+      menuItem("localhost:4211").click!();
+    }
     await vi.waitFor(() => expect(win.webContents.url).toBe("http://localhost:4211/"));
     expect(menuItem("localhost:4211").checked).toBe(true);
+    if (process.platform === "darwin") expect(trayItem("localhost:4211").checked).toBe(true);
     expect(JSON.parse(readFileSync(targetFile, "utf8")).current).toBe("http://localhost:4211/");
     const external = preventable();
     win.webContents.emit("will-navigate", external, `${OTHER}/tasks`);
@@ -318,7 +325,7 @@ describe("target sources", () => {
     try {
       await runSuplexDesktop({ argv: [], environment: {} });
       expect(fake.FakeWindow.all[0]!.webContents.url).toBe(`${ORIGIN}/`);
-      if (process.platform === "darwin") expect(trayItem("Suplex on this Mac").submenu!.find((item) => item.label === "Start Suplex")!.enabled).toBe(true);
+      if (process.platform === "darwin") expect(trayItem("Start Suplex").enabled).toBe(true);
     } finally { rmSync(installFile, { force: true }); }
   });
   test("an invalid explicit target fails visibly and does not fall through", async () => {
@@ -423,13 +430,14 @@ describe("local install", () => {
     await desktop({ action: "launch" });
     await vi.waitFor(() => expect(win.webContents.url).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/$/), { timeout: 20_000 });
     const firstOrigin = new URL(win.webContents.url).origin;
-    const controls = (): MenuEntry[] => trayItem("Suplex on this Mac").submenu!;
-    expect(controls().find((item) => item.label === "Stop Suplex")!.enabled).toBe(true);
-    controls().find((item) => item.label === "Stop Suplex")!.click!();
+    const statusIndex = trayMenu().findIndex((item) => item.label === "Running");
+    expect(trayMenu().slice(statusIndex, statusIndex + 6).map((item) => item.label ?? item.type)).toEqual(["Running", "separator", "Start Suplex", "Stop Suplex", "separator", "Start Suplex on Login"]);
+    expect(trayItem("Stop Suplex").enabled).toBe(true);
+    trayItem("Stop Suplex").click!();
     await vi.waitFor(async () => { expect(await healthy(firstOrigin)).toBe(false); }, { timeout: 10_000 });
     await vi.waitFor(() => expect(win.webContents.url).toMatch(/pages\/choice\.html\?manage=1$/));
-    expect(controls().find((item) => item.label === "Start Suplex")!.enabled).toBe(true);
-    controls().find((item) => item.label === "Start Suplex")!.click!();
+    expect(trayItem("Start Suplex").enabled).toBe(true);
+    trayItem("Start Suplex").click!();
     await vi.waitFor(() => expect(win.webContents.url).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/$/), { timeout: 20_000 });
     const secondOrigin = new URL(win.webContents.url).origin;
     expect(await healthy(secondOrigin)).toBe(true);

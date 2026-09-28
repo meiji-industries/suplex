@@ -96,7 +96,7 @@ mod tests {
         assert_eq!(mismatch.status(), StatusCode::UNPROCESSABLE_ENTITY);
         assert_eq!(
             mismatch.json::<Value>().await.unwrap(),
-            json!({"error":"The Direct build workflow has no Reviewer Advisor"})
+            json!({"error":"The Simple task workflow has no Reviewer Advisor"})
         );
         // Switching to repair replaces the inherited delivery settings.
         let repair = send(

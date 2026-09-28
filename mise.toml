@@ -110,6 +110,8 @@ run = "pnpm exec tsx scripts/dev.ts --migrate"
 run = "pnpm run build"
 [tasks.typecheck]
 run = "export PATH=\"$(dirname \"$(mise which node)\"):$PATH\" && pnpm run typecheck"
+[tasks.lint]
+run = "export PATH=\"$(dirname \"$(mise which node)\"):$PATH\" && pnpm run lint && cargo clippy --manifest-path rust/Cargo.toml --all-targets -- -D warnings"
 [tasks.test]
 run = "export PATH=\"$(dirname \"$(mise which node)\"):$PATH\" && pnpm run test"
 [tasks.test-browser]

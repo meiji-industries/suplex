@@ -45,6 +45,7 @@ export const ProjectBodySchema = z.object({
   verificationCommand: z.string(),
   rootProfileId: z.string().min(1),
   workerProfileId: z.string().min(1),
+  altProfileId: z.string().min(1).optional(),
   agentTaskPolicy: ProjectAgentTaskPolicySchema.optional(),
   providerPolicy: ProjectProviderPolicySchema.nullable().optional(),
 }).strict();

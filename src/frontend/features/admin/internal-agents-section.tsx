@@ -28,7 +28,7 @@ import {
 } from "../../components/ui/dropdown-menu.js";
 import { NewButton } from "../../components/ui/new-button.js";
 import { SettingsSectionHeader } from "../settings/settings-layout.js";
-import { Archive, ArchiveRestore, Copy, Ellipsis, Pencil, Trash2 } from "lucide-react";
+import { Archive, ArchiveRestore, Copy, Ellipsis, Pencil, Trash2, Zap } from "lucide-react";
 import type {
   Dispatch,
   ReactElement,
@@ -40,6 +40,7 @@ import { modelHint } from "./model-hints.js";
 
 const SEEDED_AGENT_DESCRIPTIONS: Record<string, string> = {
   profile_native_root: "Plans each task and reviews the changes of the Worker.",
+  profile_native_independent: "Provides a second plan, reviews changes, and rates pull requests.",
   profile_native_worker: "Builds the changes for each task.",
 };
 
@@ -87,28 +88,21 @@ export function AgentCard({
           </span>
         </CardTitle>
         <CardDescription>
-          {agent.role === "root" ? "Coordinator" : "Worker"}
+          <span className="flex items-center gap-2">
+            {agent.role === "root" ? "Coordinator" : "Worker"}
+            {isDefaultAgent(agent) ? <Badge variant="outline">Default</Badge> : null}
+          </span>
         </CardDescription>
         {actions ? <CardAction>{actions}</CardAction> : null}
       </CardHeader>
       <CardContent>
         <p>{agentDescription(agent)}</p>
         <p className="text-xs text-muted-foreground">
-          {providerIcons[agent.provider].label} · {agent.model} ·{" "}
-          {REASONING_LABELS[agent.reasoningLevel] ?? agent.reasoningLevel}{" "}
-          reasoning
-          {agent.serviceTier === "priority" ? " · Priority" : ""}
+          {providerIcons[agent.provider].label} · {agent.model}{" "}
+          {REASONING_LABELS[agent.reasoningLevel] ?? agent.reasoningLevel}
+          {agent.serviceTier === "priority" ? <> <span title="Priority"><Zap className="inline size-3.5 align-text-bottom" role="img" aria-label="Priority" /></span></> : ""}
         </p>
-        {isDefaultAgent(agent) || agent.archivedAt ? (
-          <span className="flex gap-1">
-            {isDefaultAgent(agent) ? (
-              <Badge variant="outline">Default</Badge>
-            ) : null}
-            {agent.archivedAt ? (
-              <Badge variant="secondary">Archived</Badge>
-            ) : null}
-          </span>
-        ) : null}
+        {agent.archivedAt ? <Badge variant="secondary">Archived</Badge> : null}
       </CardContent>
     </Card>
   );

@@ -55,6 +55,7 @@ pub struct Project {
     pub verification_command: String,
     pub root_profile_id: String,
     pub worker_profile_id: String,
+    pub alt_profile_id: String,
     pub agent_task_policy: ProjectAgentTaskPolicy,
     pub provider_policy: Option<ProjectProviderPolicy>,
     pub created_at: String,
@@ -76,6 +77,7 @@ pub fn response_project(project: &Project) -> ProjectResponse {
         verification_command: project.verification_command.clone(),
         root_profile_id: project.root_profile_id.clone(),
         worker_profile_id: project.worker_profile_id.clone(),
+        alt_profile_id: project.alt_profile_id.clone(),
         agent_task_policy: project.agent_task_policy.clone(),
         provider_policy: project.provider_policy.clone(),
         created_at: project.created_at.clone(),
@@ -98,12 +100,13 @@ struct StoredProject {
     verification_command: String,
     root_profile_id: String,
     worker_profile_id: String,
+    alt_profile_id: String,
     agent_task_policy_json: String,
     created_at: String,
     updated_at: String,
 }
 
-const SELECTION: &str = "SELECT p.integration_json, p.execution_json, p.provider_policy_json, p.id, p.company_id, p.name, p.repository_path, p.worktree_root, p.repository_identity, p.base_branch, p.setup_command, p.verification_command, p.root_profile_id, p.worker_profile_id, p.agent_task_policy_json, p.created_at, p.updated_at FROM suplex_projects p";
+const SELECTION: &str = "SELECT p.integration_json, p.execution_json, p.provider_policy_json, p.id, p.company_id, p.name, p.repository_path, p.worktree_root, p.repository_identity, p.base_branch, p.setup_command, p.verification_command, p.root_profile_id, p.worker_profile_id, p.agent_task_policy_json, p.created_at, p.updated_at, p.alt_profile_id FROM suplex_projects p";
 
 fn stored(row: &Row<'_>) -> rusqlite::Result<StoredProject> {
     Ok(StoredProject {
@@ -124,6 +127,7 @@ fn stored(row: &Row<'_>) -> rusqlite::Result<StoredProject> {
         agent_task_policy_json: row.get(14)?,
         created_at: row.get(15)?,
         updated_at: row.get(16)?,
+        alt_profile_id: row.get(17)?,
     })
 }
 
@@ -164,6 +168,7 @@ fn validate_provider_policy(
     policy: &ProjectProviderPolicy,
     root_profile_id: &str,
     worker_profile_id: &str,
+    alt_profile_id: &str,
 ) -> DatabaseResult<()> {
     for instance_id in &policy.allowed_instance_ids {
         let exists: bool = database.connection().query_row(
@@ -183,7 +188,11 @@ fn validate_provider_policy(
             ));
         }
     }
-    for (role, profile_id) in [("root", root_profile_id), ("worker", worker_profile_id)] {
+    for (field, role, profile_id) in [
+        ("rootProfileId", "root", root_profile_id),
+        ("workerProfileId", "worker", worker_profile_id),
+        ("altProfileId", "root", alt_profile_id),
+    ] {
         let (provider, instance) =
             profile_provider(database, profile_id, role)?.ok_or_else(|| {
                 failure(
@@ -191,7 +200,7 @@ fn validate_provider_policy(
                     422,
                     vec![finding(
                         "profile-ineligible",
-                        &format!("{role}ProfileId"),
+                        field,
                         "Select an active profile with the matching role",
                     )],
                 )
@@ -211,7 +220,7 @@ fn validate_provider_policy(
                 422,
                 vec![finding(
                     "profile-provider-ineligible",
-                    &format!("{role}ProfileId"),
+                    field,
                     "Select an agent with a provider and login allowed by this project",
                 )],
             ));
@@ -375,6 +384,7 @@ fn public_project(stored: StoredProject) -> DatabaseResult<Project> {
         verification_command: stored.verification_command,
         root_profile_id: stored.root_profile_id,
         worker_profile_id: stored.worker_profile_id,
+        alt_profile_id: stored.alt_profile_id,
         agent_task_policy: policy,
         provider_policy: parse_optional(
             stored.provider_policy_json,
@@ -567,6 +577,23 @@ pub fn create_local(
         }
         None => (None, None, None, None),
     };
+    let explicit_alt = match options.configuration {
+        Some(ProjectCreateBody::Local(value)) => value.alt_profile_id.as_deref(),
+        _ => None,
+    };
+    let alt_profile_id = if let Some(id) = explicit_alt {
+        auth::js_trim(id).to_owned()
+    } else {
+        crate::profiles::agent_profiles::read_profile(
+            database,
+            "profile_native_independent",
+            "root",
+        )?
+        .filter(|profile| {
+            crate::profiles::agent_profiles::allowed_profile(provider_policy.as_ref(), profile)
+        })
+        .map_or_else(|| root_profile_id.to_owned(), |profile| profile.profile_id)
+    };
     let company = companies::require_company_access(database, actor_user_id, company_id)?;
     if company.status != "active" {
         return Err(failure(
@@ -610,8 +637,9 @@ pub fn create_local(
                 ));
             }
         }
+        require_profile(database, "root", &alt_profile_id, "altProfileId")?;
         if let Some(policy) = &provider_policy {
-            validate_provider_policy(database, policy, root_profile_id, worker_profile_id)?;
+            validate_provider_policy(database, policy, root_profile_id, worker_profile_id, &alt_profile_id)?;
         }
         if let Some(policy) = &explicit_policy {
             validate_agent_policy(database, policy, &id)?;
@@ -621,8 +649,8 @@ pub fn create_local(
             params![id, company_id, prepared.name, prepared.repository_path.to_string_lossy(), prepared.worktree_root.to_string_lossy(), prepared.repository, prepared.base_branch, prepared.setup_command, prepared.verification_command, root_profile_id, worker_profile_id, policy_json, stamp],
         )?;
         database.connection().execute(
-            "UPDATE suplex_projects SET integration_json = ?1, execution_json = ?2 WHERE id = ?3",
-            params![integration_json, execution_json, id],
+            "UPDATE suplex_projects SET integration_json = ?1, execution_json = ?2, alt_profile_id = ?4 WHERE id = ?3",
+            params![integration_json, execution_json, id, alt_profile_id],
         )?;
         crate::identity::audit::record(database, &crate::identity::audit::AuditEvent { id: &audit_id, actor_user_id: Some(actor_user_id), actor_agent_id: None, action: "project_created", target_user_id: None, company_id: Some(company_id), metadata_json: &crate::shared::js_json::stringify(&json!({"projectId": id})), created_at: &stamp })?;
         database.connection().execute(
@@ -737,14 +765,19 @@ fn admitted_policy(
     policy
 }
 
-fn require_profile(database: &SuplexDatabase, role: &str, profile_id: &str) -> DatabaseResult<()> {
+fn require_profile(
+    database: &SuplexDatabase,
+    role: &str,
+    profile_id: &str,
+    field: &str,
+) -> DatabaseResult<()> {
     if profile_provider(database, profile_id, role)?.is_none() {
         return Err(failure(
             "Project configuration is invalid",
             422,
             vec![finding(
                 "profile-ineligible",
-                &format!("{role}ProfileId"),
+                field,
                 "Select an active profile with the matching role",
             )],
         ));
@@ -798,14 +831,19 @@ pub fn update_local(
 ) -> DatabaseResult<Project> {
     let root = auth::js_trim(&body.root_profile_id);
     let worker = auth::js_trim(&body.worker_profile_id);
+    let alt = body
+        .alt_profile_id
+        .as_deref()
+        .map_or(existing.alt_profile_id.as_str(), auth::js_trim);
     let stamp = rfc3339_millis(now);
     let company_id = existing.company_id.as_str();
     let project_id = existing.id.as_str();
     database
         .transaction(false, |database| {
             require_active_company(database, actor_user_id, company_id)?;
-            require_profile(database, "root", root)?;
-            require_profile(database, "worker", worker)?;
+            require_profile(database, "root", root, "rootProfileId")?;
+            require_profile(database, "worker", worker, "workerProfileId")?;
+            require_profile(database, "root", alt, "altProfileId")?;
             let stored = stored_row(database, project_id)?;
             let provider_policy_json = match &body.provider_policy {
                 None => stored.as_ref().and_then(|row| row.provider_policy_json.clone()),
@@ -814,6 +852,7 @@ pub fn update_local(
             };
             if let Some(policy) = &provider_policy_json {
                 let policy = stored_contract(policy, project_contracts::parse_provider_policy)?;
+                validate_provider_policy(database, &policy, root, worker, alt)?;
                 for instance_id in &policy.allowed_instance_ids {
                     let exists: bool = database.connection().query_row(
                         "SELECT EXISTS(SELECT 1 FROM suplex_provider_instances WHERE id = ?1)",
@@ -861,8 +900,8 @@ pub fn update_local(
                 None => stored.execution_json,
             };
             database.connection().execute(
-                "UPDATE suplex_projects SET integration_json = ?1, execution_json = ?2 WHERE id = ?3",
-                params![integration_json, execution_json, project_id],
+                "UPDATE suplex_projects SET integration_json = ?1, execution_json = ?2, alt_profile_id = ?4 WHERE id = ?3",
+                params![integration_json, execution_json, project_id, alt],
             )?;
             audit_update(database, actor_user_id, company_id, project_id, &stamp)?;
             database.connection().execute(
@@ -1169,6 +1208,7 @@ pub fn apply_patch(
                 update("execution_json", Some(json_text(&execution)?))?;
             }
             if patch.root_profile_id.is_some()
+                || patch.alt_profile_id.is_some()
                 || patch.worker_profile_id.is_some()
                 || patch.agent_task_policy.is_some()
                 || patch.provider_policy.is_some()
@@ -1195,8 +1235,13 @@ fn patch_agent_configuration(
         .worker_profile_id
         .as_deref()
         .map_or(stored.worker_profile_id.as_str(), auth::js_trim);
-    require_profile(database, "root", root)?;
-    require_profile(database, "worker", worker)?;
+    let alt = patch
+        .alt_profile_id
+        .as_deref()
+        .map_or(stored.alt_profile_id.as_str(), auth::js_trim);
+    require_profile(database, "root", alt, "altProfileId")?;
+    require_profile(database, "root", root, "rootProfileId")?;
+    require_profile(database, "worker", worker, "workerProfileId")?;
     let provider_policy = match &patch.provider_policy {
         Some(policy) => policy.clone(),
         None => parse_optional(
@@ -1205,7 +1250,7 @@ fn patch_agent_configuration(
         )?,
     };
     if let Some(policy) = &provider_policy {
-        validate_provider_policy(database, policy, root, worker)?;
+        validate_provider_policy(database, policy, root, worker, alt)?;
     }
     let policy = match &patch.agent_task_policy {
         Some(policy) => {
@@ -1219,10 +1264,10 @@ fn patch_agent_configuration(
         ),
     };
     let connection = database.connection();
-    if patch.root_profile_id.is_some() {
+    if patch.root_profile_id.is_some() || patch.alt_profile_id.is_some() {
         connection.execute(
-            "UPDATE suplex_projects SET root_profile_id = ?1 WHERE id = ?2",
-            params![root, stored.id],
+            "UPDATE suplex_projects SET root_profile_id = ?1, alt_profile_id = ?2 WHERE id = ?3",
+            params![root, alt, stored.id],
         )?;
     }
     if patch.worker_profile_id.is_some() {
@@ -1825,6 +1870,7 @@ mod tests {
         )
         .unwrap();
         assert!(created.id.starts_with("project_"));
+        assert_eq!(created.alt_profile_id, "profile_native_independent");
         assert_eq!(created.id.len(), 32);
         assert_eq!(created.repository.as_deref(), Some("owner/local"));
         assert_eq!(created.root_profile_id, "profile_native_root");

@@ -21,26 +21,25 @@ test.each([1280, 390])("tasks can be created, started and viewed on the board at
       await dialog.getByLabel("Task title", { exact: true }).fill(`Task ${immediate}`);
       await dialog.getByLabel("Task description", { exact: true }).fill("Use the native Coordinator and Worker");
       if (immediate) {
-        const diagram = dialog.getByRole("group", { name: "Standard workflow", exact: true });
+        const diagram = dialog.getByRole("group", { name: "Plan and build workflow", exact: true });
         await diagram.getByRole("button", { name: /^Coordinator assignee:/ }).first().press("Enter");
         await page.getByRole("menuitemradio").filter({ hasText: alternate.name }).press("Enter");
         expect(await diagram.getByRole("button", { name: `Coordinator assignee: ${alternate.name}`, exact: true }).count()).toBe(2);
       } else {
-        await dialog.getByRole("combobox", { name: "Workflow", exact: true }).click();
-        await page.getByRole("option", { name: "Combined planning", exact: true }).click();
-        const diagram = dialog.getByRole("group", { name: "Combined planning workflow", exact: true });
+        await dialog.getByRole("button", { name: "Workflow", exact: true }).click();
+        await page.getByRole("option", { name: "Double plans", exact: true }).click();
+        const diagram = dialog.getByRole("group", { name: "Double plans workflow", exact: true });
         await diagram.getByRole("button", { name: /^Plan A assignee:/ }).click();
         await page.getByRole("menuitemradio").filter({ hasText: alternate.name }).click();
-        await dialog.getByRole("combobox", { name: "Delivery target", exact: true }).click();
-        await page.getByRole("option", { name: "Push branch", exact: true }).click();
+        await dialog.getByRole("button", { name: "Delivery target", exact: true }).click();
+        await page.getByRole("option", { name: "push branch", exact: true }).click();
         expect(await diagram.textContent()).toContain("Push branch");
       }
+      await dialog.getByRole("button", { name: "Task start mode", exact: true }).click();
+      await page.getByRole("menuitemradio", { name: immediate ? "Run" : "Backlog", exact: true }).click();
       const response = page.waitForResponse(candidate => candidate.request().method() === "POST" && candidate.url().endsWith(`/api/companies/${value.company.id}/tasks`));
       if (immediate) await dialog.getByLabel("Task description", { exact: true }).press("Control+Enter");
-      else {
-        await dialog.getByRole("button", { name: "Task start options", exact: true }).click();
-        await page.getByRole("menuitem", { name: "Create in backlog", exact: true }).click();
-      }
+      else await dialog.getByRole("button", { name: "Create task", exact: true }).click();
       const created = await response;
       expect(created.status(), await created.text()).toBe(201);
       const task = TaskSchema.parse(await created.json());

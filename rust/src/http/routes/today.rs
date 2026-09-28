@@ -65,7 +65,7 @@ async fn today(
     let range = parse_range(raw_query.as_deref());
     let result = range.and_then(|(start, end)| {
         state.with_database(|database| {
-            today_repository::read(database, &user.id, start, end, Utc::now()).map_err(Into::into)
+            today_repository::read(database, &user.id, start, end, Utc::now())
         })
     });
     let mut response = match result {

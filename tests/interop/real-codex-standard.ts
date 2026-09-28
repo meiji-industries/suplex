@@ -23,7 +23,7 @@ if (deterministic) process.env.SUPLEX_CODEX_COMMAND = fileURLToPath(new URL("../
 const phase = deterministic ? process.env.SUPLEX_DETERMINISTIC_PHASE ?? "deliver" : "deliver";
 // Workflow phases run one non-Standard workflow to local delivery; their Advisors use the stand-in's report bridge calls.
 // refine_pull_request starts from pull request #1 on the seeded `feature` branch and delivers by push and merge.
-const workflowNames: Record<string, string> = { direct_build: "Direct build", independent_review: "Second opinion", competing_plans: "Combined planning", refine_pull_request: "Pull request repair" };
+const workflowNames: Record<string, string> = { direct_build: "Simple task", independent_review: "Double reviews", competing_plans: "Double plans", refine_pull_request: "Review and repair" };
 const workflowPhase = phase in workflowNames;
 const repair = phase === "refine_pull_request";
 if (!["deliver", "deliver_pr", "answer", "restart", "cancel", "deliver_claude"].includes(phase) && !workflowPhase) throw new Error("Unknown deterministic phase");
@@ -207,7 +207,7 @@ try {
     ok(headSha && baseSha, "The seeded origin has the pull request branches");
     pulls.push({ number: 1, repository: fixture.project.repository!.toLowerCase(), head: "feature", headSha, base: "main", baseSha, title: "Repair the README", body: "Add the verified README line.", draft: false });
   }
-  for (const id of ["profile_native_root", "profile_native_worker"]) {
+  for (const id of ["profile_native_root", "profile_native_independent", "profile_native_worker"]) {
     const provider = claude ? "claude-code" : "codex";
     const profileModel = claude ? "haiku" : model;
     fixture.database.prepare("UPDATE suplex_profiles SET provider = ?, model = ?, reasoning_level = 'medium', service_tier = 'default' WHERE id = ?").run(provider, profileModel, id);
@@ -219,26 +219,26 @@ try {
   const response = await fixture.page.goto(`${fixture.base}/tasks?company=${fixture.company.id}`);
   equal(response?.status(), 200);
   await fixture.page.getByRole("heading", { name: "Tasks", exact: true }).waitFor();
-  await fixture.page.keyboard.press("c");
+  await fixture.page.getByRole("button", { name: "New task", exact: true }).click();
   const dialog = fixture.page.getByRole("dialog", { name: "New task", exact: true });
   await dialog.waitFor();
   await dialog.getByLabel("Task title", { exact: true }).fill("Append one verified README line");
   await dialog.getByLabel("Task description", { exact: true }).fill("Append `Verified by Suplex Standard task.` to README.md, run pnpm test, commit the change, and deliver the local worktree.");
   if (workflowPhase) {
     const workflowName = workflowNames[phase] ?? phase;
-    await dialog.getByRole("combobox", { name: "Workflow", exact: true }).click();
+    await dialog.getByRole("button", { name: "Workflow", exact: true }).click();
     await fixture.page.getByRole("option", { name: workflowName }).click();
-    await dialog.getByRole("combobox", { name: "Workflow", exact: true }).filter({ hasText: workflowName }).waitFor();
+    await dialog.getByRole("button", { name: "Workflow", exact: true }).filter({ hasText: workflowName }).waitFor();
   }
   if (repair) {
-    await dialog.getByRole("button", { name: "New from source", exact: true }).click();
+    await dialog.getByRole("button", { name: "Pull request", exact: true }).click();
     await fixture.page.getByRole("menuitem").filter({ hasText: "#1 Repair the README" }).click();
-    await dialog.getByRole("button", { name: "New from source", exact: true }).filter({ hasText: "PR #1" }).waitFor();
+    await dialog.getByRole("button", { name: "Pull request", exact: true }).filter({ hasText: "PR #1" }).waitFor();
   } else {
-    await dialog.getByRole("combobox", { name: "Delivery target", exact: true }).click();
-    await fixture.page.getByRole("option", { name: phase === "deliver_pr" ? "Draft pull request" : "Keep in worktree" }).click();
+    await dialog.getByRole("button", { name: "Delivery target", exact: true }).click();
+    await fixture.page.getByRole("option", { name: phase === "deliver_pr" ? "open a draft PR" : "keep in worktree" }).click();
   }
-  equal(await dialog.getByRole("button", { name: "Task start options", exact: true }).isEnabled(), true);
+  equal(await dialog.getByRole("button", { name: "Task start mode", exact: true }).isEnabled(), true);
   equal(fixture.errors.length, 0, fixture.errors.join("; "));
   if (process.env.SUPLEX_REAL_CODEX_RUN !== "1" && !deterministic) {
     console.log(JSON.stringify({ backend: "rust", taskPage: response?.status(), dialog: "ready", project: fixture.project.id, revision }));
@@ -248,8 +248,9 @@ try {
     await mkdir(proof, { recursive: true });
     await fixture.page.screenshot({ path: `${proof}/new-task.png`, fullPage: true });
     const createdResponse = fixture.page.waitForResponse(candidate => candidate.request().method() === "POST" && candidate.url().endsWith(`/api/companies/${fixture.company.id}/tasks`));
-    await dialog.getByRole("button", { name: "Task start options", exact: true }).click();
-    await fixture.page.getByRole("menuitem", { name: "Create in backlog", exact: true }).click();
+    await dialog.getByRole("button", { name: "Task start mode", exact: true }).click();
+    await fixture.page.getByRole("menuitemradio", { name: "Backlog", exact: true }).click();
+    await dialog.getByRole("button", { name: "Create task", exact: true }).click();
     const created = await createdResponse;
     equal(created.status(), 201, await created.text());
     const task = TaskSchema.parse(await created.json());

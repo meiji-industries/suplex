@@ -219,7 +219,7 @@ pub fn list(
 ) -> DatabaseResult<Vec<AgentProfile>> {
     actor(database, user_id, false)?;
     let sql = format!(
-        "{SELECTION}{} ORDER BY name COLLATE NOCASE, id",
+        "{SELECTION}{} ORDER BY sort_order, name COLLATE NOCASE, id",
         if include_archived {
             ""
         } else {
@@ -277,7 +277,7 @@ pub fn update(
         assert_name(database, &input.name, id)?;
         if changes.archived == Some(true) || input.role != current.role {
             let used: bool = database.connection().query_row(
-                "SELECT EXISTS(SELECT 1 FROM suplex_projects WHERE root_profile_id = ?1 OR worker_profile_id = ?1)",
+                "SELECT EXISTS(SELECT 1 FROM suplex_projects WHERE root_profile_id = ?1 OR worker_profile_id = ?1 OR alt_profile_id = ?1)",
                 [id],
                 |row| row.get(0),
             )?;
@@ -410,7 +410,7 @@ pub fn delete(
     database.transaction(false, |database| {
         get(database, id)?;
         let references = [
-            ("projects", "SELECT 1 FROM suplex_projects WHERE root_profile_id = ?1 OR worker_profile_id = ?1 LIMIT 1"),
+            ("projects", "SELECT 1 FROM suplex_projects WHERE root_profile_id = ?1 OR worker_profile_id = ?1 OR alt_profile_id = ?1 LIMIT 1"),
             ("workflows", "SELECT 1 FROM suplex_workflows WHERE json_extract(configuration_json, '$.rootProfileId') = ?1 OR json_extract(configuration_json, '$.workerProfileId') = ?1 OR EXISTS (SELECT 1 FROM json_each(configuration_json, '$.advisorProfileIds') WHERE value = ?1) LIMIT 1"),
             ("task templates", "SELECT 1 FROM suplex_task_templates WHERE json_extract(configuration_json, '$.rootProfileId') = ?1 OR json_extract(configuration_json, '$.workerProfileId') = ?1 OR EXISTS (SELECT 1 FROM json_each(configuration_json, '$.advisorProfileIds') WHERE value = ?1) LIMIT 1"),
         ];
@@ -885,6 +885,19 @@ mod tests {
         };
         let created = create(&mut database, &admin.user.id, &input, now).unwrap();
         assert!(created.id.starts_with("profile_"));
+        let ordered = list(&database, &admin.user.id, false).unwrap();
+        assert_eq!(
+            ordered
+                .iter()
+                .map(|profile| profile.id.as_str())
+                .collect::<Vec<_>>(),
+            vec![
+                "profile_native_root",
+                "profile_native_independent",
+                "profile_native_worker",
+                created.id.as_str()
+            ]
+        );
         assert!(
             list(&database, &admin.user.id, false)
                 .unwrap()

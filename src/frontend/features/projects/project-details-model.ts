@@ -16,8 +16,8 @@ export const PROJECT_SECTIONS = [
 ] as const satisfies ReadonlyArray<{ id: ProjectSection; label: string }>;
 
 export type GeneralDraft = Pick<ApiProject, "name" | "baseBranch" | "repositoryPath"> & { repository: string };
-export type AgentsDraft = Pick<ApiProject, "rootProfileId" | "workerProfileId"> & { providerPolicy: ProjectProviderPolicy | null };
-export type AgentsDraftFinding = { field: "rootProfileId" | "workerProfileId"; message: string };
+export type AgentsDraft = Pick<ApiProject, "rootProfileId" | "workerProfileId" | "altProfileId"> & { providerPolicy: ProjectProviderPolicy | null };
+export type AgentsDraftFinding = { field: "rootProfileId" | "workerProfileId" | "altProfileId"; message: string };
 export type ExecutionDraft = Pick<ApiProject, "setupCommand" | "verificationCommand"> & Pick<ProjectExecution, "instructions"> & { skillDirectories: string };
 export type ConnectionsDraft = { integration: ProjectIntegration; environment: string; mcp: string };
 
@@ -26,7 +26,7 @@ export function generalDraft(project: ApiProject): GeneralDraft {
 }
 
 export function agentsDraft(project: ApiProject): AgentsDraft {
-  return { rootProfileId: project.rootProfileId, workerProfileId: project.workerProfileId, providerPolicy: project.providerPolicy ?? null };
+  return { rootProfileId: project.rootProfileId, workerProfileId: project.workerProfileId, altProfileId: project.altProfileId, providerPolicy: project.providerPolicy ?? null };
 }
 
 export function executionDraft(project: ApiProject): ExecutionDraft {
@@ -58,6 +58,7 @@ export function generalProjectPatch(saved: GeneralDraft, draft: GeneralDraft): P
 export function agentsProjectPatch(saved: AgentsDraft, draft: AgentsDraft): ProjectPatchBody {
   return {
     ...(draft.rootProfileId !== saved.rootProfileId ? { rootProfileId: draft.rootProfileId } : {}),
+    ...(draft.altProfileId !== saved.altProfileId ? { altProfileId: draft.altProfileId } : {}),
     ...(draft.workerProfileId !== saved.workerProfileId ? { workerProfileId: draft.workerProfileId } : {}),
     ...(JSON.stringify(draft.providerPolicy) !== JSON.stringify(saved.providerPolicy) ? { providerPolicy: draft.providerPolicy } : {}),
   };
@@ -67,6 +68,7 @@ export function agentsDraftFindings(draft: AgentsDraft, profiles: readonly Pick<
   return ([
     ["rootProfileId", "root"],
     ["workerProfileId", "worker"],
+    ["altProfileId", "root"],
   ] as const).flatMap(([field, role]) => {
     const profile = profiles.find((candidate) => candidate.id === draft[field] && candidate.role === role);
     return !draft[field] || (profile !== undefined && !isProfileAllowed(draft.providerPolicy, profile))

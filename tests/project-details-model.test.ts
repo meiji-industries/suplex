@@ -10,7 +10,7 @@ const profiles: ApiProfile[] = [
   { id: "worker-codex", name: "Worker Codex", role: "worker", provider: "codex", model: "gpt-5.4", reasoningLevel: "medium", serviceTier: "default", avatarSeed: "c".repeat(32), archivedAt: null, createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-01T00:00:00.000Z" },
 ];
 
-const unrestricted: AgentsDraft = { rootProfileId: "root-claude-default", workerProfileId: "worker-codex", providerPolicy: null };
+const unrestricted: AgentsDraft = { rootProfileId: "root-claude-default", workerProfileId: "worker-codex", altProfileId: "root-codex", providerPolicy: null };
 
 test("General saves send only edited project fields", () => {
   const saved = { repository: "acme/suplex", name: "Suplex", baseBranch: "main", repositoryPath: "/repos/suplex" };
@@ -64,4 +64,11 @@ test("Agents send an allowed new Coordinator with the new policy", () => {
 
 test("Agents have no findings when the provider policy does not change", () => {
   expect(agentsDraftFindings(unrestricted, profiles)).toEqual([]);
+});
+
+
+test("Alt Coordinator saves its own default and respects provider access", () => {
+  const draft = { ...unrestricted, altProfileId: "root-claude-default" };
+  expect(agentsProjectPatch(unrestricted, draft)).toEqual({ altProfileId: "root-claude-default" });
+  expect(agentsDraftFindings({ ...draft, rootProfileId: "root-codex", providerPolicy: { allowedProviders: ["codex"], allowedInstanceIds: [] } }, profiles)).toEqual([{ field: "altProfileId", message: "Select an agent with a provider and login allowed by this project" }]);
 });

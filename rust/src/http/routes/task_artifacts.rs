@@ -138,14 +138,11 @@ async fn read(
             cookies,
         );
     };
-    let mut response = match serve_path(path, content_type, request).await {
-        Some(response) => response,
-        None => {
-            return with_cookies(
-                auth::error(StatusCode::INTERNAL_SERVER_ERROR, "Internal server error"),
-                cookies,
-            );
-        }
+    let Some(mut response) = serve_path(path, content_type, request).await else {
+        return with_cookies(
+            auth::error(StatusCode::INTERNAL_SERVER_ERROR, "Internal server error"),
+            cookies,
+        );
     };
     response.headers_mut().insert(
         header::CACHE_CONTROL,

@@ -12,25 +12,29 @@ pub(crate) mod tests {
     use uuid::Uuid;
 
     fn settle(path: &Path) {
-        let file = fs::OpenOptions::new().write(true).open(path).unwrap();
+        let file = fs::OpenOptions::new()
+            .write(true)
+            .open(path)
+            .expect("open generated artifact to set its modification time");
         file.set_times(
             fs::FileTimes::new().set_modified(SystemTime::now() - Duration::from_secs(2)),
         )
-        .unwrap();
+        .expect("set artifact modification time before the settle window");
     }
 
     pub(crate) fn fixture() -> (PathBuf, PathBuf, SuplexDatabase, String) {
         let directory = std::env::temp_dir().join(format!("suplex-task-media-{}", Uuid::new_v4()));
-        fs::create_dir_all(&directory).unwrap();
+        fs::create_dir_all(&directory).expect("create artifact fixture directory");
         let database_path = directory.join("suplex.sqlite");
-        let mut database = SuplexDatabase::open(&database_path, OpenMode::Migrate).unwrap();
+        let mut database = SuplexDatabase::open(&database_path, OpenMode::Migrate)
+            .expect("open migrated artifact fixture database");
         let now = Utc::now();
         let user = crate::identity::auth::development_sign_in(&mut database, now)
-            .unwrap()
+            .expect("sign in artifact fixture user")
             .user;
         let stamp = now.to_rfc3339();
-        database.connection().execute("INSERT INTO suplex_companies (id,name,status,created_at) VALUES ('company_media','Media','active',?1)", [&stamp]).unwrap();
-        database.connection().execute("INSERT INTO suplex_projects (id,company_id,name,repository_path,worktree_root,repository_identity,base_branch,setup_command,verification_command,root_profile_id,worker_profile_id,agent_task_policy_json,created_at,updated_at) VALUES ('project_media','company_media','Media','/tmp/repo','/tmp/worktrees',NULL,'main','','','profile_root','profile_worker','{}',?1,?1)", [&stamp]).unwrap();
+        database.connection().execute("INSERT INTO suplex_companies (id,name,status,created_at) VALUES ('company_media','Media','active',?1)", [&stamp]).expect("create artifact fixture company");
+        database.connection().execute("INSERT INTO suplex_projects (id,company_id,name,repository_path,worktree_root,repository_identity,base_branch,setup_command,verification_command,root_profile_id,worker_profile_id,agent_task_policy_json,created_at,updated_at) VALUES ('project_media','company_media','Media','/tmp/repo','/tmp/worktrees',NULL,'main','','','profile_root','profile_worker','{}',?1,?1)", [&stamp]).expect("create artifact fixture project");
         let profile = json!({"profileId":"profile_root","provider":"codex","model":"gpt-6-sol","reasoningLevel":"medium","serviceTier":"default"});
         let task = repository::create(
             &mut database,
@@ -56,10 +60,10 @@ pub(crate) mod tests {
                 request_hash: "media-hash".into(),
                 creator: TaskCreator::User(user.id),
                 delivery_target: "merged".into(),
-                delivery_intent: serde_json::from_value(json!({"repository":"owner/repo","headBranch":"task-media","baseBranch":"main","baselineSha":"head","pullRequestNumber":null})).unwrap(),
-                root_profile: serde_json::from_value(profile.clone()).unwrap(),
-                worker_profile: serde_json::from_value(profile).unwrap(),
-                advisor_profiles: serde_json::from_value(json!({})).unwrap(),
+                delivery_intent: serde_json::from_value(json!({"repository":"owner/repo","headBranch":"task-media","baseBranch":"main","baselineSha":"head","pullRequestNumber":null})).expect("parse fixture delivery intent"),
+                root_profile: serde_json::from_value(profile.clone()).expect("parse fixture Coordinator profile"),
+                worker_profile: serde_json::from_value(profile).expect("parse fixture Worker profile"),
+                advisor_profiles: serde_json::from_value(json!({})).expect("parse fixture advisor profiles"),
                 issue: None,
                 start_queued: false,
                 copied_from_task_id: None,
@@ -69,7 +73,7 @@ pub(crate) mod tests {
             },
             now,
         )
-        .unwrap()
+        .expect("create artifact fixture task")
         .task;
         (directory.clone(), database_path, database, task.id)
     }

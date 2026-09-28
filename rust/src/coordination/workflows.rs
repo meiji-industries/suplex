@@ -22,27 +22,27 @@ pub struct WorkflowDefinition {
 pub const WORKFLOWS: [WorkflowDefinition; 5] = [
     WorkflowDefinition {
         id: "standard",
-        name: "Standard",
+        name: "Plan and build",
         advisor_roles: &[],
     },
     WorkflowDefinition {
         id: "direct_build",
-        name: "Direct build",
+        name: "Simple task",
         advisor_roles: &[],
     },
     WorkflowDefinition {
         id: "independent_review",
-        name: "Second opinion",
+        name: "Double reviews",
         advisor_roles: &["reviewer"],
     },
     WorkflowDefinition {
         id: "competing_plans",
-        name: "Combined planning",
+        name: "Double plans",
         advisor_roles: &["planner_a", "planner_b"],
     },
     WorkflowDefinition {
         id: "refine_pull_request",
-        name: "Pull request repair",
+        name: "Review and repair",
         advisor_roles: &["rater"],
     },
 ];
@@ -76,6 +76,17 @@ pub fn advisor_roles(workflow: &str) -> impl Iterator<Item = AdvisorRole> {
         .map_or(&[][..], |definition| definition.advisor_roles)
         .iter()
         .map(|role| AdvisorRole::parse(role).expect("the catalog names Advisor roles"))
+}
+
+pub fn advisor_default_profile_id<'a>(
+    role: AdvisorRole,
+    coordinator: &'a str,
+    alternate: &'a str,
+) -> &'a str {
+    match role {
+        AdvisorRole::PlannerA => coordinator,
+        AdvisorRole::PlannerB | AdvisorRole::Reviewer | AdvisorRole::Rater => alternate,
+    }
 }
 
 pub fn advisor_label(role: &str) -> &'static str {
@@ -459,7 +470,7 @@ pub fn workflow_ready_for_delivery(
             if built {
                 Ok(())
             } else {
-                Err("Direct build requires a completed Worker assignment in direct mode before delivery.".into())
+                Err("Simple task requires a completed Worker assignment in direct mode before delivery.".into())
             }
         }
         Workflow::CompetingPlans => {
@@ -496,7 +507,7 @@ pub fn workflow_ready_for_delivery(
             if valid == Some(true) {
                 Ok(())
             } else {
-                Err("Combined planning requires two valid plan reports and a completed Worker build of the combined plan before delivery.".into())
+                Err("Double plans requires two valid plan reports and a completed Worker build of the combined plan before delivery.".into())
             }
         }
         Workflow::IndependentReview | Workflow::RefinePullRequest => {
@@ -744,11 +755,11 @@ mod tests {
                 .map(|definition| definition.name)
                 .collect::<Vec<_>>(),
             [
-                "Standard",
-                "Direct build",
-                "Second opinion",
-                "Combined planning",
-                "Pull request repair"
+                "Plan and build",
+                "Simple task",
+                "Double reviews",
+                "Double plans",
+                "Review and repair"
             ]
         );
         assert_eq!(

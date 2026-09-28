@@ -3,7 +3,13 @@
 //! mv .context/workflow-layouts.json src/frontend/features/tasks/workflow-layouts.json
 use serde_json::{Value, json};
 
-const GRAPHS: &[(&str, &[&str], &[(&str, &str)])] = &[
+type Graph = (
+    &'static str,
+    &'static [&'static str],
+    &'static [(&'static str, &'static str)],
+);
+
+const GRAPHS: &[Graph] = &[
     (
         "standard",
         &["plan", "build", "review", "delivery"],
@@ -91,7 +97,7 @@ fn layout(id: &str, nodes: &[&str], edges: &[(&str, &str)], compact: bool) -> Va
         .expect("layout failed");
     let mut positions: Vec<Value> = result["children"]
         .as_array()
-        .unwrap()
+        .expect("ELK layout output is complete")
         .iter()
         .map(|node| {
             json!({
@@ -101,7 +107,7 @@ fn layout(id: &str, nodes: &[&str], edges: &[(&str, &str)], compact: bool) -> Va
         .collect();
     let mut routes: Vec<Value> = result["edges"]
         .as_array()
-        .unwrap()
+        .expect("ELK layout output is complete")
         .iter()
         .map(|edge| {
             let section = &edge["sections"][0];
@@ -117,12 +123,15 @@ fn layout(id: &str, nodes: &[&str], edges: &[(&str, &str)], compact: bool) -> Va
         let repair = positions
             .iter()
             .find(|node| node["id"] == "repair")
-            .unwrap();
-        let rater = positions.iter().find(|node| node["id"] == "rater").unwrap();
-        let px = repair["x"].as_f64().unwrap();
-        let py = repair["y"].as_f64().unwrap();
-        let rx = rater["x"].as_f64().unwrap();
-        let ry = rater["y"].as_f64().unwrap();
+            .expect("ELK layout output is complete");
+        let rater = positions
+            .iter()
+            .find(|node| node["id"] == "rater")
+            .expect("ELK layout output is complete");
+        let px = repair["x"].as_f64().expect("ELK layout output is complete");
+        let py = repair["y"].as_f64().expect("ELK layout output is complete");
+        let rx = rater["x"].as_f64().expect("ELK layout output is complete");
+        let ry = rater["y"].as_f64().expect("ELK layout output is complete");
         let points = if compact {
             json!([{"x": px, "y": py + 22.0}, {"x": -30.0, "y": py + 22.0}, {"x": -30.0, "y": ry - 20.0}, {"x": rx + 22.0, "y": ry - 20.0}, {"x": rx + 22.0, "y": ry}])
         } else {
@@ -134,14 +143,19 @@ fn layout(id: &str, nodes: &[&str], edges: &[(&str, &str)], compact: bool) -> Va
         let coordinator = positions
             .iter()
             .find(|node| node["id"] == "coordinator")
-            .unwrap();
-        let coordinator_y = coordinator["y"].as_f64().unwrap();
-        let coordinator_right = coordinator["x"].as_f64().unwrap() + 44.0;
+            .expect("ELK layout output is complete");
+        let coordinator_y = coordinator["y"]
+            .as_f64()
+            .expect("ELK layout output is complete");
+        let coordinator_right = coordinator["x"]
+            .as_f64()
+            .expect("ELK layout output is complete")
+            + 44.0;
         let merge = positions
             .iter_mut()
             .find(|node| node["id"] == "merge")
-            .unwrap();
-        let merge_x = merge["x"].as_f64().unwrap() + 152.0;
+            .expect("ELK layout output is complete");
+        let merge_x = merge["x"].as_f64().expect("ELK layout output is complete") + 152.0;
         merge["x"] = json!(merge_x);
         merge["y"] = json!(coordinator_y);
         for route in &mut routes {
@@ -155,32 +169,37 @@ fn layout(id: &str, nodes: &[&str], edges: &[(&str, &str)], compact: bool) -> Va
     if id == "competing_plans" && !compact {
         for route in &mut routes {
             if !matches!(
-                route["id"].as_str().unwrap(),
+                route["id"].as_str().expect("ELK layout output is complete"),
                 "objective-plan-a" | "objective-plan-b" | "plan-a-combine" | "plan-b-combine"
             ) {
                 continue;
             }
-            let points = route["points"].as_array().unwrap();
+            let points = route["points"]
+                .as_array()
+                .expect("ELK layout output is complete");
             let start = &points[0];
             let end = &points[points.len() - 1];
-            let sx = start["x"].as_f64().unwrap();
-            let sy = start["y"].as_f64().unwrap();
-            let ex = end["x"].as_f64().unwrap();
-            let ey = end["y"].as_f64().unwrap();
+            let sx = start["x"].as_f64().expect("ELK layout output is complete");
+            let sy = start["y"].as_f64().expect("ELK layout output is complete");
+            let ex = end["x"].as_f64().expect("ELK layout output is complete");
+            let ey = end["y"].as_f64().expect("ELK layout output is complete");
             let middle = (sx + ex) / 2.0;
             route["points"] = json!([start, {"x": middle, "y": sy}, {"x": middle, "y": ey}, end]);
         }
     }
     if id != "refine_pull_request" {
-        let build = positions.iter().find(|node| node["id"] == "build").unwrap();
+        let build = positions
+            .iter()
+            .find(|node| node["id"] == "build")
+            .expect("ELK layout output is complete");
         let review = positions
             .iter()
             .find(|node| node["id"] == "review")
-            .unwrap();
-        let bx = build["x"].as_f64().unwrap() + 22.0;
-        let by = build["y"].as_f64().unwrap() + 22.0;
-        let rx = review["x"].as_f64().unwrap() + 22.0;
-        let ry = review["y"].as_f64().unwrap() + 22.0;
+            .expect("ELK layout output is complete");
+        let bx = build["x"].as_f64().expect("ELK layout output is complete") + 22.0;
+        let by = build["y"].as_f64().expect("ELK layout output is complete") + 22.0;
+        let rx = review["x"].as_f64().expect("ELK layout output is complete") + 22.0;
+        let ry = review["y"].as_f64().expect("ELK layout output is complete") + 22.0;
         let points = if compact {
             let loop_x = bx.max(rx) + 44.0;
             vec![
@@ -201,7 +220,12 @@ fn layout(id: &str, nodes: &[&str], edges: &[(&str, &str)], compact: bool) -> Va
         routes.push(json!({"id": "review-build", "points": points}));
     }
     let width = if id == "refine_pull_request" && !compact {
-        json!(result["width"].as_f64().unwrap() + 152.0)
+        json!(
+            result["width"]
+                .as_f64()
+                .expect("ELK layout output is complete")
+                + 152.0
+        )
     } else {
         result["width"].clone()
     };
@@ -219,5 +243,8 @@ fn main() {
             }),
         );
     }
-    println!("{}", serde_json::to_string_pretty(&output).unwrap());
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&output).expect("layout output serializes")
+    );
 }

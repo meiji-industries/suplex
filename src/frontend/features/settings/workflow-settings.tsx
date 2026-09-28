@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState, type ReactElement } from "react";
 import { Archive, ArchiveRestore, CirclePlus, Copy, Ellipsis } from "lucide-react";
 import { DeliveryTargetSchema, VisualEvidenceSchema } from "../../contracts/tasks.js";
 import type { WorkflowRecordInput } from "../../contracts/workflow-presets.js";
-import { ADVISOR_LABELS, WORKFLOWS, workflowDefinition } from "../tasks/workflow-presentation.js";
+import { ADVISOR_DEFAULT_LABELS, ADVISOR_LABELS, WORKFLOWS, workflowDefinition } from "../tasks/workflow-presentation.js";
 import { WorkflowIdSchema } from "../../contracts/workflows.js";
 import type { AdvisorRole } from "../../contracts/advisor-reports.js";
 import { SettingsContent, SettingsLayout } from "./settings-layout.js";
@@ -80,7 +80,7 @@ export function WorkflowSettingsView(): ReactElement {
   const agentLines = (workflow: ApiWorkflow): { label: string; agent: ApiProfile | undefined; fallback: string }[] => [
     { label: "Coordinator", agent: profileFor(workflow.rootProfileId), fallback: "Project default" },
     { label: "Worker", agent: profileFor(workflow.workerProfileId), fallback: "Project default" },
-    ...workflowDefinition(workflow.engine).advisorRoles.map((role) => ({ label: ADVISOR_LABELS[role], agent: profileFor(workflow.advisorProfileIds?.[role]), fallback: "Same as Coordinator" })),
+    ...workflowDefinition(workflow.engine).advisorRoles.map((role) => ({ label: ADVISOR_LABELS[role], agent: profileFor(workflow.advisorProfileIds?.[role]), fallback: ADVISOR_DEFAULT_LABELS[role] })),
   ];
 
   const edit = (workflow: ApiWorkflow): void => { setError(""); setEditor({ kind: "edit", workflowId: workflow.id, draft: workflowDraft(workflow) }); };
@@ -187,7 +187,7 @@ export function WorkflowSettingsView(): ReactElement {
               <FieldLegend variant="label">Default agents</FieldLegend>
               {profileSelect("workflow-root", "Coordinator", "root", draft.rootProfileId, "Project default", (value) => setDraft("rootProfileId", value))}
               {profileSelect("workflow-worker", "Worker", "worker", draft.workerProfileId, "Project default", (value) => setDraft("workerProfileId", value))}
-              {definition.advisorRoles.map((role) => profileSelect(`workflow-advisor-${role}`, ADVISOR_LABELS[role], "root", draft.advisorProfileIds?.[role], "Same as Coordinator", (value) => setDraft("advisorProfileIds", { ...draft.advisorProfileIds, [role]: value })))}
+              {definition.advisorRoles.map((role) => profileSelect(`workflow-advisor-${role}`, ADVISOR_LABELS[role], "root", draft.advisorProfileIds?.[role], ADVISOR_DEFAULT_LABELS[role], (value) => setDraft("advisorProfileIds", { ...draft.advisorProfileIds, [role]: value })))}
             </FieldSet>
             <FieldSet disabled={busy}>
               <FieldLegend variant="label">Default configuration</FieldLegend>

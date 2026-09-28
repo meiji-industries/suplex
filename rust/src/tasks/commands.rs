@@ -284,11 +284,13 @@ pub fn select_local_profiles(
         &project.worker_profile_id,
         "worker",
     )?;
-    // TypeScript `create`: each workflow Advisor defaults to the Coordinator profile.
+    // Resolve project defaults before capturing profiles for this task.
     let mut advisors = BTreeMap::new();
     let selected = serde_json::to_value(&input.advisor_profile_ids)?;
     for role in workflows::advisor_roles(input.workflow.as_str()) {
-        let id = selected[role.as_str()].as_str().unwrap_or(&root.profile_id);
+        let id = selected[role.as_str()].as_str().unwrap_or_else(|| {
+            workflows::advisor_default_profile_id(role, &root.profile_id, &project.alt_profile_id)
+        });
         let profile = selected_profile(database, project, Some(id), id, "root")?;
         advisors.insert(role, profile);
     }
@@ -1087,13 +1089,14 @@ fn normalized_edit(
 
 /// The Advisor profiles of the edited workflow. A request that names its
 /// Advisors states them all; only a request without any Advisor selection
-/// keeps the stored ones. An unnamed role follows the Coordinator profile.
+/// keeps the stored ones. An unnamed role follows its project default.
 fn edited_advisor_profiles(
     database: &SuplexDatabase,
     input: &TaskDetailsBody,
     current: &repository::TaskEditSnapshot,
     normalized: &Map<String, Value>,
     root_profile: &TaskProfile,
+    alt_profile_id: &str,
 ) -> DatabaseResult<BTreeMap<AdvisorRole, TaskProfile>> {
     let workflow = normalized["workflow"].as_str().unwrap_or("standard");
     let mut advisor_profiles = BTreeMap::new();
@@ -1107,7 +1110,13 @@ fn edited_advisor_profiles(
         let id = normalized["advisorProfileIds"][role.as_str()]
             .as_str()
             .or(stored)
-            .unwrap_or(&root_profile.profile_id);
+            .unwrap_or_else(|| {
+                workflows::advisor_default_profile_id(
+                    role,
+                    &root_profile.profile_id,
+                    alt_profile_id,
+                )
+            });
         let profile = if root_profile.profile_id == id {
             root_profile.clone()
         } else {
@@ -1203,8 +1212,15 @@ pub fn update_user_task_details(
         let root_profile = edit_profile(database, root_id, Some(&current.root_profile), "root")?;
         let worker_profile =
             edit_profile(database, worker_id, Some(&current.worker_profile), "worker")?;
-        let advisor_profiles =
-            edited_advisor_profiles(database, input, &current, &normalized, &root_profile)?;
+        let project = service::get(database, actor_user_id, &scope.project_id)?;
+        let advisor_profiles = edited_advisor_profiles(
+            database,
+            input,
+            &current,
+            &normalized,
+            &root_profile,
+            &project.alt_profile_id,
+        )?;
         let delivery_target = normalized
             .get("deliveryTarget")
             .and_then(Value::as_str)
@@ -1317,6 +1333,86 @@ mod tests {
             pull_request_dependencies: vec![], workflow: crate::coordination::workflows::Workflow::Standard,
         };
         (filename, database, user.id, prepared)
+    }
+
+    #[test]
+    fn advisors_inherit_project_defaults_and_capture_explicit_overrides() {
+        let (filename, mut database, user_id, _) = command_fixture();
+        let project = service::get(&database, &user_id, "command_project").unwrap();
+        let request = |workflow: &str| {
+            serde_json::from_value::<TaskCreateBody>(json!({
+            "projectId": "command_project", "title": "Defaults", "description": "", "idempotencyKey": "default-test", "workflow": workflow
+        })).unwrap()
+        };
+        let plans =
+            select_local_profiles(&database, &project, &request("competing_plans")).unwrap();
+        assert_eq!(
+            plans.advisors[&AdvisorRole::PlannerA].profile_id,
+            project.root_profile_id
+        );
+        assert_eq!(
+            plans.advisors[&AdvisorRole::PlannerB].profile_id,
+            project.alt_profile_id
+        );
+        for (workflow, role) in [
+            ("independent_review", AdvisorRole::Reviewer),
+            ("refine_pull_request", AdvisorRole::Rater),
+        ] {
+            assert_eq!(
+                select_local_profiles(&database, &project, &request(workflow))
+                    .unwrap()
+                    .advisors[&role]
+                    .profile_id,
+                project.alt_profile_id
+            );
+        }
+        let patch = serde_json::from_value(json!({"altProfileId": "profile_native_root"})).unwrap();
+        let changed = service::apply_patch(
+            &mut database,
+            &user_id,
+            &project,
+            &patch,
+            (&project.repository_path, &project.worktree_root),
+            Utc::now(),
+        )
+        .unwrap();
+        assert_eq!(changed.alt_profile_id, "profile_native_root");
+        let mut next = request("competing_plans");
+        assert_eq!(
+            select_local_profiles(&database, &changed, &next)
+                .unwrap()
+                .advisors[&AdvisorRole::PlannerB]
+                .profile_id,
+            "profile_native_root"
+        );
+        next.advisor_profile_ids =
+            serde_json::from_value(json!({"planner_b": "profile_native_independent"})).unwrap();
+        assert_eq!(
+            select_local_profiles(&database, &changed, &next)
+                .unwrap()
+                .advisors[&AdvisorRole::PlannerB]
+                .profile_id,
+            "profile_native_independent"
+        );
+        assert_eq!(
+            plans.advisors[&AdvisorRole::PlannerB].profile_id,
+            "profile_native_independent"
+        );
+        let invalid =
+            serde_json::from_value(json!({"altProfileId": "profile_native_worker"})).unwrap();
+        assert!(
+            service::apply_patch(
+                &mut database,
+                &user_id,
+                &changed,
+                &invalid,
+                (&project.repository_path, &project.worktree_root),
+                Utc::now()
+            )
+            .is_err()
+        );
+        drop(database);
+        let _ = std::fs::remove_file(filename);
     }
 
     fn another(prepared: &PreparedTask, key: &str) -> PreparedTask {

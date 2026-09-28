@@ -44,7 +44,7 @@ export class DesktopUpdater {
   }
 
   menuItem(): DesktopUpdateMenuItem {
-    return { label: "Check for Desktop Update", click: () => { void this.check(true); } };
+    return { label: "Check for updates", click: () => { void this.check(true); } };
   }
 
   async check(manual: boolean): Promise<void> {

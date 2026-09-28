@@ -313,6 +313,7 @@ mod migration_regressions {
             ),
             json!([
                 {"role":"root","provider":"codex","model":"gpt-5.6-sol","reasoning_level":"medium","service_tier":"default"},
+                {"role":"root","provider":"codex","model":"gpt-5.6-sol","reasoning_level":"medium","service_tier":"default"},
                 {"role":"worker","provider":"codex","model":"gpt-5.6-luna","reasoning_level":"max","service_tier":"priority"}
             ])
         );
@@ -441,14 +442,14 @@ mod migration_regressions {
         );
         assert_eq!(
             rows(&database, "SELECT role FROM suplex_profiles ORDER BY role"),
-            json!([{"role":"root"},{"role":"worker"}])
+            json!([{"role":"root"},{"role":"root"},{"role":"worker"}])
         );
         assert_eq!(rows(&database, "PRAGMA foreign_key_check"), json!([]));
         drop(database);
         let reopened = SuplexDatabase::open(&path, OpenMode::Migrate).unwrap();
         assert_eq!(
             rows(&reopened, "SELECT COUNT(*) AS n FROM suplex_profiles"),
-            json!([{"n":2}])
+            json!([{"n":3}])
         );
         assert_eq!(
             reopened.schema_status().unwrap().state,

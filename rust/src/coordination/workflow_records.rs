@@ -411,7 +411,7 @@ mod tests {
                 false
             )
             .unwrap_err(),
-            "The Direct build workflow has no Reviewer, Rater Advisor"
+            "The Simple task workflow has no Reviewer, Rater Advisor"
         );
         assert_eq!(
             normalized(

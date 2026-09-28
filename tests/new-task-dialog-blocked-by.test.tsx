@@ -32,6 +32,8 @@ vi.mock("../src/frontend/components/ui/dropdown-menu.js", async () => {
     DropdownMenuTrigger: ({ render, children }: { render: React.ReactElement; children: React.ReactNode }) => { const { setOpen } = React.useContext(Context); return React.cloneElement(render as React.ReactElement<React.ButtonHTMLAttributes<HTMLButtonElement>>, { onClick: () => setOpen(true) }, children); },
     DropdownMenuContent: ({ children }: { children: React.ReactNode }) => React.useContext(Context).open ? <div role="menu">{children}</div> : null,
     DropdownMenuItem: ({ children, onClick }: { children: React.ReactNode; onClick?: () => void }) => <button type="button" role="menuitem" onClick={onClick}>{children}</button>,
+    DropdownMenuRadioGroup: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+    DropdownMenuRadioItem: ({ children }: { children: React.ReactNode }) => <button type="button" role="menuitemradio">{children}</button>,
   };
 });
 vi.mock("../src/frontend/components/ui/button.js", () => ({ Button: ({ children, ...props }: React.ButtonHTMLAttributes<HTMLButtonElement>) => <button {...props}>{children}</button> }));
@@ -39,26 +41,19 @@ vi.mock("../src/frontend/components/ui/new-button.js", () => ({ NewButton: ({ ch
 vi.mock("../src/frontend/components/ui/input.js", () => ({ Input: (props: React.InputHTMLAttributes<HTMLInputElement>) => <input {...props} /> }));
 vi.mock("../src/frontend/components/ui/textarea.js", () => ({ Textarea: (props: React.TextareaHTMLAttributes<HTMLTextAreaElement>) => <textarea {...props} /> }));
 vi.mock("../src/frontend/components/ui/checkbox.js", () => ({ Checkbox: ({ checked, disabled, onCheckedChange }: { checked: boolean; disabled?: boolean; onCheckedChange: (value: boolean) => void }) => <input type="checkbox" checked={checked} disabled={disabled} onChange={event => onCheckedChange(event.target.checked)} /> }));
-vi.mock("../src/frontend/components/ui/select.js", async () => {
+vi.mock("../src/frontend/features/tasks/task-option-filter.js", async () => {
   const React = await import("react");
-  const Context = React.createContext({ value: "", disabled: false, open: false, setOpen: (_open: boolean): void => undefined, onValueChange: (_value: string): void => undefined });
-  return {
-    Select: ({ value, disabled = false, onValueChange, children }: { value: string; disabled?: boolean; onValueChange: (value: string) => void; children: React.ReactNode }) => {
-      const [open, setOpen] = React.useState(false);
-      return <Context.Provider value={{ value, disabled, onValueChange, open, setOpen }}>{children}</Context.Provider>;
-    },
-    SelectTrigger: ({ children, ...props }: React.ButtonHTMLAttributes<HTMLButtonElement>) => { const context = React.useContext(Context); return <button {...props} type="button" disabled={context.disabled} onClick={() => context.setOpen(true)}>{children}</button>; },
-    SelectContent: ({ children }: { children: React.ReactNode }) => React.useContext(Context).open ? <div role="listbox">{children}</div> : null,
-    SelectItem: ({ value, children }: { value: string; children: React.ReactNode }) => { const context = React.useContext(Context); return <button type="button" role="option" aria-selected={value === context.value} onClick={() => { context.onValueChange(value); context.setOpen(false); }}>{children}</button>; },
-    SelectValue: ({ children }: { children?: React.ReactNode }) => { const context = React.useContext(Context); return children ?? context.value; },
-  };
+  return { TaskOptionFilter: ({ label, value, valueLabel, options, disabled, onValueChange }: { label: string; value: string | string[]; valueLabel?: string; options: { value: string; label: string; disabled?: boolean }[]; disabled: boolean; onValueChange: (value: string | string[]) => void }) => {
+    const [open, setOpen] = React.useState(false);
+    return <><button type="button" aria-label={label} disabled={disabled} onClick={() => setOpen(!open)}>{valueLabel ?? options.find(option => option.value === value)?.label ?? value}</button>{open ? options.map(option => <button type="button" role="option" key={option.value} disabled={option.disabled} onClick={() => { onValueChange(Array.isArray(value) ? value.includes(option.value) ? value.filter(item => item !== option.value) : [...value, option.value] : option.value); setOpen(false); }}>{option.label}</button>) : null}</>;
+  } };
 });
 vi.mock("../src/frontend/components/ui/inline-attachment-picker.js", () => ({ InlineAttachmentPicker: () => null }));
 vi.mock("../src/frontend/components/ui/alert.js", () => ({ Alert: ({ children }: { children: React.ReactNode }) => <div>{children}</div>, AlertDescription: ({ children }: { children: React.ReactNode }) => <div>{children}</div> }));
 vi.mock("../src/frontend/components/app/entity-avatar.js", () => ({ EntityAvatar: () => null }));
 vi.mock("../src/frontend/components/ui/breadcrumb.js", () => ({ Breadcrumb: ({ children }: { children: React.ReactNode }) => <>{children}</>, BreadcrumbItem: ({ children }: { children: React.ReactNode }) => <>{children}</>, BreadcrumbList: ({ children }: { children: React.ReactNode }) => <>{children}</>, BreadcrumbSeparator: () => null }));
 vi.mock("../src/frontend/features/tasks/task-source-picker.js", () => ({
-  TaskSourcePicker: ({ onSelect, pullRequestsOnly, onClear }: { onSelect: (source: unknown, selector?: unknown) => void; pullRequestsOnly: boolean; onClear: () => void }) => <><button type="button" onClick={() => pullRequestsOnly ? onSelect({ kind: "pull_request", title: "Repair the picker", number: 42 }, { kind: "pull_request", number: 42 }) : onSelect({ kind: "issue", issue: { kind: "jira", site: "https://client.atlassian.net", id: "42", key: "APP-42", title: "Fix the picker", url: "https://client.atlassian.net/browse/APP-42" } })}>{pullRequestsOnly ? "Select a pull request" : "Select Jira issue"}</button><button type="button" onClick={onClear}>Clear source</button></>,
+  TaskSourcePicker: ({ onSelect, pullRequestsOnly, onClear, trigger }: { trigger?: React.ReactElement<React.ButtonHTMLAttributes<HTMLButtonElement>>; onSelect: (source: unknown, selector?: unknown) => void; pullRequestsOnly: boolean; onClear: () => void }) => <><button type="button" onClick={() => pullRequestsOnly ? onSelect({ kind: "pull_request", title: "Repair the picker", number: 42 }, { kind: "pull_request", number: 42 }) : onSelect({ kind: "issue", issue: { kind: "jira", site: "https://client.atlassian.net", id: "42", key: "APP-42", title: "Fix the picker", url: "https://client.atlassian.net/browse/APP-42" } })}>{trigger?.props.children ?? (pullRequestsOnly ? "Select a PR" : "Select Jira issue")}</button><button type="button" onClick={onClear}>Clear source</button></>,
   issueTaskSource: (issue: unknown) => ({ kind: "issue", issue }),
   prefillForTaskSource: (source: { kind: string; issue?: { title: string; key: string; url: string } }) => source.kind === "issue" ? { title: source.issue!.title, description: `Work on ${source.issue!.key}: ${source.issue!.url}` } : { title: "", description: "" },
 }));
@@ -69,7 +64,7 @@ import { NewTaskDialog } from "../src/frontend/features/tasks/new-task-dialog.js
 const project = { id: "project-1", name: "Project One", rootProfileId: "root", workerProfileId: "worker", verificationCommand: "" };
 const profile = { id: "root", role: "root", provider: "opencode", model: "root", reasoningLevel: "medium", serviceTier: "default" };
 const worker = { ...profile, id: "worker", role: "worker", model: "worker" };
-const workflow = { id: "workflow_native_standard", name: "Standard", engine: "standard", rootProfileId: "root", workerProfileId: "worker", advisorProfileIds: {}, deliveryTarget: "pull_request_draft", runProjectTests: true, visualEvidence: "off", archivedAt: null };
+const workflow = { id: "workflow_native_standard", name: "Plan and build", engine: "standard", rootProfileId: "root", workerProfileId: "worker", advisorProfileIds: {}, deliveryTarget: "pull_request_draft", runProjectTests: true, visualEvidence: "off", archivedAt: null };
 const active = { id: "task-active", projectId: project.id, title: "Active prerequisite", status: "active", archivedAt: null, queue: { state: "running" } };
 const otherProject = { id: "task-other-project", projectId: "project-2", title: "Other project", status: "active", archivedAt: null, queue: { state: "running" } };
 const backlog = { id: "task-backlog", projectId: project.id, title: "Backlog task", status: "backlog", archivedAt: null, queue: { state: "backlog" } };
@@ -220,7 +215,7 @@ test("the picker reports an empty task result", async () => {
 });
 
 test("Workflow stays selected by name, previews the selected engine, and posts it", async () => {
-  const review = { ...workflow, id: "workflow_native_independent_review", name: "Second opinion", engine: "independent_review" };
+  const review = { ...workflow, id: "workflow_native_independent_review", name: "Double reviews", engine: "independent_review" };
   const fallback = api.readJsonUnchecked.getMockImplementation()!;
   api.readJsonUnchecked.mockImplementation(async (url: string, init?: RequestInit) => url === "/api/workflows?includeArchived=true" ? { workflows: [workflow, review] } : fallback(url, init));
   const view = mount();
@@ -230,12 +225,12 @@ test("Workflow stays selected by name, previews the selected engine, and posts i
   const title = view.container.querySelector<HTMLInputElement>('[aria-label="Task title"]')!;
   const submit = async () => { await act(async () => { setText(title, "Pick a workflow"); title.form?.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })); await Promise.resolve(); }); };
   const lastPost = () => JSON.parse(api.readJsonUnchecked.mock.calls.filter(([url, init]) => url === "/api/companies/company-1/tasks" && init?.method === "POST").at(-1)![1].body);
-  expect(trigger().textContent).toBe("Standard");
+  expect(trigger().textContent).toBe("Plan and build");
   expect(clear()).toBeNull();
 
   await act(async () => { trigger().click(); });
-  await act(async () => { button(view.container, "Second opinion").click(); });
-  expect(trigger().textContent).toBe("Second opinion");
+  await act(async () => { button(view.container, "Double reviews").click(); });
+  expect(trigger().textContent).toBe("Double reviews");
   expect(clear()).toBeNull();
   expect(view.container.querySelector('[data-workflow-illustration="independent_review"]')).not.toBeNull();
   expect(view.container.textContent).toContain("Reviewer");
@@ -243,8 +238,8 @@ test("Workflow stays selected by name, previews the selected engine, and posts i
   expect(lastPost().workflow).toBe("independent_review");
 
   await act(async () => { trigger().click(); });
-  await act(async () => { button(view.container, "Standard").click(); });
-  expect(trigger().textContent).toBe("Standard");
+  await act(async () => { button(view.container, "Plan and build").click(); });
+  expect(trigger().textContent).toBe("Plan and build");
   expect(clear()).toBeNull();
   await submit();
   expect(lastPost().workflow).toBe("standard");
@@ -265,35 +260,61 @@ async function submitTask(container: HTMLElement) {
   await act(async () => { setText(title, "Workflow task"); title.form?.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })); await Promise.resolve(); });
 }
 
+test.each([true, false])("form submission uses the selected start mode: %s", async startImmediately => {
+  const { container } = mount(false, { startImmediately });
+  await flush();
+  expect(button(container, "Create task")).toBeDefined();
+  await submitTask(container);
+  expect(latestRequest("POST")).toMatchObject({ startImmediately });
+});
+
 test("shows disabled project tests when the project has no test command", async () => {
   const { container } = mount();
   await flush();
-  const projectTests = button(container, "Tests");
-  expect(projectTests.textContent).toBe("run");
+  await act(async () => { button(container, "Tests and proof").click(); });
+  const projectTests = Array.from(container.querySelectorAll<HTMLButtonElement>('[role="option"]')).find(option => option.textContent === "Tests")!;
   expect(projectTests.disabled).toBe(true);
   expect(container.textContent).not.toContain("No project test command configured.");
 });
 
+test("the combined checks picker saves tests and proof independently", async () => {
+  const fallback = api.readJsonUnchecked.getMockImplementation()!;
+  api.readJsonUnchecked.mockImplementation(async (url: string, init?: RequestInit) => url === "/api/companies/company-1/projects" ? { projects: [{ ...project, verificationCommand: "pnpm test" }] } : fallback(url, init));
+  const { container } = mount();
+  await flush();
+  expect(button(container, "Tests and proof").textContent).toBe("tests");
+  await selectOption(container, "Tests and proof", "Tests");
+  expect(button(container, "Tests and proof").textContent).toBe("no checks");
+  await selectOption(container, "Tests and proof", "Proof");
+  expect(button(container, "Tests and proof").textContent).toBe("proof");
+  await selectOption(container, "Tests and proof", "Tests");
+  expect(button(container, "Tests and proof").textContent).toBe("tests and proof");
+  await selectOption(container, "Tests and proof", "Tests");
+  await submitTask(container);
+  expect(latestRequest("POST")).toMatchObject({ runProjectTests: false, visualEvidence: "capture" });
+});
+
 test("repair keeps its source requirement and restores the prior delivery", async () => {
-  const repair = { ...workflow, id: "repair", name: "Pull request repair", engine: "refine_pull_request" };
+  const repair = { ...workflow, id: "repair", name: "Review and repair", engine: "refine_pull_request" };
   const standard = { ...workflow, deliveryTarget: undefined, runProjectTests: undefined };
   const fallback = api.readJsonUnchecked.getMockImplementation()!;
   api.readJsonUnchecked.mockImplementation(async (url: string, init?: RequestInit) => url === "/api/workflows?includeArchived=true" ? { workflows: [standard, repair] } : fallback(url, init));
   const { container } = mount();
   await flush();
-  await selectOption(container, "Delivery target", "Push branch");
-  await selectOption(container, "Workflow", "Pull request repair");
-  expect(button(container, "Delivery target").textContent).toBe("merged");
+  await selectOption(container, "Delivery target", "push branch");
+  await selectOption(container, "Workflow", "Review and repair");
+  expect(button(container, "Delivery target").textContent).toBe("merge to base");
   expect(button(container, "Delivery target").disabled).toBe(true);
-  expect(container.querySelector('[data-repair-note]')?.textContent).toBe("Needs a PR");
-  expect(container.querySelector('[data-repair-note]')?.classList.contains("text-destructive")).toBe(true);
+  expect(container.textContent).not.toContain("Needs a PR");
+  expect(button(container, "a PR")).toBeDefined();
   await submitTask(container);
   expect(latestRequest("POST")).toBeUndefined();
-  await act(async () => { button(container, "Select a pull request").click(); });
+  await act(async () => { button(container, "a PR").click(); });
+  expect(button(container, "PR #42")).toBeDefined();
   await submitTask(container);
   expect(latestRequest("POST")).toMatchObject({ workflow: "refine_pull_request", deliveryTarget: "merged", runProjectTests: true, source: { kind: "pull_request", number: 42 } });
-  await selectOption(container, "Workflow", "Standard");
-  expect(button(container, "Delivery target").textContent).toBe("remote_branch");
+  await selectOption(container, "Workflow", "Plan and build");
+  expect(button(container, "Delivery target").textContent).toBe("push branch");
   expect(button(container, "Delivery target").disabled).toBe(false);
   await submitTask(container);
   expect(latestRequest("POST")).toMatchObject({ workflow: "standard", deliveryTarget: "remote_branch" });
@@ -315,26 +336,26 @@ test("saved variants and explicit edit drafts keep their settings with the engin
   expect(button(container, "Workflow").textContent).toBe("Team review");
   expect(container.querySelector('[data-workflow-illustration="independent_review"]')).not.toBeNull();
   expect(container.textContent).not.toContain("Check the complete change.");
-  expect(button(container, "Delivery target").textContent).toBe("local_worktree");
+  expect(button(container, "Delivery target").textContent).toBe("keep in worktree");
   await submitTask(container);
   expect(latestRequest("PATCH")).toMatchObject({ workflow: "independent_review", deliveryTarget: "local_worktree", advisorProfileIds: { reviewer: "root" } });
   expect(latestRequest("PATCH")).not.toHaveProperty("source");
   expect(storage.setItem).not.toHaveBeenCalled();
 });
 
-test("Standard remains visible and usable when the workflow catalog is empty", async () => {
+test("Plan and build remains visible and usable when the workflow catalog is empty", async () => {
   const fallback = api.readJsonUnchecked.getMockImplementation()!;
   api.readJsonUnchecked.mockImplementation(async (url: string, init?: RequestInit) => url === "/api/workflows?includeArchived=true" ? { workflows: [] } : fallback(url, init));
   const { container } = mount();
   await flush();
-  expect(button(container, "Workflow").textContent).toBe("Standard");
+  expect(button(container, "Workflow").textContent).toBe("Plan and build");
   expect(container.querySelector('[data-workflow-illustration="standard"]')).not.toBeNull();
   await submitTask(container);
   expect(latestRequest("POST")).toMatchObject({ workflow: "standard" });
 });
 
 test("templates replace the selected workflow, illustration, and admitted Advisors", async () => {
-  const combined = { ...workflow, id: "combined", name: "Combined planning", engine: "competing_plans", advisorProfileIds: { planner_a: "root", planner_b: "root" } };
+  const combined = { ...workflow, id: "combined", name: "Double plans", engine: "competing_plans", advisorProfileIds: { planner_a: "root", planner_b: "root" } };
   const template = { id: "template", name: "Plan the feature", description: "Compare approaches.", workflow: "competing_plans", advisorProfileIds: combined.advisorProfileIds, deliveryTarget: "remote_branch", runProjectTests: false, visualEvidence: "capture" };
   const fallback = api.readJsonUnchecked.getMockImplementation()!;
   api.readJsonUnchecked.mockImplementation(async (url: string, init?: RequestInit) => {
@@ -345,11 +366,11 @@ test("templates replace the selected workflow, illustration, and admitted Adviso
   const { container } = mount();
   await flush();
   await selectOption(container, "Template", "Plan the feature");
-  expect(button(container, "Workflow").textContent).toBe("Combined planning");
+  expect(button(container, "Workflow").textContent).toBe("Double plans");
   expect(container.querySelector('[data-workflow-illustration="competing_plans"]')).not.toBeNull();
   await submitTask(container);
   expect(latestRequest("POST")).toMatchObject({ workflow: "competing_plans", description: "Compare approaches.", advisorProfileIds: { planner_a: "root", planner_b: "root" }, deliveryTarget: "remote_branch", visualEvidence: "capture" });
-  await selectOption(container, "Workflow", "Standard");
+  await selectOption(container, "Workflow", "Plan and build");
   await submitTask(container);
   expect(latestRequest("POST").advisorProfileIds).toEqual({});
 });

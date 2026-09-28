@@ -1,25 +1,27 @@
 import { updateTask, createTask } from "./lib/task-api.js";
 import { useEffect, useRef, useState, type ReactElement } from "react";
 import { isProfileAllowed } from "../projects/lib/provider-policy.js";
-import { ChevronDown, CirclePlus, FileText, FolderKanban, X } from "lucide-react";
-import { TaskImageInputSchema, DeliveryTargetSchema, VisualEvidenceSchema, type Task, type TaskInput } from "../../contracts/tasks.js";
-import { ADVISOR_LABELS, workflowDefinition } from "./workflow-presentation.js";
+import { TriangleAlert, ChevronDown, CircleOff, CirclePlus, Combine, FileText, FolderGit2, FolderKanban, GitBranch, GitMerge, GitPullRequest, GitPullRequestDraft, Inbox, ListChecks, Play, ScanEye, Send, TestTube2, Wrench, X } from "lucide-react";
+import { TaskImageInputSchema, DeliveryTargetSchema, type Task, type TaskInput } from "../../contracts/tasks.js";
+import { ADVISOR_DEFAULT_LABELS, ADVISOR_LABELS, workflowDefinition } from "./workflow-presentation.js";
 import type { AdvisorProfileIds, WorkflowId } from "../../contracts/workflows.js";
 import type { AdvisorRole } from "../../contracts/advisor-reports.js";
 import type { ApiProfile, ApiProject, ApiTaskTemplate, ApiWorkflow } from "../../shell/view-shared.js";
 import { ApiError, readJsonUnchecked, withCompany } from "../../lib/api.js";
 import { useTaskCache } from "./task-data.js";
+import { Collapsible } from "../../components/ui/collapsible.js";
+import { ButtonGroup, ButtonGroupText } from "../../components/ui/button-group.js";
 import { Button } from "../../components/ui/button.js";
 import { NewButton } from "../../components/ui/new-button.js";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "../../components/ui/dialog.js";
 import { Input } from "../../components/ui/input.js";
 import { Textarea } from "../../components/ui/textarea.js";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../components/ui/select.js";
+import { TaskOptionFilter } from "./task-option-filter.js";
 import { InlineAttachmentPicker } from "../../components/ui/inline-attachment-picker.js";
 import { Alert, AlertDescription } from "../../components/ui/alert.js";
 import { EntityAvatar } from "../../components/app/entity-avatar.js";
 import { Breadcrumb, BreadcrumbItem, BreadcrumbList, BreadcrumbSeparator } from "../../components/ui/breadcrumb.js";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "../../components/ui/dropdown-menu.js";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuRadioGroup, DropdownMenuRadioItem, DropdownMenuTrigger } from "../../components/ui/dropdown-menu.js";
 import { WorkflowIllustration } from "./workflow-illustration.js";
 import { TaskSourcePicker, issueTaskSource, prefillForTaskSource, type TaskSourceSelector, type TaskSourceSummary } from "./task-source-picker.js";
 import { BlockedByPickerDialog } from "./blocked-by-picker.js";
@@ -32,6 +34,20 @@ import { listProjects } from "../projects/lib/project-api.js";
 
 type Delivery = { deliveryTarget: NonNullable<TaskInput["deliveryTarget"]>; runProjectTests: boolean };
 type RecordFallback = { rootProfileId?: string | undefined; workerProfileId?: string | undefined; advisorProfileIds?: AdvisorProfileIds | undefined; deliveryTarget?: Delivery["deliveryTarget"] | undefined; runProjectTests?: boolean | undefined; visualEvidence?: NonNullable<TaskInput["visualEvidence"]> | undefined };
+const workflowIcons: Record<WorkflowId, ReactElement> = {
+  standard: <ListChecks aria-hidden="true" className="size-[11px]" />,
+  direct_build: <Send aria-hidden="true" className="size-[11px]" />,
+  independent_review: <ScanEye aria-hidden="true" className="size-[11px]" />,
+  competing_plans: <Combine aria-hidden="true" className="size-[11px]" />,
+  refine_pull_request: <Wrench aria-hidden="true" className="size-[11px]" />,
+};
+const deliveryIcons: Record<Delivery["deliveryTarget"], ReactElement> = {
+  local_worktree: <FolderGit2 aria-hidden="true" className="size-[11px]" />,
+  remote_branch: <GitBranch aria-hidden="true" className="size-[11px]" />,
+  pull_request_draft: <GitPullRequestDraft aria-hidden="true" className="size-[11px]" />,
+  pull_request_ready: <GitPullRequest aria-hidden="true" className="size-[11px]" />,
+  merged: <GitMerge aria-hidden="true" className="size-[11px]" />,
+};
 const REPAIR: WorkflowId = "refine_pull_request";
 const repairNote = "Suplex repairs this pull request, then pushes and merges it after the checks pass.";
 
@@ -184,7 +200,7 @@ export function NewTaskDialog({ open, onOpenChange, companyId, onCreated, initia
     setWorkflow(template.workflow); setWorkflowId(findRecord(workflows, undefined, template.workflow)?.id ?? ""); setAdvisorProfileIds(admittedAdvisors(template.workflow, template.advisorProfileIds));
   };
   const missingSource = repair && source?.kind !== "pull_request";
-  const submit = async (shouldStartImmediately = true) => {
+  const submit = async () => {
     if (busy || imageRead.current.pending || !projectId || !title.trim() || missingSource) return;
     setBusy(true); setError(""); setProjectFindings([]);
     try {
@@ -193,7 +209,7 @@ export function NewTaskDialog({ open, onOpenChange, companyId, onCreated, initia
         onCreated(saved);
         return;
       }
-      const body = { projectId, title, description, startImmediately: shouldStartImmediately, deliveryTarget, runProjectTests, visualEvidence, images, workflow, advisorProfileIds: admittedAdvisors(workflow, advisorProfileIds), ...(rootProfileId ? { rootProfileId } : {}), ...(workerProfileId ? { workerProfileId } : {}), ...(sourceSummary?.kind === "issue" ? { issue: sourceSummary.issue } : {}), ...(source ? { source } : {}), ...(blockedBy.length ? { dependsOn: blockedBy.map(prerequisite => prerequisite.id) } : {}) };
+      const body = { projectId, title, description, startImmediately, deliveryTarget, runProjectTests, visualEvidence, images, workflow, advisorProfileIds: admittedAdvisors(workflow, advisorProfileIds), ...(rootProfileId ? { rootProfileId } : {}), ...(workerProfileId ? { workerProfileId } : {}), ...(sourceSummary?.kind === "issue" ? { issue: sourceSummary.issue } : {}), ...(source ? { source } : {}), ...(blockedBy.length ? { dependsOn: blockedBy.map(prerequisite => prerequisite.id) } : {}) };
       const serialized = JSON.stringify(body);
       if (request.current?.body !== serialized) request.current = { body: serialized, key: crypto.randomUUID() };
       const task = await createTask(companyId, { ...body, idempotencyKey: request.current.key });
@@ -238,13 +254,17 @@ export function NewTaskDialog({ open, onOpenChange, companyId, onCreated, initia
     if (Object.values(advisorProfileIds).some(id => id && !allowed(id))) setAdvisorProfileIds(current => Object.fromEntries(Object.entries(current).filter(([, id]) => id && allowed(id))));
   }, [editing, open, settingsLoaded, project, profiles, rootProfileId, workerProfileId, advisorProfileIds]);
   const definition = workflowDefinition(workflow);
-  const selectedWorkflow = workflows.find(record => record.id === workflowId);
   const availableWorkflows = workflows.filter(record => (!record.archivedAt || record.id === workflowId) && (repositoryConnection?.kind !== "bitbucket" || record.engine !== REPAIR));
   const deliveryLabel = taskDeliveryTargetOptions.find(option => option.value === deliveryTarget)?.label ?? "Selected target";
+  const avatarFor = (id: string | undefined) => {
+    const profile = eligibleProfiles.find(profile => profile.id === id && !profile.archivedAt);
+    return profile ? <EntityAvatar kind="agent" id={profile.id} name={profile.name} seed={profile.avatarSeed} size="default" /> : undefined;
+  };
   const rootSelector = <TaskRoleSelector compact inline role="root" profiles={eligibleProfiles} assignment={rootProfileId} defaultProfileId={project?.rootProfileId} busy={busy} onChange={setRootProfileId} />;
   return <Dialog open={open} onOpenChange={value => { if (!busy) onOpenChange(value); }}>
-    <DialogContent className="max-h-[85vh] w-[min(92vw,936px)] max-w-none gap-0 overflow-y-auto p-0 sm:max-w-[936px]" showCloseButton={false}>
-      <form className="min-w-0" onPaste={event => { const files = Array.from(event.clipboardData.files); if (files.length && !busy && !editing) { event.preventDefault(); void addImages(files); } }} onKeyDown={event => { if ((event.metaKey || event.ctrlKey) && event.key === "Enter") { event.preventDefault(); event.currentTarget.requestSubmit(); } }} onSubmit={event => { event.preventDefault(); void submit(); }}>
+    <DialogContent className="w-[min(92vw,936px)] max-w-none gap-0 p-0 sm:max-w-[936px]" showCloseButton={false}>
+      <Collapsible.Root open={workflowPreviewOpen} onOpenChange={setWorkflowPreviewOpen} className="relative min-w-0">
+      <form className="max-h-[85vh] min-w-0 overflow-y-auto rounded-xl" onPaste={event => { const files = Array.from(event.clipboardData.files); if (files.length && !busy && !editing) { event.preventDefault(); void addImages(files); } }} onKeyDown={event => { if ((event.metaKey || event.ctrlKey) && event.key === "Enter") { event.preventDefault(); event.currentTarget.requestSubmit(); } }} onSubmit={event => { event.preventDefault(); void submit(); }}>
         <div className="flex min-h-[230px] min-w-0 flex-col">
       <DialogHeader className="px-4 py-3 sm:px-5">
         <div className="flex min-w-0 flex-wrap items-center justify-between gap-2"><Breadcrumb><BreadcrumbList className="gap-2 text-sm"><BreadcrumbItem>
@@ -253,7 +273,7 @@ export function NewTaskDialog({ open, onOpenChange, companyId, onCreated, initia
           </DropdownMenuTrigger><DropdownMenuContent align="start">{projects.map(candidate => <DropdownMenuItem className="text-xs" key={candidate.id} onClick={() => { setProjectId(candidate.id); setSource(undefined); setSourceSummary(undefined); setBlockedBy([]); }}><EntityAvatar kind="project" id={candidate.id} name={candidate.name} size="xs" /><span className="min-w-0 flex-1 truncate">{candidate.name}</span>{candidate.id === projectId ? <span aria-label="Selected">✓</span> : null}</DropdownMenuItem>)}</DropdownMenuContent></DropdownMenu>
         </BreadcrumbItem><BreadcrumbSeparator /><BreadcrumbItem><DialogTitle className="font-normal">{editing ? "Edit task" : "New task"}</DialogTitle></BreadcrumbItem></BreadcrumbList></Breadcrumb>
         <div className="ml-auto flex flex-wrap items-center justify-end gap-1">
-          <TaskSourcePicker compact projectId={projectId} value={sourceSummary} disabled={busy || editing} pullRequestsOnly={repair} onClear={() => { setSource(undefined); setSourceSummary(undefined); }} onSelect={(summary, selector) => { setSource(selector); setSourceSummary(summary); const prefill = prefillForTaskSource(summary); if (!title) setTitle(prefill.title); if (!description) setDescription(prefill.description); }} />
+          {repair ? null : <TaskSourcePicker compact projectId={projectId} value={sourceSummary} disabled={busy || editing} pullRequestsOnly={repair} onClear={() => { setSource(undefined); setSourceSummary(undefined); }} onSelect={(summary, selector) => { setSource(selector); setSourceSummary(summary); const prefill = prefillForTaskSource(summary); if (!title) setTitle(prefill.title); if (!description) setDescription(prefill.description); }} />}
           {editing ? null : <Button type="button" variant="ghost" size="xs" disabled={busy || !projectId} onClick={() => setBlockedByPickerOpen(true)}><CirclePlus className="size-3.5" />Blocked by...</Button>}
           <DropdownMenu><DropdownMenuTrigger render={<Button type="button" variant="ghost" size="xs" disabled={busy || !projectId} />}><FileText className="size-3.5" />Template</DropdownMenuTrigger><DropdownMenuContent align="end">{templates.length ? templates.map(template => <DropdownMenuItem className="text-xs" key={template.id} onClick={() => applyTemplate(template)}>{template.name}</DropdownMenuItem>) : <DropdownMenuItem className="text-xs" render={<a href={withCompany(`/projects/${encodeURIComponent(projectId)}/templates`, companyId)} />}>Open templates</DropdownMenuItem>}</DropdownMenuContent></DropdownMenu>
         </div></div>
@@ -265,28 +285,48 @@ export function NewTaskDialog({ open, onOpenChange, companyId, onCreated, initia
         {error ? <div className="px-5 pb-3"><Alert variant="destructive"><AlertDescription>{error}{projectFindings.length && projectId ? <>. {projectFindings.join(". ")}. <a className="underline" href={withCompany(`/projects/${encodeURIComponent(projectId)}`, companyId)}>Open the project settings</a></> : null}</AlertDescription></Alert></div> : null}
         <div className="flex flex-wrap items-center gap-2 px-5 pb-3">
           {editing ? null : <InlineAttachmentPicker compact attachments={images.map((image, index) => ({ id: String(index), filename: image.filename, previewUrl: `data:${image.mimeType};base64,${image.base64}` }))} onSelect={addImages} onRemove={index => setImages(current => current.filter((_, item) => item !== index))} disabled={busy || readingImages} />}
-          <Select value={runProjectTests ? "run" : "skip"} disabled={busy || repair || !project?.verificationCommand.trim()} onValueChange={value => setRunProjectTests(value === "run")}><SelectTrigger aria-label="Tests" size="sm" className="text-xs"><SelectValue /></SelectTrigger><SelectContent><SelectItem className="text-xs" value="run">Run tests</SelectItem><SelectItem className="text-xs" value="skip">Skip tests</SelectItem></SelectContent></Select>
-          <Select value={visualEvidence} disabled={busy} onValueChange={value => setVisualEvidence(VisualEvidenceSchema.parse(value))}><SelectTrigger aria-label="Screenshots" size="sm" className="text-xs"><SelectValue /></SelectTrigger><SelectContent><SelectItem className="text-xs" value="off">Skip screenshots</SelectItem><SelectItem className="text-xs" value="capture">Take screenshots</SelectItem><SelectItem className="text-xs" value="required">Screenshots necessary</SelectItem></SelectContent></Select>
-          <Select value={workflowId || workflow} disabled={busy || !availableWorkflows.length} onValueChange={value => { const record = availableWorkflows.find(record => record.id === value); if (record) selectRecord(record); }}><SelectTrigger aria-label="Workflow" size="sm" className="max-w-full text-xs"><SelectValue><span className="min-w-0 whitespace-normal break-words text-left">{selectedWorkflow?.name ?? definition.name}</span></SelectValue></SelectTrigger><SelectContent>{availableWorkflows.map(record => <SelectItem className="text-xs" key={record.id} value={record.id}>{record.name}</SelectItem>)}</SelectContent></Select>
-          <Select value={deliveryTarget} disabled={busy || repair} onValueChange={value => setDeliveryTarget(DeliveryTargetSchema.parse(value))}><SelectTrigger aria-label="Delivery target" size="sm" className="text-xs"><SelectValue /></SelectTrigger><SelectContent>{deliveryOptions.map(option => <SelectItem className="text-xs" key={option.value} value={option.value}>{option.label}</SelectItem>)}</SelectContent></Select>
-          <Button type="button" variant="ghost" size="icon-xs" aria-label={workflowPreviewOpen ? "Hide workflow preview" : "Show workflow preview"} aria-controls="new-task-workflow-preview" aria-expanded={workflowPreviewOpen} onClick={() => setWorkflowPreviewOpen(value => !value)}><ChevronDown className={workflowPreviewOpen ? "rotate-180" : ""} /></Button>
+          <div className="max-w-full overflow-x-auto p-1 -m-1">
+          <ButtonGroup aria-label="Task options">
+          <TaskOptionFilter prefix={editing ? "Run" : <DropdownMenu>
+            <DropdownMenuTrigger render={<Button type="button" variant="outline" size="sm" aria-label="Task start mode" disabled={busy} />}>{startImmediately ? <Play aria-hidden="true" className="size-[11px]" /> : <Inbox aria-hidden="true" className="size-[11px]" />}{startImmediately ? "Run" : "Backlog"}</DropdownMenuTrigger>
+            <DropdownMenuContent align="start"><DropdownMenuRadioGroup value={startImmediately ? "start" : "backlog"} onValueChange={value => setStartImmediately(value === "start")}><DropdownMenuRadioItem value="start"><Play aria-hidden="true" className="size-[11px]" />Run</DropdownMenuRadioItem><DropdownMenuRadioItem value="backlog"><Inbox aria-hidden="true" className="size-[11px]" />Backlog</DropdownMenuRadioItem></DropdownMenuRadioGroup></DropdownMenuContent>
+          </DropdownMenu>} label="Workflow" value={workflowId || workflow} valueLabel={workflows.find(record => record.id === workflowId)?.name ?? definition.name} disabled={busy || !availableWorkflows.length} options={availableWorkflows.map(record => ({ value: record.id, label: record.name, icon: workflowIcons[record.engine] }))} onValueChange={value => { const record = availableWorkflows.find(record => record.id === value); if (record) selectRecord(record); }} />
+          {repair ? <>
+            <ButtonGroupText><span className="text-muted-foreground">on</span></ButtonGroupText>
+            <TaskSourcePicker compact pullRequestsOnly projectId={projectId} value={sourceSummary} disabled={busy || editing} trigger={<Button type="button" variant="outline" size="sm" aria-label="Pull request">{source?.kind === "pull_request" ? <><GitPullRequest aria-hidden="true" className="size-[11px]" />{`PR #${source.number}`}</> : <><TriangleAlert aria-hidden="true" className="size-[11px] text-destructive" /><span className="text-destructive">a PR</span></>}</Button>} onClear={() => { setSource(undefined); setSourceSummary(undefined); }} onSelect={(summary, selector) => { setSource(selector); setSourceSummary(summary); const prefill = prefillForTaskSource(summary); if (!title) setTitle(prefill.title); if (!description) setDescription(prefill.description); }} />
+          </> : null}
+          <TaskOptionFilter prefix="with" label="Tests and proof" valueIcon={runProjectTests ? visualEvidence === "off" ? <TestTube2 aria-hidden="true" className="size-[11px]" /> : <ListChecks aria-hidden="true" className="size-[11px]" /> : visualEvidence === "off" ? <CircleOff aria-hidden="true" className="size-[11px]" /> : <ScanEye aria-hidden="true" className="size-[11px]" />} value={[...(runProjectTests ? ["tests"] : []), ...(visualEvidence !== "off" ? ["proof"] : [])]} valueLabel={[runProjectTests ? "tests" : "", visualEvidence === "off" ? "" : visualEvidence === "required" ? "necessary proof" : "proof"].filter(Boolean).join(" and ") || "no checks"} disabled={busy} options={[{ value: "tests", label: "Tests", icon: <TestTube2 aria-hidden="true" className="size-[11px]" />, disabled: repair || !project?.verificationCommand.trim() }, { value: "proof", label: "Proof", icon: <ScanEye aria-hidden="true" className="size-[11px]" /> }]} onValueChange={values => {
+            if (!repair && project?.verificationCommand.trim()) setRunProjectTests(values.includes("tests"));
+            setVisualEvidence(values.includes("proof") ? visualEvidence === "required" ? "required" : "capture" : "off");
+          }} />
+          <TaskOptionFilter prefix="then" label="Delivery target" value={deliveryTarget} disabled={busy || repair} options={deliveryOptions.map(option => ({ value: option.value, icon: deliveryIcons[option.value], label: option.value === "pull_request_draft" ? "open a draft PR" : option.value === "pull_request_ready" ? "open a PR" : option.label.toLowerCase() }))} onValueChange={value => setDeliveryTarget(DeliveryTargetSchema.parse(value))} />
+          </ButtonGroup>
+          </div>
           {blockedBy.map(prerequisite => <span key={prerequisite.id} className="flex items-center gap-1 text-xs" data-blocked-by-selection><span className="max-w-40 truncate">Blocked by {prerequisite.title}</span><Button type="button" variant="ghost" size="icon-xs" aria-label={`Remove ${prerequisite.title} from Blocked by`} disabled={busy} onClick={() => setBlockedBy(current => current.filter(selected => selected.id !== prerequisite.id))}><X /></Button></span>)}
-          <DialogFooter className="ml-auto flex-row items-center gap-1 sm:justify-end">{unsupportedTarget ? <span>Select a workflow that delivers a draft pull request.</span> : repair && missingSource ? <span className="text-xs text-destructive" data-repair-note>Needs a PR</span> : null}<NewButton type={editing ? "submit" : "button"} disabled={busy || readingImages || !projectId || !title.trim() || missingSource || unsupportedTarget} title={editing ? "Save task (⌘Enter)" : "Start now (⌘Enter)"} onClick={editing ? undefined : () => { setStartImmediately(true); void submit(true); }}>{busy ? (editing ? "Saving…" : "Creating…") : editing ? "Save task" : "Start now"}</NewButton>{editing ? null : <DropdownMenu><DropdownMenuTrigger render={<Button type="button" variant="default" size="sm" aria-label="Task start options" disabled={busy || readingImages || !projectId || !title.trim() || missingSource || unsupportedTarget} />}><ChevronDown /></DropdownMenuTrigger><DropdownMenuContent align="end"><DropdownMenuItem className="text-xs" onClick={() => { setStartImmediately(false); void submit(false); }}>Create in backlog</DropdownMenuItem></DropdownMenuContent></DropdownMenu>}</DialogFooter>
+          <DialogFooter className="ml-auto flex-row items-center gap-1 sm:justify-end">{unsupportedTarget ? <span>Select a workflow that delivers a draft pull request.</span> : null}<NewButton type="submit" disabled={busy || readingImages || !projectId || !title.trim() || missingSource || unsupportedTarget} title={editing ? "Save task (⌘Enter)" : "Create task (⌘Enter)"}>{busy ? (editing ? "Saving…" : "Creating…") : editing ? "Save task" : "Create task"}</NewButton></DialogFooter>
         </div>
         </div>
-        <div className={`grid min-w-0 transition-[grid-template-rows,opacity,transform] duration-150 motion-reduce:transition-none ${workflowPreviewOpen ? "grid-rows-[1fr] translate-y-0 opacity-100" : "pointer-events-none grid-rows-[0fr] -translate-y-4 opacity-0"}`}>
-          <div className="min-h-0 overflow-hidden">
-        <section id="new-task-workflow-preview" aria-label="Workflow preview" aria-hidden={!workflowPreviewOpen} inert={!workflowPreviewOpen} className="min-w-0 bg-muted/45 px-2 pb-3 pt-3 dark:bg-black/25 sm:px-3">
+        <Collapsible.Panel id="new-task-workflow-preview" keepMounted className="h-(--collapsible-panel-height) overflow-hidden transition-[height] duration-150 data-starting-style:h-0 data-ending-style:h-0 motion-reduce:transition-none">
+        <section aria-label="Workflow preview" className="min-w-0 bg-muted/45 px-2 pb-5 pt-3 dark:bg-black/25 sm:px-3">
           {repair && !missingSource ? <p className="mx-auto mb-1 max-w-xl text-center text-xs text-muted-foreground" data-repair-note>{repairNote}</p> : null}
-          <WorkflowIllustration workflow={workflow} delivery={repair ? "Merged pull request" : deliveryLabel} pullRequestNumber={source?.kind === "pull_request" ? source.number : editTask?.pullRequest?.number} agents={{
+          <WorkflowIllustration workflow={workflow} delivery={repair ? "Merged pull request" : deliveryLabel} pullRequestNumber={source?.kind === "pull_request" ? source.number : editTask?.pullRequest?.number} avatars={{
+            root: avatarFor(rootProfileId || project?.rootProfileId),
+            worker: avatarFor(workerProfileId || project?.workerProfileId),
+            ...Object.fromEntries(definition.advisorRoles.map(role => [role, avatarFor(advisorProfileIds[role] || (role === "planner_a" ? rootProfileId || project?.rootProfileId : project?.altProfileId))])),
+          }} agents={{
             root: rootSelector,
             worker: <TaskRoleSelector compact inline role="worker" profiles={eligibleProfiles} assignment={workerProfileId} defaultProfileId={project?.workerProfileId} busy={busy} onChange={setWorkerProfileId} />,
-            ...Object.fromEntries(definition.advisorRoles.map(role => [role, <TaskRoleSelector compact inline role="root" label={ADVISOR_LABELS[role]} profiles={eligibleProfiles} assignment={advisorProfileIds[role] ?? ""} defaultProfileId={rootProfileId || project?.rootProfileId} busy={busy} onChange={profileId => setAdvisorProfileIds(current => ({ ...current, [role]: profileId || undefined }))} />])),
+            ...Object.fromEntries(definition.advisorRoles.map(role => [role, <TaskRoleSelector compact inline role="root" label={ADVISOR_LABELS[role]} profiles={eligibleProfiles} assignment={advisorProfileIds[role] ?? ""} defaultProfileId={role === "planner_a" ? rootProfileId || project?.rootProfileId : project?.altProfileId} defaultChoiceLabel={ADVISOR_DEFAULT_LABELS[role]} busy={busy} onChange={profileId => setAdvisorProfileIds(current => ({ ...current, [role]: profileId || undefined }))} />])),
           }} />
         </section>
-          </div>
-        </div>
+        </Collapsible.Panel>
       </form>
+        <div className="absolute -bottom-3.5 left-1/2 -translate-x-1/2">
+          <Collapsible.Trigger aria-label={workflowPreviewOpen ? "Hide workflow preview" : "Show workflow preview"} render={<Button type="button" variant="outline" size="icon-sm" className="bg-background! rounded-full shadow-sm" />}>
+            <ChevronDown aria-hidden="true" className="size-3.5 transition-transform in-data-panel-open:rotate-180" />
+          </Collapsible.Trigger>
+        </div>
+      </Collapsible.Root>
     </DialogContent>
     <BlockedByPickerDialog open={blockedByPickerOpen} onOpenChange={setBlockedByPickerOpen} companyId={companyId} projectId={projectId} excludeTaskIds={blockedBy.map(prerequisite => prerequisite.id)} onSelect={selected => setBlockedBy(current => [...current, selected])} onError={setError} />
   </Dialog>;

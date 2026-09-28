@@ -199,7 +199,8 @@ describe("Activity shell lifecycle", () => {
     expect(taskLink).not.toBeNull();
 
     await act(async () => navigate("/analytics?company=company-a"));
-    expect(container.querySelector('[aria-busy="true"]')).not.toBeNull();
+    expect(container.querySelector('[aria-busy="true"]')).toBeNull();
+    expect(container.querySelector('main[data-view="tasks"]')).not.toBeNull();
     expect(container.querySelector('a[href*="/tasks/task-a"]')).toBe(taskLink);
     expect(state.sidebarUnmounts).toBe(0);
 

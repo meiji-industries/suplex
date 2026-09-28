@@ -1,4 +1,4 @@
-import { Archive, Building2, FileText, FolderGit2, HardDrive, KeyRound, ListChecks, Mail, Plug, ShieldCheck, UserRound, Users, Webhook, Workflow, type LucideIcon } from "lucide-react";
+import { Archive, Braces, Building2, FileText, FolderGit2, HardDrive, KeyRound, ListChecks, Mail, Plug, ShieldCheck, UserRound, Users, Webhook, Workflow, type LucideIcon } from "lucide-react";
 
 import { companySettingsPath, withCompany, type ApiUser } from "../../lib/api.js";
 
@@ -14,8 +14,6 @@ export function buildSettingsGroups(companyId: string, user?: ApiUser): Settings
     { label: "Templates", href: withCompany("/templates", companyId), icon: FileText },
     ...(admin && companyId ? [{ label: "Workspace", href: companySettingsPath(companyId), icon: Building2 }] : []),
     ...(admin ? [
-      { label: "Workflows", href: withCompany("/admin/workflows", companyId), icon: Workflow },
-      { label: "Triggers", href: withCompany("/admin/triggers", companyId), icon: Webhook },
       { label: "Onboarding", href: withCompany("/admin/onboarding", companyId), icon: ListChecks },
     ] : []),
   ];
@@ -24,6 +22,9 @@ export function buildSettingsGroups(companyId: string, user?: ApiUser): Settings
     ...(admin ? [{ title: "Features", items: [
       { label: "Agents", href: withCompany("/admin/agents", companyId), icon: Users },
       { label: "Providers", href: withCompany("/admin/providers", companyId), icon: Plug },
+      { label: "API & MCP", href: withCompany("/admin/api-mcp", companyId), icon: Braces },
+      { label: "Workflows", href: withCompany("/admin/workflows", companyId), icon: Workflow },
+      { label: "Triggers", href: withCompany("/admin/triggers", companyId), icon: Webhook },
     ] }] : []),
     { title: "System", items: [
       ...(admin ? [

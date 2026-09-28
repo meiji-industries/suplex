@@ -192,7 +192,7 @@ export function ProjectDetails({ projectId }: { projectId: string }): ReactEleme
       const result = await patch(body);
       if (token !== saveTokens.current.agents || generation !== loadToken.current) return;
       const saved = agentsDraft(result);
-      setProject((current) => current ? { ...current, rootProfileId: result.rootProfileId, workerProfileId: result.workerProfileId, providerPolicy: result.providerPolicy, agentTaskPolicy: result.agentTaskPolicy, updatedAt: result.updatedAt } : current);
+      setProject((current) => current ? { ...current, rootProfileId: result.rootProfileId, workerProfileId: result.workerProfileId, altProfileId: result.altProfileId, providerPolicy: result.providerPolicy, agentTaskPolicy: result.agentTaskPolicy, updatedAt: result.updatedAt } : current);
       setAgentSettings((current) => current ? { saved, draft: same(current.draft, submitted) ? saved : current.draft, status: same(current.draft, submitted) ? { kind: "saved" } : idle } : current);
     } catch (reason) {
       if (token === saveTokens.current.agents && generation === loadToken.current) setAgentSettings((current) => current ? { ...current, status: saveFailure(reason, "Unable to save Agents") } : current);
@@ -290,13 +290,13 @@ export function ProjectDetails({ projectId }: { projectId: string }): ReactEleme
         {profileError ? <Alert variant="destructive"><AlertDescription><span>{profileError}. </span><Button type="button" variant="link" size="sm" disabled={profilesLoading} onClick={() => void loadProfiles(loadToken.current)}>Retry</Button></AlertDescription></Alert> : null}
         {sectionError(agentSettings.status) ? <Alert variant="destructive"><AlertDescription>{sectionError(agentSettings.status)}</AlertDescription></Alert> : null}
         <SettingsSection title="Default agents">
-          {(["rootProfileId", "workerProfileId"] as const).map((key) => {
-            const role = key === "rootProfileId" ? "root" : "worker";
+          {(["rootProfileId", "altProfileId", "workerProfileId"] as const).map((key) => {
+            const role = key === "workerProfileId" ? "worker" : "root";
             const selected = agents.find((agent) => agent.role === role && agent.id === agentSettings.draft[key]);
             const options = agents.filter((agent) => agent.role === role && (agent.id === agentSettings.draft[key] || isProfileAllowed(agentSettings.draft.providerPolicy, agent)));
             const findings = [...fieldFindings(agentSettings.status, key), ...agentFindings.filter((finding) => finding.field === key)];
             const id = `project-${key}`;
-            return <SettingRow key={key} label={`${role === "root" ? "Coordinator" : "Worker"} default`} htmlFor={id}><div className="w-full sm:w-80"><Select disabled={agentSettings.status.kind === "saving"} value={agentSettings.draft[key] || null} onValueChange={(value) => { if (value) updateAgents(key, value); }}><SelectTrigger id={id} aria-invalid={findings.length > 0}><SelectValue placeholder="None">{selected ? <span className="flex items-center gap-2"><EntityAvatar kind="agent" id={selected.id} name={selected.name} seed={selected.avatarSeed} />{selected.name}</span> : "None"}</SelectValue></SelectTrigger><SelectContent>{options.map((agent) => <SelectItem key={agent.id} value={agent.id} disabled={!isProfileAllowed(agentSettings.draft.providerPolicy, agent)}><span className="flex items-center gap-2"><EntityAvatar kind="agent" id={agent.id} name={agent.name} seed={agent.avatarSeed} />{agent.name}<span className="text-xs text-muted-foreground">{credentialLabel(agent)}</span></span></SelectItem>)}</SelectContent></Select><FieldError errors={findings} /></div></SettingRow>;
+            return <SettingRow key={key} label={`${key === "altProfileId" ? "Alt Coordinator" : role === "root" ? "Coordinator" : "Worker"} default`} htmlFor={id}><div className="w-full sm:w-80"><Select disabled={agentSettings.status.kind === "saving"} value={agentSettings.draft[key] || null} onValueChange={(value) => { if (value) updateAgents(key, value); }}><SelectTrigger id={id} aria-invalid={findings.length > 0}><SelectValue placeholder="None">{selected ? <span className="flex items-center gap-2"><EntityAvatar kind="agent" id={selected.id} name={selected.name} seed={selected.avatarSeed} />{selected.name}</span> : "None"}</SelectValue></SelectTrigger><SelectContent>{options.map((agent) => <SelectItem key={agent.id} value={agent.id} disabled={!isProfileAllowed(agentSettings.draft.providerPolicy, agent)}><span className="flex items-center gap-2"><EntityAvatar kind="agent" id={agent.id} name={agent.name} seed={agent.avatarSeed} />{agent.name}<span className="text-xs text-muted-foreground">{credentialLabel(agent)}</span></span></SelectItem>)}</SelectContent></Select><FieldError errors={findings} /></div></SettingRow>;
           })}
           {agents.length === 0 ? <SettingRow label="Agent profiles" description="No agents are configured."><Button type="button" variant="outline" size="sm" render={<a href={withCompany("/admin/agents", project.companyId)} />}>Add an agent</Button></SettingRow> : null}
         </SettingsSection>

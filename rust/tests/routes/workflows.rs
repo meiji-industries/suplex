@@ -69,7 +69,7 @@ mod tests {
         let taken = send(
             reqwest::Method::PATCH,
             url,
-            Some(json!({"name":"Standard"})),
+            Some(json!({"name":"Plan and build"})),
         )
         .await
         .unwrap();
@@ -251,7 +251,7 @@ mod tests {
         ));
         let all: serde_json::Value = serde_json::from_slice(&all).unwrap();
         assert_eq!(all["workflows"].as_array().unwrap().len(), 5);
-        assert_eq!(all["workflows"][4]["id"], "workflow_native_standard");
+        assert_eq!(all["workflows"][2]["id"], "workflow_native_standard");
         drop(state);
         let _ = std::fs::remove_file(&path);
         let _ = std::fs::remove_file(path.with_extension("sqlite-wal"));

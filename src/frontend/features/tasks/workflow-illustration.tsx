@@ -27,23 +27,23 @@ function Label({ x, y, children, caption }: { x: number; y: number; children: Re
 }
 
 function SuplexAgent() {
-  return <span className="inline-flex h-6 items-center gap-1 font-medium"><img src={suplexMark} alt="" className="size-4 invert dark:invert-0" />Suplex</span>;
+  return <span className="inline-flex h-6 items-center font-medium">Suplex</span>;
 }
 
-function Station({ id, x, y, label, caption, icon: Icon, tone = "source", sheet = false, labelAt = [x, y + 36], viewWidth, control }: {
-  id: string; x: number; y: number; label: string; caption?: string | undefined; icon: LucideIcon; tone?: Tone; sheet?: boolean; labelAt?: [number, number]; viewWidth: number; control?: ReactNode;
+function Station({ id, x, y, label, caption, icon: Icon, tone = "source", sheet = false, labelAt = [x, y + 36], viewWidth, control, avatar }: {
+  id: string; x: number; y: number; label: string; caption?: string | undefined; icon: LucideIcon; tone?: Tone; sheet?: boolean; labelAt?: [number, number]; viewWidth: number; control?: ReactNode; avatar?: ReactNode;
 }) {
   const controlX = Math.max(0, Math.min(viewWidth - 160, labelAt[0] - 80));
   return <g data-illustration-station={id}>
     <g className={tones[tone]}>
-      {sheet ? <>
+      {avatar ? null : sheet ? <>
         <rect x={x - 12} y={y - 20} width="32" height="32" rx="5" className="fill-current opacity-10 dark:opacity-20" />
         <rect x={x - 16} y={y - 16} width="32" height="32" rx="5" className="fill-card" stroke="currentColor" strokeOpacity=".65" />
       </> : <>
         <circle cx={x} cy={y} r="22" className="fill-current opacity-10 dark:opacity-20" />
         <circle cx={x} cy={y} r="16" className="fill-card" stroke="currentColor" strokeOpacity=".65" />
       </>}
-      <Icon x={x - 8} y={y - 8} width="16" height="16" strokeWidth="1.6" aria-hidden="true" />
+      {avatar ? <foreignObject x={x - 16} y={y - 16} width="32" height="32" data-illustration-avatar={id}><div>{avatar}</div></foreignObject> : <Icon x={x - 8} y={y - 8} width="16" height="16" strokeWidth="1.6" aria-hidden="true" />}
     </g>
     {control ? <foreignObject x={controlX} y={labelAt[1] - 14} width="160" height="64" data-illustration-control={id}>
       <div className="grid min-w-0 justify-items-center p-1 text-center text-xs leading-4">{control}{caption ? <span>{caption}</span> : null}</div>
@@ -73,7 +73,7 @@ function routePath(points: Point[]): string {
   return points.map((point, index) => `${index ? "L" : "M"}${point.x} ${point.y}`).join("");
 }
 
-function Artwork({ workflow, delivery, compact, agents, arrowId, author, pullRequestNumber }: { workflow: WorkflowId; delivery: string; compact: boolean; agents: AgentControls; arrowId: string; author: ReactNode; pullRequestNumber: number | undefined }) {
+function Artwork({ workflow, delivery, compact, agents, avatars, arrowId, author, authorAvatar, pullRequestNumber }: { workflow: WorkflowId; delivery: string; compact: boolean; agents: AgentControls; avatars: AgentControls; arrowId: string; author: ReactNode; authorAvatar: ReactNode; pullRequestNumber: number | undefined }) {
   const layout = layouts[workflow][compact ? "compact" : "wide"];
   const viewWidth = compact ? 320 : 768;
   const offsetX = (viewWidth - layout.width) / 2;
@@ -111,15 +111,16 @@ function Artwork({ workflow, delivery, compact, agents, arrowId, author, pullReq
       }
       return <Station key={id} id={id} x={x} y={y} label={id === "source" && pullRequestNumber ? `PR #${pullRequestNumber}` : meta.label} caption={caption} icon={id === "plan" && workflow === "direct_build" ? Send : meta.icon}
         tone={meta.tone} sheet={"sheet" in meta && meta.sheet} labelAt={labelAt} viewWidth={viewWidth}
-        control={control} />;
+        control={control} avatar={id === "objective" ? authorAvatar : deliveryNode ? <img src={suplexMark} alt="" className="size-8 invert dark:invert-0" /> : role ? avatars[role] : undefined} />;
     })}
   </>;
 }
 
-export function WorkflowIllustration({ workflow, delivery, agents = {}, pullRequestNumber }: { workflow: WorkflowId; delivery: string; agents?: AgentControls; pullRequestNumber?: number | undefined }) {
+export function WorkflowIllustration({ workflow, delivery, agents = {}, avatars = {}, pullRequestNumber }: { workflow: WorkflowId; delivery: string; agents?: AgentControls; avatars?: AgentControls; pullRequestNumber?: number | undefined }) {
   const id = useId();
   const user = useOptionalCompanyContext()?.user;
-  const author = <span className="inline-flex h-6 items-center gap-1 font-medium">{user ? <EntityAvatar kind="user" id={user.id} name={user.displayName} seed={user.avatarSeed} size="xs" /> : <UserRound className="size-4" />}{user?.displayName ?? "User"}</span>;
+  const author = <span className="inline-flex h-6 items-center font-medium">{user?.displayName ?? "User"}</span>;
+  const authorAvatar = user ? <EntityAvatar kind="user" id={user.id} name={user.displayName} seed={user.avatarSeed} size="default" /> : <UserRound className="size-8" />;
   const definition = workflowDefinition(workflow);
   const description = `${definition.steps.join(" ")}${workflow === "refine_pull_request" ? " Coordinator directs repair or delivery after each rating." : " Coordinator can send changes back to Worker after review."} Delivery: ${delivery}.`;
   const deliveryAction = ({
@@ -142,7 +143,7 @@ export function WorkflowIllustration({ workflow, delivery, agents = {}, pullRequ
         <desc id={`${id}-${compact}-description`}>{description}</desc>
         <defs>{(Object.entries(tones) as [Tone, string][]).map(([tone, className]) =>
           <marker key={tone} id={`${arrowId}-${tone}`} viewBox="0 0 8 8" refX="8" refY="4" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto"><path d="M0 0 8 4 0 8z" className={className} fill="currentColor" /></marker>)}</defs>
-        <Artwork workflow={workflow} delivery={deliveryAction} compact={compact} agents={agents} arrowId={arrowId} author={author} pullRequestNumber={pullRequestNumber} />
+        <Artwork workflow={workflow} delivery={deliveryAction} compact={compact} agents={agents} avatars={avatars} arrowId={arrowId} author={author} authorAvatar={authorAvatar} pullRequestNumber={pullRequestNumber} />
       </svg>;
     })}
   </div>;

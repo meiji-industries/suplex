@@ -398,7 +398,12 @@ pub fn provider_context(
                 crate::shared::public_failure(error)
             }
         })?;
-        [project.root_profile_id, project.worker_profile_id].to_vec()
+        [
+            project.root_profile_id,
+            project.alt_profile_id,
+            project.worker_profile_id,
+        ]
+        .to_vec()
     } else {
         let mut ids = Vec::new();
         for id in profile_ids.unwrap_or_default().split(',') {

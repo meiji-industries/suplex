@@ -34,6 +34,12 @@ source, attachments, and prerequisites are separate task input; they are not
 part of the saved template configuration. A template records the built-in
 workflow selection, not a live subscription to a named preset's future edits.
 
+Projects select default Coordinator, Alt Coordinator, and Worker profiles.
+Plan A inherits the selected Coordinator. Plan B, Reviewer, and Rater inherit
+the project Alt Coordinator unless the workflow or task selects a profile.
+Workflow presets store these as inherited selections by leaving the advisor
+profile unset.
+
 Creation captures the resulting configuration for that task. Later edits to a
 template or preset do not rewrite an admitted task's history or native prompt.
 See [coordination](coordination.md) for captured intent and explicit task edits.

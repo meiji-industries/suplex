@@ -163,6 +163,8 @@ pub struct NewRepositoryCreate {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct LocalProjectCreate {
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub alt_profile_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub integration: Option<ProjectIntegration>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub execution: Option<ProjectExecution>,
@@ -194,6 +196,7 @@ pub enum ProjectCreateBody {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProjectResponse {
+    pub alt_profile_id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub integration: Option<ProjectIntegration>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -220,6 +223,7 @@ pub struct ProjectResponse {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProjectPatch {
+    pub alt_profile_id: Option<String>,
     pub integration: Option<ProjectIntegration>,
     /// Present execution fields without defaults; the service merges them.
     pub execution: Option<Map<String, Value>>,
@@ -574,6 +578,7 @@ fn project_fields(input: Option<&Value>, patch: bool) -> ContractResult<Fields<'
         };
     }
     Ok(fields
+        .opt("altProfileId", text(1, MAX))
         .opt("agentTaskPolicy", nested::<ProjectAgentTaskPolicy>)
         .opt("providerPolicy", nullable(nested::<ProjectProviderPolicy>)))
 }

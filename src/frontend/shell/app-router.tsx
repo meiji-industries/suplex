@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useState, type ReactElement } from "react";
+import { lazy, startTransition, Suspense, useEffect, useState, type ReactElement } from "react";
 
 import { CompanyProvider } from "./company-context.js";
 import { SystemHealthProvider } from "../components/app/system-health.js";
@@ -22,6 +22,7 @@ const ProjectDetails = lazy(() => import("../features/projects/project-details.j
 const TimelineView = lazy(() => import("../features/timeline/timeline.js").then(module => ({ default: module.TimelineView })));
 const AnalyticsView = lazy(() => import("../features/analytics/analytics.js").then(module => ({ default: module.AnalyticsView })));
 const TaskTemplateSettings = lazy(() => import("../features/settings/task-template-settings.js").then(module => ({ default: module.TaskTemplateSettings })));
+const ApiMcpSettingsView = lazy(() => import("../features/settings/api-mcp-settings.js").then(module => ({ default: module.ApiMcpSettingsView })));
 const ProviderSettingsView = lazy(() => import("../features/settings/provider-settings.js").then(module => ({ default: module.ProviderSettingsView })));
 const BackupSettingsView = lazy(() => import("../features/settings/backup-settings.js").then(module => ({ default: module.BackupSettingsView })));
 const EnvironmentSettingsView = lazy(() => import("../features/settings/environment-settings.js").then(module => ({ default: module.EnvironmentSettingsView })));
@@ -46,6 +47,7 @@ function AppView(): ReactElement {
     return <AdminView />;
   }
   if (pathname === "/admin/onboarding") return <OnboardingSettingsView />;
+  if (pathname === "/admin/api-mcp") return <ApiMcpSettingsView />;
   if (pathname === "/admin/providers") return <ProviderSettingsView />;
   if (pathname === "/admin/environment") return <EnvironmentSettingsView />;
   if (pathname === "/admin/backups") return <BackupSettingsView />;
@@ -73,7 +75,7 @@ function locationKey(): string {
 export function AppRouter(): ReactElement {
   const [route, setRoute] = useState(locationKey);
   useEffect(() => {
-    const updateRoute = (): void => setRoute(locationKey());
+    const updateRoute = (): void => startTransition(() => setRoute(locationKey()));
     const intercept = (event: MouseEvent): void => {
       const anchor = (event.target as Element | null)?.closest("a");
       if (!anchor || !shouldNavigate(event, anchor)) return;

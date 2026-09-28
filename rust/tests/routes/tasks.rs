@@ -474,7 +474,7 @@ mod tests {
         assert_eq!(reviewed["workflow"], "independent_review");
         assert_eq!(
             reviewed["advisorProfiles"]["reviewer"]["profileId"],
-            "profile_native_root"
+            "profile_native_independent"
         );
         let wrong_role = create(
             State(state.clone()), Path("task_http_company".into()), headers.clone(),

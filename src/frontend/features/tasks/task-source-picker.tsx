@@ -40,7 +40,7 @@ export function preserveEditedPrefill(current: { title: string; description: str
   return { title: !current.title || current.title === previous.title ? next.title : current.title, description: !current.description || current.description === previous.description ? next.description : current.description };
 }
 
-export function TaskSourcePicker({ projectId, value, disabled, pullRequestsOnly = false, compact = false, onSelect, onClear }: { projectId: string; value?: TaskSourceSummary | undefined; disabled?: boolean; pullRequestsOnly?: boolean; compact?: boolean; onSelect: (source: TaskSourceSummary, selector?: Exclude<TaskSourceSelector, { kind: "issue" }>) => void; onClear: () => void }): ReactElement {
+export function TaskSourcePicker({ projectId, value, disabled, pullRequestsOnly = false, compact = false, trigger, onSelect, onClear }: { projectId: string; value?: TaskSourceSummary | undefined; disabled?: boolean; pullRequestsOnly?: boolean; compact?: boolean; trigger?: ReactElement; onSelect: (source: TaskSourceSummary, selector?: Exclude<TaskSourceSelector, { kind: "issue" }>) => void; onClear: () => void }): ReactElement {
   const [selectedKind, setKind] = useState<TaskSourceSelector["kind"]>("pull_request");
   const kind = pullRequestsOnly ? "pull_request" : selectedKind;
   const [query, setQuery] = useState("");
@@ -70,7 +70,7 @@ export function TaskSourcePicker({ projectId, value, disabled, pullRequestsOnly 
   };
   const filtered = useMemo(() => kind === "issue" ? rows : filterTaskSources(rows, query), [kind, query, rows]);
   return <DropdownMenu onOpenChange={(open) => { if (open) void load(); }}>
-    {value ? <div className="flex items-center gap-2 text-sm">
+    {trigger ? <DropdownMenuTrigger render={trigger} disabled={disabled || !projectId} /> : value ? <div className="flex items-center gap-2 text-sm">
       <DropdownMenuTrigger render={<Button type="button" variant="ghost" size={compact ? "xs" : "sm"} disabled={disabled || !projectId} aria-label="New from source" />}>
         {value.kind === "issue" ? <><CircleDot /><span>{value.issue.key}</span></> : value.kind === "pull_request" ? <><Badge variant="outline">PR #{value.number}</Badge><span className="max-w-[24rem] truncate">{value.headBranch}</span></> : <><GitBranch /><span className="max-w-[24rem] truncate">{value.branch}</span></>}
       </DropdownMenuTrigger>
@@ -88,6 +88,7 @@ export function TaskSourcePicker({ projectId, value, disabled, pullRequestsOnly 
           {row.kind === "pull_request" ? <GitPullRequest className="mt-0.5 size-3.5" /> : row.kind === "issue" ? <CircleDot className="mt-0.5 size-3.5" /> : <GitBranch className="mt-0.5 size-3.5" />}<span className="min-w-0"><span className="block truncate font-medium">{row.kind === "issue" ? `${row.issue.key} ${row.issue.title}` : row.kind === "pull_request" ? `#${row.number} ${row.title}` : row.branch}</span><span className="block truncate text-muted-foreground">{row.kind === "pull_request" ? `${row.author} · ${row.headBranch} → ${row.baseBranch}` : row.kind === "issue" ? row.issue.kind : `${row.headSha.slice(0, 8)} · ${row.subject} · ${row.author}`}</span></span>
         </DropdownMenuItem>)}
       </div>
+      {trigger && value ? <DropdownMenuItem onClick={onClear}>Clear pull request</DropdownMenuItem> : null}
     </DropdownMenuContent>
   </DropdownMenu>;
 }

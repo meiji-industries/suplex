@@ -2,7 +2,7 @@
   "name": "suplex-desktop",
   "productName": "Suplex",
   "private": true,
-  "version": "0.7.0",
+  "version": "0.8.0",
   "main": "dist/src/main.js",
   "scripts": {
     "build": "tsc -p tsconfig.json && cp src/connect.html src/statusTemplate*.png dist/src/ && mkdir -p dist/src/pages && cp src/pages/* dist/src/pages/",

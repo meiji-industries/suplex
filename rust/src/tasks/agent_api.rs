@@ -1524,73 +1524,20 @@ fn check_requested_profiles(database: &SuplexDatabase, raw: &TaskCreateBody) -> 
     Ok(())
 }
 
-/// The allowlist governs what a caller may choose; server-chosen defaults are already trusted.
-fn check_permitted_profiles(raw: &TaskCreateBody, project: &Project) -> DatabaseResult<()> {
-    let policy = &project.agent_task_policy;
-    if let Some(id) = &raw.root_profile_id
-        && !policy.root_profile_ids.contains(id)
-    {
-        let reason = "The selected root profile is not permitted.";
-        return Err(fail_with(
-            reason,
-            422,
-            "root_profile_not_permitted",
-            json!({"field": "rootProfileId", "value": id, "reason": reason}),
-        ));
-    }
-    if let Some(id) = &raw.worker_profile_id
-        && !policy.worker_profile_ids.contains(id)
-    {
-        let reason = "The selected worker profile is not permitted.";
-        return Err(fail_with(
-            reason,
-            422,
-            "worker_profile_not_permitted",
-            json!({"field": "workerProfileId", "value": id, "reason": reason}),
-        ));
-    }
-    Ok(())
-}
-
-/// Every Advisor role of the workflow resolves to a permitted profile; one the
-/// caller named must exist. An unnamed role follows its project default.
+/// An Advisor profile the caller names must exist. An unnamed role follows its
+/// workflow or project default.
 fn check_advisor_profiles(
     database: &SuplexDatabase,
     raw: &TaskCreateBody,
     request: &task_contracts::TaskCreateBody,
-    project: &Project,
-    root_id: &str,
 ) -> DatabaseResult<()> {
     let raw_advisors = serde_json::to_value(&raw.advisor_profile_ids)?;
-    let requested_advisors = serde_json::to_value(&request.advisor_profile_ids)?;
-    let permitted_advisors = serde_json::to_value(&project.agent_task_policy.advisor_profile_ids)?;
     for role in crate::coordination::workflows::advisor_roles(request.workflow.as_str()) {
-        let default = crate::coordination::workflows::advisor_default_profile_id(
-            role,
-            root_id,
-            &project.alt_profile_id,
-        );
         let role = role.as_str();
-        let profile_id = requested_advisors[role]
-            .as_str()
-            .unwrap_or(default)
-            .to_owned();
-        let field = format!("advisorProfileIds.{role}");
-        if raw_advisors.get(role).is_some() {
-            crate::profiles::agent_profiles::read_profile(database, &profile_id, "root")?
-                .ok_or_else(|| profile_not_available(&profile_id, "root", &field))?;
-        }
-        if !permitted_advisors[role]
-            .as_array()
-            .is_some_and(|ids| ids.iter().any(|id| id == &json!(profile_id)))
-        {
-            let reason = "The selected Advisor profile is not permitted.";
-            return Err(fail_with(
-                reason,
-                422,
-                "advisor_profile_not_permitted",
-                json!({"field": field, "value": profile_id, "reason": reason}),
-            ));
+        if let Some(profile_id) = raw_advisors[role].as_str() {
+            let field = format!("advisorProfileIds.{role}");
+            crate::profiles::agent_profiles::read_profile(database, profile_id, "root")?
+                .ok_or_else(|| profile_not_available(profile_id, "root", &field))?;
         }
     }
     Ok(())
@@ -1625,8 +1572,7 @@ fn resolve(
         "worker",
         &project,
     )?;
-    check_permitted_profiles(raw, &project)?;
-    check_advisor_profiles(database, raw, &request, &project, &root.profile_id)?;
+    check_advisor_profiles(database, raw, &request)?;
     request.root_profile_id = Some(root.profile_id);
     request.worker_profile_id = Some(worker.profile_id);
     let signature =
@@ -2611,20 +2557,21 @@ fn duplicate_request(
         })
         .cloned()
         .unwrap_or_else(|| policy.default_workflow_id.clone());
-    let permitted = |ids: &[String], id: &Value| {
-        id.as_str()
-            .filter(|id| ids.iter().any(|allowed| allowed == id))
-            .map(str::to_owned)
+    // A profile removed since the source task ran falls back to its default.
+    let existing = |id: &Value, role: &str| -> DatabaseResult<Option<String>> {
+        let Some(id) = id.as_str() else {
+            return Ok(None);
+        };
+        Ok(
+            crate::profiles::agent_profiles::read_profile(database, id, role)?
+                .map(|_| id.to_owned()),
+        )
     };
-    let advisors = serde_json::to_value(&policy.advisor_profile_ids)?;
     let mut advisor_ids = Map::new();
     if let Some(stored) = source["advisorProfiles"].as_object() {
         for (role, profile) in stored {
-            let allowed = advisors[role]
-                .as_array()
-                .is_some_and(|ids| ids.contains(&profile["profileId"]));
-            if allowed {
-                advisor_ids.insert(role.clone(), profile["profileId"].clone());
+            if let Some(id) = existing(&profile["profileId"], "root")? {
+                advisor_ids.insert(role.clone(), json!(id));
             }
         }
     }
@@ -2649,14 +2596,8 @@ fn duplicate_request(
         source: task_source.map(serde_json::from_value).transpose()?,
         workflow_id: Some(workflow_id),
         template_id: None,
-        root_profile_id: permitted(
-            &policy.root_profile_ids,
-            &source["rootProfile"]["profileId"],
-        ),
-        worker_profile_id: permitted(
-            &policy.worker_profile_ids,
-            &source["workerProfile"]["profileId"],
-        ),
+        root_profile_id: existing(&source["rootProfile"]["profileId"], "root")?,
+        worker_profile_id: existing(&source["workerProfile"]["profileId"], "worker")?,
         advisor_profile_ids: serde_json::from_value(Value::Object(advisor_ids))?,
         delivery_target: None,
         run_project_tests: None,

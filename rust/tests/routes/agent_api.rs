@@ -1005,6 +1005,50 @@ pub(crate) mod tests {
         assert_eq!(counts, (1, 1, 1));
     }
 
+    /// An unnamed role uses its workflow or project default; a named profile
+    /// must exist with the role it fills.
+    #[tokio::test]
+    async fn profiles_follow_defaults_or_an_existing_named_profile() {
+        let agent = agent().await;
+        agent.server.state.with_database(|database| {
+            database.connection().execute(
+                "UPDATE suplex_projects SET agent_task_policy_json = json_set(agent_task_policy_json, '$.workflowIds', json('[\"workflow_native_standard\",\"workflow_native_independent_review\"]'), '$.workerProfileIds', json('[\"profile_elsewhere\"]')) WHERE id = 'project_api'",
+                [],
+            ).unwrap();
+        });
+        let (status, task) = agent
+            .call(reqwest::Method::POST, "/api/agent/tasks", Some(json!({"projectId":"project_api", "title":"Named agents", "idempotencyKey":"named-agents-001", "rootProfileId":"profile_native_independent", "workerProfileId":"profile_native_worker"})))
+            .await;
+        assert_eq!(status, 201, "a named, existing Coordinator or Worker is refused: {task}");
+        let (status, missing) = agent
+            .call(reqwest::Method::POST, "/api/agent/tasks", Some(json!({"projectId":"project_api", "title":"Missing agent", "idempotencyKey":"named-agents-002", "rootProfileId":"profile_missing"})))
+            .await;
+        assert_eq!(
+            (status, missing["code"].as_str()),
+            (422, Some("root_profile_not_found")),
+            "{missing}"
+        );
+        let body = |key: &str, advisors: Value| {
+            json!({"projectId":"project_api", "title":"Second opinion", "idempotencyKey": key, "workflowId":"workflow_native_independent_review", "advisorProfileIds": advisors})
+        };
+        let (status, task) = agent
+            .call(reqwest::Method::POST, "/api/agent/tasks", Some(body("advisor-default-001", json!({}))))
+            .await;
+        assert_eq!(status, 201, "the workflow default Reviewer is refused: {task}");
+        let (status, task) = agent
+            .call(reqwest::Method::POST, "/api/agent/tasks", Some(body("advisor-named-001", json!({"reviewer":"profile_native_root"}))))
+            .await;
+        assert_eq!(status, 201, "a named, existing Reviewer is refused: {task}");
+        let (status, missing) = agent
+            .call(reqwest::Method::POST, "/api/agent/tasks", Some(body("advisor-missing-001", json!({"reviewer":"profile_missing"}))))
+            .await;
+        assert_eq!(
+            (status, missing["code"].as_str()),
+            (422, Some("advisor_profile_not_found")),
+            "{missing}"
+        );
+    }
+
     #[tokio::test]
     async fn completed_command_receipt_replays_on_stale_revision_without_another_effect() {
         let agent = agent().await;

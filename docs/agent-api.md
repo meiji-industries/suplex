@@ -178,10 +178,8 @@ scheduler tick after a restart. Cancelling a queued task prevents admission.
 
 Rejected create inputs include `field`, `value`, and `reason`. Project IDs use
 `project_not_found`. Dependencies use `dependency_not_found`. Profile IDs use
-`root_profile_not_found`,
-`root_profile_not_permitted`, `worker_profile_not_found`,
-`worker_profile_not_permitted`, `advisor_profile_not_found`, or
-`advisor_profile_not_permitted`. Source issues, pull requests, and branches
+`root_profile_not_found`, `worker_profile_not_found`, or
+`advisor_profile_not_found`. Source issues, pull requests, and branches
 use `source_issue_rejected`, `source_pull_request_rejected`, and
 `source_branch_rejected`.
 

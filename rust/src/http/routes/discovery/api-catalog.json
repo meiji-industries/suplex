@@ -95,7 +95,7 @@
       "path": "/api/agent/tasks",
       "method": "POST",
       "authentication": "agent credential",
-      "description": "Create a backlog task, or a queued task with queue true. dryRun validates without writing state. An idempotency key is necessary unless dryRun is true. A queued task starts by itself only when every prerequisite is complete. Task input errors include project_not_found, dependency_not_found, root_profile_not_found, root_profile_not_permitted, worker_profile_not_found, worker_profile_not_permitted, advisor_profile_not_found, advisor_profile_not_permitted, source_issue_rejected, source_pull_request_rejected, source_branch_rejected, workflow_not_found, workflow_not_permitted, template_not_found, and template_not_permitted. They include field, value, and reason."
+      "description": "Create a backlog task, or a queued task with queue true. dryRun validates without writing state. An idempotency key is necessary unless dryRun is true. A queued task starts by itself only when every prerequisite is complete. Task input errors include project_not_found, dependency_not_found, root_profile_not_found, worker_profile_not_found, advisor_profile_not_found, source_issue_rejected, source_pull_request_rejected, source_branch_rejected, workflow_not_found, workflow_not_permitted, template_not_found, and template_not_permitted. They include field, value, and reason."
     },
     {
       "path": "/api/agent/tasks/{taskId}",
@@ -107,7 +107,7 @@
       "path": "/api/agent/tasks/{taskId}/dependencies",
       "method": "PUT",
       "authentication": "agent credential",
-      "description": "Replace the prerequisites of a task, shown as Blocked by. Task input errors include project_not_found, dependency_not_found, root_profile_not_found, root_profile_not_permitted, worker_profile_not_found, worker_profile_not_permitted, advisor_profile_not_found, advisor_profile_not_permitted, source_issue_rejected, source_pull_request_rejected, source_branch_rejected, workflow_not_found, workflow_not_permitted, template_not_found, and template_not_permitted. They include field, value, and reason."
+      "description": "Replace the prerequisites of a task, shown as Blocked by. Task input errors include project_not_found, dependency_not_found, root_profile_not_found, worker_profile_not_found, advisor_profile_not_found, source_issue_rejected, source_pull_request_rejected, source_branch_rejected, workflow_not_found, workflow_not_permitted, template_not_found, and template_not_permitted. They include field, value, and reason."
     },
     {
       "path": "/api/agent/tasks/{taskId}/commands",

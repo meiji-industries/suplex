@@ -2,7 +2,14 @@
 import type { HealthSnapshot } from "./contracts/health.js";
 
 type DesktopNetworkAccessMode = "local" | "tailscale" | "all";
-type DesktopNetworkAccess = { managed: false } | { managed: true; mode: DesktopNetworkAccessMode; busy: boolean; httpsUrl: string | null };
+type DesktopNetworkAccess = { managed: false } | {
+  managed: true;
+  preference: DesktopNetworkAccessMode;
+  active: DesktopNetworkAccessMode | null;
+  pending: boolean;
+  busy: boolean;
+  httpsUrl: string | null;
+};
 
 declare global {
   interface Window {
@@ -12,7 +19,9 @@ declare global {
       accountCleared(): Promise<void>;
       openHostPicker(): Promise<void>;
       networkAccess(): Promise<DesktopNetworkAccess>;
-      setNetworkAccess(mode: DesktopNetworkAccessMode): Promise<DesktopNetworkAccess>;
+      saveNetworkAccessPreference(mode: DesktopNetworkAccessMode): Promise<DesktopNetworkAccess>;
+      restartNetworkAccess(): Promise<DesktopNetworkAccess>;
+      onNetworkAccessChange(listener: (state: DesktopNetworkAccess) => void): () => void;
     };
   __SUPLEX_VIEW__?: "auth" | "oauth-consent" | "admin" | "projects" | "tasks" | "board" | "timeline" | "company-settings" | "setup";
   }

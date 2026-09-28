@@ -39,37 +39,85 @@ const setup = (input: {
   return { controller, file, operations };
 };
 
-test("enabling Tailscale preflights before stopping and keeps local running when discovery fails", async () => {
+test("saving a preference persists pending intent without touching the runtime", async () => {
+  const resolve = vi.fn(async (preference: "local" | "tailscale" | "all") => preference === "local" ? local : preference === "all" ? all : tailscale());
+  const start = vi.fn(async () => ({ port: 4111, adopted: false }));
+  const stop = vi.fn(async () => undefined);
+  const removeServeRoute = vi.fn(async () => undefined);
+  const { controller, file } = setup({ resolve, start, stop, removeServeRoute });
+  await controller.startPreferred();
+  resolve.mockClear();
+  start.mockClear();
+
+  await controller.savePreference("tailscale");
+
+  expect(await readNetworkAccess(file)).toBe("tailscale");
+  expect(controller.state()).toMatchObject({ preference: "tailscale", active: { kind: "owned", access: local } });
+  expect(resolve).not.toHaveBeenCalled();
+  expect(start).not.toHaveBeenCalled();
+  expect(stop).not.toHaveBeenCalled();
+  expect(removeServeRoute).not.toHaveBeenCalled();
+});
+
+test("saving the active mode cancels a pending restart", async () => {
+  const { controller, file, operations } = setup();
+  await controller.startPreferred();
+  await controller.savePreference("tailscale");
+  await controller.savePreference("local");
+  expect(controller.state()).toMatchObject({ preference: "local", active: { kind: "owned", access: local } });
+  expect(await readNetworkAccess(file)).toBe("local");
+  expect(operations).toEqual(["start:local"]);
+});
+
+test("apply uses only the latest saved preference", async () => {
+  const resolve = vi.fn(async (preference: "local" | "tailscale" | "all") => preference === "local" ? local : preference === "all" ? all : tailscale());
+  const { controller, file, operations } = setup({ resolve });
+  await controller.startPreferred();
+  await controller.savePreference("tailscale");
+  await controller.savePreference("all");
+
+  await expect(controller.applyPreference()).resolves.toMatchObject({ kind: "owned", access: all });
+
+  expect(resolve).toHaveBeenCalledTimes(2);
+  expect(resolve).toHaveBeenLastCalledWith("all");
+  expect(operations).toEqual(["start:local", "stop", "start:all"]);
+  expect(await readNetworkAccess(file)).toBe("all");
+});
+
+test("a failed resolution retains the running host and pending preference", async () => {
   const resolutions: string[] = [];
-  const { controller, operations } = setup({ resolve: async (preference) => {
+  const { controller, file, operations } = setup({ resolve: async (preference) => {
     resolutions.push(`resolve:${preference}`);
     if (preference === "tailscale") throw new Error("not connected");
     return local;
   } });
   await controller.startPreferred();
-  await expect(controller.change("tailscale")).rejects.toThrow("not connected");
+  await controller.savePreference("tailscale");
+  await expect(controller.applyPreference()).rejects.toThrow("not connected");
   expect(resolutions).toEqual(["resolve:local", "resolve:tailscale"]);
   expect(operations).toEqual(["start:local"]);
-  expect(controller.state().active).toMatchObject({ kind: "owned", access: local });
-});
-
-test("all-network access persists and never resolves Tailscale", async () => {
-  const resolve = vi.fn(async (preference: "local" | "tailscale" | "all") => preference === "all" ? all : local);
-  const { controller, file, operations } = setup({ resolve });
-  await controller.startPreferred();
-  await controller.change("all");
-  expect(resolve).toHaveBeenNthCalledWith(2, "all");
-  expect(operations).toEqual(["start:local", "stop", "start:all"]);
-  expect(await readNetworkAccess(file)).toBe("all");
-});
-
-test("an owned host transitions modes and saves only the active mode", async () => {
-  const { controller, file, operations } = setup();
-  await controller.startPreferred();
-  const changed = await controller.change("tailscale");
-  expect(changed).toMatchObject({ kind: "active", active: { kind: "owned", access: tailscale() } });
-  expect(operations).toEqual(["start:local", "stop", "start:tailscale"]);
+  expect(controller.state()).toMatchObject({ preference: "tailscale", active: { kind: "owned", access: local } });
   expect(await readNetworkAccess(file)).toBe("tailscale");
+});
+
+test("a failed start restores the previous mode and retains pending preference", async () => {
+  const operations: string[] = [];
+  const { controller, file } = setup({
+    start: async (access) => {
+      operations.push(`start:${access.kind}`);
+      if (access.kind === "all") throw new Error("all failed");
+      return { port: 4111, adopted: false };
+    },
+    stop: async () => { operations.push("stop"); },
+  });
+  await controller.startPreferred();
+  await controller.savePreference("all");
+
+  await expect(controller.applyPreference()).rejects.toThrow("all failed");
+
+  expect(operations).toEqual(["start:local", "stop", "start:all", "start:local"]);
+  expect(controller.state()).toMatchObject({ preference: "all", active: { kind: "owned", access: local } });
+  expect(await readNetworkAccess(file)).toBe("all");
 });
 
 test("a cleanup failure leaves the host stopped with Tailscale recovery intent instead of starting local behind a stale route", async () => {
@@ -84,11 +132,12 @@ test("a cleanup failure leaves the host stopped with Tailscale recovery intent i
   });
   await controller.startPreferred();
   hostname = "mac.two.ts.net";
-  await expect(controller.change("local")).rejects.toThrow("route remains");
+  await controller.savePreference("local");
+  await expect(controller.applyPreference()).rejects.toThrow("route remains");
   expect(operations).toEqual(["start:tailscale", "stop"]);
   expect(cleanup).toEqual(["remove-route"]);
   expect(controller.state().active).toBeNull();
-  expect(await readNetworkAccess(file)).toBe("tailscale");
+  expect(await readNetworkAccess(file)).toBe("local");
 });
 
 test("a preference write failure leaves the old host running", async () => {
@@ -97,7 +146,7 @@ test("a preference write failure leaves the old host running", async () => {
   mkdirSync(file);
   const { controller, operations } = setup({ file });
   await controller.startPreferred();
-  await expect(controller.change("tailscale")).rejects.toThrow();
+  await expect(controller.savePreference("tailscale")).rejects.toThrow();
   expect(operations).toEqual(["start:local"]);
   expect(controller.state().active).toMatchObject({ kind: "owned", access: local });
 });
@@ -123,7 +172,8 @@ test("a failed Tailscale start with unresolved cleanup never restores local, and
     },
   });
   await controller.startPreferred();
-  await expect(controller.change("tailscale")).rejects.toThrow("cleanup unresolved");
+  await controller.savePreference("tailscale");
+  await expect(controller.applyPreference()).rejects.toThrow("cleanup unresolved");
   expect(controller.state().active).toBeNull();
   expect(operations).toEqual(["start:local", "stop", "start:tailscale"]);
   expect(await readNetworkAccess(file)).toBe("tailscale");
@@ -134,7 +184,7 @@ test("a failed Tailscale start with unresolved cleanup never restores local, and
   expect(operations).toEqual(["start:local", "stop", "start:tailscale", "start:tailscale"]);
 });
 
-test("a later local selection clears unresolved cleanup before saving the pending local preference", async () => {
+test("a later local selection saves pending intent without touching unresolved cleanup", async () => {
   const file = join(root(), "network-access.json");
   const removeServeRoute = vi.fn(async () => undefined);
   let tailscaleStarts = 0;
@@ -151,10 +201,13 @@ test("a later local selection clears unresolved cleanup before saving the pendin
     },
   });
   await controller.startPreferred();
-  await expect(controller.change("tailscale")).rejects.toThrow();
-  expect(await controller.change("local")).toEqual({ kind: "pending", preference: "local", reason: "stopped" });
-  expect(removeServeRoute).toHaveBeenCalledWith(tailscale(), 4222);
+  await controller.savePreference("tailscale");
+  await expect(controller.applyPreference()).rejects.toThrow();
+  await controller.savePreference("local");
+  expect(removeServeRoute).not.toHaveBeenCalled();
   expect(await readNetworkAccess(file)).toBe("local");
+  await controller.startPreferred();
+  expect(removeServeRoute).toHaveBeenCalledWith(tailscale(), 4222);
 });
 
 test("a recreated controller recovers the live route before local selection and startup", async () => {
@@ -173,7 +226,8 @@ test("a recreated controller recovers the live route before local selection and 
     },
   });
   await first.startPreferred();
-  await expect(first.change("tailscale")).rejects.toThrow("cleanup unresolved");
+  await first.savePreference("tailscale");
+  await expect(first.applyPreference()).rejects.toThrow("cleanup unresolved");
   expect(readFileSync(join(directory, "network-access-cleanup.json"), "utf8")).toBe('{"port":4333}');
 
   const observed: string[] = [];
@@ -186,8 +240,8 @@ test("a recreated controller recovers the live route before local selection and 
       removeServeRoute: async (access, port) => { observed.push(`cleanup:${access.hostname}:${port}`); },
     },
   });
-  expect(await second.change("local")).toEqual({ kind: "pending", preference: "local", reason: "stopped" });
-  expect(observed).toEqual(["cleanup:new-name.ts.net:4333"]);
+  await second.savePreference("local");
+  expect(observed).toEqual([]);
   expect(await second.startPreferred()).toMatchObject({ kind: "owned", access: local, port: 4111 });
   expect(observed).toEqual(["cleanup:new-name.ts.net:4333", "start:local"]);
 });
@@ -210,13 +264,14 @@ test("shutdown cleanup can fail and retry from authoritative Serve state while t
 test("an adopted host stays untouched and does not claim an active access mode", async () => {
   const { controller, operations, file } = setup({ adopted: true });
   expect(await controller.startPreferred()).toEqual({ kind: "adopted", port: 4111 });
-  expect(await controller.change("tailscale")).toEqual({ kind: "pending", preference: "tailscale", reason: "adopted" });
+  await controller.savePreference("tailscale");
+  await expect(controller.applyPreference()).rejects.toThrow("does not own");
   expect(operations).toEqual(["start:local"]);
   expect(await readNetworkAccess(file)).toBe("tailscale");
   expect(controller.state().active).toEqual({ kind: "adopted", port: 4111 });
 });
 
-test("shutdown waits behind an in-progress mode change and then stops the resulting owned host", async () => {
+test("shutdown waits behind an in-progress apply and then stops the resulting owned host", async () => {
   let release: (() => void) | undefined;
   const delayed = new Promise<void>((resolve) => { release = resolve; });
   const start = vi.fn(async (access: ResolvedNetworkAccess) => {
@@ -226,7 +281,8 @@ test("shutdown waits behind an in-progress mode change and then stops the result
   const stop = vi.fn(async () => undefined);
   const { controller } = setup({ start, stop });
   await controller.startPreferred();
-  const changing = controller.change("tailscale");
+  await controller.savePreference("tailscale");
+  const changing = controller.applyPreference();
   const shutdown = controller.shutdown();
   await vi.waitFor(() => expect(start).toHaveBeenCalledTimes(2));
   release?.();

@@ -52,7 +52,14 @@ export type DesktopApi = {
 export type NetworkAccessMode = "local" | "tailscale" | "all";
 export type AppNetworkAccess =
   | { readonly managed: false }
-  | { readonly managed: true; readonly mode: NetworkAccessMode; readonly busy: boolean; readonly httpsUrl: string | null };
+  | {
+      readonly managed: true;
+      readonly preference: NetworkAccessMode;
+      readonly active: NetworkAccessMode | null;
+      readonly pending: boolean;
+      readonly busy: boolean;
+      readonly httpsUrl: string | null;
+    };
 
 declare const location: { readonly protocol: string }; // the preload runs in the renderer; this package compiles without the DOM lib
 
@@ -83,5 +90,11 @@ else contextBridge.exposeInMainWorld("suplexApp", {
   accountCleared: async () => { await ipcRenderer.invoke("suplex:account-cleared"); },
   openHostPicker: async () => { await ipcRenderer.invoke("suplex:host-picker"); },
   networkAccess: async () => (await ipcRenderer.invoke("suplex:access", { action: "read" })) as AppNetworkAccess,
-  setNetworkAccess: async (mode: NetworkAccessMode) => (await ipcRenderer.invoke("suplex:access", { action: "change", mode })) as AppNetworkAccess,
+  saveNetworkAccessPreference: async (mode: NetworkAccessMode) => (await ipcRenderer.invoke("suplex:access", { action: "save", mode })) as AppNetworkAccess,
+  restartNetworkAccess: async () => (await ipcRenderer.invoke("suplex:access", { action: "restart" })) as AppNetworkAccess,
+  onNetworkAccessChange: (listener: (state: AppNetworkAccess) => void) => {
+    const receive = (_event: Electron.IpcRendererEvent, state: AppNetworkAccess): void => { listener(state); };
+    ipcRenderer.on("suplex:network-access-changed", receive);
+    return () => { ipcRenderer.removeListener("suplex:network-access-changed", receive); };
+  },
 });

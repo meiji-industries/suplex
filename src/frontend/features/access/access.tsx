@@ -1,9 +1,11 @@
 import { startRegistration } from "@simplewebauthn/browser";
+import { CircleAlert } from "lucide-react";
 import { useCallback, useEffect, useState, type ReactElement } from "react";
 
 import type { RemoteAccessPolicy } from "../../contracts/generated/RemoteAccessPolicy.js";
 import type { CredentialSummary } from "../../contracts/generated/CredentialSummary.js";
 import { Alert, AlertDescription } from "../../components/ui/alert.js";
+import { Badge } from "../../components/ui/badge.js";
 import { LoadingState } from "../../components/app/loading-state.js";
 import { Button } from "../../components/ui/button.js";
 import { Checkbox } from "../../components/ui/checkbox.js";
@@ -17,6 +19,7 @@ import { beginPasskey, finishPasskey, readAccess, removePasskey, renamePasskey, 
 
 type NetworkState = Awaited<ReturnType<NonNullable<typeof window.suplexApp>["networkAccess"]>>;
 type OpenPolicy = Extract<RemoteAccessPolicy, { kind: "open" }>;
+const networkModeLabels = { local: "This Mac only", tailscale: "Tailscale", all: "All networks" } as const;
 
 function OwnPasskey({ credential, reload, onError }: { credential: CredentialSummary; reload: () => Promise<void>; onError: (message: string) => void }): ReactElement {
   const [label, setLabel] = useState(credential.label);
@@ -50,11 +53,12 @@ export function AccessView(): ReactElement {
   }, []);
   useEffect(() => {
     const controller = new AbortController();
+    const unsubscribe = window.suplexApp?.onNetworkAccessChange(setNetwork);
     void readAccess(controller.signal).then((response) => {
       setPolicy(response.policy); if (response.policy.kind === "open") setLastOpenPolicy(response.policy); setUsers(response.users); setCredentials(response.credentials); setHttpsOrigin(response.httpsOrigin); setServerNetworkMode(response.networkMode);
     }).catch(() => setError("Suplex could not load access settings."));
     void window.suplexApp?.networkAccess().then(setNetwork).catch(() => setError("Suplex could not read the desktop network setting."));
-    return () => controller.abort();
+    return () => { controller.abort(); unsubscribe?.(); };
   }, []);
   if (!user || user.role !== "admin") return <SettingsLayout title="Access" companyId={companyId} backHref={withCompany("/", companyId)} activeHref={withCompany("/admin/access", companyId)}><SettingsContent title="Access"><SettingsSection><SettingRow label="Access settings are not available" description="Only administrators can open this page." /></SettingsSection></SettingsContent></SettingsLayout>;
   if (!policy) return <SettingsLayout title="Access" companyId={companyId} backHref={withCompany("/", companyId)} activeHref={withCompany("/admin/access", companyId)}><SettingsContent title="Access">{error ? <Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert> : <LoadingState />}</SettingsContent></SettingsLayout>;
@@ -74,11 +78,23 @@ export function AccessView(): ReactElement {
     setLastOpenPolicy((draft) => draft ? { ...draft, externalHttpsOrigin } : draft);
   };
   const save = async (): Promise<void> => { setBusy(true); setError(""); try { setPolicy((await saveAccess(policy)).policy); await reload(); } catch (reason) { setError(reason instanceof Error ? reason.message : "Suplex could not save access settings."); } finally { setBusy(false); } };
+  const restartNetwork = async (): Promise<void> => {
+    if (!window.suplexApp) return;
+    setError("");
+    try {
+      setNetwork(await window.suplexApp.restartNetworkAccess());
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Suplex could not restart network access.");
+    }
+  };
   const enroll = async (): Promise<void> => { setBusy(true); setError(""); try { const offered = await beginPasskey(); const response = await startRegistration({ optionsJSON: offered.options }); await finishPasskey(offered.challengeId, label, response); setLabel(""); await reload(); } catch { setError("Suplex could not add the passkey."); } finally { setBusy(false); } };
   return <SettingsLayout title="Access" companyId={companyId} backHref={withCompany("/", companyId)} activeHref={withCompany("/admin/access", companyId)}><SettingsContent width="wide" title="Access" description="Control remote access to this Suplex host.">
     <SettingsSection title="Remote access">
-      <SettingRow label="Network access" description={network.managed ? "The desktop app manages this host." : "Open this page from this Mac in the desktop app to change the network."}>
-        <Select disabled={!network.managed || network.busy} value={network.managed ? network.mode : serverNetworkMode ?? "local"} onValueChange={(value) => { if (!window.suplexApp || (value !== "local" && value !== "tailscale" && value !== "all")) return; setError(""); void window.suplexApp.setNetworkAccess(value).then(setNetwork).catch(() => setError("Suplex could not change the desktop network setting.")); }}><SelectTrigger aria-label="Network access"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="local">This Mac only</SelectItem><SelectItem value="tailscale">Tailscale</SelectItem><SelectItem value="all">All networks</SelectItem></SelectContent></Select>
+      <SettingRow label="Network access" description={network.managed ? network.pending ? network.active === null ? "Suplex is stopped. Start Suplex to apply this setting." : `Active mode: ${networkModeLabels[network.active]}.` : "The desktop app manages this host." : "Open this page from this Mac in the desktop app to change the network."}>
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          <Select disabled={!network.managed || network.busy} value={network.managed ? network.preference : serverNetworkMode ?? "local"} onValueChange={(value) => { if (!window.suplexApp || (value !== "local" && value !== "tailscale" && value !== "all")) return; setError(""); void window.suplexApp.saveNetworkAccessPreference(value).then(setNetwork).catch((reason: unknown) => setError(reason instanceof Error ? reason.message : "Suplex could not save the desktop network setting.")); }}><SelectTrigger aria-label="Network access"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="local">This Mac only</SelectItem><SelectItem value="tailscale">Tailscale</SelectItem><SelectItem value="all">All networks</SelectItem></SelectContent></Select>
+          {network.managed && network.pending ? <><Badge variant="amber"><CircleAlert />Restart required</Badge>{network.active !== null ? <Button size="sm" disabled={network.busy} onClick={() => void restartNetwork()}>Restart</Button> : null}</> : null}
+        </div>
       </SettingRow>
       <SettingRow label="Require HTTPS" description="Remote HTTP requests are rejected. Configure Tailscale Serve or a loopback reverse proxy."><Checkbox aria-label="Require HTTPS" checked={requireHttps} disabled={policy.kind === "passkeys"} onCheckedChange={(checked) => { if (policy.kind === "open") { const next = { ...policy, requireHttps: checked }; setPolicy(next); setLastOpenPolicy(next); } }} /></SettingRow>
       <SettingRow label="HTTPS address" description="Use the public HTTPS origin for the proxy and passkeys."><Input aria-label="HTTPS address" placeholder="https://suplex.example.com" value={externalOrigin} onChange={(event) => setOrigin(event.target.value)} /></SettingRow>

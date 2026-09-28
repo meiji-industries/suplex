@@ -54,6 +54,7 @@ elif len(args) == 4 and args[:2] == ["install", "--stage"] and args[3] == "--jso
     (data / "fixture-stages.json").write_text(json.dumps([*done, stage]))
     frame({"ok": True, "stage": stage, "skipped": False})
 elif args == ["start", "--foreground"]:
+    time.sleep(read("fixture.json", {}).get("startDelayMs", 0) / 1000)
     port = int(os.environ.get("SUPLEX_PORT", "4111"))
 
     class Handler(BaseHTTPRequestHandler):

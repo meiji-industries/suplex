@@ -23,6 +23,7 @@ const CONNECTING_COVER = "html::after { content: \"CONNECTING\"; position: fixed
 
 type Bounds = { width: number; height: number; x?: number; y?: number };
 type Preventable = { preventDefault(): void };
+type LocalPageCapture = { readonly window: BrowserWindow; readonly url: string; readonly target: SuplexTarget };
 
 export function retryPage(origin: string): string {
   const address = origin.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;").replaceAll("'", "&#39;");
@@ -187,7 +188,10 @@ export async function runSuplexDesktop(input: { readonly argv: readonly string[]
     },
     onStateChange: (nextState) => {
       networkState = nextState;
-      queueMicrotask(() => { rebuildMenu(); });
+      queueMicrotask(() => {
+        rebuildMenu();
+        sendNetworkAccessSnapshot();
+      });
     },
   });
 
@@ -391,46 +395,70 @@ export async function runSuplexDesktop(input: { readonly argv: readonly string[]
     const url = tailscaleUrl();
     if (url !== null) clipboard.writeText(url);
   };
-  const changeNetworkAccess = async (requested: NetworkAccess): Promise<void> => {
+  const saveNetworkAccessPreference = async (requested: NetworkAccess): Promise<void> => {
     if (networkState.busy) return;
     try {
-      const changed = await networkAccess.change(requested);
-      if (changed.kind === "pending") {
-        await dialog.showMessageBox({
-          type: "info",
-          message: changed.reason === "adopted" ? "Restart Suplex to apply network access" : "Start Suplex to apply network access",
-          detail: changed.reason === "adopted"
-            ? "Another process manages this Suplex host. The setting applies the next time this app starts the host."
-            : "Suplex saved the setting. The setting applies when this app starts the host.",
-        });
-        return;
-      }
-      if (window && localOrigin !== null) await switchTo(window, parseSuplexTarget(`${localOrigin}/`));
-      if (changed.active.kind === "owned" && changed.active.access.kind === "tailscale") {
-        const result = await dialog.showMessageBox({
-          type: "info",
-          message: "Tailscale access is on",
-          detail: "Tailscale access is ready. Access settings determine who can use this Suplex instance.",
-          buttons: ["Copy Tailscale URL", "OK"],
-          defaultId: 0,
-          cancelId: 1,
-        });
-        if (result.response === 0) copyTailscaleUrl();
-      }
+      await networkAccess.savePreference(requested);
     } catch (error) {
       await dialog.showMessageBox({
         type: "error",
-        message: "Suplex could not change network access",
+        message: "Suplex could not save network access",
         detail: (error as Error).message,
       });
     } finally {
       rebuildMenu();
     }
   };
-  const accessSnapshot = (): import("./preload").AppNetworkAccess => {
+  const captureLocalPage = (): LocalPageCapture | null => {
+    if (!window || window.isDestroyed() || localOrigin === null) return null;
+    const current = window.webContents.getURL();
+    if (!URL.canParse(current)) return null;
+    const page = new URL(current);
+    if (page.origin !== localOrigin) return null;
+    return { window, url: current, target: parseSuplexTarget(`${page.origin}${page.pathname}${page.search}`) };
+  };
+  const sameCapturedPage = (capture: LocalPageCapture): boolean =>
+    window === capture.window && !capture.window.isDestroyed() && capture.window.webContents.getURL() === capture.url;
+  const managedAccessSnapshot = (): Extract<import("./preload").AppNetworkAccess, { readonly managed: true }> => {
     const active = networkState.active;
-    if (active?.kind !== "owned") return { managed: false };
-    return { managed: true, mode: active.access.kind, busy: networkState.busy, httpsUrl: tailscaleUrl() };
+    const activeMode = active?.kind === "owned" ? active.access.kind : null;
+    return {
+      managed: true,
+      preference: networkState.preference,
+      active: activeMode,
+      pending: activeMode !== networkState.preference,
+      busy: networkState.busy,
+      httpsUrl: tailscaleUrl(),
+    };
+  };
+  const accessSnapshot = (): import("./preload").AppNetworkAccess =>
+    networkState.active?.kind === "owned" ? managedAccessSnapshot() : { managed: false };
+  const sendNetworkAccessSnapshot = (): void => {
+    const capture = captureLocalPage();
+    if (capture === null) return;
+    capture.window.webContents.send("suplex:network-access-changed", accessSnapshot());
+  };
+  const returnToRestartPage = async (capture: LocalPageCapture | null): Promise<void> => {
+    if (capture === null || localOrigin === null || !sameCapturedPage(capture)) return;
+    const previous = new URL(capture.target.url);
+    const target = parseSuplexTarget(new URL(`${previous.pathname}${previous.search}`, `${localOrigin}/`).href);
+    origin = target.origin;
+    state = { name: "connected", url: target.url };
+    rebuildMenu();
+    await load(capture.window, target);
+  };
+  const restartNetworkAccess = async (): Promise<LocalPageCapture | null> => {
+    if (networkState.busy) return null;
+    const returnPage = captureLocalPage();
+    try {
+      await networkAccess.applyPreference();
+    } catch (error) {
+      if (returnPage !== null && sameCapturedPage(returnPage)) {
+        returnPage.window.webContents.send("suplex:network-access-changed", managedAccessSnapshot());
+      }
+      throw error;
+    }
+    return returnPage;
   };
   const localAdminFrame = async (event: Electron.IpcMainInvokeEvent): Promise<boolean> => {
     const sender = event.sender;
@@ -452,12 +480,19 @@ export async function runSuplexDesktop(input: { readonly argv: readonly string[]
     }
   };
   const networkAccessItems = (): Electron.MenuItemConstructorOptions[] => {
-    const selected = networkState.active === null ? networkState.preference : networkState.active.kind === "owned" ? networkState.active.access.kind : null;
+    const selected = networkState.preference;
+    const active = networkState.active;
+    const pending = active?.kind === "owned" && active.access.kind !== selected;
     const url = tailscaleUrl();
     return [
-      { id: "network-access-local", label: "This Mac only", type: "radio", checked: selected === "local", enabled: localInstalled && !networkState.busy, click: () => { void changeNetworkAccess("local"); } },
-      { id: "network-access-tailscale", label: "Tailscale", type: "radio", checked: selected === "tailscale", enabled: localInstalled && !networkState.busy, click: () => { void changeNetworkAccess("tailscale"); } },
-      { id: "network-access-all", label: "All networks", type: "radio", checked: selected === "all", enabled: localInstalled && !networkState.busy, click: () => { void changeNetworkAccess("all"); } },
+      { id: "network-access-local", label: "This Mac only", type: "radio", checked: selected === "local", enabled: localInstalled && !networkState.busy, click: () => { void saveNetworkAccessPreference("local"); } },
+      { id: "network-access-tailscale", label: "Tailscale", type: "radio", checked: selected === "tailscale", enabled: localInstalled && !networkState.busy, click: () => { void saveNetworkAccessPreference("tailscale"); } },
+      { id: "network-access-all", label: "All networks", type: "radio", checked: selected === "all", enabled: localInstalled && !networkState.busy, click: () => { void saveNetworkAccessPreference("all"); } },
+      ...(pending ? [
+        { type: "separator" as const },
+        { id: "network-access-pending", label: "Restart required", enabled: false },
+        { id: "network-access-restart", label: "Restart", enabled: !networkState.busy, click: () => { void restartNetworkAccess().then(returnToRestartPage).catch((error: unknown) => dialog.showMessageBox({ type: "error", message: "Suplex could not restart network access", detail: (error as Error).message })); } },
+      ] : []),
       ...(url === null ? [] : [
         { type: "separator" as const },
         { id: "network-access-copy-url", label: "Copy Tailscale URL", enabled: !networkState.busy, click: copyTailscaleUrl },
@@ -732,10 +767,15 @@ export async function runSuplexDesktop(input: { readonly argv: readonly string[]
   ipcMain.removeHandler("suplex:access");
   ipcMain.handle("suplex:access", async (event: Electron.IpcMainInvokeEvent, message: unknown): Promise<import("./preload").AppNetworkAccess> => {
     if (!await localAdminFrame(event)) return { managed: false };
-    if (typeof message === "object" && message !== null && Reflect.get(message, "action") === "change") {
+    if (typeof message === "object" && message !== null && Reflect.get(message, "action") === "save") {
       const mode = Reflect.get(message, "mode");
       if (mode !== "local" && mode !== "tailscale" && mode !== "all") return accessSnapshot();
-      await changeNetworkAccess(mode);
+      await networkAccess.savePreference(mode);
+    } else if (typeof message === "object" && message !== null && Reflect.get(message, "action") === "restart") {
+      const returnPage = await restartNetworkAccess();
+      const snapshot = accessSnapshot();
+      setImmediate(() => { void returnToRestartPage(returnPage); });
+      return snapshot;
     }
     return accessSnapshot();
   });
@@ -760,6 +800,7 @@ export async function runSuplexDesktop(input: { readonly argv: readonly string[]
   app.on("activate", () => { void open(); });
   app.setAboutPanelOptions({ applicationName: "Suplex", applicationVersion: app.getVersion() });
   await app.whenReady();
+  await networkAccess.loadPreference();
   if (process.platform === "darwin") {
     tray = new Tray(join(__dirname, "statusTemplate.png"), TRAY_GUID);
     tray.setToolTip("Suplex");

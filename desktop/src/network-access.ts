@@ -24,10 +24,6 @@ export type NetworkAccessState = {
   readonly busy: boolean;
 };
 
-export type NetworkAccessChange =
-  | { readonly kind: "active"; readonly active: ActiveNetworkAccess }
-  | { readonly kind: "pending"; readonly preference: NetworkAccess; readonly reason: "stopped" | "adopted" };
-
 export type NetworkAccessPorts = {
   readonly resolve: (preference: NetworkAccess) => Promise<ResolvedNetworkAccess>;
   readonly start: (access: ResolvedNetworkAccess) => Promise<{ readonly port: number; readonly adopted: boolean }>;
@@ -100,8 +96,10 @@ export function createNetworkAccessController(options: {
   readonly onStateChange?: (state: NetworkAccessState) => void;
 }): {
   state(): NetworkAccessState;
+  loadPreference(): Promise<void>;
   startPreferred(): Promise<ActiveNetworkAccess>;
-  change(preference: NetworkAccess): Promise<NetworkAccessChange>;
+  savePreference(preference: NetworkAccess): Promise<void>;
+  applyPreference(): Promise<ActiveNetworkAccess>;
   shutdown(): Promise<void>;
 } {
   const resolve = options.ports.resolve ?? resolveNetworkAccess;
@@ -170,69 +168,38 @@ export function createNetworkAccessController(options: {
 
   return {
     state,
+    loadPreference: () => serialize(async () => {
+      preference = await readNetworkAccess(options.file);
+    }),
     startPreferred: () => serialize(async () => {
       preference = await readNetworkAccess(options.file);
       await recoverCleanup();
       const resolved = await resolve(preference);
       return start(resolved);
     }),
-    change: (requested) => serialize(async () => {
-      const previous = active;
-      if (previous?.kind === "owned" && previous.access.kind === requested) {
-        preference = requested;
-        await writeNetworkAccess(options.file, requested);
-        return { kind: "active", active: previous };
-      }
-
-      const next = await resolve(requested);
-      if (previous === null || previous.kind === "adopted") {
-        await recoverCleanup();
-        preference = requested;
-        await writeNetworkAccess(options.file, requested);
-        return { kind: "pending", preference: requested, reason: previous === null ? "stopped" : "adopted" };
-      }
-
-      const previousPreference = preferenceOf(previous.access);
+    savePreference: (requested) => serialize(async () => {
       await writeNetworkAccess(options.file, requested);
       preference = requested;
-      let transitionError: unknown;
+    }),
+    applyPreference: () => serialize(async () => {
+      const previous = active;
+      if (previous?.kind !== "owned") throw new Error("Suplex does not own a running host to restart.");
+      if (previous.access.kind === preference) return previous;
+      const next = await resolve(preference);
+      const previousPreference = preferenceOf(previous.access);
+      await stop(previous);
       try {
-        await stop(previous);
-        const running = await start(next);
-        return { kind: "active", active: running };
+        return await start(next);
       } catch (error) {
-        transitionError = error;
-      }
-
-      if (cleanupRequired !== null) {
-        try {
-          await writeNetworkAccess(options.file, "tailscale");
-          preference = "tailscale";
-        } catch (preferenceError) {
-          throw new AggregateError([transitionError, preferenceError], "Suplex could not preserve the safe Tailscale recovery mode.");
-        }
-        throw transitionError;
-      }
-
-      if (active?.kind === "owned" && active.access.kind === next.kind) {
-        try {
-          await stop(active);
-        } catch (cleanupError) {
-          throw new AggregateError([transitionError, cleanupError], "Suplex could not change network access or safely restore the previous mode.");
-        }
-      }
-
-      if (active === null) {
+        if (cleanupRequired !== null) throw error;
         try {
           const restored = await resolve(previousPreference);
           await start(restored);
-          await writeNetworkAccess(options.file, previousPreference);
-          preference = previousPreference;
         } catch (restoreError) {
-          throw new AggregateError([transitionError, restoreError], "Suplex could not change network access or restore the previous mode.");
+          throw new AggregateError([error, restoreError], "Suplex could not apply network access or restore the previous mode.");
         }
+        throw error;
       }
-      throw transitionError;
     }),
     shutdown: () => serialize(async () => {
       const running = active;

@@ -103,6 +103,7 @@ const preventable = (): { preventDefault: ReturnType<typeof vi.fn> } => ({ preve
 const setApplicationMenu = vi.spyOn(fake.Menu, "setApplicationMenu");
 const settingsMenu = (): MenuEntry[] => ((setApplicationMenu.mock.lastCall?.[0] as { entries: MenuEntry[] }).entries).find((entry) => entry.label === "Suplex")!.submenu!.find((entry) => entry.label === "Settings")!.submenu!;
 const menuItem = (label: string): MenuEntry => settingsMenu().find((entry) => entry.label === label)!;
+const networkMenu = (): MenuEntry[] => menuItem("Network access").submenu!;
 const trayMenu = (): MenuEntry[] => fake.Tray.all.at(-1)!.menu!.entries as MenuEntry[];
 const trayItem = (label: string): MenuEntry => trayMenu().find((entry) => entry.label === label)!;
 const ORIGIN = "https://suplex.tail1234.ts.net";
@@ -116,6 +117,8 @@ beforeEach(() => {
   fake.FakeWindow.all = [];
   fake.Tray.all = [];
   rmSync(targetFile, { force: true });
+  rmSync(join(fake.userData, "network-access.json"), { force: true });
+  rmSync(join(fake.userData, "network-access-cleanup.json"), { force: true });
   vi.clearAllMocks();
 });
 
@@ -318,6 +321,16 @@ describe("remembered targets", () => {
 });
 
 describe("target sources", () => {
+  test("a remote-first launch reads the saved network preference", async () => {
+    writeFileSync(join(fake.userData, "network-access.json"), JSON.stringify("all"));
+    await runSuplexDesktop({ argv: [], environment: { SUPLEX_DESKTOP_URL: ORIGIN } });
+    expect(networkMenu().filter((entry) => entry.type === "radio").map((entry) => [entry.label, entry.checked])).toEqual([
+      ["This Mac only", false],
+      ["Tailscale", false],
+      ["All networks", true],
+    ]);
+  });
+
   test("a selected remote host stays selected across launch even with a local install", async () => {
     const installFile = join(fake.userData, "install.json");
     writeFileSync(installFile, JSON.stringify({ completedAt: "2026-09-27T00:00:00Z", runtimeStamp: "test", port: 4111 }));
@@ -443,6 +456,34 @@ describe("local install", () => {
     expect(await healthy(secondOrigin)).toBe(true);
     fake.app.emit("before-quit", preventable());
     await vi.waitFor(async () => { expect(await healthy(secondOrigin)).toBe(false); }, { timeout: 10_000 });
+  });
+
+  test("a pending restart does not replace navigation made while the host restarts", async () => {
+    const win = await start();
+    await desktop({ action: "choose", mode: "local" });
+    await onPage(win, "ready");
+    await desktop({ action: "launch" });
+    await vi.waitFor(() => expect(win.webContents.url).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/$/), { timeout: 20_000 });
+    const localOrigin = new URL(win.webContents.url).origin;
+    await win.loadURL(`${localOrigin}/admin/access?company=company-1`);
+
+    networkMenu().find((entry) => entry.label === "All networks")!.click!();
+    await vi.waitFor(() => expect(JSON.parse(readFileSync(join(fake.userData, "network-access.json"), "utf8"))).toBe("all"));
+    await vi.waitFor(() => expect(networkMenu().filter((entry) => entry.label === "Restart required" || entry.label === "Restart")).toEqual([
+      expect.objectContaining({ label: "Restart required", enabled: false }),
+      expect.objectContaining({ label: "Restart", enabled: true }),
+    ]));
+
+    settings({ startDelayMs: 250 });
+    networkMenu().find((entry) => entry.label === "Restart")!.click!();
+    await vi.waitFor(async () => { expect(await healthy(localOrigin)).toBe(false); }, { timeout: 10_000 });
+    await win.loadURL(`${ORIGIN}/tasks/remote`);
+    await vi.waitFor(async () => { expect(await healthy(localOrigin)).toBe(true); }, { timeout: 10_000 });
+    await vi.waitFor(() => expect(networkMenu().some((entry) => entry.label === "Restart")).toBe(false));
+    expect(win.webContents.url).toBe(`${ORIGIN}/tasks/remote`);
+
+    fake.app.emit("before-quit", preventable());
+    await vi.waitFor(async () => { expect(await healthy(localOrigin)).toBe(false); }, { timeout: 10_000 });
   });
 
   test("a failed stage latches until Retry, which reruns from that stage", async () => {

@@ -134,12 +134,16 @@ that a particular version has been published or installed successfully.
 ## Process ownership and updates
 
 In local desktop mode, the app starts its bundled host and stops the process
-group it owns on quit. A mode change stops the owned host before it starts the
-same database in the new mode. If the new start fails, the app restores the
-previous working mode when it can do so safely. It can adopt an already running
-host only when that host reports the same installation identity. It leaves an
-adopted host running and saves a changed network setting for the next managed
-start.
+group it owns on quit. A network mode selection saves the preferred mode but
+does not change the running host. The Access page and the native menu show an
+explicit **Restart** action when the saved mode differs from the active owned
+mode. Restart resolves current Tailscale state, stops the owned host, and starts
+the same database in the saved mode. If the new start fails, the app restores
+the previous working mode when it can do so safely. It retains the saved mode,
+so the pending restart remains available for retry. It can adopt an already
+running host only when that host reports the same installation identity. It
+never stops an adopted host and saves a changed network setting for the next
+managed start.
 An unrelated server occupying the preferred port causes another local port to
 be selected; answering a health check is not enough to claim ownership.
 

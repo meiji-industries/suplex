@@ -17,7 +17,7 @@ import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "
 import { Input } from "../../components/ui/input.js";
 import { Textarea } from "../../components/ui/textarea.js";
 import { TaskOptionFilter } from "./task-option-filter.js";
-import { InlineAttachmentPicker } from "../../components/ui/inline-attachment-picker.js";
+import { InlineAttachmentList, InlineAttachmentPicker } from "../../components/ui/inline-attachment-picker.js";
 import { Alert, AlertDescription } from "../../components/ui/alert.js";
 import { EntityAvatar } from "../../components/app/entity-avatar.js";
 import { Breadcrumb, BreadcrumbItem, BreadcrumbList, BreadcrumbSeparator } from "../../components/ui/breadcrumb.js";
@@ -283,8 +283,9 @@ export function NewTaskDialog({ open, onOpenChange, companyId, onCreated, initia
           <Textarea aria-label="Task description" placeholder="Write a description" value={description} onChange={event => setDescription(event.target.value)} className="min-h-20 resize-none border-0 bg-transparent px-0 py-1 text-sm font-normal placeholder:text-muted-foreground/70 shadow-none focus-visible:ring-0 md:text-sm dark:bg-transparent" />
         </div>
         {error ? <div className="px-5 pb-3"><Alert variant="destructive"><AlertDescription>{error}{projectFindings.length && projectId ? <>. {projectFindings.join(". ")}. <a className="underline" href={withCompany(`/projects/${encodeURIComponent(projectId)}`, companyId)}>Open the project settings</a></> : null}</AlertDescription></Alert></div> : null}
+        {!editing && images.length ? <div className="px-5 pb-3"><InlineAttachmentList attachments={images.map((image, index) => ({ id: String(index), filename: image.filename, previewUrl: `data:${image.mimeType};base64,${image.base64}` }))} onRemove={index => setImages(current => current.filter((_, item) => item !== index))} disabled={busy || readingImages} /></div> : null}
         <div className="flex flex-wrap items-center gap-2 px-5 pb-3">
-          {editing ? null : <InlineAttachmentPicker compact attachments={images.map((image, index) => ({ id: String(index), filename: image.filename, previewUrl: `data:${image.mimeType};base64,${image.base64}` }))} onSelect={addImages} onRemove={index => setImages(current => current.filter((_, item) => item !== index))} disabled={busy || readingImages} />}
+          {editing ? null : <InlineAttachmentPicker compact attachments={images.map((image, index) => ({ id: String(index), filename: image.filename, previewUrl: `data:${image.mimeType};base64,${image.base64}` }))} onSelect={addImages} disabled={busy || readingImages} />}
           <div className="max-w-full overflow-x-auto p-1 -m-1">
           <ButtonGroup aria-label="Task options">
           <TaskOptionFilter prefix={editing ? "Run" : <DropdownMenu>

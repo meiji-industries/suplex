@@ -48,7 +48,7 @@ vi.mock("../src/frontend/features/tasks/task-option-filter.js", async () => {
     return <><button type="button" aria-label={label} disabled={disabled} onClick={() => setOpen(!open)}>{valueLabel ?? options.find(option => option.value === value)?.label ?? value}</button>{open ? options.map(option => <button type="button" role="option" key={option.value} disabled={option.disabled} onClick={() => { onValueChange(Array.isArray(value) ? value.includes(option.value) ? value.filter(item => item !== option.value) : [...value, option.value] : option.value); setOpen(false); }}>{option.label}</button>) : null}</>;
   } };
 });
-vi.mock("../src/frontend/components/ui/inline-attachment-picker.js", () => ({ InlineAttachmentPicker: () => null }));
+vi.mock("../src/frontend/components/ui/inline-attachment-picker.js", () => ({ InlineAttachmentList: () => null, InlineAttachmentPicker: () => null }));
 vi.mock("../src/frontend/components/ui/alert.js", () => ({ Alert: ({ children }: { children: React.ReactNode }) => <div>{children}</div>, AlertDescription: ({ children }: { children: React.ReactNode }) => <div>{children}</div> }));
 vi.mock("../src/frontend/components/app/entity-avatar.js", () => ({ EntityAvatar: () => null }));
 vi.mock("../src/frontend/components/ui/breadcrumb.js", () => ({ Breadcrumb: ({ children }: { children: React.ReactNode }) => <>{children}</>, BreadcrumbItem: ({ children }: { children: React.ReactNode }) => <>{children}</>, BreadcrumbList: ({ children }: { children: React.ReactNode }) => <>{children}</>, BreadcrumbSeparator: () => null }));

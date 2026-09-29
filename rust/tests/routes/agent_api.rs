@@ -36,22 +36,11 @@ pub(crate) mod tests {
             &[
                 "init",
                 "--quiet",
-                "--bare",
-                "--initial-branch=main",
-                bare.to_str().unwrap(),
-            ],
-            root,
-        );
-        git(
-            &[
-                "init",
-                "--quiet",
                 "--initial-branch=main",
                 local.to_str().unwrap(),
             ],
             root,
         );
-        git(&["remote", "add", "origin", bare.to_str().unwrap()], &local);
         git(
             &[
                 "-c",
@@ -66,7 +55,19 @@ pub(crate) mod tests {
             ],
             &local,
         );
-        git(&["push", "--quiet", "origin", "main"], &local);
+        // Clone and fetch rather than push, so the fixture needs no push permission.
+        git(
+            &[
+                "clone",
+                "--quiet",
+                "--bare",
+                local.to_str().unwrap(),
+                bare.to_str().unwrap(),
+            ],
+            root,
+        );
+        git(&["remote", "add", "origin", bare.to_str().unwrap()], &local);
+        git(&["fetch", "--quiet", "origin"], &local);
         git(
             &[
                 "remote",
@@ -142,10 +143,17 @@ pub(crate) mod tests {
 
     /// The agent API fixture: a project on a real repository with a local-worktree agent policy.
     pub(crate) async fn agent() -> Agent {
+        agent_with(None).await
+    }
+
+    pub(crate) async fn agent_with(host: Option<crate::tasks::host::TaskHostHandle>) -> Agent {
         let root = std::env::temp_dir().join(format!("suplex-agent-api-{}", uuid::Uuid::new_v4()));
         let local = repository(&root);
         let (state, path) = route_auth::tests::state();
-        let state = state.with_artifact_root(root.join("artifacts"));
+        let mut state = state.with_artifact_root(root.join("artifacts"));
+        if let Some(host) = host {
+            state = state.with_task_host(host);
+        }
         let server = server(Some((state, path))).await;
         let policy = json!({"workflowIds": ["workflow_native_standard"], "defaultWorkflowId": "workflow_native_standard", "rootProfileIds": ["profile_native_root"], "workerProfileIds": ["profile_native_worker"], "deliveryTarget": "local_worktree"});
         server.state.with_database(|database| {
@@ -418,14 +426,15 @@ pub(crate) mod tests {
                 .as_array()
                 .unwrap()
                 .len(),
-            8
+            8,
+            "answer_human_question needs the answer grant"
         );
         let (_, capabilities) = agent
             .call(reqwest::Method::GET, "/api/agent/capabilities", None)
             .await;
-        assert_eq!(capabilities, super::capabilities(true));
+        assert_eq!(capabilities, super::capabilities(true, false));
         assert_eq!(
-            super::capabilities(false)["unavailableCommands"],
+            super::capabilities(false, false)["unavailableCommands"],
             json!([
                 "answer_human_question",
                 "deliver_task",
@@ -1225,5 +1234,421 @@ pub(crate) mod tests {
         let body: Value = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(body["tasks"].as_array().unwrap().len(), 100);
         assert!(bytes.len() < 20 * 1024, "{} bytes", bytes.len());
+    }
+
+    pub(crate) fn admin_id(server: &Server) -> String {
+        server.state.with_database(|database| {
+            database
+                .connection()
+                .query_row(
+                    "SELECT id FROM suplex_users WHERE role = 'admin'",
+                    [],
+                    |row| row.get::<_, String>(0),
+                )
+                .unwrap()
+        })
+    }
+
+    /// The administrator lets the agent answer questions on their behalf, or stops it.
+    pub(crate) async fn grant_answers(server: &Server, agent_id: &str, granted: bool) -> Value {
+        let (status, body) = server
+            .send(
+                reqwest::Method::PUT,
+                &format!("/api/admin/external-agents/{agent_id}/answer-grant"),
+                Some(&server.admin_cookie),
+                Some(json!({"granted": granted})),
+            )
+            .await;
+        assert_eq!(status, 200, "{body}");
+        body
+    }
+
+    /// An active task whose Coordinator asks a question with two options; returns its id.
+    pub(crate) fn ask(server: &Server, task_id: &str, question: &str) -> String {
+        server.state.with_database(|database| {
+            let root = crate::coordination::root_session_store::reserve_root(
+                database,
+                task_id,
+                Utc::now(),
+            )
+            .unwrap();
+            let options = json!([
+                {"label": "Main", "description": "Use main", "recommended": true},
+                {"label": "Branch", "description": "Use a branch", "recommended": false}
+            ]);
+            assert!(
+                crate::coordination::root_session_store::ask_human_for_root(
+                    database,
+                    task_id,
+                    &root.id,
+                    root.generation,
+                    question,
+                    &options,
+                    Utc::now(),
+                )
+                .unwrap()
+            );
+            database
+                .connection()
+                .query_row(
+                    "SELECT human_question_id FROM suplex_task_controls WHERE task_id = ?1",
+                    [task_id],
+                    |row| row.get(0),
+                )
+                .unwrap()
+        })
+    }
+
+    /// Create and start a task, then let its Coordinator ask; returns the task id and question id.
+    pub(crate) async fn waiting_task(agent: &Agent, key: &str) -> (String, String) {
+        let task = agent.create("Question target", key).await;
+        let id = task["id"].as_str().unwrap().to_owned();
+        let (status, started) = agent
+            .call(
+                reqwest::Method::POST,
+                &format!("/api/agent/tasks/{id}/commands"),
+                Some(json!({"command": "start_task", "revision": task["revision"], "idempotencyKey": format!("{key}-start")})),
+            )
+            .await;
+        assert_eq!(status, 200, "{started}");
+        let question = ask(&agent.server, &id, "Use main?");
+        (id, question)
+    }
+
+    /// Status, question id, command revision, and Coordinator turns: all that an answer changes.
+    fn answer_state(server: &Server, task_id: &str) -> (String, Option<String>, i64, i64) {
+        server.state.with_database(|database| {
+            database
+                .connection()
+                .query_row(
+                    "SELECT c.status, c.human_question_id, t.command_revision, (SELECT COUNT(*) FROM suplex_task_turns WHERE task_id = t.id) FROM suplex_tasks t JOIN suplex_task_controls c ON c.task_id = t.id WHERE t.id = ?1",
+                    [task_id],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+                )
+                .unwrap()
+        })
+    }
+
+    fn latest_prompt(server: &Server, task_id: &str) -> Value {
+        server.state.with_database(|database| {
+            let prompt: String = database
+                .connection()
+                .query_row(
+                    "SELECT prompt_text FROM suplex_task_turns WHERE task_id = ?1 ORDER BY created_at DESC, id DESC LIMIT 1",
+                    [task_id],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            serde_json::from_str(&prompt).unwrap()
+        })
+    }
+
+    #[tokio::test]
+    async fn an_agent_answers_a_question_only_while_an_administrator_grants_it() {
+        let (host, mut wakes) = crate::tasks::host::TaskHostHandle::recording();
+        let agent = agent_with(Some(host)).await;
+        let admin = admin_id(&agent.server);
+        let (id, question) = waiting_task(&agent, "answer-001").await;
+        let path = format!("/api/agent/tasks/{id}/commands");
+        let read = async || {
+            agent
+                .call(reqwest::Method::GET, &format!("/api/agent/tasks/{id}"), None)
+                .await
+                .1
+        };
+        let task = read().await;
+        assert_eq!(
+            task["question"],
+            json!({"id": question, "kind": "question", "requiresCommandCleanup": false, "options": [
+                {"id": "option-1", "label": "Main", "description": "Use main", "recommended": true},
+                {"id": "option-2", "label": "Branch", "description": "Use a branch", "recommended": false}
+            ]})
+        );
+        assert_eq!(task["permittedCommands"], json!(["cancel_task", "duplicate_task"]));
+
+        // Off by default: identity, capabilities, and the command all agree.
+        let (_, identity) = agent.call(reqwest::Method::GET, "/api/agent/me", None).await;
+        assert_eq!(
+            (identity["capabilities"]["humanAnswers"].clone(), identity["answerGrant"].clone()),
+            (json!(false), Value::Null)
+        );
+        let (_, capabilities) = agent
+            .call(reqwest::Method::GET, "/api/agent/capabilities", None)
+            .await;
+        assert_eq!(capabilities, super::capabilities(true, false));
+        assert!(capabilities["unavailableCommands"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("answer_human_question")));
+        let before = answer_state(&agent.server, &id);
+        let (status, refused) = agent.call(reqwest::Method::POST, &path, Some(json!({"command": "answer_human_question", "revision": task["revision"], "idempotencyKey": "answer-ungranted", "questionId": question, "optionId": "option-1"}))).await;
+        assert_eq!(
+            (status, refused["code"].as_str()),
+            (403, Some("answer_grant_required"))
+        );
+        assert_eq!(answer_state(&agent.server, &id), before);
+        assert_eq!(before.0, "waiting_human");
+        assert_eq!(before.1.as_deref(), Some(question.as_str()));
+
+        // Only an administrator changes the grant.
+        route_auth::tests::require_passkeys(&agent.server.state);
+        let grant_path = format!("/api/admin/external-agents/{}/answer-grant", agent.agent_id);
+        let body = Some(json!({"granted": true}));
+        assert_eq!(
+            agent.server.send(reqwest::Method::PUT, &grant_path, Some(&agent.server.member_cookie), body.clone()).await.0,
+            404
+        );
+        assert_eq!(
+            agent.server.send(reqwest::Method::PUT, &grant_path, None, body.clone()).await.0,
+            401
+        );
+        let (status, _) = agent.call(reqwest::Method::PUT, &grant_path, body).await;
+        assert_eq!(status, 401);
+        let granted = grant_answers(&agent.server, &agent.agent_id, true).await;
+        assert_eq!(granted["agent"]["answerGrantedByUserId"], json!(admin));
+        assert!(granted["agent"]["answerGrantedAt"].is_string());
+        let audit: (Option<String>, Option<String>, String) = agent.server.state.with_database(|database| database.connection().query_row(
+            "SELECT actor_user_id, actor_agent_id, metadata_json FROM suplex_audit_events WHERE action = 'external_agent_answer_grant_updated'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        ).unwrap());
+        assert_eq!((audit.0.as_deref(), audit.1), (Some(admin.as_str()), None));
+        assert_eq!(
+            serde_json::from_str::<Value>(&audit.2).unwrap(),
+            json!({"agentId": agent.agent_id, "answerGranted": true})
+        );
+
+        let (_, identity) = agent.call(reqwest::Method::GET, "/api/agent/me", None).await;
+        assert_eq!(identity["capabilities"]["humanAnswers"], true);
+        assert_eq!(identity["answerGrant"]["userId"], json!(admin));
+        assert!(identity["capabilities"]["taskCommands"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("answer_human_question")));
+        let (_, capabilities) = agent
+            .call(reqwest::Method::GET, "/api/agent/capabilities", None)
+            .await;
+        assert_eq!(capabilities, super::capabilities(true, true));
+        assert!(capabilities["autonomousCommands"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("answer_human_question")));
+        assert_eq!(capabilities["capabilities"]["humanDecisions"], true);
+        assert!(!capabilities["unavailableCommands"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("answer_human_question")));
+
+        let task = read().await;
+        assert_eq!(
+            task["permittedCommands"],
+            json!(["cancel_task", "duplicate_task", "answer_human_question"])
+        );
+        let revision = task["revision"].clone();
+        let command = |body: Value| agent.call(reqwest::Method::POST, &path, Some(body));
+        let before = answer_state(&agent.server, &id);
+        let (status, stale) = command(json!({"command": "answer_human_question", "revision": revision, "idempotencyKey": "answer-stale", "questionId": "not-the-question", "optionId": "option-1"})).await;
+        assert_eq!((status, stale["code"].as_str()), (409, Some("question_stale")));
+        let (status, unknown) = command(json!({"command": "answer_human_question", "revision": revision, "idempotencyKey": "answer-unknown", "questionId": question, "optionId": "option-3"})).await;
+        assert_eq!((status, unknown["code"].as_str()), (422, Some("option_not_offered")));
+        for invalid in [
+            json!({"command": "answer_human_question", "revision": revision, "idempotencyKey": "answer-both", "questionId": question, "optionId": "option-1", "answer": "Main"}),
+            json!({"command": "answer_human_question", "revision": revision, "idempotencyKey": "answer-none", "questionId": question}),
+            json!({"command": "answer_human_question", "revision": revision, "idempotencyKey": "answer-no-question", "answer": "Main"}),
+            json!({"command": "cancel_task", "revision": revision, "idempotencyKey": "answer-foreign", "questionId": question, "answer": "Main"}),
+        ] {
+            let (status, body) = command(invalid).await;
+            assert_eq!((status, body["code"].as_str()), (400, Some("request_invalid")), "{body}");
+        }
+        assert_eq!(answer_state(&agent.server, &id), before);
+
+        let answer = json!({"command": "answer_human_question", "revision": revision, "idempotencyKey": "answer-option", "questionId": question, "optionId": "option-2"});
+        let (status, answered) = command(answer.clone()).await;
+        assert_eq!(
+            (status, answered["status"].as_str(), answered["question"].clone()),
+            (200, Some("active"), Value::Null),
+            "{answered}"
+        );
+        assert_eq!(wakes.try_recv().ok().as_deref(), Some(id.as_str()));
+        let admin_name: String = agent.server.state.with_database(|database| database.connection().query_row("SELECT display_name FROM suplex_users WHERE id = ?1", [&admin], |row| row.get(0)).unwrap());
+        assert_eq!(
+            latest_prompt(&agent.server, &id),
+            json!({"question": "Use main?", "answer": "Branch: Use a branch", "answeredBy": {"agentId": agent.agent_id, "agentName": "AgentApi Bot", "userId": admin, "userName": admin_name}})
+        );
+        let audit: (Option<String>, String) = agent.server.state.with_database(|database| database.connection().query_row(
+            "SELECT actor_user_id, metadata_json FROM suplex_audit_events WHERE action = 'task_answered' AND actor_agent_id = ?1",
+            [&agent.agent_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        ).unwrap());
+        assert_eq!(audit.0, None);
+        assert_eq!(serde_json::from_str::<Value>(&audit.1).unwrap()["answeredForUserId"], json!(admin));
+
+        // The receipt replays without a second answer; the key cannot carry another request.
+        let after = answer_state(&agent.server, &id);
+        assert_eq!(command(answer.clone()).await, (200, answered.clone()));
+        assert_eq!(answer_state(&agent.server, &id), after);
+        let (status, conflict) = command(json!({"command": "answer_human_question", "revision": revision, "idempotencyKey": "answer-option", "questionId": question, "answer": "Other"})).await;
+        assert_eq!((status, conflict["code"].as_str()), (409, Some("idempotency_conflict")));
+        let (status, stale) = command(json!({"command": "answer_human_question", "revision": revision, "idempotencyKey": "answer-stale-revision", "questionId": question, "answer": "Other"})).await;
+        assert_eq!((status, stale["code"].as_str()), (412, Some("revision_stale")));
+        let (status, idle) = command(json!({"command": "answer_human_question", "revision": answered["revision"], "idempotencyKey": "answer-idle", "questionId": question, "answer": "Other"})).await;
+        assert_eq!((status, idle["code"].as_str()), (409, Some("task_not_waiting")));
+        assert_eq!(answer_state(&agent.server, &id), after);
+
+        // Clearing the grant applies to the next request.
+        let question = ask(&agent.server, &id, "Use main again?");
+        grant_answers(&agent.server, &agent.agent_id, false).await;
+        let task = read().await;
+        let (status, revoked) = command(json!({"command": "answer_human_question", "revision": task["revision"], "idempotencyKey": "answer-revoked", "questionId": question, "answer": "Main"})).await;
+        assert_eq!((status, revoked["code"].as_str()), (403, Some("answer_grant_required")));
+        let (_, identity) = agent.call(reqwest::Method::GET, "/api/agent/me", None).await;
+        assert_eq!(identity["capabilities"]["humanAnswers"], false);
+    }
+
+    #[tokio::test]
+    async fn agent_answers_take_free_text_and_leave_human_only_decisions_and_other_projects_alone() {
+        let agent = agent().await;
+        grant_answers(&agent.server, &agent.agent_id, true).await;
+        let (id, question) = waiting_task(&agent, "free-001").await;
+        let path = format!("/api/agent/tasks/{id}/commands");
+        let read = async |id: &str| {
+            agent
+                .call(reqwest::Method::GET, &format!("/api/agent/tasks/{id}"), None)
+                .await
+                .1
+        };
+        let task = read(&id).await;
+        let (status, answered) = agent.call(reqwest::Method::POST, &path, Some(json!({"command": "answer_human_question", "revision": task["revision"], "idempotencyKey": "free-answer", "questionId": question, "answer": "  Use the release branch  "}))).await;
+        assert_eq!((status, answered["status"].as_str()), (200, Some("active")), "{answered}");
+        assert_eq!(latest_prompt(&agent.server, &id)["answer"], "Use the release branch");
+
+        // A question whose interrupted commands need confirmation stays human-only.
+        let question = ask(&agent.server, &id, "Did the commands stop?");
+        agent.server.state.with_database(|database| database.connection().execute(
+            "UPDATE suplex_task_controls SET recovery_turn_id = (SELECT id FROM suplex_task_turns WHERE task_id = ?1 LIMIT 1) WHERE task_id = ?1",
+            [&id],
+        )).unwrap();
+        let task = read(&id).await;
+        assert_eq!(task["question"]["requiresCommandCleanup"], true);
+        assert!(!task["permittedCommands"].as_array().unwrap().contains(&json!("answer_human_question")));
+        let before = answer_state(&agent.server, &id);
+        let (status, cleanup) = agent.call(reqwest::Method::POST, &path, Some(json!({"command": "answer_human_question", "revision": task["revision"], "idempotencyKey": "cleanup-answer", "questionId": question, "answer": "Stopped"}))).await;
+        assert_eq!((status, cleanup["code"].as_str()), (409, Some("human_decision_required")));
+        assert_eq!(answer_state(&agent.server, &id), before);
+
+        // A task limit decision stays human-only.
+        let pause = json!({"kind":"task_limit", "reason":"budget", "limits":{"budgetUsd":15,"maxTurns":40}, "usage":{"estimatedCostUsd":15,"admittedTurns":3}, "proposedLimits":{"budgetUsd":25,"maxTurns":40}}).to_string();
+        agent.server.state.with_database(|database| database.connection().execute(
+            "UPDATE suplex_task_controls SET recovery_turn_id = NULL, human_question = 'Raise limit?', human_question_id = 'limit-question', limit_pause_json = ?1 WHERE task_id = ?2",
+            params![pause, id],
+        )).unwrap();
+        let task = read(&id).await;
+        assert_eq!(task["question"]["kind"], "task_limit");
+        let before = answer_state(&agent.server, &id);
+        let (status, limit) = agent.call(reqwest::Method::POST, &path, Some(json!({"command": "answer_human_question", "revision": task["revision"], "idempotencyKey": "limit-answer", "questionId": "limit-question", "answer": "Raise it"}))).await;
+        assert_eq!((status, limit["code"].as_str()), (409, Some("human_decision_required")));
+        assert_eq!(answer_state(&agent.server, &id), before);
+
+        // A task outside the agent's granted projects is not found.
+        let (foreign_id, foreign_question) = waiting_task(&agent, "foreign-001").await;
+        let (status, _) = agent
+            .server
+            .send(
+                reqwest::Method::PUT,
+                &format!("/api/admin/external-agents/{}/projects", agent.agent_id),
+                Some(&agent.server.admin_cookie),
+                Some(json!({"projectIds": ["project_api_2"]})),
+            )
+            .await;
+        assert_eq!(status, 200);
+        let before = answer_state(&agent.server, &foreign_id);
+        let (status, outside) = agent.call(reqwest::Method::POST, &format!("/api/agent/tasks/{foreign_id}/commands"), Some(json!({"command": "answer_human_question", "revision": "any", "idempotencyKey": "foreign-answer", "questionId": foreign_question, "answer": "Main"}))).await;
+        assert_eq!((status, outside["code"].as_str()), (404, Some("not_found")));
+        assert_eq!(answer_state(&agent.server, &foreign_id), before);
+    }
+
+    #[tokio::test]
+    async fn the_stdio_bridge_answers_a_question_for_the_granting_administrator() {
+        use crate::integrations::suplex::bridge::{Bridge, Settings};
+        let agent = agent().await;
+        grant_answers(&agent.server, &agent.agent_id, true).await;
+        let (task_id, question) = waiting_task(&agent, "bridge-answer").await;
+        let bridge = Bridge::new(Settings {
+            base_url: agent.server.base.clone(),
+            credential: agent.credential.clone(),
+        });
+        let call = async |name: &str, args: Value| {
+            let result = bridge.result(name, args.as_object().unwrap()).await;
+            (result.is_error, result.structured_content.unwrap())
+        };
+        let (_, read) = call("suplex_get_task", json!({"taskId": task_id})).await;
+        assert_eq!(read["body"]["question"]["id"], json!(question));
+        let (error, answered) = call("suplex_command_task", json!({"taskId": task_id, "command": "answer_human_question", "revision": read["body"]["revision"], "idempotencyKey": "bridge-answer-1", "questionId": question, "optionId": "option-1"})).await;
+        assert_eq!(
+            (error, answered["status"].as_u64(), answered["body"]["status"].as_str()),
+            (None, Some(200), Some("active")),
+            "{answered}"
+        );
+        assert_eq!(latest_prompt(&agent.server, &task_id)["answer"], "Main: Use main");
+    }
+
+    #[tokio::test]
+    async fn http_mcp_answers_a_question_once_the_oauth_agent_is_granted() {
+        use crate::http::routes::oauth::tests::{authorize, exchange, register};
+        let agent = agent().await;
+        let server = &agent.server;
+        let client = register(server, "Answering client").await;
+        let verifier = "s".repeat(43);
+        let code = authorize(server, &client, &verifier, "answer-state").await;
+        let token = exchange(server, &client, &code, &verifier).await.1["access_token"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let bearer = format!("Bearer {token}");
+        let mut id = 0;
+        let mut rpc = async |method: &str, params: Value| {
+            id += 1;
+            let response = server
+                .request(
+                    reqwest::Method::POST,
+                    "/mcp",
+                    &[
+                        ("authorization", bearer.as_str()),
+                        ("accept", "application/json, text/event-stream"),
+                        ("mcp-protocol-version", "2025-06-18"),
+                    ],
+                    Some(json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params})),
+                )
+                .await;
+            assert_eq!(response.status(), 200);
+            response.json::<Value>().await.unwrap()["result"]["structuredContent"].clone()
+        };
+        rpc("initialize", json!({"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "test", "version": "1"}})).await;
+        let tool = |name: &str, arguments: Value| json!({"name": name, "arguments": arguments});
+        let whoami = rpc("tools/call", tool("suplex_whoami", json!({}))).await;
+        assert_eq!(whoami["body"]["answerGrant"], Value::Null, "{whoami}");
+        let oauth_agent = whoami["body"]["agent"]["id"].as_str().unwrap().to_owned();
+        let (task_id, question) = waiting_task(&agent, "oauth-answer").await;
+        let read = rpc("tools/call", tool("suplex_get_task", json!({"taskId": task_id}))).await;
+        let answer = json!({"taskId": task_id, "command": "answer_human_question", "revision": read["body"]["revision"], "idempotencyKey": "oauth-answer-1", "questionId": question, "answer": "Use main"});
+        let refused = rpc("tools/call", tool("suplex_command_task", answer.clone())).await;
+        assert_eq!(
+            (refused["status"].as_u64(), refused["body"]["code"].as_str()),
+            (Some(403), Some("answer_grant_required"))
+        );
+        grant_answers(server, &oauth_agent, true).await;
+        let capabilities = rpc("tools/call", tool("suplex_capabilities", json!({}))).await;
+        assert_eq!(capabilities["body"], super::capabilities(true, true));
+        // The grant adds answer_human_question to permittedCommands, so the revision moves.
+        let read = rpc("tools/call", tool("suplex_get_task", json!({"taskId": task_id}))).await;
+        let mut answer = answer;
+        answer["revision"] = read["body"]["revision"].clone();
+        let answered = rpc("tools/call", tool("suplex_command_task", answer)).await;
+        assert_eq!(
+            (answered["status"].as_u64(), answered["body"]["status"].as_str()),
+            (Some(200), Some("active")),
+            "{answered}"
+        );
+        assert_eq!(latest_prompt(server, &task_id)["answeredBy"]["agentId"], json!(oauth_agent));
     }
 }

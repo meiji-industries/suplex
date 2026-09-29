@@ -117,12 +117,12 @@
     }
   ],
   "administration": {
-    "description": "OAuth connections, pairing codes, credential rotation, revocation, and project grants appear on the Agents page. An administrator controls them."
+    "description": "OAuth connections, pairing codes, credential rotation, revocation, project grants, and permission to answer questions appear on the Agents page. An administrator controls them."
   },
   "notes": [
     "Suplex conceals tasks that the caller cannot read. Denied and missing tasks both answer 404 with resource_not_found.",
-    "Human answers remain unavailable to paired agents. The runtime API exposes delivery and merge commands only when capabilities reports them. Suplex can perform delivery for a task's configured target, including a merge after review, without an agent command.",
-    "MCP exposes task lifecycle commands only. It does not expose runtime delivery or merge commands. Human answers remain unavailable to paired agents. Suplex can perform delivery for a task's configured target, including a merge after review, without an agent command."
+    "A paired agent can answer a task's Coordinator question with answer_human_question only after an administrator lets it answer on their behalf. Task limit decisions and command cleanup confirmations stay with a person. The runtime API exposes delivery and merge commands only when capabilities reports them. Suplex can perform delivery for a task's configured target, including a merge after review, without an agent command.",
+    "MCP exposes task lifecycle commands only. It does not expose runtime delivery or merge commands. A paired agent can answer a task's Coordinator question with answer_human_question only after an administrator lets it answer on their behalf. Task limit decisions and command cleanup confirmations stay with a person. Suplex can perform delivery for a task's configured target, including a merge after review, without an agent command."
   ],
   "documentation": {
     "discovery": "docs/agents/machine-discovery.md",

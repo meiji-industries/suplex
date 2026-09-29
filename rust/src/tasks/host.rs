@@ -44,6 +44,19 @@ impl TaskHostHandle {
         let mut finished = self.finished_rx.clone();
         while !*finished.borrow() && finished.changed().await.is_ok() {}
     }
+    /// A handle that only records wakes, for route tests.
+    #[cfg(test)]
+    pub fn recording() -> (Self, mpsc::UnboundedReceiver<String>) {
+        let (wake_tx, wake_rx) = mpsc::unbounded_channel();
+        let (shutdown_tx, _) = watch::channel(false);
+        let (_, finished_rx) = watch::channel(true);
+        let handle = Self {
+            wake_tx,
+            shutdown_tx,
+            finished_rx,
+        };
+        (handle, wake_rx)
+    }
 }
 
 /// Resume every active task from durable intent. The periodic scan covers

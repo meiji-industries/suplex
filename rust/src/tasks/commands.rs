@@ -851,14 +851,21 @@ pub fn send_user_note(
     })
 }
 
-/// Answer the current question and wake only after the durable answer commit.
+/// Why the current question cannot take an answer.
+pub(crate) enum Unanswerable {
+    NotWaiting,
+    QuestionChanged,
+    TaskLimit,
+    CommandCleanup,
+}
+
 /// The answer names the current question of an open task, no limit decision
-/// is pending, and interrupted commands are confirmed stopped.
-fn require_answerable(
+/// is pending, and no interrupted command awaits confirmation that it stopped.
+pub(crate) fn answerable(
     database: &SuplexDatabase,
     task_id: &str,
-    answer: &AnswerBody,
-) -> DatabaseResult<()> {
+    question_id: &str,
+) -> DatabaseResult<Result<(), Unanswerable>> {
     let (archived, question, limit_pause, recovery_turn): (bool, Option<String>, bool, bool) = database
         .connection()
         .query_row(
@@ -866,27 +873,48 @@ fn require_answerable(
             [task_id],
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
         )?;
-    if archived
-        || question.as_deref() != Some(answer.question_id.as_str())
-        || answer.answer.trim().is_empty()
-    {
-        return Err(TaskError::new(
+    Ok(match question {
+        _ if archived => Err(Unanswerable::NotWaiting),
+        None => Err(Unanswerable::NotWaiting),
+        Some(current) if current != question_id => Err(Unanswerable::QuestionChanged),
+        Some(_) if limit_pause => Err(Unanswerable::TaskLimit),
+        Some(_) if recovery_turn => Err(Unanswerable::CommandCleanup),
+        Some(_) => Ok(()),
+    })
+}
+
+/// Answer the current question and wake only after the durable answer commit.
+fn require_answerable(
+    database: &SuplexDatabase,
+    task_id: &str,
+    answer: &AnswerBody,
+) -> DatabaseResult<()> {
+    let question_changed = || {
+        TaskError::new(
             "The question changed. Read the current question before answering",
             409,
         )
-        .into());
+    };
+    if answer.answer.trim().is_empty() {
+        return Err(question_changed().into());
     }
-    if limit_pause {
-        return Err(TaskError::new("Select a task limit action before you continue", 409).into());
-    }
-    if recovery_turn && !answer.confirm_commands_stopped.unwrap_or(false) {
-        return Err(TaskError::new(
+    match answerable(database, task_id, &answer.question_id)? {
+        Ok(()) => Ok(()),
+        Err(Unanswerable::NotWaiting | Unanswerable::QuestionChanged) => {
+            Err(question_changed().into())
+        }
+        Err(Unanswerable::TaskLimit) => {
+            Err(TaskError::new("Select a task limit action before you continue", 409).into())
+        }
+        Err(Unanswerable::CommandCleanup) if answer.confirm_commands_stopped.unwrap_or(false) => {
+            Ok(())
+        }
+        Err(Unanswerable::CommandCleanup) => Err(TaskError::new(
             "Confirm that the commands have stopped before you continue",
             409,
         )
-        .into());
+        .into()),
     }
-    Ok(())
 }
 
 pub fn answer_user_task(
@@ -907,6 +935,7 @@ pub fn answer_user_task(
             &answer.question_id,
             &answer.answer,
             answer.confirm_commands_stopped.unwrap_or(false),
+            None,
             now,
         )?;
         let answered =

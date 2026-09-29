@@ -1,7 +1,7 @@
 [
   {
     "name": "suplex_whoami",
-    "description": "Read this paired agent's identity, capabilities, and granted projects with each project's delivery defaults (agentTaskPolicy). taskCommands lists exactly the lifecycle commands accepted by suplex_command_task. autonomousCommands also includes task creation and, when enabled, runtime delivery commands. MCP exposes task lifecycle commands only. It does not expose runtime delivery or merge commands. Human answers remain unavailable to paired agents. Suplex can perform delivery for a task's configured target, including a merge after review, without an agent command.",
+    "description": "Read this paired agent's identity, capabilities, and granted projects with each project's delivery defaults (agentTaskPolicy). taskCommands lists exactly the lifecycle commands accepted by suplex_command_task. autonomousCommands also includes task creation and, when enabled, runtime delivery commands. MCP exposes task lifecycle commands only. It does not expose runtime delivery or merge commands. A paired agent can answer a task's Coordinator question with answer_human_question only after an administrator lets it answer on their behalf. Task limit decisions and command cleanup confirmations stay with a person. Suplex can perform delivery for a task's configured target, including a merge after review, without an agent command.",
     "inputSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "type": "object",
@@ -11,7 +11,7 @@
   },
   {
     "name": "suplex_capabilities",
-    "description": "Read the runtime capability contract, autonomous commands, and unavailable commands. taskCommands lists exactly the lifecycle commands accepted by suplex_command_task. autonomousCommands also includes task creation and, when enabled, runtime delivery commands. MCP exposes task lifecycle commands only. It does not expose runtime delivery or merge commands. Human answers remain unavailable to paired agents. Suplex can perform delivery for a task's configured target, including a merge after review, without an agent command.",
+    "description": "Read the runtime capability contract, autonomous commands, and unavailable commands. taskCommands lists exactly the lifecycle commands accepted by suplex_command_task. autonomousCommands also includes task creation and, when enabled, runtime delivery commands. MCP exposes task lifecycle commands only. It does not expose runtime delivery or merge commands. A paired agent can answer a task's Coordinator question with answer_human_question only after an administrator lets it answer on their behalf. Task limit decisions and command cleanup confirmations stay with a person. Suplex can perform delivery for a task's configured target, including a merge after review, without an agent command.",
     "inputSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "type": "object",
@@ -178,7 +178,7 @@
   },
   {
     "name": "suplex_get_task_delivery",
-    "description": "Read the delivery and blocker state of one task, including its queue state and wait reasons, any pull request, delivery wait, and completion observation. Suplex reports no persisted check observation. MCP exposes task lifecycle commands only. It does not expose runtime delivery or merge commands. Human answers remain unavailable to paired agents. Suplex can perform delivery for a task's configured target, including a merge after review, without an agent command.",
+    "description": "Read the delivery and blocker state of one task, including its queue state and wait reasons, any pull request, delivery wait, and completion observation. Suplex reports no persisted check observation. MCP exposes task lifecycle commands only. It does not expose runtime delivery or merge commands. A paired agent can answer a task's Coordinator question with answer_human_question only after an administrator lets it answer on their behalf. Task limit decisions and command cleanup confirmations stay with a person. Suplex can perform delivery for a task's configured target, including a merge after review, without an agent command.",
     "inputSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "type": "object",
@@ -197,7 +197,7 @@
   },
   {
     "name": "suplex_create_task",
-    "description": "Create a task. Without queue it never starts by itself; use suplex_command_task with start_task to queue it later. With queue true it is queued: it starts now when every prerequisite is complete, and otherwise starts by itself when the last one completes. dryRun true validates the request and returns the projected task without writing state. dependsOn sets task prerequisites and blockedByPullRequests sets pull request prerequisites as [{ number }]. Suplex observes each pull request in the project repository. Open blocks until merge. Closed stays blocked until reopened and merged or removed. A prerequisite can be any task the agent can read in a granted project. The task waits for the prerequisite. A self-reference, a cycle, or a task outside a granted project is rejected. Rejected inputs report field, value, and reason. MCP exposes task lifecycle commands only. It does not expose runtime delivery or merge commands. Human answers remain unavailable to paired agents. Suplex can perform delivery for a task's configured target, including a merge after review, without an agent command.",
+    "description": "Create a task. Without queue it never starts by itself; use suplex_command_task with start_task to queue it later. With queue true it is queued: it starts now when every prerequisite is complete, and otherwise starts by itself when the last one completes. dryRun true validates the request and returns the projected task without writing state. dependsOn sets task prerequisites and blockedByPullRequests sets pull request prerequisites as [{ number }]. Suplex observes each pull request in the project repository. Open blocks until merge. Closed stays blocked until reopened and merged or removed. A prerequisite can be any task the agent can read in a granted project. The task waits for the prerequisite. A self-reference, a cycle, or a task outside a granted project is rejected. Rejected inputs report field, value, and reason. MCP exposes task lifecycle commands only. It does not expose runtime delivery or merge commands. A paired agent can answer a task's Coordinator question with answer_human_question only after an administrator lets it answer on their behalf. Task limit decisions and command cleanup confirmations stay with a person. Suplex can perform delivery for a task's configured target, including a merge after review, without an agent command.",
     "inputSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "type": "object",
@@ -487,7 +487,7 @@
   },
   {
     "name": "suplex_command_task",
-    "description": "Apply one lifecycle command to a task this agent created. Reading another task in a granted project does not grant command authority. revision must be the task's current revision (a stale one fails with revision_stale) and idempotencyKey is required. start_task queues a manual backlog task: it starts now when every prerequisite is complete and never bypasses one. disarm_task returns a queued task to the manual backlog. cancel_task and archive_task are not reversible by this agent. note is only accepted by send_task_note. MCP exposes task lifecycle commands only. It does not expose runtime delivery or merge commands. Human answers remain unavailable to paired agents. Suplex can perform delivery for a task's configured target, including a merge after review, without an agent command.",
+    "description": "Apply one lifecycle command to a task this agent created. Reading another task in a granted project does not grant command authority. revision must be the task's current revision (a stale one fails with revision_stale) and idempotencyKey is required. start_task queues a manual backlog task: it starts now when every prerequisite is complete and never bypasses one. disarm_task returns a queued task to the manual backlog. cancel_task and archive_task are not reversible by this agent. note is only accepted by send_task_note. answer_human_question answers the task's current question: send questionId from suplex_get_task question.id and exactly one of optionId or answer. MCP exposes task lifecycle commands only. It does not expose runtime delivery or merge commands. A paired agent can answer a task's Coordinator question with answer_human_question only after an administrator lets it answer on their behalf. Task limit decisions and command cleanup confirmations stay with a person. Suplex can perform delivery for a task's configured target, including a merge after review, without an agent command.",
     "inputSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "type": "object",
@@ -502,7 +502,8 @@
             "unarchive_task",
             "duplicate_task",
             "send_task_note",
-            "recheck_delivery_wait"
+            "recheck_delivery_wait",
+            "answer_human_question"
           ]
         },
         "revision": {
@@ -518,6 +519,23 @@
         "note": {
           "type": "string",
           "minLength": 1
+        },
+        "questionId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "description": "The current question id from the task's question.id. Only answer_human_question accepts it."
+        },
+        "optionId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "description": "An offered option id from question.options, such as option-1. Send optionId or answer, not both."
+        },
+        "answer": {
+          "type": "string",
+          "minLength": 1,
+          "description": "A free-text answer. Send optionId or answer, not both."
         },
         "taskId": {
           "type": "string",

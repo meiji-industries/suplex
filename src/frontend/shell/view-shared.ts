@@ -1,14 +1,14 @@
 import { isApiError } from "../lib/api.js";
 import type { CredentialResponse, InvitationSummaryResponse } from "../contracts/common.js";
 import type { ModelResponse, ProfileResponse, ProjectResponse } from "../contracts/projects.js";
-import type { AgentApiAdminAgent } from "../contracts/agents.js";
+import type { ExternalAgentResponse } from "../contracts/generated/ExternalAgentResponse.js";
 import type { TaskListTask, TaskResponse } from "../contracts/task-responses.js";
 import type { TaskTemplateResponse } from "../contracts/task-templates.js";
 import type { WorkflowRecord } from "../contracts/workflow-presets.js";
 
 export type ApiProfile = ProfileResponse;
 export type ApiWorkflow = WorkflowRecord;
-export type ApiExternalAgent = AgentApiAdminAgent;
+export type ApiExternalAgent = ExternalAgentResponse;
 export type ApiModel = ModelResponse;
 export type ApiInvitation = InvitationSummaryResponse;
 export type ApiCredential = CredentialResponse;

@@ -1289,6 +1289,7 @@ mod tests {
                 "stale",
                 "Proceed",
                 false,
+                None,
                 now
             )
             .is_err()
@@ -1307,6 +1308,7 @@ mod tests {
                 "question-normal",
                 "Proceed",
                 false,
+                None,
                 now
             )
             .is_err()
@@ -1324,6 +1326,7 @@ mod tests {
             "question-normal",
             "  Proceed 🌍  ",
             false,
+            None,
             now,
         )
         .unwrap();
@@ -1346,6 +1349,7 @@ mod tests {
                 "question-normal",
                 "Again",
                 false,
+                None,
                 now
             )
             .is_err()
@@ -1381,6 +1385,7 @@ mod tests {
                 "question-worker",
                 "I stopped commands.",
                 false,
+                None,
                 now
             )
             .is_err()
@@ -1391,6 +1396,7 @@ mod tests {
             "question-worker",
             "I stopped commands.",
             true,
+            None,
             now,
         )
         .unwrap();

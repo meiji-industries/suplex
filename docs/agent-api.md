@@ -70,6 +70,9 @@ ID and revision.
 `attention` selects tasks with a current human question. `blocker` selects a
 current human question or a persisted delivery wait. A task projection includes
 only safe task, project, workflow progress, question, and delivery observations.
+`humanQuestion` is the text of the current question. `question` has its `id`,
+its `kind` (`question` or `task_limit`), `requiresCommandCleanup`, and its
+offered `options`, each with an `id` such as `option-1`, or it is `null`.
 `permittedCommands` lists the lifecycle commands that
 `POST /api/agent/tasks/:taskId/commands` accepts for the task right now.
 It is empty when another agent or a user created the task.
@@ -121,10 +124,45 @@ the task can send a command. A command for another task returns the same `404`
 as an unavailable task. `taskCommands` from `GET /api/agent/me` lists exactly
 these lifecycle commands. `autonomousCommands` from
 `GET /api/agent/capabilities` also includes task creation and, when enabled,
-the runtime delivery commands. Human answers remain unavailable. The runtime API
-exposes delivery and merge commands only when capabilities reports them. Suplex
-can perform a task's configured delivery, including a merge after review,
-without an agent command.
+the runtime delivery commands. `answer_human_question` appears in these lists
+only when an administrator lets the agent answer questions; see
+[Answering a Coordinator question](#answering-a-coordinator-question). The
+runtime API exposes delivery and merge commands only when capabilities reports
+them. Suplex can perform a task's configured delivery, including a merge after
+review, without an agent command.
+
+## Answering a Coordinator question
+
+An administrator can let an external agent answer questions on their behalf.
+The setting is **May answer questions on my behalf** in the agent's actions on
+the Agents page. It is off for every new, existing, and OAuth agent. Suplex
+reads it on each request, so a change applies to the agent's next request.
+
+`GET /api/agent/me` reports `capabilities.humanAnswers` and `answerGrant`, with
+the `userId` and `userName` of the administrator who granted it. When the grant
+is on, `taskCommands` and `autonomousCommands` include `answer_human_question`,
+`capabilities.humanDecisions` is `true`, and `permittedCommands` includes it
+for a task that waits on a plain Coordinator question. When the grant is off,
+`unavailableCommands` includes `answer_human_question`.
+
+Send `command: "answer_human_question"` with the current `revision`, an
+`idempotencyKey`, the `questionId` from `question.id`, and exactly one of
+`optionId` (an offered option ID) or `answer` (free text). An option answer
+sends the option label and description to the Coordinator, as the board does.
+The Coordinator prompt and the board show the answer as given by the agent for
+the administrator who granted it. The audit event `task_answered` has the agent
+as actor and `answeredForUserId` in its metadata.
+
+| Status | Code | Condition |
+| --- | --- | --- |
+| `403` | `answer_grant_required` | No administrator lets this agent answer questions. |
+| `409` | `question_stale` | `questionId` is not the current question. |
+| `409` | `task_not_waiting` | The task has no current question. |
+| `409` | `human_decision_required` | The question is a task limit decision or needs confirmation that commands stopped. Only a person can answer it. |
+| `422` | `option_not_offered` | `optionId` is not an option of the current question. |
+
+None of these refusals changes the task. A repeated request with the same
+`idempotencyKey` returns the stored result and does not answer again.
 
 ## Creating a task
 

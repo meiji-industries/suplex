@@ -431,8 +431,16 @@ fn accepted_history(turns: &[RootTurn]) -> (Vec<(String, i64)>, Vec<String>) {
         };
         if let Some(answer) = value["answer"].as_str() {
             accepted.push((question.to_owned(), turn.generation));
+            let answered_by = value
+                .get("answeredBy")
+                .cloned()
+                .and_then(|by| serde_json::from_value::<AnsweredBy>(by).ok());
+            let source = match answered_by {
+                Some(by) => format!("answer by agent {} for {}", by.agent_name, by.user_name),
+                None => "human answer".to_owned(),
+            };
             messages.push(format!(
-                "Accepted human answer ({created_at}):\n{question}\nAnswer: {answer}"
+                "Accepted {source} ({created_at}):\n{question}\nAnswer: {answer}"
             ));
         } else if let Some(decision) = value.get("decision") {
             messages.push(format!(
@@ -644,4 +652,34 @@ pub fn replace_coordinator(
             .root
             .ok_or_else(|| CoordinationError::refused("replacement_session_missing").into())
     })
+}
+
+#[cfg(test)]
+mod answer_history_tests {
+    use super::*;
+
+    #[test]
+    fn replacement_history_names_the_agent_and_user_of_an_agent_answer() {
+        let turn = |prompt: &str| RootTurn {
+            id: "turn".into(),
+            prompt: prompt.into(),
+            observation: None,
+            created_at: "2026-09-29T00:00:00.000Z".into(),
+            generation: 1,
+        };
+        let (accepted, messages) = accepted_history(&[
+            turn(r#"{"question":"Use main?","answer":"Yes"}"#),
+            turn(
+                r#"{"question":"Use a branch?","answer":"No","answeredBy":{"agentId":"agent_1","agentName":"Hermes","userId":"user_1","userName":"Ada"}}"#,
+            ),
+        ]);
+        assert_eq!(accepted.len(), 2);
+        assert_eq!(
+            messages,
+            [
+                "Accepted human answer (2026-09-29T00:00:00.000Z):\nUse main?\nAnswer: Yes",
+                "Accepted answer by agent Hermes for Ada (2026-09-29T00:00:00.000Z):\nUse a branch?\nAnswer: No",
+            ]
+        );
+    }
 }

@@ -90,7 +90,9 @@ same body. A denial never tells you which case applied. Treat every `404` as
 created in granted projects. Those tasks have no permitted commands. Task
 commands and dependency changes remain limited to tasks this agent created.
 
-Human answers are not available to paired agents. The runtime API exposes
+A paired agent can answer a task's Coordinator question only after an
+administrator lets it answer on their behalf. Task limit decisions and command
+cleanup confirmations stay with a person. The runtime API exposes
 delivery and merge commands only when `GET /api/agent/capabilities` reports
 them. MCP exposes lifecycle task commands only. Suplex can perform a task's
 configured delivery, including a merge after review, without an agent command.

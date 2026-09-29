@@ -10,6 +10,7 @@ import {
 import { Button } from "../../components/ui/button.js";
 import {
   DropdownMenu,
+  DropdownMenuCheckboxItem,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
@@ -43,6 +44,7 @@ export function ExternalAgentsSection({
   onRotateAgent,
   onEditProjects,
   onEditAvatar,
+  onSetAnswerGrant,
   onRevokeAgent,
   onClearPendingAction,
 }: {
@@ -54,6 +56,7 @@ export function ExternalAgentsSection({
   onRotateAgent: (agent: ApiExternalAgent) => Promise<void>;
   onEditProjects: (agent: ApiExternalAgent) => void;
   onEditAvatar: (agent: ApiExternalAgent) => void;
+  onSetAnswerGrant: (agent: ApiExternalAgent, granted: boolean) => Promise<void>;
   onRevokeAgent: (agent: ApiExternalAgent) => Promise<void>;
   onClearPendingAction: () => void;
 }): ReactElement {
@@ -180,6 +183,14 @@ export function ExternalAgentsSection({
                         <DropdownMenuItem onClick={() => onEditAvatar(agent)}>
                           <Pencil className="mr-2 size-3.5" /> Edit avatar
                         </DropdownMenuItem>
+                        <DropdownMenuCheckboxItem
+                          checked={agent.answerGrantedAt !== null}
+                          onCheckedChange={(checked) =>
+                            void onSetAnswerGrant(agent, checked)
+                          }
+                        >
+                          May answer questions on my behalf
+                        </DropdownMenuCheckboxItem>
                         <DropdownMenuItem
                           variant="destructive"
                           onClick={() => void onRevokeAgent(agent)}

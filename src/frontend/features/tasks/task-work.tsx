@@ -48,12 +48,21 @@ function resultText(result: string | null): string {
   catch { return ""; }
 }
 
-function humanMessage(prompt: string): string {
-  if (prompt.startsWith("Human note:\n")) return prompt.slice("Human note:\n".length);
+const AnswerSchema = z.object({
+  question: z.string(),
+  answer: z.string(),
+  answeredBy: z.object({ agentId: z.string(), agentName: z.string(), userId: z.string(), userName: z.string() }).strict().optional(),
+}).strict();
+
+/** The person or granted agent who wrote a Coordinator prompt, and its text. */
+export function humanMessage(prompt: string): { author: string; text: string } | null {
+  if (prompt.startsWith("Human note:\n")) return { author: "You", text: prompt.slice("Human note:\n".length) };
   try {
-    const answer = z.object({ question: z.string(), answer: z.string() }).strict().safeParse(JSON.parse(prompt));
-    return answer.success ? answer.data.answer : "";
-  } catch { return ""; }
+    const answer = AnswerSchema.safeParse(JSON.parse(prompt));
+    if (!answer.success) return null;
+    const by = answer.data.answeredBy;
+    return { author: by ? `Answered by ${by.agentName} for ${by.userName}` : "You", text: answer.data.answer };
+  } catch { return null; }
 }
 
 export function TaskWork({ task, activity, onChange, onSelectWorker }: { task: Task; activity: TaskActivity; onChange: (task: Task) => void; onSelectWorker: () => void }) {
@@ -68,12 +77,13 @@ export function TaskWork({ task, activity, onChange, onSelectWorker }: { task: T
     <TabsContent value="chat"><div className="grid min-w-0 gap-5 pt-3" aria-label="Conversation">
       <WorkflowPlan key={`workflow-plan-${task.id}`} task={task} />
       <RootPlan execution={execution} />
-      {activity.turns.filter(turn => resultText(turn.result) || humanMessage(turn.prompt)).map(turn => {
+      {activity.turns.filter(turn => resultText(turn.result) || humanMessage(turn.prompt)?.text).map(turn => {
         const session = activity.sessions.find(session => session.id === turn.sessionId);
         const role = session?.label ?? "Coordinator";
-        return <div key={turn.id} className="grid min-w-0 gap-5">{humanMessage(turn.prompt) ? <article className="space-y-2 border-l-2 pl-3"><header className="flex items-center gap-2 text-xs"><span className="font-medium">You</span><span className="text-muted-foreground">{answerLabels[turn.status]}</span></header><Markdown source={humanMessage(turn.prompt)} /></article> : null}{resultText(turn.result) ? <article className="flex min-w-0 gap-3"><EntityAvatar kind="agent" id={session?.profileId ?? task.rootProfile.profileId} name={role} size="sm" /><div className="min-w-0 flex-1 space-y-2"><header className="flex items-center gap-2 text-xs"><span className="font-medium">{role}</span><span className="text-muted-foreground">{turnLabel(turn)}</span></header><Markdown source={resultText(turn.result)} /></div></article> : null}</div>;
+        const message = humanMessage(turn.prompt);
+        return <div key={turn.id} className="grid min-w-0 gap-5">{message?.text ? <article className="space-y-2 border-l-2 pl-3"><header className="flex items-center gap-2 text-xs"><span className="font-medium">{message.author}</span><span className="text-muted-foreground">{answerLabels[turn.status]}</span></header><Markdown source={message.text} /></article> : null}{resultText(turn.result) ? <article className="flex min-w-0 gap-3"><EntityAvatar kind="agent" id={session?.profileId ?? task.rootProfile.profileId} name={role} size="sm" /><div className="min-w-0 flex-1 space-y-2"><header className="flex items-center gap-2 text-xs"><span className="font-medium">{role}</span><span className="text-muted-foreground">{turnLabel(turn)}</span></header><Markdown source={resultText(turn.result)} /></div></article> : null}</div>;
       })}
-      {!activity.turns.some(turn => resultText(turn.result) || humanMessage(turn.prompt)) ? <p className="text-xs text-muted-foreground">{task.status === "backlog" ? "Start the task to work with Coordinator." : task.status === "queued" ? "Suplex starts this task when its prerequisites are complete." : "Agent replies appear here."}</p> : null}
+      {!activity.turns.some(turn => resultText(turn.result) || humanMessage(turn.prompt)?.text) ? <p className="text-xs text-muted-foreground">{task.status === "backlog" ? "Start the task to work with Coordinator." : task.status === "queued" ? "Suplex starts this task when its prerequisites are complete." : "Agent replies appear here."}</p> : null}
       <TaskNoteInput key={`task-note-input-${task.id}`} task={task} onChange={onChange} />
       <TaskArtifacts task={task} />
     </div></TabsContent>

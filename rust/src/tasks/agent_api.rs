@@ -29,7 +29,10 @@ use crate::{
         AppState,
         contracts::typed::{
             ContractFailure,
-            agent_api::{TaskCommandBody, TaskCreateBody, TaskDependenciesBody, TaskListQuery},
+            agent_api::{
+                ANSWER_HUMAN_QUESTION, TaskCommandBody, TaskCreateBody, TaskDependenciesBody,
+                TaskListQuery,
+            },
             task_templates,
             tasks::{self as task_contracts, TaskImage},
         },
@@ -88,9 +91,17 @@ fn hmac(key: &str, message: &str) -> String {
     URL_SAFE_NO_PAD.encode(outer)
 }
 
-pub const TASK_COMMANDS: [&str; 8] = crate::http::contracts::typed::agent_api::TASK_COMMANDS;
+pub const TASK_COMMANDS: [&str; 9] = crate::http::contracts::typed::agent_api::TASK_COMMANDS;
 /// ponytail: one page of rows feeds upstream dependency lookup; page it if an agent ever owns more.
 const UPSTREAM_POOL: usize = 200;
+
+/// The lifecycle commands an agent may send; answers need the answer grant.
+pub fn task_commands(answers: bool) -> Vec<&'static str> {
+    TASK_COMMANDS
+        .into_iter()
+        .filter(|command| answers || *command != ANSWER_HUMAN_QUESTION)
+        .collect()
+}
 
 /// The task row fields authority and paging read.
 #[derive(Clone, Debug)]
@@ -214,7 +225,18 @@ fn task_json(database: &SuplexDatabase, task_id: &str) -> DatabaseResult<Value> 
     Ok(serde_json::to_value(task)?)
 }
 
-fn permitted_commands(task: &response::TaskResponse) -> Vec<&'static str> {
+/// A plain Coordinator question. Task limit decisions and command cleanup stay human-only.
+fn agent_answerable(task: &response::TaskResponse) -> bool {
+    matches!(
+        task.human_question,
+        Some(response::TaskHumanQuestion::Question {
+            requires_command_cleanup: false,
+            ..
+        })
+    )
+}
+
+fn permitted_commands(task: &response::TaskResponse, principal: &Principal) -> Vec<&'static str> {
     let archived = task.archived_at.is_some();
     let mut commands = if archived {
         vec!["unarchive_task"]
@@ -241,7 +263,75 @@ fn permitted_commands(task: &response::TaskResponse) -> Vec<&'static str> {
     {
         commands.push("recheck_delivery_wait");
     }
+    if !archived
+        && task.status == TaskStatus::WaitingHuman
+        && agent_answerable(task)
+        && principal.answer_grant.is_some()
+    {
+        commands.push(ANSWER_HUMAN_QUESTION);
+    }
     commands
+}
+
+/// An offered option's identifier: its 1-based position in the current question.
+/// The question id changes with every new question, so the pair is deterministic.
+fn option_id(index: usize) -> String {
+    format!("option-{}", index + 1)
+}
+
+fn option_index(id: &str) -> Option<usize> {
+    id.strip_prefix("option-")?
+        .parse::<usize>()
+        .ok()?
+        .checked_sub(1)
+}
+
+/// The current question with the identifiers an agent answers with.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AgentQuestion<'a> {
+    id: &'a str,
+    kind: &'static str,
+    requires_command_cleanup: bool,
+    options: Vec<AgentQuestionOption<'a>>,
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AgentQuestionOption<'a> {
+    id: String,
+    label: &'a str,
+    description: &'a str,
+    recommended: bool,
+}
+
+fn agent_question(question: &response::TaskHumanQuestion) -> AgentQuestion<'_> {
+    let (id, kind, options, requires_command_cleanup) = match question {
+        response::TaskHumanQuestion::Question {
+            id,
+            options,
+            requires_command_cleanup,
+            ..
+        } => (id, "question", options, *requires_command_cleanup),
+        response::TaskHumanQuestion::TaskLimit { id, options, .. } => {
+            (id, "task_limit", options, false)
+        }
+    };
+    AgentQuestion {
+        id,
+        kind,
+        requires_command_cleanup,
+        options: options
+            .iter()
+            .enumerate()
+            .map(|(index, option)| AgentQuestionOption {
+                id: option_id(index),
+                label: &option.label,
+                description: &option.description,
+                recommended: option.recommended,
+            })
+            .collect(),
+    }
 }
 
 fn selection(task: &response::TaskResponse) -> (Option<&str>, Option<&str>, Option<&str>) {
@@ -296,6 +386,7 @@ struct AgentTaskProjection<'a> {
     revision: Option<String>,
     permitted_commands: Vec<&'static str>,
     human_question: Option<String>,
+    question: Option<AgentQuestion<'a>>,
     blocker: Value,
     workflow_stage: String,
     workflow: Value,
@@ -348,7 +439,11 @@ fn delivery_summary(
 }
 
 /// `agentApiProjection`: the stored-state projection and its revision.
-fn projection_of(database: &SuplexDatabase, row: &Row) -> DatabaseResult<Value> {
+fn projection_of(
+    database: &SuplexDatabase,
+    principal: &Principal,
+    row: &Row,
+) -> DatabaseResult<Value> {
     let task = response::get(database, &row.id)?.ok_or_else(not_found)?;
     let project: Option<(String, String)> = database
         .connection()
@@ -379,7 +474,7 @@ fn projection_of(database: &SuplexDatabase, row: &Row) -> DatabaseResult<Value> 
     let (workflow_id, workflow_name, template_id) = selection(&task);
     let source = &task.configuration.source;
     let archived = task.archived_at.is_some();
-    let permitted = permitted_commands(&task);
+    let permitted = permitted_commands(&task, principal);
     let mut value = AgentTaskProjection {
         id: &task.id,
         issue_key: task.issue_key.as_deref(),
@@ -399,6 +494,7 @@ fn projection_of(database: &SuplexDatabase, row: &Row) -> DatabaseResult<Value> 
         revision: None,
         permitted_commands: permitted,
         human_question: question,
+        question: task.human_question.as_ref().map(agent_question),
         blocker,
         workflow_stage: stage,
         workflow: json!({"id": workflow_id, "engine": task.workflow, "name": workflow_name}),
@@ -425,7 +521,7 @@ pub fn projection(
     task_id: &str,
 ) -> DatabaseResult<Value> {
     let row = require_readable(database, principal, task_id)?;
-    projection_of(database, &row)
+    projection_of(database, principal, &row)
 }
 
 pub fn identity(database: &SuplexDatabase, principal: &Principal) -> DatabaseResult<Value> {
@@ -451,7 +547,8 @@ pub fn identity(database: &SuplexDatabase, principal: &Principal) -> DatabaseRes
     )?;
     Ok(json!({
         "agent": {"id": principal.agent_id, "name": name, "profileId": principal.profile_id},
-        "capabilities": {"taskDiscovery": true, "taskRead": true, "taskCreate": true, "taskCommands": TASK_COMMANDS},
+        "capabilities": {"taskDiscovery": true, "taskRead": true, "taskCreate": true, "humanAnswers": principal.answer_grant.is_some(), "taskCommands": task_commands(principal.answer_grant.is_some())},
+        "answerGrant": principal.answer_grant.as_ref().map(|grant| json!({"userId": grant.user_id, "userName": grant.user_name})),
         "projects": projects_json,
     }))
 }
@@ -749,7 +846,7 @@ fn list_page(
     let tasks = found
         .iter()
         .take(limit)
-        .map(|row| projection_of(database, row))
+        .map(|row| projection_of(database, principal, row))
         .collect::<DatabaseResult<Vec<_>>>()?;
     let next = match tasks.last() {
         Some(last) if more => Some(create_cursor(principal, &filter, last)),
@@ -2082,10 +2179,15 @@ fn audit(
         )
         .optional()?
         .map_or_else(|| "unknown".to_owned(), |(status, archived)| json!({"status": status, "archived": archived}).to_string());
-    let metadata = json!({"taskId": task_id, "resultingState": state})
+    let mut metadata = json!({"taskId": task_id, "resultingState": state})
         .as_object()
         .cloned()
         .unwrap_or_default();
+    if action == "task_answered"
+        && let Some(grant) = &principal.answer_grant
+    {
+        metadata.insert("answeredForUserId".into(), json!(grant.user_id));
+    }
     external_agents::audit(
         database,
         (None, Some(&principal.agent_id)),
@@ -2250,6 +2352,7 @@ fn command_audit(command: &str) -> &'static str {
         "archive_task" => "task_archived",
         "unarchive_task" => "task_unarchived",
         "send_task_note" => "task_note_added",
+        ANSWER_HUMAN_QUESTION => "task_answered",
         "duplicate_task" => "task_duplicated",
         _ => "delivery_wait_recheck_requested",
     }
@@ -2259,7 +2362,11 @@ fn command_audit(command: &str) -> &'static str {
 pub fn wakes_host(command: &str) -> bool {
     matches!(
         command,
-        "start_task" | "cancel_task" | "send_task_note" | "recheck_delivery_wait"
+        "start_task"
+            | "cancel_task"
+            | "send_task_note"
+            | "recheck_delivery_wait"
+            | ANSWER_HUMAN_QUESTION
     )
 }
 
@@ -2282,6 +2389,13 @@ fn claim(
         input,
     )?));
     require_owned(database, principal, task_id)?;
+    if input.command == ANSWER_HUMAN_QUESTION && principal.answer_grant.is_none() {
+        return Err(fail(
+            "An administrator must let this agent answer questions",
+            403,
+            "answer_grant_required",
+        ));
+    }
     // This historical table name preserves idempotency receipts across the public rename.
     let stored: Option<(String, String)> = database
         .connection()
@@ -2319,9 +2433,12 @@ fn claim(
     }
     let guard = InFlight(key);
     let row = require_owned(database, principal, task_id)?;
-    let before = projection_of(database, &row)?;
+    let before = projection_of(database, principal, &row)?;
     if before["revision"] != json!(input.revision) {
         return Err(stale());
+    }
+    if input.command == ANSWER_HUMAN_QUESTION {
+        require_answerable(database, task_id, input)?;
     }
     if !before["permittedCommands"]
         .as_array()
@@ -2344,6 +2461,63 @@ fn claim(
         return Err(stale());
     }
     Ok(Claim::Claimed { guard, hash })
+}
+
+/// The answer names the current plain question; the board's check decides it.
+fn require_answerable(
+    database: &SuplexDatabase,
+    task_id: &str,
+    input: &TaskCommandBody,
+) -> DatabaseResult<()> {
+    let question_id = input.question_id.as_deref().unwrap_or_default();
+    match commands::answerable(database, task_id, question_id)? {
+        Ok(()) => {
+            let task = response::get(database, task_id)?.ok_or_else(not_found)?;
+            answer_text(&task, input).map(|_| ())
+        }
+        Err(commands::Unanswerable::NotWaiting) => Err(fail(
+            "The task is not waiting for an answer",
+            409,
+            "task_not_waiting",
+        )),
+        Err(commands::Unanswerable::QuestionChanged) => Err(fail(
+            "The question changed. Read the current question before answering",
+            409,
+            "question_stale",
+        )),
+        Err(commands::Unanswerable::TaskLimit | commands::Unanswerable::CommandCleanup) => {
+            Err(fail(
+                "Only a person can answer this decision",
+                409,
+                "human_decision_required",
+            ))
+        }
+    }
+}
+
+/// The answer text: the offered option as the board sends it, or the free text.
+fn answer_text(task: &response::TaskResponse, input: &TaskCommandBody) -> DatabaseResult<String> {
+    if let Some(answer) = &input.answer {
+        return Ok(answer.clone());
+    }
+    let options = match &task.human_question {
+        Some(response::TaskHumanQuestion::Question { options, .. }) => options.as_slice(),
+        _ => &[],
+    };
+    input
+        .option_id
+        .as_deref()
+        .and_then(option_index)
+        .and_then(|index| options.get(index))
+        .map(|option| format!("{}: {}", option.label, option.description))
+        .ok_or_else(|| {
+            fail_with(
+                "The option is not offered by the current question",
+                422,
+                "option_not_offered",
+                json!({"code": "option_not_offered", "field": "optionId", "value": input.option_id, "reason": "The option is not offered by the current question."}),
+            )
+        })
 }
 
 fn finish(
@@ -2418,6 +2592,32 @@ fn apply(
                 task_id,
                 input.note.as_deref().unwrap_or_default(),
                 &label,
+                now,
+            )?;
+        }
+        ANSWER_HUMAN_QUESTION => {
+            let Some(grant) = &principal.answer_grant else {
+                return Err(fail(
+                    "An administrator must let this agent answer questions",
+                    403,
+                    "answer_grant_required",
+                ));
+            };
+            let task = response::get(database, task_id)?.ok_or_else(not_found)?;
+            let answer = answer_text(&task, input)?;
+            // The Coordinator store re-checks the question and refuses command cleanup.
+            root_session_store::answer_human(
+                database,
+                task_id,
+                input.question_id.as_deref().unwrap_or_default(),
+                &answer,
+                false,
+                Some(&root_session_store::AnsweredBy {
+                    agent_id: principal.agent_id.clone(),
+                    agent_name: grant.agent_name.clone(),
+                    user_id: grant.user_id.clone(),
+                    user_name: grant.user_name.clone(),
+                }),
                 now,
             )?;
         }

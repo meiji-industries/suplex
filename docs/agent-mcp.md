@@ -40,7 +40,7 @@ Suplex re-reads the agent, administrator authority, company access, and project 
 
 Task reads cover every task in the approved projects. Lifecycle commands and dependency changes remain limited to tasks that the connected agent created.
 
-MCP exposes lifecycle task commands only. It does not expose runtime delivery or merge commands. Human answers remain unavailable to paired agents. Suplex can perform a task's configured delivery, including a merge after review, without an agent command.
+MCP exposes lifecycle task commands only. It does not expose runtime delivery or merge commands. A paired agent can answer a task's Coordinator question with `answer_human_question` in `suplex_command_task` only after an administrator lets it answer on their behalf. Send `questionId` from `suplex_get_task` `question.id` and exactly one of `optionId` or `answer`. Task limit decisions and command cleanup confirmations stay with a person. See [the runtime API guide](agent-api.md#answering-a-coordinator-question). Suplex can perform a task's configured delivery, including a merge after review, without an agent command.
 
 ## Use the advanced stdio setup
 

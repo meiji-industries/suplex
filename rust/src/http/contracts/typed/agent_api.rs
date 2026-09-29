@@ -15,7 +15,7 @@ use super::{
     text, trimmed,
 };
 
-pub const TASK_COMMANDS: [&str; 8] = [
+pub const TASK_COMMANDS: [&str; 9] = [
     "start_task",
     "disarm_task",
     "cancel_task",
@@ -24,7 +24,10 @@ pub const TASK_COMMANDS: [&str; 8] = [
     "duplicate_task",
     "send_task_note",
     "recheck_delivery_wait",
+    ANSWER_HUMAN_QUESTION,
 ];
+/// Accepted only from an agent that holds an answer grant.
+pub const ANSWER_HUMAN_QUESTION: &str = "answer_human_question";
 pub const TASK_FILTERS: [&str; 6] = [
     "stale_delivery",
     "conflicting_pull_request",
@@ -64,6 +67,11 @@ pub struct AdminListQuery {
 #[serde(rename_all = "camelCase")]
 pub struct AdminProjectsBody {
     pub project_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AdminAnswerGrantBody {
+    pub granted: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -117,6 +125,12 @@ pub struct TaskCommandBody {
     pub idempotency_key: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub question_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub option_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub answer: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -275,6 +289,12 @@ impl Contract for AdminProjectsBody {
     }
 }
 
+impl Contract for AdminAnswerGrantBody {
+    fn schema(input: Option<&Value>) -> ContractResult<Value> {
+        Fields::new(input)?.req("granted", flag).strict()
+    }
+}
+
 impl Contract for DeliveryDecisionBody {
     fn schema(input: Option<&Value>) -> ContractResult<Value> {
         Fields::new(input)?
@@ -333,22 +353,41 @@ pub fn task_filter(input: Option<&Value>) -> ContractResult<Value> {
     one_of(&TASK_FILTERS)(input)
 }
 
-/// A note belongs to `send_task_note` and only to it.
+/// A note belongs to `send_task_note` and only to it. `questionId` and exactly
+/// one of `optionId` or `answer` belong to `answer_human_question` and only to it.
 fn task_command_fields(fields: Fields) -> ContractResult<Value> {
     let mut fields = fields
         .req("command", one_of(&TASK_COMMANDS))
         .req("revision", text(1, 256))
         .req("idempotencyKey", trimmed(1, 128))
-        .opt("note", trimmed(1, MAX));
+        .opt("note", trimmed(1, MAX))
+        .opt("questionId", text(1, 256))
+        .opt("optionId", text(1, 64))
+        .opt("answer", trimmed(1, MAX));
     fields.strict_keys();
     if fields.refinable() {
+        let blank = |value: Option<&Value>| {
+            value
+                .and_then(Value::as_str)
+                .is_none_or(|text| crate::identity::auth::js_trim(text).is_empty())
+        };
+        let command = fields.raw("command").cloned();
+        let sends_note = command == Some(json!("send_task_note"));
         let note = fields.raw("note");
-        let sends_note = fields.raw("command") == Some(&json!("send_task_note"));
-        let blank = note
-            .and_then(Value::as_str)
-            .is_none_or(|note| crate::identity::auth::js_trim(note).is_empty());
-        if (sends_note && blank) || (!sends_note && note.is_some()) {
+        if (sends_note && blank(note)) || (!sends_note && note.is_some()) {
             fields.fail("custom", ".note");
+        }
+        let answers = command == Some(json!(ANSWER_HUMAN_QUESTION));
+        let question = fields.raw("questionId").is_some();
+        let option = fields.raw("optionId").is_some();
+        let answer = fields.raw("answer");
+        if answers != question {
+            fields.fail("custom", ".questionId");
+        }
+        if answers && option == answer.is_some() {
+            fields.fail("custom", ".answer");
+        } else if !answers && (option || answer.is_some()) {
+            fields.fail("custom", if option { ".optionId" } else { ".answer" });
         }
     }
     fields.finish()

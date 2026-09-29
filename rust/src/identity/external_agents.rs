@@ -1,6 +1,8 @@
 //! External agents: administration, pairing, credentials, and OAuth-provisioned identities.
 
 use crate::identity::IdentityError;
+use crate::identity::answer_grant_repository;
+pub use crate::identity::answer_grant_repository::AnswerGrant;
 use crate::shared::hash::sha256_hex;
 use crate::shared::ids::{random_hex, random_hex_id, random_secret};
 use crate::shared::time::rfc3339_millis;
@@ -43,27 +45,56 @@ pub struct Principal {
     pub profile_id: Option<String>,
     pub project_ids: Vec<String>,
     pub cursor_key: String,
+    /// Read from the database on every request, so clearing it applies to the next one.
+    pub answer_grant: Option<AnswerGrant>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+crate::shared::wire_enum! {
+    pub enum ExternalAgentStatus {
+        Pending = "pending",
+        Paired = "paired",
+        Revoked = "revoked",
+    }
+}
+
+crate::shared::wire_enum! {
+    pub enum ExternalAgentConnection {
+        OAuth = "oauth",
+        Credential = "credential",
+    }
+}
+
+#[derive(Debug, Clone, Serialize, ts_rs::TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export, rename = "ExternalAgentResponse")]
 pub struct AdminAgent {
     pub id: String,
+    #[ts(type = "\"external\"")]
     pub kind: &'static str,
     pub name: String,
     pub avatar_seed: String,
     pub company_id: String,
     pub client_profile_id: Option<String>,
-    pub status: String,
+    pub status: ExternalAgentStatus,
     pub project_ids: Vec<String>,
     pub pairing_expires_at: Option<String>,
     pub paired_at: Option<String>,
     pub credential_created_at: Option<String>,
-    pub connection_kind: String,
+    pub connection_kind: ExternalAgentConnection,
     pub last_used_at: Option<String>,
     pub revoked_at: Option<String>,
+    /// The administrator who let this agent answer questions, when granted.
+    pub answer_granted_by_user_id: Option<String>,
+    pub answer_granted_at: Option<String>,
     pub created_at: String,
     pub updated_at: String,
+}
+
+/// One external agent after an administrator changes it.
+#[derive(Debug, Clone, Serialize, ts_rs::TS)]
+#[ts(export, rename = "ExternalAgentResult")]
+pub struct AdminAgentResult {
+    pub agent: AdminAgent,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -360,7 +391,7 @@ const ADMIN_COLUMNS: &str = "SELECT e.id, ag.name, ag.avatar_seed, e.company_id,
     e.paired_at, \
     (SELECT c.created_at FROM suplex_external_agent_credentials c WHERE c.agent_id = e.id AND c.revoked_at IS NULL ORDER BY c.created_at DESC LIMIT 1) AS credential_created_at, \
     CASE WHEN EXISTS (SELECT 1 FROM suplex_oauth_grants og WHERE og.agent_id = e.id) THEN 'oauth' ELSE 'credential' END AS connection_kind, \
-    e.last_used_at, e.revoked_at, e.created_at, e.updated_at \
+    e.last_used_at, e.revoked_at, e.created_at, e.updated_at, e.answer_granted_by_user_id, e.answer_granted_at \
     FROM suplex_external_agents e JOIN suplex_agents ag ON ag.id = e.id";
 
 fn admin_row(row: &Row<'_>) -> rusqlite::Result<AdminAgent> {
@@ -379,6 +410,8 @@ fn admin_row(row: &Row<'_>) -> rusqlite::Result<AdminAgent> {
         connection_kind: row.get(9)?,
         last_used_at: row.get(10)?,
         revoked_at: row.get(11)?,
+        answer_granted_by_user_id: row.get(14)?,
+        answer_granted_at: row.get(15)?,
         created_at: row.get(12)?,
         updated_at: row.get(13)?,
     })
@@ -439,7 +472,7 @@ pub fn public_agent(database: &SuplexDatabase, agent_id: &str) -> DatabaseResult
         avatar_seed: agent.avatar_seed,
         company_id: agent.company_id,
         profile_id: agent.client_profile_id,
-        status: agent.status,
+        status: agent.status.as_str().to_owned(),
         project_ids: agent.project_ids,
         paired_at: agent.paired_at,
         last_used_at: agent.last_used_at,
@@ -531,6 +564,44 @@ pub fn replace_projects(
                 ("addedProjects", &json!(added).to_string()),
                 ("removedProjects", &json!(removed).to_string()),
             ]),
+            now,
+        )
+    })?;
+    admin_agent(database, agent_id)
+}
+
+/// Let the agent answer Coordinator questions on the administrator's behalf, or stop it.
+pub fn set_answer_grant(
+    database: &mut SuplexDatabase,
+    actor_user_id: &str,
+    agent_id: &str,
+    granted: bool,
+    now: DateTime<Utc>,
+) -> DatabaseResult<AdminAgent> {
+    require_admin(database, actor_user_id)?;
+    if !valid_id(agent_id) {
+        return Err(not_found("agent_not_found"));
+    }
+    let now_iso = rfc3339_millis(now);
+    database.transaction(false, |database| {
+        let company_id = match agent_state(database, agent_id)? {
+            Some((company_id, status)) if status != "revoked" => company_id,
+            _ => return Err(not_found("agent_not_found")),
+        };
+        answer_grant_repository::write(
+            database,
+            agent_id,
+            granted.then_some(actor_user_id),
+            &now_iso,
+        )?;
+        let mut details = metadata(&[("agentId", agent_id)]);
+        details.insert("answerGranted".into(), json!(granted));
+        audit(
+            database,
+            (Some(actor_user_id), None),
+            "external_agent_answer_grant_updated",
+            &company_id,
+            details,
             now,
         )
     })?;
@@ -699,6 +770,7 @@ pub fn authenticate(
             return Err(authentication_failure());
         };
         let project_ids = grants(database, &agent_id)?;
+        let answer_grant = answer_grant_repository::read(database, &agent_id)?;
         database.connection().execute(
             "UPDATE suplex_external_agent_credentials SET last_used_at = ?1 WHERE id = ?2",
             params![now_iso, credential_id],
@@ -713,6 +785,7 @@ pub fn authenticate(
             profile_id,
             project_ids,
             cursor_key: credential_hash,
+            answer_grant,
         })
     })
 }
@@ -797,6 +870,7 @@ pub fn provision_oauth_agent(
         profile_id: None,
         project_ids,
         cursor_key: input.cursor_key.to_owned(),
+        answer_grant: None,
     })
 }
 
@@ -820,6 +894,7 @@ pub fn oauth_principal(
             return Err(authentication_failure());
         };
         let project_ids = grants(database, agent_id)?;
+        let answer_grant = answer_grant_repository::read(database, agent_id)?;
         database.connection().execute(
             "UPDATE suplex_external_agents SET last_used_at = ?1, updated_at = ?1 WHERE id = ?2",
             params![now_iso, agent_id],
@@ -830,6 +905,7 @@ pub fn oauth_principal(
             profile_id,
             project_ids,
             cursor_key: cursor_key.to_owned(),
+            answer_grant,
         })
     })
 }
@@ -856,7 +932,7 @@ pub fn revoke(
             _ => return Err(not_found("agent_not_found")),
         };
         for sql in [
-            "UPDATE suplex_external_agents SET status = 'revoked', revoked_at = ?1, updated_at = ?1 WHERE id = ?2",
+            "UPDATE suplex_external_agents SET status = 'revoked', revoked_at = ?1, updated_at = ?1, answer_granted_by_user_id = NULL, answer_granted_at = NULL WHERE id = ?2",
             "UPDATE suplex_external_agent_credentials SET revoked_at = ?1 WHERE agent_id = ?2 AND revoked_at IS NULL",
             "UPDATE suplex_external_agent_pairing_codes SET replaced_at = ?1 WHERE agent_id = ?2 AND consumed_at IS NULL AND replaced_at IS NULL",
             "UPDATE suplex_oauth_grants SET revoked_at = ?1, updated_at = ?1 WHERE agent_id = ?2 AND revoked_at IS NULL",
@@ -976,7 +1052,7 @@ pub(crate) mod tests {
         let mut fixture = fixture();
         let issued = issue(&mut fixture, "External Dev", &["project_allowed"]);
         assert!(issued.pairing_code.starts_with("fhp_"));
-        assert_eq!(issued.agent.status, "pending");
+        assert_eq!(issued.agent.status, ExternalAgentStatus::Pending);
         let (name, status): (String, String) = fixture.database.connection().query_row(
             "SELECT ag.name, e.status FROM suplex_agents ag JOIN suplex_external_agents e ON e.id = ag.id WHERE ag.id = ?1",
             [&issued.agent.id], |row| Ok((row.get(0)?, row.get(1)?)),

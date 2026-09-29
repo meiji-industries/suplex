@@ -362,14 +362,26 @@ fn record_confirmed_interruption(
     Ok(())
 }
 
+/// A paired agent that answered for the administrator who granted it.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AnsweredBy {
+    pub agent_id: String,
+    pub agent_name: String,
+    pub user_id: String,
+    pub user_name: String,
+}
+
 /// Answer only the current human question. Confirmed interrupted native work
 /// is recorded before the answer prompt, all in the same durable transaction.
+/// An agent answer carries its attribution into the Coordinator prompt.
 pub fn answer_human(
     database: &mut SuplexDatabase,
     task_id: &str,
     question_id: &str,
     answer: &str,
     confirm_commands_stopped: bool,
+    answered_by: Option<&AnsweredBy>,
     now: DateTime<Utc>,
 ) -> DatabaseResult<()> {
     let answer =
@@ -407,7 +419,10 @@ pub fn answer_human(
         if let Some(recovery_turn_id) = recovery_turn_id {
             record_confirmed_interruption(database, task_id, &recovery_turn_id, question_id, answer, now)?;
         }
-        let prompt = js_json::stringify(&serde_json::json!({"question":question,"answer":answer}));
+        let prompt = js_json::stringify(&match answered_by {
+            Some(answered_by) => serde_json::json!({"question":question,"answer":answer,"answeredBy":answered_by}),
+            None => serde_json::json!({"question":question,"answer":answer}),
+        });
         let id = new_turn_id(now)?;
         let time = rfc3339_millis(now);
         insert_pending_turn(database, &NewTurn { id: &id, task_id, session_id: &root.id, generation: root.generation, assignment_hash: None, prompt: &prompt, workflow_input: None }, &time)?;

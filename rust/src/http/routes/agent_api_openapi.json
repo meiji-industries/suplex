@@ -251,9 +251,7 @@
                         },
                         "humanDecisions": {
                           "type": "boolean",
-                          "enum": [
-                            false
-                          ]
+                          "description": "True when an administrator lets this agent answer Coordinator questions."
                         }
                       },
                       "required": [
@@ -281,6 +279,7 @@
                           "duplicate_task",
                           "send_task_note",
                           "recheck_delivery_wait",
+                          "answer_human_question",
                           "observe_delivery",
                           "request_delivery_repair",
                           "decide_delivery_wait",
@@ -296,7 +295,9 @@
                       "items": {
                         "type": "string",
                         "enum": [
-                          "task_human_answer"
+                          "task_human_answer",
+                          "task_limit_decision",
+                          "command_cleanup_confirmation"
                         ]
                       }
                     },
@@ -1516,13 +1517,68 @@
                               "unarchive_task",
                               "duplicate_task",
                               "send_task_note",
-                              "recheck_delivery_wait"
+                              "recheck_delivery_wait",
+                              "answer_human_question"
                             ]
                           }
                         },
                         "humanQuestion": {
                           "nullable": true,
                           "type": "string"
+                        },
+                        "question": {
+                          "nullable": true,
+                          "type": "object",
+                          "description": "The current question. Answer it with answer_human_question when permittedCommands includes it.",
+                          "properties": {
+                            "id": {
+                              "type": "string"
+                            },
+                            "kind": {
+                              "type": "string",
+                              "enum": [
+                                "question",
+                                "task_limit"
+                              ]
+                            },
+                            "requiresCommandCleanup": {
+                              "type": "boolean"
+                            },
+                            "options": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "id": {
+                                    "type": "string"
+                                  },
+                                  "label": {
+                                    "type": "string"
+                                  },
+                                  "description": {
+                                    "type": "string"
+                                  },
+                                  "recommended": {
+                                    "type": "boolean"
+                                  }
+                                },
+                                "required": [
+                                  "id",
+                                  "label",
+                                  "description",
+                                  "recommended"
+                                ],
+                                "additionalProperties": false
+                              }
+                            }
+                          },
+                          "required": [
+                            "id",
+                            "kind",
+                            "requiresCommandCleanup",
+                            "options"
+                          ],
+                          "additionalProperties": false
                         },
                         "blocker": {
                           "nullable": true,
@@ -1960,6 +2016,7 @@
                         "revision",
                         "permittedCommands",
                         "humanQuestion",
+                        "question",
                         "blocker",
                         "workflowStage",
                         "workflow",
@@ -2423,13 +2480,68 @@
                           "unarchive_task",
                           "duplicate_task",
                           "send_task_note",
-                          "recheck_delivery_wait"
+                          "recheck_delivery_wait",
+                          "answer_human_question"
                         ]
                       }
                     },
                     "humanQuestion": {
                       "nullable": true,
                       "type": "string"
+                    },
+                    "question": {
+                      "nullable": true,
+                      "type": "object",
+                      "description": "The current question. Answer it with answer_human_question when permittedCommands includes it.",
+                      "properties": {
+                        "id": {
+                          "type": "string"
+                        },
+                        "kind": {
+                          "type": "string",
+                          "enum": [
+                            "question",
+                            "task_limit"
+                          ]
+                        },
+                        "requiresCommandCleanup": {
+                          "type": "boolean"
+                        },
+                        "options": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "id": {
+                                "type": "string"
+                              },
+                              "label": {
+                                "type": "string"
+                              },
+                              "description": {
+                                "type": "string"
+                              },
+                              "recommended": {
+                                "type": "boolean"
+                              }
+                            },
+                            "required": [
+                              "id",
+                              "label",
+                              "description",
+                              "recommended"
+                            ],
+                            "additionalProperties": false
+                          }
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "kind",
+                        "requiresCommandCleanup",
+                        "options"
+                      ],
+                      "additionalProperties": false
                     },
                     "blocker": {
                       "nullable": true,
@@ -2867,6 +2979,7 @@
                     "revision",
                     "permittedCommands",
                     "humanQuestion",
+                    "question",
                     "blocker",
                     "workflowStage",
                     "workflow",
@@ -4360,13 +4473,68 @@
                           "unarchive_task",
                           "duplicate_task",
                           "send_task_note",
-                          "recheck_delivery_wait"
+                          "recheck_delivery_wait",
+                          "answer_human_question"
                         ]
                       }
                     },
                     "humanQuestion": {
                       "nullable": true,
                       "type": "string"
+                    },
+                    "question": {
+                      "nullable": true,
+                      "type": "object",
+                      "description": "The current question. Answer it with answer_human_question when permittedCommands includes it.",
+                      "properties": {
+                        "id": {
+                          "type": "string"
+                        },
+                        "kind": {
+                          "type": "string",
+                          "enum": [
+                            "question",
+                            "task_limit"
+                          ]
+                        },
+                        "requiresCommandCleanup": {
+                          "type": "boolean"
+                        },
+                        "options": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "id": {
+                                "type": "string"
+                              },
+                              "label": {
+                                "type": "string"
+                              },
+                              "description": {
+                                "type": "string"
+                              },
+                              "recommended": {
+                                "type": "boolean"
+                              }
+                            },
+                            "required": [
+                              "id",
+                              "label",
+                              "description",
+                              "recommended"
+                            ],
+                            "additionalProperties": false
+                          }
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "kind",
+                        "requiresCommandCleanup",
+                        "options"
+                      ],
+                      "additionalProperties": false
                     },
                     "blocker": {
                       "nullable": true,
@@ -4804,6 +4972,7 @@
                     "revision",
                     "permittedCommands",
                     "humanQuestion",
+                    "question",
                     "blocker",
                     "workflowStage",
                     "workflow",
@@ -5497,13 +5666,68 @@
                               "unarchive_task",
                               "duplicate_task",
                               "send_task_note",
-                              "recheck_delivery_wait"
+                              "recheck_delivery_wait",
+                              "answer_human_question"
                             ]
                           }
                         },
                         "humanQuestion": {
                           "nullable": true,
                           "type": "string"
+                        },
+                        "question": {
+                          "nullable": true,
+                          "type": "object",
+                          "description": "The current question. Answer it with answer_human_question when permittedCommands includes it.",
+                          "properties": {
+                            "id": {
+                              "type": "string"
+                            },
+                            "kind": {
+                              "type": "string",
+                              "enum": [
+                                "question",
+                                "task_limit"
+                              ]
+                            },
+                            "requiresCommandCleanup": {
+                              "type": "boolean"
+                            },
+                            "options": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "id": {
+                                    "type": "string"
+                                  },
+                                  "label": {
+                                    "type": "string"
+                                  },
+                                  "description": {
+                                    "type": "string"
+                                  },
+                                  "recommended": {
+                                    "type": "boolean"
+                                  }
+                                },
+                                "required": [
+                                  "id",
+                                  "label",
+                                  "description",
+                                  "recommended"
+                                ],
+                                "additionalProperties": false
+                              }
+                            }
+                          },
+                          "required": [
+                            "id",
+                            "kind",
+                            "requiresCommandCleanup",
+                            "options"
+                          ],
+                          "additionalProperties": false
                         },
                         "blocker": {
                           "nullable": true,
@@ -5703,6 +5927,7 @@
                         "revision",
                         "permittedCommands",
                         "humanQuestion",
+                        "question",
                         "blocker",
                         "workflowStage",
                         "workflow",
@@ -6169,7 +6394,7 @@
       "post": {
         "operationId": "commandAgentApiTask",
         "summary": "Apply an authorized task lifecycle command",
-        "description": "Only the paired agent that created the task can send a command. Every command requires the current task revision and an idempotency key. start_task queues a manual backlog task: it starts now when every prerequisite is complete and never bypasses one. disarm_task returns a queued task to the manual backlog. taskCommands lists exactly the lifecycle commands accepted by suplex_command_task. autonomousCommands also includes task creation and, when enabled, runtime delivery commands. Human answers remain unavailable to paired agents. The runtime API exposes delivery and merge commands only when capabilities reports them. Suplex can perform delivery for a task's configured target, including a merge after review, without an agent command.",
+        "description": "Only the paired agent that created the task can send a command. Every command requires the current task revision and an idempotency key. answer_human_question also needs questionId and exactly one of optionId or answer. It fails with answer_grant_required until an administrator grants the agent permission, with question_stale for an old questionId, with task_not_waiting when the task has no question, and with human_decision_required for a task limit decision or command cleanup. start_task queues a manual backlog task: it starts now when every prerequisite is complete and never bypasses one. disarm_task returns a queued task to the manual backlog. taskCommands lists exactly the lifecycle commands accepted by suplex_command_task. autonomousCommands also includes task creation and, when enabled, runtime delivery commands. A paired agent can answer a task's Coordinator question with answer_human_question only after an administrator lets it answer on their behalf. Task limit decisions and command cleanup confirmations stay with a person. The runtime API exposes delivery and merge commands only when capabilities reports them. Suplex can perform delivery for a task's configured target, including a merge after review, without an agent command.",
         "security": [
           {
             "AgentApiBearer": []
@@ -6204,7 +6429,8 @@
                       "unarchive_task",
                       "duplicate_task",
                       "send_task_note",
-                      "recheck_delivery_wait"
+                      "recheck_delivery_wait",
+                      "answer_human_question"
                     ]
                   },
                   "revision": {
@@ -6220,6 +6446,23 @@
                   "note": {
                     "type": "string",
                     "minLength": 1
+                  },
+                  "questionId": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 256,
+                    "description": "The current question id from the task's question.id. Only answer_human_question accepts it."
+                  },
+                  "optionId": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 64,
+                    "description": "An offered option id from question.options, such as option-1. Send optionId or answer, not both."
+                  },
+                  "answer": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "A free-text answer. Send optionId or answer, not both."
                   }
                 },
                 "required": [
@@ -6539,13 +6782,68 @@
                           "unarchive_task",
                           "duplicate_task",
                           "send_task_note",
-                          "recheck_delivery_wait"
+                          "recheck_delivery_wait",
+                          "answer_human_question"
                         ]
                       }
                     },
                     "humanQuestion": {
                       "nullable": true,
                       "type": "string"
+                    },
+                    "question": {
+                      "nullable": true,
+                      "type": "object",
+                      "description": "The current question. Answer it with answer_human_question when permittedCommands includes it.",
+                      "properties": {
+                        "id": {
+                          "type": "string"
+                        },
+                        "kind": {
+                          "type": "string",
+                          "enum": [
+                            "question",
+                            "task_limit"
+                          ]
+                        },
+                        "requiresCommandCleanup": {
+                          "type": "boolean"
+                        },
+                        "options": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "id": {
+                                "type": "string"
+                              },
+                              "label": {
+                                "type": "string"
+                              },
+                              "description": {
+                                "type": "string"
+                              },
+                              "recommended": {
+                                "type": "boolean"
+                              }
+                            },
+                            "required": [
+                              "id",
+                              "label",
+                              "description",
+                              "recommended"
+                            ],
+                            "additionalProperties": false
+                          }
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "kind",
+                        "requiresCommandCleanup",
+                        "options"
+                      ],
+                      "additionalProperties": false
                     },
                     "blocker": {
                       "nullable": true,
@@ -6745,6 +7043,7 @@
                     "revision",
                     "permittedCommands",
                     "humanQuestion",
+                    "question",
                     "blocker",
                     "workflowStage",
                     "workflow",
@@ -6833,6 +7132,64 @@
                       "type": "string",
                       "enum": [
                         "credential_invalid"
+                      ]
+                    },
+                    "field": {
+                      "type": "string"
+                    },
+                    "value": {
+                      "type": "string"
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "findings": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "code": {
+                            "type": "string"
+                          },
+                          "field": {
+                            "type": "string"
+                          },
+                          "message": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "code",
+                          "field",
+                          "message"
+                        ],
+                        "additionalProperties": false
+                      }
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "code"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Safe error response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "code": {
+                      "type": "string",
+                      "enum": [
+                        "answer_grant_required"
                       ]
                     },
                     "field": {
@@ -7107,7 +7464,10 @@
                         "code": {
                           "type": "string",
                           "enum": [
-                            "illegal_command"
+                            "illegal_command",
+                            "task_not_waiting",
+                            "question_stale",
+                            "human_decision_required"
                           ]
                         },
                         "field": {
@@ -7219,6 +7579,64 @@
                       "type": "string",
                       "enum": [
                         "revision_stale"
+                      ]
+                    },
+                    "field": {
+                      "type": "string"
+                    },
+                    "value": {
+                      "type": "string"
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "findings": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "code": {
+                            "type": "string"
+                          },
+                          "field": {
+                            "type": "string"
+                          },
+                          "message": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "code",
+                          "field",
+                          "message"
+                        ],
+                        "additionalProperties": false
+                      }
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "code"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Safe error response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "code": {
+                      "type": "string",
+                      "enum": [
+                        "option_not_offered"
                       ]
                     },
                     "field": {

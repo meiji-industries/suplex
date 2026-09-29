@@ -91,14 +91,24 @@ delivery surface off, in which case `capabilities.delivery` and
 `capabilities.merge` are `false` and the delivery routes are not registered at
 all. Treat the served list as authoritative and never call a command it omits.
 
+When `suplex_whoami` reports `capabilities.humanAnswers: true`, you may answer
+a task's plain Coordinator question for the administrator in `answerGrant`.
+Read the task, then send `answer_human_question` with the current `revision`,
+`questionId` from `question.id`, and exactly one of `optionId` from
+`question.options` or free-text `answer`. Answer only what the person you work
+for would answer; otherwise surface the question to them.
+
 `GET /api/agent/openapi.json` returns the authenticated runtime contract if
 you need the exact request shapes.
 
 **Not available to this agent, in any transport:**
 
-- Answering a human question. `answer_human_question` does not exist; human
-  answers are a human-only record. Surface the question to the person you work
-  for and let them answer in Suplex.
+- Answering a human question without the answer grant. `answer_human_question`
+  works only when an administrator lets this agent answer on their behalf.
+  Without it the command returns `answer_grant_required`; surface the question
+  to the person you work for and let them answer in Suplex.
+- Task limit decisions and questions that need confirmation that commands
+  stopped. These return `human_decision_required` even with the grant.
 - `deliver_task`: delivery is not an agent command.
 - Merging, when `capabilities.merge` is `false`.
 - Editing a task's title or description after creation, deleting a task, and

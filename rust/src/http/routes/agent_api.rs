@@ -30,7 +30,6 @@ use crate::{
 
 use super::auth;
 
-const TASK_COMMANDS: [&str; 8] = contracts::TASK_COMMANDS;
 const DELIVERY_COMMANDS: [&str; 6] = [
     "observe_delivery",
     "request_delivery_repair",
@@ -55,30 +54,35 @@ pub(crate) fn delivery(state: &AppState) -> Option<AgentDelivery> {
 }
 
 /// `agentApiCapabilities`: the reported surface is the registered surface.
-pub fn capabilities(agent_delivery: bool) -> Value {
+/// Answers appear only for an agent that holds the answer grant.
+pub fn capabilities(agent_delivery: bool, answers: bool) -> Value {
     let mut autonomous = vec!["create_backlog_task", "create_queued_task"];
-    autonomous.extend(TASK_COMMANDS);
+    autonomous.extend(agent_api::task_commands(answers));
     if agent_delivery {
         autonomous.extend(DELIVERY_COMMANDS);
     }
-    let unavailable: Vec<&str> = if agent_delivery {
-        vec!["answer_human_question", "deliver_task"]
+    let mut unavailable = Vec::new();
+    if !answers {
+        unavailable.push(contracts::ANSWER_HUMAN_QUESTION);
+    }
+    unavailable.push("deliver_task");
+    if !agent_delivery {
+        unavailable.push("merge_pull_request");
+    }
+    let human_only = if answers {
+        vec!["task_limit_decision", "command_cleanup_confirmation"]
     } else {
-        vec![
-            "answer_human_question",
-            "deliver_task",
-            "merge_pull_request",
-        ]
+        vec!["task_human_answer"]
     };
     json!({
         "apiVersion": "v1",
         "capabilities": {
             "read": {"task": true, "workflows": true, "templates": true},
             "create": {"backlogTask": true, "queuedTask": true, "deliveryTargets": ["local_worktree", "remote_branch", "pull_request_draft", "pull_request_ready", "merged"]},
-            "taskControl": true, "delivery": agent_delivery, "merge": agent_delivery, "humanDecisions": false,
+            "taskControl": true, "delivery": agent_delivery, "merge": agent_delivery, "humanDecisions": answers,
         },
         "autonomousCommands": autonomous,
-        "humanOnlyRecords": ["task_human_answer"],
+        "humanOnlyRecords": human_only,
         "unavailableCommands": unavailable,
         "pagination": {"supported": true, "cursor": true},
     })
@@ -255,8 +259,11 @@ async fn openapi(State(state): State<AppState>, headers: HeaderMap) -> Response 
 }
 
 async fn capabilities_route(State(state): State<AppState>, headers: HeaderMap) -> Response {
-    attempt!(bearer(&state, &headers, true));
-    no_store(StatusCode::OK, &capabilities(delivery(&state).is_some()))
+    let principal = attempt!(bearer(&state, &headers, true));
+    no_store(
+        StatusCode::OK,
+        &capabilities(delivery(&state).is_some(), principal.answer_grant.is_some()),
+    )
 }
 
 async fn workflows(

@@ -122,6 +122,13 @@ pub(crate) mod tests {
             (Some("External agent 1"), Some("pending"))
         );
         assert_eq!(created["agent"]["projectIds"], json!(["project_api"]));
+        assert_eq!(
+            (
+                created["agent"]["answerGrantedByUserId"].clone(),
+                created["agent"]["answerGrantedAt"].clone()
+            ),
+            (Value::Null, Value::Null)
+        );
         assert!(created["pairingCode"].as_str().unwrap().starts_with("fhp_"));
         let id = created["agent"]["id"].as_str().unwrap().to_owned();
 

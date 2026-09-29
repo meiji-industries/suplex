@@ -1,6 +1,7 @@
 import { readJsonUnchecked } from "../../lib/api.js";
 import type { ApiExternalAgent } from "../../shell/view-shared.js";
 import { externalAgentSetupInstructions } from "./external-agent-setup-instructions.js";
+import { replaceExternalAgentProjects, revokeExternalAgent as revokeAgent, setExternalAgentAnswerGrant } from "./external-agent-api.js";
 import type { Dispatch, SetStateAction } from "react";
 
 type PairingCode = {
@@ -140,10 +141,7 @@ export function createExternalAgentActions({
       return;
     }
     try {
-      await readJsonUnchecked(
-        `/api/admin/external-agents/${encodeURIComponent(agent.id)}/revoke`,
-        { method: "POST", body: "{}" },
-      );
+      await revokeAgent(agent.id);
       setPendingAction("");
       await reload();
     } catch {
@@ -158,18 +156,20 @@ export function createExternalAgentActions({
   const saveExternalAgentProjects = async (): Promise<void> => {
     if (!editingExternalAgent) return;
     try {
-      await readJsonUnchecked<{ agent: ApiExternalAgent }>(
-        `/api/admin/external-agents/${encodeURIComponent(editingExternalAgent.id)}/projects`,
-        {
-          method: "PUT",
-          body: JSON.stringify({ projectIds: editingExternalAgentProjectIds }),
-        },
-      );
+      await replaceExternalAgentProjects(editingExternalAgent.id, editingExternalAgentProjectIds);
       setEditProjectsModalOpen(false);
       setEditingExternalAgent(null);
       await reload();
     } catch {
       setError("Unable to update agent projects");
+    }
+  };
+  const setAnswerGrant = async (agent: ApiExternalAgent, granted: boolean): Promise<void> => {
+    try {
+      await setExternalAgentAnswerGrant(agent.id, granted);
+      await reload();
+    } catch {
+      setError("Unable to update answer permission");
     }
   };
   const copyPairingCode = async (): Promise<void> => {
@@ -203,6 +203,7 @@ export function createExternalAgentActions({
     revokeExternalAgent,
     openEditExternalAgentProjects,
     saveExternalAgentProjects,
+    setAnswerGrant,
     copyPairingCode,
     copyExternalAgentSetupInstructions,
   };

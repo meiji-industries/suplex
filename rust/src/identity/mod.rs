@@ -1,4 +1,5 @@
 pub mod admin;
+pub mod answer_grant_repository;
 pub mod audit;
 pub mod auth;
 pub mod avatars;

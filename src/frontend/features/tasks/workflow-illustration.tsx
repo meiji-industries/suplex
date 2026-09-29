@@ -10,6 +10,7 @@ import { useOptionalCompanyContext } from "../../shell/company-context.js";
 
 type Tone = "coordinator" | "worker" | "planner" | "advisor" | "source";
 type AgentControls = Partial<Record<"root" | "worker" | AdvisorRole, ReactNode>>;
+type AgentNames = Partial<Record<"root" | "worker" | AdvisorRole, string>>;
 type Point = { x: number; y: number };
 const tones: Record<Tone, string> = {
   coordinator: "text-violet-600 dark:text-violet-400",
@@ -73,7 +74,7 @@ function routePath(points: Point[]): string {
   return points.map((point, index) => `${index ? "L" : "M"}${point.x} ${point.y}`).join("");
 }
 
-function Artwork({ workflow, delivery, compact, agents, avatars, arrowId, author, authorAvatar, pullRequestNumber }: { workflow: WorkflowId; delivery: string; compact: boolean; agents: AgentControls; avatars: AgentControls; arrowId: string; author: ReactNode; authorAvatar: ReactNode; pullRequestNumber: number | undefined }) {
+function Artwork({ workflow, delivery, compact, agents, agentNames, avatars, arrowId, author, authorAvatar, pullRequestNumber }: { workflow: WorkflowId; delivery: string; compact: boolean; agents: AgentControls; agentNames: AgentNames; avatars: AgentControls; arrowId: string; author: ReactNode; authorAvatar: ReactNode; pullRequestNumber: number | undefined }) {
   const layout = layouts[workflow][compact ? "compact" : "wide"];
   const viewWidth = compact ? 320 : 768;
   const offsetX = (viewWidth - layout.width) / 2;
@@ -94,7 +95,7 @@ function Artwork({ workflow, delivery, compact, agents, avatars, arrowId, author
       const { x, y } = nodePoints[id]!;
       const role = "role" in meta ? meta.role : undefined;
       const deliveryNode = id === "delivery" || id === "merge";
-      const control = id === "objective" ? author : deliveryNode ? <SuplexAgent /> : role ? agents[role] : undefined;
+      const control = id === "objective" ? author : deliveryNode ? <SuplexAgent /> : role ? agents[role] ?? (agentNames[role] ? <span className="inline-flex h-6 items-center font-medium">{agentNames[role]}</span> : undefined) : undefined;
       const caption = id === "plan" ? workflow === "direct_build" ? "delegates" : "writes the plan"
         : id === "objective" ? "prompts"
         : id === "plan-a" || id === "plan-b" ? "plans"
@@ -116,7 +117,7 @@ function Artwork({ workflow, delivery, compact, agents, avatars, arrowId, author
   </>;
 }
 
-export function WorkflowIllustration({ workflow, delivery, agents = {}, avatars = {}, pullRequestNumber }: { workflow: WorkflowId; delivery: string; agents?: AgentControls; avatars?: AgentControls; pullRequestNumber?: number | undefined }) {
+export function WorkflowIllustration({ workflow, delivery, agents = {}, agentNames = {}, avatars = {}, pullRequestNumber }: { workflow: WorkflowId; delivery: string; agents?: AgentControls; agentNames?: AgentNames; avatars?: AgentControls; pullRequestNumber?: number | undefined }) {
   const id = useId();
   const user = useOptionalCompanyContext()?.user;
   const author = <span className="inline-flex h-6 items-center font-medium">{user?.displayName ?? "User"}</span>;
@@ -137,13 +138,13 @@ export function WorkflowIllustration({ workflow, delivery, agents = {}, avatars 
       const height = layout.height + (compact ? 78 : workflow === "refine_pull_request" ? 160 : 110);
       const arrowId = `${id.replaceAll(":", "")}-${compact}-arrow`;
       return <svg key={String(compact)} className={compact ? "mx-auto block w-full max-w-80 @min-[640px]:hidden" : "mx-auto hidden w-full max-w-3xl @min-[640px]:block"}
-        viewBox={`0 0 ${compact ? 320 : 768} ${height}`} role={Object.keys(agents).length ? "group" : "img"}
+        viewBox={`0 0 ${compact ? 320 : 768} ${height}`} role={Object.keys(agents).length || Object.keys(agentNames).length ? "group" : "img"}
         aria-labelledby={`${id}-${compact}-title`} aria-describedby={`${id}-${compact}-description`}>
         <title id={`${id}-${compact}-title`}>{`${definition.name} workflow`}</title>
         <desc id={`${id}-${compact}-description`}>{description}</desc>
         <defs>{(Object.entries(tones) as [Tone, string][]).map(([tone, className]) =>
           <marker key={tone} id={`${arrowId}-${tone}`} viewBox="0 0 8 8" refX="8" refY="4" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto"><path d="M0 0 8 4 0 8z" className={className} fill="currentColor" /></marker>)}</defs>
-        <Artwork workflow={workflow} delivery={deliveryAction} compact={compact} agents={agents} avatars={avatars} arrowId={arrowId} author={author} authorAvatar={authorAvatar} pullRequestNumber={pullRequestNumber} />
+        <Artwork workflow={workflow} delivery={deliveryAction} compact={compact} agents={agents} agentNames={agentNames} avatars={avatars} arrowId={arrowId} author={author} authorAvatar={authorAvatar} pullRequestNumber={pullRequestNumber} />
       </svg>;
     })}
   </div>;

@@ -11,6 +11,7 @@ import type { TaskDiffResponse } from "../../../contracts/generated/TaskDiffResp
 import type { TaskDiffSummaryResponse } from "../../../contracts/generated/TaskDiffSummaryResponse.js";
 import type { TimelineResponse } from "../../../contracts/generated/TimelineResponse.js";
 import type { ArchiveConfirmation } from "../../../contracts/generated/ArchiveConfirmation.js";
+import type { ProfileResponse } from "../../../contracts/projects.js";
 
 export type TaskAction = "refresh" | "cancel" | "unarchive" | "disarm" | "start" | "answer";
 
@@ -19,6 +20,11 @@ const taskPath = (taskId: string, suffix = ""): string =>
 
 export function getTask(taskId: string): Promise<Task> {
   return readJsonUnchecked<Task>(taskPath(taskId));
+}
+
+export async function listTaskProfiles(signal?: AbortSignal): Promise<ProfileResponse[]> {
+  const result = await readJsonUnchecked<{ profiles: ProfileResponse[] }>("/api/profiles", signal ? { signal } : undefined);
+  return result.profiles;
 }
 
 export async function listTasks(

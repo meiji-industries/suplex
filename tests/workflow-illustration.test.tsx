@@ -90,3 +90,14 @@ test("pull request repair names the selected pull request in both layouts", () =
   element.innerHTML = html;
   for (const source of Array.from(element.querySelectorAll('[data-illustration-station="source"]'))) expect(source.textContent).toContain("PR #285");
 });
+
+test("read-only agent names replace role labels only when their profiles resolve", () => {
+  const element = document.createElement("div");
+  element.innerHTML = renderToStaticMarkup(<WorkflowIllustration workflow="independent_review" delivery="Push branch" agentNames={{ root: "Ada", worker: "Bea" }} />);
+  for (const diagram of Array.from(element.querySelectorAll('svg[role="group"]'))) {
+    expect(diagram.querySelector('[data-illustration-control="plan"]')?.textContent).toContain("Ada");
+    expect(diagram.querySelector('[data-illustration-control="build"]')?.textContent).toContain("Bea");
+    expect(diagram.querySelector('[data-illustration-control="reviewer"]')).toBeNull();
+    expect(diagram.querySelectorAll("button")).toHaveLength(0);
+  }
+});

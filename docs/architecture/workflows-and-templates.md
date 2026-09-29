@@ -58,8 +58,8 @@ show the selected built-in workflow. A named preset uses its underlying
 workflow's diagram and supplies its own task defaults.
 The diagram does not define execution: [Rust workflow rules](../../rust/src/coordination/workflows.rs)
 and [coordination](coordination.md) own role handoffs and delivery decisions.
-The separate [task detail plan](../../src/frontend/features/tasks/workflow-plan-model.ts)
-also presents a workflow; neither view is a runtime state machine.
+The task detail plan also renders the shared illustration. Neither view is a
+runtime state machine.
 
 [The illustration](../../src/frontend/features/tasks/workflow-illustration.tsx)
 renders labels, agent selectors, arrows, and theme colors. It positions nodes

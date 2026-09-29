@@ -11,7 +11,9 @@ use serde_json::{Map, Value, json};
 
 use crate::http::contracts::typed::{
     Contract, ContractFailure, ContractResult,
-    agent_api::{self, GetTaskTool, TaskCommandBody, TaskDependenciesBody, TaskTool},
+    agent_api::{
+        self, GetTaskTool, TaskCommandBody, TaskDependenciesBody, TaskTool, TaskUpdateBody,
+    },
 };
 
 /// Canonical tool names, descriptions, and input schemas for both transports.
@@ -79,6 +81,12 @@ pub fn command_arguments(
     parsed::<TaskTool<TaskCommandBody>>(fields).map(|tool| (tool.task_id, tool.body))
 }
 
+pub fn update_arguments(
+    fields: &Map<String, Value>,
+) -> Result<(String, TaskUpdateBody), InvalidArguments> {
+    parsed::<TaskTool<TaskUpdateBody>>(fields).map(|tool| (tool.task_id, tool.body))
+}
+
 pub fn dependencies_arguments(
     fields: &Map<String, Value>,
 ) -> Result<(String, TaskDependenciesBody), InvalidArguments> {
@@ -122,6 +130,7 @@ mod tests {
                 "suplex_get_task",
                 "suplex_get_task_delivery",
                 "suplex_create_task",
+                "suplex_update_task",
                 "suplex_set_task_dependencies",
                 "suplex_command_task"
             ]
@@ -190,6 +199,21 @@ mod tests {
                 json!({"command": "start_task", "revision": "r", "idempotencyKey": "k"})
             ))
             .is_err()
+        );
+        let (id, update) = update_arguments(&fields(json!({"taskId": "t", "revision": "r", "idempotencyKey": "k", "advisorProfileIds": {"rater": "p"}}))).unwrap();
+        assert_eq!(
+            (
+                id.as_str(),
+                update.advisor_profile_ids.unwrap().rater.as_deref()
+            ),
+            ("t", Some("p"))
+        );
+        assert!(
+            update_arguments(&fields(
+                json!({"taskId": "t", "revision": "r", "idempotencyKey": "k"})
+            ))
+            .is_err(),
+            "an update names at least one field"
         );
         let (_, body) =
             dependencies_arguments(&fields(json!({"taskId": "t", "dependsOn": ["a"]}))).unwrap();

@@ -76,6 +76,19 @@ impl TaskError {
         Self::new("Not found", 404)
     }
 
+    /// A 422 refusal of one request field. The agent API spreads the field
+    /// into its error body; the board lists it as a finding.
+    pub fn field(code: &'static str, message: impl Into<String>, field: &str, value: &str) -> Self {
+        let message = message.into();
+        let details = serde_json::json!({"field": field, "value": value, "reason": message});
+        Self::Agent {
+            status: 422,
+            code,
+            message,
+            details: details.as_object().cloned().unwrap_or_default(),
+        }
+    }
+
     pub fn internal(message: impl Into<String>) -> Self {
         Self::Internal(message.into())
     }
@@ -89,6 +102,16 @@ impl From<TaskError> for PublicFailure {
     fn from(error: TaskError) -> Self {
         let message = error.to_string();
         match error {
+            TaskError::Agent {
+                status,
+                code,
+                details,
+                ..
+            } if details.contains_key("field") => PublicFailure::new(status, &message)
+                .with_code(code)
+                .with_findings(
+                    serde_json::json!([{"code": code, "field": details.get("field"), "message": message}]),
+                ),
             // TypeScript `sendDomainFailure` shows every task code except `task_failure`.
             TaskError::Failure { status, code, .. } | TaskError::Agent { status, code, .. }
                 if code != "task_failure" =>

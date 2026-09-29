@@ -1051,17 +1051,25 @@ pub fn answer_user_task_limit(
     Ok(answered)
 }
 
+/// The edited profile of a role, or a refusal of the request field that names it.
 fn edit_profile(
     database: &SuplexDatabase,
     id: &str,
     current: Option<&TaskProfile>,
     role: &str,
+    field: &str,
 ) -> DatabaseResult<TaskProfile> {
     if let Some(current) = current.filter(|current| current.profile_id == id) {
         return Ok(current.clone());
     }
-    read_profile(database, id, role)?
-        .ok_or_else(|| TaskError::new("The selected agent profile does not exist", 422).into())
+    let code = match field {
+        "rootProfileId" => "root_profile_not_found",
+        "workerProfileId" => "worker_profile_not_found",
+        _ => "advisor_profile_not_found",
+    };
+    read_profile(database, id, role)?.ok_or_else(|| {
+        TaskError::field(code, "The selected agent profile does not exist", field, id).into()
+    })
 }
 
 /// The edit names at least one setting.
@@ -1084,16 +1092,12 @@ fn normalized_edit(
     input: &TaskDetailsBody,
     current: &repository::TaskEditSnapshot,
 ) -> DatabaseResult<Map<String, Value>> {
+    let workflow = input
+        .workflow
+        .map(Workflow::as_str)
+        .unwrap_or(&current.workflow);
     let mut normalized = Map::new();
-    normalized.insert(
-        "workflow".into(),
-        json!(
-            input
-                .workflow
-                .map(super::super::coordination::workflows::Workflow::as_str)
-                .unwrap_or(&current.workflow)
-        ),
-    );
+    normalized.insert("workflow".into(), json!(workflow));
     normalized.insert(
         "advisorProfileIds".into(),
         serde_json::to_value(input.advisor_profile_ids.clone().unwrap_or_default())?,
@@ -1112,7 +1116,32 @@ fn normalized_edit(
         normalized.insert("runProjectTests".into(), json!(tests));
     }
     crate::coordination::workflow_records::normalize_workflow_input(&mut normalized, true)
-        .map_err(|message| TaskError::new(message, 422))?;
+        .map_err(|message| {
+            // A named role outside the workflow is the first rule that fails.
+            let ids = input.advisor_profile_ids.clone().unwrap_or_default();
+            let extra = [
+                ("reviewer", ids.reviewer),
+                ("planner_a", ids.planner_a),
+                ("planner_b", ids.planner_b),
+                ("rater", ids.rater),
+            ]
+            .into_iter()
+            .find_map(|(role, id)| {
+                id.filter(|_| {
+                    !workflows::advisor_roles(workflow).any(|allowed| allowed.as_str() == role)
+                })
+                .map(|id| (role, id))
+            });
+            match extra {
+                Some((role, id)) => TaskError::field(
+                    "advisor_role_not_in_workflow",
+                    message,
+                    &format!("advisorProfileIds.{role}"),
+                    &id,
+                ),
+                None => TaskError::new(message, 422),
+            }
+        })?;
     Ok(normalized)
 }
 
@@ -1149,7 +1178,13 @@ fn edited_advisor_profiles(
         let profile = if root_profile.profile_id == id {
             root_profile.clone()
         } else {
-            edit_profile(database, id, stored_profile, "root")?
+            edit_profile(
+                database,
+                id,
+                stored_profile,
+                "root",
+                &format!("advisorProfileIds.{}", role.as_str()),
+            )?
         };
         advisor_profiles.insert(role, profile);
     }
@@ -1226,6 +1261,23 @@ pub fn update_user_task_details(
     database.transaction(true, |database| {
         let scope = repository::task_by_id(database, task_id)?.ok_or_else(TaskError::not_found)?;
         companies::require_company_access(database, actor_user_id, &scope.company_id)?;
+        let task = update_task_details(database, task_id, input, now)?;
+        audit(database, actor_user_id, "task_details_updated", &task, now)?;
+        Ok(task)
+    })
+}
+
+/// The detail edit rules the board and the agent API share: a backlog or
+/// queued task takes the edited settings. The caller authorizes the task and
+/// records the audit event in the same transaction.
+pub fn update_task_details(
+    database: &mut SuplexDatabase,
+    task_id: &str,
+    input: &TaskDetailsBody,
+    now: DateTime<Utc>,
+) -> DatabaseResult<TaskRecord> {
+    database.transaction(true, |database| {
+        let scope = repository::task_by_id(database, task_id)?.ok_or_else(TaskError::not_found)?;
         let current =
             repository::edit_snapshot(database, task_id)?.ok_or_else(TaskError::not_found)?;
         let normalized = normalized_edit(input, &current)?;
@@ -1238,10 +1290,21 @@ pub fn update_user_task_details(
             .worker_profile_id
             .as_deref()
             .unwrap_or(&current.worker_profile.profile_id);
-        let root_profile = edit_profile(database, root_id, Some(&current.root_profile), "root")?;
-        let worker_profile =
-            edit_profile(database, worker_id, Some(&current.worker_profile), "worker")?;
-        let project = service::get(database, actor_user_id, &scope.project_id)?;
+        let root_profile = edit_profile(
+            database,
+            root_id,
+            Some(&current.root_profile),
+            "root",
+            "rootProfileId",
+        )?;
+        let worker_profile = edit_profile(
+            database,
+            worker_id,
+            Some(&current.worker_profile),
+            "worker",
+            "workerProfileId",
+        )?;
+        let project = service::get_in_company(database, &scope.company_id, &scope.project_id)?;
         let advisor_profiles = edited_advisor_profiles(
             database,
             input,

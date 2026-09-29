@@ -104,6 +104,12 @@
       "description": "Read one task. Send the ETag in If-None-Match to poll conditionally."
     },
     {
+      "path": "/api/agent/tasks/{taskId}",
+      "method": "PATCH",
+      "authentication": "agent credential",
+      "description": "Change the details of a backlog or queued task, including its workflow and Advisor profiles, with the current revision and an idempotency key. A queued task stays queued. To hold a queued task while it changes, send disarm_task, update it, then send start_task. Other task states are refused with illegal_command. Rejected fields report root_profile_not_found, worker_profile_not_found, advisor_profile_not_found, advisor_role_not_in_workflow, or workflow_not_found with field, value, and reason."
+    },
+    {
       "path": "/api/agent/tasks/{taskId}/dependencies",
       "method": "PUT",
       "authentication": "agent credential",

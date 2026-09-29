@@ -431,6 +431,108 @@
     }
   },
   {
+    "name": "suplex_update_task",
+    "description": "Change the details of a backlog or queued task: title, description, workflow, Coordinator, Worker, Advisor profiles, delivery target, project tests, and screenshots. Omitted fields keep their stored values. Name at least one field. A queued task stays queued with the same prerequisites. To hold a queued task while it changes, send disarm_task with suplex_command_task, update it, then send start_task to queue it again. Other task states are refused with illegal_command. Every update requires the current task revision and an idempotency key, and returns the task with its new revision. Rejected profiles and workflows report field, value, and reason.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "taskId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "revision": {
+          "description": "The current task revision from suplex_get_task.",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "idempotencyKey": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1
+        },
+        "description": {
+          "type": "string"
+        },
+        "workflowId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "rootProfileId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "workerProfileId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "advisorProfileIds": {
+          "description": "The complete Advisor selection. An empty object clears named Advisors, so each role follows its default. Omit it to keep the stored Advisors. Each named role must belong to the task's workflow, and each profile must be an existing Coordinator profile.",
+          "type": "object",
+          "properties": {
+            "reviewer": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "planner_a": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "planner_b": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "rater": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            }
+          },
+          "additionalProperties": false
+        },
+        "deliveryTarget": {
+          "type": "string",
+          "enum": [
+            "local_worktree",
+            "remote_branch",
+            "pull_request_draft",
+            "pull_request_ready",
+            "merged"
+          ]
+        },
+        "runProjectTests": {
+          "type": "boolean"
+        },
+        "visualEvidence": {
+          "type": "string",
+          "enum": [
+            "off",
+            "capture",
+            "required"
+          ]
+        }
+      },
+      "required": [
+        "taskId",
+        "revision",
+        "idempotencyKey"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
     "name": "suplex_set_task_dependencies",
     "description": "Replace task prerequisites in dependsOn and pull request prerequisites in blockedByPullRequests with the complete sets given. An empty array removes every prerequisite. A prerequisite can be any task the agent can read in a granted project. The task waits for the prerequisite. A self-reference, a cycle, or a task outside a granted project is rejected. Pull request errors name the rejected field, value, and reason. dryRun true validates the replacement without changing state. suplex_get_task reads dependsOn and blockedBy.",
     "inputSchema": {

@@ -225,6 +225,17 @@ impl Bridge {
                 )
                 .await
             }
+            "suplex_update_task" => {
+                let (task_id, body) = super::update_arguments(args).map_err(invalid)?;
+                let body = serde_json::to_value(body).map_err(|error| error.to_string())?;
+                self.request(
+                    Method::PATCH,
+                    &format!("/api/agent/tasks/{}", encode(&task_id)),
+                    Some(body),
+                    &[],
+                )
+                .await
+            }
             "suplex_set_task_dependencies" => {
                 let (task_id, body) = super::dependencies_arguments(args).map_err(invalid)?;
                 let body = serde_json::to_value(body).map_err(|error| error.to_string())?;

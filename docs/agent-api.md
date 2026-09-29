@@ -164,6 +164,35 @@ as actor and `answeredForUserId` in its metadata.
 None of these refusals changes the task. A repeated request with the same
 `idempotencyKey` returns the stored result and does not answer again.
 
+## Updating a task
+
+`PATCH /api/agent/tasks/:taskId` changes the details of a task in the backlog
+or the queue. The body takes the task's current `revision`, an
+`idempotencyKey`, and at least one of `title`, `description`, `workflowId`,
+`rootProfileId`, `workerProfileId`, `advisorProfileIds`, `deliveryTarget`,
+`runProjectTests`, and `visualEvidence`. An omitted field keeps its stored
+value. The response is the updated task with its new revision. The board edit
+uses the same rules.
+
+- `workflowId` names a workflow record from `GET /api/agent/workflows`. The
+  task runs the engine of that record.
+- `advisorProfileIds` is the complete Advisor selection. An empty object clears
+  the named Advisors, and each role then follows its default. Omit the field to
+  keep the stored Advisors. Each named role must belong to the resulting
+  workflow, and each profile must be an existing Coordinator profile.
+- A queued task stays queued with the same prerequisites. To hold a queued task
+  while it changes, send `disarm_task`, update the task, then send `start_task`
+  to queue it again.
+
+A task in any other state, or an archived task, returns `409 illegal_command`.
+A stale revision returns `412 revision_stale`. A repeated `idempotencyKey`
+with the same body returns the stored result; a different body returns
+`409 idempotency_conflict`. A rejected field returns `422` with `field`,
+`value`, and `reason`: `root_profile_not_found`, `worker_profile_not_found`,
+`advisor_profile_not_found`, `advisor_role_not_in_workflow`, or
+`workflow_not_found`. A rejected update keeps the task and its revision, and
+writes no audit event.
+
 ## Creating a task
 
 `POST /api/agent/tasks` creates a backlog task. Send `"queue": true` to queue
@@ -243,8 +272,8 @@ Unknown fields, such as `blockedByTaskId`, return `400 request_invalid`.
 routes as tools.
 
 The MCP bridge intentionally exposes a smaller surface than the HTTP API. It
-covers identity, capability and creation discovery, task reads and creation,
-dependencies, and lifecycle commands. Delivery refresh, repair, decisions,
+covers identity, capability and creation discovery, task reads, creation, and
+updates, dependencies, and lifecycle commands. Delivery refresh, repair, decisions,
 approvals, merge-train operations, merge, provenance, and administration stay
 HTTP-only. MCP exposes lifecycle task commands only. It does not expose runtime
 delivery or merge commands. Suplex can perform a task's configured delivery,

@@ -176,6 +176,12 @@ class SuplexClient:
         payload["idempotencyKey"] = key or idempotency_key(task_id, payload)
         return self.call("POST", f"/api/agent/tasks/{urllib.parse.quote(task_id)}/commands", payload)
 
+    def update_task(self, task_id: str, revision: str, key: str | None = None, **fields) -> dict:
+        """Change the details of a backlog or queued task. revision must be the task's current revision."""
+        payload = {"revision": revision, **fields}
+        payload["idempotencyKey"] = key or idempotency_key(task_id, payload)
+        return self.call("PATCH", f"/api/agent/tasks/{urllib.parse.quote(task_id)}", payload)
+
     def poll_task(self, task_id: str, until=None, attempts: int = 8, delay: float = 2.0) -> dict:
         """Read a task repeatedly with exponential backoff until `until` holds."""
         task = self.get_task(task_id)

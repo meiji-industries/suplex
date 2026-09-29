@@ -64,12 +64,13 @@ pub(crate) fn body_failure(status_code: StatusCode, runtime: bool) -> Response {
 
 /// `agentApiTaskFailureCode`: the runtime code for a task failure.
 fn runtime_task_code(status_code: u16, code: &str, message: &str) -> &'static str {
-    const PASSED: [&str; 19] = [
+    const PASSED: [&str; 20] = [
         "project_not_found",
         "dependency_not_found",
         "root_profile_not_found",
         "worker_profile_not_found",
         "advisor_profile_not_found",
+        "advisor_role_not_in_workflow",
         "source_issue_rejected",
         "source_pull_request_rejected",
         "source_branch_rejected",

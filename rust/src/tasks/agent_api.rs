@@ -31,7 +31,7 @@ use crate::{
             ContractFailure,
             agent_api::{
                 ANSWER_HUMAN_QUESTION, TaskCommandBody, TaskCreateBody, TaskDependenciesBody,
-                TaskListQuery,
+                TaskListQuery, TaskUpdateBody,
             },
             task_templates,
             tasks::{self as task_contracts, TaskImage},
@@ -1450,6 +1450,21 @@ fn apply_template(
     Ok(json!({"workflowId": null, "workflowName": null, "templateId": template_id}))
 }
 
+/// The name, configuration, and engine of an unarchived workflow record.
+fn workflow_record(
+    database: &SuplexDatabase,
+    workflow_id: &str,
+) -> DatabaseResult<Option<(String, String, String)>> {
+    Ok(database
+        .connection()
+        .query_row(
+            "SELECT name, configuration_json, engine FROM suplex_workflows WHERE id = ?1 AND archived_at IS NULL",
+            [workflow_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .optional()?)
+}
+
 /// Apply the named workflow, or Standard when none is named: its engine, and
 /// its Advisor profiles, agent profiles, and screenshots where the caller left
 /// them out. Returns the selection record.
@@ -1464,15 +1479,7 @@ fn apply_workflow(
         .unwrap_or_else(|| "workflow_native_standard".to_owned());
     let details =
         |reason: &str| json!({"field": "workflowId", "value": workflow_id, "reason": reason});
-    let record: Option<(String, String, String)> = database
-        .connection()
-        .query_row(
-            "SELECT name, configuration_json, engine FROM suplex_workflows WHERE id = ?1 AND archived_at IS NULL",
-            [&workflow_id],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-        )
-        .optional()?;
-    let Some((name, configuration, engine)) = record else {
+    let Some((name, configuration, engine)) = workflow_record(database, &workflow_id)? else {
         return Err(fail_with(
             "The selected workflow is not available",
             422,
@@ -2376,32 +2383,34 @@ fn stale() -> Box<dyn Error> {
 
 enum Claim {
     Replay(Value),
-    Claimed { guard: InFlight, hash: String },
+    Claimed {
+        guard: InFlight,
+        hash: String,
+        command_revision: i64,
+    },
 }
 
+/// A stored receipt replays; otherwise the request must name the current
+/// revision and be legal for the task it reads.
 fn claim(
     database: &mut SuplexDatabase,
     principal: &Principal,
     task_id: &str,
-    input: &TaskCommandBody,
+    request: &impl serde::Serialize,
+    revision: &str,
+    idempotency_key: &str,
+    legal: impl FnOnce(&SuplexDatabase, &Value) -> DatabaseResult<()>,
 ) -> DatabaseResult<Claim> {
     let hash = sha256_hex(crate::shared::js_json::stringify(&serde_json::to_value(
-        input,
+        request,
     )?));
     require_owned(database, principal, task_id)?;
-    if input.command == ANSWER_HUMAN_QUESTION && principal.answer_grant.is_none() {
-        return Err(fail(
-            "An administrator must let this agent answer questions",
-            403,
-            "answer_grant_required",
-        ));
-    }
     // This historical table name preserves idempotency receipts across the public rename.
     let stored: Option<(String, String)> = database
         .connection()
         .query_row(
             "SELECT request_hash, result_json FROM suplex_hermes_task_command_receipts WHERE agent_id = ?1 AND task_id = ?2 AND idempotency_key = ?3",
-            params![principal.agent_id, task_id, input.idempotency_key],
+            params![principal.agent_id, task_id, idempotency_key],
             |row| Ok((row.get(0)?, row.get(1)?)),
         )
         .optional()?;
@@ -2415,11 +2424,8 @@ fn claim(
         }
         return Ok(Claim::Replay(serde_json::from_str(&result)?));
     }
-    let key = crate::shared::js_json::stringify(&json!([
-        principal.agent_id,
-        task_id,
-        input.idempotency_key
-    ]));
+    let key =
+        crate::shared::js_json::stringify(&json!([principal.agent_id, task_id, idempotency_key]));
     let inserted = commands_in_flight()
         .lock()
         .map_err(|_| "command state is unavailable")?
@@ -2434,33 +2440,82 @@ fn claim(
     let guard = InFlight(key);
     let row = require_owned(database, principal, task_id)?;
     let before = projection_of(database, principal, &row)?;
-    if before["revision"] != json!(input.revision) {
+    if before["revision"] != json!(revision) {
         return Err(stale());
     }
-    if input.command == ANSWER_HUMAN_QUESTION {
-        require_answerable(database, task_id, input)?;
-    }
-    if !before["permittedCommands"]
-        .as_array()
-        .is_some_and(|commands| commands.contains(&json!(input.command)))
-    {
+    legal(database, &before)?;
+    Ok(Claim::Claimed {
+        guard,
+        hash,
+        command_revision: row.command_revision,
+    })
+}
+
+/// A lifecycle command's claim: a command the task permits, and its revision advanced.
+fn claim_command(
+    database: &mut SuplexDatabase,
+    principal: &Principal,
+    task_id: &str,
+    input: &TaskCommandBody,
+) -> DatabaseResult<Claim> {
+    if input.command == ANSWER_HUMAN_QUESTION && principal.answer_grant.is_none() {
+        require_owned(database, principal, task_id)?;
         return Err(fail(
-            "This command is not legal for the current task",
-            409,
-            "illegal_command",
+            "An administrator must let this agent answer questions",
+            403,
+            "answer_grant_required",
         ));
     }
-    // The revision claim is the optimistic lock: a concurrent command on the same revision loses here.
+    let claimed = claim(
+        database,
+        principal,
+        task_id,
+        input,
+        &input.revision,
+        &input.idempotency_key,
+        |database, task| {
+            if input.command == ANSWER_HUMAN_QUESTION {
+                require_answerable(database, task_id, input)?;
+            }
+            if task["permittedCommands"]
+                .as_array()
+                .is_some_and(|commands| commands.contains(&json!(input.command)))
+            {
+                Ok(())
+            } else {
+                Err(fail(
+                    "This command is not legal for the current task",
+                    409,
+                    "illegal_command",
+                ))
+            }
+        },
+    )?;
+    if let Claim::Claimed {
+        command_revision, ..
+    } = &claimed
+    {
+        advance(database, task_id, *command_revision)?;
+    }
+    Ok(claimed)
+}
+
+/// The revision claim is the optimistic lock: a concurrent write on the same revision loses here.
+fn advance(
+    database: &mut SuplexDatabase,
+    task_id: &str,
+    command_revision: i64,
+) -> DatabaseResult<()> {
     let claimed = database.transaction(true, |database| {
         Ok(database.connection().execute(
             "UPDATE suplex_tasks SET command_revision = command_revision + 1 WHERE id = ?1 AND command_revision = ?2",
-            params![task_id, row.command_revision],
+            params![task_id, command_revision],
         )?)
     })?;
     if claimed != 1 {
         return Err(stale());
     }
-    Ok(Claim::Claimed { guard, hash })
+    Ok(())
 }
 
 /// The answer names the current plain question; the board's check decides it.
@@ -2525,25 +2580,20 @@ fn finish(
     principal: &Principal,
     task_id: &str,
     result_task_id: &str,
-    input: &TaskCommandBody,
+    idempotency_key: &str,
     hash: &str,
+    action: &str,
 ) -> DatabaseResult<Value> {
     let now = Utc::now();
     let result = projection(database, principal, result_task_id)?;
     database.transaction(false, |database| {
         database.connection().execute(
             "INSERT INTO suplex_hermes_task_command_receipts (agent_id, task_id, idempotency_key, request_hash, result_json, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-            params![principal.agent_id, task_id, input.idempotency_key, hash, crate::shared::js_json::stringify(&result), rfc3339_millis(now)],
+            params![principal.agent_id, task_id, idempotency_key, hash, crate::shared::js_json::stringify(&result), rfc3339_millis(now)],
         )?;
         Ok(())
     })?;
-    audit(
-        database,
-        principal,
-        command_audit(&input.command),
-        task_id,
-        now,
-    )?;
+    audit(database, principal, action, task_id, now)?;
     Ok(result)
 }
 
@@ -2763,11 +2813,12 @@ pub async fn command(
     task_id: &str,
     input: &TaskCommandBody,
 ) -> DatabaseResult<Value> {
-    let (guard, hash) =
-        match state.with_database(|database| claim(database, principal, task_id, input))? {
-            Claim::Replay(result) => return Ok(result),
-            Claim::Claimed { guard, hash } => (guard, hash),
-        };
+    let claimed =
+        state.with_database(|database| claim_command(database, principal, task_id, input))?;
+    let (guard, hash) = match claimed {
+        Claim::Replay(result) => return Ok(result),
+        Claim::Claimed { guard, hash, .. } => (guard, hash),
+    };
     let mut result_task_id = task_id.to_owned();
     match input.command.as_str() {
         "archive_task" => {
@@ -2819,7 +2870,113 @@ pub async fn command(
         _ => state.with_database(|database| apply(database, principal, task_id, input))?,
     }
     let result = state.with_database(|database| {
-        finish(database, principal, task_id, &result_task_id, input, &hash)
+        finish(
+            database,
+            principal,
+            task_id,
+            &result_task_id,
+            &input.idempotency_key,
+            &hash,
+            command_audit(&input.command),
+        )
+    });
+    drop(guard);
+    result
+}
+
+/// The board's detail edit an agent update states. `workflowId` names the
+/// engine and the workflow selection the projection reports.
+fn detail_edit(
+    database: &SuplexDatabase,
+    input: &TaskUpdateBody,
+) -> DatabaseResult<(task_contracts::TaskDetailsBody, Option<Value>)> {
+    let mut selection = None;
+    let mut workflow = None;
+    if let Some(workflow_id) = &input.workflow_id {
+        let Some((name, _, engine)) = workflow_record(database, workflow_id)? else {
+            return Err(TaskError::field(
+                "workflow_not_found",
+                "The selected workflow is not available",
+                "workflowId",
+                workflow_id,
+            )
+            .into());
+        };
+        workflow = Some(
+            crate::coordination::workflows::Workflow::parse(&engine)
+                .ok_or_else(|| workflow_input_failure("The selected workflow does not exist"))?,
+        );
+        let name = crate::identity::auth::js_trim(&name);
+        selection =
+            Some(json!({"workflowId": workflow_id, "workflowName": name, "templateId": null}));
+    }
+    let details = task_contracts::TaskDetailsBody {
+        title: input.title.clone(),
+        description: input.description.clone(),
+        root_profile_id: input.root_profile_id.clone(),
+        worker_profile_id: input.worker_profile_id.clone(),
+        delivery_target: input.delivery_target,
+        run_project_tests: input.run_project_tests,
+        visual_evidence: input.visual_evidence.clone(),
+        workflow,
+        advisor_profile_ids: input.advisor_profile_ids.clone(),
+    };
+    Ok((details, selection))
+}
+
+/// `PATCH /api/agent/tasks/{taskId}`: the board's detail edit of a backlog or
+/// queued task, under the command revision and receipt. A refused edit keeps
+/// the revision and writes no receipt or audit event.
+pub fn update(
+    database: &mut SuplexDatabase,
+    principal: &Principal,
+    task_id: &str,
+    input: &TaskUpdateBody,
+) -> DatabaseResult<Value> {
+    // The guarded edit decides legality; a refusal rolls back the revision.
+    let claimed = claim(
+        database,
+        principal,
+        task_id,
+        input,
+        &input.revision,
+        &input.idempotency_key,
+        |_, _| Ok(()),
+    )?;
+    let (guard, hash, command_revision) = match claimed {
+        Claim::Replay(result) => return Ok(result),
+        Claim::Claimed {
+            guard,
+            hash,
+            command_revision,
+        } => (guard, hash, command_revision),
+    };
+    let (details, selection) = detail_edit(database, input)?;
+    let now = Utc::now();
+    let result = database.transaction(true, |database| {
+        advance(database, task_id, command_revision)?;
+        commands::update_task_details(database, task_id, &details, now).map_err(|error| {
+            match error.downcast_ref::<TaskError>() {
+                Some(TaskError::Failure { status: 409, .. }) => fail(
+                    "Only tasks in the backlog or queue can be edited. Open archived tasks before editing them.",
+                    409,
+                    "illegal_command",
+                ),
+                _ => error,
+            }
+        })?;
+        if let Some(selection) = &selection {
+            repository::select_workflow(database, task_id, selection)?;
+        }
+        finish(
+            database,
+            principal,
+            task_id,
+            task_id,
+            &input.idempotency_key,
+            &hash,
+            "task_details_updated",
+        )
     });
     drop(guard);
     result
@@ -3249,13 +3406,13 @@ mod retirement_admission_tests {
         let first = fixture
             .server
             .state
-            .with_database(|database| claim(database, &principal, id, &command))
+            .with_database(|database| claim_command(database, &principal, id, &command))
             .unwrap();
         assert!(matches!(first, Claim::Claimed { .. }));
         let Err(replay) = fixture
             .server
             .state
-            .with_database(|database| claim(database, &principal, id, &command))
+            .with_database(|database| claim_command(database, &principal, id, &command))
         else {
             panic!("same key admitted twice");
         };
@@ -3264,7 +3421,7 @@ mod retirement_admission_tests {
         let Err(loser) = fixture
             .server
             .state
-            .with_database(|database| claim(database, &principal, id, &other))
+            .with_database(|database| claim_command(database, &principal, id, &other))
         else {
             panic!("stale revision admitted");
         };

@@ -377,6 +377,19 @@ pub fn update_details(
     })
 }
 
+/// The agent workflow selection a task reports after an edit names its workflow.
+pub fn select_workflow(
+    database: &SuplexDatabase,
+    task_id: &str,
+    selection: &Value,
+) -> DatabaseResult<()> {
+    database.connection().execute(
+        "UPDATE suplex_tasks SET configuration_json = json_set(configuration_json, '$.hermesSelection', json(?1)) WHERE id = ?2",
+        params![selection.to_string(), task_id],
+    )?;
+    Ok(())
+}
+
 pub fn rename(
     database: &mut SuplexDatabase,
     task_id: &str,

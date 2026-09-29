@@ -299,7 +299,13 @@ try {
         const row = fixture.database.prepare("SELECT s.id AS sessionId,t.id AS turnId FROM suplex_task_sessions s JOIN suplex_task_turns t ON t.session_id = s.id AND t.generation = s.generation WHERE s.task_id = ? AND s.kind = 'worker' AND s.is_current = 1 ORDER BY t.created_at DESC LIMIT 1").get(task.id) as { sessionId: string; turnId: string } | undefined;
         ok(row, "The paused Worker has a durable turn");
         const directory = join(dirname(fixture.config.databasePath), "runtime", "task-sessions", row.sessionId);
-        const record = JSON.parse(await readFile(join(directory, "turn.json"), "utf8")) as { pid?: number; processIdentity?: { startTime?: string } };
+        // The fake Worker pauses before the host finishes writing turn.json.
+        let record: { pid?: number; processIdentity?: { startTime?: string } } | undefined;
+        for (let attempt = 0; !record && attempt < 100; attempt += 1) {
+          record = await readFile(join(directory, "turn.json"), "utf8").then(JSON.parse).catch(() => undefined);
+          if (!record) await setTimeout(100);
+        }
+        ok(record, "The paused Worker has a turn record");
         ok(record.pid && record.processIdentity?.startTime, "The paused Worker has a native process identity");
         const dispatches = (await readdir(directory)).filter(name => /^dispatch-.*\.json$/.test(name)).length;
         return { sessionId: row.sessionId, turnId: row.turnId, pid: record.pid!, startTime: record.processIdentity.startTime!, dispatches };

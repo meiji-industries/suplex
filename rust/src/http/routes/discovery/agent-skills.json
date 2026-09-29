@@ -3,7 +3,7 @@
   "skills": [
     {
       "name": "suplex",
-      "summary": "Work with Suplex tasks as a paired agent: discover capabilities, projects, workflows, and templates; create backlog tasks idempotently; set their prerequisites; poll them; and send lifecycle commands.",
+      "summary": "Work with Suplex tasks as a paired agent: discover capabilities, projects, workflows, and templates; create backlog tasks idempotently; update backlog and queued tasks; set their prerequisites; poll them; and send lifecycle commands.",
       "source": "skills/suplex",
       "instructions": "skills/suplex/SKILL.md",
       "install": "docs/agent-skill.md",
@@ -22,6 +22,7 @@
             "suplex_get_task",
             "suplex_get_task_delivery",
             "suplex_create_task",
+            "suplex_update_task",
             "suplex_set_task_dependencies",
             "suplex_command_task"
           ],
@@ -42,6 +43,7 @@
             "suplex_get_task",
             "suplex_get_task_delivery",
             "suplex_create_task",
+            "suplex_update_task",
             "suplex_set_task_dependencies",
             "suplex_command_task"
           ],

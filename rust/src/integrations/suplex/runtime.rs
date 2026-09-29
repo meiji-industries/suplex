@@ -110,6 +110,13 @@ impl SuplexMcpRuntime {
                     }
                 }
             }
+            "suplex_update_task" => {
+                let (task_id, body) = super::update_arguments(args)?;
+                let task = state.with_database(|database| {
+                    agent_api::update(database, principal, &task_id, &body)
+                })?;
+                Ok((200, task))
+            }
             "suplex_set_task_dependencies" => {
                 let (task_id, body) = super::dependencies_arguments(args)?;
                 let result = state.with_database(|database| {

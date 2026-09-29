@@ -1,7 +1,7 @@
 ---
 name: suplex
 version: 1
-description: Work with Suplex tasks as a paired external agent. Use when the person you work for asks to create, find, check, or command a task in Suplex, or to confirm this client's Suplex pairing.
+description: Work with Suplex tasks as a paired external agent. Use when the person you work for asks to create, find, check, change, or command a task in Suplex, or to confirm this client's Suplex pairing.
 ---
 
 # Suplex
@@ -17,7 +17,7 @@ Two transports, same API:
   Check for tools named
   `suplex_whoami`, `suplex_capabilities`, `suplex_list_workflows`,
   `suplex_list_templates`, `suplex_list_tasks`, `suplex_get_task`,
-  `suplex_get_task_delivery`, `suplex_create_task`,
+  `suplex_get_task_delivery`, `suplex_create_task`, `suplex_update_task`,
   `suplex_set_task_dependencies`, `suplex_command_task`.
 - **Otherwise use `suplex_client.py`** in this directory. It is standard
   library only and speaks the same routes.
@@ -261,6 +261,32 @@ Failures worth handling:
 - `409 command_in_progress`: a command is running. Wait and re-read.
 - `409 illegal_command` / `409 task_unavailable`: the command does not apply
   to this task now. Report it; do not force it.
+
+## Updating a task
+
+`PATCH /api/agent/tasks/{taskId}` (MCP `suplex_update_task`) changes a task in
+the backlog or the queue. Send the current `revision`, an `idempotencyKey`,
+and only the fields to change: `title`, `description`, `workflowId`,
+`rootProfileId`, `workerProfileId`, `advisorProfileIds`, `deliveryTarget`,
+`runProjectTests`, or `visualEvidence`. An omitted field keeps its value. The
+response is the task with its new revision.
+
+`advisorProfileIds` is the complete Advisor selection. `{}` returns each role
+(`reviewer`, `planner_a`, `planner_b`, `rater`) to its default. Name only roles
+that the task's resulting workflow has, and only Coordinator profiles.
+
+A queued task stays queued with the same prerequisites. To hold it while it
+changes, send `disarm_task`, update it, then send `start_task` to queue it
+again. Send `start_task` only when the person you work for asked for the task
+to be queued.
+
+```python
+task = client.get_task(task_id)
+task = client.update_task(task_id, task["revision"], advisorProfileIds={"rater": profile_id})
+```
+
+Other states return `409 illegal_command`. A rejected profile or workflow
+returns `422` with `field`, `value`, and `reason`, and keeps the revision.
 
 ## Reading approval, blocked, waiting_human, and stale answers
 

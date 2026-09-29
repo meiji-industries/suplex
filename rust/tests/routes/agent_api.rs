@@ -217,6 +217,35 @@ pub(crate) mod tests {
         }
     }
 
+    /// Make a created task Review and repair of pull request 7, the workflow
+    /// with a Rater. Creating one directly would observe GitHub.
+    pub(crate) fn review_and_repair(server: &Server, task_id: &str) {
+        server.state.with_database(|database| {
+            database.connection().execute(
+                "UPDATE suplex_task_controls SET workflow = 'refine_pull_request', delivery_target = 'merged' WHERE task_id = ?1",
+                [task_id],
+            ).unwrap();
+            database.connection().execute(
+                "UPDATE suplex_tasks SET configuration_json = json_set(configuration_json, '$.source', json('{\"kind\":\"pull_request\",\"number\":7}'), '$.runProjectTests', json('true')) WHERE id = ?1",
+                [task_id],
+            ).unwrap();
+        });
+    }
+
+    /// The profile a task stores for an Advisor role.
+    pub(crate) fn stored_advisor(server: &Server, task_id: &str, role: &str) -> Option<String> {
+        server.state.with_database(|database| {
+            database
+                .connection()
+                .query_row(
+                    "SELECT json_extract(advisor_profiles_json, '$.' || ?2 || '.profileId') FROM suplex_task_controls WHERE task_id = ?1",
+                    params![task_id, role],
+                    |row| row.get(0),
+                )
+                .unwrap()
+        })
+    }
+
     /// Ports `tests/agent-machine-discovery.integration.test.ts`: the public map, pairing, and the contract agree.
     #[tokio::test]
     async fn a_paired_agent_follows_the_public_map_without_the_web_application() {
@@ -1097,6 +1126,196 @@ pub(crate) mod tests {
             (422, Some("advisor_profile_not_found")),
             "{missing}"
         );
+    }
+
+    /// A backlog or queued task takes a detail update under its revision and
+    /// receipt. Disarm, update, and start hold a queued task while it changes.
+    #[tokio::test]
+    async fn updates_change_backlog_and_queued_tasks_under_revisions_and_receipts() {
+        let agent = agent().await;
+        let prerequisite = agent.create("Update prerequisite", "update-prerequisite").await;
+        let prerequisite_id = prerequisite["id"].as_str().unwrap();
+        let (status, queued) = agent
+            .call(reqwest::Method::POST, "/api/agent/tasks", Some(json!({"projectId": "project_api", "title": "Update target", "idempotencyKey": "update-target", "dependsOn": [prerequisite_id], "queue": true})))
+            .await;
+        assert_eq!((status, queued["status"].as_str()), (201, Some("queued")), "{queued}");
+        let id = queued["id"].as_str().unwrap().to_owned();
+        review_and_repair(&agent.server, &id);
+        let path = format!("/api/agent/tasks/{id}");
+        let update = |body: Value| agent.call(reqwest::Method::PATCH, &path, Some(body));
+        let commands = format!("{path}/commands");
+        let command = |body: Value| agent.call(reqwest::Method::POST, &commands, Some(body));
+        let audits = || -> i64 {
+            agent.server.state.with_database(|database| database.connection().query_row("SELECT COUNT(*) FROM suplex_audit_events WHERE action = 'task_details_updated' AND actor_agent_id = ?1", [&agent.agent_id], |row| row.get(0)).unwrap())
+        };
+        let (_, current) = agent.call(reqwest::Method::GET, &path, None).await;
+
+        let body = json!({"revision": current["revision"], "idempotencyKey": "update-001", "advisorProfileIds": {"rater": "profile_native_root"}});
+        let (status, updated) = update(body.clone()).await;
+        assert_eq!((status, updated["status"].as_str()), (200, Some("queued")), "{updated}");
+        assert_ne!(updated["revision"], current["revision"]);
+        assert_eq!(
+            (updated["dependsOn"].clone(), updated["queue"].clone()),
+            (current["dependsOn"].clone(), current["queue"].clone())
+        );
+        assert_eq!(stored_advisor(&agent.server, &id, "rater").as_deref(), Some("profile_native_root"));
+        assert_eq!(audits(), 1);
+        assert_eq!(update(body).await, (200, updated.clone()), "a repeated request replays its result");
+        let (status, conflict) = update(json!({"revision": updated["revision"], "idempotencyKey": "update-001", "title": "Other"})).await;
+        assert_eq!((status, conflict["code"].as_str()), (409, Some("idempotency_conflict")));
+        let (status, stale) = update(json!({"revision": current["revision"], "idempotencyKey": "update-002", "title": "Stale"})).await;
+        assert_eq!((status, stale["code"].as_str()), (412, Some("revision_stale")));
+        assert_eq!(audits(), 1);
+
+        let (status, refused) = update(json!({"revision": updated["revision"], "idempotencyKey": "update-003", "advisorProfileIds": {"rater": "profile_native_worker"}})).await;
+        assert_eq!(
+            (status, refused["code"].as_str(), refused["field"].as_str(), refused["value"].as_str()),
+            (422, Some("advisor_profile_not_found"), Some("advisorProfileIds.rater"), Some("profile_native_worker")),
+            "{refused}"
+        );
+        let (status, refused) = update(json!({"revision": updated["revision"], "idempotencyKey": "update-004", "workflowId": "workflow_missing"})).await;
+        assert_eq!(
+            (status, refused["code"].as_str(), refused["field"].as_str()),
+            (422, Some("workflow_not_found"), Some("workflowId")),
+            "{refused}"
+        );
+        let (status, empty) = update(json!({"revision": updated["revision"], "idempotencyKey": "update-005"})).await;
+        assert_eq!((status, empty["code"].as_str()), (400, Some("request_invalid")));
+        assert_eq!(
+            agent.call(reqwest::Method::GET, &path, None).await.1["revision"],
+            updated["revision"],
+            "a refused update keeps the revision"
+        );
+
+        let (status, disarmed) = command(json!({"command": "disarm_task", "revision": updated["revision"], "idempotencyKey": "update-disarm"})).await;
+        assert_eq!((status, disarmed["status"].as_str()), (200, Some("backlog")), "{disarmed}");
+        let (status, changed) = update(json!({"revision": disarmed["revision"], "idempotencyKey": "update-006", "title": "Update target changed", "advisorProfileIds": {"rater": "profile_native_independent"}})).await;
+        assert_eq!(
+            (status, changed["status"].as_str(), changed["title"].as_str()),
+            (200, Some("backlog"), Some("Update target changed")),
+            "{changed}"
+        );
+        let (status, rearmed) = command(json!({"command": "start_task", "revision": changed["revision"], "idempotencyKey": "update-rearm"})).await;
+        assert_eq!((status, rearmed["status"].as_str()), (200, Some("queued")), "{rearmed}");
+        assert_eq!(
+            (rearmed["dependsOn"].clone(), rearmed["queue"].clone()),
+            (current["dependsOn"].clone(), current["queue"].clone())
+        );
+        assert_eq!(stored_advisor(&agent.server, &id, "rater").as_deref(), Some("profile_native_independent"));
+
+        let (status, reviewed) = update(json!({"revision": rearmed["revision"], "idempotencyKey": "update-007", "workflowId": "workflow_native_independent_review", "advisorProfileIds": {"reviewer": "profile_native_root"}})).await;
+        assert_eq!(
+            (status, reviewed["workflow"]["id"].as_str(), reviewed["workflow"]["engine"].as_str()),
+            (200, Some("workflow_native_independent_review"), Some("independent_review")),
+            "{reviewed}"
+        );
+        assert_eq!(stored_advisor(&agent.server, &id, "reviewer").as_deref(), Some("profile_native_root"));
+        assert_eq!(stored_advisor(&agent.server, &id, "rater"), None);
+        assert_eq!(audits(), 3);
+
+        let prerequisite_path = format!("/api/agent/tasks/{prerequisite_id}");
+        let (status, started) = agent.call(reqwest::Method::POST, &format!("{prerequisite_path}/commands"), Some(json!({"command": "start_task", "revision": prerequisite["revision"], "idempotencyKey": "update-start"}))).await;
+        assert_eq!((status, started["status"].as_str()), (200, Some("active")), "{started}");
+        let (status, active) = agent.call(reqwest::Method::PATCH, &prerequisite_path, Some(json!({"revision": started["revision"], "idempotencyKey": "update-active", "title": "Too late"}))).await;
+        assert_eq!((status, active["code"].as_str()), (409, Some("illegal_command")), "{active}");
+        assert_eq!(audits(), 3);
+
+        let (outsider, _) = pair(&agent.server, "Outside agent", &["project_api_2"]);
+        let (status, hidden) = agent.call_as(&outsider, reqwest::Method::PATCH, &path, Some(json!({"revision": reviewed["revision"], "idempotencyKey": "update-outside", "title": "Outside"}))).await;
+        assert_eq!((status, hidden["code"].as_str()), (404, Some("not_found")), "{hidden}");
+    }
+
+    /// `suplex_update_task` reaches the same update over the stdio bridge and OAuth `/mcp`.
+    #[tokio::test]
+    async fn mcp_updates_a_task_over_the_bridge_and_http() {
+        use crate::integrations::suplex::{
+            self as mcp,
+            bridge::{Bridge, Settings},
+        };
+        let agent = agent().await;
+        let arguments = |value: Value| value.as_object().unwrap().clone();
+        let bridge = Bridge::new(Settings {
+            base_url: agent.server.base.clone(),
+            credential: agent.credential.clone(),
+        });
+        let task = agent.create("MCP update", "mcp-update-001").await;
+        let id = task["id"].as_str().unwrap().to_owned();
+        let updated = bridge
+            .result("suplex_update_task", &arguments(json!({"taskId": id, "revision": task["revision"], "idempotencyKey": "bridge-update-1", "title": "Updated over stdio", "workflowId": "workflow_native_independent_review", "advisorProfileIds": {"reviewer": "profile_native_root"}})))
+            .await
+            .structured_content
+            .unwrap();
+        let (_, read) = agent.call(reqwest::Method::GET, &format!("/api/agent/tasks/{id}"), None).await;
+        assert_eq!(
+            (updated["status"].as_u64(), &updated["body"]["revision"]),
+            (Some(200), &read["revision"]),
+            "{updated}"
+        );
+        assert_eq!(
+            (read["title"].as_str(), read["workflow"]["engine"].as_str()),
+            (Some("Updated over stdio"), Some("independent_review"))
+        );
+        assert_eq!(stored_advisor(&agent.server, &id, "reviewer").as_deref(), Some("profile_native_root"));
+        let stale = bridge
+            .result("suplex_update_task", &arguments(json!({"taskId": id, "revision": task["revision"], "idempotencyKey": "bridge-update-2", "title": "Stale"})))
+            .await
+            .structured_content
+            .unwrap();
+        assert_eq!(stale, json!({"status": 412, "body": {"error": "Task revision is stale", "code": "revision_stale"}}));
+
+        let server = &agent.server;
+        let client = crate::http::routes::oauth::tests::register(server, "Update client").await;
+        let verifier = "u".repeat(43);
+        let code = crate::http::routes::oauth::tests::authorize(server, &client, &verifier, "update-state").await;
+        let token = crate::http::routes::oauth::tests::exchange(server, &client, &code, &verifier).await.1["access_token"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let bearer = format!("Bearer {token}");
+        let rpc = async |id: u64, method: &str, params: Value| {
+            let response = server
+                .request(
+                    reqwest::Method::POST,
+                    "/mcp",
+                    &[
+                        ("authorization", bearer.as_str()),
+                        ("accept", "application/json, text/event-stream"),
+                        ("mcp-protocol-version", "2025-06-18"),
+                    ],
+                    Some(json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params})),
+                )
+                .await;
+            assert_eq!(response.status(), 200);
+            response.json::<Value>().await.unwrap()
+        };
+        rpc(1, "initialize", json!({"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "test", "version": "1"}})).await;
+        let listed = rpc(2, "tools/list", json!({})).await;
+        assert!(listed["result"]["tools"].as_array().unwrap().iter().any(|tool| tool["name"] == "suplex_update_task"));
+        let updated = rpc(3, "tools/call", json!({"name": "suplex_update_task", "arguments": {"taskId": id, "revision": read["revision"], "idempotencyKey": "oauth-update-1", "advisorProfileIds": {}}})).await;
+        let (_, reread) = agent.call(reqwest::Method::GET, &format!("/api/agent/tasks/{id}"), None).await;
+        assert_eq!(
+            (
+                updated["result"]["structuredContent"]["status"].as_u64(),
+                &updated["result"]["structuredContent"]["body"]["revision"]
+            ),
+            (Some(200), &reread["revision"]),
+            "{updated}"
+        );
+        assert_ne!(stored_advisor(&agent.server, &id, "reviewer").as_deref(), Some("profile_native_root"));
+        let refused = rpc(4, "tools/call", json!({"name": "suplex_update_task", "arguments": {"taskId": id, "revision": reread["revision"], "idempotencyKey": "oauth-update-2", "workerProfileId": "profile_missing"}})).await;
+        assert_eq!(
+            refused["result"]["structuredContent"],
+            json!({"status": 422, "body": {"error": "The selected agent profile does not exist", "code": "worker_profile_not_found"}})
+        );
+
+        let openapi: Value = serde_json::from_str(include_str!("../../src/http/routes/agent_api_openapi.json")).unwrap();
+        let body = &openapi["paths"]["/api/agent/tasks/{taskId}"]["patch"]["requestBody"]["content"]["application/json"]["schema"]["properties"];
+        let mut expected = body.as_object().unwrap().keys().cloned().chain(["taskId".to_owned()]).collect::<Vec<_>>();
+        let schema = serde_json::to_value(&mcp::tool("suplex_update_task").unwrap().input_schema).unwrap();
+        let mut actual = schema["properties"].as_object().unwrap().keys().cloned().collect::<Vec<_>>();
+        expected.sort();
+        actual.sort();
+        assert_eq!(actual, expected, "the MCP tool takes the HTTP body and the task ID");
     }
 
     #[tokio::test]

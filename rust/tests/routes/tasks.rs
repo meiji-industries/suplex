@@ -1393,6 +1393,119 @@ mod tests {
         drop(state);
         fs::remove_dir_all(root).unwrap();
     }
+    /// A backlog or queued task takes edited details and Advisors, validated
+    /// against the edited workflow. Other states and invalid fields keep the task.
+    #[tokio::test]
+    async fn backlog_and_queued_tasks_change_details_and_advisors() {
+        use crate::http::routes::agent_api::tests::{agent, review_and_repair, stored_advisor};
+        let agent = agent().await;
+        let server = &agent.server;
+        let cookie = Some(server.admin_cookie.as_str());
+        let prerequisite = agent.create("Board prerequisite", "board-edit-prerequisite").await;
+        let task = agent.create("Board edit", "board-edit-001").await;
+        let id = task["id"].as_str().unwrap().to_owned();
+        review_and_repair(server, &id);
+        let edit = |id: &str, body: Value| {
+            let path = format!("/api/tasks/{id}");
+            async move { server.send(reqwest::Method::PATCH, &path, cookie, Some(body)).await }
+        };
+        let rater = |task: &Value| task["advisorProfiles"]["rater"]["profileId"].clone();
+        let audits = || -> i64 {
+            server.state.with_database(|database| database.connection().query_row("SELECT COUNT(*) FROM suplex_audit_events WHERE action = 'task_details_updated' AND actor_user_id = (SELECT id FROM suplex_users WHERE role = 'admin')", [], |row| row.get(0)).unwrap())
+        };
+        let alternate: String = server.state.with_database(|database| database.connection().query_row("SELECT alt_profile_id FROM suplex_projects WHERE id = 'project_api'", [], |row| row.get(0)).unwrap());
+        assert_ne!(alternate, "profile_native_root");
+
+        let (status, edited) = edit(&id, json!({"advisorProfileIds": {"rater": "profile_native_root"}})).await;
+        assert_eq!((status, rater(&edited)), (200, json!("profile_native_root")), "{edited}");
+        let (_, read) = server.send(reqwest::Method::GET, &format!("/api/tasks/{id}"), cookie, None).await;
+        assert_eq!(rater(&read), json!("profile_native_root"));
+        assert_eq!(audits(), 1);
+        let (status, renamed) = edit(&id, json!({"title": "Board edit renamed"})).await;
+        assert_eq!(
+            (status, renamed["title"].as_str(), rater(&renamed)),
+            (200, Some("Board edit renamed"), json!("profile_native_root")),
+            "an omitted Advisor selection keeps the stored Advisors"
+        );
+        let (status, cleared) = edit(&id, json!({"advisorProfileIds": {}})).await;
+        assert_eq!(
+            (status, rater(&cleared)),
+            (200, json!(alternate)),
+            "an empty Advisor selection returns each role to its default"
+        );
+        assert_eq!(audits(), 3);
+
+        for (body, code, field) in [
+            (json!({"advisorProfileIds": {"rater": "profile_missing"}}), "advisor_profile_not_found", "advisorProfileIds.rater"),
+            (json!({"advisorProfileIds": {"rater": "profile_native_worker"}}), "advisor_profile_not_found", "advisorProfileIds.rater"),
+            (json!({"advisorProfileIds": {"reviewer": "profile_native_root"}}), "advisor_role_not_in_workflow", "advisorProfileIds.reviewer"),
+            (json!({"rootProfileId": "profile_native_worker"}), "root_profile_not_found", "rootProfileId"),
+        ] {
+            let (status, refused) = edit(&id, body.clone()).await;
+            assert_eq!(
+                (status, refused["code"].as_str(), refused["findings"][0]["field"].as_str()),
+                (422, Some(code), Some(field)),
+                "{body}: {refused}"
+            );
+            assert_eq!(stored_advisor(server, &id, "rater"), Some(alternate.clone()));
+        }
+        assert_eq!(audits(), 3);
+
+        let (status, reviewed) = edit(&id, json!({"workflow": "independent_review", "advisorProfileIds": {"reviewer": "profile_native_root"}})).await;
+        assert_eq!(
+            (status, reviewed["workflow"].as_str(), reviewed["advisorProfiles"]["reviewer"]["profileId"].as_str()),
+            (200, Some("independent_review"), Some("profile_native_root")),
+            "{reviewed}"
+        );
+        assert!(reviewed["advisorProfiles"].get("rater").is_none());
+        let (status, refused) = edit(&id, json!({"workflow": "standard", "advisorProfileIds": {"reviewer": "profile_native_root"}})).await;
+        assert_eq!(
+            (status, refused["code"].as_str()),
+            (422, Some("advisor_role_not_in_workflow")),
+            "the Advisors must belong to the edited workflow: {refused}"
+        );
+        assert_eq!(stored_advisor(server, &id, "reviewer").as_deref(), Some("profile_native_root"));
+        assert_eq!(audits(), 4);
+
+        let (status, queued) = agent
+            .call(reqwest::Method::POST, "/api/agent/tasks", Some(json!({"projectId": "project_api", "title": "Board queued edit", "idempotencyKey": "board-edit-queued", "dependsOn": [prerequisite["id"]], "queue": true})))
+            .await;
+        assert_eq!((status, queued["status"].as_str()), (201, Some("queued")), "{queued}");
+        let queued_id = queued["id"].as_str().unwrap().to_owned();
+        review_and_repair(server, &queued_id);
+        let (status, edited) = edit(&queued_id, json!({"advisorProfileIds": {"rater": "profile_native_root"}})).await;
+        assert_eq!(
+            (status, edited["status"].as_str(), rater(&edited), edited["dependsOn"].clone()),
+            (200, Some("queued"), json!("profile_native_root"), json!([prerequisite["id"]])),
+            "{edited}"
+        );
+        let (_, read) = server.send(reqwest::Method::GET, &format!("/api/tasks/{queued_id}"), cookie, None).await;
+        assert_eq!((read["status"].as_str(), rater(&read)), (Some("queued"), json!("profile_native_root")));
+        assert_eq!(audits(), 5);
+
+        let set = |sql: &str| {
+            server.state.with_database(|database| database.connection().execute(sql, [&queued_id]).unwrap());
+        };
+        for state in ["active", "waiting_human", "delivered", "cancelled", "archived"] {
+            match state {
+                "archived" => {
+                    set("UPDATE suplex_task_controls SET status = 'backlog', human_question = NULL, human_question_id = NULL WHERE task_id = ?1");
+                    set("UPDATE suplex_tasks SET archived_at = '2026-01-01T00:00:00.000Z' WHERE id = ?1");
+                }
+                "waiting_human" => set("UPDATE suplex_task_controls SET status = 'waiting_human', human_question = 'Which one?', human_question_id = 'question_board_edit' WHERE task_id = ?1"),
+                _ => set(&format!("UPDATE suplex_task_controls SET status = '{state}', human_question = NULL, human_question_id = NULL WHERE task_id = ?1")),
+            }
+            let refused = edit(&queued_id, json!({"advisorProfileIds": {"rater": "profile_native_independent"}})).await;
+            assert_eq!(
+                refused,
+                (409, json!({"error": "Only tasks in the backlog can be edited. Open archived tasks before editing them."})),
+                "{state}"
+            );
+            assert_eq!(stored_advisor(server, &queued_id, "rater").as_deref(), Some("profile_native_root"), "{state}");
+        }
+        assert_eq!(audits(), 5);
+    }
+
     #[tokio::test]
     async fn frozen_full_task_response_matches_typescript_source_revision() {
         let root =

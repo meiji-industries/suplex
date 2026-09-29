@@ -33,10 +33,13 @@ Both the HTTP and stdio transports expose the same tools:
 | `suplex_get_task` | Read a task in a granted project or report that a known revision is unchanged. |
 | `suplex_get_task_delivery` | Read the delivery and blocker projection. |
 | `suplex_create_task` | Create a backlog or queued task with an idempotency key. |
+| `suplex_update_task` | Change the details and Advisor profiles of a backlog or queued task with the current revision. |
 | `suplex_set_task_dependencies` | Replace the prerequisites of a task. |
 | `suplex_command_task` | Apply a lifecycle command with the current revision. |
 
 Suplex re-reads the agent, administrator authority, company access, and project grants for each access or refresh. Revocation takes effect without restarting Suplex. Access tokens apply only to `/mcp`.
+
+`suplex_update_task` changes a backlog or queued task directly. A queued task stays queued with the same prerequisites. To hold a queued task while it changes, send `disarm_task` with `suplex_command_task`, update the task, then send `start_task` to queue it again. An empty `advisorProfileIds` object returns each Advisor role to its default. Other task states return `illegal_command`.
 
 Task reads cover every task in the approved projects. Lifecycle commands and dependency changes remain limited to tasks that the connected agent created.
 

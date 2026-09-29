@@ -56,7 +56,7 @@ pub(crate) fn delivery(state: &AppState) -> Option<AgentDelivery> {
 /// `agentApiCapabilities`: the reported surface is the registered surface.
 /// Answers appear only for an agent that holds the answer grant.
 pub fn capabilities(agent_delivery: bool, answers: bool) -> Value {
-    let mut autonomous = vec!["create_backlog_task", "create_queued_task"];
+    let mut autonomous = vec!["create_backlog_task", "create_queued_task", "update_task"];
     autonomous.extend(agent_api::task_commands(answers));
     if agent_delivery {
         autonomous.extend(DELIVERY_COMMANDS);
@@ -103,7 +103,10 @@ pub fn router() -> Router<AppState> {
                     .post(create)
                     .layer(DefaultBodyLimit::max(MAX_TASK_REQUEST_BYTES)),
             )
-            .route(&format!("{prefix}/tasks/{{task_id}}"), get(read))
+            .route(
+                &format!("{prefix}/tasks/{{task_id}}"),
+                get(read).patch(update),
+            )
             .route(
                 &format!("{prefix}/tasks/{{task_id}}/commands"),
                 post(command),
@@ -401,6 +404,26 @@ async fn command(
         wake(&state, &id);
     }
     respond(result, StatusCode::OK, true)
+}
+
+async fn update(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+    body: Result<Bytes, BytesRejection>,
+) -> Response {
+    let body = attempt!(parsed_body(&headers, body, true));
+    let principal = attempt!(bearer(&state, &headers, true));
+    let id = attempt!(task_id(&id, true));
+    let request = attempt!(validated(
+        contracts::TaskUpdateBody::parse(body.as_ref()),
+        true
+    ));
+    respond(
+        state.with_database(|database| agent_api::update(database, &principal, &id, &request)),
+        StatusCode::OK,
+        true,
+    )
 }
 
 async fn list(

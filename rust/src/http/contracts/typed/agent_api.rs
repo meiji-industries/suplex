@@ -172,6 +172,32 @@ pub struct TaskCreateBody {
     pub extra: Map<String, Value>,
 }
 
+/// A detail edit of a backlog or queued task. An omitted field keeps its stored value.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TaskUpdateBody {
+    pub revision: String,
+    pub idempotency_key: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub workflow_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub root_profile_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub worker_profile_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub advisor_profile_ids: Option<AdvisorProfileIds>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub delivery_target: Option<DeliveryTarget>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub run_project_tests: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub visual_evidence: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TaskDependenciesBody {
@@ -437,6 +463,55 @@ impl Contract for TaskCreateBody {
             fields.fail("custom", ".");
         }
         fields.passthrough()
+    }
+}
+
+const TASK_UPDATE_FIELDS: [&str; 9] = [
+    "title",
+    "description",
+    "workflowId",
+    "rootProfileId",
+    "workerProfileId",
+    "advisorProfileIds",
+    "deliveryTarget",
+    "runProjectTests",
+    "visualEvidence",
+];
+
+/// An update names at least one setting.
+fn task_update_fields(fields: Fields) -> ContractResult<Value> {
+    let mut fields = fields
+        .req("revision", text(1, 256))
+        .req("idempotencyKey", trimmed(1, 128))
+        .opt("title", trimmed(1, MAX))
+        .opt("description", trimmed(0, MAX))
+        .opt("workflowId", text(1, 256))
+        .opt("rootProfileId", text(1, 256))
+        .opt("workerProfileId", text(1, 256))
+        .opt("advisorProfileIds", advisors)
+        .opt("deliveryTarget", choice::<DeliveryTarget>)
+        .opt("runProjectTests", flag)
+        .opt("visualEvidence", one_of(VISUAL_EVIDENCE));
+    fields.strict_keys();
+    if fields.refinable()
+        && TASK_UPDATE_FIELDS
+            .iter()
+            .all(|name| fields.raw(name).is_none())
+    {
+        fields.fail("custom", ".");
+    }
+    fields.finish()
+}
+
+impl Contract for TaskUpdateBody {
+    fn schema(input: Option<&Value>) -> ContractResult<Value> {
+        task_update_fields(Fields::new(input)?)
+    }
+}
+
+impl Contract for TaskTool<TaskUpdateBody> {
+    fn schema(input: Option<&Value>) -> ContractResult<Value> {
+        task_update_fields(Fields::new(input)?.req("taskId", task_id()))
     }
 }
 

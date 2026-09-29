@@ -22,6 +22,7 @@
   "GET /admin/profiles",
   "GET /admin/prompts",
   "GET /admin/providers",
+  "GET /admin/terminal",
   "GET /admin/triggers",
   "GET /admin/workflows",
   "GET /analytics",

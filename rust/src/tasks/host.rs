@@ -156,8 +156,11 @@ pub fn spawn_task_host(
 }
 
 /// Host terminals close with their task: all of them on archive, and the
-/// ones no browser shows once the task has finished.
+/// ones no browser shows once the task has finished or the experiment is off.
 fn close_retired_terminals(database: &SuplexDatabase, host_terminals: &HostTerminals) {
+    if !crate::terminals::host_enabled(database) {
+        host_terminals.close_idle();
+    }
     for task_id in host_terminals.task_ids() {
         if super::repository::archived_or_gone(database, &task_id).unwrap_or(false) {
             host_terminals.close_task(&task_id, false);

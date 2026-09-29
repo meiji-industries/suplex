@@ -25,7 +25,7 @@ test("native task detail supports answering a question and cancelling", { timeou
     await page.getByLabel("Answer", { exact: true }).fill("Use main and preserve local work.");
     await page.getByRole("button", { name: "Answer and continue", exact: true }).click();
     await page.getByRole("region", { name: "Question" }).waitFor({ state: "hidden" });
-    expect((await value.api("GET", `/api/tasks/${task.id}`)).body).toMatchObject({ status: "active" });
+    await expect.poll(async () => (await value.api("GET", `/api/tasks/${task.id}`)).body, { timeout: 10_000 }).toMatchObject({ status: "active" });
     expect(value.database.prepare("SELECT prompt_text FROM suplex_task_turns WHERE session_id = ?").all(root).some(row => String(row.prompt_text).includes("Use main and preserve local work."))).toBe(true);
     await page.getByRole("button", { name: "Task options", exact: true }).click();
     await page.getByRole("menuitem", { name: "Cancel task", exact: true }).click();

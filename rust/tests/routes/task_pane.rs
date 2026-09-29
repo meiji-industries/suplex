@@ -229,29 +229,51 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
-    async fn host_terminals_open_the_shell_without_herdr_and_ignore_a_stale_stored_pane() {
+    async fn host_terminals_open_the_shell_in_the_worktree_without_herdr_and_ignore_a_stale_stored_pane()
+     {
         let mut fixture = fixture();
         fixture.state.herdr = Herdr::new(fixture.root.join("no-herdr").to_string_lossy());
         enable_host_terminals(&fixture.state);
+        let worktree = fixture.root.join("worktree");
         fixture.execute(
-            "UPDATE suplex_task_controls SET shell_pane_id = 'pane-gone' WHERE task_id = ?1",
-            &[&fixture.task_id],
+            "UPDATE suplex_task_controls SET shell_pane_id = 'pane-gone', worktree_json = ?1 WHERE task_id = ?2",
+            &[
+                &json!({"path":worktree,"branch":"task-pane","baseSha":"head","headSha":"head","dirty":false}).to_string(),
+                &fixture.task_id,
+            ],
         );
         let address = fixture.serve().await;
         let shell_id = format!("host-shell-{}", fixture.task_id);
-        let activity: Value = reqwest::Client::new()
-            .get(format!("http://{address}/api/tasks/{}/activity", fixture.task_id))
-            .header("host", "127.0.0.1:4113")
-            .header("cookie", &fixture.cookie)
-            .send()
-            .await
-            .unwrap()
-            .json()
-            .await
-            .unwrap();
-        assert_eq!(activity["shellPaneId"], shell_id);
+        let (task_id, cookie) = (&fixture.task_id, &fixture.cookie);
+        let activity = move || async move {
+            reqwest::Client::new()
+                .get(format!("http://{address}/api/tasks/{task_id}/activity"))
+                .header("host", "127.0.0.1:4113")
+                .header("cookie", cookie)
+                .send()
+                .await
+                .unwrap()
+                .json::<Value>()
+                .await
+                .unwrap()
+        };
+        let path = format!(
+            "/api/tasks/{}/pane/shell/terminal?cols=100&rows=30",
+            fixture.task_id
+        );
+        // Without its worktree directory the task has no Shell.
+        assert_eq!(activity().await["shellPaneId"], Value::Null);
+        let (_, mut missing) = connect(address, &path, &[("cookie", &fixture.cookie)]).await;
         assert_eq!(
-            activity["sessions"][0]["paneId"],
+            missing.next().await,
+            Frame::Close(4404, "no shell pane".into())
+        );
+        assert!(fixture.state.host_terminals.task_ids().is_empty());
+        std::fs::create_dir_all(&worktree).unwrap();
+        let document = activity().await;
+        assert_eq!(document["shellPaneId"], shell_id);
+        assert_eq!(
+            document["sessions"][0]["paneId"],
             format!("host-session-{}", fixture.root_session_id)
         );
         let path = format!(
@@ -280,12 +302,24 @@ pub(crate) mod tests {
                 shell.next().await,
                 Frame::Text(r#"{"type":"replay","state":"end"}"#.into())
             );
-            shell.send(2, b"echo host-$((6*7))\n").await;
-            wait_for_output(&mut shell, "host-42").await;
+            shell.send(2, b"echo host-$((6*7)):$(pwd -P)\n").await;
+            let pwd = std::fs::canonicalize(&worktree).unwrap();
+            wait_for_output(&mut shell, &format!("host-42:{}", pwd.display())).await;
             shell.send(8, &1000_u16.to_be_bytes()).await;
         }
-        // Both connections shared one Shell, which the archive closes.
+        // Both connections shared one Shell, which the archive closes. A
+        // running Shell stays when its worktree is removed.
         assert_eq!(fixture.state.host_terminals.task_ids(), [fixture.task_id.clone()]);
+        std::fs::remove_dir_all(&worktree).unwrap();
+        assert_eq!(activity().await["shellPaneId"], shell_id);
+        let (_, mut again) = connect(address, &path, &[("cookie", &fixture.cookie)]).await;
+        assert!(matches!(again.next().await, Frame::Text(opened) if opened.contains(&shell_id)));
+        assert_eq!(
+            again.next().await,
+            Frame::Text(r#"{"type":"replay","state":"start"}"#.into())
+        );
+        wait_for_output(&mut again, "host-42").await;
+        again.send(8, &1000_u16.to_be_bytes()).await;
         fixture.state.host_terminals.close_all().await;
         assert!(fixture.state.host_terminals.task_ids().is_empty());
         let _ = std::fs::remove_dir_all(&fixture.root);

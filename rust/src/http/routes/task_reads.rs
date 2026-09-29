@@ -38,7 +38,7 @@ use crate::{
     runtimes::{task_harness::ReaderSession, task_harness_registry},
     tasks::control::SessionRow,
     tasks::worktree,
-    terminals,
+    terminals::{self, host::HostTerminals},
 };
 
 use super::auth;
@@ -151,7 +151,7 @@ fn role_label(session: &SessionRow) -> &'static str {
 fn activity_document(
     rows: &RootObservationRows,
     task_id: &str,
-    host: bool,
+    host: Option<&HostTerminals>,
 ) -> TaskActivityResponse {
     let sessions = rows
         .sessions
@@ -166,7 +166,7 @@ fn activity_document(
                 profile_id: profile.profile_id.clone(),
                 generation: session.generation,
                 native_session_id: session.native_session_id.clone(),
-                pane_id: terminals::session_pane(host, session, profile.provider),
+                pane_id: terminals::session_pane(host.is_some(), session, profile.provider),
                 current: session.current,
                 replacement: session.replacement.clone(),
                 harness: profile.provider,
@@ -189,7 +189,12 @@ fn activity_document(
     TaskActivityResponse {
         sessions,
         turns,
-        shell_pane_id: terminals::shell_pane(host, task_id, rows.control.shell_pane_id.as_ref()),
+        shell_pane_id: terminals::shell_pane(
+            host,
+            task_id,
+            rows.control.worktree_path(),
+            rows.control.shell_pane_id.as_ref(),
+        ),
     }
 }
 
@@ -269,7 +274,7 @@ async fn activity(
         Ok(activity_document(
             &rows,
             &task_id,
-            terminals::host_enabled(database),
+            terminals::host_enabled(database).then_some(&*state.host_terminals),
         ))
     });
     respond(result, cookies)

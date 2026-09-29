@@ -226,6 +226,17 @@ impl HostTerminals {
         });
     }
 
+    /// Closes every terminal that no browser shows, sign-in terminals too.
+    pub fn close_idle(&self) {
+        lock(&self.terminals).retain(|_, terminal| {
+            let idle = terminal.viewers.load(Ordering::SeqCst) == 0;
+            if idle {
+                terminal.close.cancel();
+            }
+            !idle
+        });
+    }
+
     /// Tasks that have a terminal.
     pub fn task_ids(&self) -> Vec<String> {
         let mut ids = lock(&self.terminals)
@@ -746,6 +757,23 @@ mod tests {
         }
         assert!(pids[0].contains("pid:"));
         assert_ne!(pids[0], pids[1]);
+    }
+
+    #[test]
+    fn a_mirror_starts_without_the_task_worktree() {
+        // The Mirror command runs the test binary, so this checks its spec.
+        // The fixture task has no worktree.
+        let fixture = crate::http::routes::task_pane::tests::fixture();
+        let (id, spec) = fixture
+            .state
+            .with_database(|database| {
+                super::super::task_terminal(database, "user_development", &fixture.task_id, "root")
+            })
+            .unwrap()
+            .expect("mirror");
+        assert_eq!(id, super::super::session_id(&fixture.root_session_id));
+        assert!(spec.cwd.is_dir());
+        let _ = std::fs::remove_dir_all(&fixture.root);
     }
 
     #[tokio::test]

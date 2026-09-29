@@ -8,7 +8,10 @@
 
 pub mod host;
 
-use std::{error::Error, path::Path};
+use std::{
+    error::Error,
+    path::{Path, PathBuf},
+};
 
 use tokio::sync::mpsc::UnboundedReceiver;
 
@@ -152,21 +155,19 @@ pub fn session_pane(host: bool, session: &SessionRow, provider: HarnessKind) -> 
     (session.current && provider != HarnessKind::Opencode).then(|| session_id(&session.id))
 }
 
-/// The task Shell id a browser shows.
-pub fn shell_pane(host: bool, task_id: &str, stored: Option<&String>) -> Option<String> {
-    if host {
-        Some(shell_id(task_id))
-    } else {
-        stored.cloned()
-    }
-}
-
-fn working_directory(worktree: Option<String>) -> std::path::PathBuf {
-    worktree
-        .map(std::path::PathBuf::from)
-        .filter(|path| path.is_dir())
-        .or_else(|| std::env::current_dir().ok())
-        .unwrap_or_else(|| "/".into())
+/// The task Shell id a browser shows. A host Shell starts in the task
+/// worktree, so it shows while that directory exists or while it runs.
+pub fn shell_pane(
+    host: Option<&host::HostTerminals>,
+    task_id: &str,
+    worktree: Option<&str>,
+    stored: Option<&String>,
+) -> Option<String> {
+    let Some(terminals) = host else {
+        return stored.cloned();
+    };
+    let id = shell_id(task_id);
+    (worktree.is_some_and(|path| Path::new(path).is_dir()) || terminals.contains(&id)).then_some(id)
 }
 
 /// The host terminal that the task pane route for `role` currently binds:
@@ -178,8 +179,10 @@ pub fn task_terminal(
     role: &str,
 ) -> Result<Option<(String, host::Spec)>, Box<dyn Error>> {
     let (_, worktree) = repository::task_worktree(database, user_id, task_id)?;
-    let cwd = working_directory(worktree);
     if role == "shell" {
+        let Some(cwd) = worktree.map(PathBuf::from).filter(|path| path.is_dir()) else {
+            return Ok(None);
+        };
         return Ok(Some((shell_id(task_id), host::Spec::shell(task_id, cwd))));
     }
     let rows = root_session_store::root_observation_rows(database, task_id)?;
@@ -200,6 +203,12 @@ pub fn task_terminal(
     else {
         return Ok(None);
     };
+    // The Mirror only reads session files, so it needs no worktree.
+    let cwd = directory
+        .ancestors()
+        .find(|path| path.is_dir())
+        .unwrap_or(Path::new("/"))
+        .to_path_buf();
     Ok(Some((
         session_id(&session.id),
         host::Spec::mirror(task_id, &command, cwd),
@@ -207,6 +216,8 @@ pub fn task_terminal(
 }
 
 /// The id [`task_terminal`] binds now, without the cost of building its spec.
+/// A running Shell keeps its id when its worktree is removed: only a new
+/// Shell needs the directory.
 pub fn task_terminal_id(
     database: &SuplexDatabase,
     user_id: &str,

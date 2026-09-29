@@ -837,6 +837,40 @@ mod host_tests {
     }
 
     #[tokio::test]
+    async fn host_terminals_without_a_viewer_close_when_the_experiment_is_off() {
+        use crate::terminals::host::{HostTerminals, Spec};
+        let (base, database_path, task_id) = fixture_task();
+        let terminals = HostTerminals::default();
+        let mut viewed = terminals
+            .open("host-test-viewed", Spec::mirror(&task_id, "cat", base.clone()), 80, 24)
+            .unwrap();
+        drop(
+            terminals
+                .open("host-test-idle", Spec::shell(&task_id, base.clone()), 80, 24)
+                .unwrap(),
+        );
+        drop(
+            terminals
+                .open("host-test-sign-in", Spec::sign_in("cat", base.clone()), 80, 24)
+                .unwrap(),
+        );
+        scheduled_task_ids(&database_path, &terminals).unwrap();
+        assert!(terminals.contains("host-test-viewed"));
+        assert!(!terminals.contains("host-test-idle"));
+        assert!(!terminals.contains("host-test-sign-in"));
+        // The Mirror closes on a later tick, after its viewer leaves.
+        assert!(matches!(
+            viewed.next().await,
+            Some(crate::terminals::BridgeEvent::Snapshot { .. })
+        ));
+        drop(viewed);
+        scheduled_task_ids(&database_path, &terminals).unwrap();
+        assert!(!terminals.contains("host-test-viewed"));
+        terminals.close_all().await;
+        fs::remove_dir_all(base).unwrap();
+    }
+
+    #[tokio::test]
     #[ignore = "requires HERDR_ENV=1 and a live Herdr installation"]
     async fn terminal_task_sweeps_close_six_real_owned_herdr_displays_and_processes() {
         use crate::{

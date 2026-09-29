@@ -273,13 +273,21 @@ async fn host_terminal(
         terminals::task_terminal(database, &user_id, &task_id, &role)
             .map_err(|error| error.to_string())
     });
-    let (id, spec) = match binding {
-        Ok(Some(binding)) => binding,
+    let (id, viewer) = match binding {
+        Ok(Some((id, spec))) => match state.host_terminals.open(&id, spec, cols, rows) {
+            Ok(viewer) => (id, viewer),
+            Err(_) => return close(&mut socket, 4404, "terminal could not start").await,
+        },
+        // A running Shell stays reachable after its worktree is removed.
+        Ok(None) if shell => {
+            let id = terminals::shell_id(&task_id);
+            match state.host_terminals.attach(&id) {
+                Some(viewer) => (id, viewer),
+                None => return close(&mut socket, 4404, "no shell pane").await,
+            }
+        }
         Ok(None) => return close(&mut socket, 4404, "no attachment").await,
         Err(_) => return close(&mut socket, 4404, "not found").await,
-    };
-    let Ok(viewer) = state.host_terminals.open(&id, spec, cols, rows) else {
-        return close(&mut socket, 4404, "terminal could not start").await;
     };
     if shell {
         viewer.resize(cols as f64, rows as f64);

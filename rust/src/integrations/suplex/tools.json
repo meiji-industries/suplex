@@ -1,7 +1,7 @@
 [
   {
     "name": "suplex_whoami",
-    "description": "Read this paired agent's identity, capabilities, and granted projects with the create-time agentTaskPolicy each one permits. taskCommands lists exactly the lifecycle commands accepted by suplex_command_task. autonomousCommands also includes task creation and, when enabled, runtime delivery commands. MCP exposes task lifecycle commands only. It does not expose runtime delivery or merge commands. Human answers remain unavailable to paired agents. Suplex can perform delivery for a task's configured target, including a merge after review, without an agent command.",
+    "description": "Read this paired agent's identity, capabilities, and granted projects with each project's delivery defaults (agentTaskPolicy). taskCommands lists exactly the lifecycle commands accepted by suplex_command_task. autonomousCommands also includes task creation and, when enabled, runtime delivery commands. MCP exposes task lifecycle commands only. It does not expose runtime delivery or merge commands. Human answers remain unavailable to paired agents. Suplex can perform delivery for a task's configured target, including a merge after review, without an agent command.",
     "inputSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "type": "object",
@@ -59,7 +59,7 @@
   },
   {
     "name": "suplex_list_tasks",
-    "description": "List tasks in this agent's currently granted projects, newest update first. The default view is summary. Set view to full for the complete projection. Filter by pullRequestNumber (task source or stored delivery pull request), sourceBranch, titleContains, and the runtime filters. Tasks created by another actor have no permitted commands. The opaque cursor binds every list filter.",
+    "description": "List tasks in this agent's currently granted projects, newest update first. The default view is summary. Set view to full for the complete projection. Filter by pullRequestNumber (task source or stored delivery pull request), sourceBranch, titleContains, and the runtime filters. The opaque cursor binds every list filter.",
     "inputSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "type": "object",
@@ -154,7 +154,7 @@
   },
   {
     "name": "suplex_get_task",
-    "description": "Read one task in a currently granted project. Tasks created by another actor have no permitted commands. Pass knownRevision to poll conditionally: an unchanged task returns { unchanged: true, revision } instead of the projection.",
+    "description": "Read one task in a currently granted project. Pass knownRevision to poll conditionally: an unchanged task returns { unchanged: true, revision } instead of the projection.",
     "inputSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "type": "object",
@@ -197,7 +197,7 @@
   },
   {
     "name": "suplex_create_task",
-    "description": "Create a task. Without queue it never starts by itself; use suplex_command_task with start_task to queue it later. With queue true it is queued: it starts now when every prerequisite is complete, and otherwise starts by itself when the last one completes. dryRun true validates the request and returns the projected task without writing state. dependsOn sets task prerequisites and blockedByPullRequests sets pull request prerequisites as [{ number }]. Suplex observes each pull request in the project repository. Open blocks until merge. Closed stays blocked until reopened and merged or removed. A prerequisite can be any task the agent can read in a granted project. The task waits for the prerequisite. Reading a prerequisite gives no commands on it. A self-reference, a cycle, or a task outside a granted project is rejected. Rejected inputs report field, value, and reason. MCP exposes task lifecycle commands only. It does not expose runtime delivery or merge commands. Human answers remain unavailable to paired agents. Suplex can perform delivery for a task's configured target, including a merge after review, without an agent command.",
+    "description": "Create a task. Without queue it never starts by itself; use suplex_command_task with start_task to queue it later. With queue true it is queued: it starts now when every prerequisite is complete, and otherwise starts by itself when the last one completes. dryRun true validates the request and returns the projected task without writing state. dependsOn sets task prerequisites and blockedByPullRequests sets pull request prerequisites as [{ number }]. Suplex observes each pull request in the project repository. Open blocks until merge. Closed stays blocked until reopened and merged or removed. A prerequisite can be any task the agent can read in a granted project. The task waits for the prerequisite. A self-reference, a cycle, or a task outside a granted project is rejected. Rejected inputs report field, value, and reason. MCP exposes task lifecycle commands only. It does not expose runtime delivery or merge commands. Human answers remain unavailable to paired agents. Suplex can perform delivery for a task's configured target, including a merge after review, without an agent command.",
     "inputSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "type": "object",
@@ -221,7 +221,7 @@
           "maxLength": 128
         },
         "dependsOn": {
-          "description": "A prerequisite can be any task the agent can read in a granted project. The task waits for the prerequisite. Reading a prerequisite gives no commands on it. A self-reference, a cycle, or a task outside a granted project is rejected. Shown as Blocked by. A self-reference, a cycle, or an unavailable task is rejected.",
+          "description": "A prerequisite can be any task the agent can read in a granted project. The task waits for the prerequisite. A self-reference, a cycle, or a task outside a granted project is rejected. Shown as Blocked by. A self-reference, a cycle, or an unavailable task is rejected.",
           "maxItems": 50,
           "type": "array",
           "items": {
@@ -432,7 +432,7 @@
   },
   {
     "name": "suplex_set_task_dependencies",
-    "description": "Replace task prerequisites in dependsOn and pull request prerequisites in blockedByPullRequests with the complete sets given. An empty array removes every prerequisite. A prerequisite can be any task the agent can read in a granted project. The task waits for the prerequisite. Reading a prerequisite gives no commands on it. A self-reference, a cycle, or a task outside a granted project is rejected. Pull request errors name the rejected field, value, and reason. dryRun true validates the replacement without changing state. suplex_get_task reads dependsOn and blockedBy.",
+    "description": "Replace task prerequisites in dependsOn and pull request prerequisites in blockedByPullRequests with the complete sets given. An empty array removes every prerequisite. A prerequisite can be any task the agent can read in a granted project. The task waits for the prerequisite. A self-reference, a cycle, or a task outside a granted project is rejected. Pull request errors name the rejected field, value, and reason. dryRun true validates the replacement without changing state. suplex_get_task reads dependsOn and blockedBy.",
     "inputSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "type": "object",
@@ -445,7 +445,7 @@
             "minLength": 1,
             "maxLength": 128
           },
-          "description": "A prerequisite can be any task the agent can read in a granted project. The task waits for the prerequisite. Reading a prerequisite gives no commands on it. A self-reference, a cycle, or a task outside a granted project is rejected. The complete set replaces the current set; an empty array removes every prerequisite."
+          "description": "A prerequisite can be any task the agent can read in a granted project. The task waits for the prerequisite. A self-reference, a cycle, or a task outside a granted project is rejected. The complete set replaces the current set; an empty array removes every prerequisite."
         },
         "blockedByPullRequests": {
           "default": [],

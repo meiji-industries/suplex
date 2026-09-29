@@ -30,10 +30,9 @@ and receipts or losing replay protection during this rename.
 
 `GET /api/agent/me` returns the authenticated agent identity, actual supported
 capabilities, and `{ id, name, agentTaskPolicy }` metadata for currently granted
-projects. `agentTaskPolicy` reports the create-time configuration the project
-permits: `deliveryTargets` (the delivery targets a create request may ask for),
-`runProjectTests`, and `visualEvidence`. Read it before creating a task; a
-create request that asks for anything else is rejected.
+projects. `agentTaskPolicy` reports the project's delivery defaults:
+`deliveryTargets` (the default delivery target), `runProjectTests`, and
+`visualEvidence`. A task that names none of these takes them.
 
 `GET /api/agent/capabilities` reports the deployment-wide surface. Its
 `capabilities.create.deliveryTargets` is the full set of delivery targets the
@@ -76,7 +75,7 @@ only safe task, project, workflow progress, question, and delivery observations.
 It is empty when another agent or a user created the task.
 `checks` is `null`, which means Suplex has no persisted check observation to
 report. `deliveryTarget`, `runProjectTests`, and `visualEvidence` report the
-configuration the project policy applied to the task.
+configuration applied to the task.
 
 Read responses (`GET` and `POST /api/agent/tasks`) also carry `implementation`,
 `integration`, and `actionRequired`. `integration` is what GitHub reported about
@@ -85,9 +84,7 @@ the task's pull request when the request was served, with `observation` set to
 never observes deployed runtimes, so `integration.deployed.included` is always
 `null`. `actionRequired` describes the observed owner and reason when work is
 outstanding. It does not grant command authority. `permittedCommands` is the
-authority signal. When another actor created a task, an agent-owned repair uses
-`owner: "task_owner"` and returns an empty `suggestedCommands` array. Human,
-Suplex, and upstream owners remain descriptive. Command replies omit these three
+authority signal. Human, Suplex, and upstream owners remain descriptive. Command replies omit these three
 fields because a command reports stored task state and reads no provider.
 
 `filter` selects on that observed health: `stale_delivery`,
@@ -133,11 +130,10 @@ without an agent command.
 
 `POST /api/agent/tasks` creates a backlog task. Send `"queue": true` to queue
 it; see [Queued tasks](#queued-tasks). `deliveryTarget`,
-`runProjectTests`, and `visualEvidence` are optional; sending a value the
-project policy does not permit returns `422` with
-`{ "code": "delivery_policy_rejected" }` and a message naming the permitted
-values. Read `agentTaskPolicy` from `GET /api/agent/me` to avoid the round
-trip, or omit the fields and let the policy default apply. The created task
+`runProjectTests`, and `visualEvidence` are optional. A value you omit comes
+from the template or workflow, then the project; Pull request repair always
+merges and runs the project tests. Omitting both `workflowId` and `templateId`
+selects Standard. The created task
 reports the applied `workflow`, `templateId`, `deliveryTarget`,
 `runProjectTests`, and `visualEvidence`. `workflow` has the selected record ID
 and name when Suplex selected a workflow record, plus the engine that the task
@@ -183,11 +179,8 @@ Rejected create inputs include `field`, `value`, and `reason`. Project IDs use
 use `source_issue_rejected`, `source_pull_request_rejected`, and
 `source_branch_rejected`.
 
-An unknown or archived workflow returns `422 workflow_not_found`. A workflow
-that exists but is outside the project policy returns `422
-workflow_not_permitted`. Both error bodies include `permittedWorkflowIds`.
-Templates use `template_not_found` and `template_not_permitted`, with
-`permittedTemplateIds`.
+An unknown or archived workflow returns `422 workflow_not_found`. A template
+that is not in the project returns `422 template_not_found`.
 
 ## Task prerequisites
 

@@ -38,7 +38,7 @@ Both the HTTP and stdio transports expose the same tools:
 
 Suplex re-reads the agent, administrator authority, company access, and project grants for each access or refresh. Revocation takes effect without restarting Suplex. Access tokens apply only to `/mcp`.
 
-Task reads cover every task in the approved projects. A task created by another actor has an empty `permittedCommands` array. Lifecycle commands and dependency changes remain limited to tasks that the connected agent created.
+Task reads cover every task in the approved projects. Lifecycle commands and dependency changes remain limited to tasks that the connected agent created.
 
 MCP exposes lifecycle task commands only. It does not expose runtime delivery or merge commands. Human answers remain unavailable to paired agents. Suplex can perform a task's configured delivery, including a merge after review, without an agent command.
 

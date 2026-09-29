@@ -58,11 +58,11 @@ test("official SDK discovers OAuth and calls Suplex tools without an agent key",
   const visible = await client.callTool({ name: "suplex_list_tasks", arguments: { status: "active" } });
   expect(visible.structuredContent).toMatchObject({ status: 200, body: { tasks: [expect.objectContaining({ id: uiTask.id, status: "active" })] } });
   const uiRead = await client.callTool({ name: "suplex_get_task", arguments: { taskId: uiTask.id } });
-  expect(uiRead.structuredContent).toMatchObject({ status: 200, body: { id: uiTask.id, status: "active", permittedCommands: [] } });
+  expect(uiRead.structuredContent).toMatchObject({ status: 200, body: { id: uiTask.id, status: "active", permittedCommands: ["cancel_task", "duplicate_task", "send_task_note"] } });
   const uiDelivery = await client.callTool({ name: "suplex_get_task_delivery", arguments: { taskId: uiTask.id } });
   expect(uiDelivery.structuredContent).toMatchObject({ status: 200, body: { taskId: uiTask.id, taskStatus: "active" } });
-  const deniedCommand = await client.callTool({ name: "suplex_command_task", arguments: { taskId: uiTask.id, command: "cancel_task", revision: (uiRead.structuredContent as { body: { revision: string } }).body.revision, idempotencyKey: "oauth-non-owner-command" } });
-  expect(deniedCommand).toMatchObject({ isError: true, structuredContent: { status: 404, body: { code: "resource_not_found" } } });
+  const sharedCommand = await client.callTool({ name: "suplex_command_task", arguments: { taskId: uiTask.id, command: "cancel_task", revision: (uiRead.structuredContent as { body: { revision: string } }).body.revision, idempotencyKey: "oauth-shared-command" } });
+  expect(sharedCommand).toMatchObject({ structuredContent: { status: 200, body: { status: "cancelled" } } });
   const created = await client.callTool({ name: "suplex_create_task", arguments: { projectId: fixture.project.id, title: "Created through remote MCP", idempotencyKey: "sdk-create-1" } });
   const taskId = (created.structuredContent as { body: { id: string } }).body.id;
   const read = await client.callTool({ name: "suplex_get_task", arguments: { taskId } });

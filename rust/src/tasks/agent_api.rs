@@ -98,19 +98,18 @@ struct Row {
     id: String,
     company_id: String,
     project_id: String,
-    creator_agent_id: Option<String>,
     command_revision: i64,
 }
 
-const ROW_SELECT: &str = "SELECT t.id, t.company_id, t.project_id, t.creator_agent_id, t.command_revision FROM suplex_tasks t";
+const ROW_SELECT: &str =
+    "SELECT t.id, t.company_id, t.project_id, t.command_revision FROM suplex_tasks t";
 
 fn row_from(row: &rusqlite::Row<'_>) -> rusqlite::Result<Row> {
     Ok(Row {
         id: row.get(0)?,
         company_id: row.get(1)?,
         project_id: row.get(2)?,
-        creator_agent_id: row.get(3)?,
-        command_revision: row.get(4)?,
+        command_revision: row.get(3)?,
     })
 }
 
@@ -193,17 +192,14 @@ fn require_readable(
     Ok(row)
 }
 
-/// Commands, dependency writes, and delivery operations stay with the creating agent.
+/// Commands, dependency writes, and delivery operations are open to any agent
+/// with access to the task's project, as on the board.
 fn require_owned(
     database: &SuplexDatabase,
     principal: &Principal,
     task_id: &str,
 ) -> DatabaseResult<Row> {
-    let row = require_readable(database, principal, task_id)?;
-    if row.creator_agent_id.as_deref() != Some(principal.agent_id.as_str()) {
-        return Err(not_found());
-    }
-    Ok(row)
+    require_readable(database, principal, task_id)
 }
 
 /// The live archive authority an agent holds over a task it created.
@@ -218,10 +214,7 @@ fn task_json(database: &SuplexDatabase, task_id: &str) -> DatabaseResult<Value> 
     Ok(serde_json::to_value(task)?)
 }
 
-fn permitted_commands(task: &response::TaskResponse, creator: bool) -> Vec<&'static str> {
-    if !creator {
-        return Vec::new();
-    }
+fn permitted_commands(task: &response::TaskResponse) -> Vec<&'static str> {
     let archived = task.archived_at.is_some();
     let mut commands = if archived {
         vec!["unarchive_task"]
@@ -355,11 +348,7 @@ fn delivery_summary(
 }
 
 /// `agentApiProjection`: the stored-state projection and its revision.
-fn projection_of(
-    database: &SuplexDatabase,
-    row: &Row,
-    principal: &Principal,
-) -> DatabaseResult<Value> {
+fn projection_of(database: &SuplexDatabase, row: &Row) -> DatabaseResult<Value> {
     let task = response::get(database, &row.id)?.ok_or_else(not_found)?;
     let project: Option<(String, String)> = database
         .connection()
@@ -387,11 +376,10 @@ fn projection_of(
     };
     let stage = workflow_stage(status, completion, question.is_some(), wait);
     let delivery = delivery_summary(&task.pull_request, wait, completion);
-    let creator = row.creator_agent_id.as_deref() == Some(principal.agent_id.as_str());
     let (workflow_id, workflow_name, template_id) = selection(&task);
     let source = &task.configuration.source;
     let archived = task.archived_at.is_some();
-    let permitted = permitted_commands(&task, creator);
+    let permitted = permitted_commands(&task);
     let mut value = AgentTaskProjection {
         id: &task.id,
         issue_key: task.issue_key.as_deref(),
@@ -437,7 +425,7 @@ pub fn projection(
     task_id: &str,
 ) -> DatabaseResult<Value> {
     let row = require_readable(database, principal, task_id)?;
-    projection_of(database, &row, principal)
+    projection_of(database, &row)
 }
 
 pub fn identity(database: &SuplexDatabase, principal: &Principal) -> DatabaseResult<Value> {
@@ -481,8 +469,6 @@ pub fn workflows(
         false,
         None,
     )?;
-    let policy =
-        projects::get_in_company(database, &principal.company_id, project_id)?.agent_task_policy;
     let mut statement = database.connection().prepare(
         "SELECT id, name, description FROM suplex_workflows WHERE archived_at IS NULL ORDER BY name COLLATE NOCASE, id",
     )?;
@@ -498,8 +484,7 @@ pub fn workflows(
     Ok(rows
         .into_iter()
         .map(|(id, name, description)| {
-            let permitted = policy.workflow_ids.contains(&id);
-            json!({"id": id, "name": name, "description": description, "permittedForAgentTaskCreation": permitted})
+            json!({"id": id, "name": name, "description": description, "permittedForAgentTaskCreation": true})
         })
         .collect())
 }
@@ -517,8 +502,6 @@ pub fn templates(
         false,
         None,
     )?;
-    let policy =
-        projects::get_in_company(database, &principal.company_id, project_id)?.agent_task_policy;
     let mut statement = database.connection().prepare(
         "SELECT id, name, configuration_json FROM suplex_task_templates WHERE project_id = ?1 ORDER BY name COLLATE NOCASE, id",
     )?;
@@ -534,8 +517,7 @@ pub fn templates(
     rows.into_iter()
         .map(|(id, name, configuration)| {
             let configuration = task_templates::parse_stored_configuration(serde_json::from_str(&configuration)?)?;
-            let permitted = policy.template_ids.contains(&id);
-            Ok(json!({"id": id, "name": name, "description": configuration.description, "permittedForAgentTaskCreation": permitted}))
+            Ok(json!({"id": id, "name": name, "description": configuration.description, "permittedForAgentTaskCreation": true}))
         })
         .collect()
 }
@@ -637,7 +619,7 @@ fn rows(
         None => "",
     };
     let sql = format!(
-        "SELECT t.id, t.company_id, t.project_id, t.creator_agent_id, t.command_revision FROM suplex_tasks t JOIN suplex_companies c ON c.id = t.company_id LEFT JOIN suplex_task_controls control ON control.task_id = t.id JOIN suplex_external_agents a ON a.id = ? AND a.company_id = t.company_id JOIN suplex_external_agent_project_grants g ON g.agent_id = a.id AND g.company_id = t.company_id AND g.project_id = t.project_id WHERE {} ORDER BY julianday({activity}) DESC, t.id{limit}",
+        "SELECT t.id, t.company_id, t.project_id, t.command_revision FROM suplex_tasks t JOIN suplex_companies c ON c.id = t.company_id LEFT JOIN suplex_task_controls control ON control.task_id = t.id JOIN suplex_external_agents a ON a.id = ? AND a.company_id = t.company_id JOIN suplex_external_agent_project_grants g ON g.agent_id = a.id AND g.company_id = t.company_id AND g.project_id = t.project_id WHERE {} ORDER BY julianday({activity}) DESC, t.id{limit}",
         conditions.join(" AND ")
     );
     let mut statement = database.connection().prepare(&sql)?;
@@ -767,7 +749,7 @@ fn list_page(
     let tasks = found
         .iter()
         .take(limit)
-        .map(|row| projection_of(database, row, principal))
+        .map(|row| projection_of(database, row))
         .collect::<DatabaseResult<Vec<_>>>()?;
     let next = match tasks.last() {
         Some(last) if more => Some(create_cursor(principal, &filter, last)),
@@ -883,11 +865,7 @@ fn targets(
     Ok(Targets { targets, pool })
 }
 
-async fn with_integration(
-    principal: &Principal,
-    projections: Vec<Value>,
-    stored: Targets,
-) -> Vec<Value> {
+async fn with_integration(projections: Vec<Value>, stored: Targets) -> Vec<Value> {
     let Targets { targets, pool } = stored;
     let observed_at = crate::shared::time::now_millis_rfc3339();
     let upstreams = targets
@@ -921,18 +899,14 @@ async fn with_integration(
     projections
         .into_iter()
         .zip(targets.iter().zip(&upstreams))
-        .map(|(mut projection, ((row, task), upstream))| {
+        .map(|(mut projection, ((_, task), upstream))| {
             let id = task["id"].as_str().unwrap_or_default();
             let integration = integrations[id].clone();
             let blocking = upstream
                 .iter()
                 .find(|other| integrations.get(other["id"].as_str().unwrap_or_default()).is_none_or(|value| value["integrated"] != true));
             let upstream = blocking.map_or(Value::Null, |other| json!({"taskId": other["id"], "pullRequestNumber": other["pullRequest"].get("number").cloned().unwrap_or(Value::Null)}));
-            let mut required = integration::derive_action_required(task, &integration, &upstream);
-            if required["owner"] == "agent" && row.creator_agent_id.as_deref() != Some(principal.agent_id.as_str()) {
-                required["owner"] = json!("task_owner");
-                required["suggestedCommands"] = json!([]);
-            }
+            let required = integration::derive_action_required(task, &integration, &upstream);
             let status = projection["status"].clone();
             if let Some(fields) = projection.as_object_mut() {
                 fields.insert("implementation".into(), json!({"status": status}));
@@ -951,9 +925,7 @@ pub async fn read(state: &AppState, principal: &Principal, task_id: &str) -> Dat
         let stored = targets(database, principal, std::slice::from_ref(&projection))?;
         Ok::<_, Box<dyn Error>>((projection, stored))
     })?;
-    Ok(with_integration(principal, vec![projection], stored)
-        .await
-        .remove(0))
+    Ok(with_integration(vec![projection], stored).await.remove(0))
 }
 
 /// `readAgentApiTasks`; `view` defaults differ between HTTP (full) and MCP (summary).
@@ -970,7 +942,7 @@ pub async fn read_list(
         );
     }
     let stored = state.with_database(|database| targets(database, principal, &tasks))?;
-    let tasks = with_integration(principal, tasks, stored).await;
+    let tasks = with_integration(tasks, stored).await;
     // Integration health comes from GitHub, not the query, so the filter narrows a page already drawn.
     let tasks = tasks
         .into_iter()
@@ -1309,7 +1281,8 @@ fn project_profile(
     ))
 }
 
-/// The caller's request under the project policy, before a workflow or template applies.
+/// The caller's request, before a workflow or template applies. Delivery
+/// settings the caller leaves out come from the project.
 fn base_request(raw: &TaskCreateBody, project: &Project) -> task_contracts::TaskCreateBody {
     let policy = &project.agent_task_policy;
     task_contracts::TaskCreateBody {
@@ -1321,9 +1294,12 @@ fn base_request(raw: &TaskCreateBody, project: &Project) -> task_contracts::Task
         root_profile_id: raw.root_profile_id.clone(),
         worker_profile_id: raw.worker_profile_id.clone(),
         start_immediately: raw.queue.unwrap_or(false),
-        delivery_target: policy.delivery_target,
-        run_project_tests: policy.run_project_tests,
-        visual_evidence: policy.visual_evidence.clone(),
+        delivery_target: raw.delivery_target.unwrap_or(policy.delivery_target),
+        run_project_tests: raw.run_project_tests.unwrap_or(policy.run_project_tests),
+        visual_evidence: raw
+            .visual_evidence
+            .clone()
+            .unwrap_or_else(|| policy.visual_evidence.clone()),
         source: raw.source.clone(),
         issue: None,
         workflow: crate::coordination::workflows::Workflow::Standard,
@@ -1333,8 +1309,8 @@ fn base_request(raw: &TaskCreateBody, project: &Project) -> task_contracts::Task
     }
 }
 
-/// Apply a permitted project template: its workflow, and its description and
-/// profiles where the caller left them out. Returns the selection record.
+/// Apply a project template: its workflow, and its description, profiles, and
+/// delivery settings where the caller left them out. Returns the selection record.
 fn apply_template(
     database: &SuplexDatabase,
     project: &Project,
@@ -1342,8 +1318,8 @@ fn apply_template(
     template_id: &str,
     request: &mut task_contracts::TaskCreateBody,
 ) -> DatabaseResult<Value> {
-    let policy = &project.agent_task_policy;
-    let details = |reason: &str| json!({"field": "templateId", "value": template_id, "reason": reason, "permittedTemplateIds": policy.template_ids});
+    let details =
+        |reason: &str| json!({"field": "templateId", "value": template_id, "reason": reason});
     let stored: Option<String> = database
         .connection()
         .query_row(
@@ -1360,16 +1336,17 @@ fn apply_template(
             details("The selected template is not available."),
         ));
     };
-    if !policy.template_ids.iter().any(|id| id == template_id) {
-        return Err(fail_with(
-            "The selected template is not permitted",
-            422,
-            "template_not_permitted",
-            details("The selected template is not permitted."),
-        ));
-    }
     let template = task_templates::parse_stored_configuration(serde_json::from_str(&stored)?)?;
     request.workflow = template.workflow;
+    if raw.delivery_target.is_none() {
+        request.delivery_target = template.delivery_target;
+    }
+    if raw.run_project_tests.is_none() {
+        request.run_project_tests = template.run_project_tests;
+    }
+    if raw.visual_evidence.is_none() {
+        request.visual_evidence = template.visual_evidence;
+    }
     if raw.description.is_none() {
         request.description = template.description;
     }
@@ -1384,21 +1361,20 @@ fn apply_template(
     Ok(json!({"workflowId": null, "workflowName": null, "templateId": template_id}))
 }
 
-/// Apply a permitted workflow, the project default when none is named: its
-/// engine, and its Advisor and agent profiles where the caller left them out.
-/// Returns the selection record.
+/// Apply the named workflow, or Standard when none is named: its engine, and
+/// its Advisor profiles, agent profiles, and screenshots where the caller left
+/// them out. Returns the selection record.
 fn apply_workflow(
     database: &SuplexDatabase,
-    project: &Project,
     raw: &TaskCreateBody,
     request: &mut task_contracts::TaskCreateBody,
 ) -> DatabaseResult<Value> {
-    let policy = &project.agent_task_policy;
     let workflow_id = raw
         .workflow_id
         .clone()
-        .unwrap_or_else(|| policy.default_workflow_id.clone());
-    let details = |reason: &str| json!({"field": "workflowId", "value": workflow_id, "reason": reason, "permittedWorkflowIds": policy.workflow_ids});
+        .unwrap_or_else(|| "workflow_native_standard".to_owned());
+    let details =
+        |reason: &str| json!({"field": "workflowId", "value": workflow_id, "reason": reason});
     let record: Option<(String, String, String)> = database
         .connection()
         .query_row(
@@ -1415,17 +1391,23 @@ fn apply_workflow(
             details("The selected workflow is not available."),
         ));
     };
-    if !policy.workflow_ids.contains(&workflow_id) {
-        return Err(fail_with(
-            "The selected workflow is not permitted",
-            422,
-            "workflow_not_permitted",
-            details("The selected workflow is not permitted."),
-        ));
-    }
     let configuration: Value = serde_json::from_str(&configuration)?;
     request.workflow = crate::coordination::workflows::Workflow::parse(&engine)
         .ok_or_else(|| workflow_input_failure("The selected workflow does not exist"))?;
+    if raw.visual_evidence.is_none()
+        && let Some(visual_evidence) = configuration.get("visualEvidence").and_then(Value::as_str)
+    {
+        visual_evidence.clone_into(&mut request.visual_evidence);
+    }
+    // Pull request repair always merges and runs the project tests.
+    if request.workflow == crate::coordination::workflows::Workflow::RefinePullRequest {
+        if raw.delivery_target.is_none() {
+            request.delivery_target = crate::tasks::control::DeliveryTarget::Merged;
+        }
+        if raw.run_project_tests.is_none() {
+            request.run_project_tests = true;
+        }
+    }
     if !has_advisors(raw)? {
         let advisors = configuration
             .get("advisorProfileIds")
@@ -1484,33 +1466,6 @@ fn validate_resolved(request: &mut task_contracts::TaskCreateBody) -> DatabaseRe
     Ok(())
 }
 
-/// The caller may not override the project's delivery settings.
-fn check_delivery_policy(raw: &TaskCreateBody, project: &Project) -> DatabaseResult<()> {
-    let policy = &project.agent_task_policy;
-    if raw
-        .delivery_target
-        .as_ref()
-        .is_some_and(|target| target != &policy.delivery_target)
-        || raw
-            .run_project_tests
-            .is_some_and(|value| value != policy.run_project_tests)
-        || raw
-            .visual_evidence
-            .as_ref()
-            .is_some_and(|value| value != &policy.visual_evidence)
-    {
-        return Err(fail(
-            &format!(
-                "This project permits deliveryTarget \"{}\", runProjectTests {}, and visualEvidence \"{}\"",
-                policy.delivery_target, policy.run_project_tests, policy.visual_evidence
-            ),
-            422,
-            "delivery_policy_rejected",
-        ));
-    }
-    Ok(())
-}
-
 /// Each profile the caller named must exist.
 fn check_requested_profiles(database: &SuplexDatabase, raw: &TaskCreateBody) -> DatabaseResult<()> {
     if let Some(id) = &raw.root_profile_id {
@@ -1553,10 +1508,9 @@ fn resolve(
     let mut request = base_request(raw, &project);
     let selection = match &raw.template_id {
         Some(template_id) => apply_template(database, &project, raw, template_id, &mut request)?,
-        None => apply_workflow(database, &project, raw, &mut request)?,
+        None => apply_workflow(database, raw, &mut request)?,
     };
     validate_resolved(&mut request)?;
-    check_delivery_policy(raw, &project)?;
     check_requested_profiles(database, raw)?;
     let root = project_profile(
         database,
@@ -2370,7 +2324,7 @@ fn claim(
     }
     let guard = InFlight(key);
     let row = require_owned(database, principal, task_id)?;
-    let before = projection_of(database, &row, principal)?;
+    let before = projection_of(database, &row)?;
     if before["revision"] != json!(input.revision) {
         return Err(stale());
     }

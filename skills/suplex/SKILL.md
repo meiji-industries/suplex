@@ -112,8 +112,8 @@ you need the exact request shapes.
 
 `suplex_whoami` (`GET /api/agent/me`) returns the agent identity and the
 `projects` this agent was granted, each with its `agentTaskPolicy`
-(`deliveryTargets`, `runProjectTests`, `visualEvidence`), the create-time
-configuration that project permits. Suplex's persisted grants are authoritative:
+(`deliveryTargets`, `runProjectTests`, `visualEvidence`), the delivery
+defaults a task takes when it names no other values. Suplex's persisted grants are authoritative:
 
 - One granted project: use it.
 - Several: ask the person you work for which one. Do not guess.
@@ -126,8 +126,8 @@ this agent was not granted with a non-enumerating `404`.
 
 Call `suplex_list_workflows(projectId)` and `suplex_list_templates(projectId)`
 before you set `workflowId` or `templateId`. Each result has `id`, `name`,
-`description`, and `permittedForAgentTaskCreation`. A workflow is shared by
-projects. A template belongs to the project in the request.
+`description`, and `permittedForAgentTaskCreation` (always `true`: any listed
+record can be used). A workflow is shared by projects. A template belongs to the project in the request.
 
 ## Before you create: list first
 
@@ -166,19 +166,14 @@ one. Keep that property whichever transport you use:
 Optional fields Suplex accepts: `queue`, `dependsOn`, `images`, `source`, `workflowId` or
 `templateId` (never both), `rootProfileId`, `workerProfileId`,
 `advisorProfileIds`, `deliveryTarget`, `runProjectTests`, `visualEvidence`.
-Send them only when the project policy allows them; omitting a workflow and a
-template uses the policy default. `deliveryTarget`, `runProjectTests`, and
-`visualEvidence` must match the project's `agentTaskPolicy` from
-`suplex_whoami`; anything else fails with `422 delivery_policy_rejected` and a
-message naming the permitted values. Omit them to take the policy default, the
-created task reports the applied values back. Omit `description` to keep a template's
+Omitting both a workflow and a template selects Standard. Omitted
+`deliveryTarget`, `runProjectTests`, and `visualEvidence` come from the template
+or workflow, then the project; the created task reports the applied values back. Omit `description` to keep a template's
 description; sending it, even as `""`, overrides it. Never send local paths,
 URLs, credentials, or file references.
 
-An unknown or archived workflow returns `422 workflow_not_found`. A known
-workflow outside the project policy returns `422 workflow_not_permitted`.
-Both responses include `permittedWorkflowIds`. Templates return
-`template_not_found` or `template_not_permitted` with `permittedTemplateIds`.
+An unknown or archived workflow returns `422 workflow_not_found`. A template
+that is not in the project returns `422 template_not_found`.
 The created task reports the applied `workflow` object, `templateId`, and
 `deliveryTarget`.
 

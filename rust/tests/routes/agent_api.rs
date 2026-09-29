@@ -460,6 +460,14 @@ pub(crate) mod tests {
             .find(|workflow| workflow["id"] == "workflow_native_standard")
             .unwrap();
         assert_eq!(standard["permittedForAgentTaskCreation"], true);
+        assert!(
+            workflows["workflows"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|workflow| workflow["permittedForAgentTaskCreation"] == true),
+            "{workflows}"
+        );
         assert_eq!(
             agent
                 .call(
@@ -576,23 +584,16 @@ pub(crate) mod tests {
                 json!({"error": "The project is not available.", "code": "project_not_found", "field": "projectId", "value": "project_api_2", "reason": "The project is not available."})
             )
         );
-        let (status, policy) = agent.call(reqwest::Method::POST, "/api/agent/tasks", Some(json!({"projectId": "project_api", "title": "T", "idempotencyKey": "key-00005", "deliveryTarget": "merged"}))).await;
+        let (status, delivery) = agent.call(reqwest::Method::POST, "/api/agent/tasks", Some(json!({"projectId": "project_api", "title": "T", "idempotencyKey": "key-00005", "deliveryTarget": "merged"}))).await;
         assert_eq!(
-            (status, policy["code"].as_str()),
-            (422, Some("delivery_policy_rejected"))
+            (status, delivery["deliveryTarget"].as_str()),
+            (201, Some("merged")),
+            "{delivery}"
         );
         let (status, workflow) = agent.call(reqwest::Method::POST, "/api/agent/tasks", Some(json!({"projectId": "project_api", "title": "T", "idempotencyKey": "key-00006", "workflowId": "missing"}))).await;
         assert_eq!(
-            (
-                status,
-                workflow["code"].as_str(),
-                workflow["permittedWorkflowIds"].clone()
-            ),
-            (
-                422,
-                Some("workflow_not_found"),
-                json!(["workflow_native_standard"])
-            )
+            (status, workflow["code"].as_str()),
+            (422, Some("workflow_not_found"))
         );
         let (status, profile) = agent.call(reqwest::Method::POST, "/api/agent/tasks", Some(json!({"projectId": "project_api", "title": "T", "idempotencyKey": "key-00007", "rootProfileId": "profile_missing"}))).await;
         assert_eq!(
@@ -617,7 +618,7 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
-    async fn reads_poll_conditionally_page_by_cursor_and_keep_commands_creator_only() {
+    async fn reads_poll_conditionally_page_by_cursor_and_share_commands_within_a_project() {
         let agent = agent().await;
         let first = agent.create("First", "read-001").await;
         agent.create("Second", "read-002").await;
@@ -640,7 +641,10 @@ pub(crate) mod tests {
                 None,
             )
             .await;
-        assert_eq!(foreign["permittedCommands"], json!([]));
+        assert_eq!(
+            foreign["permittedCommands"],
+            json!(["start_task", "cancel_task", "archive_task", "duplicate_task"])
+        );
         let (outside, _) = pair(&agent.server, "Outside agent", &["project_api_2"]);
         assert_eq!(
             agent
@@ -859,8 +863,8 @@ pub(crate) mod tests {
         let audits: i64 = agent.server.state.with_database(|database| database.connection().query_row("SELECT COUNT(*) FROM suplex_audit_events WHERE actor_agent_id = ?1 AND action IN ('task_started', 'task_note_added', 'task_duplicated', 'task_cancelled', 'task_archived', 'task_unarchived')", [&agent.agent_id], |row| row.get(0)).unwrap());
         assert_eq!(audits, 6);
         let (other, _) = pair(&agent.server, "Other commander", &["project_api"]);
-        let (status, denied) = agent.call_as(&other, reqwest::Method::POST, &format!("/api/agent/tasks/{id}/commands"), Some(json!({"command": "archive_task", "revision": reopened["revision"], "idempotencyKey": "other-001"}))).await;
-        assert_eq!((status, denied["code"].as_str()), (404, Some("not_found")));
+        let (status, shared) = agent.call_as(&other, reqwest::Method::POST, &format!("/api/agent/tasks/{id}/commands"), Some(json!({"command": "archive_task", "revision": reopened["revision"], "idempotencyKey": "other-001"}))).await;
+        assert_eq!((status, shared["archived"].as_bool()), (200, Some(true)), "{shared}");
     }
 
     #[tokio::test]
@@ -1003,6 +1007,43 @@ pub(crate) mod tests {
             database.connection().query_row("SELECT (SELECT COUNT(*) FROM suplex_tasks WHERE creator_agent_id = ?1), (SELECT COUNT(*) FROM suplex_task_controls WHERE task_id = ?2), (SELECT COUNT(*) FROM suplex_audit_events WHERE action = 'task_created' AND actor_agent_id = ?1)", rusqlite::params![agent.agent_id, id], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?))).unwrap()
         });
         assert_eq!(counts, (1, 1, 1));
+    }
+
+    /// Any available workflow or project template can be used, the caller's
+    /// delivery settings stand, and an unnamed workflow is Standard.
+    #[tokio::test]
+    async fn workflows_templates_and_delivery_settings_are_the_callers_choice() {
+        let agent = agent().await;
+        let template = uuid::Uuid::new_v4().to_string();
+        agent.server.state.with_database(|database| {
+            database.connection().execute(
+                "UPDATE suplex_projects SET agent_task_policy_json = json_set(agent_task_policy_json, '$.defaultWorkflowId', 'workflow_native_direct_build') WHERE id = 'project_api'",
+                [],
+            ).unwrap();
+            let now = chrono::Utc::now().to_rfc3339();
+            database.connection().execute("INSERT INTO suplex_task_templates (id, project_id, name, configuration_json, created_at, updated_at) VALUES (?1, 'project_api', 'Build', ?2, ?3, ?3)", params![template, json!({"name":"Build", "workflow":"direct_build", "advisorProfileIds":{}}).to_string(), now]).unwrap();
+        });
+        let create = |key: &str, extra: Value| {
+            let mut body = json!({"projectId":"project_api", "title":"Choice", "idempotencyKey": key});
+            body.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+            body
+        };
+        let (status, task) = agent.call(reqwest::Method::POST, "/api/agent/tasks", Some(create("choice-workflow", json!({"workflowId":"workflow_native_direct_build"})))).await;
+        assert_eq!((status, task["workflow"]["id"].as_str()), (201, Some("workflow_native_direct_build")), "{task}");
+        let (status, task) = agent.call(reqwest::Method::POST, "/api/agent/tasks", Some(create("choice-template", json!({"templateId": template})))).await;
+        assert_eq!((status, task["templateId"].as_str()), (201, Some(template.as_str())), "{task}");
+        let (status, task) = agent.call(reqwest::Method::POST, "/api/agent/tasks", Some(create("choice-delivery", json!({"deliveryTarget":"pull_request_draft", "runProjectTests": false, "visualEvidence": "capture"})))).await;
+        assert_eq!(
+            (status, task["deliveryTarget"].as_str(), task["runProjectTests"].as_bool(), task["visualEvidence"].as_str()),
+            (201, Some("pull_request_draft"), Some(false), Some("capture")),
+            "{task}"
+        );
+        let (status, task) = agent.call(reqwest::Method::POST, "/api/agent/tasks", Some(create("choice-defaults", json!({})))).await;
+        assert_eq!(
+            (status, task["workflow"]["id"].as_str(), task["deliveryTarget"].as_str()),
+            (201, Some("workflow_native_standard"), Some("local_worktree")),
+            "{task}"
+        );
     }
 
     /// An unnamed role uses its workflow or project default; a named profile

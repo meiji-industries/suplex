@@ -64,8 +64,7 @@ pub(crate) fn body_failure(status_code: StatusCode, runtime: bool) -> Response {
 
 /// `agentApiTaskFailureCode`: the runtime code for a task failure.
 fn runtime_task_code(status_code: u16, code: &str, message: &str) -> &'static str {
-    const PASSED: [&str; 17] = [
-        "delivery_policy_rejected",
+    const PASSED: [&str; 14] = [
         "project_not_found",
         "dependency_not_found",
         "root_profile_not_found",
@@ -75,9 +74,7 @@ fn runtime_task_code(status_code: u16, code: &str, message: &str) -> &'static st
         "source_pull_request_rejected",
         "source_branch_rejected",
         "workflow_not_found",
-        "workflow_not_permitted",
         "template_not_found",
-        "template_not_permitted",
         "revision_stale",
         "command_in_progress",
         "illegal_command",

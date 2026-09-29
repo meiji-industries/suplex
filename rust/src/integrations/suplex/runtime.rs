@@ -284,13 +284,24 @@ mod tests {
                 read["result"]["structuredContent"]["status"].as_u64(),
                 read["result"]["structuredContent"]["body"]["permittedCommands"].clone()
             ),
-            (Some(200), json!([]))
+            (
+                Some(200),
+                json!([
+                    "start_task",
+                    "cancel_task",
+                    "archive_task",
+                    "duplicate_task"
+                ])
+            )
         );
-        let denied = rpc("tools/call", json!({"name": "suplex_command_task", "arguments": {"taskId": foreign_id, "command": "cancel_task", "revision": read["result"]["structuredContent"]["body"]["revision"], "idempotencyKey": "oauth-non-owner-command"}})).await;
-        assert_eq!(denied["result"]["isError"], true);
+        let cancelled = rpc("tools/call", json!({"name": "suplex_command_task", "arguments": {"taskId": foreign_id, "command": "cancel_task", "revision": read["result"]["structuredContent"]["body"]["revision"], "idempotencyKey": "oauth-shared-command"}})).await;
         assert_eq!(
-            denied["result"]["structuredContent"],
-            json!({"status": 404, "body": {"error": "Not found", "code": "resource_not_found"}})
+            (
+                cancelled["result"]["structuredContent"]["status"].as_u64(),
+                cancelled["result"]["structuredContent"]["body"]["status"].as_str()
+            ),
+            (Some(200), Some("cancelled")),
+            "{cancelled}"
         );
 
         let created = rpc("tools/call", json!({"name": "suplex_create_task", "arguments": {"projectId": "project_api", "title": "Created through remote MCP", "idempotencyKey": "sdk-create-1"}})).await;

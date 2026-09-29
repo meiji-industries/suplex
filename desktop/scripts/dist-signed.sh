@@ -9,9 +9,18 @@ arch="${SUPLEX_DESKTOP_ARCH:-arm64}"
 # signing.env holds the Apple silicon feed (.../stable/mac/arm64/); each architecture updates from its own folder beside it.
 SUPLEX_DESKTOP_UPDATE_URL="$(printf %s "$SUPLEX_DESKTOP_UPDATE_URL" | sed -E "s#/mac/arm64/?\$#/mac/$arch/#")"
 export SUPLEX_DESKTOP_UPDATE_URL
-pnpm dist
 release="release/$arch"
-grep -qx "url: ${SUPLEX_DESKTOP_UPDATE_URL%/}/" "$release"/mac*/Suplex.app/Contents/Resources/app-update.yml || { echo "Suplex.app has no update feed for $SUPLEX_DESKTOP_UPDATE_URL" >&2; exit 1; }
 dmg="$release/Suplex-$(node -p "require('./package.json').version")-$arch.dmg"
-xcrun notarytool submit "$dmg" --apple-id "$APPLE_ID" --password "$APPLE_APP_SPECIFIC_PASSWORD" --team-id "$APPLE_TEAM_ID" --wait
+# A rerun after a later failure keeps a DMG that is already notarized and stapled.
+if xcrun stapler validate -q "$dmg" 2>/dev/null; then echo "$dmg is already stapled; skipping"; exit 0; fi
+pnpm dist
+grep -qx "url: ${SUPLEX_DESKTOP_UPDATE_URL%/}/" "$release"/mac*/Suplex.app/Contents/Resources/app-update.yml || { echo "Suplex.app has no update feed for $SUPLEX_DESKTOP_UPDATE_URL" >&2; exit 1; }
+auth="--apple-id $APPLE_ID --password $APPLE_APP_SPECIFIC_PASSWORD --team-id $APPLE_TEAM_ID"
+# notarytool exits 0 when Apple rejects the file, so read the status and print Apple's log.
+result="$(xcrun notarytool submit "$dmg" $auth --wait --output-format json)"
+if [ "$(printf %s "$result" | node -p 'JSON.parse(require("fs").readFileSync(0)).status')" != Accepted ]; then
+  xcrun notarytool log "$(printf %s "$result" | node -p 'JSON.parse(require("fs").readFileSync(0)).id')" $auth >&2
+  echo "Apple did not accept $dmg. Run the release again to resume." >&2
+  exit 1
+fi
 xcrun stapler staple "$dmg"

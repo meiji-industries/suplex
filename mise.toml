@@ -188,13 +188,25 @@ done
 '''
 [tasks."_release:bump"]
 hide = true
-run = "node scripts/release-version.mjs bump"
+run = '''
+# Uncommitted version files, or HEAD already tagged with this version, mean an earlier release run failed; resume that version.
+version="$(node -p "require('./package.json').version")"
+if [[ "$(git rev-parse -q --verify "refs/tags/v$version^{commit}")" == "$(git rev-parse HEAD)" ]]; then
+  echo "Resuming release v$version (already tagged)"
+elif ! git diff --quiet -- package.json desktop/package.json rust/Cargo.toml rust/Cargo.lock; then
+  node scripts/release-version.mjs check-tag
+  echo "Resuming release v$version"
+else
+  node scripts/release-version.mjs bump
+fi
+'''
 [tasks."_release:check"]
 hide = true
 description = "Verify the checkout and Docker are ready for a desktop and Linux release"
 run = '''
 git --no-pager diff --check
-[[ -z "$(git status --porcelain)" ]] || { echo "Commit or remove working-tree changes before releasing." >&2; exit 1; }
+# Version files may be dirty from an earlier failed run; _release:bump resumes that version.
+[[ -z "$(git status --porcelain -- . ':!package.json' ':!desktop/package.json' ':!rust/Cargo.toml' ':!rust/Cargo.lock')" ]] || { echo "Commit or remove working-tree changes before releasing." >&2; exit 1; }
 docker info >/dev/null 2>&1 || { echo "Start Docker before releasing; the Linux build runs in Docker." >&2; exit 1; }
 node --input-type=module <<'NODE'
 import { readFileSync } from "node:fs";
@@ -209,10 +221,13 @@ hide = true
 description = "Commit, tag, and push the released desktop version"
 run = '''
 version="$(node -p "require('./package.json').version")"
-node scripts/release-version.mjs check-tag
-git add package.json desktop/package.json rust/Cargo.toml rust/Cargo.lock
-git commit -m "release: v$version"
-git tag "v$version"
+# A rerun after a failed publish finds the tag on HEAD already; only push again.
+if [[ "$(git rev-parse -q --verify "refs/tags/v$version^{commit}")" != "$(git rev-parse HEAD)" ]]; then
+  node scripts/release-version.mjs check-tag
+  git add package.json desktop/package.json rust/Cargo.toml rust/Cargo.lock
+  git commit -m "release: v$version"
+  git tag "v$version"
+fi
 git push --atomic origin HEAD "refs/tags/v$version"
 '''
 [tasks."_release:run"]

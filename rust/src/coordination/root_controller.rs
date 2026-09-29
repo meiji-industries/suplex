@@ -775,6 +775,9 @@ async fn advisor_source(
     if !observed.clean {
         return Err(delivery_failure("worktree_dirty", dirty));
     }
+    let checks = DeliveryOperations::new(database_path, artifact_root)
+        .checks_observation(&root.task_id)
+        .await?;
     let rows = root_session_store::root_observation_rows(database, &root.task_id)?;
     let evidence = advisor_evidence::prepare_advisor_evidence(
         database,
@@ -782,6 +785,7 @@ async fn advisor_source(
         artifact_root,
         &rows,
         &observed.range,
+        checks.as_ref(),
     )?;
     Ok((observed, rows, evidence))
 }

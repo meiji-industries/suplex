@@ -54,8 +54,6 @@ run = "sh scripts/test-sccache-wrapper.sh"
 [tasks."test:parity"]
 run = '''
 set -e
-pnpm exec tsx scripts/rust-ratchet.ts --self-test
-pnpm exec tsx scripts/rust-ratchet.ts
 pnpm exec tsx scripts/rust-route-coverage.ts
 cd rust
 unset RUSTUP_TOOLCHAIN

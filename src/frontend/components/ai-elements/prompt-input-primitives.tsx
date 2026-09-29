@@ -24,10 +24,12 @@ type LooseControlProps = {
 };
 
 function DropdownMenuItem(props: LooseControlProps) {
+  // eslint-disable-next-line no-restricted-syntax -- LooseControlProps adapts AI Elements call sites to the shadcn control.
   return <BaseDropdownMenuItem {...props as unknown as React.ComponentProps<typeof BaseDropdownMenuItem>} />;
 }
 
 function InputGroupButton(props: LooseControlProps) {
+  // eslint-disable-next-line no-restricted-syntax -- LooseControlProps adapts AI Elements call sites to the shadcn control.
   return <BaseInputGroupButton {...props as unknown as React.ComponentProps<typeof BaseInputGroupButton>} />;
 }
 

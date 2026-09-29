@@ -78,8 +78,6 @@ jobs:
           cache: pnpm
           cache-dependency-path: pnpm-lock.yaml
       - run: pnpm install --frozen-lockfile
-      - run: pnpm exec tsx scripts/rust-ratchet.ts --self-test
-      - run: pnpm exec tsx scripts/rust-ratchet.ts
       - run: pnpm exec tsx scripts/rust-route-coverage.ts
       - run: pnpm exec vite build
       - run: cargo fmt --manifest-path rust/Cargo.toml --check

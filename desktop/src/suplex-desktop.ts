@@ -16,7 +16,6 @@ const KEYCHAIN_ACCESS_GROUP = "6KY6743H52.dev.suplex.desktop.webauthn"; // inert
 const INVALID_TITLE = "The Suplex URL is not valid";
 const UPDATE_CHECK_INTERVAL_MS = 60 * 60 * 1000;
 /** `suplex update` launches the app with this argument to run a manual update check. */
-const CHECK_FOR_UPDATES = "--check-for-updates";
 const TRAY_GUID = "60c7c87a-8444-4492-9b7b-1c6651965a98"; // macOS restores the user's menu-bar position for this identity.
 // Electron requires a process-lifetime reference or macOS can collect the menu-bar item.
 let tray: Tray | undefined;
@@ -711,7 +710,6 @@ export async function runSuplexDesktop(input: { readonly argv: readonly string[]
     }
     await open();
     if (requested && window) await switchTo(window, requested);
-    if (argv.includes(CHECK_FOR_UPDATES)) void desktopUpdater.check(true);
   };
 
   ipcMain.removeHandler("suplex:desktop");
@@ -817,7 +815,7 @@ export async function runSuplexDesktop(input: { readonly argv: readonly string[]
     item.setSavePath(join(app.getPath(process.platform === "darwin" ? "desktop" : "downloads"), item.getFilename()));
     item.once("done", (_doneEvent, state) => { if (state === "completed") shell.showItemInFolder(item.getSavePath()); });
   });
-  void desktopUpdater.check(process.argv.includes(CHECK_FOR_UPDATES));
+  void desktopUpdater.check(false);
   setInterval(() => { void desktopUpdater.check(false); }, UPDATE_CHECK_INTERVAL_MS); // an app left open still sees new releases
   await open();
 }

@@ -12,6 +12,7 @@ use serde_json::{Map, Value, json};
 use crate::{
     http::{AppState, routes::health, session::SessionConfig},
     platform::{
+        app_update,
         backup::BackupService,
         config::Installation,
         database::{OpenMode, SchemaState, SuplexDatabase},
@@ -30,9 +31,10 @@ Common Commands:
   up          Start Suplex in the background (alias: start)
   down        Stop Suplex (alias: stop)
   restart     Stop Suplex, then start it again
-  update      Check for a new Suplex.app version (alias: upgrade)
+  update      Install the newest Suplex.app and restart Suplex (alias: upgrade)
   logs        Show the server log
   doctor      Check the installation and database
+  version     Show the Suplex version (alias: --version, -V)
   desktop     Open Suplex.app
 
 Setup Commands:
@@ -56,6 +58,10 @@ pub async fn run(command: &str, arguments: &[String]) -> CliResult {
     match command {
         "help" | "-h" | "--help" => {
             print!("{HELP}");
+            Ok(0)
+        }
+        "version" | "--version" | "-V" => {
+            println!("suplex {}", env!("CARGO_PKG_VERSION"));
             Ok(0)
         }
         "logs" => logs(arguments),
@@ -90,7 +96,7 @@ pub async fn run(command: &str, arguments: &[String]) -> CliResult {
             );
             Ok(0)
         }
-        "update" | "upgrade" => update(),
+        "update" | "upgrade" => update(arguments).await,
         "migrate" => migrate(),
         "doctor" => doctor(arguments).await,
         "task" => task(arguments),
@@ -120,9 +126,8 @@ fn recover(arguments: &[String]) -> CliResult {
     Ok(0)
 }
 
-/// Suplex.app owns its updates, so this asks the app to check. A second
-/// launch forwards its arguments to a running app.
-fn update() -> CliResult {
+/// Updates the Suplex.app bundle that holds this executable.
+async fn update(arguments: &[String]) -> CliResult {
     let executable = std::env::current_exe()?.canonicalize()?;
     let Some(app) = executable
         .ancestors()
@@ -130,20 +135,8 @@ fn update() -> CliResult {
     else {
         return Err("This Suplex runs from a source checkout. Update it with 'git pull', then run 'suplex restart'.".into());
     };
-    let output = std::process::Command::new("open")
-        .arg("-na")
-        .arg(app)
-        .args(["--args", "--check-for-updates"])
-        .output()?;
-    if !output.status.success() {
-        return Err(format!(
-            "Suplex.app did not open: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
-        )
-        .into());
-    }
-    println!("Suplex.app checks for updates. Follow the prompt in the app.");
-    Ok(0)
+    let assume_yes = arguments.iter().any(|arg| arg == "--yes" || arg == "-y");
+    app_update::run(app, assume_yes).await
 }
 
 fn desktop() -> CliResult {

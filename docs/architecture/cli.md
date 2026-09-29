@@ -26,8 +26,9 @@ start a server. The server starts only through an explicit command:
 | `down` (`stop`) | Stops the supervised server for this installation. |
 | `restart` | Stops, then starts. |
 | `serve` | Runs the server in the current process without a supervisor. |
-| `update` (`upgrade`) | Asks `Suplex.app` to check for an update. See [Updates](#updates). |
+| `update` (`upgrade`) | Installs the newest `Suplex.app` and restarts what was running. See [Updates](#updates). |
 | `doctor` | Read-only installation report. See [Doctor](#doctor). |
+| `version` (`--version`, `-V`) | Prints the version of this `suplex` binary. |
 | `logs`, `task` | Read the log directory and one task's durable state. |
 | `setup`, `install`, `migrate`, `recover` | Configure, install dependencies, migrate, and issue a recovery link. |
 | `backup`, `verify-backup`, `restore` | See [Backup and restore](backup-and-restore.md). |
@@ -82,13 +83,18 @@ this installation's server.
 
 ## Updates
 
-The desktop app owns its update. `suplex update` resolves its own executable
-through symlinks. When the executable is inside an `.app` bundle, the command
-launches that bundle with `--check-for-updates`. A running app receives the
-argument through its single-instance handler. A new app receives it at startup.
-Both run the same manual check as the **Check for updates** menu item, including
-its download and restart prompts. The CLI does not download or replace the
-bundle.
+`suplex update` resolves its own executable through symlinks. When the
+executable is inside an `.app` bundle, the command reads the feed URL from the
+bundle's `app-update.yml` and downloads `latest-mac.yml` from it. When the feed
+has a newer version, it downloads the archive, checks its SHA-512 against the
+feed, extracts it next to the installed bundle, and checks that the new bundle
+passes `codesign` and Gatekeeper and has the same team identifier.
+
+If `Suplex.app` or a host for the installation is running, the command asks
+before it continues; `--yes` skips the question. It quits the app, stops a host
+that is still running, swaps the bundle, then starts the host and reopens the
+app. Every download and check completes before anything stops. The app's
+**Check for updates** menu item still uses the in-app updater.
 
 Outside an app bundle, the command exits with instructions to update the
 checkout with Git and restart. The checkout's Git-based updater runs only

@@ -13,7 +13,7 @@ test("an agent answer names the agent and the granting user", () => {
     answer: "Main: Use main",
     answeredBy: { agentId: "agent_1", agentName: "Hermes", userId: "user_1", userName: "Ada" },
   });
-  expect(humanMessage(prompt)).toEqual({ author: "Answered by Hermes for Ada", text: "Main: Use main" });
+  expect(humanMessage(prompt)).toEqual({ author: "Answered by Hermes for Ada", text: "Main: Use main", user: { id: "user_1", name: "Ada" } });
 });
 
 test("other Coordinator prompts are not shown as answers", () => {

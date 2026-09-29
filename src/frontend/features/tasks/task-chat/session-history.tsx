@@ -7,6 +7,7 @@ import { Alert, AlertDescription } from "../../../components/ui/alert.js";
 import { Button } from "../../../components/ui/button.js";
 import { Markdown } from "../../../components/app/markdown.js";
 import { Tool, ToolContent, ToolHeader, ToolInput, ToolOutput, type ToolPart } from "../../../components/ai-elements/tool.js";
+import { Reasoning, ReasoningContent, ReasoningTrigger } from "../../../components/ai-elements/reasoning.js";
 import { anchoredScrollTop, historyAtBottom, mergeNativeHistory, readSnapshotHistory, reconcileLiveHistory } from "./session-history-state.js";
 
 const toolStates = { pending: "input-streaming", running: "input-available", completed: "output-available", error: "output-error" } satisfies Record<Extract<NativeHistoryMessage["content"][number], { type: "tool" }>["status"], ToolPart["state"]>;
@@ -264,6 +265,8 @@ export function SessionHistory({ taskId, sessionId }: { taskId: string; sessionI
         {message.role === "user" ? <header className="mb-2 text-xs font-medium">Instruction</header> : null}
         <div className="grid min-w-0 gap-2">{message.content.map(part => part.type === "text"
           ? <Markdown key={part.id} source={part.text} />
+          : part.type === "reasoning"
+            ? <Reasoning key={part.id}><ReasoningTrigger getThinkingMessage={() => "Reasoning"} /><ReasoningContent>{part.text}</ReasoningContent></Reasoning>
           : <Tool key={part.id}>
             <ToolHeader type="dynamic-tool" toolName={part.name} input={part.input} state={toolStates[part.status]} />
             <HistoryToolContent part={part} />

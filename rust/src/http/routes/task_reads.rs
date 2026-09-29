@@ -26,8 +26,8 @@ use crate::{
         contracts::{
             task_reads::{
                 TaskActivityResponse, TaskActivitySession, TaskActivityTurn, TaskDiffResponse,
-                TaskDiffSummaryResponse, TaskExecutionResponse, TaskExecutionSession,
-                TaskExecutionTool, TaskToolStatus,
+                TaskDiffSummaryResponse, TaskExecutionReasoning, TaskExecutionResponse,
+                TaskExecutionSession, TaskExecutionTool, TaskToolStatus,
             },
             typed::tasks::TaskIdParams,
         },
@@ -221,11 +221,14 @@ fn execution_document(
                             .instance_home_directory()
                             .map(std::path::Path::new),
                     };
-                    reader.execution(&session).ok()
+                    // ponytail: read native logs twice; combine observations if Activity polling becomes costly.
+                    reader.execution(&session).ok().map(|execution| {
+                        (execution, reader.reasoning(&session).unwrap_or_default())
+                    })
                 });
             let available = observed.is_some();
-            let (tools, plan) = match observed {
-                Some((tools, plan)) => {
+            let (tools, plan, reasoning) = match observed {
+                Some(((tools, plan), reasoning)) => {
                     let tools = tools
                         .into_iter()
                         .map(|tool| {
@@ -240,9 +243,19 @@ fn execution_document(
                             })
                         })
                         .collect::<Result<Vec<_>, Box<dyn Error>>>()?;
-                    (tools, serde_json::from_value(plan)?)
+                    (
+                        tools,
+                        serde_json::from_value(plan)?,
+                        reasoning
+                            .into_iter()
+                            .map(|part| TaskExecutionReasoning {
+                                id: part.id,
+                                text: part.text,
+                            })
+                            .collect(),
+                    )
                 }
-                None => (Vec::new(), None),
+                None => (Vec::new(), None, Vec::new()),
             };
             Ok(TaskExecutionSession {
                 id: session.id.clone(),
@@ -253,6 +266,7 @@ fn execution_document(
                 available,
                 limited: false,
                 tools,
+                reasoning,
                 plan,
             })
         })

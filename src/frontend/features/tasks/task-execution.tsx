@@ -3,6 +3,7 @@ import type { TaskExecutionResponse as TaskExecution } from "../../contracts/gen
 import { useTaskExecutionQuery } from "./lib/task-queries.js";
 import { Plan, PlanHeader, PlanTitle, PlanDescription, PlanAction, PlanTrigger, PlanContent } from "../../components/ai-elements/plan.js";
 import { Tool, ToolHeader, ToolContent, ToolInput, ToolOutput, type ToolPart } from "../../components/ai-elements/tool.js";
+import { Reasoning, ReasoningContent, ReasoningTrigger } from "../../components/ai-elements/reasoning.js";
 import { Alert, AlertDescription } from "../../components/ui/alert.js";
 import { roleLabel } from "./workflow-presentation.js";
 
@@ -28,12 +29,16 @@ export function RootPlan({ execution }: { execution: TaskExecution | null }) {
 }
 
 export function TaskTools({ execution, error }: { execution: TaskExecution | null; error: string }) {
-  return <section aria-label="Tool activity" className="grid min-w-0 gap-3 pt-3">
+  return <section aria-label="Agent activity" className="grid min-w-0 gap-3 pt-3">
     {error ? <Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert> : null}
-    {execution?.sessions.map(session => <section key={session.id} aria-label={`${session.label ?? roleLabel({ kind: session.role, advisorRole: session.advisorRole ?? null })} ${session.generation} tools`} className="min-w-0">
+    {execution?.sessions.map(session => <section key={session.id} aria-label={`${session.label ?? roleLabel({ kind: session.role, advisorRole: session.advisorRole ?? null })} ${session.generation} activity`} className="min-w-0">
       <h3 className="mb-2 text-xs font-medium">{session.label ?? roleLabel({ kind: session.role, advisorRole: session.advisorRole ?? null })} {session.generation}</h3>
-      {!session.available ? <p className="text-xs text-muted-foreground">Agent activity is not available for this session.</p> : !session.tools.length ? <p className="text-xs text-muted-foreground">No tool calls yet.</p> : null}
+      {!session.available ? <p className="text-xs text-muted-foreground">Agent activity is not available for this session.</p> : !session.tools.length && !session.reasoning.length ? <p className="text-xs text-muted-foreground">No agent activity yet.</p> : null}
       {session.limited ? <p className="mb-2 text-xs text-muted-foreground">This view includes the latest 100 messages. Open the live pane for the full session.</p> : null}
+      {session.reasoning.length ? <Reasoning>
+        <ReasoningTrigger getThinkingMessage={() => "Reasoning"} />
+        <ReasoningContent>{session.reasoning.map(part => part.text).join("\n\n")}</ReasoningContent>
+      </Reasoning> : null}
       {session.tools.map(tool => <Tool key={tool.id} defaultOpen={tool.status === "error"}>
         <ToolHeader type="dynamic-tool" toolName={tool.name} input={tool.input} state={toolStates[tool.status]} />
         <ToolContent><ToolInput input={tool.input} /><ToolOutput output={tool.output} errorText={tool.error ?? undefined} /></ToolContent>

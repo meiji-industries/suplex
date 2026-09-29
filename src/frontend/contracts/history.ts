@@ -8,10 +8,13 @@ export const NativeHistoryTextPartSchema = z.object({
   text: z.string(),
 });
 
+export const NativeHistoryReasoningPartSchema = NativeHistoryTextPartSchema.extend({ type: z.literal("reasoning") });
+
 export const NativeHistoryToolPartSchema = TaskToolSchema.extend({ type: z.literal("tool") });
 
 export const NativeHistoryPartSchema = z.discriminatedUnion("type", [
   NativeHistoryTextPartSchema,
+  NativeHistoryReasoningPartSchema,
   NativeHistoryToolPartSchema,
 ]);
 

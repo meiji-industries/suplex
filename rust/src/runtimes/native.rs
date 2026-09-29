@@ -60,6 +60,12 @@ pub struct NativeTool {
     pub error: Option<String>,
 }
 
+#[derive(Clone, Debug, Serialize)]
+pub struct NativeReasoning {
+    pub id: String,
+    pub text: String,
+}
+
 pub fn session_directory(database_path: &Path, session_id: &str) -> io::Result<PathBuf> {
     if session_id.is_empty()
         || !session_id.as_bytes()[0].is_ascii_alphanumeric()

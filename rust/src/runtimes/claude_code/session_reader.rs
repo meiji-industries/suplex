@@ -13,7 +13,7 @@ use crate::{
     profiles::model_pricing::ModelPricingCatalog,
     runtimes::{
         headless::busy,
-        native::NativeTool,
+        native::{NativeReasoning, NativeTool},
         task_harness::{
             NativeSessionReader, NativeTimeline, ReaderSession, UsageEntry, modified_ms,
         },
@@ -82,6 +82,29 @@ impl NativeSessionReader for ClaudeCodeTaskRuntime {
 
     fn execution(&self, session: &ReaderSession<'_>) -> io::Result<(Vec<NativeTool>, Value)> {
         Ok(transcript::execution(&entries(session)?))
+    }
+
+    fn reasoning(&self, session: &ReaderSession<'_>) -> io::Result<Vec<NativeReasoning>> {
+        Ok(entries(session)?
+            .into_iter()
+            .filter(|entry| entry.kind == "assistant" && !entry.is_sidechain)
+            .flat_map(|entry| {
+                let blocks = transcript::blocks(&entry);
+                let id = entry.uuid;
+                blocks
+                    .into_iter()
+                    .enumerate()
+                    .filter_map(move |(index, block)| match block {
+                        transcript::Block::Thinking(text) if !text.trim().is_empty() => {
+                            Some(NativeReasoning {
+                                id: format!("{id}:{index}"),
+                                text,
+                            })
+                        }
+                        _ => None,
+                    })
+            })
+            .collect())
     }
 
     fn turn_evidence(

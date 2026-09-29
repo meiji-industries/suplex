@@ -17,6 +17,7 @@ import { TaskCheckResults } from "./task-check-results.js";
 import { TaskActivityTimeline } from "./task-activity-timeline.js";
 import { PromptInput, PromptInputFooter, PromptInputSubmit, PromptInputTextarea } from "../../components/ai-elements/prompt-input.js";
 import { TaskArtifacts } from "./task-artifacts.js";
+import { useCompanyContext } from "../../shell/company-context.js";
 const DeveloperDiff = lazy(() => import("../../components/app/developer-diff.js").then(module => ({ default: module.DeveloperDiff })));
 const MAX_TASK_NOTE_LENGTH = 20_000;
 
@@ -54,18 +55,19 @@ const AnswerSchema = z.object({
 }).strict();
 
 /** The person or granted agent who wrote a Coordinator prompt, and its text. */
-export function humanMessage(prompt: string): { author: string; text: string } | null {
+export function humanMessage(prompt: string): { author: string; text: string; user?: { id: string; name: string } } | null {
   if (prompt.startsWith("Human note:\n")) return { author: "You", text: prompt.slice("Human note:\n".length) };
   try {
     const answer = AnswerSchema.safeParse(JSON.parse(prompt));
     if (!answer.success) return null;
     const by = answer.data.answeredBy;
-    return { author: by ? `Answered by ${by.agentName} for ${by.userName}` : "You", text: answer.data.answer };
+    return by ? { author: `Answered by ${by.agentName} for ${by.userName}`, text: answer.data.answer, user: { id: by.userId, name: by.userName } } : { author: "You", text: answer.data.answer };
   } catch { return null; }
 }
 
 export function TaskWork({ task, activity, onChange }: { task: Task; activity: TaskActivity; onChange: (task: Task) => void }) {
   const [tab, setTab] = useState("chat");
+  const { user } = useCompanyContext();
   const { execution, error: executionError } = useTaskExecution(task.id);
   const summaryQuery = useTaskDiffSummary(task);
   const diffSummary = summaryQuery.isError ? null : summaryQuery.data;
@@ -80,7 +82,7 @@ export function TaskWork({ task, activity, onChange }: { task: Task; activity: T
         const session = activity.sessions.find(session => session.id === turn.sessionId);
         const role = session?.label ?? "Coordinator";
         const message = humanMessage(turn.prompt);
-        return <div key={turn.id} className="grid min-w-0 gap-5">{message?.text ? <article className="space-y-2 border-l-2 pl-3"><header className="flex items-center gap-2 text-xs"><span className="font-medium">{message.author}</span><span className="text-muted-foreground">{answerLabels[turn.status]}</span></header><Markdown source={message.text} /></article> : null}{resultText(turn.result) ? <article className="flex min-w-0 gap-3"><EntityAvatar kind="agent" id={session?.profileId ?? task.rootProfile.profileId} name={role} size="sm" /><div className="min-w-0 flex-1 space-y-2"><header className="flex items-center gap-2 text-xs"><span className="font-medium">{role}</span><span className="text-muted-foreground">{turnLabel(turn)}</span></header><Markdown source={resultText(turn.result)} /></div></article> : null}</div>;
+        return <div key={turn.id} className="grid min-w-0 gap-5">{message?.text ? <article className="flex min-w-0 gap-3"><EntityAvatar kind="user" id={message.user?.id ?? user?.id ?? "you"} name={message.user?.name ?? user?.displayName ?? "You"} {...(!message.user && user?.avatarSeed ? { seed: user.avatarSeed } : {})} size="sm" /><div className="min-w-0 flex-1 space-y-2"><header className="flex items-center gap-2 text-xs"><span className="font-medium">{message.author}</span><span className="text-muted-foreground">{answerLabels[turn.status]}</span></header><Markdown source={message.text} /></div></article> : null}{resultText(turn.result) ? <article className="flex min-w-0 gap-3"><EntityAvatar kind="agent" id={session?.profileId ?? task.rootProfile.profileId} name={role} size="sm" /><div className="min-w-0 flex-1 space-y-2"><header className="flex items-center gap-2 text-xs"><span className="font-medium">{role}</span><span className="text-muted-foreground">{turnLabel(turn)}</span></header><Markdown source={resultText(turn.result)} /></div></article> : null}</div>;
       })}
       {!activity.turns.some(turn => resultText(turn.result) || humanMessage(turn.prompt)?.text) ? <p className="text-xs text-muted-foreground">{task.status === "backlog" ? "Start the task to work with Coordinator." : task.status === "queued" ? "Suplex starts this task when its prerequisites are complete." : "Agent replies appear here."}</p> : null}
       <TaskNoteInput key={`task-note-input-${task.id}`} task={task} onChange={onChange} />

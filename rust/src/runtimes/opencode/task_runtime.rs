@@ -41,7 +41,7 @@ use crate::{
     profiles::model_pricing::ModelPricingCatalog,
     runtimes::{
         git_guard, headless,
-        native::{NativeTool, UsageTokens},
+        native::{NativeReasoning, NativeTool, UsageTokens},
         task_harness::{
             DispatchClaim, DispatchState, NativeSessionReader, NativeTimeline, PromptObservation,
             PromptState, ReaderSession, TaskHarness, TaskRole, TaskScope, UsageEntry,
@@ -579,6 +579,14 @@ impl NativeSessionReader for OpenCodeTaskRuntime {
             }
         })?;
         Ok((execution.tools, json!(execution.plan)))
+    }
+
+    fn reasoning(&self, session: &ReaderSession<'_>) -> io::Result<Vec<NativeReasoning>> {
+        let Some(native) = resolved(session)? else {
+            return Ok(Vec::new());
+        };
+        let messages = run(messages(session.session_id, session.database_path, &native))?;
+        Ok(session_reader::reasoning_from_messages(&messages))
     }
 
     fn turn_evidence(

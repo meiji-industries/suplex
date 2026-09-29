@@ -8,6 +8,8 @@ provides history, execution detail, and usage. The
 [registry](../../rust/src/runtimes/task_harness_registry.rs) selects by profile
 provider. The host consumes a common prompt observation, including admission,
 result state, running processes, unsettled tools, and whether retry is safe.
+The Live history reader includes native reasoning for Claude Code, Codex CLI,
+and OpenCode when their transcripts contain visible reasoning text.
 
 | Provider | Execution and session data | Display implementation |
 | --- | --- | --- |

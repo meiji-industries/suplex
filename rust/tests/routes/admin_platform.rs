@@ -114,7 +114,7 @@ mod tests {
         assert_eq!(headers[header::CACHE_CONTROL], "private, no-store");
         assert_eq!(
             json_body(&body),
-            json!({"minFreeDiskGb":5,"defaultBudgetUsd":15,"defaultMaxTurns":40})
+            json!({"minFreeDiskGb":5,"defaultBudgetUsd":15,"defaultMaxTurns":40,"todayPageEnabled":false})
         );
         let patch = |body: &str| {
             fixture.call(
@@ -126,7 +126,7 @@ mod tests {
         };
         assert_eq!(
             json_body(&patch(r#"{"minFreeDiskGb":7.5}"#).await.2),
-            json!({"minFreeDiskGb":7.5,"defaultBudgetUsd":15,"defaultMaxTurns":40})
+            json!({"minFreeDiskGb":7.5,"defaultBudgetUsd":15,"defaultMaxTurns":40,"todayPageEnabled":false})
         );
         assert_eq!(
             json_body(
@@ -134,7 +134,11 @@ mod tests {
                     .await
                     .2
             ),
-            json!({"minFreeDiskGb":7.5,"defaultBudgetUsd":20,"defaultMaxTurns":30})
+            json!({"minFreeDiskGb":7.5,"defaultBudgetUsd":20,"defaultMaxTurns":30,"todayPageEnabled":false})
+        );
+        assert_eq!(
+            json_body(&patch(r#"{"todayPageEnabled":true}"#).await.2)["todayPageEnabled"],
+            true
         );
         assert_eq!(
             json_body(
@@ -143,7 +147,7 @@ mod tests {
                     .await
                     .2
             ),
-            json!({"minFreeDiskGb":7.5,"defaultBudgetUsd":20,"defaultMaxTurns":30})
+            json!({"minFreeDiskGb":7.5,"defaultBudgetUsd":20,"defaultMaxTurns":30,"todayPageEnabled":true})
         );
         for invalid in [
             r#"{"defaultBudgetUsd":-1}"#,
@@ -151,6 +155,7 @@ mod tests {
             r#"{"other":1}"#,
             r#"{"defaultMaxTurns":1.5}"#,
             r#"{"minFreeDiskGb":2000}"#,
+            r#"{"todayPageEnabled":"yes"}"#,
         ] {
             assert_eq!(patch(invalid).await.0, StatusCode::BAD_REQUEST, "{invalid}");
         }
@@ -169,6 +174,10 @@ mod tests {
                 .0,
             StatusCode::FORBIDDEN
         );
+        // Members read the experiments that shape their navigation.
+        let (status, _, body) = fixture.call("GET", "/api/experiments", None, vec![]).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(json_body(&body), json!({"todayPage":true}));
     }
 
     #[tokio::test]

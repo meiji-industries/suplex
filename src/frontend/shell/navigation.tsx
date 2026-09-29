@@ -10,6 +10,7 @@ import { NewButton } from "../components/ui/new-button.js";
 import { Sidebar, SidebarContent, SidebarFooter, SidebarGroup, SidebarGroupContent, SidebarHeader, SidebarMenu, SidebarMenuButton, SidebarMenuItem, SidebarTrigger, useSidebar } from "../components/ui/sidebar.js";
 import { companySettingsPath, withCompany } from "../lib/api.js";
 import { navigate } from "./navigation-state.js";
+import { useExperiments } from "./experiments-api.js";
 import { useOptionalCompanyContext } from "./company-context.js";
 import { CompanySwitcher } from "./company-switcher.js";
 import { EntityAvatar } from "../components/app/entity-avatar.js";
@@ -31,15 +32,16 @@ function isActive(href: string): boolean {
 function MainNavigation({ close }: { close?: () => void }): ReactElement {
   const context = useOptionalCompanyContext();
   const companyId = context?.currentCompany?.id;
+  const todayPage = useExperiments()?.todayPage ?? false;
   const items = useMemo<NavItem[]>(() => {
     return [
-      { href: "/today", label: "Today", icon: CalendarDays },
+      ...(todayPage ? [{ href: "/today", label: "Today", icon: CalendarDays }] : []),
       { href: withCompany("/tasks", companyId), label: "Tasks", icon: ClipboardList },
       { href: withCompany("/board", companyId), label: "Board", icon: Columns3 },
       { href: withCompany("/timeline", companyId), label: "Timeline", icon: ChartNoAxesGantt },
       { href: withCompany("/analytics", companyId), label: "Analytics", icon: BarChart3 },
     ];
-  }, [companyId]);
+  }, [companyId, todayPage]);
   return (
     <><CreateActions {...(close ? { close } : {})} /><SidebarGroup><SidebarGroupContent><SidebarMenu>{items.map(({ href, label, icon: Icon }) => { const active = isActive(href); return <SidebarMenuItem key={href}><SidebarMenuButton render={<a aria-current={active ? "page" : undefined} href={href} onClick={close}><Icon />{label}</a>} isActive={active} tooltip={label} /></SidebarMenuItem>; })}</SidebarMenu></SidebarGroupContent></SidebarGroup></>
   );
@@ -58,8 +60,9 @@ function NavigationSearch({ close }: { close?: () => void }): ReactElement {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const companyId = context?.currentCompany?.id;
+  const todayPage = useExperiments()?.todayPage ?? false;
   const items: NavItem[] = [
-    { href: "/today", label: "Today", icon: CalendarDays },
+    ...(todayPage ? [{ href: "/today", label: "Today", icon: CalendarDays }] : []),
     { href: withCompany("/timeline", companyId), label: "Timeline", icon: ChartNoAxesGantt },
     { href: withCompany("/analytics", companyId), label: "Analytics", icon: BarChart3 },
     { href: withCompany("/tasks", companyId), label: "Tasks", icon: ClipboardList }, { href: withCompany("/board", companyId), label: "Board", icon: Columns3 }, { href: withCompany("/health", companyId), label: "Host health", icon: Shield },
@@ -94,6 +97,7 @@ export function AppSidebar(): ReactElement {
   const settingsHref = context?.user?.role === "admin" && companyId ? companySettingsPath(companyId) : withCompany("/profile", companyId);
   const { setOpenMobile } = useSidebar();
   const close = (): void => setOpenMobile(false);
+  const todayPage = useExperiments()?.todayPage ?? false;
   useEffect(() => {
     let goPending = false;
     let goTimer: number | undefined;
@@ -111,14 +115,14 @@ export function AppSidebar(): ReactElement {
         goPending = true; window.clearTimeout(goTimer); goTimer = window.setTimeout(() => { goPending = false; }, 750); return;
       }
       if (goPending && !event.metaKey && !event.ctrlKey && !event.altKey) {
-        const path = key === "h" ? "/today" : key === "t" ? "/tasks" : key === "b" ? "/board" : key === "l" ? "/timeline" : undefined;
+        const path = key === "h" ? (todayPage ? "/today" : "/tasks") : key === "t" ? "/tasks" : key === "b" ? "/board" : key === "l" ? "/timeline" : undefined;
         goPending = false; window.clearTimeout(goTimer);
         if (path) { event.preventDefault(); navigate(path === "/today" ? path : withCompany(path, context?.currentCompany?.id)); }
       }
     };
     window.addEventListener("keydown", handleShortcut);
     return () => { window.removeEventListener("keydown", handleShortcut); window.clearTimeout(goTimer); };
-  }, [context?.currentCompany?.id, context?.currentCompany?.status]);
+  }, [context?.currentCompany?.id, context?.currentCompany?.status, todayPage]);
   return (
     <Sidebar variant="inset" collapsible="offcanvas">
       <SidebarHeader className="titlebar-drag titlebar-top"><div className="flex h-8 items-center gap-1 pl-2 -mr-2"><img src={wordmark} alt="Suplex" className="h-4 w-auto invert dark:invert-0" /><button type="button" className={buttonVariants({ variant: "ghost", size: "icon-sm", className: "ml-auto" })} onClick={() => window.dispatchEvent(new Event("suplex:command-menu"))} aria-label="Search Suplex" title="Search Suplex (⌘K)"><Search /></button>{context?.user ? <Button variant="ghost" size="icon-sm" nativeButton={false} render={<a href={settingsHref} onClick={close} aria-label="Settings" title="Settings" />}><Settings /></Button> : null}<span className="md:hidden"><SidebarTrigger aria-label="Close navigation" title="Close navigation" /></span></div><CompanySwitcher /></SidebarHeader>

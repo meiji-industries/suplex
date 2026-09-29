@@ -94,6 +94,14 @@ impl Contract for HealthQuery {
     }
 }
 
+/// Host-wide experiments that change what every signed-in user sees.
+#[derive(Debug, Serialize, ts_rs::TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ExperimentsResponse {
+    pub today_page: bool,
+}
+
 /// `EnvironmentSettingsBodySchema`: at least one bounded setting.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -101,6 +109,7 @@ pub struct EnvironmentPatch {
     pub min_free_disk_gb: Option<f64>,
     pub default_budget_usd: Option<f64>,
     pub default_max_turns: Option<i64>,
+    pub today_page_enabled: Option<bool>,
 }
 
 impl Contract for EnvironmentPatch {
@@ -108,11 +117,17 @@ impl Contract for EnvironmentPatch {
         let mut fields = Fields::new(input)?
             .opt("minFreeDiskGb", number(0.0, MAX_MIN_FREE_DISK_GB))
             .opt("defaultBudgetUsd", number(0.0, f64::MAX))
-            .opt("defaultMaxTurns", int(0.0, f64::MAX));
+            .opt("defaultMaxTurns", int(0.0, f64::MAX))
+            .opt("todayPageEnabled", flag);
         if fields.refinable()
-            && ["minFreeDiskGb", "defaultBudgetUsd", "defaultMaxTurns"]
-                .iter()
-                .all(|name| fields.raw(name).is_none())
+            && [
+                "minFreeDiskGb",
+                "defaultBudgetUsd",
+                "defaultMaxTurns",
+                "todayPageEnabled",
+            ]
+            .iter()
+            .all(|name| fields.raw(name).is_none())
         {
             fields.fail("custom", ".");
         }

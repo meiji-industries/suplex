@@ -17,7 +17,12 @@ use serde_json::{Map, Value, json};
 use tokio::io::AsyncWriteExt;
 
 use crate::{
-    http::{AppState, contracts::typed::system::EnvironmentPatch, session, validation::Valid},
+    http::{
+        AppState,
+        contracts::typed::system::{EnvironmentPatch, ExperimentsResponse},
+        session,
+        validation::Valid,
+    },
     identity::auth::AuthUser,
     platform::{
         PlatformError,
@@ -37,6 +42,7 @@ pub fn router() -> Router<AppState> {
             "/api/admin/environment",
             get(read_environment).patch(update_environment),
         )
+        .route("/api/experiments", get(read_experiments))
         .route("/api/admin/backups", get(list_backups).post(create_backup))
         .route("/api/admin/backups/restore", post(restore_backup))
         .route("/api/admin/backups/{name}", get(download_backup))
@@ -160,6 +166,21 @@ async fn read_environment(State(state): State<AppState>, headers: HeaderMap) -> 
     finish(response, cookies)
 }
 
+async fn read_experiments(
+    State(state): State<AppState>,
+    _user: crate::http::access::SessionUser,
+) -> Response {
+    match state.with_database(|database| environment_settings::read(database)) {
+        Ok(settings) => private(
+            Json(ExperimentsResponse {
+                today_page: settings.today_page_enabled,
+            })
+            .into_response(),
+        ),
+        Err(_) => internal(),
+    }
+}
+
 async fn update_environment(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -181,6 +202,9 @@ async fn update_environment(
                 default_max_turns: patch
                     .default_max_turns
                     .unwrap_or(previous.default_max_turns),
+                today_page_enabled: patch
+                    .today_page_enabled
+                    .unwrap_or(previous.today_page_enabled),
             },
         )?;
         record_audit(
@@ -194,6 +218,8 @@ async fn update_environment(
                 "defaultBudgetUsd": js_number(updated.default_budget_usd).to_string(),
                 "previousDefaultMaxTurns": previous.default_max_turns.to_string(),
                 "defaultMaxTurns": updated.default_max_turns.to_string(),
+                "previousTodayPageEnabled": previous.today_page_enabled.to_string(),
+                "todayPageEnabled": updated.today_page_enabled.to_string(),
             }),
         )?;
         Ok::<_, Box<dyn std::error::Error>>(updated)

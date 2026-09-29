@@ -12,6 +12,7 @@ import { ServerStateProvider } from "./server-state.js";
 import { TaskDataProvider } from "../features/tasks/task-data.js";
 import { LoadingState } from "../components/app/loading-state.js";
 import { DesktopHostBar } from "./desktop-host-bar.js";
+import { useExperiments } from "./experiments-api.js";
 
 const AdminView = lazy(() => import("../features/admin/admin.js").then(module => ({ default: module.AdminView })));
 const CompanySettingsView = lazy(() => import("../features/settings/company-settings.js").then(module => ({ default: module.CompanySettingsView })));
@@ -39,6 +40,17 @@ export function activityShellKey(pathname: string): "activity" | undefined {
   return undefined;
 }
 
+/** Today is an experiment; when it is off, its links open the task list. */
+function TodayRoute(): ReactElement | null {
+  const experiments = useExperiments();
+  useEffect(() => {
+    if (!experiments || experiments.todayPage) return;
+    window.history.replaceState({}, "", "/tasks");
+    window.dispatchEvent(new Event("suplex:navigate"));
+  }, [experiments]);
+  return experiments?.todayPage ? <TodayView /> : null;
+}
+
 function AppView(): ReactElement {
   const pathname = window.location.pathname;
   if (pathname === "/setup") return <SetupView />;
@@ -63,7 +75,7 @@ function AppView(): ReactElement {
   if (/^\/projects\/[^/]+\/templates$/.test(pathname)) return <TaskTemplateSettings key={pathname} projectId={pathname.split("/")[2]!} />;
   if (/^\/projects\/[^/]+$/.test(pathname)) return <ProjectDetails projectId={pathname.split("/")[2]!} />;
   if (pathname === "/templates") return <TaskTemplateSettings />;
-  if (pathname === "/today") return <TodayView />;
+  if (pathname === "/today") return <TodayRoute />;
   if (pathname === "/tasks" || pathname.startsWith("/tasks/")) return <TasksView />;
   if (pathname === "/board" || pathname.startsWith("/board/")) return <TasksView mode="board" />;
   if (pathname === "/timeline") return <TimelineView />;

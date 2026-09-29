@@ -3,10 +3,12 @@ import { useEffect, useState, type FormEvent, type ReactElement } from "react";
 import { SettingsContent, SettingsLayout, SettingRow, SettingsSection } from "./settings-layout.js";
 import { Button } from "../../components/ui/button.js";
 import { Input } from "../../components/ui/input.js";
+import { Switch } from "../../components/ui/switch.js";
+import { setExperiments } from "../../shell/experiments-api.js";
 import { useCompanyContext } from "../../shell/company-context.js";
 import { readJsonUnchecked, withCompany } from "../../lib/api.js";
 
-type EnvironmentSettings = { minFreeDiskGb: number; defaultBudgetUsd: number; defaultMaxTurns: number };
+type EnvironmentSettings = { minFreeDiskGb: number; defaultBudgetUsd: number; defaultMaxTurns: number; todayPageEnabled: boolean };
 
 export function EnvironmentSettingsView(): ReactElement {
   const { currentCompany } = useCompanyContext();
@@ -17,12 +19,13 @@ export function EnvironmentSettingsView(): ReactElement {
   const [savedDefaultBudgetUsd, setSavedDefaultBudgetUsd] = useState<number | null>(null);
   const [defaultMaxTurns, setDefaultMaxTurns] = useState("40");
   const [savedDefaultMaxTurns, setSavedDefaultMaxTurns] = useState<number | null>(null);
+  const [todayPageEnabled, setTodayPageEnabled] = useState<boolean | null>(null);
   const [message, setMessage] = useState("");
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     void readJsonUnchecked<EnvironmentSettings>("/api/admin/environment")
-      .then((settings) => { setMinFreeDiskGb(String(settings.minFreeDiskGb)); setSavedMinFreeDiskGb(settings.minFreeDiskGb); setDefaultBudgetUsd(String(settings.defaultBudgetUsd)); setSavedDefaultBudgetUsd(settings.defaultBudgetUsd); setDefaultMaxTurns(String(settings.defaultMaxTurns)); setSavedDefaultMaxTurns(settings.defaultMaxTurns); })
+      .then((settings) => { setMinFreeDiskGb(String(settings.minFreeDiskGb)); setSavedMinFreeDiskGb(settings.minFreeDiskGb); setDefaultBudgetUsd(String(settings.defaultBudgetUsd)); setSavedDefaultBudgetUsd(settings.defaultBudgetUsd); setDefaultMaxTurns(String(settings.defaultMaxTurns)); setSavedDefaultMaxTurns(settings.defaultMaxTurns); setTodayPageEnabled(settings.todayPageEnabled); })
       .catch((error: unknown) => setMessage(error instanceof Error ? error.message : "Environment settings could not be loaded"));
   }, []);
 
@@ -55,6 +58,19 @@ export function EnvironmentSettingsView(): ReactElement {
     }
   };
 
+  const toggleTodayPage = async (enabled: boolean): Promise<void> => {
+    setTodayPageEnabled(enabled);
+    setMessage("");
+    try {
+      const settings = await readJsonUnchecked<EnvironmentSettings>("/api/admin/environment", { method: "PATCH", body: JSON.stringify({ todayPageEnabled: enabled }) });
+      setTodayPageEnabled(settings.todayPageEnabled);
+      setExperiments({ todayPage: settings.todayPageEnabled });
+    } catch (error) {
+      setTodayPageEnabled(!enabled);
+      setMessage(error instanceof Error ? error.message : "Environment settings could not be saved");
+    }
+  };
+
   return <SettingsLayout title="Environment" companyId={companyId} backHref={withCompany("/", companyId)} activeHref={withCompany("/admin/environment", companyId)}>
     <SettingsContent title="Environment">
       <SettingsSection title="Worktrees" description="Host-wide limits applied before Suplex creates or changes a worktree.">
@@ -83,6 +99,11 @@ export function EnvironmentSettingsView(): ReactElement {
           <Button size="sm" type="submit" disabled={!changed || saving}>{saving ? "Saving…" : "Save"}</Button>
           <p className="text-xs text-muted-foreground">Set a limit to 0 to disable it. A native turn already in progress can finish before Suplex pauses.</p>
         </form>
+      </SettingsSection>
+      <SettingsSection title="Experiments" description="Try features that are not complete. Each setting applies to all users on this host.">
+        <SettingRow label="Today page" description="Show the Today page in the navigation." htmlFor="experiment-today-page">
+          <Switch id="experiment-today-page" checked={todayPageEnabled ?? false} disabled={todayPageEnabled === null} onCheckedChange={(checked) => void toggleTodayPage(checked)} />
+        </SettingRow>
       </SettingsSection>
       {!validDisk ? <p className="text-xs text-destructive" role="alert">Enter a value from 0 to 1024 GB.</p> : null}
       {!validBudget ? <p className="text-xs text-destructive" role="alert">Enter a budget of 0 USD or more.</p> : null}

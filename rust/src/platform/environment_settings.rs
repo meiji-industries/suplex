@@ -16,6 +16,8 @@ pub struct EnvironmentSettings {
     pub min_free_disk_gb: f64,
     pub default_budget_usd: f64,
     pub default_max_turns: i64,
+    /// Experiment: show the Today page. Off by default.
+    pub today_page_enabled: bool,
 }
 
 /// JSON number as JavaScript prints it: whole numbers without a fraction.
@@ -33,6 +35,7 @@ impl EnvironmentSettings {
             "minFreeDiskGb": js_number(self.min_free_disk_gb),
             "defaultBudgetUsd": js_number(self.default_budget_usd),
             "defaultMaxTurns": self.default_max_turns,
+            "todayPageEnabled": self.today_page_enabled,
         })
     }
 }
@@ -41,13 +44,14 @@ pub fn read(database: &SuplexDatabase) -> DatabaseResult<EnvironmentSettings> {
     Ok(database
         .connection()
         .query_row(
-            "SELECT min_free_disk_gb, default_budget_usd, default_max_turns FROM suplex_environment_settings WHERE id = 'host'",
+            "SELECT min_free_disk_gb, default_budget_usd, default_max_turns, today_page_enabled FROM suplex_environment_settings WHERE id = 'host'",
             [],
             |row| {
                 Ok(EnvironmentSettings {
                     min_free_disk_gb: row.get(0)?,
                     default_budget_usd: row.get(1)?,
                     default_max_turns: row.get(2)?,
+                    today_page_enabled: row.get(3)?,
                 })
             },
         )
@@ -56,6 +60,7 @@ pub fn read(database: &SuplexDatabase) -> DatabaseResult<EnvironmentSettings> {
             min_free_disk_gb: DEFAULT_MIN_FREE_DISK_GB,
             default_budget_usd: DEFAULT_TASK_BUDGET_USD,
             default_max_turns: DEFAULT_TASK_MAX_TURNS,
+            today_page_enabled: false,
         }))
 }
 
@@ -81,11 +86,12 @@ pub fn update(
     }
     database.transaction(false, |database| {
         database.connection().execute(
-            "INSERT INTO suplex_environment_settings (id, min_free_disk_gb, default_budget_usd, default_max_turns, updated_at) VALUES ('host', ?1, ?2, ?3, ?4) ON CONFLICT(id) DO UPDATE SET min_free_disk_gb = excluded.min_free_disk_gb, default_budget_usd = excluded.default_budget_usd, default_max_turns = excluded.default_max_turns, updated_at = excluded.updated_at",
+            "INSERT INTO suplex_environment_settings (id, min_free_disk_gb, default_budget_usd, default_max_turns, today_page_enabled, updated_at) VALUES ('host', ?1, ?2, ?3, ?4, ?5) ON CONFLICT(id) DO UPDATE SET min_free_disk_gb = excluded.min_free_disk_gb, default_budget_usd = excluded.default_budget_usd, default_max_turns = excluded.default_max_turns, today_page_enabled = excluded.today_page_enabled, updated_at = excluded.updated_at",
             params![
                 settings.min_free_disk_gb,
                 settings.default_budget_usd,
                 settings.default_max_turns,
+                settings.today_page_enabled,
                 now_millis_rfc3339()
             ],
         )?;

@@ -28,11 +28,14 @@ if [ -z "$built" ]; then
 fi
 
 # Quitting the app stops its server; running tasks resume after relaunch.
-if pgrep -f "$destination/Contents/" >/dev/null 2>&1; then
+# Wait only for the app and its server. Agent sessions keep `suplex mcp` and
+# `suplex display` helpers from the bundle running; they continue on the old binary.
+app_processes="^$destination/Contents/(MacOS/|Resources/runtime/bin/suplex start)"
+if pgrep -f "$app_processes" >/dev/null 2>&1; then
   echo "Quitting the running Suplex"
   osascript -e 'tell application "Suplex" to quit' >/dev/null 2>&1 || true
   waited=0
-  while pgrep -f "$destination/Contents/" >/dev/null 2>&1; do
+  while pgrep -f "$app_processes" >/dev/null 2>&1; do
     if [ "$waited" -ge 60 ]; then
       echo "Suplex is still running after 60 seconds; quit it and run this again." >&2
       exit 1

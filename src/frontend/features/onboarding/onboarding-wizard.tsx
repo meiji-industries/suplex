@@ -119,9 +119,10 @@ export function OnboardingView(): ReactElement {
       if (currentIndex < ONBOARDING_STEPS.length - 1) go(ONBOARDING_STEPS[currentIndex + 1]!.id);
     } catch (reason) { setError(reason instanceof Error ? reason.message : "Suplex could not save the onboarding step."); }
   };
+  const avatarName = name.trim() || currentCompany?.name || "";
   const body = current === "company" ? <FieldGroup>
     <Field><FieldLabel htmlFor="onboarding-name">Company name</FieldLabel><Input id="onboarding-name" value={name} onChange={event => setName(event.target.value)} /></Field>
-    {currentCompany ? <Field><FieldLabel>Avatar</FieldLabel><AvatarEditor kind="company" id={currentCompany.id} name={currentCompany.name} seed={currentCompany.name} /></Field> : null}
+    {currentCompany ? <Field><FieldLabel>Avatar</FieldLabel><AvatarEditor kind="company" id={currentCompany.id} name={avatarName} seed={avatarName} /></Field> : null}
     <Field><FieldLabel htmlFor="onboarding-code">Company code</FieldLabel><Input id="onboarding-code" maxLength={10} pattern="[A-Z][A-Z0-9]{1,9}" value={code} onChange={event => setCode(event.target.value.toUpperCase())} /></Field>
   </FieldGroup>
     : current === "tools" ? <div className="space-y-3" aria-busy={freshness === "checking" && state.checks.length === 0}>

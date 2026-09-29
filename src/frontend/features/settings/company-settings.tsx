@@ -76,6 +76,7 @@ export function CompanySettingsView(): ReactElement {
   };
 
   const backHref = withCompany("/projects", company.id);
+  const avatarName = name.trim() || company.name;
 
   return (
     <SettingsLayout title="Workspace" companyId={company.id} backHref={backHref} activeHref={companySettingsPath(company.id)}>
@@ -88,7 +89,7 @@ export function CompanySettingsView(): ReactElement {
           </form>
         </SettingRow>
         <SettingRow label="Avatar" description="Shown in the company switcher.">
-          <AvatarEditor kind="company" id={company.id} name={company.name} seed={company.name} />
+          <AvatarEditor kind="company" id={company.id} name={avatarName} seed={avatarName} />
         </SettingRow>
         <SettingRow label="Issue code" description="2–10 letters or numbers, beginning with a letter. Once set, it locks after the company has an issue.">
           <form className="flex items-end gap-2" onSubmit={(event) => { event.preventDefault(); void saveIssueCode(); }}>

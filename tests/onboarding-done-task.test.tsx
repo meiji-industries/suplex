@@ -15,6 +15,7 @@ vi.mock("../src/frontend/features/settings/provider-login.js", () => ({ Provider
 vi.mock("../src/frontend/features/projects/project-cards.js", () => ({ ProjectCards: () => null }));
 vi.mock("../src/frontend/features/projects/recent-repositories.js", () => ({ RecentRepositories: () => null }));
 vi.mock("../src/frontend/features/projects/create-project-dialog.js", () => ({ CreateProjectDialog: () => null }));
+vi.mock("../src/frontend/components/app/entity-avatar.js", () => ({ AvatarEditor: ({ name, seed }: { name: string; seed?: string }) => <output data-avatar-name={name} data-avatar-seed={seed} /> }));
 vi.mock("../src/frontend/components/app/update-notice.js", () => ({ UpdateNotice: () => null }));
 vi.mock("../src/frontend/components/app/theme.js", () => ({ ThemeToggle: () => null }));
 vi.mock("../src/frontend/features/tasks/new-task-dialog.js", () => ({ NewTaskDialog: ({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) => open ? <div role="dialog">New task opened<button onClick={() => onOpenChange(false)}>Close</button></div> : null }));
@@ -39,6 +40,11 @@ function button(container: HTMLElement, label: string): HTMLButtonElement {
   const match = Array.from(container.querySelectorAll("button")).find(candidate => candidate.textContent === label);
   expect(match, `${label} button`).toBeDefined();
   return match!;
+}
+
+function setInput(input: HTMLInputElement, value: string): void {
+  Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set?.call(input, value);
+  input.dispatchEvent(new Event("input", { bubbles: true }));
 }
 
 afterEach(() => {
@@ -81,5 +87,24 @@ test("direct Done waits for the company, stays dismissed across refreshes, and t
 
   await act(async () => button(container, "Create your first task").click());
   expect(container.querySelectorAll('[role="dialog"]')).toHaveLength(1);
+  await act(async () => root.unmount());
+});
+
+test("company avatar uses the trimmed name draft and falls back to the saved name", async () => {
+  fixture.currentCompany = { ...company, name: "My Company" };
+  window.history.replaceState({}, "", "/onboarding?step=company");
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  await act(async () => root.render(<OnboardingView />));
+  const avatar = container.querySelector<HTMLOutputElement>("output[data-avatar-seed]")!;
+  const input = container.querySelector<HTMLInputElement>("#onboarding-name")!;
+
+  expect(avatar.dataset.avatarSeed).toBe("My Company");
+  await act(async () => setInput(input, "  ACME Agency  "));
+  expect(avatar.dataset.avatarName).toBe("ACME Agency");
+  expect(avatar.dataset.avatarSeed).toBe("ACME Agency");
+  await act(async () => setInput(input, "   "));
+  expect(avatar.dataset.avatarSeed).toBe("My Company");
   await act(async () => root.unmount());
 });

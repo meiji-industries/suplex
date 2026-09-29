@@ -519,6 +519,7 @@ mod tests {
         .unwrap();
         fs::set_permissions(&executable, fs::Permissions::from_mode(0o700)).unwrap();
         let mut inherited = std::env::vars().collect::<HashMap<_, _>>();
+        inherited.remove("SUPLEX_GIT_GUARD_DIR");
         for (name, value) in [
             ("SUPLEX_TEST_ARGS", root.join("args.txt")),
             ("SUPLEX_TEST_PROMPT", root.join("prompt.txt")),

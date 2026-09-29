@@ -3,7 +3,7 @@ use std::{
     collections::{HashMap, HashSet},
     fs, io,
     path::Path,
-    time::UNIX_EPOCH,
+    time::{SystemTime, UNIX_EPOCH},
 };
 
 use super::{session_reader, transcript};
@@ -76,11 +76,37 @@ impl From<NativeCounts> for UsageTokens {
 pub struct CodexTurnUsage {
     pub turn_id: String,
     pub model: String,
+    pub started_at_ms: i64,
     pub updated_at_ms: i64,
     pub failed: bool,
     pub tokens: UsageTokens,
     pub cost_usd: f64,
     pub priced: bool,
+}
+
+fn milliseconds(time: SystemTime) -> io::Result<i64> {
+    time.duration_since(UNIX_EPOCH)
+        .map_err(io::Error::other)?
+        .as_millis()
+        .try_into()
+        .map_err(io::Error::other)
+}
+
+fn created_at(metadata: &fs::Metadata) -> io::Result<i64> {
+    Ok(metadata
+        .created()
+        .ok()
+        .and_then(|time| milliseconds(time).ok())
+        .filter(|time| *time > 0)
+        .unwrap_or(milliseconds(metadata.modified()?)?))
+}
+
+fn file_metadata(path: &Path) -> io::Result<Option<fs::Metadata>> {
+    match fs::metadata(path) {
+        Ok(metadata) => Ok(Some(metadata)),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error),
+    }
 }
 
 #[derive(Debug, PartialEq)]
@@ -126,6 +152,42 @@ fn dispatched_models(directory: &Path) -> io::Result<HashMap<String, String>> {
     Ok(models)
 }
 
+fn dispatched_start_times(directory: &Path) -> io::Result<HashMap<String, i64>> {
+    let mut starts = HashMap::<String, i64>::new();
+    for entry in fs::read_dir(directory)? {
+        let entry = entry?;
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if !name.starts_with("dispatch-") || !name.ends_with(".json") {
+            continue;
+        }
+        let Ok(Some(record)) = headless::read_record(&entry.path()) else {
+            continue;
+        };
+        let created_at = created_at(&entry.metadata()?)?;
+        starts
+            .entry(record.turn_id)
+            .and_modify(|prior| *prior = (*prior).min(created_at))
+            .or_insert(created_at);
+    }
+    Ok(starts)
+}
+
+fn started_at_ms(
+    directory: &Path,
+    turn: &session_reader::NativeTurn,
+    dispatched_starts: &HashMap<String, i64>,
+) -> io::Result<i64> {
+    Ok(
+        file_metadata(&headless::turn_file(directory, &turn.id, "prompt"))?
+            .as_ref()
+            .map(created_at)
+            .transpose()?
+            .or_else(|| dispatched_starts.get(&turn.id).copied())
+            .unwrap_or(milliseconds(turn.updated_at)?),
+    )
+}
+
 /// Observe the native Codex timeline, preserving cumulative per-thread token
 /// semantics. Missing prices produce zero estimated cost, as in the source
 /// observer's optional catalog fallback; they do not create a new admission gate.
@@ -135,8 +197,25 @@ pub fn observe_session(
     pricing: Option<&ModelPricingCatalog>,
 ) -> io::Result<CodexUsageObservation> {
     let models = dispatched_models(directory)?;
+    let dispatched_starts = dispatched_start_times(directory)?;
+    let current = headless::read_record(&directory.join("turn.json"))?;
+    let live_turn_id = match current.as_ref() {
+        Some(record) if record.session_id == native_session_id && headless::running(record)? => {
+            Some(record.turn_id.clone())
+        }
+        _ => None,
+    };
     let mut native_turns = session_reader::turns(directory)?;
-    if native_turns.is_empty() {
+    if let Some(live_turn_id) = live_turn_id.as_ref()
+        && native_turns.iter().all(|turn| &turn.id != live_turn_id)
+    {
+        native_turns.push(session_reader::NativeTurn {
+            id: live_turn_id.clone(),
+            events: Vec::new(),
+            updated_at: fs::metadata(directory.join("turn.json"))?.modified()?,
+        });
+    }
+    if native_turns.is_empty() && live_turn_id.is_none() {
         return Err(io::Error::other("Codex turn logs are missing"));
     }
     if native_turns.iter().all(|turn| turn.id.starts_with("msg_")) {
@@ -153,6 +232,7 @@ pub fn observe_session(
     let mut turns = Vec::new();
     let mut complete = true;
     for turn in &native_turns {
+        let started_at_ms = started_at_ms(directory, turn, &dispatched_starts)?;
         let model = models
             .get(&turn.id)
             .cloned()
@@ -164,7 +244,18 @@ pub fn observe_session(
             .filter_map(NativeCounts::from_completed)
             .next_back();
         let Some(reported) = reported else {
-            if let Some(thread) = thread {
+            if live_turn_id.as_deref() == Some(turn.id.as_str()) {
+                turns.push(CodexTurnUsage {
+                    turn_id: turn.id.clone(),
+                    model,
+                    started_at_ms,
+                    updated_at_ms: milliseconds(turn.updated_at)?,
+                    failed: false,
+                    tokens: UsageTokens::default(),
+                    cost_usd: 0.0,
+                    priced: false,
+                });
+            } else if let Some(thread) = thread {
                 gaps.entry(thread).or_default().insert(model);
             }
             complete = false;
@@ -197,26 +288,14 @@ pub fn observe_session(
         turns.push(CodexTurnUsage {
             turn_id: turn.id.clone(),
             model,
-            updated_at_ms: turn
-                .updated_at
-                .duration_since(UNIX_EPOCH)
-                .map_err(io::Error::other)?
-                .as_millis()
-                .try_into()
-                .map_err(io::Error::other)?,
+            started_at_ms,
+            updated_at_ms: milliseconds(turn.updated_at)?,
             failed: transcript::failure(&turn.events).is_some(),
             tokens,
             cost_usd,
             priced: price.is_some(),
         });
     }
-    let current = headless::read_record(&directory.join("turn.json"))?;
-    let live_turn_id = match current {
-        Some(record) if record.session_id == native_session_id && headless::running(&record)? => {
-            Some(record.turn_id)
-        }
-        _ => None,
-    };
     if live_turn_id.is_some() {
         complete = false;
     }
@@ -320,6 +399,88 @@ mod tests {
         let models = dispatched_models(&directory).unwrap();
         assert_eq!(models["msg_old"], "legacy-model");
         assert_eq!(models["msg_empty"], "unknown");
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn running_turn_with_an_empty_log_is_observed_from_dispatch_evidence() {
+        let directory =
+            std::env::temp_dir().join(format!("suplex-codex-live-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&directory).unwrap();
+        let environment = HashMap::new();
+        let record = headless::dispatch(
+            headless::DispatchInput {
+                directory: &directory,
+                worktree: &directory,
+                session_id: "codex-native-live",
+                turn_id: "msg_live",
+                executable: Path::new("/bin/sh"),
+                args: &["-c".into(), "sleep 30".into()],
+                prompt: "Implement the change",
+                environment: &environment,
+            },
+            |_| Ok(true),
+        )
+        .unwrap();
+        let prompt = fs::metadata(headless::turn_file(&directory, "msg_live", "prompt")).unwrap();
+        let observed = observe_session(&directory, "codex-native-live", None).unwrap();
+        assert_eq!(observed.live_turn_id.as_deref(), Some("msg_live"));
+        assert!(!observed.complete);
+        assert_eq!(observed.turns.len(), 1);
+        let live = &observed.turns[0];
+        assert_eq!(live.turn_id, "msg_live");
+        assert_eq!(live.started_at_ms, created_at(&prompt).unwrap());
+        assert_eq!(live.tokens, UsageTokens::default());
+        assert_eq!(live.cost_usd, 0.0);
+        assert!(!live.failed);
+        headless::stop_owned(&record).unwrap();
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn prompt_creation_precedes_completed_log_time() {
+        let directory =
+            std::env::temp_dir().join(format!("suplex-codex-start-time-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&directory).unwrap();
+        fs::write(
+            headless::turn_file(&directory, "msg_done", "prompt"),
+            "Implement the change",
+        )
+        .unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        fs::write(
+            headless::turn_file(&directory, "msg_done", "jsonl"),
+            concat!(
+                "{\"type\":\"thread.started\",\"thread_id\":\"thread-1\"}\n",
+                "{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":10,\"output_tokens\":5}}\n"
+            ),
+        )
+        .unwrap();
+        let observed = observe_session(&directory, "codex-native-done", None).unwrap();
+        assert!(observed.turns[0].started_at_ms < observed.turns[0].updated_at_ms);
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn incomplete_historical_turn_is_not_reported_as_live() {
+        let directory = std::env::temp_dir().join(format!(
+            "suplex-codex-incomplete-turn-{}",
+            uuid::Uuid::new_v4()
+        ));
+        fs::create_dir_all(&directory).unwrap();
+        fs::write(
+            headless::turn_file(&directory, "msg_done", "jsonl"),
+            concat!(
+                "{\"type\":\"thread.started\",\"thread_id\":\"thread-1\"}\n",
+                "{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":10,\"output_tokens\":5}}\n"
+            ),
+        )
+        .unwrap();
+        fs::write(headless::turn_file(&directory, "msg_lost", "jsonl"), "").unwrap();
+        let observed = observe_session(&directory, "codex-native-done", None).unwrap();
+        assert_eq!(observed.live_turn_id, None);
+        assert_eq!(observed.turns.len(), 1);
+        assert_eq!(observed.turns[0].turn_id, "msg_done");
         fs::remove_dir_all(directory).unwrap();
     }
 

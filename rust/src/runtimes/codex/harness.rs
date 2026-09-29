@@ -98,7 +98,7 @@ impl NativeSessionReader for CodexTaskRuntime {
                     turn_id: turn.turn_id,
                     provider: "openai",
                     model: turn.model,
-                    started_at_ms: turn.updated_at_ms,
+                    started_at_ms: turn.started_at_ms,
                     failed: turn.failed,
                     tokens: turn.tokens,
                     cost_usd: turn.cost_usd,
@@ -216,5 +216,56 @@ impl TaskHarness for CodexTaskRuntime {
 
     fn stop(&self, directory: &Path, native_session_id: Option<&str>) -> io::Result<()> {
         headless::stop_session(directory, native_session_id)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::{collections::HashMap, fs, path::Path};
+
+    #[test]
+    fn timeline_keeps_a_running_empty_turn_unfinished() {
+        let root =
+            std::env::temp_dir().join(format!("suplex-codex-timeline-{}", uuid::Uuid::new_v4()));
+        let database = root.join("suplex.sqlite");
+        let session_id = "session-live";
+        let directory =
+            crate::runtimes::task_harness::task_session_runtime_directory(&database, session_id)
+                .unwrap();
+        fs::create_dir_all(&directory).unwrap();
+        let environment = HashMap::new();
+        let record = headless::dispatch(
+            headless::DispatchInput {
+                directory: &directory,
+                worktree: &directory,
+                session_id: "codex-native-live",
+                turn_id: "msg_live",
+                executable: Path::new("/bin/sh"),
+                args: &["-c".into(), "sleep 30".into()],
+                prompt: "Implement the change",
+                environment: &environment,
+            },
+            |_| Ok(true),
+        )
+        .unwrap();
+        let timeline = CodexTaskRuntime
+            .timeline(
+                &ReaderSession {
+                    database_path: &database,
+                    session_id,
+                    native_session_id: "codex-native-live",
+                    instance_home_directory: None,
+                },
+                None,
+            )
+            .unwrap();
+        assert_eq!(timeline.live_message_id.as_deref(), Some("msg_live"));
+        assert_eq!(timeline.usage.len(), 1);
+        assert_eq!(timeline.usage[0].message_id, "msg_live");
+        assert!(timeline.usage[0].started_at_ms > 0);
+        assert_eq!(timeline.usage[0].completed_at_ms, None);
+        headless::stop_owned(&record).unwrap();
+        fs::remove_dir_all(root).unwrap();
     }
 }

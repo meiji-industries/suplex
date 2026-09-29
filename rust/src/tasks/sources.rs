@@ -113,6 +113,9 @@ fn fetch(
     prune: bool,
     token: Option<&str>,
 ) -> Result<(), git2::Error> {
+    if !crate::projects::git::libgit2_transport() {
+        return crate::projects::git::system_fetch(repository, refspecs, prune);
+    }
     let mut origin =
         crate::projects::git::origin_remote(repository, git2::Direction::Fetch, token)?;
     let callbacks = crate::projects::git::remote_callbacks(token);
@@ -676,6 +679,8 @@ mod tests {
 
     #[tokio::test]
     async fn branch_discovery_reads_remote_refs_without_changing_the_checkout() {
+        // The token and SSH-to-HTTPS rewrite belong to libgit2 transport.
+        let _transport = crate::projects::git::fixtures::Libgit2Transport::on();
         let base = std::env::temp_dir().join(format!("suplex-sources-{}", uuid::Uuid::new_v4()));
         let origin = base.join("origin");
         let work = base.join("work");

@@ -102,6 +102,8 @@ mod tests {
 
     #[tokio::test]
     async fn local_backlog_create_fetches_git_and_returns_full_task_shape() {
+        // The token and SSH-to-HTTPS rewrite belong to libgit2 transport.
+        let _transport = crate::projects::git::fixtures::Libgit2Transport::on();
         let root = std::env::temp_dir().join(format!("suplex-task-http-{}", Uuid::new_v4()));
         fs::create_dir_all(&root).unwrap();
         let bare = root.join("origin.git");

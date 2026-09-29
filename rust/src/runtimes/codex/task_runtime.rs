@@ -120,9 +120,11 @@ where
         input.project_environment,
     );
     let server_args = ["mcp".to_owned(), "root".to_owned()];
+    // Delivery pushes from the bridge; `git` on its PATH is the Worker guard.
     let server_names = [
         bridge_auth::ROOT_BINDING_ENV.to_owned(),
         bridge_auth::ROOT_TOKEN_ENV.to_owned(),
+        "SUPLEX_GIT_REAL_BIN".to_owned(),
     ];
     let server = invocation::BridgeServer {
         command: suplex,

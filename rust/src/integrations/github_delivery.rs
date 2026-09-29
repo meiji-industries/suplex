@@ -1926,6 +1926,13 @@ pub fn push_normal(
         )
     };
     let repository = Repository::open(cwd).map_err(unavailable)?;
+    if !crate::projects::git::libgit2_transport() {
+        return crate::projects::git::system_push(
+            &repository,
+            &format!("{head_sha}:refs/heads/{branch}"),
+        )
+        .map_err(unavailable);
+    }
     let mut origin = crate::projects::git::origin_remote(&repository, git2::Direction::Push, token)
         .map_err(unavailable)?;
     let rejected = std::cell::RefCell::new(None::<String>);

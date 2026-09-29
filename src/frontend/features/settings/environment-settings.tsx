@@ -6,10 +6,10 @@ import { Input } from "../../components/ui/input.js";
 import { Switch } from "../../components/ui/switch.js";
 import { setExperiments } from "../../shell/experiments-api.js";
 import { useCompanyContext } from "../../shell/company-context.js";
-import { readJsonUnchecked, withCompany } from "../../lib/api.js";
+import { withCompany } from "../../lib/api.js";
+import { getEnvironmentSettings, updateEnvironmentSettings, type EnvironmentSettings } from "./lib/environment-api.js";
 
-type EnvironmentSettings = { minFreeDiskGb: number; defaultBudgetUsd: number; defaultMaxTurns: number; todayPageEnabled: boolean; hostTerminalEnabled: boolean };
-type ExperimentSettings = Pick<EnvironmentSettings, "todayPageEnabled">;
+type ExperimentSettings = Pick<EnvironmentSettings, "todayPageEnabled" | "git2Enabled">;
 
 export function EnvironmentSettingsView(): ReactElement {
   const { currentCompany } = useCompanyContext();
@@ -25,8 +25,8 @@ export function EnvironmentSettingsView(): ReactElement {
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
-    void readJsonUnchecked<EnvironmentSettings>("/api/admin/environment")
-      .then((settings) => { setMinFreeDiskGb(String(settings.minFreeDiskGb)); setSavedMinFreeDiskGb(settings.minFreeDiskGb); setDefaultBudgetUsd(String(settings.defaultBudgetUsd)); setSavedDefaultBudgetUsd(settings.defaultBudgetUsd); setDefaultMaxTurns(String(settings.defaultMaxTurns)); setSavedDefaultMaxTurns(settings.defaultMaxTurns); setExperimentSettings({ todayPageEnabled: settings.todayPageEnabled }); })
+    void getEnvironmentSettings()
+      .then((settings) => { setMinFreeDiskGb(String(settings.minFreeDiskGb)); setSavedMinFreeDiskGb(settings.minFreeDiskGb); setDefaultBudgetUsd(String(settings.defaultBudgetUsd)); setSavedDefaultBudgetUsd(settings.defaultBudgetUsd); setDefaultMaxTurns(String(settings.defaultMaxTurns)); setSavedDefaultMaxTurns(settings.defaultMaxTurns); setExperimentSettings({ todayPageEnabled: settings.todayPageEnabled, git2Enabled: settings.git2Enabled }); })
       .catch((error: unknown) => setMessage(error instanceof Error ? error.message : "Environment settings could not be loaded"));
   }, []);
 
@@ -44,7 +44,7 @@ export function EnvironmentSettingsView(): ReactElement {
     setSaving(true);
     setMessage("");
     try {
-      const settings = await readJsonUnchecked<EnvironmentSettings>("/api/admin/environment", { method: "PATCH", body: JSON.stringify({ minFreeDiskGb: parsed, defaultBudgetUsd: parsedBudget, defaultMaxTurns: parsedMaxTurns }) });
+      const settings = await updateEnvironmentSettings({ minFreeDiskGb: parsed, defaultBudgetUsd: parsedBudget, defaultMaxTurns: parsedMaxTurns });
       setMinFreeDiskGb(String(settings.minFreeDiskGb));
       setSavedMinFreeDiskGb(settings.minFreeDiskGb);
       setDefaultBudgetUsd(String(settings.defaultBudgetUsd));
@@ -63,8 +63,8 @@ export function EnvironmentSettingsView(): ReactElement {
     setExperimentSettings((current) => current && { ...current, [key]: enabled });
     setMessage("");
     try {
-      const settings = await readJsonUnchecked<EnvironmentSettings>("/api/admin/environment", { method: "PATCH", body: JSON.stringify({ [key]: enabled }) });
-      setExperimentSettings({ todayPageEnabled: settings.todayPageEnabled });
+      const settings = await updateEnvironmentSettings({ [key]: enabled });
+      setExperimentSettings({ todayPageEnabled: settings.todayPageEnabled, git2Enabled: settings.git2Enabled });
       setExperiments({ todayPage: settings.todayPageEnabled, hostTerminal: settings.hostTerminalEnabled });
     } catch (error) {
       setExperimentSettings((current) => current && { ...current, [key]: !enabled });
@@ -104,6 +104,9 @@ export function EnvironmentSettingsView(): ReactElement {
       <SettingsSection title="Experiments" description="Try features that are not complete. Each setting applies to all users on this host.">
         <SettingRow label="Today page" description="Show the Today page in the navigation." htmlFor="experiment-today-page">
           <Switch id="experiment-today-page" checked={experimentSettings?.todayPageEnabled ?? false} disabled={experimentSettings === null} onCheckedChange={(checked) => void toggleExperiment("todayPageEnabled", checked)} />
+        </SettingRow>
+        <SettingRow label="Built-in Git" description="Suplex uses libgit2 and the GitHub sign-in to clone, fetch, and push. When this is off, Suplex uses the Git on this host and its credentials." htmlFor="experiment-git2">
+          <Switch id="experiment-git2" checked={experimentSettings?.git2Enabled ?? false} disabled={experimentSettings === null} onCheckedChange={(checked) => void toggleExperiment("git2Enabled", checked)} />
         </SettingRow>
       </SettingsSection>
       {!validDisk ? <p className="text-xs text-destructive" role="alert">Enter a value from 0 to 1024 GB.</p> : null}

@@ -180,16 +180,23 @@ pub fn published_base_commit(
     github_token: Option<&str>,
 ) -> WorktreeResult<git2::Oid> {
     if repository.find_commit(published_sha).is_err() {
-        let mut origin =
-            crate::projects::git::origin_remote(repository, git2::Direction::Fetch, github_token)?;
-        let callbacks = crate::projects::git::remote_callbacks(github_token);
-        let mut options = FetchOptions::new();
-        options
-            .download_tags(AutotagOption::None)
-            .update_fetchhead(false)
-            .follow_redirects(RemoteRedirect::None)
-            .remote_callbacks(callbacks);
-        origin.fetch(&[published_sha.to_string()], Some(&mut options), None)?;
+        if crate::projects::git::libgit2_transport() {
+            let mut origin = crate::projects::git::origin_remote(
+                repository,
+                git2::Direction::Fetch,
+                github_token,
+            )?;
+            let callbacks = crate::projects::git::remote_callbacks(github_token);
+            let mut options = FetchOptions::new();
+            options
+                .download_tags(AutotagOption::None)
+                .update_fetchhead(false)
+                .follow_redirects(RemoteRedirect::None)
+                .remote_callbacks(callbacks);
+            origin.fetch(&[published_sha.to_string()], Some(&mut options), None)?;
+        } else {
+            crate::projects::git::system_fetch(repository, &[&published_sha.to_string()], false)?;
+        }
         repository.find_commit(published_sha)?;
     }
     Ok(published_sha)

@@ -253,6 +253,24 @@ pub(crate) fn tailscale_hostname(raw: &[u8]) -> Option<String> {
 }
 
 fn git_check() -> Value {
+    if !crate::projects::git::libgit2_transport() {
+        return match std::process::Command::new("git").arg("--version").output() {
+            Ok(output) if output.status.success() => check(
+                "git",
+                "Git",
+                "healthy",
+                "Git is available for source control",
+                json!({"version":String::from_utf8_lossy(&output.stdout).trim(),"engine":"git"}),
+            ),
+            _ => check(
+                "git",
+                "Git",
+                "unhealthy",
+                "Git is not installed",
+                json!({"version":"unavailable","engine":"git"}),
+            ),
+        };
+    }
     let (major, minor, patch) = git2::Version::get().libgit2_version();
     check(
         "git",

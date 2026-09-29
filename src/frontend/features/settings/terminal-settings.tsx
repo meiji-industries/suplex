@@ -6,9 +6,9 @@ import { RadioGroup, RadioGroupItem } from "../../components/ui/radio-group.js";
 import { toolIcons } from "../../components/app/tool-icons.js";
 import { setExperiments } from "../../shell/experiments-api.js";
 import { useCompanyContext } from "../../shell/company-context.js";
-import { readJsonUnchecked, withCompany } from "../../lib/api.js";
+import { withCompany } from "../../lib/api.js";
+import { getEnvironmentSettings, updateEnvironmentSettings, type EnvironmentSettings } from "./lib/environment-api.js";
 
-type EnvironmentSettings = { todayPageEnabled: boolean; hostTerminalEnabled: boolean };
 type TerminalChoice = "suplex" | "herdr";
 
 const cardClass = "relative grid aspect-square w-44 cursor-pointer content-start gap-2 rounded-lg border bg-card p-4 text-sm hover:border-foreground/30 has-data-checked:border-foreground has-data-checked:bg-muted/50 has-focus-visible:ring-3 has-focus-visible:ring-ring/50 has-data-disabled:cursor-default has-data-disabled:opacity-60";
@@ -20,7 +20,7 @@ export function TerminalSettingsView(): ReactElement {
   const [message, setMessage] = useState("");
 
   useEffect(() => {
-    void readJsonUnchecked<EnvironmentSettings>("/api/admin/environment")
+    void getEnvironmentSettings()
       .then(setSettings)
       .catch((error: unknown) => setMessage(error instanceof Error ? error.message : "Terminal settings could not be loaded"));
   }, []);
@@ -31,7 +31,7 @@ export function TerminalSettingsView(): ReactElement {
     setSettings({ ...previous, hostTerminalEnabled: choice === "suplex" });
     setMessage("");
     try {
-      const saved = await readJsonUnchecked<EnvironmentSettings>("/api/admin/environment", { method: "PATCH", body: JSON.stringify({ hostTerminalEnabled: choice === "suplex" }) });
+      const saved = await updateEnvironmentSettings({ hostTerminalEnabled: choice === "suplex" });
       setSettings(saved);
       setExperiments({ todayPage: saved.todayPageEnabled, hostTerminal: saved.hostTerminalEnabled });
     } catch (error) {

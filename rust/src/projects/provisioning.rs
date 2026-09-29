@@ -284,6 +284,9 @@ fn clone(
     target: &Path,
     token: Option<&str>,
 ) -> Result<(), git2::Error> {
+    if !git::libgit2_transport() {
+        return git::system_clone(github, url, target);
+    }
     let transport_url = git::github_transport_url(url, token);
     let url = transport_url.as_deref().unwrap_or(url);
     let mut options = FetchOptions::new();
@@ -414,18 +417,20 @@ fn publish(
     let repository = Repository::open(path)?;
     github.route_git(&repository)?;
     repository.remote("origin", url)?;
-    let mut origin = git::origin_remote(&repository, git2::Direction::Push, token)?;
-    let mut callbacks = remote_callbacks(token);
-    callbacks.push_update_reference(|_, status| match status {
-        Some(status) => Err(git2::Error::from_str(status)),
-        None => Ok(()),
-    });
-    let mut options = PushOptions::new();
-    options.remote_callbacks(callbacks);
-    origin.push(
-        &[format!("refs/heads/{branch}:refs/heads/{branch}")],
-        Some(&mut options),
-    )?;
+    let refspec = format!("refs/heads/{branch}:refs/heads/{branch}");
+    if git::libgit2_transport() {
+        let mut origin = git::origin_remote(&repository, git2::Direction::Push, token)?;
+        let mut callbacks = remote_callbacks(token);
+        callbacks.push_update_reference(|_, status| match status {
+            Some(status) => Err(git2::Error::from_str(status)),
+            None => Ok(()),
+        });
+        let mut options = PushOptions::new();
+        options.remote_callbacks(callbacks);
+        origin.push(&[refspec.as_str()], Some(&mut options))?;
+    } else {
+        git::system_push(&repository, &refspec)?;
+    }
     let mut config = repository.config()?;
     config.set_str(&format!("branch.{branch}.remote"), "origin")?;
     config.set_str(
@@ -730,6 +735,8 @@ mod tests {
 
     #[test]
     fn oauth_clones_and_publishes_ssh_github_urls_over_https() {
+        // The token and SSH-to-HTTPS rewrite belong to libgit2 transport.
+        let _transport = crate::projects::git::fixtures::Libgit2Transport::on();
         let root = temporary("suplex-oauth-provision");
         let bare = root.join("acme/repo.git");
         fs::create_dir_all(bare.parent().unwrap()).unwrap();

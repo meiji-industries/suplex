@@ -1,11 +1,11 @@
 {
   "serde_json_value": 174,
   "io_error_other": 104,
-  "sql_outside_storage": 814,
-  "json_field_index": 1773,
+  "sql_outside_storage": 818,
+  "json_field_index": 1782,
   "empty_string_default": 51,
   "block_on_outside_shared": 7,
   "database_open": 101,
-  "read_json_unchecked": 125,
+  "read_json_unchecked": 124,
   "as_unknown_as": 2
 }

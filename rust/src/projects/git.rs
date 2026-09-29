@@ -3,7 +3,11 @@ use std::{
     fs,
     os::unix::ffi::OsStrExt,
     path::{Path, PathBuf},
-    sync::LazyLock,
+    process::{Command, Stdio},
+    sync::{
+        LazyLock,
+        atomic::{AtomicBool, Ordering},
+    },
 };
 
 use regex::Regex;
@@ -67,6 +71,128 @@ impl Github {
         }
         Ok(())
     }
+}
+
+/// Experiment: libgit2 for Git network operations. Off means the system `git`
+/// binary and the machine's own credentials. Loaded from environment settings.
+static LIBGIT2_TRANSPORT: AtomicBool = AtomicBool::new(false);
+
+pub fn set_libgit2_transport(enabled: bool) {
+    LIBGIT2_TRANSPORT.store(enabled, Ordering::Relaxed);
+}
+
+/// Tests that need libgit2 hold it on here. The setting is process-wide, so a
+/// parallel test that changes the setting must not switch their transport.
+#[cfg(test)]
+static FORCED_LIBGIT2: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+pub(crate) fn libgit2_transport() -> bool {
+    #[cfg(test)]
+    if FORCED_LIBGIT2.load(Ordering::SeqCst) > 0 {
+        return true;
+    }
+    LIBGIT2_TRANSPORT.load(Ordering::Relaxed)
+}
+
+/// Run `git` with the machine's credentials. Prompts are off so a missing
+/// credential fails at once. Failure becomes a `git2::Error`. The Root MCP
+/// server runs delivery inside the agent environment, where `git` on PATH is
+/// the Worker guard; the guard exports the real binary.
+fn run_git(args: &[&str]) -> Result<(), git2::Error> {
+    let git = std::env::var_os("SUPLEX_GIT_REAL_BIN").unwrap_or_else(|| "git".into());
+    let output = Command::new(git)
+        .args(args)
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .stdin(Stdio::null())
+        .output()
+        .map_err(|error| {
+            let message = if error.kind() == std::io::ErrorKind::NotFound {
+                "Git is not installed".to_owned()
+            } else {
+                format!("Git could not start: {error}")
+            };
+            git2::Error::new(git2::ErrorCode::GenericError, git2::ErrorClass::Os, message)
+        })?;
+    if output.status.success() {
+        return Ok(());
+    }
+    static URL_CREDENTIALS: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"://[^/@\s]+@").expect("URL credential pattern"));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let lower = stderr.to_lowercase();
+    let auth = [
+        "authentication failed",
+        "could not read username",
+        "could not read password",
+        "terminal prompts disabled",
+        "permission denied (publickey",
+    ]
+    .iter()
+    .any(|pattern| lower.contains(pattern));
+    let line = stderr
+        .lines()
+        .rev()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .unwrap_or("Git command failed");
+    Err(git2::Error::new(
+        if auth {
+            git2::ErrorCode::Auth
+        } else {
+            git2::ErrorCode::GenericError
+        },
+        git2::ErrorClass::Net,
+        URL_CREDENTIALS.replace_all(line, "://"),
+    ))
+}
+
+fn git_directory(repository: &Repository) -> String {
+    repository
+        .workdir()
+        .unwrap_or_else(|| repository.path())
+        .to_string_lossy()
+        .into_owned()
+}
+
+/// Fetch from origin with the system `git`.
+pub(crate) fn system_fetch(
+    repository: &Repository,
+    refspecs: &[&str],
+    prune: bool,
+) -> Result<(), git2::Error> {
+    let directory = git_directory(repository);
+    let mut args = vec![
+        "-C",
+        &directory,
+        "fetch",
+        "--no-tags",
+        "--no-write-fetch-head",
+    ];
+    if prune {
+        args.push("--prune");
+    }
+    args.extend(["origin", "--"]);
+    args.extend(refspecs);
+    run_git(&args)
+}
+
+/// Push to origin with the system `git`. Never forced.
+pub(crate) fn system_push(repository: &Repository, refspec: &str) -> Result<(), git2::Error> {
+    let directory = git_directory(repository);
+    run_git(&["-C", &directory, "push", "origin", "--", refspec])
+}
+
+/// Clone with the system `git`, routing `https://github.com/` to the fixture
+/// base when `github.git` is set. The routing stays in the new repository.
+pub(crate) fn system_clone(github: &Github, url: &str, target: &Path) -> Result<(), git2::Error> {
+    let target = target.to_string_lossy();
+    let mut args = vec!["clone".to_owned()];
+    if let Some(base) = &github.git {
+        args.push("-c".into());
+        args.push(format!("url.{base}.insteadOf=https://github.com/"));
+    }
+    args.extend(["--".into(), url.to_owned(), target.into_owned()]);
+    run_git(&args.iter().map(String::as_str).collect::<Vec<_>>())
 }
 
 /// OAuth authenticates GitHub Git operations over HTTPS, including SSH origins.
@@ -177,26 +303,29 @@ fn fetch_origin_branch(
                 "Origin must identify the configured repository host",
             )]
         })?;
-    let mut origin =
-        origin_remote(repository, Direction::Fetch, token).map_err(|_| unavailable())?;
-    let mut options = FetchOptions::new();
-    options
-        .download_tags(AutotagOption::None)
-        .remote_callbacks(remote_callbacks(token));
     let refspec = format!("refs/heads/{base_branch}:refs/remotes/origin/{base_branch}");
-    origin
-        .fetch(&[refspec.as_str()], Some(&mut options), None)
-        .map_err(|error| {
-            if error.code() == git2::ErrorCode::Auth {
-                vec![finding(
-                    "repository-authentication",
-                    "repositoryPath",
-                    "Git remote authentication failed. Check the repository credentials.",
-                )]
-            } else {
-                unavailable()
-            }
-        })?;
+    let fetched = if libgit2_transport() {
+        let mut origin =
+            origin_remote(repository, Direction::Fetch, token).map_err(|_| unavailable())?;
+        let mut options = FetchOptions::new();
+        options
+            .download_tags(AutotagOption::None)
+            .remote_callbacks(remote_callbacks(token));
+        origin.fetch(&[refspec.as_str()], Some(&mut options), None)
+    } else {
+        system_fetch(repository, &[refspec.as_str()], false)
+    };
+    fetched.map_err(|error| {
+        if error.code() == git2::ErrorCode::Auth {
+            vec![finding(
+                "repository-authentication",
+                "repositoryPath",
+                "Git remote authentication failed. Check the repository credentials.",
+            )]
+        } else {
+            unavailable()
+        }
+    })?;
     let commit = repository
         .find_reference(&format!("refs/remotes/origin/{base_branch}"))
         .and_then(|reference| reference.peel_to_commit())
@@ -790,6 +919,24 @@ pub(crate) mod fixtures {
 
     use git2::{Repository, RepositoryInitOptions, Signature};
 
+    /// Holds libgit2 transport on while a test runs. Guards are counted, so
+    /// parallel tests do not end each other's hold. Both transports work against
+    /// local fixtures, so tests without a guard are unaffected.
+    pub struct Libgit2Transport;
+
+    impl Libgit2Transport {
+        pub fn on() -> Self {
+            super::FORCED_LIBGIT2.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Self
+        }
+    }
+
+    impl Drop for Libgit2Transport {
+        fn drop(&mut self) {
+            super::FORCED_LIBGIT2.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+
     pub fn init(path: &Path, bare: bool) -> Repository {
         let mut options = RepositoryInitOptions::new();
         options.bare(bare).initial_head("main");
@@ -869,7 +1016,95 @@ mod tests {
     use super::{fixtures::*, *};
 
     #[test]
+    fn system_transport_fetches_pushes_and_clones_local_remotes() {
+        let root = temporary("suplex-system-git");
+        let bare = root.join("origin.git");
+        let url = format!("file://{}", bare.display());
+        init(&bare, true);
+        let seed = init(&root.join("seed"), false);
+        commit(&seed, "one");
+        push_main(&seed, &bare);
+
+        let target = root.join("clone");
+        system_clone(&Github::default(), &url, &target).unwrap();
+        let clone = Repository::open(&target).unwrap();
+        commit(&seed, "two");
+        push_main(&seed, &bare);
+        let second = seed.head().unwrap().target().unwrap();
+        assert!(clone.find_commit(second).is_err());
+        system_fetch(&clone, &["refs/heads/main:refs/remotes/origin/main"], false).unwrap();
+        assert_eq!(
+            clone.refname_to_id("refs/remotes/origin/main").unwrap(),
+            second
+        );
+
+        // A bare commit id, as the published base commit fetch uses.
+        let third = commit(&seed, "three");
+        push_main(&seed, &bare);
+        system_fetch(&clone, &[&third.to_string()], false).unwrap();
+        assert!(clone.find_commit(third).is_ok());
+
+        // A push lands.
+        clone.set_head_detached(third).unwrap();
+        let fourth = commit(&clone, "four");
+        system_push(&clone, &format!("{fourth}:refs/heads/topic")).unwrap();
+        let published = Repository::open_bare(&bare).unwrap();
+        assert_eq!(published.refname_to_id("refs/heads/topic").unwrap(), fourth);
+
+        // A non-fast-forward push is rejected, never forced.
+        let other = init(&root.join("other"), false);
+        commit(&other, "unrelated");
+        other.remote("origin", &url).unwrap();
+        assert!(system_push(&other, "refs/heads/main:refs/heads/topic").is_err());
+        assert_eq!(published.refname_to_id("refs/heads/topic").unwrap(), fourth);
+
+        // A missing remote fails at once.
+        let missing = init(&root.join("missing"), false);
+        missing
+            .remote(
+                "origin",
+                &format!("file://{}", root.join("nowhere").display()),
+            )
+            .unwrap();
+        assert!(
+            system_fetch(
+                &missing,
+                &["refs/heads/main:refs/remotes/origin/main"],
+                false
+            )
+            .is_err()
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn libgit2_transport_still_fetches_when_the_experiment_is_on() {
+        let _transport = Libgit2Transport::on();
+        let root = temporary("suplex-libgit2-transport");
+        let bare = root.join("origin.git");
+        let local = root.join("repo");
+        let checkout = github_checkout(&local, &bare, "acme/repo");
+        let next = commit(&checkout, "two");
+        push_main(&checkout, &bare);
+        checkout
+            .reference(
+                "refs/remotes/origin/main",
+                checkout.head().unwrap().target().unwrap(),
+                true,
+                "",
+            )
+            .unwrap();
+        assert_eq!(
+            capture_task_heads_with_token(&local, "main", "github", None).unwrap(),
+            next.to_string()
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn oauth_git_operations_use_https_for_ssh_origins() {
+        // The token and SSH-to-HTTPS rewrite belong to libgit2 transport.
+        let _transport = Libgit2Transport::on();
         let root = temporary("suplex-oauth-git");
         let bare = root.join("origin.git");
         let local = root.join("repo");

@@ -102,6 +102,9 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
         TcpListener::bind((installation.bind_address.as_str(), installation.port)).await?;
     suplex::platform::supervisor::configure_foreground(&installation)?;
     let host_terminals = std::sync::Arc::<suplex::terminals::host::HostTerminals>::default();
+    suplex::projects::git::set_libgit2_transport(
+        suplex::platform::environment_settings::read(&database)?.git2_enabled,
+    );
     let task_host = suplex::tasks::host::spawn_task_host(
         installation.database.clone(),
         installation.artifacts.clone(),

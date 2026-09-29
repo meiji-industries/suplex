@@ -112,6 +112,7 @@ pub struct EnvironmentPatch {
     pub default_max_turns: Option<i64>,
     pub today_page_enabled: Option<bool>,
     pub host_terminal_enabled: Option<bool>,
+    pub git2_enabled: Option<bool>,
 }
 
 impl Contract for EnvironmentPatch {
@@ -121,7 +122,8 @@ impl Contract for EnvironmentPatch {
             .opt("defaultBudgetUsd", number(0.0, f64::MAX))
             .opt("defaultMaxTurns", int(0.0, f64::MAX))
             .opt("todayPageEnabled", flag)
-            .opt("hostTerminalEnabled", flag);
+            .opt("hostTerminalEnabled", flag)
+            .opt("git2Enabled", flag);
         if fields.refinable()
             && [
                 "minFreeDiskGb",
@@ -129,6 +131,7 @@ impl Contract for EnvironmentPatch {
                 "defaultMaxTurns",
                 "todayPageEnabled",
                 "hostTerminalEnabled",
+                "git2Enabled",
             ]
             .iter()
             .all(|name| fields.raw(name).is_none())

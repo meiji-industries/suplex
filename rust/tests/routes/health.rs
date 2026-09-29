@@ -99,12 +99,9 @@ mod tests {
         assert_eq!(body["checks"][1]["status"], "healthy");
         assert_eq!(body["checks"][2]["status"], "healthy");
         assert_eq!(body["checks"][3]["id"], "git");
-        assert!(
-            body["checks"][3]["details"]["version"]
-                .as_str()
-                .unwrap()
-                .starts_with("libgit2 ")
-        );
+        // The transport is process-wide and other tests switch it briefly.
+        let version = body["checks"][3]["details"]["version"].as_str().unwrap();
+        assert!(version.starts_with("libgit2 ") || version.starts_with("git version "));
         // Unit tests use a Herdr binary that is never installed.
         assert_eq!(body["checks"][4]["summary"], "Herdr is not installed");
         assert_eq!(body["checks"][5]["details"]["method"], "device");

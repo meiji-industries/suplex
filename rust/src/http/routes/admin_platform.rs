@@ -209,6 +209,7 @@ async fn update_environment(
                 host_terminal_enabled: patch
                     .host_terminal_enabled
                     .unwrap_or(previous.host_terminal_enabled),
+                git2_enabled: patch.git2_enabled.unwrap_or(previous.git2_enabled),
             },
         )?;
         record_audit(
@@ -226,15 +227,27 @@ async fn update_environment(
                 "todayPageEnabled": updated.today_page_enabled.to_string(),
                 "previousHostTerminalEnabled": previous.host_terminal_enabled.to_string(),
                 "hostTerminalEnabled": updated.host_terminal_enabled.to_string(),
+                "previousGit2Enabled": previous.git2_enabled.to_string(),
+                "git2Enabled": updated.git2_enabled.to_string(),
             }),
         )?;
         Ok::<_, Box<dyn std::error::Error>>(updated)
     });
+    if let Ok(settings) = &result {
+        crate::projects::git::set_libgit2_transport(settings.git2_enabled);
+    }
     let response = match result {
         Ok(settings) => private(Json(settings.to_json()).into_response()),
         Err(_) => internal(),
     };
     finish(response, cookies)
+}
+
+/// The restored or reset database can hold a different experiment setting.
+fn refresh_git_transport(state: &AppState) {
+    if let Ok(settings) = state.with_database(|database| environment_settings::read(database)) {
+        crate::projects::git::set_libgit2_transport(settings.git2_enabled);
+    }
 }
 
 /// The backup service for this installation.
@@ -416,6 +429,7 @@ async fn restore_backup(State(state): State<AppState>, headers: HeaderMap, body:
     let _ = tokio::fs::remove_dir_all(&staging).await;
     let response = match result {
         Ok(()) => {
+            refresh_git_transport(&state);
             // The restored users can hold this username under another id, so the event names the user instead of referencing it.
             match state.with_database(|database| {
                 record_audit(
@@ -457,7 +471,10 @@ async fn reset(State(state): State<AppState>, headers: HeaderMap) -> Response {
         development::seed_development_data(database, Utc::now())
     });
     let response = match result {
-        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Ok(()) => {
+            refresh_git_transport(&state);
+            StatusCode::NO_CONTENT.into_response()
+        }
         Err(error)
             if matches!(
                 error.downcast_ref(),

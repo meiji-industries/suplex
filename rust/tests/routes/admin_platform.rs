@@ -114,7 +114,7 @@ mod tests {
         assert_eq!(headers[header::CACHE_CONTROL], "private, no-store");
         assert_eq!(
             json_body(&body),
-            json!({"minFreeDiskGb":5,"defaultBudgetUsd":15,"defaultMaxTurns":40,"todayPageEnabled":false,"hostTerminalEnabled":false})
+            json!({"minFreeDiskGb":5,"defaultBudgetUsd":15,"defaultMaxTurns":40,"todayPageEnabled":false,"hostTerminalEnabled":false,"git2Enabled":false})
         );
         let patch = |body: &str| {
             fixture.call(
@@ -126,7 +126,7 @@ mod tests {
         };
         assert_eq!(
             json_body(&patch(r#"{"minFreeDiskGb":7.5}"#).await.2),
-            json!({"minFreeDiskGb":7.5,"defaultBudgetUsd":15,"defaultMaxTurns":40,"todayPageEnabled":false,"hostTerminalEnabled":false})
+            json!({"minFreeDiskGb":7.5,"defaultBudgetUsd":15,"defaultMaxTurns":40,"todayPageEnabled":false,"hostTerminalEnabled":false,"git2Enabled":false})
         );
         assert_eq!(
             json_body(
@@ -134,7 +134,7 @@ mod tests {
                     .await
                     .2
             ),
-            json!({"minFreeDiskGb":7.5,"defaultBudgetUsd":20,"defaultMaxTurns":30,"todayPageEnabled":false,"hostTerminalEnabled":false})
+            json!({"minFreeDiskGb":7.5,"defaultBudgetUsd":20,"defaultMaxTurns":30,"todayPageEnabled":false,"hostTerminalEnabled":false,"git2Enabled":false})
         );
         assert_eq!(
             json_body(&patch(r#"{"todayPageEnabled":true}"#).await.2)["todayPageEnabled"],
@@ -145,13 +145,22 @@ mod tests {
             true
         );
         assert_eq!(
+            json_body(&patch(r#"{"git2Enabled":true}"#).await.2)["git2Enabled"],
+            true
+        );
+        assert_eq!(
             json_body(
                 &fixture
                     .call("GET", "/api/admin/environment", None, vec![])
                     .await
                     .2
             ),
-            json!({"minFreeDiskGb":7.5,"defaultBudgetUsd":20,"defaultMaxTurns":30,"todayPageEnabled":true,"hostTerminalEnabled":true})
+            json!({"minFreeDiskGb":7.5,"defaultBudgetUsd":20,"defaultMaxTurns":30,"todayPageEnabled":true,"hostTerminalEnabled":true,"git2Enabled":true})
+        );
+        // The transport is process-wide: put it back for parallel tests.
+        assert_eq!(
+            json_body(&patch(r#"{"git2Enabled":false}"#).await.2)["git2Enabled"],
+            false
         );
         for invalid in [
             r#"{"defaultBudgetUsd":-1}"#,
@@ -161,6 +170,7 @@ mod tests {
             r#"{"minFreeDiskGb":2000}"#,
             r#"{"todayPageEnabled":"yes"}"#,
             r#"{"hostTerminalEnabled":"yes"}"#,
+            r#"{"git2Enabled":"yes"}"#,
         ] {
             assert_eq!(patch(invalid).await.0, StatusCode::BAD_REQUEST, "{invalid}");
         }

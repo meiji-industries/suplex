@@ -46,6 +46,7 @@ export async function seedTodayFixture(fixture: NativeFixture) {
   const database = fixture.database;
   database.exec("BEGIN");
   try {
+    database.prepare("UPDATE suplex_environment_settings SET today_page_enabled = 1 WHERE id = 'host'").run();
     database.prepare("UPDATE suplex_companies SET name = ? WHERE id = ?").run(companies[0]!.name, companies[0]!.id);
     for (const company of companies.slice(1)) {
       database.prepare("INSERT INTO suplex_companies (id,name,status,created_at) VALUES (?,?,'active',?)").run(company.id, company.name, current);

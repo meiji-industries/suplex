@@ -6,8 +6,7 @@ test("loopback requests create and preserve an Operator session", async () => {
   try {
     const { page, browser, base } = fixture;
     await page.goto(`${base}/auth`);
-    await page.locator("h1").filter({ hasText: "Today" }).waitFor();
-    expect(new URL(page.url()).pathname).toBe("/today");
+    await page.waitForURL(`${base}/tasks`);
     const initialAuth = await page.evaluate(async () => (await fetch("/api/auth/me")).json() as Promise<{ user: { id: string; displayName: string; role: string } }>);
     expect(initialAuth).toMatchObject({ user: { displayName: "Operator", role: "admin" } });
     const context = page.context();

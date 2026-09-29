@@ -252,7 +252,7 @@ mod host_tests {
                 .unwrap()
         };
         assert!(
-            !scheduled_task_ids(&database_path)
+            !scheduled_task_ids(&database_path, &Default::default())
                 .unwrap()
                 .contains(&task_id)
         );
@@ -266,7 +266,7 @@ mod host_tests {
             ).unwrap();
         }
         assert!(
-            scheduled_task_ids(&database_path)
+            scheduled_task_ids(&database_path, &Default::default())
                 .unwrap()
                 .contains(&task_id)
         );
@@ -330,12 +330,12 @@ mod host_tests {
         assert_eq!(state(healthy), "merged");
         drop(database);
         assert!(
-            !scheduled_task_ids(&database_path)
+            !scheduled_task_ids(&database_path, &Default::default())
                 .unwrap()
                 .contains(&failed)
         );
         assert!(
-            scheduled_task_ids(&database_path)
+            scheduled_task_ids(&database_path, &Default::default())
                 .unwrap()
                 .contains(&healthy.to_owned())
         );
@@ -390,7 +390,7 @@ mod host_tests {
         let log = logs.join("system.log");
         let before = fs::read_to_string(&log).map_or(0, |log| log.len());
         assert!(
-            scheduled_task_ids(&database_path)
+            scheduled_task_ids(&database_path, &Default::default())
                 .unwrap()
                 .contains(&admitted)
         );
@@ -782,6 +782,57 @@ mod host_tests {
         assert!(wake_at <= Utc::now() + chrono::Duration::seconds(301));
         assert!(!due_task_ids(&database).unwrap().contains(&cancelled));
         drop(database);
+        fs::remove_dir_all(base).unwrap();
+    }
+
+    #[tokio::test]
+    async fn host_terminals_close_with_their_task_and_archive_cleanup_does_not_need_herdr() {
+        use crate::terminals::{
+            BridgeEvent,
+            host::{HostTerminals, Spec},
+        };
+        let (base, database_path, task_id) = fixture_task();
+        {
+            let mut database = SuplexDatabase::open(&database_path, OpenMode::ReadWrite).unwrap();
+            let mut settings = crate::platform::environment_settings::read(&database).unwrap();
+            settings.host_terminal_enabled = true;
+            crate::platform::environment_settings::update(&mut database, settings).unwrap();
+            // An unreachable Herdr does not block archive.
+            crate::tasks::archive::displays::prepare_task_displays(&database, &task_id)
+                .unwrap()
+                .close()
+                .unwrap();
+            database
+                .connection()
+                .execute(
+                    "UPDATE suplex_task_controls SET status = 'cancelled' WHERE task_id = ?1",
+                    [&task_id],
+                )
+                .unwrap();
+        }
+        let terminals = HostTerminals::default();
+        let spec = || Spec::mirror(&task_id, "cat", base.clone());
+        let mut viewed = terminals.open("host-test-viewed", spec(), 80, 24).unwrap();
+        drop(terminals.open("host-test-idle", spec(), 80, 24).unwrap());
+        // A finished task keeps the terminal a browser shows.
+        scheduled_task_ids(&database_path, &terminals).unwrap();
+        assert!(terminals.contains("host-test-viewed"));
+        assert!(!terminals.contains("host-test-idle"));
+        SuplexDatabase::open(&database_path, OpenMode::ReadWrite)
+            .unwrap()
+            .connection()
+            .execute(
+                "UPDATE suplex_tasks SET archived_at = ?1 WHERE id = ?2",
+                rusqlite::params![Utc::now().to_rfc3339(), &task_id],
+            )
+            .unwrap();
+        scheduled_task_ids(&database_path, &terminals).unwrap();
+        assert!(!terminals.contains("host-test-viewed"));
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while !matches!(viewed.next().await, Some(BridgeEvent::Closed(_))) {}
+        })
+        .await
+        .unwrap();
         fs::remove_dir_all(base).unwrap();
     }
 

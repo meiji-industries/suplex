@@ -4,8 +4,8 @@ import { z } from "zod";
 import type { ExperimentsResponse } from "../contracts/generated/ExperimentsResponse.js";
 import { readJson } from "../lib/api.js";
 
-const ExperimentsSchema = z.object({ todayPage: z.boolean() }) satisfies z.ZodType<ExperimentsResponse>;
-const OFF: ExperimentsResponse = { todayPage: false };
+const ExperimentsSchema = z.object({ todayPage: z.boolean(), hostTerminal: z.boolean() }) satisfies z.ZodType<ExperimentsResponse>;
+const OFF: ExperimentsResponse = { todayPage: false, hostTerminal: false };
 
 let current: ExperimentsResponse | undefined;
 let loading: Promise<void> | undefined;

@@ -100,6 +100,7 @@ impl Contract for HealthQuery {
 #[ts(export)]
 pub struct ExperimentsResponse {
     pub today_page: bool,
+    pub host_terminal: bool,
 }
 
 /// `EnvironmentSettingsBodySchema`: at least one bounded setting.
@@ -110,6 +111,7 @@ pub struct EnvironmentPatch {
     pub default_budget_usd: Option<f64>,
     pub default_max_turns: Option<i64>,
     pub today_page_enabled: Option<bool>,
+    pub host_terminal_enabled: Option<bool>,
 }
 
 impl Contract for EnvironmentPatch {
@@ -118,13 +120,15 @@ impl Contract for EnvironmentPatch {
             .opt("minFreeDiskGb", number(0.0, MAX_MIN_FREE_DISK_GB))
             .opt("defaultBudgetUsd", number(0.0, f64::MAX))
             .opt("defaultMaxTurns", int(0.0, f64::MAX))
-            .opt("todayPageEnabled", flag);
+            .opt("todayPageEnabled", flag)
+            .opt("hostTerminalEnabled", flag);
         if fields.refinable()
             && [
                 "minFreeDiskGb",
                 "defaultBudgetUsd",
                 "defaultMaxTurns",
                 "todayPageEnabled",
+                "hostTerminalEnabled",
             ]
             .iter()
             .all(|name| fields.raw(name).is_none())

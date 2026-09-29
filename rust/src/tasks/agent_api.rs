@@ -2594,7 +2594,9 @@ pub async fn command(
                         "illegal_command",
                     ));
                 }
-                Ok(archive::ArchiveOutcome::Archived(_)) => {}
+                Ok(archive::ArchiveOutcome::Archived(_)) => {
+                    state.host_terminals.close_task(task_id, false);
+                }
                 Err(error) => return Err(uncrossed(error)),
             }
         }

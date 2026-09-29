@@ -101,9 +101,11 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
     let listener =
         TcpListener::bind((installation.bind_address.as_str(), installation.port)).await?;
     suplex::platform::supervisor::configure_foreground(&installation)?;
+    let host_terminals = std::sync::Arc::<suplex::terminals::host::HostTerminals>::default();
     let task_host = suplex::tasks::host::spawn_task_host(
         installation.database.clone(),
         installation.artifacts.clone(),
+        host_terminals.clone(),
     );
     println!("Suplex revision: {}", env!("SUPLEX_REVISION"));
     println!("URL: {}", installation.reachable_address);
@@ -127,7 +129,8 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
         installation.worktrees.clone(),
     )
     .with_artifact_root(installation.artifacts.clone())
-    .with_task_host(task_host.clone());
+    .with_task_host(task_host.clone())
+    .with_host_terminals(host_terminals.clone());
     #[cfg(debug_assertions)]
     let state = match std::env::var_os("SUPLEX_ASSETS_DIR") {
         Some(directory) => state.with_dev_assets_dir(directory.into()),
@@ -174,6 +177,7 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
         .await;
     heartbeat.abort();
     task_host.stop().await;
+    host_terminals.close_all().await;
     server_event("stopped", json!({}));
     result?;
     Ok(())

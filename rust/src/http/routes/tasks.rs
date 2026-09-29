@@ -261,6 +261,7 @@ async fn archive_pending(
             cookies,
         ),
         Ok(ArchiveOutcome::Archived(task)) => {
+            state.host_terminals.close_task(&task.id, false);
             let result = state.with_database(|database| -> Result<_, Box<dyn Error>> {
                 companies::require_company_access(database, &response_user_id, &task.company_id)?;
                 task_response::get(database, &task.id)?

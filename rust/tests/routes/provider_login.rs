@@ -9,7 +9,7 @@ mod tests {
     use crate::{
         http::routes::task_pane::tests::{
             client::{Frame, connect},
-            fixture,
+            enable_host_terminals, fixture, wait_for_output,
         },
         integrations::herdr_bridge::tests::fake_terminal,
         profiles::provider_login::tests::login_herdr,
@@ -214,7 +214,7 @@ mod tests {
         };
         assert_eq!(
             serde_json::from_str::<Value>(&opened).unwrap(),
-            json!({"type":"open","paneId":"pane-login-1","readOnly":false,"cols":100,"rows":30})
+            json!({"type":"open","paneId":"pane-login-1","readOnly":false,"cols":100,"rows":30,"scroll":"remote"})
         );
         assert_eq!(
             terminal.next().await,
@@ -246,6 +246,74 @@ mod tests {
         fixture.execute("UPDATE suplex_users SET role = 'member'", &[]);
         let (_, mut member) = connect(address, &path, &[cookie]).await;
         assert_eq!(member.next().await, Frame::Close(4403, "access".into()));
+        let _ = std::fs::remove_dir_all(&fixture.root);
+    }
+
+    #[tokio::test]
+    async fn host_sign_in_terminals_start_attach_and_close_without_herdr() {
+        let mut fixture = fixture();
+        fixture.state.herdr = crate::integrations::herdr::Herdr::new(
+            fixture.root.join("no-herdr").to_string_lossy(),
+        );
+        enable_host_terminals(&fixture.state);
+        let session = fixture
+            .state
+            .provider_logins
+            .start_host(
+                &fixture.state.herdr,
+                "provider:codex",
+                "codex",
+                "echo signed-in-$((6*7)); read answer; echo \"answer:$answer\"; read done",
+                "/",
+            )
+            .unwrap();
+        assert!(session.host);
+        assert_eq!(
+            fixture
+                .state
+                .provider_logins
+                .start_host(&fixture.state.herdr, "provider:codex", "codex", "x", "/")
+                .unwrap(),
+            session
+        );
+        let address = fixture.serve().await;
+        let path = format!(
+            "/api/admin/provider-login/{}/terminal?cols=100&rows=30",
+            session.pane_id
+        );
+        let cookie = ("cookie", fixture.cookie.as_str());
+        let (_, mut terminal) = connect(address, &path, &[cookie]).await;
+        let Frame::Text(opened) = terminal.next().await else {
+            panic!("open message")
+        };
+        assert_eq!(
+            serde_json::from_str::<Value>(&opened).unwrap(),
+            json!({"type":"open","paneId":session.pane_id,"readOnly":false,"cols":100,"rows":30,"scroll":"local"})
+        );
+        wait_for_output(&mut terminal, "signed-in-42").await;
+        terminal.send(2, b"yes\n").await;
+        wait_for_output(&mut terminal, "answer:yes").await;
+        let client = reqwest::Client::new();
+        let closed = client
+            .delete(format!(
+                "http://{address}/api/admin/provider-login/{}",
+                session.pane_id
+            ))
+            .header("host", "127.0.0.1:4113")
+            .header("origin", "http://127.0.0.1:4113")
+            .header("cookie", &fixture.cookie)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(closed.status(), 204);
+        loop {
+            if let Frame::Close(code, _) = terminal.next().await {
+                assert!([1000, 4404].contains(&code));
+                break;
+            }
+        }
+        assert!(fixture.state.provider_logins.get(&session.pane_id).is_none());
+        fixture.state.host_terminals.close_all().await;
         let _ = std::fs::remove_dir_all(&fixture.root);
     }
 }

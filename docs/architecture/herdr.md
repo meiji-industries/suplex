@@ -24,6 +24,18 @@ flowchart LR
 The diagram separates execution from display. It does not imply that every
 provider wires automatic attachment. See [provider differences](providers.md).
 
+## Host terminals
+
+The host terminal experiment in Settings replaces Herdr for the task Shell, the
+session Mirror, and provider sign-in. The Suplex host then runs each terminal in
+a PTY that it owns, see [host terminals](../../rust/src/terminals/host.rs). The
+host reads the setting for each new connection. Terminal ids come from the task
+or session and are not stored. After a restart, the next connection starts a new
+terminal. The host closes a task's terminals on archive, and closes terminals
+without a viewer when the task is finished. Archive and task completion still
+close Herdr panes that the task has, whatever the setting says. Native agent
+turns do not change.
+
 ## Pane ownership
 
 Suplex manages a workspace labelled

@@ -1,8 +1,12 @@
-//! Interactive provider sign-ins in a dedicated Herdr workspace.
+//! Interactive provider sign-ins in a dedicated Herdr workspace, or in a host
+//! terminal when the host terminal experiment is on.
 
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex, MutexGuard};
 
-use crate::integrations::herdr::{Herdr, HerdrResult};
+use crate::{
+    integrations::herdr::{Herdr, HerdrResult},
+    terminals::host::{HostTerminals, Spec},
+};
 
 use super::provider_readiness::{binary_name, claude_routing_variable, resolve_executable};
 
@@ -84,18 +88,56 @@ pub struct ProviderLoginSession {
     pub pane_id: String,
     pub workspace_id: String,
     pub label: String,
+    /// The sign-in runs in a host terminal, not in Herdr.
+    pub host: bool,
 }
 
 /// The registry is the authority for which panes the terminal route can
-/// attach to. A session whose pane disappeared from Herdr is forgotten and
-/// recreated on demand. Only one sign-in runs at a time: a new sign-in closes
-/// the previous session, so no orphaned workspaces remain.
+/// attach to. A session whose pane or host terminal disappeared is forgotten
+/// and recreated on demand. Only one sign-in runs at a time: a new sign-in
+/// closes the previous session, so no orphaned workspaces remain.
 #[derive(Default)]
 pub struct ProviderLogins {
     sessions: Mutex<Vec<ProviderLoginSession>>,
+    host: Arc<HostTerminals>,
 }
 
 impl ProviderLogins {
+    pub fn new(host: Arc<HostTerminals>) -> Self {
+        Self {
+            sessions: Mutex::default(),
+            host,
+        }
+    }
+
+    fn sessions(&self) -> MutexGuard<'_, Vec<ProviderLoginSession>> {
+        self.sessions
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    fn end(&self, herdr: &Herdr, session: &ProviderLoginSession) {
+        if session.host {
+            self.host.close(&session.pane_id);
+        } else {
+            let _ = herdr.close_pane(&session.pane_id);
+            let _ = herdr.close_workspace(&session.workspace_id);
+        }
+    }
+
+    fn replace(
+        &self,
+        herdr: &Herdr,
+        sessions: &mut Vec<ProviderLoginSession>,
+        session: ProviderLoginSession,
+    ) -> ProviderLoginSession {
+        for previous in sessions.drain(..) {
+            self.end(herdr, &previous);
+        }
+        sessions.push(session.clone());
+        session
+    }
+
     pub fn start(
         &self,
         herdr: &Herdr,
@@ -104,11 +146,10 @@ impl ProviderLogins {
         command: &str,
         cwd: &str,
     ) -> HerdrResult<ProviderLoginSession> {
-        let mut sessions = self
-            .sessions
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if let Some(existing) = sessions.iter().find(|session| session.target == target)
+        let mut sessions = self.sessions();
+        if let Some(existing) = sessions
+            .iter()
+            .find(|session| session.target == target && !session.host)
             && herdr
                 .get_pane(&existing.pane_id)
                 .is_ok_and(|pane| pane.is_some())
@@ -120,34 +161,62 @@ impl ProviderLogins {
             let _ = herdr.close_workspace(&workspace.workspace_id);
             return Err(failure);
         }
-        for previous in sessions.drain(..) {
-            let _ = herdr.close_pane(&previous.pane_id);
-            let _ = herdr.close_workspace(&previous.workspace_id);
-        }
         let session = ProviderLoginSession {
             target: target.into(),
             pane_id: root.pane_id,
             workspace_id: workspace.workspace_id,
             label: label.into(),
+            host: false,
         };
-        sessions.push(session.clone());
-        Ok(session)
+        Ok(self.replace(herdr, &mut sessions, session))
+    }
+
+    /// Starts the sign-in in a host terminal. `herdr` closes a previous
+    /// sign-in that Herdr still shows. Must run inside a Tokio runtime.
+    pub fn start_host(
+        &self,
+        herdr: &Herdr,
+        target: &str,
+        label: &str,
+        command: &str,
+        cwd: &str,
+    ) -> pty_process::Result<ProviderLoginSession> {
+        let mut sessions = self.sessions();
+        if let Some(existing) = sessions.iter().find(|session| {
+            session.target == target && session.host && self.host.contains(&session.pane_id)
+        }) {
+            return Ok(existing.clone());
+        }
+        let pane_id = format!("host-login-{}", uuid::Uuid::new_v4());
+        // The route attaches its own viewer, so this one detaches at once.
+        self.host
+            .open(&pane_id, Spec::sign_in(command, cwd.into()), 80, 24)?;
+        let session = ProviderLoginSession {
+            target: target.into(),
+            pane_id,
+            workspace_id: String::new(),
+            label: label.into(),
+            host: true,
+        };
+        Ok(self.replace(herdr, &mut sessions, session))
     }
 
     pub fn get(&self, pane_id: &str) -> Option<ProviderLoginSession> {
-        self.sessions
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
+        let mut sessions = self.sessions();
+        sessions.retain(|session| !session.host || self.host.contains(&session.pane_id));
+        sessions
             .iter()
             .find(|session| session.pane_id == pane_id)
             .cloned()
     }
 
+    /// A view of a host sign-in terminal that is still running.
+    pub fn attach_host(&self, pane_id: &str) -> Option<crate::terminals::host::Viewer> {
+        self.host.attach(pane_id)
+    }
+
     pub fn close(&self, herdr: &Herdr, pane_id: &str) -> bool {
-        let mut sessions = self
-            .sessions
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut sessions = self.sessions();
         let Some(index) = sessions
             .iter()
             .position(|session| session.pane_id == pane_id)
@@ -155,8 +224,7 @@ impl ProviderLogins {
             return false;
         };
         let session = sessions.remove(index);
-        let _ = herdr.close_pane(&session.pane_id);
-        let _ = herdr.close_workspace(&session.workspace_id);
+        self.end(herdr, &session);
         true
     }
 }

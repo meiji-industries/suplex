@@ -298,7 +298,9 @@ pub fn prepare_archive_displays(
 }
 
 /// The task's session displays plus its Shell, whose binding id is the
-/// stable shell token.
+/// stable shell token. Herdr is observed whatever the host terminal setting
+/// says, since the task may have panes from before the setting changed. An
+/// unreachable Herdr leaves them alone and does not block the caller.
 pub fn prepare_task_displays(
     database: &SuplexDatabase,
     task_id: &str,

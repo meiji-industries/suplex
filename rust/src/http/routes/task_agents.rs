@@ -146,7 +146,8 @@ fn iso_timestamp(value: f64) -> Value {
         .map_or(Value::Null, |time| json!(rfc3339_millis(time)))
 }
 
-fn agents(task: &AgentTask, database_path: &std::path::Path) -> Vec<Value> {
+/// `host` derives terminal ids for host terminals instead of stored Herdr panes.
+fn agents(task: &AgentTask, database_path: &std::path::Path, host: bool) -> Vec<Value> {
     task.rows
         .sessions
         .iter()
@@ -180,7 +181,8 @@ fn agents(task: &AgentTask, database_path: &std::path::Path) -> Vec<Value> {
             json!({
                 "id":session.id, "role":session.kind,
                 "advisorRole":session.advisor_role, "label":label(session),
-                "paneId":session.pane_id, "status":status,
+                "paneId":crate::terminals::session_pane(host, session, task.rows.profile_of(session).provider),
+                "status":status,
                 "statusChangedAt":changed_at,
             })
         })
@@ -205,17 +207,18 @@ async fn task_agents(
         Ok(value) => value,
         Err(response) => return *response,
     };
-    let (task_snapshot, database_path) = match state.with_database(|database| {
+    let (task_snapshot, database_path, host) = match state.with_database(|database| {
         Ok::<_, Box<dyn Error>>((
             task(database, &user_id, &task_id)?,
             database_path(database)?,
+            crate::terminals::host_enabled(database),
         ))
     }) {
         Ok(value) => value,
         Err(error) => return respond(Err(error), cookies),
     };
     let result = match tokio::task::spawn_blocking(
-        move || json!({"agents":agents(&task_snapshot, &database_path)}),
+        move || json!({"agents":agents(&task_snapshot, &database_path, host)}),
     )
     .await
     {
@@ -241,10 +244,11 @@ async fn company_task_agents(
         Ok(value) => value,
         Err(response) => return *response,
     };
-    let (tasks, database_path) = match state.with_database(|database| {
+    let (tasks, database_path, host) = match state.with_database(|database| {
         Ok::<_, Box<dyn Error>>((
             visible_tasks(database, &user_id, &company_id, &ids)?,
             database_path(database)?,
+            crate::terminals::host_enabled(database),
         ))
     }) {
         Ok(value) => value,
@@ -253,7 +257,7 @@ async fn company_task_agents(
     let results = match tokio::task::spawn_blocking(move || {
         tasks
             .iter()
-            .map(|task| json!({"taskId":task.id,"agents":agents(task,&database_path)}))
+            .map(|task| json!({"taskId":task.id,"agents":agents(task,&database_path,host)}))
             .collect::<Vec<_>>()
     })
     .await

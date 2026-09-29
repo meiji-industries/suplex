@@ -566,9 +566,11 @@ pub async fn run_doctor(state: &AppState) -> Result<Vec<DoctorCheck>, Box<dyn st
         .map(str::to_owned)
         .to_vec();
     let snapshot = health::snapshot(state, providers, None).await;
+    let herdr_required = !state.with_database(|database| crate::terminals::host_enabled(database));
     for check in snapshot["checks"].as_array().into_iter().flatten() {
         let id = check["id"].as_str().unwrap_or_default();
-        let required = ["database", "artifact-root", "git", "herdr-readiness"].contains(&id);
+        let required = ["database", "artifact-root", "git"].contains(&id)
+            || (herdr_required && id == "herdr-readiness");
         checks.push(DoctorCheck {
             status: if check["status"] == "healthy" {
                 "PASS"

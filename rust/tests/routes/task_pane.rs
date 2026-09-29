@@ -204,6 +204,93 @@ pub(crate) mod tests {
         }))
     }
 
+    pub(crate) fn enable_host_terminals(state: &AppState) {
+        state.with_database(|database| {
+            let mut settings = crate::platform::environment_settings::read(database).unwrap();
+            settings.host_terminal_enabled = true;
+            crate::platform::environment_settings::update(database, settings).unwrap();
+        });
+    }
+
+    /// Reads frames until a binary frame contains `text`.
+    pub(crate) async fn wait_for_output(client: &mut Client, text: &str) {
+        let mut output = Vec::new();
+        for _ in 0..500 {
+            match client.next().await {
+                Frame::Binary(bytes) => output.extend(bytes),
+                Frame::Close(code, reason) => panic!("closed {code} {reason}"),
+                Frame::Text(_) => {}
+            }
+            if String::from_utf8_lossy(&output).contains(text) {
+                return;
+            }
+        }
+        panic!("{text} did not arrive");
+    }
+
+    #[tokio::test]
+    async fn host_terminals_open_the_shell_without_herdr_and_ignore_a_stale_stored_pane() {
+        let mut fixture = fixture();
+        fixture.state.herdr = Herdr::new(fixture.root.join("no-herdr").to_string_lossy());
+        enable_host_terminals(&fixture.state);
+        fixture.execute(
+            "UPDATE suplex_task_controls SET shell_pane_id = 'pane-gone' WHERE task_id = ?1",
+            &[&fixture.task_id],
+        );
+        let address = fixture.serve().await;
+        let shell_id = format!("host-shell-{}", fixture.task_id);
+        let activity: Value = reqwest::Client::new()
+            .get(format!("http://{address}/api/tasks/{}/activity", fixture.task_id))
+            .header("host", "127.0.0.1:4113")
+            .header("cookie", &fixture.cookie)
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(activity["shellPaneId"], shell_id);
+        assert_eq!(
+            activity["sessions"][0]["paneId"],
+            format!("host-session-{}", fixture.root_session_id)
+        );
+        let path = format!(
+            "/api/tasks/{}/pane/shell/terminal?cols=100&rows=30",
+            fixture.task_id
+        );
+        for _ in 0..2 {
+            let (_, mut shell) = connect(address, &path, &[("cookie", &fixture.cookie)]).await;
+            let Frame::Text(opened) = shell.next().await else {
+                panic!("open message")
+            };
+            assert_eq!(
+                serde_json::from_str::<Value>(&opened).unwrap(),
+                json!({"type":"open","paneId":shell_id,"readOnly":false,"cols":100,"rows":30,"scroll":"local"})
+            );
+            assert_eq!(
+                shell.next().await,
+                Frame::Text(r#"{"type":"replay","state":"start"}"#.into())
+            );
+            assert_eq!(
+                shell.next().await,
+                Frame::Text(r#"{"type":"size","cols":100,"rows":30}"#.into())
+            );
+            assert!(matches!(shell.next().await, Frame::Binary(_)));
+            assert_eq!(
+                shell.next().await,
+                Frame::Text(r#"{"type":"replay","state":"end"}"#.into())
+            );
+            shell.send(2, b"echo host-$((6*7))\n").await;
+            wait_for_output(&mut shell, "host-42").await;
+            shell.send(8, &1000_u16.to_be_bytes()).await;
+        }
+        // Both connections shared one Shell, which the archive closes.
+        assert_eq!(fixture.state.host_terminals.task_ids(), [fixture.task_id.clone()]);
+        fixture.state.host_terminals.close_all().await;
+        assert!(fixture.state.host_terminals.task_ids().is_empty());
+        let _ = std::fs::remove_dir_all(&fixture.root);
+    }
+
     #[tokio::test]
     async fn terminal_origin_accepts_only_the_request_host_or_configured_origin() {
         let headers = |origin: &'static str| {
@@ -267,7 +354,7 @@ pub(crate) mod tests {
         };
         assert_eq!(
             serde_json::from_str::<Value>(&opened).unwrap(),
-            json!({"type":"open","paneId":"pane-root","readOnly":true,"cols":80,"rows":24})
+            json!({"type":"open","paneId":"pane-root","readOnly":true,"cols":80,"rows":24,"scroll":"remote"})
         );
         assert_eq!(
             observer.next().await,

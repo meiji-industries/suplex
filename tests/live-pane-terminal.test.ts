@@ -1,6 +1,6 @@
 import { expect, test } from "vitest";
 
-import { observerViewport, reconnectDelayMs, terminalCloseStatus, terminalMessageStatus, viewportAtTail, wheelToScroll } from "../src/frontend/features/tasks/task-chat/live-pane-terminal.js";
+import { bufferAtTail, nextReplayState, observerViewport, reconnectDelayMs, terminalCloseStatus, terminalMessageStatus, terminalScrollMode, viewportAtTail, wheelToScroll } from "../src/frontend/features/tasks/task-chat/live-pane-terminal.js";
 
 test("interactive terminal dimensions stay within the route contract", () => {
   expect(observerViewport({ cols: 2, rows: 1 })).toEqual({ cols: 20, rows: 5 });
@@ -45,4 +45,27 @@ test("wheel deltas convert to terminal scroll lines", () => {
   expect(wheelToScroll(0.5, 16)).toBeNull();
   expect(wheelToScroll(-33, 0)).toBeNull();
   expect(wheelToScroll(48, 16)).toEqual({ direction: "down", lines: 3 });
+});
+
+test("open messages select local scroll only for the host PTY", () => {
+  expect(terminalScrollMode("local")).toBe("local");
+  expect(terminalScrollMode("remote")).toBe("remote");
+  expect(terminalScrollMode(undefined)).toBe("remote");
+  expect(terminalScrollMode("other")).toBe("remote");
+});
+
+test("replay holds terminal input until the snapshot is parsed", () => {
+  expect(nextReplayState("idle", "start")).toBe("snapshot");
+  expect(nextReplayState("parsing", "start")).toBe("snapshot");
+  expect(nextReplayState("snapshot", "end")).toBe("parsing");
+  expect(nextReplayState("parsing", "parsed")).toBe("idle");
+  expect(nextReplayState("snapshot", "parsed")).toBe("snapshot");
+  expect(nextReplayState("idle", "end")).toBe("idle");
+  expect(nextReplayState("idle", "parsed")).toBe("idle");
+});
+
+test("native scrollback is at the tail when the viewport shows the last rows", () => {
+  expect(bufferAtTail({ viewportY: 40, baseY: 40 })).toBe(true);
+  expect(bufferAtTail({ viewportY: 12, baseY: 40 })).toBe(false);
+  expect(bufferAtTail({ viewportY: 0, baseY: 0 })).toBe(true);
 });

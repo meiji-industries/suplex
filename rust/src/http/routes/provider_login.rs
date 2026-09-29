@@ -20,11 +20,12 @@ use crate::{
         contracts::typed::projects::{ProviderInstanceCreateBody, ProviderParams},
         validation::{Valid, valid},
     },
-    integrations::herdr_bridge::{self, Mode},
+    integrations::herdr_bridge,
     profiles::{
         provider_connection::connection_from_health, provider_instances, provider_login,
         provider_readiness,
     },
+    terminals::{self, Bridge, Mode},
 };
 
 use super::{
@@ -128,7 +129,8 @@ async fn delete_instance(
     with_cookies(response, cookies)
 }
 
-/// Opens the sign-in pane; a Herdr failure is a 503 the admin can act on.
+/// Opens the sign-in pane; a Herdr or terminal failure is a 503 the admin
+/// can act on.
 async fn start(
     state: AppState,
     target: String,
@@ -136,14 +138,22 @@ async fn start(
     provider: String,
     home: Option<String>,
 ) -> Response {
+    let host = state.with_database(|database| terminals::host_enabled(database));
     let opened = tokio::task::spawn_blocking(move || {
         let command = provider_login::login_command(&provider, home.as_deref());
         let cwd = std::env::current_dir()
             .map(|path| path.to_string_lossy().into_owned())
             .unwrap_or_default();
-        state
-            .provider_logins
-            .start(&state.herdr, &target, &label, &command, &cwd)
+        let logins = &state.provider_logins;
+        if host {
+            logins
+                .start_host(&state.herdr, &target, &label, &command, &cwd)
+                .map_err(|_| ())
+        } else {
+            logins
+                .start(&state.herdr, &target, &label, &command, &cwd)
+                .map_err(|_| ())
+        }
     })
     .await;
     match opened {
@@ -155,6 +165,10 @@ async fn start(
             );
             response
         }
+        _ if host => auth::error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Suplex could not open a sign-in terminal.",
+        ),
         _ => auth::error(
             StatusCode::SERVICE_UNAVAILABLE,
             "Suplex could not open a sign-in pane. Check Herdr on the Suplex host.",
@@ -278,12 +292,33 @@ async fn terminal(
             Some((4403, "origin"))
         } else if !admin(&state, &user_id) {
             Some((4403, "access"))
-        } else if state.provider_logins.get(&pane_id).is_none() {
-            Some((4404, "not found"))
         } else {
             None
         };
-        if let Some((code, reason)) = refusal {
+        let login = if refusal.is_some() {
+            None
+        } else {
+            state.provider_logins.get(&pane_id)
+        };
+        let bridge = match login {
+            Some(login) if login.host => state
+                .provider_logins
+                .attach_host(&pane_id)
+                .map(Bridge::Host),
+            Some(_) => {
+                let (connection, events) = herdr_bridge::open(
+                    state.herdr.clone(),
+                    pane_id.clone(),
+                    Some(cols as f64),
+                    Some(rows as f64),
+                    Mode::Control,
+                );
+                Some(Bridge::Herdr(connection, events))
+            }
+            None => None,
+        };
+        let Some(bridge) = bridge else {
+            let (code, reason) = refusal.unwrap_or((4404, "not found"));
             let frame = axum::extract::ws::CloseFrame {
                 code,
                 reason: reason.into(),
@@ -292,14 +327,10 @@ async fn terminal(
                 .send(axum::extract::ws::Message::Close(Some(frame)))
                 .await;
             return;
+        };
+        if let Bridge::Host(viewer) = &bridge {
+            viewer.resize(cols as f64, rows as f64);
         }
-        let (bridge, events) = herdr_bridge::open(
-            state.herdr.clone(),
-            pane_id.clone(),
-            Some(cols as f64),
-            Some(rows as f64),
-            Mode::Control,
-        );
         let session = TerminalSession {
             pane_id: pane_id.clone(),
             read_only: false,
@@ -307,7 +338,7 @@ async fn terminal(
             rows,
             ended_code: 1000,
         };
-        run_terminal(socket, session, bridge, events, || {
+        run_terminal(socket, session, bridge, || {
             if !admin(&state, &user_id) {
                 Some((4403, "access revoked"))
             } else if state.provider_logins.get(&pane_id).is_none() {

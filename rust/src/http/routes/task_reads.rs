@@ -38,6 +38,7 @@ use crate::{
     runtimes::{task_harness::ReaderSession, task_harness_registry},
     tasks::control::SessionRow,
     tasks::worktree,
+    terminals,
 };
 
 use super::auth;
@@ -146,7 +147,12 @@ fn role_label(session: &SessionRow) -> &'static str {
     )
 }
 
-fn activity_document(rows: &RootObservationRows) -> TaskActivityResponse {
+/// `host` derives terminal ids for host terminals instead of stored Herdr panes.
+fn activity_document(
+    rows: &RootObservationRows,
+    task_id: &str,
+    host: bool,
+) -> TaskActivityResponse {
     let sessions = rows
         .sessions
         .iter()
@@ -160,7 +166,7 @@ fn activity_document(rows: &RootObservationRows) -> TaskActivityResponse {
                 profile_id: profile.profile_id.clone(),
                 generation: session.generation,
                 native_session_id: session.native_session_id.clone(),
-                pane_id: session.pane_id.clone(),
+                pane_id: terminals::session_pane(host, session, profile.provider),
                 current: session.current,
                 replacement: session.replacement.clone(),
                 harness: profile.provider,
@@ -183,7 +189,7 @@ fn activity_document(rows: &RootObservationRows) -> TaskActivityResponse {
     TaskActivityResponse {
         sessions,
         turns,
-        shell_pane_id: rows.control.shell_pane_id.clone(),
+        shell_pane_id: terminals::shell_pane(host, task_id, rows.control.shell_pane_id.as_ref()),
     }
 }
 
@@ -260,7 +266,11 @@ async fn activity(
     };
     let result = state.with_database(|database| -> Result<TaskActivityResponse, Box<dyn Error>> {
         let (rows, _) = read_task(database, &user_id, &task_id)?;
-        Ok(activity_document(&rows))
+        Ok(activity_document(
+            &rows,
+            &task_id,
+            terminals::host_enabled(database),
+        ))
     });
     respond(result, cookies)
 }

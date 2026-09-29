@@ -313,16 +313,16 @@ pub async fn snapshot(
     providers: Vec<String>,
     github_override: Option<Value>,
 ) -> Value {
-    let (database, minimum_gb, data_root) = state.with_database(|database| {
-        let minimum_gb = environment_settings::read(database)
-            .ok()
-            .map(|settings| settings.min_free_disk_gb);
+    let (database, minimum_gb, host_terminal, data_root) = state.with_database(|database| {
+        let settings = environment_settings::read(database).ok();
+        let minimum_gb = settings.as_ref().map(|settings| settings.min_free_disk_gb);
+        let host_terminal = settings.is_some_and(|settings| settings.host_terminal_enabled);
         let data_root = database
             .connection()
             .path()
             .filter(|path| !path.is_empty())
             .and_then(|path| Path::new(path).parent().map(Path::to_path_buf));
-        (database.health(), minimum_gb, data_root)
+        (database.health(), minimum_gb, host_terminal, data_root)
     });
     let artifact_root = state.artifact_root.clone();
     let worktree_root = state
@@ -362,12 +362,20 @@ pub async fn snapshot(
         Some(github) => github,
         None => github_check().await,
     };
+    let mut herdr = crate::integrations::herdr_readiness::check_herdr_readiness(&state.herdr).await;
+    // Host terminals do not need Herdr, so a Herdr problem is only a warning.
+    if host_terminal
+        && let Some(status) = herdr.get_mut("status")
+        && status == "unhealthy"
+    {
+        *status = "warning".into();
+    }
     let mut checks = vec![
         database_check(database),
         artifact,
         disk,
         git_check(),
-        crate::integrations::herdr_readiness::check_herdr_readiness(&state.herdr).await,
+        herdr,
         github,
     ];
     if state.session_config.tailscale_exposure == "serve" {

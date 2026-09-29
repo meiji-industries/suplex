@@ -1,6 +1,8 @@
 //! Live terminal views of task panes. Session panes are read-only observers;
-//! the task Shell is interactive. Herdr owns the panes: a missing or recreated
-//! pane closes the socket, and the browser reconnects to the current pane.
+//! the task Shell is interactive. Herdr owns the panes by default: a missing
+//! or recreated pane closes the socket, and the browser reconnects to the
+//! current pane. With the host terminal experiment on, the host owns them and
+//! starts a missing terminal on open.
 
 use std::time::Duration;
 
@@ -15,7 +17,6 @@ use axum::{
     routing::get,
 };
 use serde_json::{Value, json};
-use tokio::sync::mpsc::UnboundedReceiver;
 
 use crate::{
     http::{
@@ -26,7 +27,8 @@ use crate::{
         },
         validation::valid,
     },
-    integrations::herdr_bridge::{self, Bridge, BridgeEvent, Mode},
+    integrations::herdr_bridge,
+    terminals::{self, Bridge, BridgeEvent, Mode, ReplayState},
 };
 
 use super::{auth, profiles::authorize};
@@ -101,11 +103,10 @@ pub(crate) struct TerminalSession {
 pub(crate) async fn run_terminal(
     mut socket: WebSocket,
     session: TerminalSession,
-    bridge: Bridge,
-    mut events: UnboundedReceiver<BridgeEvent>,
+    mut bridge: Bridge,
     mut access: impl FnMut() -> Option<(u16, &'static str)>,
 ) {
-    let opened = json!({"type":"open","paneId":session.pane_id,"readOnly":session.read_only,"cols":session.cols,"rows":session.rows});
+    let opened = json!({"type":"open","paneId":session.pane_id,"readOnly":session.read_only,"cols":session.cols,"rows":session.rows,"scroll":bridge.scroll_mode()});
     if socket
         .send(Message::Text(opened.to_string().into()))
         .await
@@ -113,13 +114,15 @@ pub(crate) async fn run_terminal(
     {
         return;
     }
+    // A host Mirror is read only, but it takes the size of its viewer.
+    let sizable = !session.read_only || matches!(bridge, Bridge::Host(_));
     let mut interval = tokio::time::interval(Duration::from_secs(1));
     interval.tick().await;
     loop {
         tokio::select! {
             message = socket.recv() => match message {
                 Some(Ok(Message::Binary(bytes))) if !session.read_only => bridge.input(bytes.to_vec()),
-                Some(Ok(Message::Text(text))) if !session.read_only => {
+                Some(Ok(Message::Text(text))) if sizable => {
                     let Ok(message) = serde_json::from_str::<Value>(&text) else { continue };
                     match (message["type"].as_str(), message["direction"].as_str()) {
                         (Some("resize"), _) => if let (Some(cols), Some(rows)) = (number(&message["cols"]), number(&message["rows"])) {
@@ -134,11 +137,22 @@ pub(crate) async fn run_terminal(
                 Some(Ok(Message::Close(_))) | None | Some(Err(_)) => break,
                 Some(Ok(_)) => {}
             },
-            event = events.recv() => match event {
+            event = bridge.next() => match event {
                 Some(BridgeEvent::Frame { width, height, bytes, .. }) => {
                     let size = json!({"type":"size","cols":width,"rows":height}).to_string();
                     if socket.send(Message::Text(size.into())).await.is_err()
+                        || (!bytes.is_empty() && socket.send(Message::Binary(bytes.into())).await.is_err())
+                    {
+                        break;
+                    }
+                }
+                Some(BridgeEvent::Snapshot { width, height, bytes }) => {
+                    let replay = |state: ReplayState| Message::Text(json!({"type":"replay","state":state}).to_string().into());
+                    let size = json!({"type":"size","cols":width,"rows":height}).to_string();
+                    if socket.send(replay(ReplayState::Start)).await.is_err()
+                        || socket.send(Message::Text(size.into())).await.is_err()
                         || socket.send(Message::Binary(bytes.into())).await.is_err()
+                        || socket.send(replay(ReplayState::End)).await.is_err()
                     {
                         break;
                     }
@@ -193,6 +207,9 @@ async fn terminal(
             return close(&mut socket, 4403, "origin").await;
         }
         let shell = role == "shell";
+        if state.with_database(|database| terminals::host_enabled(database)) {
+            return host_terminal(socket, state, user_id, task_id, role, (cols, rows)).await;
+        }
         let pane_id = if shell {
             let resolver = state.clone();
             let (user, task) = (user_id.clone(), task_id.clone());
@@ -213,13 +230,14 @@ async fn terminal(
                 Err(_) => return close(&mut socket, 4404, "not found").await,
             }
         };
-        let (bridge, events) = herdr_bridge::open(
+        let (connection, events) = herdr_bridge::open(
             state.herdr.clone(),
             pane_id.clone(),
             shell.then_some(cols as f64),
             shell.then_some(rows as f64),
             if shell { Mode::Control } else { Mode::Observe },
         );
+        let bridge = Bridge::Herdr(connection, events);
         let session = TerminalSession {
             pane_id: pane_id.clone(),
             read_only: !shell,
@@ -227,7 +245,7 @@ async fn terminal(
             rows,
             ended_code: if shell { 1000 } else { 1012 },
         };
-        run_terminal(socket, session, bridge, events, || {
+        run_terminal(socket, session, bridge, || {
             match bound_pane(&state, &user_id, &task_id, &role) {
                 Ok(current) if current.as_deref() == Some(pane_id.as_str()) => None,
                 Ok(_) => Some((4404, "attachment changed")),
@@ -238,6 +256,51 @@ async fn terminal(
     });
     auth::append_cookies(&mut response, cookies);
     response
+}
+
+/// A host terminal view. The route starts a missing terminal, so a restart or
+/// a stale stored pane id leads to a new terminal, never to an error.
+async fn host_terminal(
+    mut socket: WebSocket,
+    state: AppState,
+    user_id: String,
+    task_id: String,
+    role: String,
+    (cols, rows): (i64, i64),
+) {
+    let shell = role == "shell";
+    let binding = state.with_database(|database| {
+        terminals::task_terminal(database, &user_id, &task_id, &role)
+            .map_err(|error| error.to_string())
+    });
+    let (id, spec) = match binding {
+        Ok(Some(binding)) => binding,
+        Ok(None) => return close(&mut socket, 4404, "no attachment").await,
+        Err(_) => return close(&mut socket, 4404, "not found").await,
+    };
+    let Ok(viewer) = state.host_terminals.open(&id, spec, cols, rows) else {
+        return close(&mut socket, 4404, "terminal could not start").await;
+    };
+    if shell {
+        viewer.resize(cols as f64, rows as f64);
+    }
+    let session = TerminalSession {
+        pane_id: id.clone(),
+        read_only: !shell,
+        cols,
+        rows,
+        ended_code: if shell { 1000 } else { 1012 },
+    };
+    run_terminal(socket, session, Bridge::Host(viewer), || {
+        match state.with_database(|database| {
+            terminals::task_terminal_id(database, &user_id, &task_id, &role)
+        }) {
+            Ok(current) if current.as_deref() == Some(id.as_str()) => None,
+            Ok(_) => Some((4404, "attachment changed")),
+            Err(_) => Some((4403, "access revoked")),
+        }
+    })
+    .await;
 }
 
 #[cfg(test)]

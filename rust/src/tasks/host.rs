@@ -13,12 +13,14 @@ use crate::{
         control::TaskStatus,
         limits::reconcile_limit_pause,
     },
+    terminals::host::HostTerminals,
 };
 use chrono::Utc;
 use std::{
     collections::{HashMap, HashSet},
     future::Future,
     path::{Path, PathBuf},
+    sync::Arc,
     time::Duration,
 };
 use tokio::{
@@ -46,7 +48,11 @@ impl TaskHostHandle {
 
 /// Resume every active task from durable intent. The periodic scan covers
 /// starts committed before this process booted and notifications lost on crash.
-pub fn spawn_task_host(database_path: PathBuf, artifact_root: PathBuf) -> TaskHostHandle {
+pub fn spawn_task_host(
+    database_path: PathBuf,
+    artifact_root: PathBuf,
+    host_terminals: Arc<HostTerminals>,
+) -> TaskHostHandle {
     let (wake_tx, mut wake_rx) = mpsc::unbounded_channel::<String>();
     let (shutdown_tx, mut shutdown_rx) = watch::channel(false);
     let (finished_tx, finished_rx) = watch::channel(false);
@@ -95,7 +101,7 @@ pub fn spawn_task_host(database_path: PathBuf, artifact_root: PathBuf) -> TaskHo
                     Vec::new()
                 },
                 Some(task_id) = wake_rx.recv() => vec![task_id],
-                _ = interval.tick() => match scheduled_task_ids(&database_path) {
+                _ = interval.tick() => match scheduled_task_ids(&database_path, &host_terminals) {
                     Ok(ids) => ids,
                     Err(error) => { eprintln!("Task scheduling will retry: {error}"); Vec::new() },
                 },
@@ -136,6 +142,18 @@ pub fn spawn_task_host(database_path: PathBuf, artifact_root: PathBuf) -> TaskHo
     handle
 }
 
+/// Host terminals close with their task: all of them on archive, and the
+/// ones no browser shows once the task has finished.
+fn close_retired_terminals(database: &SuplexDatabase, host_terminals: &HostTerminals) {
+    for task_id in host_terminals.task_ids() {
+        if super::repository::archived_or_gone(database, &task_id).unwrap_or(false) {
+            host_terminals.close_task(&task_id, false);
+        } else if super::repository::terminal_displays_ready(database, &task_id).unwrap_or(false) {
+            host_terminals.close_task(&task_id, true);
+        }
+    }
+}
+
 async fn poll_periodically<F, Fut>(
     period: Duration,
     mut shutdown: watch::Receiver<bool>,
@@ -162,8 +180,13 @@ async fn poll_periodically<F, Fut>(
 
 /// TypeScript `TaskHost.tick`: the queue sweep admits every ready queued
 /// task on each tick, starting with the immediate first tick at startup.
-pub(crate) fn scheduled_task_ids(database_path: &Path) -> DatabaseResult<Vec<String>> {
+/// Each tick also closes the host terminals of finished tasks.
+pub(crate) fn scheduled_task_ids(
+    database_path: &Path,
+    host_terminals: &HostTerminals,
+) -> DatabaseResult<Vec<String>> {
     let mut database = SuplexDatabase::open(database_path, OpenMode::ReadWrite)?;
+    close_retired_terminals(&database, host_terminals);
     {
         // A diagnostic read never changes queue admission.
         let queued = database

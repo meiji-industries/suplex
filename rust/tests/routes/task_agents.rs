@@ -182,7 +182,7 @@ mod tests {
             },
         };
         let path = database.clone();
-        let agents = tokio::task::spawn_blocking(move || agents(&task, &path))
+        let agents = tokio::task::spawn_blocking(move || agents(&task, &path, false))
             .await
             .unwrap();
         assert_eq!(agents[0]["status"], "working");

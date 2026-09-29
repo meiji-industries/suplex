@@ -45,6 +45,24 @@ export function viewportAtTail(viewport: Pick<HTMLElement, "clientHeight" | "scr
   return Math.abs(viewport.scrollTop - Math.max(0, tailScrollTop)) <= 1;
 }
 
+/** Reads the scroll owner from an `open` message: "local" for the host PTY, "remote" (Herdr) otherwise. */
+export function terminalScrollMode(value: unknown): "remote" | "local" {
+  return value === "local" ? "local" : "remote";
+}
+
+/** Replay progress for a host PTY snapshot; terminal-generated input goes to the server only in "idle". */
+export type ReplayState = "idle" | "snapshot" | "parsing";
+
+export function nextReplayState(state: ReplayState, event: "start" | "end" | "parsed"): ReplayState {
+  if (event === "start") return "snapshot";
+  if (event === "end") return state === "snapshot" ? "parsing" : state;
+  return state === "parsing" ? "idle" : state;
+}
+
+export function bufferAtTail(buffer: { viewportY: number; baseY: number }): boolean {
+  return buffer.viewportY >= buffer.baseY;
+}
+
 /** Converts a wheel delta into a Herdr scroll command; sub-pixel deltas are ignored. */
 export function wheelToScroll(deltaY: number, rowHeightPx: number): { direction: "up" | "down"; lines: number } | null {
   if (!Number.isFinite(deltaY) || !Number.isFinite(rowHeightPx) || rowHeightPx <= 0 || Math.abs(deltaY) < 1) return null;
@@ -71,7 +89,7 @@ export function PaneTerminal({ path, interactive, paneId, label }: { path: strin
   const [errorMessage, setErrorMessage] = useState<string>();
   const [scrolledUp, setScrolledUp] = useState(false);
   const [connection, setConnection] = useState(0);
-  const sendRef = useRef<(message: string | ArrayBuffer) => void>(() => undefined);
+  const [localScroll, setLocalScroll] = useState(false);
   const jumpToTailRef = useRef<() => void>(() => undefined);
   useEffect(() => {
     const host = hostRef.current;
@@ -81,6 +99,10 @@ export function PaneTerminal({ path, interactive, paneId, label }: { path: strin
     let attempt = 0;
     let retry: number | undefined;
     let resizeTimer: number | undefined;
+    // Host PTY connections keep scrollback in xterm and replay a snapshot on connect.
+    let local = false;
+    let replay: ReplayState = "idle";
+    let replayCount = 0;
     followTailRef.current = true;
     setScrolledUp(false);
     const terminal = new Terminal({ allowProposedApi: true, cursorBlink: interactive, cursorStyle: "block", disableStdin: !interactive, fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace", fontSize: 12, lineHeight: 1.2, scrollback: 0, macOptionIsMeta: true, theme: terminalTheme(host) });
@@ -93,7 +115,7 @@ export function PaneTerminal({ path, interactive, paneId, label }: { path: strin
     try { const webgl = new WebglAddon(); terminal.loadAddon(webgl); webgl.onContextLoss(() => webgl.dispose()); } catch { /* DOM renderer fallback */ }
     const setTerminalStatus = (next: TerminalStatus): void => { statusRef.current = next; setStatus(next); };
     const syncReadOnlySurface = (): void => {
-      if (interactive) return;
+      if (interactive || local) return;
       const screen = terminal.element?.querySelector<HTMLElement>(".xterm-screen");
       if (!screen) return;
       const bounds = screen.getBoundingClientRect();
@@ -113,23 +135,36 @@ export function PaneTerminal({ path, interactive, paneId, label }: { path: strin
     };
     const followTail = (): void => {
       if (!followTailRef.current) return;
-      viewport.scrollTop = interactive ? viewport.scrollHeight : localTailScrollTop();
+      if (local) terminal.scrollToBottom();
+      else viewport.scrollTop = interactive ? viewport.scrollHeight : localTailScrollTop();
       setScrolledUp(false);
     };
     const updateLocalScroll = (): void => {
-      if (interactive) return;
+      if (interactive || local) return;
       followTailRef.current = viewportAtTail(viewport, localTailScrollTop());
       setScrolledUp(!followTailRef.current);
     };
-    jumpToTailRef.current = () => { followTailRef.current = true; followTail(); };
     viewport.addEventListener("scroll", updateLocalScroll);
     const send = (message: string | ArrayBuffer): void => {
       const socket = socketRef.current;
       if (socket && socket.readyState === WebSocket.OPEN) socket.send(message);
     };
-    sendRef.current = send;
+    jumpToTailRef.current = () => {
+      if (interactive && !local) send(JSON.stringify({ type: "scroll", direction: "down", lines: 10_000 }));
+      else { followTailRef.current = true; followTail(); }
+    };
+    const fitToPanel = (): void => {
+      const proposed = fit.proposeDimensions();
+      if (!proposed) return;
+      const next = observerViewport(proposed);
+      if (terminal.cols === next.cols && terminal.rows === next.rows) return;
+      terminal.resize(next.cols, next.rows);
+      send(JSON.stringify({ type: "resize", cols: next.cols, rows: next.rows }));
+    };
     const connect = (): void => {
       if (disposed) return;
+      local = false;
+      replay = "idle";
       const proposed = interactive ? observerViewport(fit.proposeDimensions() ?? { cols: terminal.cols, rows: terminal.rows }) : undefined;
       if (proposed) terminal.resize(proposed.cols, proposed.rows);
       const scheme = location.protocol === "https:" ? "wss" : "ws";
@@ -152,10 +187,35 @@ export function PaneTerminal({ path, interactive, paneId, label }: { path: strin
           });
           return;
         }
-        let message: { type?: string; cols?: number; rows?: number; reason?: string; message?: string };
+        let message: { type?: string; cols?: number; rows?: number; reason?: string; message?: string; scroll?: unknown; state?: string };
         try { message = JSON.parse(event.data) as typeof message; }
-        catch { setErrorMessage("Herdr sent an invalid terminal event."); setTerminalStatus("ended"); socket.close(1000); return; }
-        if (message.type === "open") { setErrorMessage(undefined); setTerminalStatus(terminalMessageStatus(statusRef.current, "open")); }
+        catch { setErrorMessage("Suplex received an invalid terminal event."); setTerminalStatus("ended"); socket.close(1000); return; }
+        if (message.type === "open") {
+          setErrorMessage(undefined);
+          setTerminalStatus(terminalMessageStatus(statusRef.current, "open"));
+          local = terminalScrollMode(message.scroll) === "local";
+          terminal.options.scrollback = local ? 10_000 : 0;
+          setLocalScroll(local);
+          if (local && !interactive) { host.style.width = ""; host.style.height = ""; fitToPanel(); }
+        }
+        else if (message.type === "replay" && message.state === "start") {
+          terminal.reset();
+          replayCount += 1;
+          replay = nextReplayState(replay, "start");
+          followTailRef.current = true;
+          setScrolledUp(false);
+        }
+        else if (message.type === "replay" && message.state === "end") {
+          replay = nextReplayState(replay, "end");
+          const current = replayCount;
+          // xterm runs write callbacks in order, so this one runs after every snapshot chunk is parsed.
+          terminal.write(new Uint8Array(0), () => {
+            if (disposed || socket !== socketRef.current || current !== replayCount) return;
+            replay = nextReplayState(replay, "parsed");
+            followTail();
+            if (statusRef.current !== "live") setTerminalStatus(terminalMessageStatus(statusRef.current, "frame"));
+          });
+        }
         else if (message.type === "size" && typeof message.cols === "number" && typeof message.rows === "number" && Number.isInteger(message.cols) && Number.isInteger(message.rows) && message.cols > 0 && message.rows > 0 && message.cols <= 65_535 && message.rows <= 65_535 && (terminal.cols !== message.cols || terminal.rows !== message.rows)) {
           const wasFollowing = followTailRef.current;
           terminal.resize(message.cols, message.rows);
@@ -164,7 +224,7 @@ export function PaneTerminal({ path, interactive, paneId, label }: { path: strin
         }
         else if (message.type === "closed") setTerminalStatus("ended");
         else if (message.type === "error") {
-          setErrorMessage(message.message?.trim() || "Herdr could not observe this pane.");
+          setErrorMessage(message.message?.trim() || "The terminal is not available.");
           if (interactive) setTerminalStatus("ended");
           else if (statusRef.current !== "live") setTerminalStatus("reconnecting");
         }
@@ -187,45 +247,45 @@ export function PaneTerminal({ path, interactive, paneId, label }: { path: strin
       };
     };
     if (interactive) {
-      terminal.onData(data => send(new TextEncoder().encode(data).buffer as ArrayBuffer));
+      terminal.onData(data => { if (replay === "idle") send(new TextEncoder().encode(data).buffer as ArrayBuffer); });
       terminal.onBinary(data => {
+        if (replay !== "idle") return;
         const bytes = new Uint8Array(data.length);
         for (let index = 0; index < data.length; index++) bytes[index] = data.charCodeAt(index) & 0xff;
         send(bytes.buffer as ArrayBuffer);
       });
-      terminal.attachCustomWheelEventHandler((event) => {
-        if (event.type !== "wheel") return false;
-        const rowHeight = host.clientHeight > 0 && terminal.rows > 0 ? host.clientHeight / terminal.rows : 0;
-        const deltaY = event.deltaMode === WheelEvent.DOM_DELTA_LINE ? event.deltaY * rowHeight : event.deltaY;
-        const scroll = wheelToScroll(deltaY, rowHeight);
-        if (scroll) {
-          send(JSON.stringify({ type: "scroll", direction: scroll.direction, lines: scroll.lines }));
-          if (scroll.direction === "up") setScrolledUp(true);
-          else setScrolledUp(false);
-        }
-        return false;
-      });
-    } else {
-      terminal.attachCustomWheelEventHandler(() => false);
     }
+    terminal.attachCustomWheelEventHandler((event) => {
+      if (local) return true;
+      if (!interactive || event.type !== "wheel") return false;
+      const rowHeight = host.clientHeight > 0 && terminal.rows > 0 ? host.clientHeight / terminal.rows : 0;
+      const deltaY = event.deltaMode === WheelEvent.DOM_DELTA_LINE ? event.deltaY * rowHeight : event.deltaY;
+      const scroll = wheelToScroll(deltaY, rowHeight);
+      if (scroll) {
+        send(JSON.stringify({ type: "scroll", direction: scroll.direction, lines: scroll.lines }));
+        if (scroll.direction === "up") setScrolledUp(true);
+        else setScrolledUp(false);
+      }
+      return false;
+    });
+    terminal.onScroll(() => {
+      if (!local) return;
+      followTailRef.current = bufferAtTail(terminal.buffer.active);
+      setScrolledUp(!followTailRef.current);
+    });
     terminal.attachCustomKeyEventHandler((event) => {
       if (event.type === "keydown" && (event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "c" && terminal.getSelection()) { void navigator.clipboard.writeText(terminal.getSelection()).catch(() => undefined); terminal.clearSelection(); return false; }
       return true;
     });
     const observer = new ResizeObserver(() => { window.clearTimeout(resizeTimer); resizeTimer = window.setTimeout(() => {
       if (statusRef.current === "ended" || statusRef.current === "taken_over") return;
-      if (!interactive) {
+      if (!interactive && !local) {
         const wasFollowing = followTailRef.current;
         syncReadOnlySurface();
         if (wasFollowing) requestAnimationFrame(followTail);
         return;
       }
-      const proposed = fit.proposeDimensions();
-      if (!proposed) return;
-      const next = observerViewport(proposed);
-      if (terminal.cols === next.cols && terminal.rows === next.rows) return;
-      terminal.resize(next.cols, next.rows);
-      send(JSON.stringify({ type: "resize", cols: next.cols, rows: next.rows }));
+      fitToPanel();
     }, 150); });
     observer.observe(host);
     connect();
@@ -233,11 +293,10 @@ export function PaneTerminal({ path, interactive, paneId, label }: { path: strin
   }, [connection, interactive, paneId, path, label]);
   const reconnect = () => { setConnection((value) => value + 1); statusRef.current = "connecting"; setStatus("connecting"); };
   const jumpToBottom = () => {
-    if (interactive) sendRef.current(JSON.stringify({ type: "scroll", direction: "down", lines: 10_000 }));
-    else jumpToTailRef.current();
+    jumpToTailRef.current();
     setScrolledUp(false);
     hostRef.current?.querySelector<HTMLElement>(".xterm-helper-textarea")?.focus();
   };
   const overlay = status === "connecting" ? "Connection in progress" : status === "reconnecting" ? <ReconnectingStatus /> : status === "taken_over" ? "Another viewer took control" : status === "ended" ? (errorMessage ?? (paneId || interactive ? "Pane ended" : "No live pane")) : null;
-  return <div className="flex h-full min-h-0 min-w-0 w-full flex-1 flex-col"><div className="relative mt-1 min-h-0 min-w-0 w-full flex-1 overflow-hidden bg-background p-2"><div className={interactive ? "h-full w-full overflow-hidden" : "h-full w-full max-w-full overflow-auto"} ref={viewportRef}><div aria-label={label} className="h-full" ref={hostRef} /></div>{overlay ? <div className="absolute inset-0 z-10 flex items-center justify-center gap-2 bg-background/85 text-sm text-foreground"><span>{overlay}</span>{errorMessage || status === "taken_over" ? <Button size="xs" onClick={reconnect}>{status === "taken_over" ? "Take control" : "Retry"}</Button> : null}</div> : null}{status === "live" && scrolledUp ? <div className="absolute bottom-3 right-3 z-10"><Button aria-label="Open latest output" size="icon-xs" variant="secondary" onClick={jumpToBottom}><ArrowDownToLine aria-hidden="true" /></Button></div> : null}</div></div>;
+  return <div className="flex h-full min-h-0 min-w-0 w-full flex-1 flex-col"><div className="relative mt-1 min-h-0 min-w-0 w-full flex-1 overflow-hidden bg-background p-2"><div className={interactive || localScroll ? "h-full w-full overflow-hidden" : "h-full w-full max-w-full overflow-auto"} ref={viewportRef}><div aria-label={label} className="h-full" ref={hostRef} /></div>{overlay ? <div className="absolute inset-0 z-10 flex items-center justify-center gap-2 bg-background/85 text-sm text-foreground"><span>{overlay}</span>{errorMessage || status === "taken_over" ? <Button size="xs" onClick={reconnect}>{status === "taken_over" ? "Take control" : "Retry"}</Button> : null}</div> : null}{status === "live" && scrolledUp ? <div className="absolute bottom-3 right-3 z-10"><Button aria-label="Open latest output" size="icon-xs" variant="secondary" onClick={jumpToBottom}><ArrowDownToLine aria-hidden="true" /></Button></div> : null}</div></div>;
 }

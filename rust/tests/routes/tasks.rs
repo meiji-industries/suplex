@@ -1134,7 +1134,7 @@ mod tests {
                 tokio::time::sleep(std::time::Duration::from_millis(20)).await;
             }
         }).await.unwrap();
-        let host = crate::tasks::host::spawn_task_host(db_path.clone(), root.clone());
+        let host = crate::tasks::host::spawn_task_host(db_path.clone(), root.clone(), Default::default());
         let host_state = state.clone().with_task_host(host.clone());
         let cancelled = cancel_pending(
             State(host_state.clone()),

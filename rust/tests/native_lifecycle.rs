@@ -153,6 +153,14 @@ fn administrator_invitation_replaces_prior_token_and_preserves_recovery_metadata
     let filename =
         std::env::temp_dir().join(format!("suplex-invite-{}.sqlite", uuid::Uuid::new_v4()));
     let mut database = SuplexDatabase::open(&filename, OpenMode::Migrate).unwrap();
+    // Migrations seed the development Operator; bootstrap needs no active admin.
+    database
+        .connection()
+        .execute(
+            "UPDATE suplex_users SET status = 'revoked' WHERE role = 'admin'",
+            [],
+        )
+        .unwrap();
     let now = chrono::Utc::now();
     let first = issue_administrator_invitation(&mut database, "bootstrap", "{}", now)
         .unwrap()

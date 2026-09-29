@@ -21,25 +21,7 @@ use super::{
     herdr::{Herdr, Viewport},
     provider_http::{lenient, optional_metadata},
 };
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum BridgeEvent {
-    Frame {
-        seq: u64,
-        full: bool,
-        width: u32,
-        height: u32,
-        bytes: Vec<u8>,
-    },
-    Closed(String),
-    Error(String),
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Mode {
-    Observe,
-    Control,
-}
+use crate::terminals::{BridgeEvent, Mode, clamp, exit_reason};
 
 #[derive(Debug)]
 enum Request {
@@ -49,12 +31,12 @@ enum Request {
 }
 
 /// Handle to an open bridge. Dropping it releases the Herdr child.
-pub struct Bridge {
+pub struct Connection {
     requests: UnboundedSender<Request>,
     release: CancellationToken,
 }
 
-impl Bridge {
+impl Connection {
     pub fn input(&self, bytes: Vec<u8>) {
         let _ = self.requests.send(Request::Input(bytes));
     }
@@ -72,14 +54,10 @@ impl Bridge {
     }
 }
 
-impl Drop for Bridge {
+impl Drop for Connection {
     fn drop(&mut self) {
         self.release.cancel();
     }
-}
-
-fn clamp(value: f64, minimum: i64, maximum: i64) -> i64 {
-    (value.round() as i64).clamp(minimum, maximum)
 }
 
 /// One `herdr pane bridge` JSON line.
@@ -128,18 +106,6 @@ pub fn parse_bridge_record(line: &str) -> Option<BridgeEvent> {
     }
 }
 
-fn exit_reason(status: std::io::Result<std::process::ExitStatus>) -> String {
-    use std::os::unix::process::ExitStatusExt;
-    let reason = status.ok().and_then(|status| {
-        status
-            .signal()
-            .and_then(|signal| nix::sys::signal::Signal::try_from(signal).ok())
-            .map(|signal| signal.as_str().to_owned())
-            .or_else(|| status.code().map(|code| code.to_string()))
-    });
-    format!("exited:{}", reason.unwrap_or_else(|| "unknown".into()))
-}
-
 /// SIGTERM, then SIGKILL after half a second.
 async fn stop(child: &mut Child) {
     if let Some(pid) = child.id() {
@@ -162,7 +128,7 @@ pub fn open(
     cols: Option<f64>,
     rows: Option<f64>,
     mode: Mode,
-) -> (Bridge, UnboundedReceiver<BridgeEvent>) {
+) -> (Connection, UnboundedReceiver<BridgeEvent>) {
     let (requests, requested) = unbounded_channel();
     let (events, received) = unbounded_channel();
     let release = CancellationToken::new();
@@ -182,7 +148,7 @@ pub fn open(
             tokio::spawn(observe(herdr, pane_id, 1_000, events, release.clone()));
         }
     }
-    (Bridge { requests, release }, received)
+    (Connection { requests, release }, received)
 }
 
 async fn write(stdin: &mut Option<ChildStdin>, record: Value) {

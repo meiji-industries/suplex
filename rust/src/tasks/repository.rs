@@ -625,6 +625,37 @@ pub(crate) fn bound_pane(
     Ok(pane.flatten())
 }
 
+/// The authorized task's current session of `kind`.
+pub(crate) fn current_session(
+    database: &SuplexDatabase,
+    user_id: &str,
+    task_id: &str,
+    kind: &str,
+) -> DatabaseResult<Option<String>> {
+    super::authorize_task(database, user_id, task_id)?;
+    Ok(database
+        .connection()
+        .query_row(
+            "SELECT id FROM suplex_task_sessions WHERE task_id = ?1 AND kind = ?2 AND is_current = 1 ORDER BY created_at, id LIMIT 1",
+            params![task_id, kind],
+            |row| row.get(0),
+        )
+        .optional()?)
+}
+
+/// Whether the task is archived. A deleted task counts as archived.
+pub(crate) fn archived_or_gone(database: &SuplexDatabase, task_id: &str) -> DatabaseResult<bool> {
+    let archived: Option<bool> = database
+        .connection()
+        .query_row(
+            "SELECT archived_at IS NOT NULL FROM suplex_tasks WHERE id = ?1",
+            [task_id],
+            |row| row.get(0),
+        )
+        .optional()?;
+    Ok(archived.is_none_or(|archived| archived))
+}
+
 type ShellPaneContext = (Option<String>, Vec<Option<String>>, Option<String>);
 
 pub(crate) fn shell_pane_context(

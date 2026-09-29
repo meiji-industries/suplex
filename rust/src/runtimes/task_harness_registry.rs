@@ -1,10 +1,13 @@
 //! TypeScript `task-harness-registry.ts`: one harness per supported agent CLI.
 //! A new runtime adds its module and one line to `harness`.
 
+use std::path::Path;
+
 use super::{
     claude_code::task_runtime::ClaudeCodeTaskRuntime, codex::harness::CodexTaskRuntime,
     opencode::task_runtime::OpenCodeTaskRuntime, task_harness::TaskHarness,
 };
+use crate::tasks::control::HarnessKind;
 
 /// The harness for one harness kind, when its runtime is ported.
 pub fn harness(kind: &str) -> Option<&'static dyn TaskHarness> {
@@ -45,6 +48,25 @@ pub fn session_harness(native_session_id: &str) -> &'static str {
         "claude-code"
     } else {
         "opencode"
+    }
+}
+
+/// The passive display command for a session runtime directory. OpenCode
+/// has none.
+pub fn display_command(provider: HarnessKind, runtime_directory: &Path) -> Option<String> {
+    match provider {
+        HarnessKind::ClaudeCode => {
+            super::claude_code::display::claude_display_command(runtime_directory)
+                .ok()
+                .map(|display| display.command)
+        }
+        HarnessKind::Codex => super::codex::display::display_command(runtime_directory)
+            .ok()
+            .map(|display| display.command),
+        HarnessKind::Devin => super::devin::display::display_command(runtime_directory)
+            .ok()
+            .map(|display| display.command),
+        HarnessKind::Opencode => None,
     }
 }
 
@@ -94,5 +116,22 @@ mod tests {
         assert_eq!(session_harness(&claude.new_session_id()), "claude-code");
         assert!(for_session(Some("ses_abc")).is_some());
         assert!(for_session(None).is_some());
+    }
+
+    #[test]
+    fn every_provider_but_opencode_has_a_display_command_for_its_directory() {
+        let directory = Path::new("/tmp/suplex-display");
+        assert_eq!(display_command(HarnessKind::Opencode, directory), None);
+        for provider in [
+            HarnessKind::ClaudeCode,
+            HarnessKind::Codex,
+            HarnessKind::Devin,
+        ] {
+            assert!(
+                display_command(provider, directory)
+                    .unwrap()
+                    .contains("'/tmp/suplex-display'")
+            );
+        }
     }
 }

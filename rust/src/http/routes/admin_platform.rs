@@ -174,6 +174,7 @@ async fn read_experiments(
         Ok(settings) => private(
             Json(ExperimentsResponse {
                 today_page: settings.today_page_enabled,
+                host_terminal: settings.host_terminal_enabled,
             })
             .into_response(),
         ),
@@ -205,6 +206,9 @@ async fn update_environment(
                 today_page_enabled: patch
                     .today_page_enabled
                     .unwrap_or(previous.today_page_enabled),
+                host_terminal_enabled: patch
+                    .host_terminal_enabled
+                    .unwrap_or(previous.host_terminal_enabled),
             },
         )?;
         record_audit(
@@ -220,6 +224,8 @@ async fn update_environment(
                 "defaultMaxTurns": updated.default_max_turns.to_string(),
                 "previousTodayPageEnabled": previous.today_page_enabled.to_string(),
                 "todayPageEnabled": updated.today_page_enabled.to_string(),
+                "previousHostTerminalEnabled": previous.host_terminal_enabled.to_string(),
+                "hostTerminalEnabled": updated.host_terminal_enabled.to_string(),
             }),
         )?;
         Ok::<_, Box<dyn std::error::Error>>(updated)

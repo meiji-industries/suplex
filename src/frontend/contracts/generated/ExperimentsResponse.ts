@@ -3,4 +3,4 @@
 /**
  * Host-wide experiments that change what every signed-in user sees.
  */
-export type ExperimentsResponse = { todayPage: boolean, };
+export type ExperimentsResponse = { todayPage: boolean, hostTerminal: boolean, };

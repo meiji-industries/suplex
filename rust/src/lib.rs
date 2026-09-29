@@ -10,3 +10,4 @@ pub mod projects;
 pub mod runtimes;
 pub mod shared;
 pub mod tasks;
+pub mod terminals;

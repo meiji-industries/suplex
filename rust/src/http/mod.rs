@@ -19,6 +19,7 @@ use crate::platform::{config::Installation, database::SuplexDatabase, embedded};
 use crate::profiles::provider_login::ProviderLogins;
 use crate::projects::git::Github;
 use crate::tasks::host::TaskHostHandle;
+use crate::terminals::host::HostTerminals;
 
 pub mod access;
 pub mod agent_api_runtime;
@@ -81,6 +82,7 @@ pub struct AppState {
     pub github_device: Arc<DeviceAuth>,
     pub herdr: Herdr,
     pub provider_logins: Arc<ProviderLogins>,
+    pub host_terminals: Arc<HostTerminals>,
     dev_assets_dir: Option<PathBuf>,
     /// Dynamic client registrations per source address in the last hour.
     pub oauth_registrations: OAuthRegistrations,
@@ -91,6 +93,7 @@ pub type OAuthRegistrations =
 
 impl AppState {
     pub fn new(database: SuplexDatabase, session_config: session::SessionConfig) -> Self {
+        let host_terminals = Arc::<HostTerminals>::default();
         Self {
             database: Arc::new(Mutex::new(database)),
             session_config,
@@ -102,7 +105,8 @@ impl AppState {
             history_shutdown: CancellationToken::new(),
             github_device: Arc::new(DeviceAuth::new().expect("GitHub device endpoints are valid")),
             herdr: Herdr::default(),
-            provider_logins: Arc::default(),
+            provider_logins: Arc::new(ProviderLogins::new(host_terminals.clone())),
+            host_terminals,
             dev_assets_dir: None,
             oauth_registrations: OAuthRegistrations::default(),
         }
@@ -133,6 +137,14 @@ impl AppState {
 
     pub fn with_task_host(mut self, task_host: TaskHostHandle) -> Self {
         self.task_host = Some(task_host);
+        self
+    }
+
+    /// Shares one terminal registry with the task host, which closes the
+    /// terminals of finished tasks.
+    pub fn with_host_terminals(mut self, host_terminals: Arc<HostTerminals>) -> Self {
+        self.provider_logins = Arc::new(ProviderLogins::new(host_terminals.clone()));
+        self.host_terminals = host_terminals;
         self
     }
 
@@ -392,6 +404,7 @@ mod tests {
             github_device: Arc::new(DeviceAuth::new().unwrap()),
             herdr: Herdr::default(),
             provider_logins: Arc::default(),
+            host_terminals: Arc::default(),
             dev_assets_dir: None,
             oauth_registrations: OAuthRegistrations::default(),
         };

@@ -329,9 +329,13 @@ pub struct SessionDisplay<'a> {
 }
 
 /// Opens or refreshes the Herdr display for one task session and records the
-/// pane bindings. Callers ignore its failure and continue native work.
-pub fn attach_session(herdr: &Herdr, display: &SessionDisplay<'_>) -> DisplayResult<String> {
+/// pane bindings. Callers ignore its failure and continue native work. With
+/// host terminals on, the host starts the display when a browser opens it.
+pub fn attach_session(herdr: &Herdr, display: &SessionDisplay<'_>) -> DisplayResult<()> {
     let database = SuplexDatabase::open(display.database_path, OpenMode::ReadWrite)?;
+    if crate::terminals::host_enabled(&database) {
+        return Ok(());
+    }
     let (task_id, kind, generation, pane_id) = database.connection().query_row(
         "SELECT task_id, kind, generation, pane_id FROM suplex_task_sessions WHERE id = ?1",
         [display.session_id],
@@ -408,6 +412,7 @@ pub fn attach_session(herdr: &Herdr, display: &SessionDisplay<'_>) -> DisplayRes
             Ok(())
         },
     )
+    .map(drop)
 }
 
 /// Shows a harness session in Herdr before dispatch. The display is an

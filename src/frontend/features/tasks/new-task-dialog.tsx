@@ -89,8 +89,8 @@ export function NewTaskDialog({ open, onOpenChange, companyId, onCreated, initia
   const [workflows, setWorkflows] = useState<ApiWorkflow[]>([]);
   const [workflowId, setWorkflowId] = useState("");
   const [advisorProfileIds, setAdvisorProfileIds] = useState<AdvisorProfileIds>(initialDraft?.advisorProfileIds ?? {});
-  // The non-repair target/tests this draft had before switching to repair, restored when switching away.
-  const previousDelivery = useRef<Delivery | null>(null);
+  // The non-repair target this draft had before switching to repair, restored when switching away.
+  const previousDelivery = useRef<Delivery["deliveryTarget"] | null>(null);
   const [source, setSource] = useState<TaskSourceSelector | undefined>(initialDraft?.source);
   const [sourceSummary, setSourceSummary] = useState<TaskSourceSummary | undefined>(initialDraft?.sourceSummary ?? (initialDraft?.issue ? issueTaskSource(initialDraft.issue) : undefined));
   const [images, setImages] = useState<NonNullable<TaskInput["images"]>>(initialDraft?.images ?? []);
@@ -104,14 +104,13 @@ export function NewTaskDialog({ open, onOpenChange, companyId, onCreated, initia
   const [projectFindings, setProjectFindings] = useState<string[]>([]);
   const request = useRef<{ body: string; key: string } | null>(null);
   const repair = workflow === REPAIR;
-  /** Explicit draft fields win, then the record's default agents and settings, then the fallback; repair always merges with tests. */
+  /** Explicit draft fields win, then the record's default agents and settings, then the fallback; repair always merges. */
   const applyRecord = (record: ApiWorkflow, explicit: RecordFallback, fallback: RecordFallback) => {
     setRootProfileId(explicit.rootProfileId ?? record.rootProfileId ?? fallback.rootProfileId ?? "");
     setWorkerProfileId(explicit.workerProfileId ?? record.workerProfileId ?? fallback.workerProfileId ?? "");
     setAdvisorProfileIds(admittedAdvisors(record.engine, explicit.advisorProfileIds ?? { ...fallback.advisorProfileIds, ...record.advisorProfileIds }));
     setVisualEvidence(explicit.visualEvidence ?? record.visualEvidence ?? fallback.visualEvidence ?? "off");
-    if (record.engine === REPAIR) { setDeliveryTarget("merged"); setRunProjectTests(true); return; }
-    setDeliveryTarget(explicit.deliveryTarget ?? record.deliveryTarget ?? fallback.deliveryTarget ?? "pull_request_draft");
+    setDeliveryTarget(record.engine === REPAIR ? "merged" : explicit.deliveryTarget ?? record.deliveryTarget ?? fallback.deliveryTarget ?? "pull_request_draft");
     setRunProjectTests(explicit.runProjectTests ?? record.runProjectTests ?? fallback.runProjectTests ?? true);
   };
   useEffect(() => {
@@ -135,13 +134,13 @@ export function NewTaskDialog({ open, onOpenChange, companyId, onCreated, initia
     setWorkflowId(initialDraft?.workflowId ?? "");
     setAdvisorProfileIds(admittedAdvisors(nextWorkflow, initialDraft?.advisorProfileIds ?? {}));
     previousDelivery.current = null;
+    setRunProjectTests(saved.runProjectTests ?? true);
     if (nextWorkflow === REPAIR) {
-      previousDelivery.current = { deliveryTarget: memory().deliveryTarget ?? "pull_request_draft", runProjectTests: memory().runProjectTests ?? true };
-      setDeliveryTarget("merged"); setRunProjectTests(true);
+      previousDelivery.current = memory().deliveryTarget ?? "pull_request_draft";
+      setDeliveryTarget("merged");
       if (initialDraft?.source?.kind !== "pull_request") { setSource(undefined); setSourceSummary(undefined); }
     } else {
       setDeliveryTarget(saved.deliveryTarget ?? "pull_request_draft");
-      setRunProjectTests(saved.runProjectTests ?? true);
     }
     let cancelled = false;
     void Promise.all([listProjects(companyId), readJsonUnchecked<{ profiles: ApiProfile[] }>("/api/profiles"), readJsonUnchecked<{ workflows: ApiWorkflow[] }>("/api/workflows?includeArchived=true")]).then(([projectResult, profileResult, workflowResult]) => {
@@ -167,24 +166,24 @@ export function NewTaskDialog({ open, onOpenChange, companyId, onCreated, initia
   }, [projectId, open]);
   useEffect(() => {
     if (editing || !open || !settingsLoaded || !projects.some(project => project.id === projectId)) return;
-    // Repair forces target/tests; remember the draft's own general settings instead of the forced values.
-    const general = repair && previousDelivery.current ? previousDelivery.current : { deliveryTarget, runProjectTests };
+    // Repair forces the target; remember the draft's own target instead of the forced value.
+    const general = repair && previousDelivery.current ? previousDelivery.current : deliveryTarget;
     // A workflow's default agent is not a general preference: keep the earlier remembered profile instead.
     const defaults: { rootProfileId?: string | undefined; workerProfileId?: string | undefined } = workflows.find(record => record.id === workflowId) ?? {};
     const remembered = memory();
     const rootProfile = rootProfileId && rootProfileId === defaults.rootProfileId ? remembered.rootProfileId : rootProfileId || undefined;
     const workerProfile = workerProfileId && workerProfileId === defaults.workerProfileId ? remembered.workerProfileId : workerProfileId || undefined;
-    writeNewTaskMemory({ projectId, rootProfileId: rootProfile, workerProfileId: workerProfile, startImmediately, deliveryTarget: general.deliveryTarget, runProjectTests: general.runProjectTests, visualEvidence });
+    writeNewTaskMemory({ projectId, rootProfileId: rootProfile, workerProfileId: workerProfile, startImmediately, deliveryTarget: general, runProjectTests, visualEvidence });
   }, [open, settingsLoaded, projects, projectId, rootProfileId, workerProfileId, startImmediately, deliveryTarget, runProjectTests, visualEvidence, repair, workflows, workflowId, editing]);
   const selectRecord = (record: ApiWorkflow) => {
     if (record.id === workflowId) return;
     const next = record.engine;
     let fallback: Delivery = { deliveryTarget, runProjectTests };
     if (next === REPAIR && workflow !== REPAIR) {
-      previousDelivery.current = { deliveryTarget, runProjectTests };
+      previousDelivery.current = deliveryTarget;
       if (source?.kind !== "pull_request") { setSource(undefined); setSourceSummary(undefined); }
     } else if (workflow === REPAIR && next !== REPAIR && previousDelivery.current) {
-      fallback = previousDelivery.current;
+      fallback = { deliveryTarget: previousDelivery.current, runProjectTests };
       previousDelivery.current = null;
     }
     setWorkflow(next);
@@ -194,7 +193,7 @@ export function NewTaskDialog({ open, onOpenChange, companyId, onCreated, initia
   const applyTemplate = (template: ApiTaskTemplate) => {
     setDescription(template.description); setRootProfileId(template.rootProfileId ?? ""); setWorkerProfileId(template.workerProfileId ?? "");
     setVisualEvidence(template.visualEvidence);
-    if (template.workflow === REPAIR) { if (workflow !== REPAIR) previousDelivery.current = { deliveryTarget, runProjectTests }; if (source?.kind !== "pull_request") { setSource(undefined); setSourceSummary(undefined); } }
+    if (template.workflow === REPAIR) { if (workflow !== REPAIR) previousDelivery.current = deliveryTarget; if (source?.kind !== "pull_request") { setSource(undefined); setSourceSummary(undefined); } }
     else previousDelivery.current = null;
     setDeliveryTarget(template.deliveryTarget); setRunProjectTests(template.runProjectTests);
     setWorkflow(template.workflow); setWorkflowId(findRecord(workflows, undefined, template.workflow)?.id ?? ""); setAdvisorProfileIds(admittedAdvisors(template.workflow, template.advisorProfileIds));
@@ -296,8 +295,8 @@ export function NewTaskDialog({ open, onOpenChange, companyId, onCreated, initia
             <ButtonGroupText><span className="text-muted-foreground">on</span></ButtonGroupText>
             <TaskSourcePicker compact pullRequestsOnly projectId={projectId} value={sourceSummary} disabled={busy || editing} trigger={<Button type="button" variant="outline" size="sm" aria-label="Pull request">{source?.kind === "pull_request" ? <><GitPullRequest aria-hidden="true" className="size-[11px]" />{`PR #${source.number}`}</> : <><TriangleAlert aria-hidden="true" className="size-[11px] text-destructive" /><span className="text-destructive">a PR</span></>}</Button>} onClear={() => { setSource(undefined); setSourceSummary(undefined); }} onSelect={(summary, selector) => { setSource(selector); setSourceSummary(summary); const prefill = prefillForTaskSource(summary); if (!title) setTitle(prefill.title); if (!description) setDescription(prefill.description); }} />
           </> : null}
-          <TaskOptionFilter prefix="with" label="Tests and proof" valueIcon={runProjectTests ? visualEvidence === "off" ? <TestTube2 aria-hidden="true" className="size-[11px]" /> : <ListChecks aria-hidden="true" className="size-[11px]" /> : visualEvidence === "off" ? <CircleOff aria-hidden="true" className="size-[11px]" /> : <ScanEye aria-hidden="true" className="size-[11px]" />} value={[...(runProjectTests ? ["tests"] : []), ...(visualEvidence !== "off" ? ["proof"] : [])]} valueLabel={[runProjectTests ? "tests" : "", visualEvidence === "off" ? "" : visualEvidence === "required" ? "necessary proof" : "proof"].filter(Boolean).join(" and ") || "no checks"} disabled={busy} options={[{ value: "tests", label: "Tests", icon: <TestTube2 aria-hidden="true" className="size-[11px]" />, disabled: repair || !project?.verificationCommand.trim() }, { value: "proof", label: "Proof", icon: <ScanEye aria-hidden="true" className="size-[11px]" /> }]} onValueChange={values => {
-            if (!repair && project?.verificationCommand.trim()) setRunProjectTests(values.includes("tests"));
+          <TaskOptionFilter prefix="with" label="Tests and proof" valueIcon={runProjectTests ? visualEvidence === "off" ? <TestTube2 aria-hidden="true" className="size-[11px]" /> : <ListChecks aria-hidden="true" className="size-[11px]" /> : visualEvidence === "off" ? <CircleOff aria-hidden="true" className="size-[11px]" /> : <ScanEye aria-hidden="true" className="size-[11px]" />} value={[...(runProjectTests ? ["tests"] : []), ...(visualEvidence !== "off" ? ["proof"] : [])]} valueLabel={[runProjectTests ? "tests" : "", visualEvidence === "off" ? "" : visualEvidence === "required" ? "necessary proof" : "proof"].filter(Boolean).join(" and ") || "no checks"} disabled={busy} options={[{ value: "tests", label: "Tests", icon: <TestTube2 aria-hidden="true" className="size-[11px]" />, disabled: !project?.verificationCommand.trim() }, { value: "proof", label: "Proof", icon: <ScanEye aria-hidden="true" className="size-[11px]" /> }]} onValueChange={values => {
+            if (project?.verificationCommand.trim()) setRunProjectTests(values.includes("tests"));
             setVisualEvidence(values.includes("proof") ? visualEvidence === "required" ? "required" : "capture" : "off");
           }} />
           <TaskOptionFilter prefix="then" label="Delivery target" value={deliveryTarget} disabled={busy || repair} options={deliveryOptions.map(option => ({ value: option.value, icon: deliveryIcons[option.value], label: option.value === "pull_request_draft" ? "open a draft PR" : option.value === "pull_request_ready" ? "open a PR" : option.label.toLowerCase() }))} onValueChange={value => setDeliveryTarget(DeliveryTargetSchema.parse(value))} />

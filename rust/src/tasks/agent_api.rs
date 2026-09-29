@@ -1005,7 +1005,6 @@ fn validate_workflow(
     workflow: &str,
     advisors: &Value,
     delivery_target: Option<&Value>,
-    run_project_tests: Option<&Value>,
     has_pull_request: bool,
 ) -> DatabaseResult<()> {
     validate_advisors(advisors)?;
@@ -1037,11 +1036,6 @@ fn validate_workflow(
         if delivery_target.is_some_and(|value| value != "merged") {
             return Err(workflow_input_failure(
                 "Pull request repair always delivers a merged pull request",
-            ));
-        }
-        if run_project_tests.is_some_and(|value| value != true) {
-            return Err(workflow_input_failure(
-                "Pull request repair always runs the project tests",
             ));
         }
         if !has_pull_request {
@@ -1080,14 +1074,12 @@ fn normalize_workflow(fields: &mut Map<String, Value>) -> DatabaseResult<()> {
         &workflow,
         &advisors,
         fields.get("deliveryTarget"),
-        fields.get("runProjectTests"),
         fields.get("source").and_then(|source| source.get("kind")) == Some(&json!("pull_request")),
     )?;
     fields.insert("workflow".into(), json!(workflow));
     fields.insert("advisorProfileIds".into(), advisors);
     if workflow == "refine_pull_request" {
         fields.insert("deliveryTarget".into(), json!("merged"));
-        fields.insert("runProjectTests".into(), json!(true));
     }
     Ok(())
 }
@@ -1399,14 +1391,18 @@ fn apply_workflow(
     {
         visual_evidence.clone_into(&mut request.visual_evidence);
     }
-    // Pull request repair always merges and runs the project tests.
-    if request.workflow == crate::coordination::workflows::Workflow::RefinePullRequest {
-        if raw.delivery_target.is_none() {
-            request.delivery_target = crate::tasks::control::DeliveryTarget::Merged;
-        }
-        if raw.run_project_tests.is_none() {
-            request.run_project_tests = true;
-        }
+    if raw.run_project_tests.is_none()
+        && let Some(run_project_tests) = configuration
+            .get("runProjectTests")
+            .and_then(Value::as_bool)
+    {
+        request.run_project_tests = run_project_tests;
+    }
+    // Pull request repair always merges.
+    if request.workflow == crate::coordination::workflows::Workflow::RefinePullRequest
+        && raw.delivery_target.is_none()
+    {
+        request.delivery_target = crate::tasks::control::DeliveryTarget::Merged;
     }
     if !has_advisors(raw)? {
         let advisors = configuration
@@ -1450,7 +1446,6 @@ fn validate_resolved(request: &mut task_contracts::TaskCreateBody) -> DatabaseRe
         request.workflow.as_str(),
         &advisors,
         Some(&json!(request.delivery_target)),
-        Some(&json!(request.run_project_tests)),
         request
             .source
             .as_ref()
@@ -2752,6 +2747,102 @@ mod retirement_admission_tests {
             .await;
         assert_eq!(status, 409, "{conflict}");
         assert_eq!(count(&fixture.server.state, "suplex_tasks"), 1);
+    }
+
+    /// Pull request repair takes the caller's project tests choice, then the
+    /// workflow record's, then the project's; it still merges.
+    #[tokio::test]
+    async fn pull_request_repair_takes_the_chosen_then_default_project_tests() {
+        // The pinned pull request source needs no Git fetch, so this fixture has no origin.
+        let (state, path) = crate::http::routes::auth::tests::state();
+        let server =
+            crate::http::routes::external_agent_administration::tests::server(Some((state, path)))
+                .await;
+        let state = &server.state;
+        state.with_database(|database| {
+            database.connection().execute(
+                "UPDATE suplex_projects SET root_profile_id = 'profile_native_root', worker_profile_id = 'profile_native_worker', repository_identity = 'acme/demo', agent_task_policy_json = ?1 WHERE id = 'project_api'",
+                [json!({"workflowIds": ["workflow_native_standard"], "defaultWorkflowId": "workflow_native_standard", "rootProfileIds": ["profile_native_root"], "workerProfileIds": ["profile_native_worker"], "deliveryTarget": "local_worktree"}).to_string()],
+            ).unwrap();
+        });
+        let (credential, _) =
+            crate::http::routes::agent_api::tests::pair(&server, "Repair Bot", &["project_api"]);
+        let principal = state.with_database(|database| {
+            external_agents::authenticate(database, &credential, Utc::now()).unwrap()
+        });
+        let repair = |key: &str, tests: Option<bool>| -> TaskCreateBody {
+            let mut body = json!({
+                "projectId": "project_api", "title": "Repair", "idempotencyKey": key,
+                "images": [], "advisorProfileIds": {},
+                "workflowId": "workflow_native_refine_pull_request",
+                "source": {"kind": "pull_request", "number": 7}
+            });
+            if let Some(tests) = tests {
+                body["runProjectTests"] = json!(tests);
+            }
+            serde_json::from_value(body).unwrap()
+        };
+        let raw = repair("repair-tests-off", Some(false));
+        let snapshot = pending(state, &principal, &raw);
+        let base = "b".repeat(40);
+        let source = sources::captured_pull_request_for_test(7, &"a".repeat(40), &base);
+        let created = state
+            .with_database(|database| {
+                write(
+                    database,
+                    &principal,
+                    &raw,
+                    &snapshot,
+                    (source, base),
+                    None,
+                    state.artifact_root.as_deref(),
+                )
+            })
+            .unwrap();
+        let Creation::Task { id, .. } = created else {
+            panic!("the repair task must be created");
+        };
+        let task = state.with_database(|database| task_json(database, &id).unwrap());
+        assert_eq!(
+            (
+                &task["workflow"],
+                &task["deliveryTarget"],
+                &task["configuration"]["runProjectTests"]
+            ),
+            (
+                &json!("refine_pull_request"),
+                &json!("merged"),
+                &json!(false)
+            ),
+            "{task}"
+        );
+        let resolved_tests = |record: &str| {
+            state.with_database(|database| {
+                database
+                    .connection()
+                    .execute(
+                        "UPDATE suplex_workflows SET configuration_json = ?1 WHERE id = 'workflow_native_refine_pull_request'",
+                        [record],
+                    )
+                    .unwrap();
+                resolve(database, &principal.company_id, &repair("repair-default", None))
+                    .unwrap()
+                    .request
+                    .run_project_tests
+            })
+        };
+        assert!(!resolved_tests(r#"{"runProjectTests":false}"#));
+        state.with_database(|database| {
+            database
+                .connection()
+                .execute(
+                    "UPDATE suplex_projects SET agent_task_policy_json = json_set(agent_task_policy_json, '$.runProjectTests', json('false')) WHERE id = 'project_api'",
+                    [],
+                )
+                .unwrap()
+        });
+        assert!(resolved_tests(r#"{"runProjectTests":true}"#));
+        assert!(!resolved_tests("{}"));
     }
 
     #[tokio::test]

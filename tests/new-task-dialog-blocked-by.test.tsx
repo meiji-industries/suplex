@@ -323,6 +323,36 @@ test("repair keeps its source requirement and restores the prior delivery", asyn
   expect(diagram.querySelectorAll('[data-role-selector="worker"]')).toHaveLength(1);
 });
 
+test("repair takes its record's project tests, keeps them editable, and still merges", async () => {
+  const repair = { ...workflow, id: "repair", name: "Review and repair", engine: "refine_pull_request", deliveryTarget: undefined, runProjectTests: false };
+  const fallback = api.readJsonUnchecked.getMockImplementation()!;
+  api.readJsonUnchecked.mockImplementation(async (url: string, init?: RequestInit) => {
+    if (url === "/api/companies/company-1/projects") return { projects: [{ ...project, verificationCommand: "pnpm test" }] };
+    if (url === "/api/workflows?includeArchived=true") return { workflows: [workflow, repair] };
+    if (url === "/api/tasks/task-edit" && init?.method === "PATCH") return { id: "task-edit" };
+    return fallback(url, init);
+  });
+  const { container } = mount();
+  await flush();
+  await selectOption(container, "Workflow", "Review and repair");
+  expect(button(container, "Tests and proof").textContent).toBe("no checks");
+  expect(button(container, "Delivery target").disabled).toBe(true);
+  await act(async () => { button(container, "a PR").click(); });
+  await submitTask(container);
+  expect(latestRequest("POST")).toMatchObject({ workflow: "refine_pull_request", deliveryTarget: "merged", runProjectTests: false });
+  await selectOption(container, "Tests and proof", "Tests");
+  await act(async () => { button(container, "a PR").click(); });
+  await submitTask(container);
+  expect(latestRequest("POST")).toMatchObject({ workflow: "refine_pull_request", deliveryTarget: "merged", runProjectTests: true });
+  await act(async () => { roots.splice(0).forEach(root => root.unmount()); document.body.replaceChildren(); });
+  const edit = mount(true, { workflowId: repair.id, runProjectTests: true, source: { kind: "pull_request", number: 42 } });
+  await flush();
+  expect(button(edit.container, "Tests and proof").textContent).toBe("tests");
+  await selectOption(edit.container, "Tests and proof", "Tests");
+  await submitTask(edit.container);
+  expect(latestRequest("PATCH")).toMatchObject({ workflow: "refine_pull_request", deliveryTarget: "merged", runProjectTests: false });
+});
+
 test("saved variants and explicit edit drafts keep their settings with the engine illustration", async () => {
   const saved = { ...workflow, id: "custom", name: "Team review", description: "Check the complete change.", engine: "independent_review", deliveryTarget: "pull_request_ready", advisorProfileIds: { reviewer: "root" } };
   const fallback = api.readJsonUnchecked.getMockImplementation()!;

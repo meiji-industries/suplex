@@ -446,17 +446,10 @@ fn normalized_run_project_tests(
             extra.join(", ")
         ));
     }
-    let run = preset.run_project_tests;
-    if engine != "refine_pull_request" {
-        return Ok(run);
-    }
-    if delivery_target != "merged" {
+    if engine == "refine_pull_request" && delivery_target != "merged" {
         return Err("Pull request repair always delivers a merged pull request".into());
     }
-    if run.is_some_and(|run| !run) {
-        return Err("Pull request repair always runs the project tests".into());
-    }
-    Ok(Some(true))
+    Ok(preset.run_project_tests)
 }
 
 fn local_failure(message: impl Into<String>, status: u16) -> Box<dyn Error> {
@@ -1961,6 +1954,25 @@ mod tests {
     };
 
     type Replies = Arc<std::sync::Mutex<HashMap<String, (u16, Value)>>>;
+
+    #[test]
+    fn repair_preset_keeps_its_project_tests_choice_and_merges() {
+        let repair = |run_project_tests| Preset {
+            engine: "refine_pull_request".into(),
+            run_project_tests,
+            ..Preset::default()
+        };
+        for run in [None, Some(false), Some(true)] {
+            assert_eq!(
+                normalized_run_project_tests(&repair(run), "merged"),
+                Ok(run)
+            );
+        }
+        assert_eq!(
+            normalized_run_project_tests(&repair(Some(false)), "pull_request_draft"),
+            Err("Pull request repair always delivers a merged pull request".into())
+        );
+    }
 
     /// A loopback GitHub REST API answering each path and query from `replies`.
     async fn fake_github(replies: Replies) -> (Github, String, tokio::task::JoinHandle<()>) {

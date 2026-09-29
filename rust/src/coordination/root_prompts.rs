@@ -13,6 +13,16 @@ const STANDARD_CONTEXT_PREFIX: &str =
 const COORDINATOR_SYSTEM_PROMPT: &str = include_str!("prompts/coordinator_system.txt");
 const CONFIGURED_CHECK_EVIDENCE_POLICY: &str =
     include_str!("prompts/configured_check_evidence_policy.txt");
+const PULL_REQUEST_CI_EVIDENCE: &str = "runProjectTests is false for this Pull request repair. Local project checks are not required. The pull request's CI is the verification evidence. Missing local check output is not missing verification.";
+
+/// Pull request repair without project tests verifies with the pull request's CI.
+fn pull_request_ci_evidence(configuration: &Value) -> String {
+    if configuration.get("runProjectTests") == Some(&Value::Bool(false)) {
+        format!("\n{PULL_REQUEST_CI_EVIDENCE}")
+    } else {
+        String::new()
+    }
+}
 /// Static outputs of TypeScript `taskRolePrompt` for the non-Standard roles.
 pub const ROOT_WORKFLOW_ROLE_PROMPT: &str = include_str!("prompts/role_root_workflow.txt");
 pub const ADVISOR_ROLE_PROMPT: &str = include_str!("prompts/role_advisor.txt");
@@ -74,8 +84,13 @@ pub fn initial_coordinator_prompt(
         let suffix = CAPTURED_CONTEXT_SUFFIX
             .strip_prefix(STANDARD_CONTEXT_PREFIX)
             .unwrap_or(CAPTURED_CONTEXT_SUFFIX);
+        let ci_evidence = if control.workflow == Workflow::RefinePullRequest {
+            pull_request_ci_evidence(&context["configuration"])
+        } else {
+            String::new()
+        };
         format!(
-            "{COORDINATOR_SYSTEM_PROMPT}\n\n{instructions}\n\n{identity}\nBase branch: {base_branch}{pull}\n\nCaptured task configuration:\n{}\n\n{suffix}\n\n{}",
+            "{COORDINATOR_SYSTEM_PROMPT}\n\n{instructions}\n\n{identity}\nBase branch: {base_branch}{pull}\n\nCaptured task configuration:\n{}\n\n{suffix}{ci_evidence}\n\n{}",
             js_json::stringify(context),
             visual_evidence_instruction(visual_evidence),
         )
@@ -229,7 +244,14 @@ pub fn compose_advisor_assignment(input: &AdvisorAssignment<'_>) -> String {
             "Captured task configuration:\n{}",
             js_json::stringify(input.configuration)
         ),
-        format!("Configured project check evidence:\n{CONFIGURED_CHECK_EVIDENCE_POLICY}"),
+        format!(
+            "Configured project check evidence:\n{CONFIGURED_CHECK_EVIDENCE_POLICY}{}",
+            if input.role == "rater" {
+                pull_request_ci_evidence(input.configuration)
+            } else {
+                String::new()
+            }
+        ),
         format!(
             "Screenshots:\n{}",
             visual_evidence_instruction(input.visual_evidence)
@@ -668,6 +690,54 @@ mod tests {
             files: vec!["src/a.ts".into(), "src/b.ts".into()],
             commits: vec!["b".repeat(40)],
             patch_digest: None,
+        }
+    }
+
+    #[test]
+    fn repair_without_project_tests_uses_pull_request_ci_as_verification() {
+        let mut control = TaskControlRow::fixture();
+        control.workflow = Workflow::RefinePullRequest;
+        control.delivery_intent.pull_request_number = Some(7);
+        let rater = |configuration: &Value| {
+            compose_advisor_assignment(&AdvisorAssignment {
+                role: "rater",
+                objective: "Repair it",
+                configuration,
+                visual_evidence: "off",
+                repository: "owner/repo",
+                head_branch: "feature",
+                base_branch: "main",
+                pull_request_number: Some(7),
+                range: &range(),
+                evidence_directory: "/tmp/evidence",
+                attachments: &[],
+                brief: None,
+                prior_findings: None,
+                repair_evidence: None,
+            })
+        };
+        let skipped = json!({"runProjectTests":false,"verificationCommand":"pnpm check"});
+        for prompt in [
+            initial_coordinator_prompt(
+                &control,
+                &json!({"configuration": skipped, "images": []}),
+                &[],
+            ),
+            rater(&skipped),
+        ] {
+            assert!(prompt.contains("Local project checks are not required. The pull request's CI is the verification evidence. Missing local check output is not missing verification."), "{prompt}");
+        }
+        let required = json!({"runProjectTests":true,"verificationCommand":"pnpm check"});
+        for prompt in [
+            initial_coordinator_prompt(
+                &control,
+                &json!({"configuration": required, "images": []}),
+                &[],
+            ),
+            rater(&required),
+        ] {
+            assert!(!prompt.contains("The pull request's CI is the verification evidence"));
+            assert!(prompt.contains("runProjectTests=true and a configured verificationCommand each name required coverage."));
         }
     }
 

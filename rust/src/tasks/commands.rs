@@ -1515,6 +1515,70 @@ mod tests {
         std::fs::remove_file(filename).unwrap();
     }
 
+    /// The board create and PATCH of a Pull request repair task keep the
+    /// chosen project tests; repair still merges and needs its pull request.
+    #[test]
+    fn pull_request_repair_keeps_the_chosen_project_tests() {
+        let (filename, mut database, user_id, _) = command_fixture();
+        let project = service::get(&database, &user_id, "command_project").unwrap();
+        let mut fields = json!({"projectId":"command_project","title":"Repair","idempotencyKey":"repair-tests","workflow":"refine_pull_request","runProjectTests":false,"source":{"kind":"pull_request","number":7}}).as_object().unwrap().clone();
+        crate::coordination::workflow_records::normalize_workflow_input(&mut fields, true).unwrap();
+        let input = <TaskCreateBody as crate::http::contracts::typed::Contract>::parse(Some(
+            &Value::Object(fields),
+        ))
+        .unwrap();
+        let profiles = select_local_profiles(&database, &project, &input).unwrap();
+        let mut prepared = prepare_local_user_task(
+            "command_company",
+            &user_id,
+            &project,
+            &input,
+            profiles,
+            "head",
+            Utc::now(),
+        )
+        .unwrap();
+        super::super::sources::apply(
+            &mut prepared,
+            super::super::sources::captured_pull_request_for_test(
+                7,
+                &"a".repeat(40),
+                &"b".repeat(40),
+            ),
+        )
+        .unwrap();
+        let task = repository::create(&mut database, &prepared, Utc::now())
+            .unwrap()
+            .task;
+        let stored = |database: &SuplexDatabase| -> Value {
+            database
+                .connection()
+                .query_row(
+                    "SELECT json_extract(configuration_json, '$.runProjectTests') FROM suplex_tasks WHERE id = ?1",
+                    [&task.id],
+                    |row| row.get::<_, bool>(0),
+                )
+                .map(Value::Bool)
+                .unwrap()
+        };
+        assert_eq!(stored(&database), json!(false));
+        let edit = |body: Value| serde_json::from_value::<TaskDetailsBody>(body).unwrap();
+        for tests in [true, false] {
+            update_user_task_details(&mut database, &user_id, &task.id, &edit(json!({"workflow":"refine_pull_request","deliveryTarget":"merged","runProjectTests":tests})), Utc::now()).unwrap();
+            assert_eq!(stored(&database), json!(tests));
+        }
+        let refused = update_user_task_details(&mut database, &user_id, &task.id, &edit(json!({"workflow":"refine_pull_request","deliveryTarget":"pull_request_draft","runProjectTests":false})), Utc::now()).unwrap_err();
+        assert_eq!(
+            failure(refused),
+            (
+                422,
+                "Pull request repair always delivers a merged pull request".into()
+            )
+        );
+        drop(database);
+        std::fs::remove_file(filename).unwrap();
+    }
+
     #[test]
     fn branch_source_starts_without_claiming_a_pull_request() {
         let (filename, mut database, user, mut prepared) = command_fixture();

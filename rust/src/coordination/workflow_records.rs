@@ -136,12 +136,6 @@ pub fn normalize_workflow_input(
     {
         return Err("Pull request repair always delivers a merged pull request".into());
     }
-    if raw
-        .get("runProjectTests")
-        .is_some_and(|value| value != true)
-    {
-        return Err("Pull request repair always runs the project tests".into());
-    }
     let source_kind = raw
         .get("source")
         .and_then(|source| source.get("kind"))
@@ -150,7 +144,6 @@ pub fn normalize_workflow_input(
         return Err("Select a pull request source for Pull request repair".into());
     }
     raw.insert("deliveryTarget".into(), json!("merged"));
-    raw.insert("runProjectTests".into(), json!(true));
     Ok(())
 }
 
@@ -423,11 +416,11 @@ mod tests {
         );
         assert_eq!(
             normalized(
-                json!({"workflow":"refine_pull_request","runProjectTests":false}),
-                false
+                json!({"workflow":"refine_pull_request","runProjectTests":false,"source":{"kind":"pull_request","number":7}}),
+                true
             )
-            .unwrap_err(),
-            "Pull request repair always runs the project tests"
+            .unwrap(),
+            json!({"workflow":"refine_pull_request","advisorProfileIds":{},"deliveryTarget":"merged","runProjectTests":false,"source":{"kind":"pull_request","number":7}})
         );
         assert_eq!(
             normalized(json!({"workflow":"refine_pull_request"}), true).unwrap_err(),
@@ -435,7 +428,7 @@ mod tests {
         );
         assert_eq!(
             normalized(json!({"workflow":"refine_pull_request"}), false).unwrap(),
-            json!({"workflow":"refine_pull_request","advisorProfileIds":{},"deliveryTarget":"merged","runProjectTests":true})
+            json!({"workflow":"refine_pull_request","advisorProfileIds":{},"deliveryTarget":"merged"})
         );
     }
 }

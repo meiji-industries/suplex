@@ -47,8 +47,9 @@ Project instructions and the task description supply domain-specific guidance;
 the proposed layered prompt editor is [unimplemented work](../proposals.md#editable-prompt-guidance).
 
 Workflow-specific constraints still apply when defaults are resolved. Pull
-request repair requires a PR source, selects a merged delivery target, and runs
-project tests. Those are the implementation's definition of that workflow,
+request repair requires a PR source and selects a merged delivery target. Its
+`runProjectTests` resolves like other workflows; without project tests, the pull
+request's CI is the verification evidence. Those are the implementation's definition of that workflow,
 not a general restriction on people editing or merging independently.
 
 ## Workflow diagrams

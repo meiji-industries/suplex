@@ -53,6 +53,17 @@ mod tests {
             json!({"rater":"profile_native_root"})
         );
         assert_eq!(saved["description"], "Fable rates and plans.");
+        for tests in [false, true] {
+            let changed = send(
+                reqwest::Method::PATCH,
+                url,
+                Some(json!({"runProjectTests":tests})),
+            )
+            .await
+            .unwrap();
+            assert_eq!(changed.status(), StatusCode::OK);
+            assert_eq!(changed.json::<Value>().await.unwrap()["runProjectTests"], tests);
+        }
         for payload in [
             json!({"advisorProfileIds":{"reviewer":"profile_native_root"}}),
             json!({"rootProfileId":"profile_native_worker"}),
@@ -162,7 +173,7 @@ mod tests {
                 |row| row.get(0),
             )
         }).unwrap();
-        assert_eq!(audits, 5);
+        assert_eq!(audits, 7);
         let anonymous = client
             .post(format!("http://{address}/api/admin/workflows"))
             .header("host", "suplex.example.test:4111")

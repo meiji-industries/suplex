@@ -92,7 +92,7 @@ export function WorkflowSettingsView(): ReactElement {
     setEditor((current) => current.kind === "closed" ? current : { ...current, draft: {
       ...current.draft, engine,
       advisorProfileIds: Object.fromEntries(Object.entries(current.draft.advisorProfileIds ?? {}).filter(([role]) => workflowDefinition(engine).advisorRoles.includes(role as AdvisorRole))),
-      ...(engine === REPAIR ? { deliveryTarget: "merged" as const, runProjectTests: true } : {}),
+      ...(engine === REPAIR ? { deliveryTarget: "merged" as const } : {}),
     } });
   };
   const patch = async (workflow: ApiWorkflow, body: Record<string, unknown>, failure: string): Promise<void> => {
@@ -193,7 +193,7 @@ export function WorkflowSettingsView(): ReactElement {
               <FieldLegend variant="label">Default configuration</FieldLegend>
               <Field><FieldLabel htmlFor="workflow-delivery-target">Delivery target</FieldLabel><Select disabled={busy || draft.engine === REPAIR} value={draft.engine === REPAIR ? "merged" : draft.deliveryTarget ?? "default"} onValueChange={(value) => setDraft("deliveryTarget", value === "default" || !value ? undefined : DeliveryTargetSchema.parse(value))}><SelectTrigger id="workflow-delivery-target"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="default">Selected in the task</SelectItem>{taskDeliveryTargetOptions.map((option) => <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>)}</SelectContent></Select></Field>
               <Field><FieldLabel htmlFor="workflow-browser-evidence">Browser evidence</FieldLabel><Select disabled={busy} value={draft.visualEvidence ?? "default"} onValueChange={(value) => setDraft("visualEvidence", value === "default" || !value ? undefined : VisualEvidenceSchema.parse(value))}><SelectTrigger id="workflow-browser-evidence"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="default">Selected in the task</SelectItem><SelectItem value="off">Off</SelectItem><SelectItem value="capture">Capture</SelectItem><SelectItem value="required">Necessary</SelectItem></SelectContent></Select></Field>
-              <Field orientation="horizontal"><Checkbox id="workflow-run-project-tests" disabled={busy || draft.engine === REPAIR} checked={draft.engine === REPAIR ? true : draft.runProjectTests ?? true} onCheckedChange={(value) => setDraft("runProjectTests", value === true)} /><FieldLabel htmlFor="workflow-run-project-tests">Run project tests</FieldLabel></Field>
+              <Field orientation="horizontal"><Checkbox id="workflow-run-project-tests" disabled={busy} checked={draft.runProjectTests ?? true} onCheckedChange={(value) => setDraft("runProjectTests", value === true)} /><FieldLabel htmlFor="workflow-run-project-tests">Run project tests</FieldLabel></Field>
             </FieldSet>
             <DialogFooter>
               <DialogClose disabled={busy} render={<Button type="button" variant="outline" size="sm" />}>Cancel</DialogClose>

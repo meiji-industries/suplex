@@ -132,7 +132,7 @@ without an agent command.
 it; see [Queued tasks](#queued-tasks). `deliveryTarget`,
 `runProjectTests`, and `visualEvidence` are optional. A value you omit comes
 from the template or workflow, then the project; Pull request repair always
-merges and runs the project tests. Omitting both `workflowId` and `templateId`
+merges. Omitting both `workflowId` and `templateId`
 selects Standard. The created task
 reports the applied `workflow`, `templateId`, `deliveryTarget`,
 `runProjectTests`, and `visualEvidence`. `workflow` has the selected record ID

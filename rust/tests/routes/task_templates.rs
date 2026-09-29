@@ -98,7 +98,15 @@ mod tests {
             mismatch.json::<Value>().await.unwrap(),
             json!({"error":"The Simple task workflow has no Reviewer Advisor"})
         );
-        // Switching to repair replaces the inherited delivery settings.
+        let skipped = send(
+            reqwest::Method::PATCH,
+            &format!("/api/task-templates/{id}"),
+            Some(json!({"runProjectTests":false})),
+        )
+        .await
+        .unwrap();
+        assert_eq!(skipped.status(), StatusCode::OK);
+        // Switching to repair replaces the inherited delivery target and keeps the project tests choice.
         let repair = send(
             reqwest::Method::PATCH,
             &format!("/api/task-templates/{id}"),
@@ -108,7 +116,18 @@ mod tests {
         .unwrap();
         let repair: Value = repair.json().await.unwrap();
         assert_eq!(repair["deliveryTarget"], "merged");
-        assert_eq!(repair["runProjectTests"], true);
+        assert_eq!(repair["runProjectTests"], false);
+        for tests in [true, false] {
+            let changed = send(
+                reqwest::Method::PATCH,
+                &format!("/api/task-templates/{id}"),
+                Some(json!({"runProjectTests":tests})),
+            )
+            .await
+            .unwrap();
+            assert_eq!(changed.status(), StatusCode::OK);
+            assert_eq!(changed.json::<Value>().await.unwrap()["runProjectTests"], tests);
+        }
         let contradiction = send(
             reqwest::Method::PATCH,
             &format!("/api/task-templates/{id}"),

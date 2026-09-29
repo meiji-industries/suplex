@@ -143,7 +143,7 @@ pub(crate) fn prerequisites_complete(
     task_id: &str,
 ) -> DatabaseResult<bool> {
     let waiting: bool = database.connection().query_row(
-        "SELECT EXISTS(SELECT 1 FROM suplex_task_dependencies d JOIN suplex_tasks t ON t.id = d.depends_on_task_id JOIN suplex_task_controls c ON c.task_id = t.id WHERE d.task_id = ?1 AND (c.status <> 'delivered' OR (c.delivery_target = 'merged' AND COALESCE(json_extract(c.pull_request_json, '$.state'), '') <> 'merged'))) OR EXISTS(SELECT 1 FROM suplex_task_pull_request_dependencies d WHERE d.task_id = ?1 AND d.state <> 'merged')",
+        "SELECT EXISTS(SELECT 1 FROM suplex_task_dependencies d JOIN suplex_tasks t ON t.id = d.depends_on_task_id JOIN suplex_task_controls c ON c.task_id = t.id WHERE d.task_id = ?1 AND (c.status <> 'delivered' OR (c.delivery_target IN ('pull_request_draft', 'pull_request_ready', 'merged') AND COALESCE(json_extract(c.pull_request_json, '$.state'), '') <> 'merged'))) OR EXISTS(SELECT 1 FROM suplex_task_pull_request_dependencies d WHERE d.task_id = ?1 AND d.state <> 'merged')",
         [task_id], |row| row.get(0),
     )?;
     Ok(!waiting)

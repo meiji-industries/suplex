@@ -203,15 +203,20 @@ fn dependency_projection(
             observed_at: None,
         });
         let reason = match status {
-            TaskStatus::Delivered => {
-                if delivery_target == DeliveryTarget::Merged
-                    && pull_state != Some(PullRequestState::Merged)
-                {
+            // A pull request target completes when its pull request merges.
+            TaskStatus::Delivered => match (delivery_target, pull_state) {
+                (target, _) if !target.uses_pull_request() => None,
+                (_, Some(PullRequestState::Merged)) => None,
+                (DeliveryTarget::Merged, _) | (_, None) => {
                     Some(TaskQueueWaitReason::PrerequisiteMergeUnobserved)
-                } else {
-                    None
                 }
-            }
+                (_, Some(PullRequestState::Open)) => {
+                    Some(TaskQueueWaitReason::PrerequisitePullRequestOpen)
+                }
+                (_, Some(PullRequestState::Closed)) => {
+                    Some(TaskQueueWaitReason::PrerequisitePullRequestClosed)
+                }
+            },
             _ if archived_at.is_some() => Some(TaskQueueWaitReason::PrerequisiteArchived),
             TaskStatus::Backlog | TaskStatus::Queued => {
                 Some(TaskQueueWaitReason::PrerequisiteNotStarted)
@@ -221,7 +226,7 @@ fn dependency_projection(
             TaskStatus::Cancelled => Some(TaskQueueWaitReason::PrerequisiteCancelled),
         };
         if let Some(reason) = reason {
-            let condition = if delivery_target == DeliveryTarget::Merged {
+            let condition = if delivery_target.uses_pull_request() {
                 "its pull request merges"
             } else {
                 "it is delivered"
@@ -241,6 +246,12 @@ fn dependency_projection(
                 ),
                 (TaskQueueWaitReason::PrerequisiteCancelled, _) => format!(
                     "{title} is cancelled. Remove it from Blocked by, or send this task to the backlog."
+                ),
+                (TaskQueueWaitReason::PrerequisitePullRequestOpen, _) => format!(
+                    "{title} is delivered, and its pull request is open. This task starts when {condition}."
+                ),
+                (TaskQueueWaitReason::PrerequisitePullRequestClosed, _) => format!(
+                    "{title} is delivered, but its pull request is closed without merging. Reopen and merge it, or remove {title} from Blocked by."
                 ),
                 (TaskQueueWaitReason::PrerequisiteArchived, _) => format!(
                     "{title} is archived and not delivered. Remove it from Blocked by, or open and deliver it."

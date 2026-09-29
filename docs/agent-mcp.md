@@ -34,7 +34,7 @@ Both the HTTP and stdio transports expose the same tools:
 | `suplex_get_task_delivery` | Read the delivery and blocker projection. |
 | `suplex_create_task` | Create a backlog or queued task with an idempotency key. |
 | `suplex_update_task` | Change the details and Advisor profiles of a backlog or queued task with the current revision. |
-| `suplex_set_task_dependencies` | Replace the prerequisites of a task. |
+| `suplex_set_task_dependencies` | Replace the prerequisites of a task. A prerequisite task with a pull request delivery target is complete when its pull request merges. |
 | `suplex_command_task` | Apply a lifecycle command with the current revision. |
 
 Suplex re-reads the agent, administrator authority, company access, and project grants for each access or refresh. Revocation takes effect without restarting Suplex. Access tokens apply only to `/mcp`.

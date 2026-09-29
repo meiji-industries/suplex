@@ -956,7 +956,7 @@
       "post": {
         "operationId": "createAgentApiBacklogTask",
         "summary": "Create a backlog or queued task",
-        "description": "Creates a backlog task. With queue true, the task is queued: it starts now when every prerequisite is complete, and otherwise stays queued with zero sessions until the last prerequisite completes. Without queue, it never starts by itself. dryRun true validates the same request and returns its projection without writing a task, dependency, receipt, artifact, or audit event. The server defaults description to an empty string and rejects unknown fields with request_invalid. dependsOn sets the prerequisites, shown as Blocked by. A prerequisite can be any task the agent can read in a granted project. The task waits for the prerequisite. A self-reference, a cycle, or a task outside a granted project is rejected. Idempotency is scoped to the paired agent and company. An identical replay returns 200; reuse for a different request returns 409 with idempotency_conflict. GET /api/agent/tasks supports opaque cursors and returns nextCursor.",
+        "description": "Creates a backlog task. With queue true, the task is queued: it starts now when every prerequisite is complete, and otherwise stays queued with zero sessions until the last prerequisite completes. Without queue, it never starts by itself. dryRun true validates the same request and returns its projection without writing a task, dependency, receipt, artifact, or audit event. The server defaults description to an empty string and rejects unknown fields with request_invalid. dependsOn sets the prerequisites, shown as Blocked by. A prerequisite can be any task the agent can read in a granted project. The task waits for the prerequisite. A prerequisite task is complete when it is delivered. For a pull_request_draft, pull_request_ready, or merged target, its pull request must also merge. A self-reference, a cycle, or a task outside a granted project is rejected. Idempotency is scoped to the paired agent and company. An identical replay returns 200; reuse for a different request returns 409 with idempotency_conflict. GET /api/agent/tasks supports opaque cursors and returns nextCursor.",
         "security": [
           {
             "AgentApiBearer": []
@@ -988,7 +988,7 @@
                     "maxLength": 128
                   },
                   "dependsOn": {
-                    "description": "A prerequisite can be any task the agent can read in a granted project. The task waits for the prerequisite. A self-reference, a cycle, or a task outside a granted project is rejected. Shown as Blocked by. A self-reference, a cycle, or an unavailable task is rejected.",
+                    "description": "A prerequisite can be any task the agent can read in a granted project. The task waits for the prerequisite. A prerequisite task is complete when it is delivered. For a pull_request_draft, pull_request_ready, or merged target, its pull request must also merge. A self-reference, a cycle, or a task outside a granted project is rejected. Shown as Blocked by. A self-reference, a cycle, or an unavailable task is rejected.",
                     "maxItems": 50,
                     "type": "array",
                     "items": {
@@ -4149,7 +4149,7 @@
       "get": {
         "operationId": "getAgentApiCreatedTask",
         "summary": "Read a task in a granted project",
-        "description": "A paired agent can read every task in its currently granted company projects. Task states are backlog, queued, active, waiting_human, cancelled, and delivered. queue.waitingOn lists the exact wait reason of each incomplete prerequisite. A prerequisite is complete when it is delivered at its own delivery target; the merged target also needs the merged pull request state Suplex observed from GitHub. Human questions are records only: answering them remains human authority and no agent answer command exists. The server router rejects path parameters longer than 100 characters before this authenticated operation is matched; those router-level responses are outside this contract.",
+        "description": "A paired agent can read every task in its currently granted company projects. Task states are backlog, queued, active, waiting_human, cancelled, and delivered. queue.waitingOn lists the exact wait reason of each incomplete prerequisite. A prerequisite is complete when it is delivered at its own delivery target; the pull_request_draft, pull_request_ready, and merged targets also need the merged pull request state Suplex observed from GitHub. Human questions are records only: answering them remains human authority and no agent answer command exists. The server router rejects path parameters longer than 100 characters before this authenticated operation is matched; those router-level responses are outside this contract.",
         "security": [
           {
             "AgentApiBearer": []
@@ -6836,7 +6836,7 @@
       "put": {
         "operationId": "setAgentApiTaskDependencies",
         "summary": "Replace the prerequisites of a task",
-        "description": "Replaces dependsOn, shown as Blocked by, with the complete set in the body. A prerequisite can be any task the agent can read in a granted project. The task waits for the prerequisite. A self-reference, a cycle, or a task outside a granted project is rejected. dryRun true validates the replacement and reports the projected prerequisites and start state without changing dependencies, queue state, or audits. A self-reference, a cycle, or an unavailable task is rejected and the current set stays. Unknown fields are rejected. The response and every later read report dependsOn and blockedBy from the same stored edges.",
+        "description": "Replaces dependsOn, shown as Blocked by, with the complete set in the body. A prerequisite can be any task the agent can read in a granted project. The task waits for the prerequisite. A prerequisite task is complete when it is delivered. For a pull_request_draft, pull_request_ready, or merged target, its pull request must also merge. A self-reference, a cycle, or a task outside a granted project is rejected. dryRun true validates the replacement and reports the projected prerequisites and start state without changing dependencies, queue state, or audits. A self-reference, a cycle, or an unavailable task is rejected and the current set stays. Unknown fields are rejected. The response and every later read report dependsOn and blockedBy from the same stored edges.",
         "security": [
           {
             "AgentApiBearer": []
@@ -6869,7 +6869,7 @@
                       "minLength": 1,
                       "maxLength": 128
                     },
-                    "description": "A prerequisite can be any task the agent can read in a granted project. The task waits for the prerequisite. A self-reference, a cycle, or a task outside a granted project is rejected. The complete set replaces the current set; an empty array removes every prerequisite."
+                    "description": "A prerequisite can be any task the agent can read in a granted project. The task waits for the prerequisite. A prerequisite task is complete when it is delivered. For a pull_request_draft, pull_request_ready, or merged target, its pull request must also merge. A self-reference, a cycle, or a task outside a granted project is rejected. The complete set replaces the current set; an empty array removes every prerequisite."
                   },
                   "blockedByPullRequests": {
                     "default": [],

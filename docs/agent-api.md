@@ -217,11 +217,14 @@ sessions or turns. Suplex starts it when every prerequisite is complete. Every
 task read reports `status` and `queue.waitingOn`. Each incomplete prerequisite
 has an `id`, `title`, `status`, `deliveryTarget`, `reason`, and `summary`.
 
-A prerequisite is complete when it is delivered at its own delivery target.
-The `merged` target also needs the merged pull request state that Suplex
-observed from GitHub. A prerequisite delivered at `pull_request_draft`,
-`pull_request_ready`, `remote_branch`, or `local_worktree` is complete without
-a merge, because that target is what its delivery promised. Wait reasons:
+A prerequisite task is complete when it is delivered at its own delivery
+target. For the `pull_request_draft`, `pull_request_ready`, and `merged`
+targets, it also needs the merged pull request state that Suplex observed from
+GitHub. A task that waits for such a prerequisite starts when that pull request
+merges, not when it opens. A prerequisite delivered at `remote_branch` or
+`local_worktree` has no pull request, so it is complete at delivery. A task
+that is already active continues while the pull request of a delivered
+prerequisite is open. Wait reasons:
 
 | `reason` | Meaning |
 | --- | --- |
@@ -230,7 +233,9 @@ a merge, because that target is what its delivery promised. Wait reasons:
 | `prerequisite_needs_human` | The prerequisite waits for a human answer. |
 | `prerequisite_cancelled` | The prerequisite is cancelled. Remove it or disarm the task. |
 | `prerequisite_archived` | The prerequisite is archived and not delivered. |
-| `prerequisite_merge_unobserved` | The prerequisite is delivered at `merged`, but Suplex did not observe the merge. Suplex checks GitHub again. |
+| `prerequisite_merge_unobserved` | The prerequisite is delivered at a pull request target, but Suplex did not observe the merge. Suplex checks GitHub again. |
+| `prerequisite_pull_request_open` | The prerequisite pull request is open. For a task prerequisite, the task is delivered at `pull_request_draft` or `pull_request_ready`. The task starts when the pull request merges. |
+| `prerequisite_pull_request_closed` | The prerequisite pull request is closed without merging. Reopen and merge it, or remove the prerequisite. |
 
 Queue at creation with `"queue": true`, or send `start_task` to a manual
 backlog task. Both start the task now when every prerequisite is complete and

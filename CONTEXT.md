@@ -21,7 +21,9 @@ another task waits for, shown as "Blocked by". Task edges use
 `suplex_task_dependencies`; pull request edges use
 `suplex_task_pull_request_dependencies` and retain the latest GitHub observation.
 APIs call task ids `dependsOn`, pull request inputs `blockedByPullRequests`, and
-the resolved mixed list `blockedBy`. A pull request prerequisite is complete only
+the resolved mixed list `blockedBy`. A prerequisite task is complete when it is
+delivered; for a `pull_request_draft`, `pull_request_ready`, or `merged` target,
+its pull request must also merge. A pull request prerequisite is complete only
 when GitHub reports it merged. A closed pull request stays blocked until it is
 reopened and merged or removed. Missing or stale observations are refreshed from
 GitHub during queued-task sweeps, never repaired by a user.

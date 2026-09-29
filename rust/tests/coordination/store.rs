@@ -561,6 +561,196 @@ mod tests {
         let _ = std::fs::remove_file(filename.with_extension("sqlite-shm"));
     }
 
+    /// A pull request target prerequisite completes when its pull request merges.
+    #[test]
+    fn pull_request_target_prerequisites_release_dependents_when_the_pull_request_merges() {
+        let filename =
+            std::env::temp_dir().join(format!("suplex_merge_wait_{}.sqlite", Uuid::new_v4()));
+        let now = DateTime::parse_from_rfc3339("2026-09-25T12:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let mut database = SuplexDatabase::open(&filename, OpenMode::Migrate).unwrap();
+        let user = auth::development_sign_in(&mut database, now).unwrap().user;
+        database.connection().execute("INSERT INTO suplex_companies (id,name,status,created_at) VALUES ('merge_company','Merge','active',?1)", [rfc3339_millis(now)]).unwrap();
+        database.connection().execute("INSERT INTO suplex_projects (id,company_id,name,repository_path,worktree_root,repository_identity,base_branch,setup_command,verification_command,root_profile_id,worker_profile_id,agent_task_policy_json,created_at,updated_at) VALUES ('merge_project','merge_company','Merge','/tmp/merge-repo','/tmp/merge-worktrees',NULL,'main','','','root','worker','{}',?1,?1)", [rfc3339_millis(now)]).unwrap();
+        let waits = |database: &SuplexDatabase, id: &str| {
+            let response = crate::tasks::response::get(database, id).unwrap().unwrap();
+            serde_json::to_value(&response).unwrap()["queue"]["waitingOn"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|wait| {
+                    (
+                        wait["id"].as_str().unwrap().to_owned(),
+                        wait["reason"].as_str().unwrap().to_owned(),
+                        wait["summary"].as_str().unwrap().to_owned(),
+                    )
+                })
+                .collect::<Vec<_>>()
+        };
+        let status = |database: &SuplexDatabase, id: &str| -> String {
+            database
+                .connection()
+                .query_row(
+                    "SELECT status FROM suplex_task_controls WHERE task_id = ?1",
+                    [id],
+                    |row| row.get(0),
+                )
+                .unwrap()
+        };
+        let observe = |database: &SuplexDatabase, id: &str, state: Option<&str>| {
+            let pull = state.map(|state| format!(r#"{{"repository":"owner/repo","number":7,"url":"https://github.com/owner/repo/pull/7","headSha":"head","state":"{state}","mergedAt":null}}"#));
+            database
+                .connection()
+                .execute(
+                    "UPDATE suplex_task_controls SET pull_request_json = ?1 WHERE task_id = ?2",
+                    params![pull, id],
+                )
+                .unwrap();
+        };
+        for (index, target) in [
+            "pull_request_draft",
+            "pull_request_ready",
+            "merged",
+            "remote_branch",
+            "local_worktree",
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let first = PreparedTask {
+                id: repository::new_task_id(),
+                company_id: "merge_company".into(),
+                project_id: "merge_project".into(),
+                title: "First".into(),
+                description: "".into(),
+                configuration: serde_json::json!({"repository":"owner/repo","repositoryPath":"/tmp/merge-repo","worktreeRoot":"/tmp/merge-worktrees","branch":format!("task-first-{index}"),"baseBranch":"main","baselineSha":"head","startingSha":"head","source":null,"capturedAt":"2026-09-25T12:00:00.000Z"}),
+                idempotency_key: format!("merge-first-{index}"),
+                request_hash: format!("merge-first-hash-{index}"),
+                creator: TaskCreator::User(user.id.clone()),
+                delivery_target: target.into(),
+                delivery_intent: serde_json::from_value(serde_json::json!({"repository":"owner/repo","headBranch":format!("task-first-{index}"),"baseBranch":"main","baselineSha":"head","pullRequestNumber":null})).unwrap(),
+                root_profile: serde_json::from_value(serde_json::json!({"profileId":"root","provider":"codex","model":"test","reasoningLevel":"medium","serviceTier":"default"})).unwrap(),
+                worker_profile: serde_json::from_value(serde_json::json!({"profileId":"worker","provider":"codex","model":"test","reasoningLevel":"medium","serviceTier":"default"})).unwrap(),
+                advisor_profiles: serde_json::from_value(serde_json::json!({})).unwrap(),
+                issue: None,
+                start_queued: true,
+                copied_from_task_id: None,
+                depends_on: vec![],
+                pull_request_dependencies: vec![],
+                workflow: crate::coordination::workflows::Workflow::Standard,
+            };
+            let a = repository::create(&mut database, &first, now)
+                .unwrap()
+                .task
+                .id;
+            let b = repository::create(
+                &mut database,
+                &PreparedTask {
+                    id: repository::new_task_id(),
+                    idempotency_key: format!("merge-second-{index}"),
+                    request_hash: format!("merge-second-hash-{index}"),
+                    delivery_target: "local_worktree".into(),
+                    depends_on: vec![a.clone()],
+                    ..first.clone()
+                },
+                now,
+            )
+            .unwrap()
+            .task
+            .id;
+            // An active dependent keeps its turns while the pull request is open.
+            let active = repository::create(
+                &mut database,
+                &PreparedTask {
+                    id: repository::new_task_id(),
+                    idempotency_key: format!("merge-active-{index}"),
+                    request_hash: format!("merge-active-hash-{index}"),
+                    delivery_target: "local_worktree".into(),
+                    depends_on: vec![],
+                    ..first.clone()
+                },
+                now,
+            )
+            .unwrap()
+            .task
+            .id;
+            database.connection().execute(
+                "INSERT INTO suplex_task_dependencies (task_id, depends_on_task_id, created_at) VALUES (?1, ?2, ?3)",
+                params![active, a, rfc3339_millis(now)],
+            ).unwrap();
+            observe(&database, &a, Some("open"));
+            let released = mark_delivered(&mut database, &a, now).unwrap();
+            assert!(!crate::tasks::dependencies::blocked(&database, &active).unwrap());
+            // Admission and the queue projection agree for every observed pull request state.
+            let backlog = repository::create(
+                &mut database,
+                &PreparedTask {
+                    id: repository::new_task_id(),
+                    idempotency_key: format!("merge-backlog-{index}"),
+                    request_hash: format!("merge-backlog-hash-{index}"),
+                    delivery_target: "local_worktree".into(),
+                    start_queued: false,
+                    depends_on: vec![a.clone()],
+                    ..first.clone()
+                },
+                now,
+            )
+            .unwrap()
+            .task
+            .id;
+            for state in [None, Some("open"), Some("closed"), Some("merged")] {
+                observe(&database, &a, state);
+                assert_eq!(
+                    repository::prerequisites_complete(&database, &backlog).unwrap(),
+                    waits(&database, &backlog).is_empty(),
+                    "{target} {state:?}"
+                );
+            }
+            observe(&database, &a, Some("open"));
+            if matches!(target, "remote_branch" | "local_worktree") {
+                assert_eq!(released, vec![b.clone()], "{target}");
+                assert!(waits(&database, &b).is_empty());
+                continue;
+            }
+            assert!(released.is_empty(), "{target}");
+            assert_eq!(status(&database, &b), "queued");
+            let open = waits(&database, &b);
+            assert_eq!(open.len(), 1);
+            assert_eq!(open[0].0, a);
+            if target == "merged" {
+                assert_eq!(open[0].1, "prerequisite_merge_unobserved");
+            } else {
+                assert_eq!(open[0].1, "prerequisite_pull_request_open");
+                assert_eq!(
+                    open[0].2,
+                    "First is delivered, and its pull request is open. This task starts when its pull request merges."
+                );
+                observe(&database, &a, Some("closed"));
+                assert!(admit_queued(&mut database, now).unwrap().is_empty());
+                let closed = waits(&database, &b);
+                assert_eq!(closed[0].1, "prerequisite_pull_request_closed");
+                assert_eq!(
+                    closed[0].2,
+                    "First is delivered, but its pull request is closed without merging. Reopen and merge it, or remove First from Blocked by."
+                );
+            }
+            observe(&database, &a, None);
+            assert!(admit_queued(&mut database, now).unwrap().is_empty());
+            let unobserved = waits(&database, &b);
+            assert_eq!(unobserved[0].1, "prerequisite_merge_unobserved");
+            assert!(unobserved[0].2.contains("Suplex checks GitHub again"));
+            observe(&database, &a, Some("merged"));
+            assert_eq!(admit_queued(&mut database, now).unwrap(), vec![b.clone()]);
+            assert_eq!(status(&database, &b), "active");
+            assert!(waits(&database, &b).is_empty());
+        }
+        drop(database);
+        let _ = std::fs::remove_file(&filename);
+        let _ = std::fs::remove_file(filename.with_extension("sqlite-wal"));
+        let _ = std::fs::remove_file(filename.with_extension("sqlite-shm"));
+    }
+
     /// The typed rows keep the JSON of the json_object projection they replaced.
     #[test]
     fn typed_rows_serialize_like_the_persisted_json_projection() {

@@ -64,7 +64,7 @@ export const TaskInputSchema = z.object({
   issue: IssueAssociationSchema.nullable().optional(),
   workflow: WorkflowIdSchema.default("standard"),
   advisorProfileIds: AdvisorProfileIdsSchema.default({}),
-  /** Prerequisite task ids, shown as "Blocked by". With startImmediately, the task is queued: it starts when every one is complete. */
+  /** Prerequisite task ids, shown as "Blocked by". With startImmediately, the task is queued: it starts when every one is complete. A prerequisite with a pull request delivery target is complete when its pull request merges. */
   dependsOn: z.array(id).max(MAX_TASK_DEPENDENCIES).default([]),
   /** Pull requests in this project's repository. A queued task starts only after every one merges. */
   blockedByPullRequests: z.array(PullRequestDependencyInputSchema).max(MAX_TASK_DEPENDENCIES).default([]),

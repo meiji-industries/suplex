@@ -1498,7 +1498,8 @@ pub fn set_worktree(
 }
 
 /// Complete a local task and release its queued dependents inside the same
-/// transaction. Pull-request ownership conflicts leave a dependent queued.
+/// transaction. A dependent stays queued while this task's pull request is
+/// unmerged at a pull request target, or while another task owns its pull request.
 pub fn mark_delivered(
     database: &mut SuplexDatabase,
     task_id: &str,

@@ -506,10 +506,20 @@ fn projection_of(
         created_at: &task.created_at,
         updated_at: &task.updated_at,
     };
-    let hashed = crate::shared::js_json::stringify(
-        &json!({"value": value, "commandRevision": row.command_revision}),
-    );
-    value.revision = Some(URL_SAFE_NO_PAD.encode(Sha256::digest(hashed.as_bytes())));
+    let hash = |value: &Value| {
+        URL_SAFE_NO_PAD.encode(Sha256::digest(
+            crate::shared::js_json::stringify(value).as_bytes(),
+        ))
+    };
+    // Host sweeps and delivery observation move `updatedAt` and `delivery` on a running task.
+    // They form a separate revision part so a poll sees them and a command does not conflict on them.
+    let mut stable = serde_json::to_value(&value)?;
+    let observed = json!([stable["updatedAt"].take(), stable["delivery"].take()]);
+    value.revision = Some(format!(
+        "{}.{}",
+        hash(&json!({"value": stable, "commandRevision": row.command_revision})),
+        hash(&observed)
+    ));
     value.blocked_by = value.blocked_by.iter().map(response_blocker).collect();
     Ok(serde_json::to_value(value)?)
 }
@@ -2440,7 +2450,8 @@ fn claim(
     let guard = InFlight(key);
     let row = require_owned(database, principal, task_id)?;
     let before = projection_of(database, principal, &row)?;
-    if before["revision"] != json!(revision) {
+    let command_part = |revision: &str| revision.split('.').next().unwrap_or_default().to_owned();
+    if before["revision"].as_str().map(command_part) != Some(command_part(revision)) {
         return Err(stale());
     }
     legal(database, &before)?;

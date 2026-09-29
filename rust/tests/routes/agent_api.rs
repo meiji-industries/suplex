@@ -1356,6 +1356,48 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
+    async fn notes_and_cancels_survive_host_observation_but_not_real_changes() {
+        let agent = agent().await;
+        let task = agent.create("Observed target", "observed-001").await;
+        let id = task["id"].as_str().unwrap().to_owned();
+        let path = format!("/api/agent/tasks/{id}/commands");
+        let command = |body: Value| agent.call(reqwest::Method::POST, &path, Some(body));
+        let task_path = format!("/api/agent/tasks/{id}");
+        let read = || agent.call(reqwest::Method::GET, &task_path, None);
+        // The host sweep and pull request observation write only observed fields.
+        let observe = |seconds: i64, state: &str| {
+            let later = Utc::now() + chrono::Duration::seconds(seconds);
+            agent.server.state.with_database(|database| {
+                crate::tasks::repository::schedule_next_sweep(database, &id, later).unwrap();
+                database.connection().execute(
+                    "UPDATE suplex_task_controls SET pull_request_json = ?1, updated_at = ?2 WHERE task_id = ?3",
+                    params![json!({"repository": "acme/demo", "number": 7, "url": "https://github.com/acme/demo/pull/7", "headSha": "abc", "state": state, "mergedAt": null}).to_string(), crate::shared::time::rfc3339_millis(later), id],
+                ).unwrap();
+            });
+        };
+        let (status, started) = command(json!({"command": "start_task", "revision": task["revision"], "idempotencyKey": "observed-start"})).await;
+        assert_eq!(status, 200, "{started}");
+        let (_, before) = read().await;
+        observe(5, "open");
+        let (_, after) = read().await;
+        assert_ne!(before["revision"], after["revision"], "a poll still sees observed changes");
+        let (status, noted) = command(json!({"command": "send_task_note", "revision": before["revision"], "idempotencyKey": "observed-note", "note": "Still going"})).await;
+        assert_eq!(status, 200, "{noted}");
+        observe(10, "closed");
+        let (status, cancelled) = command(json!({"command": "cancel_task", "revision": noted["revision"], "idempotencyKey": "observed-cancel"})).await;
+        assert_eq!((status, cancelled["status"].as_str()), (200, Some("cancelled")), "{cancelled}");
+        let (status, stale) = command(json!({"command": "cancel_task", "revision": noted["revision"], "idempotencyKey": "observed-cancel-again"})).await;
+        assert_eq!((status, stale["code"].as_str()), (412, Some("revision_stale")));
+        let (status, illegal) = command(json!({"command": "send_task_note", "revision": cancelled["revision"], "idempotencyKey": "observed-note-late", "note": "Too late"})).await;
+        assert_eq!((status, illegal["code"].as_str()), (409, Some("illegal_command")));
+
+        let edited = agent.create("Edited target", "observed-002").await;
+        agent.server.state.with_database(|database| database.connection().execute("UPDATE suplex_tasks SET title = 'Renamed target' WHERE id = ?1", [edited["id"].as_str().unwrap()]).unwrap());
+        let (status, stale) = agent.call(reqwest::Method::POST, &format!("/api/agent/tasks/{}/commands", edited["id"].as_str().unwrap()), Some(json!({"command": "cancel_task", "revision": edited["revision"], "idempotencyKey": "observed-edited-cancel"}))).await;
+        assert_eq!((status, stale["code"].as_str()), (412, Some("revision_stale")));
+    }
+
+    #[tokio::test]
     async fn template_description_omission_and_explicit_empty_value_remain_distinct_requests() {
         let agent = agent().await;
         let template = "agent_description_template";

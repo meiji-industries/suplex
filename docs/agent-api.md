@@ -117,8 +117,11 @@ All successful Agent API responses use `Cache-Control: private, no-store`.
 
 `POST /api/agent/tasks/:taskId/commands` applies one lifecycle command. The
 body takes `command`, the task's current `revision`, an `idempotencyKey`, and
-`note` for `send_task_note` only. A stale revision returns `412` with
-`{ "code": "revision_stale" }`; a command outside `permittedCommands` returns
+`note` for `send_task_note` only. A command compares only the part of `revision`
+that commands depend on. A change to only `updatedAt` or `delivery`, such as a
+host sweep or a pull request observation, does not make a revision stale. Any
+other change, including a completed command, does. A stale revision returns
+`412` with `{ "code": "revision_stale" }`; a command outside `permittedCommands` returns
 `409` with `{ "code": "illegal_command" }`. Only the paired agent that created
 the task can send a command. A command for another task returns the same `404`
 as an unavailable task. `taskCommands` from `GET /api/agent/me` lists exactly

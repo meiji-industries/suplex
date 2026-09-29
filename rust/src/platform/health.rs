@@ -386,6 +386,7 @@ pub async fn snapshot(
     json!({
         "generatedAt":now_millis_rfc3339(),
         "reachableAddress":state.session_config.reachable_address,
+        "version":env!("CARGO_PKG_VERSION"),
         "ready":ready,"checks":checks,
     })
 }

@@ -20,6 +20,7 @@ export const HealthCheckSchema = z.object({
 export const HealthSnapshotSchema = z.object({
   generatedAt: z.string().datetime(),
   reachableAddress: z.string().url(),
+  version: z.string().optional(),
   ready: z.boolean(),
   checks: z.array(HealthCheckSchema),
   herdr: z.object({ reachable: z.boolean(), socketPath: z.string() }).optional(),

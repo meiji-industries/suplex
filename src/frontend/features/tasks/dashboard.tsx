@@ -34,5 +34,6 @@ export function Dashboard(): ReactElement {
       {snapshot?.herdr ? <div className="flex items-center justify-between border-b px-4 py-2 text-xs"><span>Herdr</span><span>{snapshot.herdr.reachable ? "Running" : "Not running"}</span></div> : null}
       <HealthCheckSections snapshot={snapshot} />
       <div id="updates" className="px-4 pt-5 lg:px-6"><UpdateSettings /></div>
+      {snapshot?.version ? <p className="px-4 py-4 font-mono text-xs text-muted-foreground lg:px-6">Suplex {snapshot.version}</p> : null}
     </SettingsLayout>;
 }

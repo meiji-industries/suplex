@@ -19,6 +19,8 @@ export interface HealthCheck {
 export interface HealthSnapshot {
   generatedAt: string;
   reachableAddress: string;
+  /** The version of the Suplex host that produced this snapshot. */
+  version?: string | undefined;
   ready: boolean;
   checks: HealthCheck[];
   herdr?: { reachable: boolean; socketPath: string } | undefined;

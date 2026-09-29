@@ -64,7 +64,14 @@ pub struct TaskExecutionSession {
     pub available: bool,
     pub limited: bool,
     pub tools: Vec<TaskExecutionTool>,
+    pub reasoning: Vec<TaskExecutionReasoning>,
     pub plan: Option<Vec<PlanItem>>,
+}
+
+#[derive(Serialize, TS)]
+pub struct TaskExecutionReasoning {
+    pub id: String,
+    pub text: String,
 }
 
 crate::shared::wire_enum! {

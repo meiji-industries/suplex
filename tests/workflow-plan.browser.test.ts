@@ -31,10 +31,10 @@ test.each([1440, 900, 390])("workflow plans use the shared illustration at %ipx"
       const plan = page.locator('[data-workflow-plan="standard"]');
       expect(await plan.locator("desc").first().textContent()).toContain(`Delivery: ${option.label}.`);
     }
-    await page.route(`**/api/tasks/${standardTaskId}/execution`, route => route.fulfill({ json: { sessions: [{ id: "root", role: "root", generation: 1, available: true, limited: false, plan: [{ content: "Coordinator plan remains separate", status: "pending" }], tools: [] }] } }));
+    await page.route(`**/api/tasks/${standardTaskId}/execution`, route => route.fulfill({ json: { sessions: [{ id: "root", role: "root", generation: 1, available: true, limited: false, plan: [{ content: "Coordinator plan remains separate", status: "pending" }], tools: [], reasoning: [] }] } }));
     await page.goto(`${value.base}/tasks/${standardTaskId}?company=${value.company.id}`);
     await page.locator('[data-workflow-plan="standard"] [data-workflow-illustration="standard"]').waitFor({ state: "visible" });
-    expect(await page.getByText("Coordinator plan remains separate", { exact: true }).isVisible()).toBe(true);
+    await page.getByText("Coordinator plan remains separate", { exact: true }).waitFor({ state: "visible" });
     expect(value.errors).toEqual([]);
   } finally { await value.close(); }
 });

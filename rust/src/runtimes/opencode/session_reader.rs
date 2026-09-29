@@ -14,7 +14,7 @@ use super::{
 };
 use crate::{
     profiles::model_pricing::ModelPricingCatalog,
-    runtimes::native::{NativeTool, UsageTokens, session_directory},
+    runtimes::native::{NativeReasoning, NativeTool, UsageTokens, session_directory},
 };
 
 const MESSAGE_LIMIT: usize = 100;
@@ -94,6 +94,29 @@ fn by_creation(messages: &[Envelope]) -> Vec<&Envelope> {
     sorted
 }
 
+pub fn reasoning_from_messages(messages: &[Envelope]) -> Vec<NativeReasoning> {
+    by_creation(messages)
+        .into_iter()
+        .filter(|message| message.info.assistant().is_some())
+        .flat_map(|message| {
+            message
+                .parts
+                .iter()
+                .enumerate()
+                .filter_map(move |(index, part)| match part {
+                    Part::Other(value) if value["type"] == "reasoning" => value["text"]
+                        .as_str()
+                        .filter(|text| !text.trim().is_empty())
+                        .map(|text| NativeReasoning {
+                            id: format!("{}:{index}", message.info.id()),
+                            text: text.to_owned(),
+                        }),
+                    _ => None,
+                })
+        })
+        .collect()
+}
+
 pub fn execution_from_messages(messages: &[&Envelope]) -> Result<Execution, BoxError> {
     let mut sorted = messages.to_vec();
     sorted.sort_by(|left, right| left.info.created().total_cmp(&right.info.created()));
@@ -130,6 +153,14 @@ pub fn history_from_messages(messages: &[Envelope]) -> Result<Vec<Value>, BoxErr
                     "type": "text",
                     "text": text.text,
                 })),
+                Part::Other(value) if value["type"] == "reasoning" => {
+                    if let Some(text) = value["text"].as_str().filter(|text| !text.trim().is_empty()) {
+                        content.push(json!({
+                            "id": value["id"].as_str().filter(|id| !id.is_empty()).map(str::to_owned).unwrap_or_else(|| format!("{}:reasoning:{index}", message.info.id())),
+                            "type": "reasoning", "text": text,
+                        }));
+                    }
+                }
                 Part::Tool(tool) => {
                     let native = native_tool(
                         tool.id
@@ -499,17 +530,41 @@ mod tests {
     }
 
     #[test]
+    fn reasoning_uses_native_message_order_and_ignores_empty_parts() {
+        let later = assistant(
+            "msg_later",
+            20,
+            json!([{"type":"reasoning","text":"Second thought"}]),
+        );
+        let earlier = assistant(
+            "msg_earlier",
+            10,
+            json!([{"type":"reasoning","text":"First thought"},{"type":"reasoning","text":""}]),
+        );
+        let parts = reasoning_from_messages(&[later, earlier]);
+        assert_eq!(
+            parts
+                .iter()
+                .map(|part| part.text.as_str())
+                .collect::<Vec<_>>(),
+            ["First thought", "Second thought"]
+        );
+        assert_eq!(parts[0].id, "msg_earlier:0");
+    }
+
+    #[test]
     fn history_maps_stable_text_and_tool_identities_with_complete_native_output() {
         let output = "x".repeat(100_000);
         let user = Envelope::parse(json!({"info":{"id":"msg_user","sessionID":"ses_old","role":"user","time":{"created":10},"agent":"suplex-worker","model":{"providerID":"openai","modelID":"model"}},"parts":[{"id":"prt_user","type":"text","text":"Inspect the repository"}]})).unwrap();
         let mut result = retired_message();
-        result["parts"] = json!([{"id":"prt_text","type":"text","text":"Complete"},{"id":"prt_tool","type":"tool","callID":"call_1","tool":"read","state":{"status":"completed","input":{"path":"/repo/file"},"output":output}}]);
+        result["parts"] = json!([{"id":"prt_reasoning","type":"reasoning","text":"Check the file"},{"id":"prt_text","type":"text","text":"Complete"},{"id":"prt_tool","type":"tool","callID":"call_1","tool":"read","state":{"status":"completed","input":{"path":"/repo/file"},"output":output}}]);
         let result = Envelope::parse(result).unwrap();
         assert_eq!(
             Value::Array(history_from_messages(&[result, user]).unwrap()),
             json!([
                 {"id":"msg_user","role":"user","createdAt":10,"content":[{"id":"prt_user","type":"text","text":"Inspect the repository"}]},
                 {"id":"msg_result","role":"assistant","createdAt":100,"content":[
+                    {"id":"prt_reasoning","type":"reasoning","text":"Check the file"},
                     {"id":"prt_text","type":"text","text":"Complete"},
                     {"id":"prt_tool","type":"tool","name":"read","status":"completed","input":{"path":"/repo/file"},"output":output,"error":null},
                 ]},

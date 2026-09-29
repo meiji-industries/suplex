@@ -30,6 +30,7 @@ pub enum Block {
         is_error: Option<bool>,
     },
     Text(String),
+    Thinking(String),
     Other,
 }
 
@@ -121,6 +122,12 @@ pub fn block(value: &Value) -> Option<Block> {
             is_error: optional(object, "is_error", Value::as_bool)?,
         }),
         "text" => Some(Block::Text(object.get("text")?.as_str()?.to_owned())),
+        "thinking" => Some(
+            object
+                .get("thinking")
+                .and_then(Value::as_str)
+                .map_or(Block::Other, |text| Block::Thinking(text.to_owned())),
+        ),
         _ => Some(Block::Other),
     }
 }
@@ -320,6 +327,9 @@ pub fn history_messages(entries: &[ClaudeMessageEntry]) -> Vec<Value> {
                     Block::Text(text) => content.push(json!({
                         "id":format!("{}:text:{index}", entry.uuid),"type":"text","text":text,
                     })),
+                    Block::Thinking(text) if !text.trim().is_empty() => content.push(json!({
+                        "id":format!("{}:reasoning:{index}", entry.uuid),"type":"reasoning","text":text,
+                    })),
                     Block::ToolUse { id, name, input } => {
                         let result = results.get(&id);
                         let text = result.map(|(content, _)| result_text(content.as_ref()));
@@ -513,6 +523,15 @@ pub fn usage_records(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn thinking_block_keeps_visible_native_text() {
+        assert_eq!(
+            block(&json!({"type":"thinking","thinking":"Check the callers."})),
+            Some(Block::Thinking("Check the callers.".into()))
+        );
+        assert_eq!(block(&json!({"type":"thinking"})), Some(Block::Other));
+    }
     use crate::profiles::model_pricing::ModelPricing;
 
     fn transcript() -> String {
@@ -577,7 +596,7 @@ mod tests {
     }
 
     #[test]
-    fn history_omits_thinking_and_joins_completed_failed_and_running_tools_by_native_id() {
+    fn history_joins_completed_failed_and_running_tools_by_native_id() {
         let entries = message_entries(&parse_json_lines(&transcript()));
         let history = history_messages(&entries[..5]);
         assert_eq!(
@@ -619,7 +638,11 @@ mod tests {
             json!([{"type":"text","text":"same"},{"type":"thinking","thinking":"hidden"},{"type":"text","text":"same"}]),
         ));
         assert_eq!(duplicated[0]["content"][0]["id"], "a-slots:text:0");
-        assert_eq!(duplicated[0]["content"][1]["id"], "a-slots:text:2");
+        assert_eq!(
+            duplicated[0]["content"][1],
+            json!({"id":"a-slots:reasoning:1","type":"reasoning","text":"hidden"})
+        );
+        assert_eq!(duplicated[0]["content"][2]["id"], "a-slots:text:2");
         let changed = history_messages(&entry(
             json!([{"type":"text","text":"expanded text"},{"type":"thinking","thinking":"hidden"},{"type":"text","text":"same"}]),
         ));

@@ -1,5 +1,5 @@
-use crate::runtimes::native::NativeTool;
 use crate::runtimes::native::SessionRef;
+use crate::runtimes::native::{NativeReasoning, NativeTool};
 // TypeScript `CodexTaskRuntime` behind the shared task harness seam.
 
 use std::{error::Error, io, path::Path, time::UNIX_EPOCH};
@@ -33,7 +33,39 @@ impl NativeSessionReader for CodexTaskRuntime {
             .into_iter()
             .filter_map(|turn| {
                 let text = transcript::result_text(&turn.events);
-                if text.is_empty() {
+                let mut content: Vec<Value> = Vec::new();
+                for event in &turn.events {
+                    if !matches!(
+                        event.kind(),
+                        "item.started" | "item.updated" | "item.completed"
+                    ) {
+                        continue;
+                    }
+                    let Some(item) = event.value().get("item") else {
+                        continue;
+                    };
+                    if item["type"] != "reasoning" {
+                        continue;
+                    }
+                    let (Some(id), Some(reasoning)) = (item["id"].as_str(), item["text"].as_str())
+                    else {
+                        continue;
+                    };
+                    if reasoning.trim().is_empty() {
+                        continue;
+                    }
+                    let id = format!("{}:{id}", turn.id);
+                    if let Some(part) = content.iter_mut().find(|part| part["id"] == id) {
+                        part["text"] = json!(reasoning);
+                    } else {
+                        content.push(json!({"id":id,"type":"reasoning","text":reasoning}));
+                    }
+                }
+                if !text.is_empty() {
+                    content
+                        .push(json!({"id":format!("{}:text",turn.id),"type":"text","text":text}));
+                }
+                if content.is_empty() {
                     return None;
                 }
                 let created_at: i64 = turn
@@ -45,7 +77,7 @@ impl NativeSessionReader for CodexTaskRuntime {
                     .ok()?;
                 Some(json!({
                     "id":turn.id,"role":"assistant","createdAt":created_at,
-                    "content":[{"id":format!("{}:text",turn.id),"type":"text","text":text}],
+                    "content":content,
                 }))
             })
             .collect())
@@ -63,6 +95,40 @@ impl NativeSessionReader for CodexTaskRuntime {
             })
             .collect();
         Ok((tools, Value::Null))
+    }
+
+    fn reasoning(&self, session: &ReaderSession<'_>) -> io::Result<Vec<NativeReasoning>> {
+        let mut parts: Vec<NativeReasoning> = Vec::new();
+        for turn in session_reader::turns(&session.runtime_directory()?)? {
+            for event in turn.events {
+                let Some(item) = event.value().get("item") else {
+                    continue;
+                };
+                if !matches!(
+                    event.kind(),
+                    "item.started" | "item.updated" | "item.completed"
+                ) || item["type"] != "reasoning"
+                {
+                    continue;
+                }
+                let (Some(id), Some(text)) = (item["id"].as_str(), item["text"].as_str()) else {
+                    continue;
+                };
+                if text.trim().is_empty() {
+                    continue;
+                }
+                let id = format!("{}:{id}", turn.id);
+                if let Some(part) = parts.iter_mut().find(|part| part.id == id) {
+                    part.text = text.to_owned();
+                } else {
+                    parts.push(NativeReasoning {
+                        id,
+                        text: text.to_owned(),
+                    });
+                }
+            }
+        }
+        Ok(parts)
     }
 
     fn turn_evidence(
@@ -223,6 +289,49 @@ impl TaskHarness for CodexTaskRuntime {
 mod tests {
     use super::*;
     use std::{collections::HashMap, fs, path::Path};
+
+    #[test]
+    fn reasoning_reads_completed_native_text() {
+        let root =
+            std::env::temp_dir().join(format!("suplex-codex-reasoning-{}", uuid::Uuid::new_v4()));
+        let database = root.join("suplex.sqlite");
+        let directory =
+            crate::runtimes::task_harness::task_session_runtime_directory(&database, "session-1")
+                .unwrap();
+        fs::create_dir_all(&directory).unwrap();
+        fs::write(directory.join("turn-msg_1.jsonl"), concat!(
+            "{\"type\":\"item.updated\",\"item\":{\"id\":\"r1\",\"type\":\"reasoning\",\"text\":\"partial\"}}\n",
+            "{\"type\":\"item.completed\",\"item\":{\"id\":\"r1\",\"type\":\"reasoning\",\"text\":\"I checked the call sites.\"}}\n",
+            "{\"type\":\"item.completed\",\"item\":{\"id\":\"a1\",\"type\":\"agent_message\",\"text\":\"Done\"}}\n",
+        )).unwrap();
+        let parts = CodexTaskRuntime
+            .reasoning(&ReaderSession {
+                database_path: &database,
+                session_id: "session-1",
+                native_session_id: "native-1",
+                instance_home_directory: None,
+            })
+            .unwrap();
+        assert_eq!(parts.len(), 1);
+        assert_eq!(parts[0].id, "msg_1:r1");
+        assert_eq!(parts[0].text, "I checked the call sites.");
+        let history = CodexTaskRuntime
+            .history(&ReaderSession {
+                database_path: &database,
+                session_id: "session-1",
+                native_session_id: "native-1",
+                instance_home_directory: None,
+            })
+            .unwrap();
+        assert_eq!(
+            history[0]["content"],
+            json!([
+                {"id":"msg_1:r1","type":"reasoning","text":"I checked the call sites."},
+                {"id":"msg_1:text","type":"text","text":"Done"},
+            ])
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn timeline_keeps_a_running_empty_turn_unfinished() {

@@ -2,6 +2,7 @@
 import type { AdvisorRole } from "./AdvisorRole.js";
 import type { PlanItem } from "./PlanItem.js";
 import type { SessionKind } from "./SessionKind.js";
+import type { TaskExecutionReasoning } from "./TaskExecutionReasoning.js";
 import type { TaskExecutionTool } from "./TaskExecutionTool.js";
 
-export type TaskExecutionSession = { id: string, role: SessionKind, advisorRole: AdvisorRole | null, label: string, generation: number, available: boolean, limited: boolean, tools: Array<TaskExecutionTool>, plan: Array<PlanItem> | null, };
+export type TaskExecutionSession = { id: string, role: SessionKind, advisorRole: AdvisorRole | null, label: string, generation: number, available: boolean, limited: boolean, tools: Array<TaskExecutionTool>, reasoning: Array<TaskExecutionReasoning>, plan: Array<PlanItem> | null, };

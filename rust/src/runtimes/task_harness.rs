@@ -160,6 +160,12 @@ pub trait NativeSessionReader {
     fn history(&self, session: &ReaderSession<'_>) -> io::Result<Vec<Value>>;
     /// Native tools and the current plan.
     fn execution(&self, session: &ReaderSession<'_>) -> io::Result<(Vec<NativeTool>, Value)>;
+    fn reasoning(
+        &self,
+        _session: &ReaderSession<'_>,
+    ) -> io::Result<Vec<crate::runtimes::native::NativeReasoning>> {
+        Ok(Vec::new())
+    }
     /// One admitted native turn; `None` when its log is missing.
     fn turn_evidence(
         &self,

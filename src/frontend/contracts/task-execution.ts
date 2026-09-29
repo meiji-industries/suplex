@@ -26,6 +26,7 @@ export const TaskExecutionResponseSchema = z.object({
     available: z.boolean(),
     limited: z.boolean(),
     tools: z.array(TaskToolSchema),
+    reasoning: z.array(z.object({ id: z.string(), text: z.string() })),
     plan: z.array(TaskPlanItemSchema).nullable(),
   })),
 });

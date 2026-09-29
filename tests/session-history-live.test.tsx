@@ -56,6 +56,37 @@ afterEach(() => {
   document.body.replaceChildren();
 });
 
+test("live history shows recorded reasoning on demand before the answer", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  vi.stubGlobal("WebSocket", FakeWebSocket);
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  await act(async () => root.render(<SessionHistory taskId="task" sessionId="session" />));
+  await act(async () => {
+    FakeWebSocket.instances[0]?.emit({ type: "snapshot", page: { messages: [{ id: "message", role: "assistant", createdAt: null, content: [
+      { id: "reasoning", type: "reasoning", text: "Checked the native transcript." },
+      { id: "answer", type: "text", text: "Done." },
+    ] }], olderCursor: null }, order: ["message"] });
+    await Promise.resolve();
+  });
+  const trigger = Array.from(container.querySelectorAll("button")).find(button => button.textContent?.includes("Reasoning"));
+  expect(trigger).toBeDefined();
+  expect(container.textContent).toContain("Done.");
+  expect(container.textContent).not.toContain("Checked the native transcript.");
+  await act(async () => trigger?.click());
+  expect(container.textContent).toContain("Checked the native transcript.");
+  await act(async () => {
+    FakeWebSocket.instances[0]?.emit({ type: "update", messages: [{ id: "message", role: "assistant", createdAt: null, content: [
+      { id: "reasoning", type: "reasoning", text: "Checked the native transcript and tests." },
+      { id: "answer", type: "text", text: "Done." },
+    ] }], removedIds: [], order: ["message"] });
+    await Promise.resolve();
+  });
+  expect(container.textContent).toContain("Checked the native transcript and tests.");
+  await act(async () => root.unmount());
+});
+
 test("a resize keeps a following viewport at the latest message without moving a paused reader", async () => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.stubGlobal("WebSocket", FakeWebSocket);

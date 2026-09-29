@@ -202,6 +202,10 @@ installs nothing.
 `mise run desktop:dev` opens the app from source, `mise run desktop:dist`
 bundles the runtime and packages `desktop/release/<arch>/Suplex-<version>-<arch>.dmg`
 (`SUPLEX_DESKTOP_ARCH=arm64`, the default, or `x64` for Intel),
+`mise run desktop:install` builds this checkout and replaces
+`/Applications/Suplex.app` without a release (it quits, swaps, and relaunches
+the app, keeps its data, and refuses uncommitted changes unless
+`SUPLEX_INSTALL_DIRTY=1`),
 `mise run desktop:dist:signed` builds both architectures and signs, notarizes, and staples them with the
 credentials in 1Password, and `mise run desktop:open` or `suplex desktop` opens
 the installed app at this host's `http://localhost:<port>`. The Navigate menu

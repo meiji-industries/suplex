@@ -130,6 +130,9 @@ run = "pnpm run desktop:test"
 [tasks."desktop:dist"]
 description = "Bundle the server runtime, then package Suplex.app, DMG, and ZIP under desktop/release/<arch> (SUPLEX_DESKTOP_ARCH=arm64 or x64, default arm64; Developer ID signed if the cert is in the keychain, not notarized)"
 run = "pnpm run desktop:dist"
+[tasks."desktop:install"]
+description = "Build Suplex.app from this checkout and replace /Applications/Suplex.app without a release: quit, swap, relaunch, then suplex doctor (refuses uncommitted changes unless SUPLEX_INSTALL_DIRTY=1)"
+run = "sh scripts/desktop-install.sh"
 [tasks."desktop:dist:signed"]
 description = "Bundle the server runtime, then package, sign, notarize, and staple the Apple silicon and Intel DMGs for distribution; Apple credentials come from the 1Password Suplex vault (.env.production)"
 run = '''

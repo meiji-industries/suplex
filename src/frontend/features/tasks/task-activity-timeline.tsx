@@ -56,7 +56,7 @@ export function TaskActivityTimeline({ taskId, checksKey }: { taskId: string; ch
   }
   const lanes = [...laneMap.values()];
 
-  return <section aria-label="Task timeline" data-task-timeline className="min-w-0 border-b border-border/70 pb-3">
+  return <section aria-label="Task timeline" data-task-timeline className="min-w-0 pb-3">
     <div className="mb-2 flex flex-wrap items-center gap-2"><h3 className="text-xs font-semibold">Timeline</h3>{intervals.length ? <span className="text-xs tabular-nums text-muted-foreground" title="Total Coordinator and Worker execution time. Concurrent executions count separately. Elapsed span covers agent time and GitHub CI checks.">Worked for {taskTimelineDuration(worked)} during {taskTimelineDuration(end - start)}</span> : null}</div>
     {error ? <Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert> : null}
     {!intervals.length ? <p className="text-xs text-muted-foreground">{snapshot ? "No agent time yet." : error ? "Agent time is not available." : "Loading timeline…"}</p> : <div className="overflow-x-auto" aria-label="Task timeline Gantt chart">

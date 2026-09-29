@@ -130,10 +130,10 @@ export function TaskNoteInput({ task, onChange }: { task: Task; onChange: (task:
   };
   if (!eligible) return <p className="text-xs text-muted-foreground">{task.archivedAt ? "Open the archived task before you send a message." : task.status === "backlog" ? "Start the task before you send a message." : task.status === "queued" ? "Wait for Suplex to start the task before you send a message." : task.status === "waiting_human" ? "Answer the current decision before you send a message." : "This task cannot receive messages."}</p>;
   return <section className="border-t pt-3" aria-label="Message Coordinator">
-    {task.status === "delivered" ? <p>Send a message to resume this task.</p> : null}
+    {task.status === "delivered" ? <p className="pb-2">Send a message to resume this task.</p> : null}
     {error ? <Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert> : null}
     <div className={error ? "mt-2" : undefined}><PromptInput maxFiles={0} onError={() => setError("Attachments are not supported. Send text only.")} onSubmit={submit}>
-      <PromptInputTextarea aria-label="Message Coordinator" value={text} onChange={event => { revision.current += 1; setText(event.currentTarget.value); }} onPaste={event => { if (Array.from(event.clipboardData.items).some(item => item.kind === "file")) { event.preventDefault(); setError("Attachments are not supported. Send text only."); } }} aria-invalid={trimmed.length > MAX_TASK_NOTE_LENGTH || undefined} />
+      <PromptInputTextarea aria-label="Message Coordinator" placeholder="What should we steer?" value={text} onChange={event => { revision.current += 1; setText(event.currentTarget.value); }} onPaste={event => { if (Array.from(event.clipboardData.items).some(item => item.kind === "file")) { event.preventDefault(); setError("Attachments are not supported. Send text only."); } }} aria-invalid={trimmed.length > MAX_TASK_NOTE_LENGTH || undefined} />
       <PromptInputFooter><span className="mr-auto text-xs text-muted-foreground">{trimmed.length.toLocaleString()} / {MAX_TASK_NOTE_LENGTH.toLocaleString()}</span><PromptInputSubmit status={submitting ? "submitted" : "ready"} disabled={invalid || submitting} /></PromptInputFooter>
     </PromptInput></div>
   </section>;

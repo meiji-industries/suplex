@@ -30,7 +30,7 @@ export function WorkflowPlan({ task }: { task: Task }) {
   const avatars = Object.fromEntries(Object.entries(profileAssignments).flatMap(([role, profile]) => profile ? [[role, <EntityAvatar key={profile.id} kind="agent" id={profile.id} name={profile.name} seed={profile.avatarSeed} size="default" />]] : []));
   const delivery = task.workflow === "refine_pull_request" ? "Merged pull request" : deliveryLabel(task);
   const pullRequestNumber = source?.kind === "pull_request" ? source.number : task.pullRequest?.number;
-  return <section aria-label="Workflow plan" data-workflow-plan={task.workflow} className="min-w-0 border-b border-border/70 pb-6">
+  return <section aria-label="Workflow plan" data-workflow-plan={task.workflow} className="min-w-0 pb-6">
     <WorkflowIllustration fit workflow={task.workflow} delivery={delivery} pullRequestNumber={pullRequestNumber} agentNames={agentNames} avatars={avatars} />
   </section>;
 }

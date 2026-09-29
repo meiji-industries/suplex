@@ -16,7 +16,7 @@ import { Badge } from "../../components/ui/badge.js";
 import { Alert, AlertDescription } from "../../components/ui/alert.js";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "../../components/ui/dialog.js";
 import { Markdown } from "../../components/app/markdown.js";
-import { EntityAvatar } from "../../components/app/entity-avatar.js";
+import { ProjectLabel } from "../../components/app/project-label.js";
 import { TaskStatus, TaskTitleLink } from "./task-status.js";
 import { TaskWork, type TaskActivity } from "./task-work.js";
 import { taskDeliveryTargetOptions } from "./task-delivery-target.js";
@@ -123,7 +123,7 @@ export function TaskDetailsPage({ task, project, onChange }: { task: Task; proje
           </div>
           {task.blockedBy.length ? blockedBy : null}
           {task.issue ? issue : null}
-          <div className="space-y-1.5"><dt className="text-muted-foreground">Project</dt><dd className="flex min-w-0 items-center gap-2">{project ? <EntityAvatar kind="project" id={project.id} name={project.name} size="xs" /> : null}<span className="truncate">{project?.name ?? task.configuration.repository}</span></dd></div>
+          <div className="space-y-1.5"><dt className="text-muted-foreground">Project</dt><dd className="flex min-w-0 items-center gap-2"><ProjectLabel project={project} fallback={task.configuration.repository} /></dd></div>
           {(["root", "worker", ...workflowDefinition(task.workflow).advisorRoles] satisfies TaskAgentRole[]).map(role => <TaskAgent key={role} task={task} role={role} onChange={onChange} onActivityChange={activityQuery.refresh} {...(role === "worker" ? { openRequest: openWorkerSelection, onOpenRequestHandled: () => setOpenWorkerSelection(0) } : {})} />)}
           <div className="space-y-1.5"><dt className="text-muted-foreground">Branch</dt><dd><CopyValue label="branch" value={task.configuration.branch}><code className="truncate" title={task.configuration.branch}>{task.configuration.branch}</code></CopyValue></dd></div>
           {task.worktree ? <div className="space-y-1.5"><dt className="text-muted-foreground">Worktree</dt><dd><CopyValue label="worktree path" value={task.worktree.path}><span className="truncate font-mono text-xs" title={task.worktree.path}>{task.worktree.path.split("/").pop()}</span></CopyValue></dd></div> : null}

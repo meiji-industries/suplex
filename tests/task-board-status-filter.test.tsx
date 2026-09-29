@@ -13,7 +13,7 @@ import type { Task } from "../src/frontend/contracts/tasks.js";
 
 const api = vi.hoisted(() => ({ readJsonUnchecked: vi.fn(), withCompany: (path: string) => path }));
 vi.mock("../src/frontend/lib/api.js", async importOriginal => ({ ...(await importOriginal<Record<string, unknown>>()), ...api }));
-vi.mock("../src/frontend/shell/company-context.js", () => ({ useCompanyContext: () => ({ user: { id: "user-1" }, currentCompany: { id: "company-1", status: "active" } }) }));
+vi.mock("../src/frontend/shell/company-context.js", () => ({ useCompanyContext: () => ({ user: { id: "user-1" }, currentCompany: { id: "company-1", status: "active" } }), useOptionalCompanyContext: () => ({ avatars: {} }) }));
 vi.mock("../src/frontend/shell/application-frame.js", () => ({ ApplicationFrame: ({ children }: { children: ReactNode }) => children }));
 vi.mock("../src/frontend/shell/global-new-task-dialog.js", () => ({ requestNewTask: vi.fn() }));
 vi.mock("../src/frontend/features/analytics/lib/analytics.js", async importOriginal => ({ ...(await importOriginal<Record<string, unknown>>()), useTaskCosts: () => new Map() }));
@@ -124,6 +124,21 @@ test("the board keeps queued and backlog tasks in separate columns and filters",
   expect(columns()).toEqual(["Backlog"]);
   expect(container.textContent).not.toContain("Ship after review");
   await act(async () => root.unmount());
+});
+
+test("board cards render the project avatar and preserve the repository fallback", async () => {
+  const tasks = [task("task-1", "Repair the poller", "active"), { ...task("task-2", "Repair the fallback", "backlog"), projectId: "missing-project" }];
+  api.readJsonUnchecked.mockImplementation(async (path: string) => path.includes("/projects") ? { projects: [{ id: "project-1", name: "Suplex" }] } : { tasks: path.endsWith("/task-costs") ? [] : tasks });
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  try {
+    await act(async () => { root.render(<ServerStateProvider><TaskDataProvider><TasksView mode="board" /></TaskDataProvider></ServerStateProvider>); });
+    const projectCard = Array.from(container.querySelectorAll("a")).find(card => card.textContent?.includes("Repair the poller"));
+    expect(projectCard?.querySelector('[data-slot="avatar"][data-size="xs"]')).not.toBeNull();
+    expect(container.textContent).toContain("Suplex");
+    expect(container.textContent).toContain("meiji-industries/suplex");
+  } finally { await act(async () => root.unmount()); container.remove(); }
 });
 
 test("board cards label every Blocked by task and list rows omit it", async () => {

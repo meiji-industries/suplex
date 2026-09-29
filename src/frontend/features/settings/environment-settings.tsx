@@ -9,7 +9,7 @@ import { useCompanyContext } from "../../shell/company-context.js";
 import { readJsonUnchecked, withCompany } from "../../lib/api.js";
 
 type EnvironmentSettings = { minFreeDiskGb: number; defaultBudgetUsd: number; defaultMaxTurns: number; todayPageEnabled: boolean; hostTerminalEnabled: boolean };
-type ExperimentSettings = Pick<EnvironmentSettings, "todayPageEnabled" | "hostTerminalEnabled">;
+type ExperimentSettings = Pick<EnvironmentSettings, "todayPageEnabled">;
 
 export function EnvironmentSettingsView(): ReactElement {
   const { currentCompany } = useCompanyContext();
@@ -26,7 +26,7 @@ export function EnvironmentSettingsView(): ReactElement {
 
   useEffect(() => {
     void readJsonUnchecked<EnvironmentSettings>("/api/admin/environment")
-      .then((settings) => { setMinFreeDiskGb(String(settings.minFreeDiskGb)); setSavedMinFreeDiskGb(settings.minFreeDiskGb); setDefaultBudgetUsd(String(settings.defaultBudgetUsd)); setSavedDefaultBudgetUsd(settings.defaultBudgetUsd); setDefaultMaxTurns(String(settings.defaultMaxTurns)); setSavedDefaultMaxTurns(settings.defaultMaxTurns); setExperimentSettings({ todayPageEnabled: settings.todayPageEnabled, hostTerminalEnabled: settings.hostTerminalEnabled }); })
+      .then((settings) => { setMinFreeDiskGb(String(settings.minFreeDiskGb)); setSavedMinFreeDiskGb(settings.minFreeDiskGb); setDefaultBudgetUsd(String(settings.defaultBudgetUsd)); setSavedDefaultBudgetUsd(settings.defaultBudgetUsd); setDefaultMaxTurns(String(settings.defaultMaxTurns)); setSavedDefaultMaxTurns(settings.defaultMaxTurns); setExperimentSettings({ todayPageEnabled: settings.todayPageEnabled }); })
       .catch((error: unknown) => setMessage(error instanceof Error ? error.message : "Environment settings could not be loaded"));
   }, []);
 
@@ -64,7 +64,7 @@ export function EnvironmentSettingsView(): ReactElement {
     setMessage("");
     try {
       const settings = await readJsonUnchecked<EnvironmentSettings>("/api/admin/environment", { method: "PATCH", body: JSON.stringify({ [key]: enabled }) });
-      setExperimentSettings({ todayPageEnabled: settings.todayPageEnabled, hostTerminalEnabled: settings.hostTerminalEnabled });
+      setExperimentSettings({ todayPageEnabled: settings.todayPageEnabled });
       setExperiments({ todayPage: settings.todayPageEnabled, hostTerminal: settings.hostTerminalEnabled });
     } catch (error) {
       setExperimentSettings((current) => current && { ...current, [key]: !enabled });
@@ -104,9 +104,6 @@ export function EnvironmentSettingsView(): ReactElement {
       <SettingsSection title="Experiments" description="Try features that are not complete. Each setting applies to all users on this host.">
         <SettingRow label="Today page" description="Show the Today page in the navigation." htmlFor="experiment-today-page">
           <Switch id="experiment-today-page" checked={experimentSettings?.todayPageEnabled ?? false} disabled={experimentSettings === null} onCheckedChange={(checked) => void toggleExperiment("todayPageEnabled", checked)} />
-        </SettingRow>
-        <SettingRow label="Host terminal" description="Suplex runs the Shell, Mirror, and sign-in terminals without Herdr. The Shell stops when the Suplex host restarts. Agent work continues." htmlFor="experiment-host-terminal">
-          <Switch id="experiment-host-terminal" checked={experimentSettings?.hostTerminalEnabled ?? false} disabled={experimentSettings === null} onCheckedChange={(checked) => void toggleExperiment("hostTerminalEnabled", checked)} />
         </SettingRow>
       </SettingsSection>
       {!validDisk ? <p className="text-xs text-destructive" role="alert">Enter a value from 0 to 1024 GB.</p> : null}

@@ -25,6 +25,7 @@ const AnalyticsView = lazy(() => import("../features/analytics/analytics.js").th
 const TaskTemplateSettings = lazy(() => import("../features/settings/task-template-settings.js").then(module => ({ default: module.TaskTemplateSettings })));
 const ApiMcpSettingsView = lazy(() => import("../features/settings/api-mcp-settings.js").then(module => ({ default: module.ApiMcpSettingsView })));
 const ProviderSettingsView = lazy(() => import("../features/settings/provider-settings.js").then(module => ({ default: module.ProviderSettingsView })));
+const TerminalSettingsView = lazy(() => import("../features/settings/terminal-settings.js").then(module => ({ default: module.TerminalSettingsView })));
 const BackupSettingsView = lazy(() => import("../features/settings/backup-settings.js").then(module => ({ default: module.BackupSettingsView })));
 const EnvironmentSettingsView = lazy(() => import("../features/settings/environment-settings.js").then(module => ({ default: module.EnvironmentSettingsView })));
 const WorkflowSettingsView = lazy(() => import("../features/settings/workflow-settings.js").then(module => ({ default: module.WorkflowSettingsView })));
@@ -62,6 +63,7 @@ function AppView(): ReactElement {
   if (pathname === "/admin/onboarding") return <OnboardingSettingsView />;
   if (pathname === "/admin/api-mcp") return <ApiMcpSettingsView />;
   if (pathname === "/admin/providers") return <ProviderSettingsView />;
+  if (pathname === "/admin/terminal") return <TerminalSettingsView />;
   if (pathname === "/admin/environment") return <EnvironmentSettingsView />;
   if (pathname === "/admin/backups") return <BackupSettingsView />;
   if (pathname === "/admin/workflows") return <WorkflowSettingsView />;

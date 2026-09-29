@@ -107,6 +107,7 @@ vi.mock("../src/frontend/features/analytics/analytics.js", async () => {
 });
 vi.mock("../src/frontend/features/settings/task-template-settings.js", () => ({ TaskTemplateSettings: view("templates") }));
 vi.mock("../src/frontend/features/settings/provider-settings.js", () => ({ ProviderSettingsView: view("providers") }));
+vi.mock("../src/frontend/features/settings/terminal-settings.js", () => ({ TerminalSettingsView: view("terminal") }));
 vi.mock("../src/frontend/features/settings/environment-settings.js", () => ({ EnvironmentSettingsView: view("environment") }));
 vi.mock("../src/frontend/features/settings/workflow-settings.js", () => ({ WorkflowSettingsView: view("workflows") }));
 vi.mock("../src/frontend/features/settings/trigger-settings.js", () => ({ TriggerSettingsView: view("triggers") }));

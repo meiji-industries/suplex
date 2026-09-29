@@ -1,4 +1,4 @@
-import { Archive, Braces, Building2, FileText, FolderGit2, HardDrive, KeyRound, ListChecks, Mail, Plug, ShieldCheck, UserRound, Users, Webhook, Workflow, type LucideIcon } from "lucide-react";
+import { Archive, Braces, Building2, FileText, FolderGit2, HardDrive, KeyRound, ListChecks, Mail, Plug, ShieldCheck, SquareTerminal, UserRound, Users, Webhook, Workflow, type LucideIcon } from "lucide-react";
 
 import { companySettingsPath, withCompany, type ApiUser } from "../../lib/api.js";
 
@@ -22,6 +22,7 @@ export function buildSettingsGroups(companyId: string, user?: ApiUser): Settings
     ...(admin ? [{ title: "Features", items: [
       { label: "Agents", href: withCompany("/admin/agents", companyId), icon: Users },
       { label: "Providers", href: withCompany("/admin/providers", companyId), icon: Plug },
+      { label: "Terminal", href: withCompany("/admin/terminal", companyId), icon: SquareTerminal },
       { label: "API & MCP", href: withCompany("/admin/api-mcp", companyId), icon: Braces },
       { label: "Workflows", href: withCompany("/admin/workflows", companyId), icon: Workflow },
       { label: "Triggers", href: withCompany("/admin/triggers", companyId), icon: Webhook },

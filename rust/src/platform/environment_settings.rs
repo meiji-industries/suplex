@@ -18,8 +18,8 @@ pub struct EnvironmentSettings {
     pub default_max_turns: i64,
     /// Experiment: show the Today page. Off by default.
     pub today_page_enabled: bool,
-    /// Experiment: the host owns task and sign-in terminals instead of Herdr.
-    /// Off by default.
+    /// The host owns task and sign-in terminals instead of Herdr.
+    /// Off by default. Set on the Terminal settings page.
     pub host_terminal_enabled: bool,
 }
 

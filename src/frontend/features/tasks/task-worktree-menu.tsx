@@ -11,6 +11,11 @@ function localOrigin(): boolean {
   return ["localhost", "127.0.0.1", "[::1]"].includes(window.location.hostname);
 }
 
+// Worktree paths only mean something on the host's own machine or in the desktop app.
+export function showWorktreeMenu(): boolean {
+  return !!window.suplexApp || localOrigin();
+}
+
 export function TaskWorktreeMenu({ taskId, path, onError }: { taskId: string; path: string; onError: (message: string) => void }): ReactElement {
   const [apps, setApps] = useState<WorktreeApp[] | null>(null);
   const [copyState, setCopyState] = useState<"" | "copied" | "failed">("");

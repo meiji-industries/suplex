@@ -44,7 +44,7 @@ function mount() {
   document.body.append(container);
   const root = createRoot(container);
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  const view = { container, root, client, render: async (nextTask: Task = task) => { await act(async () => { root.render(<QueryClientProvider client={client}><TaskWork task={nextTask} activity={activity} onChange={() => {}} onSelectWorker={() => {}} /></QueryClientProvider>); await Promise.resolve(); }); } };
+  const view = { container, root, client, render: async (nextTask: Task = task) => { await act(async () => { root.render(<QueryClientProvider client={client}><TaskWork task={nextTask} activity={activity} onChange={() => {}} /></QueryClientProvider>); await Promise.resolve(); }); } };
   cleanups.push(() => { root.unmount(); client.clear(); container.remove(); });
   return view;
 }

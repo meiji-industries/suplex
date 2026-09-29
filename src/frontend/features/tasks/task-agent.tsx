@@ -21,9 +21,8 @@ export const taskAgentLabel = (role: TaskAgentRole): string => role === "root" ?
 const roleProfile = (task: Task, role: TaskAgentRole) => role === "root" ? task.rootProfile : role === "worker" ? task.workerProfile : task.advisorProfiles[role] ?? task.rootProfile;
 const roleSession = (activity: TaskActivity, role: TaskAgentRole) => activity.sessions.find(session => session.current && (role === "root" ? session.kind === "root" : session.kind === "worker" && session.advisorRole === (role === "worker" ? null : role)));
 
-export function TaskAgent({ task, role, onChange, onActivityChange, openRequest, onOpenRequestHandled }: {
+export function TaskAgent({ task, role, onChange, onActivityChange }: {
   task: Task; role: TaskAgentRole; onChange: (task: Task) => void; onActivityChange: () => Promise<TaskActivity>;
-  openRequest?: number; onOpenRequestHandled?: () => void;
 }) {
   const label = taskAgentLabel(role);
   const profile = roleProfile(task, role);
@@ -58,7 +57,6 @@ export function TaskAgent({ task, role, onChange, onActivityChange, openRequest,
     } catch (cause) { setError(cause instanceof Error ? cause.message : "Task activity is not available."); }
     finally { setBusy(false); setOpen(true); }
   };
-  useEffect(() => { if (openRequest) { onOpenRequestHandled?.(); void openDialog(); } }, [openRequest]);
   const save = async () => {
     if (!intent || busy || !selected || noChange) return;
     setBusy(true); setError("");

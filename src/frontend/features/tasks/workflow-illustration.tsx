@@ -1,4 +1,4 @@
-import { useId, type ReactNode } from "react";
+import { useId, useLayoutEffect, useRef, type ReactNode } from "react";
 import { Combine, Crosshair, FileText, GitMerge, GitPullRequest, ListChecks, ScanEye, Send, Terminal, UserRound, type LucideIcon } from "lucide-react";
 import type { WorkflowId } from "../../contracts/workflows.js";
 import { REPAIR_RATING_TARGET, type AdvisorRole } from "../../contracts/advisor-reports.js";
@@ -117,8 +117,36 @@ function Artwork({ workflow, delivery, compact, agents, agentNames, avatars, arr
   </>;
 }
 
-export function WorkflowIllustration({ workflow, delivery, agents = {}, agentNames = {}, avatars = {}, pullRequestNumber }: { workflow: WorkflowId; delivery: string; agents?: AgentControls; agentNames?: AgentNames; avatars?: AgentControls; pullRequestNumber?: number | undefined }) {
+// Crops each visible SVG's viewBox to its drawn content; the layouts reserve slack for every workflow's label placement.
+function fitToContent(root: HTMLElement): void {
+  for (const svg of Array.from(root.querySelectorAll<SVGSVGElement>(":scope > svg"))) {
+    const frame = svg.getBoundingClientRect();
+    if (!frame.height) continue;
+    const box = svg.viewBox.baseVal;
+    const scale = box.height / frame.height;
+    let top = Infinity, bottom = -Infinity;
+    for (const element of Array.from(svg.querySelectorAll("path, circle, rect, text, foreignObject > div"))) {
+      if (element.closest("defs")) continue;
+      const rect = element.getBoundingClientRect();
+      if (!rect.height) continue;
+      top = Math.min(top, rect.top - frame.top);
+      bottom = Math.max(bottom, rect.bottom - frame.top);
+    }
+    if (top < bottom) svg.setAttribute("viewBox", `${box.x} ${box.y + top * scale - 4} ${box.width} ${(bottom - top) * scale + 8}`);
+  }
+}
+
+export function WorkflowIllustration({ workflow, delivery, agents = {}, agentNames = {}, avatars = {}, pullRequestNumber, fit = false }: { workflow: WorkflowId; delivery: string; agents?: AgentControls; agentNames?: AgentNames; avatars?: AgentControls; pullRequestNumber?: number | undefined; fit?: boolean }) {
   const id = useId();
+  const container = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    const root = container.current;
+    if (!fit || !root || typeof ResizeObserver === "undefined") return;
+    // Refit when the panel opens or the wide/compact artwork swaps.
+    const observer = new ResizeObserver(() => fitToContent(root));
+    observer.observe(root);
+    return () => observer.disconnect();
+  });
   const user = useOptionalCompanyContext()?.user;
   const author = <span className="inline-flex h-6 items-center font-medium">{user?.displayName ?? "User"}</span>;
   const authorAvatar = user ? <EntityAvatar kind="user" id={user.id} name={user.displayName} seed={user.avatarSeed} size="default" /> : <UserRound className="size-8" />;
@@ -132,7 +160,7 @@ export function WorkflowIllustration({ workflow, delivery, agents = {}, agentNam
     "Merge to base": "merges the PR",
     "Merged pull request": "merges the PR",
   } as Record<string, string>)[delivery] ?? delivery;
-  return <div className="@container" data-workflow-illustration={workflow}>
+  return <div ref={container} className="@container" data-workflow-illustration={workflow}>
     {[false, true].map(compact => {
       const layout = layouts[workflow][compact ? "compact" : "wide"];
       const height = layout.height + (compact ? 78 : workflow === "refine_pull_request" ? 160 : 110);

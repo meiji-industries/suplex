@@ -1,7 +1,9 @@
 import { useEffect, useState } from "react";
 import { useTaskTimeline } from "./lib/task-queries.js";
+import { checkRunLabel, checkRunName, checkRunStatus, useTaskChecks } from "./lib/task-checks.js";
 import { taskTimelineDuration } from "../timeline/lib/task-timeline-duration.js";
 import { Alert, AlertDescription } from "../../components/ui/alert.js";
+import { ToolIcon } from "../../components/app/tool-icons.js";
 import { TimelineAgentLabel } from "../timeline/timeline-agent-label.js";
 
 import { roleLabel } from "./workflow-presentation.js";
@@ -13,8 +15,10 @@ function timestamp(value: number): string {
   return new Date(value).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "medium" });
 }
 
-export function TaskActivityTimeline({ taskId }: { taskId: string }) {
+export function TaskActivityTimeline({ taskId, checksKey }: { taskId: string; checksKey?: string | null }) {
   const query = useTaskTimeline(taskId);
+  // Same refresh key as the Checks tab: both share one poll per task.
+  const { checks } = useTaskChecks(checksKey ? taskId : null, checksKey);
   const snapshot = query.data ? { activity: query.data.tasks.find(task => task.id === taskId)?.activity ?? [], readAt: query.dataUpdatedAt } : null;
   const error = query.isError ? "Timeline is not available." : "";
   const [now, setNow] = useState(Date.now);
@@ -28,8 +32,18 @@ export function TaskActivityTimeline({ taskId }: { taskId: string }) {
     ...entry, start: Date.parse(entry.startedAt), end: Math.max(Date.parse(entry.startedAt), entry.finishedAt ? Date.parse(entry.finishedAt) : asOf),
     live: entry.status === "running" && !error && now <= liveUntil,
   }));
-  const start = intervals.reduce((first, entry) => Math.min(first, entry.start), Infinity);
-  const end = intervals.reduce((last, entry) => Math.max(last, entry.end), -Infinity);
+  // ponytail: latest run per check on the current PR head only; earlier pushes need persisted CI history.
+  const ciRuns = (checks?.runs ?? []).flatMap(run => {
+    const status = checkRunStatus(run);
+    const started = run.startedAt ? Date.parse(run.startedAt) : Number.NaN;
+    if (status === "skipped" || !Number.isFinite(started)) return [];
+    const completed = run.completedAt ? Date.parse(run.completedAt) : Number.NaN;
+    return [{ run, status, name: checkRunName(run), start: started, end: Math.max(started, Number.isFinite(completed) ? completed : status === "pending" ? now : started) }];
+  });
+  const ciStart = ciRuns.reduce((first, entry) => Math.min(first, entry.start), Infinity);
+  const ciEnd = ciRuns.reduce((last, entry) => Math.max(last, entry.end), -Infinity);
+  const start = Math.min(ciStart, intervals.reduce((first, entry) => Math.min(first, entry.start), Infinity));
+  const end = Math.max(ciEnd, intervals.reduce((last, entry) => Math.max(last, entry.end), -Infinity));
   const worked = intervals.reduce((total, entry) => total + entry.end - entry.start, 0);
   const span = Math.max(1, end - start);
   const ticks = Array.from({ length: 5 }, (_, index) => start + span * index / 4);
@@ -43,7 +57,7 @@ export function TaskActivityTimeline({ taskId }: { taskId: string }) {
   const lanes = [...laneMap.values()];
 
   return <section aria-label="Task timeline" data-task-timeline className="min-w-0 border-b border-border/70 pb-3">
-    <div className="mb-2 flex flex-wrap items-center gap-2"><h3 className="text-xs font-semibold">Timeline</h3>{intervals.length ? <span className="text-xs tabular-nums text-muted-foreground" title="Total Coordinator and Worker execution time. Concurrent executions count separately. Elapsed span from the first agent response to the last.">Worked for {taskTimelineDuration(worked)} during {taskTimelineDuration(end - start)}</span> : null}</div>
+    <div className="mb-2 flex flex-wrap items-center gap-2"><h3 className="text-xs font-semibold">Timeline</h3>{intervals.length ? <span className="text-xs tabular-nums text-muted-foreground" title="Total Coordinator and Worker execution time. Concurrent executions count separately. Elapsed span covers agent time and GitHub CI checks.">Worked for {taskTimelineDuration(worked)} during {taskTimelineDuration(end - start)}</span> : null}</div>
     {error ? <Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert> : null}
     {!intervals.length ? <p className="text-xs text-muted-foreground">{snapshot ? "No agent time yet." : error ? "Agent time is not available." : "Loading timeline…"}</p> : <div className="overflow-x-auto" aria-label="Task timeline Gantt chart">
       <div className="grid min-w-[45rem] grid-cols-[13rem_minmax(32rem,1fr)] text-xs">
@@ -66,6 +80,23 @@ export function TaskActivityTimeline({ taskId }: { taskId: string }) {
             })}
           </div>
         </div>)}
+        {ciRuns.length ? <div className="contents" data-task-ci-lane>
+          <div className="sticky left-0 z-10 flex min-h-11 items-center border-b border-border bg-background px-3">
+            <span className="flex min-w-0 items-center gap-2">
+              {/* Same box as an agent's avatar, so the names line up. */}
+              <span className="grid size-6 shrink-0 place-items-center"><ToolIcon tool="gh-auth" /></span>
+              <span className="min-w-0"><span className="block truncate text-xs font-medium">GitHub CI</span><span className="block truncate text-xs text-muted-foreground">Checks · {ciRuns.length}× · {taskTimelineDuration(ciEnd - ciStart)}</span></span>
+            </span>
+          </div>
+          <div className="relative min-h-11 border-b border-border/70" role="list" aria-label="GitHub CI checks">
+            {ciRuns.map((entry, index) => {
+              const left = Math.min(99.5, (entry.start - start) / span * 100);
+              const width = Math.min(100 - left, Math.max(0.5, (entry.end - entry.start) / span * 100));
+              const label = `${entry.name}: ${timestamp(entry.start)} to ${timestamp(entry.end)}. ${checkRunLabel(entry.run, now)}.`;
+              return <div role="listitem" tabIndex={0} key={`${entry.name}:${index}`} data-task-ci-check={entry.status} aria-label={label} title={label} className={`absolute top-3 flex h-5 items-center overflow-hidden rounded-sm px-1 text-left text-xs leading-5 outline-none focus-visible:ring-2 focus-visible:ring-ring ${entry.status === "pending" ? "phase-timing-active text-emerald-950 motion-reduce:animate-none" : entry.status === "failed" ? "bg-destructive/20 text-destructive" : "bg-muted text-muted-foreground"}`} style={{ left: `${left}%`, width: `${width}%` }}><span className="truncate">{entry.name}</span></div>;
+            })}
+          </div>
+        </div> : null}
       </div>
     </div>}
   </section>;

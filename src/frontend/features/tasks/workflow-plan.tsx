@@ -4,7 +4,6 @@ import type { ProfileResponse } from "../../contracts/projects.js";
 import { workflowDefinition } from "./workflow-presentation.js";
 import { taskDeliveryTargetOptions } from "./task-delivery-target.js";
 import { EntityAvatar } from "../../components/app/entity-avatar.js";
-import { Plan, PlanAction, PlanContent, PlanDescription, PlanHeader, PlanTitle, PlanTrigger } from "../../components/ui/plan.js";
 import { WorkflowIllustration } from "./workflow-illustration.js";
 import { listTaskProfiles } from "./lib/task-api.js";
 
@@ -31,8 +30,7 @@ export function WorkflowPlan({ task }: { task: Task }) {
   const avatars = Object.fromEntries(Object.entries(profileAssignments).flatMap(([role, profile]) => profile ? [[role, <EntityAvatar key={profile.id} kind="agent" id={profile.id} name={profile.name} seed={profile.avatarSeed} size="default" />]] : []));
   const delivery = task.workflow === "refine_pull_request" ? "Merged pull request" : deliveryLabel(task);
   const pullRequestNumber = source?.kind === "pull_request" ? source.number : task.pullRequest?.number;
-  return <section aria-label="Workflow plan" data-workflow-plan={task.workflow}><Plan>
-    <PlanHeader><div><PlanTitle>Workflow plan</PlanTitle><PlanDescription>{definition.name}</PlanDescription></div><PlanAction><PlanTrigger label="Open or close the workflow plan" /></PlanAction></PlanHeader>
-    <PlanContent><div className="min-w-0"><WorkflowIllustration workflow={task.workflow} delivery={delivery} pullRequestNumber={pullRequestNumber} agentNames={agentNames} avatars={avatars} /><p className="text-xs text-muted-foreground">Delivery target: <span>{delivery}</span></p></div></PlanContent>
-  </Plan></section>;
+  return <section aria-label="Workflow plan" data-workflow-plan={task.workflow} className="min-w-0 border-b border-border/70 pb-6">
+    <WorkflowIllustration fit workflow={task.workflow} delivery={delivery} pullRequestNumber={pullRequestNumber} agentNames={agentNames} avatars={avatars} />
+  </section>;
 }

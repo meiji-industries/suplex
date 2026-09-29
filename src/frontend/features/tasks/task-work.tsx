@@ -1,5 +1,4 @@
 import { addTaskNote } from "./lib/task-api.js";
-import { TaskWorker } from "./task-worker.js";
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { z } from "zod";
 import { CircleDashed } from "lucide-react";
@@ -65,17 +64,17 @@ export function humanMessage(prompt: string): { author: string; text: string } |
   } catch { return null; }
 }
 
-export function TaskWork({ task, activity, onChange, onSelectWorker }: { task: Task; activity: TaskActivity; onChange: (task: Task) => void; onSelectWorker: () => void }) {
+export function TaskWork({ task, activity, onChange }: { task: Task; activity: TaskActivity; onChange: (task: Task) => void }) {
   const [tab, setTab] = useState("chat");
   const { execution, error: executionError } = useTaskExecution(task.id);
   const summaryQuery = useTaskDiffSummary(task);
   const diffSummary = summaryQuery.isError ? null : summaryQuery.data;
+  const checksKey = task.pullRequest ? `${task.pullRequest.number}:${task.pullRequest.state}:${task.pullRequest.headSha}` : null;
   return <Tabs value={tab} onValueChange={value => setTab(String(value))} data-task-work-tabs>
-    <TaskWorker key={task.id} task={task} activity={activity} onSelect={onSelectWorker} />
-    <TaskActivityTimeline taskId={task.id} />
+    <WorkflowPlan key={`workflow-plan-${task.id}`} task={task} />
+    <TaskActivityTimeline taskId={task.id} checksKey={checksKey} />
     <div className="max-w-full border-b"><TabsList variant="line"><TabsTrigger value="chat">Chat</TabsTrigger><TabsTrigger value="activity">Activity <span className="text-xs text-muted-foreground">{activity.turns.length}</span></TabsTrigger><TabsTrigger value="diffs">Diffs{diffSummary?.available ? <span className="text-xs text-muted-foreground"> ({diffSummary.files})</span> : null}</TabsTrigger><TabsTrigger value="checks">Checks</TabsTrigger><TabsTrigger value="other">Other</TabsTrigger></TabsList></div>
     <TabsContent value="chat"><div className="grid min-w-0 gap-5 pt-3" aria-label="Conversation">
-      <WorkflowPlan key={`workflow-plan-${task.id}`} task={task} />
       <RootPlan execution={execution} />
       {activity.turns.filter(turn => resultText(turn.result) || humanMessage(turn.prompt)?.text).map(turn => {
         const session = activity.sessions.find(session => session.id === turn.sessionId);
@@ -89,7 +88,7 @@ export function TaskWork({ task, activity, onChange, onSelectWorker }: { task: T
     </div></TabsContent>
     <TabsContent value="activity"><section aria-label="Task activity" className="grid min-w-0 gap-0 pt-3">{activity.turns.map(turn => <div key={turn.id} className="flex gap-3 border-b py-3 text-xs"><CircleDashed className="size-4 shrink-0 text-muted-foreground" /><span className="font-medium">{activity.sessions.find(session => session.id === turn.sessionId)?.label ?? "Coordinator"}</span><span className="text-muted-foreground">{turnLabel(turn)}</span></div>)}{!activity.turns.length && !execution?.sessions.some(session => session.tools.length) ? <p className="text-xs text-muted-foreground">No activity yet.</p> : null}<TaskTools execution={execution} error={executionError} /></section></TabsContent>
     <TabsContent value="diffs">{tab === "diffs" ? <TaskDiff task={task} /> : null}</TabsContent>
-    <TabsContent value="checks">{tab === "checks" ? <TaskChecks task={task} /> : null}</TabsContent>
+    <TabsContent value="checks">{tab === "checks" ? <TaskChecks taskId={task.id} checksKey={checksKey} /> : null}</TabsContent>
     <TabsContent value="other"><div className="grid min-w-0 gap-4 pt-3 text-xs"><details><summary className="cursor-pointer font-medium">Runtime diagnostics</summary><section aria-label="Sessions" className="grid gap-3 pt-3">{activity.sessions.map(session => <div key={session.id}><p>{session.label} {session.generation}</p><code className="break-all text-muted-foreground">{session.nativeSessionId ?? "Not started"}</code></div>)}</section>{activity.turns.map(turn => <details key={turn.id} className="border-b py-2"><summary className="cursor-pointer">{turnLabel(turn)} · Prompt</summary><Markdown source={turn.prompt} /></details>)}</details></div></TabsContent>
   </Tabs>;
 }
@@ -147,7 +146,7 @@ function TaskDiff({ task }: { task: Task }) {
   return <div className="min-w-0 space-y-3 pt-3" data-task-diff-panel>{error ? <Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert> : !diff ? <p className="flex items-center gap-2 text-xs text-muted-foreground" aria-busy="true"><Spinner /><span>Loading changes…</span></p> : !diff.available ? <p className="text-xs text-muted-foreground">The worktree is not available.</p> : <Suspense fallback={null}><DeveloperDiff patch={diff.patch} /></Suspense>}</div>;
 }
 
-function TaskChecks({ task }: { task: Task }) {
-  const { checks, error } = useTaskChecks(task.id, task.pullRequest ? `${task.pullRequest.number}:${task.pullRequest.state}:${task.pullRequest.headSha}` : null);
+function TaskChecks({ taskId, checksKey }: { taskId: string; checksKey: string | null }) {
+  const { checks, error } = useTaskChecks(taskId, checksKey);
   return <section aria-label="GitHub checks" className="space-y-3 pt-3">{error ? <Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert> : !checks ? <p className="flex items-center gap-2 text-xs text-muted-foreground" aria-busy="true"><Spinner /><span>Loading checks…</span></p> : !checks.runs.length ? <p className="text-xs text-muted-foreground">{checks.available ? "GitHub has no checks for this pull request." : "No pull request checks are available."}</p> : <TaskCheckResults runs={checks.runs} />}</section>;
 }

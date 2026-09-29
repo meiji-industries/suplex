@@ -26,7 +26,7 @@ import { CostValue } from "../../components/app/cost-value.js";
 import { Progress, ProgressLabel, ProgressValue } from "../../components/ui/progress.js";
 import { WorkflowHistory, WorkflowStatus } from "./workflow-history.js";
 import { TaskPullRequestCard } from "./pull-request-card.js";
-import { TaskWorktreeMenu } from "./task-worktree-menu.js";
+import { showWorktreeMenu, TaskWorktreeMenu } from "./task-worktree-menu.js";
 import { workflowDefinition } from "./workflow-presentation.js";
 
 const emptyActivity: TaskActivity = { sessions: [], turns: [], shellPaneId: null };
@@ -79,7 +79,6 @@ export function TaskDetailsPage({ task, project, onChange }: { task: Task; proje
   const [busy, setBusy] = useState(false);
   const [image, setImage] = useState<Task["images"][number] | null>(null);
   const [edit, setEdit] = useState<NewTaskDraft | null>(null);
-  const [openWorkerSelection, setOpenWorkerSelection] = useState(0);
   const blockedBy = <TaskBlockedByProperty task={task} onChange={onChange} />;
   const issue = <div className="space-y-1.5"><dt className="text-muted-foreground">Issue</dt><dd><IssuePicker projectId={task.projectId} issue={task.issue} onChange={async issue => onChange(await setTaskIssue(task.id, issue))} /></dd></div>;
   const editable = ["backlog", "queued"].includes(task.status) && !task.archivedAt;
@@ -94,18 +93,18 @@ export function TaskDetailsPage({ task, project, onChange }: { task: Task; proje
   return <article data-task-detail className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
     <div data-task-body className="grid min-h-0 min-w-0 flex-1 overflow-y-auto lg:grid-cols-[minmax(0,1fr)_260px]">
       <div data-task-main className="flex min-w-0 flex-col">
-        <header className="px-4 pb-3 pt-4 sm:px-6 lg:px-10"><div className="mx-auto flex max-w-4xl min-w-0 items-start justify-between gap-3"><h2 className="min-w-0 flex-1 text-xl font-semibold leading-8" aria-label={task.title}>{task.title}</h2>{task.worktree ? <TaskWorktreeMenu taskId={task.id} path={task.worktree.path} onError={setError} /> : null}</div></header>
+        <header className="px-4 pb-3 pt-4 sm:px-6 lg:px-10"><div className="mx-auto flex max-w-4xl min-w-0 items-start justify-between gap-3"><h2 className="min-w-0 flex-1 text-xl font-semibold leading-8" aria-label={task.title}>{task.title}</h2>{task.worktree && showWorktreeMenu() ? <TaskWorktreeMenu taskId={task.id} path={task.worktree.path} onError={setError} /> : null}</div></header>
         <div data-task-content className="min-w-0 px-4 pb-6 pt-4 sm:px-6 lg:px-10"><div data-task-content-inner className="mx-auto max-w-4xl space-y-7">
           {readError ? <Alert variant="destructive"><AlertDescription>{readError}</AlertDescription></Alert> : null}
           <Markdown source={task.description} />
           {task.images.length ? <ul className="flex flex-wrap gap-2" aria-label="Task images">{task.images.map(item => <li key={item.artifactId}><button type="button" className="size-16 overflow-hidden rounded-field border bg-muted/30 focus-visible:outline" aria-label={`Open ${item.filename}`} onClick={() => setImage(item)}><img className="size-full object-cover" src={`/api/tasks/${task.id}/images/${item.artifactId}`} alt={item.filename} /></button></li>)}</ul> : null}
-          {task.status !== "active" || task.pullRequest || task.humanQuestion || ["pull_request_ready", "merged"].includes(task.deliveryTarget) ? <div data-task-current className="-mx-4 border-y px-4 py-3 sm:-mx-6 sm:px-6 lg:-mx-10 lg:px-10"><div className="mx-auto max-w-4xl space-y-3">
+          {task.status !== "active" || task.pullRequest || task.humanQuestion || ["pull_request_ready", "merged"].includes(task.deliveryTarget) ? <div data-task-current className="-mx-4 px-4 py-3 sm:-mx-6 sm:px-6 lg:-mx-10 lg:px-10"><div className="mx-auto max-w-4xl space-y-3">
             {task.pullRequest || ["active", "delivered"].includes(task.status) && ["pull_request_draft", "pull_request_ready", "merged"].includes(task.deliveryTarget) ? <TaskPullRequestCard task={task} onChange={onChange} /> : task.status === "active" ? null : <div className="flex flex-wrap items-center justify-between gap-2"><p className="text-xs text-muted-foreground">{["backlog", "queued"].includes(task.status) ? backlogText(task) : task.status === "delivered" ? "The delivery target is complete." : task.status === "cancelled" ? "The task is cancelled." : "Coordinator needs your answer."}</p>{editable ? <span className="flex items-center gap-2"><Button size="sm" variant="outline" disabled={busy} onClick={() => setEdit(editTaskDraft(task))}>Edit task</Button>{task.status === "queued" ? <Button size="sm" variant="outline" disabled={busy} onClick={() => void act("disarm")}>Send to backlog</Button> : <Button size="sm" disabled={busy} onClick={() => void act("start")}>{task.queue.waitingOn.length ? "Queue task" : "Start task"}</Button>}</span> : null}</div>}
             {["backlog", "queued"].includes(task.status) && task.queue.waitingOn.length ? <TaskQueueWaits task={task} /> : null}
             {task.humanQuestion ? <TaskQuestion key={task.humanQuestion.id} question={task.humanQuestion} busy={busy} onAnswer={answer => act("answer", { questionId: task.humanQuestion?.id, ...answer })} onLimitDecision={limitDecision => act("answer", { questionId: task.humanQuestion?.id, limitDecision })} /> : null}
           </div></div> : null}
           {task.workflow !== "standard" ? <WorkflowHistory task={task} activity={activity} /> : null}
-          <TaskWork task={task} activity={activity} onChange={onChange} onSelectWorker={() => setOpenWorkerSelection(value => value + 1)} />
+          <TaskWork task={task} activity={activity} onChange={onChange} />
         </div></div>
       </div>
       <aside aria-label="Task properties" className="min-w-0 border-t px-4 py-5 lg:border-l lg:border-t-0">
@@ -124,7 +123,7 @@ export function TaskDetailsPage({ task, project, onChange }: { task: Task; proje
           {task.blockedBy.length ? blockedBy : null}
           {task.issue ? issue : null}
           <div className="space-y-1.5"><dt className="text-muted-foreground">Project</dt><dd className="flex min-w-0 items-center gap-2"><ProjectLabel project={project} fallback={task.configuration.repository} /></dd></div>
-          {(["root", "worker", ...workflowDefinition(task.workflow).advisorRoles] satisfies TaskAgentRole[]).map(role => <TaskAgent key={role} task={task} role={role} onChange={onChange} onActivityChange={activityQuery.refresh} {...(role === "worker" ? { openRequest: openWorkerSelection, onOpenRequestHandled: () => setOpenWorkerSelection(0) } : {})} />)}
+          {(["root", "worker", ...workflowDefinition(task.workflow).advisorRoles] satisfies TaskAgentRole[]).map(role => <TaskAgent key={role} task={task} role={role} onChange={onChange} onActivityChange={activityQuery.refresh} />)}
           <div className="space-y-1.5"><dt className="text-muted-foreground">Branch</dt><dd><CopyValue label="branch" value={task.configuration.branch}><code className="truncate" title={task.configuration.branch}>{task.configuration.branch}</code></CopyValue></dd></div>
           {task.worktree ? <div className="space-y-1.5"><dt className="text-muted-foreground">Worktree</dt><dd><CopyValue label="worktree path" value={task.worktree.path}><span className="truncate font-mono text-xs" title={task.worktree.path}>{task.worktree.path.split("/").pop()}</span></CopyValue></dd></div> : null}
           <Collapsible.Root className="space-y-3">

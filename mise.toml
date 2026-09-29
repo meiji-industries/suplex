@@ -96,7 +96,7 @@ run = "pnpm exec tsx scripts/dev.ts --stop"
 
 [tasks."dev:status"]
 run = '''
-port=${SUPLEX_PORT:-${CONDUCTOR_PORT:-4111}}
+port=${SUPLEX_PORT:-${CONDUCTOR_PORT:-14111}}
 lsof -nP -iTCP:$port -sTCP:LISTEN || echo "dev stack not running (port $port free)"
 '''
 

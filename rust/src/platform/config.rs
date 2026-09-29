@@ -74,7 +74,7 @@ impl Installation {
         let default_port = if experimental.is_some() {
             value("CONDUCTOR_PORT")
                 .and_then(|port| port.parse::<u16>().ok())
-                .unwrap_or(4111)
+                .unwrap_or(14111)
                 .to_string()
         } else {
             "4111".into()

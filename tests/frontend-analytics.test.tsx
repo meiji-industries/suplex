@@ -68,6 +68,9 @@ test("keeps cohort, partial, and missing-usage values while ledger search and so
   try {
     await act(async () => root.render(<AnalyticsView />));
     await act(async () => { await import("../src/frontend/features/analytics/analytics-charts.js"); });
+    expect(container.querySelector('section[aria-label="Activity"]')?.textContent).toContain("Activity");
+    const activityHeatmap = container.querySelector('[role="group"][aria-label="Spend activity by local day"]');
+    expect(activityHeatmap?.querySelector('[role="img"][aria-label]')?.getAttribute("aria-label")).toMatch(/^\d{4}-\d{2}-\d{2}: \$0\.00$/);
     expect(metric("Estimated spend")?.textContent).toBe("$9.00");
     expect(metric("Estimated spend")?.querySelector("span")?.title).toContain("partial usage");
     expect(metric("Delivered")?.textContent).toBe("67%");

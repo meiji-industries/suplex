@@ -248,7 +248,7 @@ pub fn rename_own_credential(
         );
     }
     let updated =
-        super::passkey_repository::rename_own_credential(database, user_id, credential_id, &label)?;
+        super::passkey_repository::rename_own_credential(database, user_id, credential_id, label)?;
     if updated != 1 {
         return Err(IdentityError::not_found().into());
     }

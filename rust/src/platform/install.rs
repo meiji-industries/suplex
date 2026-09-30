@@ -372,24 +372,27 @@ fn data() -> Value {
         Err(error) => return failure(error.to_string(), "Check the Suplex configuration path."),
     };
     let old = fs::read_to_string(&path).unwrap_or_default();
+    let configured = |name: &str| {
+        old.lines().find_map(|line| {
+            line.split_once('=')
+                .filter(|(key, _)| key.trim() == name)
+                .map(|(_, value)| value.trim().trim_matches(['\'', '"']).to_owned())
+        })
+    };
     let port = env::var("SUPLEX_PORT")
         .ok()
-        .or_else(|| {
-            old.lines().find_map(|line| {
-                line.split_once('=')
-                    .filter(|(key, _)| key.trim() == "SUPLEX_PORT")
-                    .map(|(_, value)| value.trim().trim_matches(['\'', '"']).to_owned())
-            })
-        })
+        .or_else(|| configured("SUPLEX_PORT"))
         .unwrap_or_else(|| "4111".into());
-    if let Err(error) = setup::upsert_environment(
-        &path,
-        &[
-            ("SUPLEX_ACCESS_MODE", "local"),
-            ("SUPLEX_BIND_ADDRESS", "127.0.0.1"),
-            ("SUPLEX_PORT", &port),
-        ],
-    ) {
+    // Updates rerun this stage; keep the access settings the user chose.
+    let mut values: Vec<(&str, &str)> = [
+        ("SUPLEX_ACCESS_MODE", "local"),
+        ("SUPLEX_BIND_ADDRESS", "127.0.0.1"),
+    ]
+    .into_iter()
+    .filter(|(name, _)| configured(name).is_none())
+    .collect();
+    values.push(("SUPLEX_PORT", &port));
+    if let Err(error) = setup::upsert_environment(&path, &values) {
         return failure(error.to_string(), "Check the Suplex configuration path.");
     }
     let installation = match Installation::load() {

@@ -183,3 +183,16 @@ fn herdr_download_failure_reports_curl_exit_code() {
         "Check the network connection and try again."
     );
 }
+
+#[test]
+fn data_keeps_configured_tailscale_access_on_update() {
+    let fixture = Fixture::new();
+    let configuration = "SUPLEX_ACCESS_MODE=tailscale\nSUPLEX_TAILSCALE_EXPOSURE=serve\nSUPLEX_TAILSCALE_ADDRESS=suplex.example.ts.net\nSUPLEX_BIND_ADDRESS=127.0.0.1\nSUPLEX_PORT=4111\n";
+    fs::write(fixture.root.join("missing.env"), configuration).unwrap();
+    let (output, result) = fixture.stage("data");
+    assert!(output.status.success(), "{result}");
+    assert_eq!(
+        fs::read_to_string(fixture.root.join("missing.env")).unwrap(),
+        configuration
+    );
+}

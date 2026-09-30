@@ -264,9 +264,3 @@
     animation: none;
   }
 }
-
-/* Inter Tight is set a little wider. Each element gets 0.025em of its own size; a tracking class still wins. */
-@layer base {
-  :where(*) { letter-spacing: 0.025em; }
-  .font-mono, code, kbd, samp, pre, :is(.font-mono, code, kbd, samp, pre) * { letter-spacing: normal; }
-}

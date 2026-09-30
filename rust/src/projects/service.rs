@@ -58,6 +58,7 @@ pub struct Project {
     pub alt_profile_id: String,
     pub agent_task_policy: ProjectAgentTaskPolicy,
     pub provider_policy: Option<ProjectProviderPolicy>,
+    pub task_concurrency: Option<i64>,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -80,6 +81,7 @@ pub fn response_project(project: &Project) -> ProjectResponse {
         alt_profile_id: project.alt_profile_id.clone(),
         agent_task_policy: project.agent_task_policy.clone(),
         provider_policy: project.provider_policy.clone(),
+        task_concurrency: project.task_concurrency,
         created_at: project.created_at.clone(),
         updated_at: project.updated_at.clone(),
     }
@@ -102,11 +104,12 @@ struct StoredProject {
     worker_profile_id: String,
     alt_profile_id: String,
     agent_task_policy_json: String,
+    task_concurrency: Option<i64>,
     created_at: String,
     updated_at: String,
 }
 
-const SELECTION: &str = "SELECT p.integration_json, p.execution_json, p.provider_policy_json, p.id, p.company_id, p.name, p.repository_path, p.worktree_root, p.repository_identity, p.base_branch, p.setup_command, p.verification_command, p.root_profile_id, p.worker_profile_id, p.agent_task_policy_json, p.created_at, p.updated_at, p.alt_profile_id FROM suplex_projects p";
+const SELECTION: &str = "SELECT p.integration_json, p.execution_json, p.provider_policy_json, p.id, p.company_id, p.name, p.repository_path, p.worktree_root, p.repository_identity, p.base_branch, p.setup_command, p.verification_command, p.root_profile_id, p.worker_profile_id, p.agent_task_policy_json, p.created_at, p.updated_at, p.alt_profile_id, p.task_concurrency FROM suplex_projects p";
 
 fn stored(row: &Row<'_>) -> rusqlite::Result<StoredProject> {
     Ok(StoredProject {
@@ -128,6 +131,7 @@ fn stored(row: &Row<'_>) -> rusqlite::Result<StoredProject> {
         created_at: row.get(15)?,
         updated_at: row.get(16)?,
         alt_profile_id: row.get(17)?,
+        task_concurrency: row.get(18)?,
     })
 }
 
@@ -390,6 +394,7 @@ fn public_project(stored: StoredProject) -> DatabaseResult<Project> {
             stored.provider_policy_json,
             project_contracts::parse_provider_policy,
         )?,
+        task_concurrency: stored.task_concurrency,
         created_at: stored.created_at,
         updated_at: stored.updated_at,
     })
@@ -1196,6 +1201,12 @@ pub fn apply_patch(
             }
             if let Some(integration) = &patch.integration {
                 update("integration_json", Some(json_text(integration)?))?;
+            }
+            if let Some(limit) = patch.task_concurrency {
+                database.connection().execute(
+                    "UPDATE suplex_projects SET task_concurrency = ?1 WHERE id = ?2",
+                    params![limit, project_id],
+                )?;
             }
             if let Some(changes) = &patch.execution {
                 let mut execution = match &stored.execution_json {

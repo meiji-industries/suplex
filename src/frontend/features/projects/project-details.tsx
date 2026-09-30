@@ -28,6 +28,7 @@ import {
   agentsProjectPatch,
   connectionsDraft,
   executionDraft,
+  executionDraftFindings,
   executionProjectPatch,
   generalDraft,
   generalProjectPatch,
@@ -202,6 +203,11 @@ export function ProjectDetails({ projectId }: { projectId: string }): ReactEleme
   const saveExecution = async (): Promise<void> => {
     if (!execution) return;
     const submitted = execution.draft;
+    const findings = executionDraftFindings(submitted);
+    if (findings.length > 0) {
+      setExecution((current) => current ? { ...current, status: { kind: "failed", message: "Correct the execution fields", findings } } : current);
+      return;
+    }
     const body = executionProjectPatch(execution.saved, submitted);
     const token = ++saveTokens.current.execution;
     const generation = loadToken.current;
@@ -210,7 +216,7 @@ export function ProjectDetails({ projectId }: { projectId: string }): ReactEleme
       const result = await patch(body);
       if (token !== saveTokens.current.execution || generation !== loadToken.current) return;
       const saved = executionDraft(result);
-      setProject((current) => current ? { ...current, setupCommand: result.setupCommand, verificationCommand: result.verificationCommand, execution: { ...(current.execution ?? ProjectExecutionSchema.parse({})), instructions: result.execution?.instructions ?? "", skillDirectories: result.execution?.skillDirectories ?? [] }, updatedAt: result.updatedAt } : current);
+      setProject((current) => current ? { ...current, setupCommand: result.setupCommand, verificationCommand: result.verificationCommand, execution: { ...(current.execution ?? ProjectExecutionSchema.parse({})), instructions: result.execution?.instructions ?? "", skillDirectories: result.execution?.skillDirectories ?? [] }, taskConcurrency: result.taskConcurrency, updatedAt: result.updatedAt } : current);
       setExecution((current) => current ? { saved, draft: same(current.draft, submitted) ? saved : current.draft, status: same(current.draft, submitted) ? { kind: "saved" } : idle } : current);
     } catch (reason) {
       if (token === saveTokens.current.execution && generation === loadToken.current) setExecution((current) => current ? { ...current, status: saveFailure(reason, "Unable to save Execution") } : current);
@@ -321,6 +327,9 @@ export function ProjectDetails({ projectId }: { projectId: string }): ReactEleme
         <SettingsSection title="Commands">
           <SettingRow label="Setup command" description="Runs before task work starts." htmlFor="project-setup-command"><div className="w-full sm:w-96"><Input size="sm" id="project-setup-command" disabled={execution.status.kind === "saving"} aria-invalid={fieldFindings(execution.status, "setupCommand").length > 0} value={execution.draft.setupCommand} onChange={(event) => updateExecution("setupCommand", event.target.value)} /><FieldError errors={fieldFindings(execution.status, "setupCommand")} /></div></SettingRow>
           <SettingRow label="Verification command" description="Checks completed task work." htmlFor="project-verification-command"><div className="w-full sm:w-96"><Input size="sm" id="project-verification-command" disabled={execution.status.kind === "saving"} aria-invalid={fieldFindings(execution.status, "verificationCommand").length > 0} value={execution.draft.verificationCommand} onChange={(event) => updateExecution("verificationCommand", event.target.value)} /><FieldError errors={fieldFindings(execution.status, "verificationCommand")} /></div></SettingRow>
+        </SettingsSection>
+        <SettingsSection title="Scheduling">
+          <SettingRow label="Task concurrency" description="The maximum number of tasks that Suplex runs at one time. Empty means no limit." htmlFor="project-task-concurrency"><div className="w-full sm:w-96"><Input size="sm" id="project-task-concurrency" inputMode="numeric" disabled={execution.status.kind === "saving"} aria-invalid={fieldFindings(execution.status, "taskConcurrency").length > 0} value={execution.draft.taskConcurrency} onChange={(event) => updateExecution("taskConcurrency", event.target.value)} /><FieldError errors={fieldFindings(execution.status, "taskConcurrency")} /></div></SettingRow>
         </SettingsSection>
         <SettingsSection title="Agent context">
           <SettingRow label="Project instructions" description="Instructions added to project tasks." htmlFor="project-instructions"><div className="w-full sm:w-[28rem]"><Textarea id="project-instructions" disabled={execution.status.kind === "saving"} value={execution.draft.instructions} onChange={(event) => updateExecution("instructions", event.target.value)} /></div></SettingRow>

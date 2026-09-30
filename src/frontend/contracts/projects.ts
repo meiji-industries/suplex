@@ -57,10 +57,11 @@ export const ProjectPatchBodySchema = ProjectBodySchema.partial().extend({
     environment: ProjectExecutionSchema.shape.environment.removeDefault().optional(),
     mcp: ProjectExecutionSchema.shape.mcp.removeDefault().optional(),
   }).strict().optional(),
+  taskConcurrency: z.number().int().min(1).nullable().optional(),
 }).strict().refine((value) => Object.keys(value).length > 0, "Provide at least one project field");
 
 export const ProjectResponseSchema = ProjectBodySchema.extend({
-  id: z.string(), companyId: z.string(), repository: z.string().optional(), createdAt: z.string(), updatedAt: z.string(),
+  id: z.string(), companyId: z.string(), repository: z.string().optional(), taskConcurrency: z.number().int().min(1).nullable(), createdAt: z.string(), updatedAt: z.string(),
 }).strip();
 
 export const ProjectProviderInstanceSchema = ProviderInstanceSchema.pick({ id: true, provider: true, label: true });

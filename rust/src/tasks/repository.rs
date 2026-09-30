@@ -242,8 +242,10 @@ pub(crate) fn admit_queued(
         return Ok(false);
     }
     assert_task_pull_requests_available(database, task_id)?;
+    // The project's task concurrency is checked in this statement, so admits
+    // in one transaction cannot exceed it. A task waiting on a human holds its slot.
     Ok(database.connection().execute(
-        "UPDATE suplex_task_controls SET status = 'active', wake_at = ?1, updated_at = ?1 WHERE task_id = ?2 AND status = 'queued' AND EXISTS(SELECT 1 FROM suplex_tasks WHERE id = ?2 AND archived_at IS NULL)",
+        "UPDATE suplex_task_controls SET status = 'active', wake_at = ?1, updated_at = ?1 WHERE task_id = ?2 AND status = 'queued' AND EXISTS(SELECT 1 FROM suplex_tasks t LEFT JOIN suplex_projects p ON p.id = t.project_id WHERE t.id = ?2 AND t.archived_at IS NULL AND (p.task_concurrency IS NULL OR p.task_concurrency > (SELECT COUNT(*) FROM suplex_tasks s JOIN suplex_task_controls sc ON sc.task_id = s.id WHERE s.project_id = t.project_id AND s.archived_at IS NULL AND sc.status IN ('active', 'waiting_human'))))",
         params![rfc3339_millis(now), task_id],
     )? == 1)
 }

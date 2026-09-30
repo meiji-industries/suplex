@@ -1756,4 +1756,88 @@ mod tests {
         let _ = std::fs::remove_file(filename.with_extension("sqlite-shm"));
         let _ = std::fs::remove_dir_all(&session_directory);
     }
+
+    /// A project's task concurrency counts active and waiting tasks, admits the
+    /// oldest queued task when a slot frees, and leaves other projects alone.
+    #[test]
+    fn project_task_concurrency_admits_oldest_queued_task_per_free_slot() {
+        let filename =
+            std::env::temp_dir().join(format!("suplex_concurrency_{}.sqlite", Uuid::new_v4()));
+        let now = DateTime::parse_from_rfc3339("2026-09-25T12:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let mut database = SuplexDatabase::open(&filename, OpenMode::Migrate).unwrap();
+        let user = auth::development_sign_in(&mut database, now).unwrap().user;
+        database.connection().execute("INSERT INTO suplex_companies (id,name,status,created_at) VALUES ('limit_company','Limit','active',?1)", [rfc3339_millis(now)]).unwrap();
+        for project in ["limited_project", "open_project"] {
+            database.connection().execute("INSERT INTO suplex_projects (id,company_id,name,repository_path,worktree_root,repository_identity,base_branch,setup_command,verification_command,root_profile_id,worker_profile_id,agent_task_policy_json,created_at,updated_at) VALUES (?1,'limit_company',?1,'/tmp/' || ?1,'/tmp/' || ?1 || '-worktrees',NULL,'main','','','root','worker','{}',?2,?2)", params![project, rfc3339_millis(now)]).unwrap();
+        }
+        let profile = serde_json::json!({"profileId":"root","provider":"codex","model":"test","reasoningLevel":"medium","serviceTier":"default"});
+        let create = |database: &mut SuplexDatabase, project: &str, key: &str| {
+            repository::create(database, &PreparedTask {
+                id: repository::new_task_id(),
+                company_id: "limit_company".into(),
+                project_id: project.into(),
+                title: key.into(),
+                description: String::new(),
+                configuration: serde_json::json!({"repository":"owner/repo","branch":key,"baseBranch":"main","baselineSha":"head","runProjectTests":false,"visualEvidence":"off"}),
+                idempotency_key: key.into(),
+                request_hash: key.into(),
+                creator: TaskCreator::User(user.id.clone()),
+                delivery_target: "local_worktree".into(),
+                delivery_intent: serde_json::from_value(serde_json::json!({"repository":"owner/repo","headBranch":key,"baseBranch":"main","baselineSha":"head","pullRequestNumber":null})).unwrap(),
+                root_profile: serde_json::from_value(profile.clone()).unwrap(),
+                worker_profile: serde_json::from_value(profile.clone()).unwrap(),
+                advisor_profiles: serde_json::from_value(serde_json::json!({})).unwrap(),
+                issue: None,
+                start_queued: true,
+                copied_from_task_id: None,
+                depends_on: vec![],
+                pull_request_dependencies: vec![],
+                workflow: crate::coordination::workflows::Workflow::Standard,
+            }, now).unwrap().task.id
+        };
+        // Without a limit, every queued task starts.
+        let unlimited = [create(&mut database, "limited_project", "unlimited-a"), create(&mut database, "limited_project", "unlimited-b")];
+        let open = create(&mut database, "open_project", "open-a");
+        let status = |database: &SuplexDatabase, id: &str| -> String {
+            database.connection().query_row("SELECT status FROM suplex_task_controls WHERE task_id = ?1", [id], |row| row.get(0)).unwrap()
+        };
+        for id in unlimited.iter().chain([&open]) {
+            assert_eq!(status(&database, id), "active");
+        }
+        database.connection().execute("UPDATE suplex_task_controls SET status = 'delivered' WHERE task_id IN (?1, ?2)", params![unlimited[0], unlimited[1]]).unwrap();
+        database.connection().execute("UPDATE suplex_projects SET task_concurrency = 1 WHERE id = 'limited_project'", []).unwrap();
+
+        let running = create(&mut database, "limited_project", "running");
+        let newer = create(&mut database, "limited_project", "newer");
+        let older = create(&mut database, "limited_project", "older");
+        let other = create(&mut database, "open_project", "open-b");
+        assert_eq!(status(&database, &running), "active");
+        assert_eq!(status(&database, &newer), "queued");
+        assert_eq!(status(&database, &older), "queued");
+        // Another project still starts while this one is full.
+        assert_eq!(status(&database, &other), "active");
+        // Queue time orders the queue, not creation time.
+        database.connection().execute("UPDATE suplex_task_controls SET status_changed_at = '2026-09-25T11:00:00.000Z' WHERE task_id = ?1", [&older]).unwrap();
+        database.connection().execute("UPDATE suplex_task_controls SET status_changed_at = '2026-09-25T11:30:00.000Z' WHERE task_id = ?1", [&newer]).unwrap();
+        assert!(admit_queued(&mut database, now).unwrap().is_empty());
+
+        // A task waiting on a human holds its slot.
+        database.connection().execute("UPDATE suplex_task_controls SET status = 'waiting_human', human_question = 'Continue?', human_question_id = 'question_limit' WHERE task_id = ?1", [&running]).unwrap();
+        assert!(admit_queued(&mut database, now).unwrap().is_empty());
+        assert_eq!(status(&database, &older), "queued");
+
+        database.connection().execute("UPDATE suplex_task_controls SET status = 'delivered', human_question = NULL, human_question_id = NULL WHERE task_id = ?1", [&running]).unwrap();
+        assert_eq!(admit_queued(&mut database, now).unwrap(), vec![older.clone()]);
+        assert_eq!(status(&database, &newer), "queued");
+
+        // An archived task does not hold a slot.
+        database.connection().execute("UPDATE suplex_tasks SET archived_at = ?1 WHERE id = ?2", params![rfc3339_millis(now), older]).unwrap();
+        assert_eq!(admit_queued(&mut database, now).unwrap(), vec![newer.clone()]);
+        drop(database);
+        let _ = std::fs::remove_file(&filename);
+        let _ = std::fs::remove_file(filename.with_extension("sqlite-wal"));
+        let _ = std::fs::remove_file(filename.with_extension("sqlite-shm"));
+    }
 }

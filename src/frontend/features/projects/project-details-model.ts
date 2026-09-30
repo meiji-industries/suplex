@@ -18,7 +18,8 @@ export const PROJECT_SECTIONS = [
 export type GeneralDraft = Pick<ApiProject, "name" | "baseBranch" | "repositoryPath"> & { repository: string };
 export type AgentsDraft = Pick<ApiProject, "rootProfileId" | "workerProfileId" | "altProfileId"> & { providerPolicy: ProjectProviderPolicy | null };
 export type AgentsDraftFinding = { field: "rootProfileId" | "workerProfileId" | "altProfileId"; message: string };
-export type ExecutionDraft = Pick<ApiProject, "setupCommand" | "verificationCommand"> & Pick<ProjectExecution, "instructions"> & { skillDirectories: string };
+export type ExecutionDraft = Pick<ApiProject, "setupCommand" | "verificationCommand"> & Pick<ProjectExecution, "instructions"> & { skillDirectories: string; taskConcurrency: string };
+export type ExecutionDraftFinding = { field: "taskConcurrency"; message: string };
 export type ConnectionsDraft = { integration: ProjectIntegration; environment: string; mcp: string };
 
 export function generalDraft(project: ApiProject): GeneralDraft {
@@ -35,6 +36,7 @@ export function executionDraft(project: ApiProject): ExecutionDraft {
     verificationCommand: project.verificationCommand,
     instructions: project.execution?.instructions ?? "",
     skillDirectories: project.execution?.skillDirectories.join("\n") ?? "",
+    taskConcurrency: project.taskConcurrency?.toString() ?? "",
   };
 }
 
@@ -86,7 +88,15 @@ export function executionProjectPatch(saved: ExecutionDraft, draft: ExecutionDra
     ...(draft.setupCommand !== saved.setupCommand ? { setupCommand: draft.setupCommand } : {}),
     ...(draft.verificationCommand !== saved.verificationCommand ? { verificationCommand: draft.verificationCommand } : {}),
     ...(Object.keys(execution).length > 0 ? { execution } : {}),
+    ...(draft.taskConcurrency.trim() !== saved.taskConcurrency ? { taskConcurrency: draft.taskConcurrency.trim() === "" ? null : Number(draft.taskConcurrency) } : {}),
   };
+}
+
+export function executionDraftFindings(draft: ExecutionDraft): ExecutionDraftFinding[] {
+  const limit = draft.taskConcurrency.trim();
+  return limit === "" || (/^\d+$/.test(limit) && Number.isSafeInteger(Number(limit)) && Number(limit) >= 1)
+    ? []
+    : [{ field: "taskConcurrency", message: "Write a whole number of 1 or more." }];
 }
 
 export function isProjectSection(value: string): value is ProjectSection {

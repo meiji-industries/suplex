@@ -1603,6 +1603,17 @@ mod tests {
         ));
         repository::assert_pull_request_available(&database, "candidate", "other/repo", 7).unwrap();
         repository::assert_pull_request_available(&database, &owner.id, "new/repo", 7).unwrap();
+        let found = repository::pull_request_owner(&database, "", "github", "new/repo", 7)
+            .unwrap()
+            .expect("the task owns the pull request");
+        assert_eq!(found.task_id, owner.id);
+        assert!(
+            repository::pull_request_owner(&database, "", "bitbucket", "new/repo", 7)
+                .unwrap()
+                .is_none()
+        );
+        let failure: crate::shared::PublicFailure = TaskError::PullRequestOwned.into();
+        assert_eq!(failure.status.as_u16(), 409);
         drop(database);
         std::fs::remove_file(filename).unwrap();
     }

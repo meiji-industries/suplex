@@ -29,7 +29,7 @@ test("selection produces only the stable selector payload", () => {
 
 test("source menu rows use Base UI's activation event", () => {
   const source = readFileSync(new URL("../src/frontend/features/tasks/task-source-picker.tsx", import.meta.url), "utf8");
-  expect(source).toContain("onClick={() => row.kind === \"issue\" ? onSelect(row) : onSelect(row, selectorForTaskSource(row))}");
+  expect(source).toContain("onClick={() => choose(row)}");
   expect(source).not.toContain("onSelect={() => row.kind === \"issue\"");
 });
 

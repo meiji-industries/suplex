@@ -185,3 +185,22 @@ test("issue results keep tracker matches that do not contain the query", async (
   expect(document.body.textContent).toContain("APP-42 Fix the picker");
   root.unmount();
 });
+
+test("a pull request that a task already uses opens that task instead of selecting it", async () => {
+  api.readJsonUnchecked.mockResolvedValue({ available: true, sources: [
+    { kind: "pull_request", number: 42, title: "Fix picker search", body: "", author: "octo", headBranch: "fix/search", baseBranch: "main", isDraft: false, usedBy: { taskId: "task-7", title: "Search repair", status: "active" } },
+  ] });
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  const onSelect = vi.fn();
+  const onOpenTask = vi.fn();
+  act(() => { root.render(<TaskSourcePicker projectId="project-1" onSelect={onSelect} onClear={() => undefined} onOpenTask={onOpenTask} />); });
+  await act(async () => { container.querySelector<HTMLButtonElement>('[aria-label="New from source"]')!.click(); });
+  await flush();
+  expect(document.body.textContent).toContain("Open task: Search repair");
+  await act(async () => { document.querySelector<HTMLElement>('[role="menuitem"]')!.click(); });
+  expect(onOpenTask).toHaveBeenCalledWith("task-7");
+  expect(onSelect).not.toHaveBeenCalled();
+  root.unmount();
+});

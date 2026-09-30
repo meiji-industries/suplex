@@ -149,17 +149,38 @@ pub(crate) fn prerequisites_complete(
     Ok(!waiting)
 }
 
+/// An open task that already works on a pull request.
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct PullRequestOwner {
+    #[serde(rename = "taskId")]
+    pub task_id: String,
+    pub title: String,
+    pub status: String,
+}
+
+/// Find the open task other than `task_id` that owns pull request `number`.
+/// `host` applies when `task_id` is not a stored task.
+pub(crate) fn pull_request_owner(
+    database: &SuplexDatabase,
+    task_id: &str,
+    host: &str,
+    repository: &str,
+    number: i64,
+) -> DatabaseResult<Option<PullRequestOwner>> {
+    Ok(database.connection().query_row(
+        "WITH owner_host(kind) AS (SELECT COALESCE((SELECT json_extract(configuration_json, '$.integration.repository.kind') FROM suplex_tasks WHERE id = ?1), ?4)), known(id, name) AS (SELECT repository_id, repository_name FROM suplex_github_trigger_rules UNION SELECT repository_id, repository_name FROM suplex_github_trigger_dispatches), names(name) AS (SELECT lower(?2) UNION SELECT lower(name) FROM known WHERE (SELECT kind FROM owner_host) = 'github' AND id IN (SELECT id FROM known WHERE lower(name) = lower(?2))) SELECT t.id, t.title, c.status FROM suplex_tasks t JOIN suplex_task_controls c ON c.task_id = t.id WHERE t.id <> ?1 AND t.archived_at IS NULL AND c.status IN ('backlog','queued','active','waiting_human') AND COALESCE(json_extract(t.configuration_json, '$.integration.repository.kind'), 'github') = (SELECT kind FROM owner_host) AND ((lower(json_extract(t.configuration_json, '$.repository')) IN (SELECT name FROM names) AND json_extract(t.configuration_json, '$.source.kind') = 'pull_request' AND json_extract(t.configuration_json, '$.source.number') = ?3) OR (lower(json_extract(c.delivery_intent_json, '$.repository')) IN (SELECT name FROM names) AND json_extract(c.delivery_intent_json, '$.pullRequestNumber') = ?3) OR (lower(json_extract(c.pull_request_json, '$.repository')) IN (SELECT name FROM names) AND json_extract(c.pull_request_json, '$.number') = ?3)) ORDER BY t.created_at LIMIT 1",
+        params![task_id, repository, number, host],
+        |row| Ok(PullRequestOwner { task_id: row.get(0)?, title: row.get(1)?, status: row.get(2)? }),
+    ).optional()?)
+}
+
 pub(crate) fn assert_pull_request_available(
     database: &SuplexDatabase,
     task_id: &str,
     repository: &str,
     number: i64,
 ) -> DatabaseResult<()> {
-    let owned: bool = database.connection().query_row(
-        "WITH owner_host(kind) AS (SELECT COALESCE((SELECT json_extract(configuration_json, '$.integration.repository.kind') FROM suplex_tasks WHERE id = ?1), 'github')), known(id, name) AS (SELECT repository_id, repository_name FROM suplex_github_trigger_rules UNION SELECT repository_id, repository_name FROM suplex_github_trigger_dispatches), names(name) AS (SELECT lower(?2) UNION SELECT lower(name) FROM known WHERE (SELECT kind FROM owner_host) = 'github' AND id IN (SELECT id FROM known WHERE lower(name) = lower(?2))) SELECT EXISTS(SELECT 1 FROM suplex_tasks t JOIN suplex_task_controls c ON c.task_id = t.id WHERE t.id <> ?1 AND t.archived_at IS NULL AND c.status IN ('backlog','queued','active','waiting_human') AND COALESCE(json_extract(t.configuration_json, '$.integration.repository.kind'), 'github') = (SELECT kind FROM owner_host) AND ((lower(json_extract(t.configuration_json, '$.repository')) IN (SELECT name FROM names) AND json_extract(t.configuration_json, '$.source.kind') = 'pull_request' AND json_extract(t.configuration_json, '$.source.number') = ?3) OR (lower(json_extract(c.delivery_intent_json, '$.repository')) IN (SELECT name FROM names) AND json_extract(c.delivery_intent_json, '$.pullRequestNumber') = ?3) OR (lower(json_extract(c.pull_request_json, '$.repository')) IN (SELECT name FROM names) AND json_extract(c.pull_request_json, '$.number') = ?3)))",
-        params![task_id, repository, number], |row| row.get(0),
-    )?;
-    if owned {
+    if pull_request_owner(database, task_id, "github", repository, number)?.is_some() {
         return Err(TaskError::PullRequestOwned.into());
     }
     Ok(())

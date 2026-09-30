@@ -125,7 +125,8 @@ impl From<TaskError> for PublicFailure {
             TaskError::Source { status, code, .. } => {
                 PublicFailure::new(status, message).with_code(code)
             }
-            TaskError::PullRequestOwned | TaskError::Internal(_) => PublicFailure::internal(),
+            TaskError::PullRequestOwned => PublicFailure::new(409, message),
+            TaskError::Internal(_) => PublicFailure::internal(),
         }
     }
 }

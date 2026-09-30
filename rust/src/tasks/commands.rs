@@ -1877,7 +1877,11 @@ mod tests {
             crate::tasks::control::DeliveryTarget::Merged
         );
         assert!(serde_json::json!(rows.control.workflow_state)["followUp"].is_null());
-        assert_eq!(rows.root.unwrap().id, root.id, "the running Coordinator continues");
+        assert_eq!(
+            rows.root.unwrap().id,
+            root.id,
+            "the running Coordinator continues"
+        );
         assert!(rows.turns.iter().any(|turn| {
             turn.prompt_text
                 .contains("from pull_request_ready to merged")

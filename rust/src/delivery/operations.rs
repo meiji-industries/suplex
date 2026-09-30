@@ -1657,14 +1657,8 @@ impl DeliveryOperations {
         // Passive observation never completes a task the Coordinator has not
         // read yet: the description can ask for changes to a finished PR.
         let awaiting_coordinator = current.workflow_state.follow_up == Some(true)
-            || !root_session_store::root_turn_completed(
-                &self.open(OpenMode::ReadOnly)?,
-                task_id,
-            )?;
-        if awaiting_coordinator
-            && !options.explicit
-            && options.validated_range.is_none()
-        {
+            || !root_session_store::root_turn_completed(&self.open(OpenMode::ReadOnly)?, task_id)?;
+        if awaiting_coordinator && !options.explicit && options.validated_range.is_none() {
             return Ok(pull);
         }
         if standard {

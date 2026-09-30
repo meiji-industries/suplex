@@ -817,7 +817,16 @@ impl Contract for TaskIssueBody {
 impl Contract for TaskContinueDeliveryBody {
     fn schema(input: Option<&Value>) -> ContractResult<Value> {
         Fields::new(input)?
-            .req("deliveryTarget", one_of(&["local_worktree", "remote_branch", "pull_request_draft", "pull_request_ready", "merged"]))
+            .req(
+                "deliveryTarget",
+                one_of(&[
+                    "local_worktree",
+                    "remote_branch",
+                    "pull_request_draft",
+                    "pull_request_ready",
+                    "merged",
+                ]),
+            )
             .strict()
     }
 }

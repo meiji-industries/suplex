@@ -55,9 +55,9 @@ export function TaskPullRequestCard({ task, onChange }: { task: Task; onChange: 
       <span className="min-w-0 flex-1"><span className="block truncate text-sm font-medium">{task.title}</span><span className="text-xs text-muted-foreground">{task.configuration.repository} #{pullRequest.number}</span></span>
       <Badge variant="secondary">{state}</Badge>
       <ExternalLink className="size-3.5 shrink-0 text-muted-foreground" />
-    </a> : <div className="flex items-center gap-3 p-3"><GitPullRequest className="size-5 shrink-0" /><span className="min-w-0 flex-1 truncate text-sm font-medium">{task.title}</span><Badge variant="secondary">{state}</Badge></div>}
+    </a> : <div className="flex items-center gap-3 p-3"><GitPullRequest className="size-5 shrink-0" /><span className="min-w-0 flex-1 truncate text-sm font-medium">{task.title}</span></div>}
     {continuing || canPublish || canMerge ? <div className="flex flex-wrap items-center gap-2 border-t px-3 py-2">
-      {continuing ? <span className="text-xs text-muted-foreground">Coordinator continues delivery.</span> : null}
+      {continuing ? <span className="text-xs text-muted-foreground">{task.deliveryTarget === "merged" ? "Coordinator works to merge this pull request." : "Coordinator prepares this pull request for review."}</span> : null}
       {canPublish ? <Button size="sm" disabled={pending} onClick={() => void continueDelivery("pull_request_ready")}>Publish for review</Button> : null}
       {canMerge ? <Button size="sm" variant={canPublish ? "outline" : "default"} disabled={pending} onClick={() => void continueDelivery("merged")}>Continue to merge</Button> : null}
       {error ? <span role="alert" className="text-xs text-destructive">{error}</span> : null}

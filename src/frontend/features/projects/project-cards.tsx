@@ -1,5 +1,4 @@
-import { Button } from "../../components/ui/button.js";
-import { Card, CardAction, CardContent, CardHeader, CardTitle } from "../../components/ui/card.js";
+import { Card, CardContent, CardHeader, CardTitle } from "../../components/ui/card.js";
 import { EntityAvatar } from "../../components/app/entity-avatar.js";
 import { withCompany } from "../../lib/api.js";
 import type { ReactElement } from "react";
@@ -38,9 +37,6 @@ export function ProjectCards({ projects, agents }: { projects: readonly ApiProje
         <Card className="pt-[20px]" size="sm">
           <CardHeader>
             <CardTitle><a className="flex items-center gap-2" href={withCompany(`/projects/${encodeURIComponent(project.id)}`, project.companyId)}><ProjectIcon project={project} /><span className="text-sm">{project.name}</span></a></CardTitle>
-            <CardAction>
-              <Button variant="ghost" size="sm" render={<a href={withCompany(`/projects/${encodeURIComponent(project.id)}`, project.companyId)} />}>Configure</Button>
-            </CardAction>
           </CardHeader>
           <CardContent>
             <div className="grid gap-3 text-xs">

@@ -187,10 +187,50 @@ async fn task_sources(
             }
         };
     let response = match crate::tasks::sources::discover(&project, &kind).await {
-        Ok(sources) => axum::Json(sources).into_response(),
+        Ok(mut sources) => {
+            if kind == "pull_request"
+                && let Err(error) = annotate_pull_request_owners(&state, &project, &mut sources)
+            {
+                return with_cookies(ApiError::response(error), cookies);
+            }
+            axum::Json(sources).into_response()
+        }
         Err(error) => ApiError::response(error),
     };
     with_cookies(response, cookies)
+}
+
+/// Mark each pull request that an open task already uses.
+fn annotate_pull_request_owners(
+    state: &AppState,
+    project: &service::Project,
+    sources: &mut serde_json::Value,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let Some(repository) = project.repository.as_deref() else {
+        return Ok(());
+    };
+    let host = match &project.integration {
+        Some(integration) => serde_json::to_value(&integration.repository)?["kind"]
+            .as_str()
+            .unwrap_or("github")
+            .to_owned(),
+        None => "github".to_owned(),
+    };
+    let Some(rows) = sources["sources"].as_array_mut() else {
+        return Ok(());
+    };
+    state.with_database(|database| {
+        for row in rows.iter_mut() {
+            let Some(number) = row["number"].as_i64() else {
+                continue;
+            };
+            let owner = crate::tasks::repository::pull_request_owner(
+                database, "", &host, repository, number,
+            )?;
+            row["usedBy"] = serde_json::to_value(owner)?;
+        }
+        Ok(())
+    })
 }
 
 async fn create(

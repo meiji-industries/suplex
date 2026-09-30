@@ -11,7 +11,7 @@ import type { IssueAssociation } from "../../contracts/issues.js";
 
 export type TaskSourceSummary =
   | { kind: "issue"; issue: IssueAssociation }
-  | { kind: "pull_request"; number: number; title: string; body: string; author: string; headBranch: string; baseBranch: string; isDraft: boolean }
+  | { kind: "pull_request"; number: number; title: string; body: string; author: string; headBranch: string; baseBranch: string; isDraft: boolean; usedBy?: { taskId: string; title: string; status: string } | null }
   | { kind: "branch"; branch: string; headSha: string; subject: string; author: string };
 export type TaskSourceSelector = { kind: "issue"; number: number } | { kind: "pull_request"; number: number } | { kind: "branch"; branch: string };
 export const taskSourceTabs = [{ value: "pull_request", label: "Pull requests" }, { value: "issue", label: "Issues" }, { value: "branch", label: "Branches" }] as const;
@@ -40,7 +40,7 @@ export function preserveEditedPrefill(current: { title: string; description: str
   return { title: !current.title || current.title === previous.title ? next.title : current.title, description: !current.description || current.description === previous.description ? next.description : current.description };
 }
 
-export function TaskSourcePicker({ projectId, value, disabled, pullRequestsOnly = false, compact = false, trigger, onSelect, onClear }: { projectId: string; value?: TaskSourceSummary | undefined; disabled?: boolean; pullRequestsOnly?: boolean; compact?: boolean; trigger?: ReactElement; onSelect: (source: TaskSourceSummary, selector?: Exclude<TaskSourceSelector, { kind: "issue" }>) => void; onClear: () => void }): ReactElement {
+export function TaskSourcePicker({ projectId, value, disabled, pullRequestsOnly = false, compact = false, trigger, onSelect, onClear, onOpenTask }: { projectId: string; value?: TaskSourceSummary | undefined; disabled?: boolean; pullRequestsOnly?: boolean; compact?: boolean; trigger?: ReactElement; onSelect: (source: TaskSourceSummary, selector?: Exclude<TaskSourceSelector, { kind: "issue" }>) => void; onClear: () => void; onOpenTask?: (taskId: string) => void }): ReactElement {
   const [selectedKind, setKind] = useState<TaskSourceSelector["kind"]>("pull_request");
   const kind = pullRequestsOnly ? "pull_request" : selectedKind;
   const [query, setQuery] = useState("");
@@ -68,6 +68,11 @@ export function TaskSourcePicker({ projectId, value, disabled, pullRequestsOnly 
     catch { if (generation === requestGeneration.current) { setAvailable(false); setRows([]); } }
     finally { if (generation === requestGeneration.current) setLoading(false); }
   };
+  const choose = (row: TaskSourceSummary): void => {
+    if (row.kind === "issue") onSelect(row);
+    else if (row.kind === "pull_request" && row.usedBy) onOpenTask?.(row.usedBy.taskId);
+    else onSelect(row, selectorForTaskSource(row));
+  };
   const filtered = useMemo(() => kind === "issue" ? rows : filterTaskSources(rows, query), [kind, query, rows]);
   return <DropdownMenu onOpenChange={(open) => { if (open) void load(); }}>
     {trigger ? <DropdownMenuTrigger render={trigger} disabled={disabled || !projectId} /> : value ? <div className="flex items-center gap-2 text-sm">
@@ -84,8 +89,8 @@ export function TaskSourcePicker({ projectId, value, disabled, pullRequestsOnly 
       </Tabs>}
       <div className="relative mt-2"><Search className="absolute left-2 top-2 size-3.5 text-muted-foreground" /><Input aria-label="Search task sources" value={query} onChange={(event) => { setQuery(event.target.value); if (kind === "issue") void load("issue", event.target.value); }} onKeyDown={(event) => { if (event.key !== "ArrowUp" && event.key !== "ArrowDown" && event.key !== "Escape") event.stopPropagation(); }} placeholder="Search" className="pl-7" /></div>
       <div className="mt-2 max-h-64 overflow-y-auto" aria-live="polite">
-         {loading ? <p className="flex items-center gap-2 p-2 text-xs text-muted-foreground" aria-busy="true"><Spinner /><span>Loading task sources…</span></p> : !available ? <p className="p-2 text-xs text-muted-foreground">{kind === "pull_request" ? "Pull requests are not available." : kind === "issue" ? "Issues are not available." : "Branches are not available."}</p> : filtered.length === 0 ? <p className="p-2 text-xs text-muted-foreground">No {kind === "pull_request" ? "pull requests" : kind === "issue" ? "issues" : "branches"} found.</p> : filtered.map((row) => <DropdownMenuItem className={compact ? "text-xs" : undefined} key={row.kind === "issue" ? `${row.issue.kind}:${row.issue.id}` : row.kind === "pull_request" ? row.number : row.branch} onClick={() => row.kind === "issue" ? onSelect(row) : onSelect(row, selectorForTaskSource(row))}>
-          {row.kind === "pull_request" ? <GitPullRequest className="mt-0.5 size-3.5" /> : row.kind === "issue" ? <CircleDot className="mt-0.5 size-3.5" /> : <GitBranch className="mt-0.5 size-3.5" />}<span className="min-w-0"><span className="block truncate font-medium">{row.kind === "issue" ? `${row.issue.key} ${row.issue.title}` : row.kind === "pull_request" ? `#${row.number} ${row.title}` : row.branch}</span><span className="block truncate text-muted-foreground">{row.kind === "pull_request" ? `${row.author} · ${row.headBranch} → ${row.baseBranch}` : row.kind === "issue" ? row.issue.kind : `${row.headSha.slice(0, 8)} · ${row.subject} · ${row.author}`}</span></span>
+         {loading ? <p className="flex items-center gap-2 p-2 text-xs text-muted-foreground" aria-busy="true"><Spinner /><span>Loading task sources…</span></p> : !available ? <p className="p-2 text-xs text-muted-foreground">{kind === "pull_request" ? "Pull requests are not available." : kind === "issue" ? "Issues are not available." : "Branches are not available."}</p> : filtered.length === 0 ? <p className="p-2 text-xs text-muted-foreground">No {kind === "pull_request" ? "pull requests" : kind === "issue" ? "issues" : "branches"} found.</p> : filtered.map((row) => <DropdownMenuItem className={compact ? "text-xs" : undefined} key={row.kind === "issue" ? `${row.issue.kind}:${row.issue.id}` : row.kind === "pull_request" ? row.number : row.branch} onClick={() => choose(row)}>
+          {row.kind === "pull_request" ? <GitPullRequest className="mt-0.5 size-3.5" /> : row.kind === "issue" ? <CircleDot className="mt-0.5 size-3.5" /> : <GitBranch className="mt-0.5 size-3.5" />}<span className="min-w-0"><span className="block truncate font-medium">{row.kind === "issue" ? `${row.issue.key} ${row.issue.title}` : row.kind === "pull_request" ? `#${row.number} ${row.title}` : row.branch}</span><span className="block truncate text-muted-foreground">{row.kind === "pull_request" ? row.usedBy ? `Open task: ${row.usedBy.title}` : `${row.author} · ${row.headBranch} → ${row.baseBranch}` : row.kind === "issue" ? row.issue.kind : `${row.headSha.slice(0, 8)} · ${row.subject} · ${row.author}`}</span></span>
         </DropdownMenuItem>)}
       </div>
       {trigger && value ? <DropdownMenuItem onClick={onClear}>Clear pull request</DropdownMenuItem> : null}

@@ -1,7 +1,7 @@
 import { expect, test } from "vitest";
 
 import type { ApiProfile } from "../src/frontend/shell/view-shared.js";
-import { agentsDraftFindings, agentsProjectPatch, generalProjectPatch, type AgentsDraft } from "../src/frontend/features/projects/project-details-model.js";
+import { agentsDraftFindings, agentsProjectPatch, executionDraftFindings, executionProjectPatch, generalProjectPatch, type AgentsDraft, type ExecutionDraft } from "../src/frontend/features/projects/project-details-model.js";
 import type { ProjectProviderPolicy } from "../src/frontend/contracts/provider-policy.js";
 
 const profiles: ApiProfile[] = [
@@ -71,4 +71,16 @@ test("Alt Coordinator saves its own default and respects provider access", () =>
   const draft = { ...unrestricted, altProfileId: "root-claude-default" };
   expect(agentsProjectPatch(unrestricted, draft)).toEqual({ altProfileId: "root-claude-default" });
   expect(agentsDraftFindings({ ...draft, rootProfileId: "root-codex", providerPolicy: { allowedProviders: ["codex"], allowedInstanceIds: [] } }, profiles)).toEqual([{ field: "altProfileId", message: "Select an agent with a provider and login allowed by this project" }]);
+});
+
+test("Execution saves task concurrency as a number, or null when empty", () => {
+  const saved: ExecutionDraft = { setupCommand: "", verificationCommand: "", instructions: "", skillDirectories: "", taskConcurrency: "" };
+
+  expect(executionProjectPatch(saved, { ...saved, taskConcurrency: "1" })).toEqual({ taskConcurrency: 1 });
+  expect(executionProjectPatch({ ...saved, taskConcurrency: "2" }, saved)).toEqual({ taskConcurrency: null });
+  expect(executionProjectPatch(saved, { ...saved, taskConcurrency: " " })).toEqual({});
+  expect(executionDraftFindings({ ...saved, taskConcurrency: "3" })).toEqual([]);
+  for (const invalid of ["0", "-1", "1.5", "two"]) {
+    expect(executionDraftFindings({ ...saved, taskConcurrency: invalid })).toEqual([{ field: "taskConcurrency", message: "Write a whole number of 1 or more." }]);
+  }
 });

@@ -9,9 +9,9 @@ use ts_rs::TS;
 
 pub use super::ContractResult;
 use super::{
-    Contract, ContractFailure, Fields, MAX, Parse, choice, fail, flag, formatted, list, nested,
-    nullable, one_of, params, present, rule, tagged, tasks::VISUAL_EVIDENCE, text, trimmed, union,
-    url,
+    Contract, ContractFailure, Fields, MAX, Parse, choice, fail, flag, formatted, int, list,
+    nested, nullable, one_of, params, present, rule, tagged, tasks::VISUAL_EVIDENCE, text, trimmed,
+    union, url,
 };
 pub use crate::profiles::agent_profiles::{
     ProfileInput as ProfileBody, ProfilePatch as ProfilePatchBody,
@@ -215,6 +215,8 @@ pub struct ProjectResponse {
     pub worker_profile_id: String,
     pub agent_task_policy: ProjectAgentTaskPolicy,
     pub provider_policy: Option<ProjectProviderPolicy>,
+    /// The most tasks that run at one time; `None` means no limit.
+    pub task_concurrency: Option<i64>,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -239,6 +241,8 @@ pub struct ProjectPatch {
     pub agent_task_policy: Option<ProjectAgentTaskPolicy>,
     #[serde(default, deserialize_with = "super::present_nullable")]
     pub provider_policy: Option<Option<ProjectProviderPolicy>>,
+    #[serde(default, deserialize_with = "super::present_nullable")]
+    pub task_concurrency: Option<Option<i64>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -592,7 +596,8 @@ impl Contract for LocalProjectCreate {
 /// At least one project field.
 impl Contract for ProjectPatch {
     fn schema(input: Option<&Value>) -> ContractResult<Value> {
-        let mut fields = project_fields(input, true)?;
+        let mut fields =
+            project_fields(input, true)?.opt("taskConcurrency", nullable(int(1.0, f64::MAX)));
         fields.strict_keys();
         if fields.refinable() && input.and_then(Value::as_object).is_some_and(Map::is_empty) {
             fields.fail("custom", ".");
@@ -824,6 +829,24 @@ mod tests {
                 }
                 other => panic!("{field} null was accepted: {other:?}"),
             }
+        }
+    }
+
+    #[test]
+    fn task_concurrency_patch_accepts_a_positive_integer_or_null() {
+        let parse = |value: Value| {
+            ProjectPatch::parse(Some(&serde_json::json!({ "taskConcurrency": value })))
+                .map(|patch| patch.task_concurrency)
+        };
+        assert_eq!(parse(serde_json::json!(1)).unwrap(), Some(Some(1)));
+        assert_eq!(parse(Value::Null).unwrap(), Some(None));
+        for invalid in [
+            serde_json::json!(0),
+            serde_json::json!(-1),
+            serde_json::json!(1.5),
+            serde_json::json!("1"),
+        ] {
+            assert!(parse(invalid.clone()).is_err(), "{invalid} was accepted");
         }
     }
 

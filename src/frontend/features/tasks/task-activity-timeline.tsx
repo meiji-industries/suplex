@@ -15,7 +15,7 @@ function timestamp(value: number): string {
   return new Date(value).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "medium" });
 }
 
-export function TaskActivityTimeline({ taskId, checksKey }: { taskId: string; checksKey?: string | null }) {
+export function TaskActivityTimeline({ taskId, createdAt, checksKey }: { taskId: string; createdAt: string; checksKey?: string | null }) {
   const query = useTaskTimeline(taskId);
   // Same refresh key as the Checks tab: both share one poll per task.
   const { checks } = useTaskChecks(checksKey ? taskId : null, checksKey);
@@ -33,10 +33,12 @@ export function TaskActivityTimeline({ taskId, checksKey }: { taskId: string; ch
     live: entry.status === "running" && !error && now <= liveUntil,
   }));
   // ponytail: latest run per check on the current PR head only; earlier pushes need persisted CI history.
+  // Runs that began before the task existed belong to earlier work on the branch.
+  const created = Date.parse(createdAt);
   const ciRuns = (checks?.runs ?? []).flatMap(run => {
     const status = checkRunStatus(run);
     const started = run.startedAt ? Date.parse(run.startedAt) : Number.NaN;
-    if (status === "skipped" || !Number.isFinite(started)) return [];
+    if (status === "skipped" || !Number.isFinite(started) || started < created) return [];
     const completed = run.completedAt ? Date.parse(run.completedAt) : Number.NaN;
     return [{ run, status, name: checkRunName(run), start: started, end: Math.max(started, Number.isFinite(completed) ? completed : status === "pending" ? now : started) }];
   });

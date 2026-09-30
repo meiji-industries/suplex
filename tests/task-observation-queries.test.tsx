@@ -113,7 +113,7 @@ test("timeline freshness advances on identical successful reads, expires after t
   const body = { tasks: [{ id: "task", projectId: "project", issueKey: null, title: "Task", activity: [{ id: "execution", role: "root", advisorRole: null, label: "Coordinator", agentId: "agent", agentName: "Agent", avatarSeed: "agent", status: "running", attempt: 1, startedAt, finishedAt: null }] }], unavailableSessions: 0 };
   let failed = false;
   vi.stubGlobal("fetch", vi.fn(async () => failed ? new Response('{"error":"Timeline failed"}', { status: 500 }) : new Response(JSON.stringify(body))));
-  await act(async () => root.render(<QueryClientProvider client={client}><TaskActivityTimeline taskId="task" /></QueryClientProvider>));
+  await act(async () => root.render(<QueryClientProvider client={client}><TaskActivityTimeline taskId="task" createdAt="2026-09-27T11:00:00.000Z" /></QueryClientProvider>));
   const entry = () => container.querySelector('[data-task-timing="root"]');
   expect(entry()?.getAttribute("data-task-timing-active")).toBe("true");
   await act(async () => vi.advanceTimersByTimeAsync(15_000));
@@ -135,6 +135,21 @@ test("timeline freshness advances on identical successful reads, expires after t
   await act(async () => vi.advanceTimersByTimeAsync(3000));
   expect(container.textContent).not.toContain("Timeline is not available.");
   expect(entry()?.getAttribute("data-task-timing-active")).toBe("true");
+});
+
+
+test("timeline CI lane shows only check runs that began after the task was created", async () => {
+  const createdAt = "2026-09-27T11:00:00.000Z";
+  const timeline = { tasks: [{ id: "ci-task", projectId: "project", issueKey: null, title: "Task", activity: [{ id: "execution", role: "root", advisorRole: null, label: "Coordinator", agentId: "agent", agentName: "Agent", avatarSeed: "agent", status: "completed", attempt: 1, startedAt: "2026-09-27T11:10:00.000Z", finishedAt: "2026-09-27T11:20:00.000Z" }] }], unavailableSessions: 0 };
+  const checks = { available: true, runs: [
+    { name: "before", status: "successful", url: null, startedAt: "2026-09-27T10:59:59.000Z", completedAt: "2026-09-27T11:05:00.000Z" },
+    { name: "after", status: "successful", url: null, startedAt: createdAt, completedAt: "2026-09-27T11:05:00.000Z" },
+  ] };
+  vi.stubGlobal("fetch", vi.fn(async (url: string) => new Response(JSON.stringify(url.endsWith("/checks") ? checks : timeline))));
+  await act(async () => root.render(<QueryClientProvider client={client}><TaskActivityTimeline taskId="ci-task" createdAt={createdAt} checksKey="1:ready:sha" /></QueryClientProvider>));
+  const runs = Array.from(container.querySelectorAll("[data-task-ci-check]"), run => run.textContent);
+  expect(runs).toEqual(["after"]);
+  expect(container.querySelector("[data-task-ci-lane]")?.textContent).toContain("Checks · 1× · 5m");
 });
 
 

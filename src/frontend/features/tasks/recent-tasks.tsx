@@ -35,7 +35,7 @@ function RecentTasksContent({ close, costs }: { close?: () => void; costs: Retur
       <SidebarMenuButton render={<a href={withCompany(`/tasks/${task.id}`, companyId)} onClick={close} aria-label={`${task.title}, ${taskStatusLabel(task)}${task.blockedBy.length ? `, ${blockedByLabel(task.blockedBy)}` : ""}${task.pullRequest ? `, pull request ${task.pullRequest.state}` : ""}`}>
         <span className="flex min-w-0 flex-1 items-center gap-2">
           <span data-recent-task-status={task.status} className={`inline-flex shrink-0${task.status === "active" ? " animate-spin" : ""}`}><TaskStatusIcon status={task.status} pullRequestState={task.pullRequest?.state} /></span>
-          <span className="min-w-0 flex-1 truncate">{task.title}{task.blockedBy.length ? <span data-recent-task-blocked-by className="text-muted-foreground"> · {blockedByLabel(task.blockedBy)}</span> : null}</span>
+          <span className="min-w-0 flex-1 truncate text-[13px]">{task.title}{task.blockedBy.length ? <span data-recent-task-blocked-by className="text-muted-foreground"> · {blockedByLabel(task.blockedBy)}</span> : null}</span>
           {cost?.cost != null ? <CostValue value={cost.cost} subsidized={cost.subsidized} partial={cost.partial} className="shrink-0 text-xs tabular-nums text-muted-foreground" suffix={cost.partial ? "+" : ""} /> : null}
         </span>
       </a>} isActive={window.location.pathname === `/tasks/${task.id}`} tooltip={`${task.title}${task.blockedBy.length ? ` · ${blockedByLabel(task.blockedBy)}` : ""}`} />

@@ -133,15 +133,15 @@ export function WorkflowSettingsView(): ReactElement {
     <SettingsContent width="wide" title="Workflows" description="A workflow sets the steps, default agents, and delivery that Suplex uses for a task.">
       <SettingsToolbar actionsInHeader searchLabel="Filter workflows by name" searchPlaceholder="Filter by name" searchWidth="compact" searchValue={search} onSearchChange={setSearch} actions={admin ? <NewButton disabled={busy} onClick={() => { setError(""); setEditor({ kind: "create", draft: emptyDraft() }); }}>New workflow</NewButton> : null} />
       {error && editor.kind === "closed" ? <div className="mt-3"><Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert></div> : null}
-      <div className="mt-4 grid gap-3" aria-label="Workflows">
+      <div className="mt-4 grid gap-[30px]" aria-label="Workflows">
         {visible.map((workflow) => <article key={workflow.id} data-workflow-card={workflow.id}>
-          <Card size="sm">
+          <Card className="gap-y-[8px] data-[size=sm]:[--card-spacing:20px]" size="sm">
             <CardHeader>
-              <CardTitle><span className="flex min-w-0 flex-wrap items-center gap-2">{workflow.name}{workflow.archivedAt ? <Badge variant="secondary">Archived</Badge> : null}</span></CardTitle>
-              <CardAction className="flex items-center gap-1">
+              <CardTitle className="leading-[24px] group-data-[size=sm]/card:text-base"><span className="flex min-w-0 flex-wrap items-center gap-2">{workflow.name}{workflow.archivedAt ? <Badge variant="secondary">Archived</Badge> : null}</span></CardTitle>
+              <CardAction className="flex items-center gap-1 -mt-[6px] -mb-[6px]">
                 {admin ? <Button variant="ghost" size="sm" aria-label={`Configure ${workflow.name}`} disabled={busy} onClick={() => edit(workflow)}>Configure</Button> : null}
                 <DropdownMenu>
-                  <DropdownMenuTrigger render={<Button variant="ghost" size="icon-xs" aria-label={`${workflow.name} actions`} title={`${workflow.name} actions`} />}><Ellipsis /></DropdownMenuTrigger>
+                  <DropdownMenuTrigger render={<Button className="border-t-[var(--border)] border-r-[var(--border)] border-b-[var(--border)] border-l-[var(--border)] pt-[10px] pr-[10px] pb-[10px] pl-[10px] w-auto h-auto" variant="ghost" size="icon-xs" aria-label={`${workflow.name} actions`} title={`${workflow.name} actions`} />}><Ellipsis className="w-[14px] h-[14px]" /></DropdownMenuTrigger>
                   <DropdownMenuContent align="end">
                     <DropdownMenuItem disabled={Boolean(workflow.archivedAt) || currentCompany?.status !== "active"} onClick={() => requestNewTask({ workflowId: workflow.id })}><CirclePlus />Create task</DropdownMenuItem>
                     {admin ? <>
@@ -155,7 +155,7 @@ export function WorkflowSettingsView(): ReactElement {
               </CardAction>
             </CardHeader>
             <CardContent>
-              {workflow.description ? <p className="text-xs text-muted-foreground">{workflow.description}</p> : null}
+              {workflow.description ? <p className="text-muted-foreground text-[14px] leading-[20px]">{workflow.description}</p> : null}
               <WorkflowIllustration workflow={workflow.engine} delivery={workflow.engine === REPAIR ? "Merged pull request" : deliveryLabel(workflow.deliveryTarget)} />
               <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 text-xs text-muted-foreground">
                 {workflow.name !== workflowDefinition(workflow.engine).name ? <span>Built-in workflow <span className="text-foreground">{workflowDefinition(workflow.engine).name}</span></span> : null}

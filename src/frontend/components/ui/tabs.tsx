@@ -60,7 +60,7 @@ function TabsList({
         {variant === "pill" ? (
           <TabsPrimitive.Indicator
             data-slot="tabs-indicator"
-            className="absolute top-(--active-tab-top) left-(--active-tab-left) -z-10 h-(--active-tab-height) w-(--active-tab-width) rounded-full border bg-muted transition-[left,width] duration-200 ease-out motion-reduce:transition-none"
+            className="absolute top-(--active-tab-top) left-(--active-tab-left) -z-10 h-(--active-tab-height) w-(--active-tab-width) rounded-full border bg-muted transition-[left,width] duration-200 ease-out motion-reduce:transition-none dark:bg-[#454545e6] border-t-[0px] border-r-[0px] border-b-[0px] border-l-[0px]"
           />
         ) : null}
         {children}

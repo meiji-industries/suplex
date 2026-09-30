@@ -35,7 +35,7 @@ export function ProjectCards({ projects, agents }: { projects: readonly ApiProje
   return <>
     {projects.map((project) => (
       <article key={project.id}>
-        <Card size="sm">
+        <Card className="pt-[20px]" size="sm">
           <CardHeader>
             <CardTitle><a className="flex items-center gap-2" href={withCompany(`/projects/${encodeURIComponent(project.id)}`, project.companyId)}><ProjectIcon project={project} /><span className="text-sm">{project.name}</span></a></CardTitle>
             <CardAction>
@@ -45,8 +45,8 @@ export function ProjectCards({ projects, agents }: { projects: readonly ApiProje
           <CardContent>
             <div className="grid gap-3 text-xs">
               <div className="min-w-0">
-                <div className="truncate font-medium" title={project.repository}>{project.repository ?? "Repository unavailable"}</div>
-                <div className="truncate text-xs text-muted-foreground" title={project.repositoryPath}>{project.repositoryPath}</div>
+                <div className="truncate font-medium text-[14px] leading-[20px]" title={project.repository}>{project.repository ?? "Repository unavailable"}</div>
+                <div className="truncate text-muted-foreground text-[13px] leading-[18px]" title={project.repositoryPath}>{project.repositoryPath}</div>
               </div>
               <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
                 <span>Base <span className="font-mono text-foreground">{project.baseBranch}</span></span>

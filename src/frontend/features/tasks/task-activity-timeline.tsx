@@ -56,43 +56,43 @@ export function TaskActivityTimeline({ taskId, checksKey }: { taskId: string; ch
   }
   const lanes = [...laneMap.values()];
 
-  return <section aria-label="Task timeline" data-task-timeline className="min-w-0 pb-3">
+  return <section aria-label="Task timeline" data-task-timeline className="min-w-0 pb-0">
     {error ? <Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert> : null}
-    {!intervals.length ? <p className="text-xs text-muted-foreground">{snapshot ? "No agent time yet." : error ? "Agent time is not available." : "Loading timeline…"}</p> : <div className="overflow-x-auto" aria-label="Task timeline Gantt chart">
+    {!intervals.length ? <p className="text-xs text-muted-foreground">{snapshot ? "No agent time yet." : error ? "Agent time is not available." : "Loading timeline…"}</p> : <div className="overflow-x-auto dark:bg-[color-mix(in_oklch,_var(--background),_white_6%)] not-dark:bg-[color-mix(in_oklch,_var(--background),_black_3%)] rounded-tl-[var(--radius)] rounded-tr-[var(--radius)] rounded-br-[var(--radius)] rounded-bl-[var(--radius)] pt-[15px] pb-1" aria-label="Task timeline Gantt chart">
       <div className="grid min-w-[45rem] grid-cols-[13rem_minmax(32rem,1fr)_15px] text-xs [&>.contents:last-child>*]:border-b-0">
-        <div className="sticky left-0 z-20 truncate border-b border-border bg-background px-2 py-1 tabular-nums text-muted-foreground" title="Total Coordinator and Worker execution time. Concurrent executions count separately. Elapsed span covers agent time and GitHub CI checks.">Worked for {taskTimelineDuration(worked)} during {taskTimelineDuration(end - start)}</div>
+        <div className="sticky left-0 z-20 truncate border-b border-border bg-background px-2 py-1 tabular-nums text-muted-foreground dark:bg-[color-mix(in_oklch,_var(--background),_white_6%)] not-dark:bg-[color-mix(in_oklch,_var(--background),_black_3%)] pl-[15px]" title="Total Coordinator and Worker execution time. Concurrent executions count separately. Elapsed span covers agent time and GitHub CI checks.">Worked for {taskTimelineDuration(worked)} during {taskTimelineDuration(end - start)}</div>
         <div className="relative h-6 border-b border-border" data-task-time-axis>
           {ticks.map((tick, index) => <span key={index} className="absolute top-1 whitespace-nowrap text-muted-foreground" style={index === 4 ? { right: 0 } : { left: `${index * 25}%` }}>{new Date(tick).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit", ...(span < 300_000 ? { second: "2-digit" } : {}) })}</span>)}
         </div><div aria-hidden="true" className="border-b border-border" />
         {lanes.map(lane => <div className="contents" key={lane.agentId}>
-          <div className="sticky left-0 z-10 flex min-h-11 items-center border-b border-border bg-background px-3">
+          <div className="sticky left-0 z-10 flex items-center border-b border-border bg-background px-3 dark:bg-[color-mix(in_oklch,_var(--background),_white_6%)] not-dark:bg-[color-mix(in_oklch,_var(--background),_black_3%)] min-h-[54px] pt-[10px] pb-[10px] pl-[15px]">
             <TimelineAgentLabel avatarSeed={lane.avatarSeed} name={lane.name} role={[...lane.roles].join(" / ")} executionCount={lane.entries.length} duration={taskTimelineDuration(lane.entries.reduce((total, entry) => total + entry.end - entry.start, 0))} />
           </div>
-          <div className="relative min-h-11 border-b border-border/70" role="list" aria-label={`${lane.name} executions`}>
+          <div className="relative border-b border-border/70 min-h-[54px]" role="list" aria-label={`${lane.name} executions`}>
             {lane.entries.map(entry => {
               const left = Math.min(99.5, (entry.start - start) / span * 100);
               const width = Math.min(100 - left, Math.max(0.5, (entry.end - entry.start) / span * 100));
               const status = entry.status === "running" && !entry.live ? "Observation not available" : statuses[entry.status];
               const role = entry.label ?? roleLabel({ kind: entry.role, advisorRole: entry.advisorRole ?? null });
               const label = `${lane.name}, ${role}, session ${entry.attempt}: ${timestamp(entry.start)} to ${timestamp(entry.end)}, ${taskTimelineDuration(entry.end - entry.start)}. ${status}.`;
-              return <div role="listitem" tabIndex={0} key={entry.id} data-task-timing={entry.role} data-task-agent-id={entry.agentId} data-task-timing-active={entry.live || undefined} aria-label={label} title={label} className={`absolute top-3 flex h-5 items-center overflow-hidden rounded-sm px-1 text-left text-xs leading-5 outline-none focus-visible:ring-2 focus-visible:ring-ring ${entry.live ? "phase-timing-active text-emerald-950 motion-reduce:animate-none" : entry.status === "failed" ? "bg-destructive/20 text-destructive" : "bg-primary/15 text-foreground"}`} style={{ left: `${left}%`, width: `${width}%` }}><span className="truncate">{role}</span></div>;
+              return <div role="listitem" tabIndex={0} key={entry.id} data-task-timing={entry.role} data-task-agent-id={entry.agentId} data-task-timing-active={entry.live || undefined} aria-label={label} title={label} className={`absolute flex h-5 items-center overflow-hidden rounded-sm px-1 text-left text-xs leading-5 outline-none focus-visible:ring-2 focus-visible:ring-ring ${entry.live ? "phase-timing-active text-emerald-950 motion-reduce:animate-none" : entry.status === "failed" ? "bg-destructive/20 text-destructive" : "bg-primary/15 text-foreground"} top-[17px]`} style={{ left: `${left}%`, width: `${width}%` }}><span className="truncate">{role}</span></div>;
             })}
           </div><div aria-hidden="true" className="border-b border-border/70" />
         </div>)}
         {ciRuns.length ? <div className="contents" data-task-ci-lane>
-          <div className="sticky left-0 z-10 flex min-h-11 items-center border-b border-border bg-background px-3">
+          <div className="sticky left-0 z-10 flex items-center border-b border-border bg-background px-3 dark:bg-[color-mix(in_oklch,_var(--background),_white_6%)] not-dark:bg-[color-mix(in_oklch,_var(--background),_black_3%)] min-h-[54px] pt-[5px] pb-[5px] pl-[15px]">
             <span className="flex min-w-0 items-center gap-2">
               {/* Same box as an agent's avatar, so the names line up. */}
               <span className="grid size-6 shrink-0 place-items-center"><ToolIcon tool="gh-auth" /></span>
               <span className="min-w-0"><span className="block truncate text-xs font-medium">GitHub CI</span><span className="block truncate text-xs text-muted-foreground">Checks · {ciRuns.length}× · {taskTimelineDuration(ciEnd - ciStart)}</span></span>
             </span>
           </div>
-          <div className="relative min-h-11 border-b border-border/70" role="list" aria-label="GitHub CI checks">
+          <div className="relative border-b border-border/70 min-h-[54px]" role="list" aria-label="GitHub CI checks">
             {ciRuns.map((entry, index) => {
               const left = Math.min(99.5, (entry.start - start) / span * 100);
               const width = Math.min(100 - left, Math.max(0.5, (entry.end - entry.start) / span * 100));
               const label = `${entry.name}: ${timestamp(entry.start)} to ${timestamp(entry.end)}. ${checkRunLabel(entry.run, now)}.`;
-              return <div role="listitem" tabIndex={0} key={`${entry.name}:${index}`} data-task-ci-check={entry.status} aria-label={label} title={label} className={`absolute top-3 flex h-5 items-center overflow-hidden rounded-sm px-1 text-left text-xs leading-5 outline-none focus-visible:ring-2 focus-visible:ring-ring ${entry.status === "pending" ? "phase-timing-active text-emerald-950 motion-reduce:animate-none" : entry.status === "failed" ? "bg-destructive/20 text-destructive" : "bg-muted text-muted-foreground"}`} style={{ left: `${left}%`, width: `${width}%` }}><span className="truncate">{entry.name}</span></div>;
+              return <div role="listitem" tabIndex={0} key={`${entry.name}:${index}`} data-task-ci-check={entry.status} aria-label={label} title={label} className={`absolute flex h-5 items-center overflow-hidden rounded-sm px-1 text-left text-xs leading-5 outline-none focus-visible:ring-2 focus-visible:ring-ring ${entry.status === "pending" ? "phase-timing-active text-emerald-950 motion-reduce:animate-none" : entry.status === "failed" ? "bg-destructive/20 text-destructive" : "bg-muted text-muted-foreground"} top-[17px]`} style={{ left: `${left}%`, width: `${width}%` }}><span className="truncate">{entry.name}</span></div>;
             })}
           </div><div aria-hidden="true" className="border-b border-border/70" />
         </div> : null}

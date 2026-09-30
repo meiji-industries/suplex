@@ -76,7 +76,7 @@ export function TaskWork({ task, activity, onChange }: { task: Task; activity: T
     <WorkflowPlan key={`workflow-plan-${task.id}`} task={task} />
     <TaskActivityTimeline taskId={task.id} checksKey={checksKey} />
     <div className="max-w-full border-b"><TabsList variant="line"><TabsTrigger value="chat">Chat</TabsTrigger><TabsTrigger value="activity">Activity <span className="text-xs text-muted-foreground">{activity.turns.length}</span></TabsTrigger><TabsTrigger value="diffs">Diffs{diffSummary?.available ? <span className="text-xs text-muted-foreground"> ({diffSummary.files})</span> : null}</TabsTrigger><TabsTrigger value="checks">Checks</TabsTrigger><TabsTrigger value="other">Other</TabsTrigger></TabsList></div>
-    <TabsContent value="chat"><div className="grid min-w-0 gap-5 pt-3" aria-label="Conversation">
+    <TabsContent className="tracking-wide" value="chat"><div className="grid min-w-0 gap-5 pt-3 pl-3" aria-label="Conversation">
       <RootPlan execution={execution} />
       {activity.turns.filter(turn => resultText(turn.result) || humanMessage(turn.prompt)?.text).map(turn => {
         const session = activity.sessions.find(session => session.id === turn.sessionId);

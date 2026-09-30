@@ -22,7 +22,7 @@ const SpendChart = lazy(() => import("./analytics-charts.js").then(module => ({ 
 const ActivityChart = lazy(() => import("./analytics-charts.js").then(module => ({ default: module.ActivityChart })));
 
 function Filter({ label, value, options, onChange }: { label: string; value: string; options: Array<{ value: string; label: string }>; onChange: (value: string) => void }) {
-  return <Select value={value} onValueChange={value => { if (value !== null) onChange(value); }}><SelectTrigger aria-label={label} size="sm"><SelectValue /></SelectTrigger><SelectContent>{options.map(option => <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>)}</SelectContent></Select>;
+  return <Select value={value} onValueChange={value => { if (value !== null) onChange(value); }}><SelectTrigger aria-label={label}><SelectValue /></SelectTrigger><SelectContent>{options.map(option => <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>)}</SelectContent></Select>;
 }
 function Metric({ label, value, detail }: { label: string; value: ReactNode; detail: string }) {
   return <div className="min-w-0 border-b border-r px-4 py-4"><dt className="text-xs text-muted-foreground">{label}</dt><dd className="mt-1 text-2xl font-semibold tabular-nums tracking-tight">{value}</dd><p className="mt-1 text-xs text-muted-foreground">{detail}</p></div>;
@@ -108,7 +108,7 @@ export function AnalyticsView() {
   };
   return <ApplicationFrame title="Analytics" headerRight={<><Button size="sm" variant="outline" onClick={exportRows} disabled={!rows.length}><ArrowDownToLine />Export CSV</Button><Button size="icon-sm" variant="ghost" aria-label="Refresh analytics" onClick={() => setRefresh(value => value + 1)}><RefreshCw /></Button></>}>
     <main className="min-w-0 flex-1 overflow-auto" data-analytics>
-      <div className="flex flex-wrap items-center gap-2 border-b px-4 py-3">
+      <div className="flex flex-wrap items-center gap-2 border-b px-4 py-3 pt-[12px] pb-[12px] pl-[12px] pr-[12px]">
         <Filter label="Creation period" value={period} onChange={setPeriod} options={[{ value: "7", label: "Created in last 7 days" }, { value: "30", label: "Created in last 30 days" }, { value: "90", label: "Created in last 90 days" }, { value: "all", label: "Created at any time" }]} />
         <Filter label="Project" value={project} onChange={setProject} options={[{ value: "all", label: "All projects" }, ...projects.map(item => ({ value: item.id, label: item.name }))]} />
         <Filter label="Delivery target" value={delivery} onChange={setDelivery} options={[{ value: "all", label: "All delivery targets" }, ...taskDeliveryTargetOptions]} />

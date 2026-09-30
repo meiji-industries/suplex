@@ -44,14 +44,14 @@ function SettingsSidebar({ companyId, backHref, activeHref }: { companyId: strin
   return (
     <Sidebar variant="inset" collapsible="offcanvas">
       <SidebarHeader className="titlebar-drag titlebar-top">
-        <div className="flex items-center gap-1"><div className="min-w-0 flex-1"><SidebarMenu><SidebarMenuItem><SidebarMenuButton render={<a href={backHref} onClick={close}><ArrowLeft />Back to app</a>} tooltip="Back to app" /></SidebarMenuItem></SidebarMenu></div><span className="md:hidden"><SidebarTrigger aria-label="Close navigation" title="Close navigation" /></span></div>
+        <div className="flex items-center gap-1"><div className="min-w-0 flex-1"><SidebarMenu><SidebarMenuItem><SidebarMenuButton className="text-sm leading-none" render={<a href={backHref} onClick={close}><ArrowLeft />Back to app</a>} tooltip="Back to app" /></SidebarMenuItem></SidebarMenu></div><span className="md:hidden"><SidebarTrigger aria-label="Close navigation" title="Close navigation" /></span></div>
         <CompanySwitcher />
         <SidebarInput id={searchId} aria-label="Search settings" aria-keyshortcuts="/" placeholder="Search the settings" value={search} onChange={(event) => setSearch(event.target.value)} />
       </SidebarHeader>
       <SidebarContent>
         {filtered.map((group) => (
           <SidebarGroup key={group.title}>
-            <SidebarGroupLabel>{group.title}</SidebarGroupLabel>
+            <SidebarGroupLabel className="tracking-widest">{group.title}</SidebarGroupLabel>
             <SidebarGroupContent>
               <SidebarMenu>
                 {group.items.map((item) => {
@@ -85,8 +85,8 @@ export function SettingsHeader({ title, description, actions }: SettingsHeaderPr
   const { setSlot } = useContext(SettingsHeaderSlotContext); return (
     <div data-settings-header className="mb-10 flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between sm:gap-12">
       <div className="min-w-0 flex-1 space-y-1.5 sm:max-w-[36rem]">
-        <h2 className="text-xl font-semibold">{title}</h2>
-        {description ? <p className="text-sm text-balance text-muted-foreground">{description}</p> : null}
+        <h2 className="font-semibold text-[24px] leading-[32px]">{title}</h2>
+        {description ? <p className="text-balance text-muted-foreground text-base leading-[24px]">{description}</p> : null}
       </div>
       {/* Two columns: the text wraps on the left, and the buttons sit on the right, bottom-aligned with the text. A toolbar can send its buttons here. */}<div ref={setSlot} className="flex shrink-0 flex-wrap items-center justify-end gap-2 empty:hidden">{actions}</div>
     </div>

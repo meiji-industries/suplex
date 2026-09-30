@@ -98,10 +98,11 @@ test("task rows keep every field, with the branch before the status bubble", () 
 });
 
 test("task rows dim the titles of delivered and cancelled tasks only", () => {
-  const titleClass = (status: Task["status"]) => /class="truncate ([^"]+)">Repair task links</.exec(renderToStaticMarkup(createElement(TaskRow, { task: { ...task, status }, project: undefined, cost: undefined })))?.[1];
+  // The title also carries type styles; only its colour depends on the status.
+  const titleColour = (status: Task["status"]) => /class="truncate ([^"]+)">Repair task links</.exec(renderToStaticMarkup(createElement(TaskRow, { task: { ...task, status }, project: undefined, cost: undefined })))?.[1]?.split(" ").filter(name => name === "text-muted-foreground" || name === "text-foreground");
 
-  expect(titleClass("delivered")).toBe("text-muted-foreground");
-  expect(titleClass("cancelled")).toBe("text-muted-foreground");
-  expect(titleClass("active")).toBe("text-foreground");
-  expect(titleClass("waiting_human")).toBe("text-foreground");
+  expect(titleColour("delivered")).toEqual(["text-muted-foreground"]);
+  expect(titleColour("cancelled")).toEqual(["text-muted-foreground"]);
+  expect(titleColour("active")).toEqual(["text-foreground"]);
+  expect(titleColour("waiting_human")).toEqual(["text-foreground"]);
 });

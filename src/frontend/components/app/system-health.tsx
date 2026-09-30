@@ -285,7 +285,7 @@ export function SystemHealthIndicator({ sidebar = false }: { sidebar?: boolean }
           <StatusLight level={level} label={label} />
         </span>
         {sidebar ? <span>{label}</span> : null}
-        {sidebar && instanceHost ? <span className="ml-auto min-w-0 truncate rounded-[5px] bg-muted px-1.5 py-0.5 text-xs font-medium text-muted-foreground" title={instanceHost} data-testid="instance-host">{instanceHost}</span> : null}
+        {sidebar && instanceHost ? <span className="ml-auto min-w-0 truncate rounded-[5px] bg-muted px-1.5 py-0.5 text-xs text-muted-foreground font-normal" title={instanceHost} data-testid="instance-host">{instanceHost}</span> : null}
       </DialogTrigger>
       <DialogContent showCloseButton>
         <DialogHeader>

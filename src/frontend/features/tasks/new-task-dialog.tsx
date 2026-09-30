@@ -265,9 +265,9 @@ export function NewTaskDialog({ open, onOpenChange, companyId, onCreated, initia
       <Collapsible.Root open={workflowPreviewOpen} onOpenChange={setWorkflowPreviewOpen} className="relative min-w-0">
       <form className="max-h-[85vh] min-w-0 overflow-y-auto rounded-xl" onPaste={event => { const files = Array.from(event.clipboardData.files); if (files.length && !busy && !editing) { event.preventDefault(); void addImages(files); } }} onKeyDown={event => { if ((event.metaKey || event.ctrlKey) && event.key === "Enter") { event.preventDefault(); event.currentTarget.requestSubmit(); } }} onSubmit={event => { event.preventDefault(); void submit(); }}>
         <div className="flex min-h-[230px] min-w-0 flex-col">
-      <DialogHeader className="px-4 py-3 sm:px-5">
+      <DialogHeader className="px-4 pt-6 pb-3 sm:px-5">
         <div className="flex min-w-0 flex-wrap items-center justify-between gap-2"><Breadcrumb><BreadcrumbList className="gap-2 text-sm"><BreadcrumbItem>
-          <DropdownMenu><DropdownMenuTrigger render={<Button type="button" variant="ghost" size="xs" aria-label="Project" disabled={busy || editing || !projects.length} />}>
+          <DropdownMenu><DropdownMenuTrigger render={<Button className="pl-0" type="button" variant="ghost" size="xs" aria-label="Project" disabled={busy || editing || !projects.length} />}>
             {project ? <EntityAvatar kind="project" id={project.id} name={project.name} size="xs" /> : <FolderKanban className="size-3.5 text-muted-foreground" />}<span className="max-w-40 truncate">{project?.name ?? "Project"}</span>
           </DropdownMenuTrigger><DropdownMenuContent align="start">{projects.map(candidate => <DropdownMenuItem className="text-xs" key={candidate.id} onClick={() => { setProjectId(candidate.id); setSource(undefined); setSourceSummary(undefined); setBlockedBy([]); }}><EntityAvatar kind="project" id={candidate.id} name={candidate.name} size="xs" /><span className="min-w-0 flex-1 truncate">{candidate.name}</span>{candidate.id === projectId ? <span aria-label="Selected">✓</span> : null}</DropdownMenuItem>)}</DropdownMenuContent></DropdownMenu>
         </BreadcrumbItem><BreadcrumbSeparator /><BreadcrumbItem><DialogTitle className="font-normal">{editing ? "Edit task" : "New task"}</DialogTitle></BreadcrumbItem></BreadcrumbList></Breadcrumb>
@@ -278,12 +278,12 @@ export function NewTaskDialog({ open, onOpenChange, companyId, onCreated, initia
         </div></div>
       </DialogHeader>
         <div className="flex-1 px-5 pt-1">
-          <Input aria-label="Task title" autoFocus placeholder="Task title" value={title} onChange={event => setTitle(event.target.value)} className="h-10 border-0 bg-transparent px-0 text-lg font-semibold placeholder:text-muted-foreground/70 shadow-none focus-visible:ring-0 md:text-lg dark:bg-transparent" />
-          <Textarea aria-label="Task description" placeholder="Write a description" value={description} onChange={event => setDescription(event.target.value)} className="min-h-20 resize-none border-0 bg-transparent px-0 py-1 text-sm font-normal placeholder:text-muted-foreground/70 shadow-none focus-visible:ring-0 md:text-sm dark:bg-transparent" />
+          <Input aria-label="Task title" autoFocus placeholder="Task title" value={title} onChange={event => setTitle(event.target.value)} className="h-10 border-0 bg-transparent px-0 placeholder:text-muted-foreground/70 shadow-none focus-visible:ring-0 dark:bg-transparent text-xl font-medium" />
+          <Textarea aria-label="Task description" placeholder="Write a description" value={description} onChange={event => setDescription(event.target.value)} className="min-h-20 resize-none border-0 bg-transparent px-0 py-1 text-sm font-normal placeholder:text-muted-foreground/70 shadow-none focus-visible:ring-0 md:text-sm dark:bg-transparent tracking-wide" />
         </div>
         {error ? <div className="px-5 pb-3"><Alert variant="destructive"><AlertDescription>{error}{projectFindings.length && projectId ? <>. {projectFindings.join(". ")}. <a className="underline" href={withCompany(`/projects/${encodeURIComponent(projectId)}`, companyId)}>Open the project settings</a></> : null}</AlertDescription></Alert></div> : null}
         {!editing && images.length ? <div className="px-5 pb-3"><InlineAttachmentList attachments={images.map((image, index) => ({ id: String(index), filename: image.filename, previewUrl: `data:${image.mimeType};base64,${image.base64}` }))} onRemove={index => setImages(current => current.filter((_, item) => item !== index))} disabled={busy || readingImages} /></div> : null}
-        <div className="flex flex-wrap items-center gap-2 px-5 pb-3">
+        <div className="flex flex-wrap items-center gap-2 p-6">
           {editing ? null : <InlineAttachmentPicker compact attachments={images.map((image, index) => ({ id: String(index), filename: image.filename, previewUrl: `data:${image.mimeType};base64,${image.base64}` }))} onSelect={addImages} disabled={busy || readingImages} />}
           <div className="max-w-full overflow-x-auto p-1 -m-1">
           <ButtonGroup aria-label="Task options">
@@ -322,7 +322,7 @@ export function NewTaskDialog({ open, onOpenChange, companyId, onCreated, initia
         </Collapsible.Panel>
       </form>
         <div className="absolute -bottom-3.5 left-1/2 -translate-x-1/2">
-          <Collapsible.Trigger aria-label={workflowPreviewOpen ? "Hide workflow preview" : "Show workflow preview"} render={<Button type="button" variant="outline" size="icon-sm" className="bg-background! rounded-full shadow-sm" />}>
+          <Collapsible.Trigger aria-label={workflowPreviewOpen ? "Hide workflow preview" : "Show workflow preview"} render={<Button type="button" variant="outline" size="icon-sm" className="bg-background! rounded-full shadow-sm w-7 h-7" />}>
             <ChevronDown aria-hidden="true" className="size-3.5 transition-transform in-data-panel-open:rotate-180" />
           </Collapsible.Trigger>
         </div>

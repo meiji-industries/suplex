@@ -23,6 +23,16 @@ vi.mock("../src/frontend/components/ui/dialog.js", async () => {
   };
 });
 
+vi.mock("../src/frontend/components/ui/tabs.js", async () => {
+  const React = await import("react");
+  const Context = React.createContext((_value: string): void => undefined);
+  return {
+    Tabs: ({ onValueChange, children }: { onValueChange: (value: string) => void; children: React.ReactNode }) => <Context.Provider value={onValueChange}>{children}</Context.Provider>,
+    TabsList: ({ children }: { children: React.ReactNode }) => <div role="tablist">{children}</div>,
+    TabsTrigger: ({ value, children }: { value: string; children: React.ReactNode }) => { const change = React.useContext(Context); return <button type="button" role="tab" onClick={() => change(value)}>{children}</button>; },
+  };
+});
+
 import { TaskBlockedByProperty } from "../src/frontend/features/tasks/task-details.js";
 
 const self = { id: "task-self", projectId: "project-1", title: "This task", status: "active", archivedAt: null, queue: { state: "running" } };
@@ -35,6 +45,8 @@ const otherProject = { id: "task-other-project", projectId: "project-2", title: 
 const activeTask: Pick<Task, "id" | "companyId" | "projectId" | "status" | "blockedBy"> = { id: "task-self", companyId: "company-1", projectId: "project-1", status: "active", blockedBy: [] };
 const first = { id: "task-first", title: "First prerequisite", status: "backlog" as const };
 const second = { id: "task-second", title: "Second prerequisite", status: "delivered" as const };
+
+const pullRequest = { kind: "pull_request", number: 12, title: "Ship the API", body: "", author: "octocat", headBranch: "feature/api", baseBranch: "main", isDraft: false, usedBy: null };
 
 const saved = { id: "task-self", blockedBy: [] } as unknown as Task;
 
@@ -63,6 +75,7 @@ beforeEach(() => {
   api.readJsonUnchecked.mockReset();
   api.readJsonUnchecked.mockImplementation(async (url: string) => {
     if (url === "/api/tasks/task-self/dependencies") return saved;
+    if (url === "/api/projects/project-1/task-sources?kind=pull_request") return { available: true, sources: [pullRequest, { ...pullRequest, number: 7, title: "Already listed" }] };
     if (url === "/api/companies/company-1/tasks") return { tasks: [self, active, backlog, queued, delivered, otherProject, { ...first, projectId: "project-1", archivedAt: null, queue: { state: "backlog" } }] };
     throw new Error(`Unexpected request: ${url}`);
   });
@@ -149,4 +162,20 @@ test("a failed save shows the error message", async () => {
   expect(view.saves()).toEqual([["task-active"]]);
   expect(view.onChange).not.toHaveBeenCalled();
   expect(view.container.textContent).toContain("The dependency creates a cycle");
+});
+
+test("selecting a pull request saves it with the current task prerequisites", async () => {
+  const listed = { id: "pull_request:7", title: "Already listed", status: "active" as const, kind: "pull_request" as const, number: 7, state: "open" as const, url: "https://github.com/o/r/pull/7" };
+  const view = mount({ ...activeTask, blockedBy: [first, listed] });
+  await view.render();
+  await act(async () => { button(view.container, "Add Blocked by task").click(); });
+  await flush();
+  await act(async () => { button(view.container, "Pull requests").click(); });
+  await flush();
+  const picker = view.container.querySelector('[aria-label="Search pull requests"]')!.parentElement!;
+  expect(picker.textContent).not.toContain("#7 Already listed");
+  await act(async () => { button(picker as HTMLElement, "#12 Ship the API").click(); await Promise.resolve(); });
+  const body = JSON.parse(api.readJsonUnchecked.mock.calls.find(([url]) => url === "/api/tasks/task-self/dependencies")![1].body);
+  expect(body).toEqual({ dependsOn: ["task-first"], blockedByPullRequests: [{ number: 7 }, { number: 12 }] });
+  expect(view.container.querySelector('[aria-label="Search pull requests"]')).toBeNull();
 });

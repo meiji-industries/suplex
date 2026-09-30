@@ -36,6 +36,15 @@ vi.mock("../src/frontend/components/ui/dropdown-menu.js", async () => {
     DropdownMenuRadioItem: ({ children }: { children: React.ReactNode }) => <button type="button" role="menuitemradio">{children}</button>,
   };
 });
+vi.mock("../src/frontend/components/ui/tabs.js", async () => {
+  const React = await import("react");
+  const Context = React.createContext((_value: string): void => undefined);
+  return {
+    Tabs: ({ onValueChange, children }: { onValueChange: (value: string) => void; children: React.ReactNode }) => <Context.Provider value={onValueChange}>{children}</Context.Provider>,
+    TabsList: ({ children }: { children: React.ReactNode }) => <div role="tablist">{children}</div>,
+    TabsTrigger: ({ value, children }: { value: string; children: React.ReactNode }) => { const change = React.useContext(Context); return <button type="button" role="tab" onClick={() => change(value)}>{children}</button>; },
+  };
+});
 vi.mock("../src/frontend/components/ui/button.js", () => ({ Button: ({ children, ...props }: React.ButtonHTMLAttributes<HTMLButtonElement>) => <button {...props}>{children}</button> }));
 vi.mock("../src/frontend/components/ui/new-button.js", () => ({ NewButton: ({ children, ...props }: React.ButtonHTMLAttributes<HTMLButtonElement>) => <button {...props}>{children}</button> }));
 vi.mock("../src/frontend/components/ui/input.js", () => ({ Input: (props: React.InputHTMLAttributes<HTMLInputElement>) => <input {...props} /> }));
@@ -68,6 +77,8 @@ const workflow = { id: "workflow_native_standard", name: "Plan and build", engin
 const active = { id: "task-active", projectId: project.id, title: "Active prerequisite", status: "active", archivedAt: null, queue: { state: "running" } };
 const otherProject = { id: "task-other-project", projectId: "project-2", title: "Other project", status: "active", archivedAt: null, queue: { state: "running" } };
 const backlog = { id: "task-backlog", projectId: project.id, title: "Backlog task", status: "backlog", archivedAt: null, queue: { state: "backlog" } };
+const waiting = { id: "task-waiting", projectId: project.id, title: "Waiting task", status: "waiting_human", archivedAt: null, queue: { state: "running" } };
+const pullRequest = { kind: "pull_request", number: 12, title: "Ship the API", body: "", author: "octocat", headBranch: "feature/api", baseBranch: "main", isDraft: false, usedBy: null };
 const archived = { id: "task-archived", projectId: project.id, title: "Archived task", status: "active", archivedAt: "2026-01-01T00:00:00.000Z", queue: { state: "running" } };
 const delivered = { id: "task-delivered", projectId: project.id, title: "Delivered task", status: "delivered", archivedAt: null, queue: { state: "delivered" } };
 const cancelled = { id: "task-cancelled", projectId: project.id, title: "Cancelled task", status: "cancelled", archivedAt: null, queue: { state: "cancelled" } };
@@ -109,7 +120,8 @@ beforeEach(() => {
     if (url === "/api/profiles") return { profiles: [profile, worker] };
     if (url === "/api/workflows?includeArchived=true") return { workflows: [workflow] };
     if (url === "/api/projects/project-1/task-templates") return { templates: [] };
-    if (url === "/api/companies/company-1/tasks") return { tasks: [active, otherProject, backlog, archived, delivered, cancelled] };
+    if (url === "/api/companies/company-1/tasks") return { tasks: [active, otherProject, backlog, waiting, archived, delivered, cancelled] };
+    if (url === "/api/projects/project-1/task-sources?kind=pull_request") return { available: true, sources: [pullRequest] };
     throw new Error(`Unexpected request: ${url}`);
   });
 });
@@ -124,6 +136,7 @@ test("New task Blocked by picker filters, selects several, removes one, and post
   expect(view.container.textContent).toContain("Active prerequisite");
   expect(view.container.textContent).not.toContain("task-active");
   expect(view.container.textContent).toContain("Backlog task");
+  expect(view.container.textContent).toContain("Waiting task");
   expect(view.container.textContent).not.toContain("Other project");
   expect(view.container.textContent).not.toContain("Archived task");
   expect(view.container.textContent).not.toContain("Delivered task");
@@ -144,12 +157,12 @@ test("New task Blocked by picker filters, selects several, removes one, and post
   expect(posts()[0]).not.toHaveProperty("dependsOn");
   expect(posts()[0]).not.toHaveProperty("blockedByTaskId");
 
-  for (const name of ["Active prerequisite", "Backlog task"]) {
+  for (const name of ["Active prerequisite", "Backlog task", "Waiting task"]) {
     await act(async () => { button(view.container, "Blocked by...").click(); });
     await flush();
     await act(async () => { button(view.container, name).click(); });
   }
-  expect(view.container.querySelectorAll("[data-blocked-by-selection]")).toHaveLength(2);
+  expect(view.container.querySelectorAll("[data-blocked-by-selection]")).toHaveLength(3);
   // A selected task is not offered again.
   await act(async () => { button(view.container, "Blocked by...").click(); });
   await flush();
@@ -159,8 +172,53 @@ test("New task Blocked by picker filters, selects several, removes one, and post
   await act(async () => { button(view.container, "Blocked by...").click(); });
   await flush();
   await act(async () => { button(view.container, "Active prerequisite").click(); setText(title, "Create dependent"); title.form?.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })); await Promise.resolve(); });
-  expect(posts()[1].dependsOn).toEqual(["task-backlog", "task-active"]);
+  expect(posts()[1].dependsOn).toEqual(["task-backlog", "task-waiting", "task-active"]);
   expect(posts()[1]).not.toHaveProperty("blockedByTaskId");
+});
+
+test("the Pull requests tab adds a removable pull request chip and posts it as blockedByPullRequests", async () => {
+  const view = mount();
+  await flush();
+  await act(async () => { button(view.container, "Blocked by...").click(); });
+  await flush();
+  await act(async () => { button(view.container, "Pull requests").click(); });
+  await flush();
+  expect(view.container.querySelector('[aria-label="Search pull requests"]')).not.toBeNull();
+  expect(view.container.textContent).toContain("#12 Ship the API");
+  expect(view.container.textContent).not.toContain("Active prerequisite");
+  await act(async () => { button(view.container, "#12 Ship the API").click(); });
+  expect(view.container.querySelector('[aria-label="Search pull requests"]')).toBeNull();
+  expect(view.container.textContent).toContain("Blocked by #12 Ship the API");
+  // A selected pull request is not offered again.
+  await act(async () => { button(view.container, "Blocked by...").click(); });
+  await flush();
+  await act(async () => { button(view.container, "Pull requests").click(); });
+  await flush();
+  expect(view.container.textContent).toContain("No pull requests found.");
+  await act(async () => { button(view.container, "Close").click(); });
+  await act(async () => { button(view.container, "Remove pull request #12 from Blocked by").click(); });
+  expect(view.container.querySelector("[data-blocked-by-selection]")).toBeNull();
+  await act(async () => { button(view.container, "Blocked by...").click(); });
+  await flush();
+  await act(async () => { button(view.container, "Pull requests").click(); });
+  await flush();
+  const title = view.container.querySelector<HTMLInputElement>('[aria-label="Task title"]')!;
+  await act(async () => { button(view.container, "#12 Ship the API").click(); setText(title, "Wait for the API"); title.form?.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })); await Promise.resolve(); });
+  const post = api.readJsonUnchecked.mock.calls.filter(([url, init]) => url === "/api/companies/company-1/tasks" && init?.method === "POST").at(-1)!;
+  expect(JSON.parse(post[1].body)).toMatchObject({ blockedByPullRequests: [{ number: 12 }] });
+  expect(JSON.parse(post[1].body)).not.toHaveProperty("dependsOn");
+});
+
+test("the Pull requests tab reports an unavailable repository", async () => {
+  const fallback = api.readJsonUnchecked.getMockImplementation()!;
+  api.readJsonUnchecked.mockImplementation(async (url: string, init?: RequestInit) => url === "/api/projects/project-1/task-sources?kind=pull_request" ? { available: false, sources: [] } : fallback(url, init));
+  const view = mount();
+  await flush();
+  await act(async () => { button(view.container, "Blocked by...").click(); });
+  await flush();
+  await act(async () => { button(view.container, "Pull requests").click(); });
+  await flush();
+  expect(view.container.textContent).toContain("Pull requests are not available.");
 });
 
 test("New from stores the selected Jira issue on the create request", async () => {
@@ -211,7 +269,7 @@ test("the picker reports an empty task result", async () => {
   await flush();
   const search = view.container.querySelector<HTMLInputElement>('[aria-label="Search tasks"]')!;
   await act(async () => { setText(search, "nothing"); });
-  expect(view.container.textContent).toContain("No matching backlog, queued, or active tasks.");
+  expect(view.container.textContent).toContain("No matching backlog, queued, active, or Answer necessary tasks.");
 });
 
 test("Workflow stays selected by name, previews the selected engine, and posts it", async () => {

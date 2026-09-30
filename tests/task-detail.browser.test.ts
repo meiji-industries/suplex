@@ -20,7 +20,7 @@ test("native task detail supports answering a question and cancelling", { timeou
     const { page } = value;
     await page.goto(`${value.base}/tasks/${task.id}?company=${value.company.id}`);
     await page.getByRole("heading", { name: "Native task detail", level: 2, exact: true }).waitFor();
-    await page.locator("[data-app-header]").getByRole("button", { name: "Task options", exact: true }).waitFor();
+    await page.locator("[data-task-detail-header]").getByRole("button", { name: "Task options", exact: true }).waitFor();
     await page.getByRole("region", { name: "Question" }).getByText("Which base branch should I use?").waitFor();
     await page.getByLabel("Answer", { exact: true }).fill("Use main and preserve local work.");
     await page.getByRole("button", { name: "Answer and continue", exact: true }).click();

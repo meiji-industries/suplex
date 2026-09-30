@@ -13,16 +13,20 @@ import { SettingsDataTable, SettingsTableCell, SettingsTableEmpty, SettingsTable
 import { useCompanyContext } from "../../shell/company-context.js";
 import { readJsonUnchecked, withCompany } from "../../lib/api.js";
 import { ProviderLoginTerminal, useProviderLogin } from "./provider-login.js";
-import { ProviderInstallationInstructions } from "../../components/app/provider-installation.js";
+import { ProviderInstallCommand } from "../../components/app/provider-installation.js";
+import { ProviderIcon } from "../../components/app/provider-icons.js";
 
+// The groups show the scope, so there is no Scope column. Configuration takes the remaining width.
 const columns: SettingsTableColumn[] = [
-  { key: "provider", label: "Provider", width: 170 },
-  { key: "scope", label: "Scope", width: 80 },
-  { key: "configuration", label: "Configuration", width: 150 },
-  { key: "models", label: "Models", width: 70 },
-  { key: "status", label: "Status", width: 110 },
+  { key: "provider", label: "Provider", width: 190 },
+  { key: "configuration", label: "Configuration" },
+  { key: "models", label: "Models", width: 80, align: "center" },
+  { key: "status", label: "Status", width: 140 },
   { key: "actions", width: 150 },
 ];
+
+// One height for every row: a 32px button plus the cell padding and the divider.
+const rowHeight = "h-[53px]";
 
 type ProviderView = { status: "loading" } | { status: "failed"; message: string } | { status: "loaded"; data: ProviderListResponse };
 type ProviderInstance = z.infer<typeof ProviderInstanceListResponseSchema>["instances"][number];
@@ -90,25 +94,24 @@ export function ProviderSettingsView(): ReactElement {
       <NewButton onClick={() => { setError(""); setAddOpen(true); }}>Add Provider</NewButton>
      </>}>
      {error ? <p role="alert" className="mb-3 text-xs text-destructive">{error}</p> : null}
+     {providers.some(provider => provider.status !== "configured") ? <p className="mb-3 text-xs text-muted-foreground">Install a missing provider on the machine that runs Suplex. Then select Refresh.</p> : null}
     <SettingsDataTable label="Providers" columns={columns}>
       {view.status === "loading" ? <SettingsTableLoading columnCount={columns.length} /> : <SettingsTableGroup label="System" count={providers.length} columnCount={columns.length}>
-        {providers.map((provider) => <SettingsTableRow key={`provider:${provider.id}`}>
-          <SettingsTableCell className="truncate font-medium">{provider.label}</SettingsTableCell>
-          <SettingsTableCell className="text-muted-foreground">System</SettingsTableCell>
+        {providers.map((provider) => <SettingsTableRow key={`provider:${provider.id}`} className={rowHeight}>
+          <SettingsTableCell><span className="flex min-w-0 items-center gap-2"><ProviderIcon provider={provider.id} tone="mono" /><span className="truncate font-medium">{provider.label}</span></span></SettingsTableCell>
           <SettingsTableCell>{provider.status === "configured"
             ? <Badge variant="secondary">Configured</Badge>
-            : <div className="space-y-2"><Badge variant="destructive">Not installed</Badge><ProviderInstallationInstructions provider={provider.id} checkLabel="Refresh" /></div>}</SettingsTableCell>
-          <SettingsTableCell>{provider.modelCount}</SettingsTableCell>
+            : <div className="flex min-w-0 items-center gap-2"><Badge variant="destructive">Not installed</Badge><ProviderInstallCommand provider={provider.id} /></div>}</SettingsTableCell>
+          <SettingsTableCell className="text-center tabular-nums">{provider.modelCount}</SettingsTableCell>
           <SettingsTableCell><ConnectionBadge connection={provider.connection} /></SettingsTableCell>
           <SettingsTableCell>{provider.connection.status !== "connected" ? loginButton(`provider:${provider.id}`, provider.label, `/api/admin/providers/${encodeURIComponent(provider.id)}/login`) : null}</SettingsTableCell>
         </SettingsTableRow>)}
       </SettingsTableGroup>}
       {instances.length ? <SettingsTableGroup label="Company" count={instances.length} columnCount={columns.length}>
-        {instances.map((instance) => <SettingsTableRow key={`instance:${instance.id}`}>
-          <SettingsTableCell className="truncate font-medium">{instance.label}</SettingsTableCell>
-          <SettingsTableCell className="text-muted-foreground">Company</SettingsTableCell>
-          <SettingsTableCell className="truncate text-muted-foreground" title={instance.homeDirectory}>{instance.provider}</SettingsTableCell>
-          <SettingsTableCell>{providers.find(provider => provider.id === instance.provider)?.modelCount ?? 0}</SettingsTableCell>
+        {instances.map((instance) => <SettingsTableRow key={`instance:${instance.id}`} className={rowHeight}>
+          <SettingsTableCell><span className="flex min-w-0 items-center gap-2"><ProviderIcon provider={instance.provider} tone="mono" /><span className="truncate font-medium">{instance.label}</span></span></SettingsTableCell>
+          <SettingsTableCell className="truncate text-muted-foreground" title={instance.homeDirectory}>{providers.find(provider => provider.id === instance.provider)?.label ?? instance.provider}</SettingsTableCell>
+          <SettingsTableCell className="text-center tabular-nums">{providers.find(provider => provider.id === instance.provider)?.modelCount ?? 0}</SettingsTableCell>
           <SettingsTableCell><ConnectionBadge connection={instance.connection} /></SettingsTableCell>
           <SettingsTableCell><div className="flex gap-1">
             {instance.connection.status !== "connected" ? loginButton(`instance:${instance.id}`, instance.label, `/api/admin/provider-instances/${encodeURIComponent(instance.id)}/login`) : null}

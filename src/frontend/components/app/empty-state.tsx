@@ -8,9 +8,9 @@ export function EmptyState({ icon: Icon, title, description, action }: { icon: L
   return (
     <Empty>
       <EmptyHeader>
-        <EmptyMedia variant="icon"><Icon aria-hidden="true" /></EmptyMedia>
-        <EmptyTitle>{title}</EmptyTitle>
-        {description ? <EmptyDescription>{description}</EmptyDescription> : null}
+        <EmptyMedia className="[zoom:1.25]" variant="icon"><Icon className="[stroke-width:0.8]" aria-hidden="true" /></EmptyMedia>
+        <EmptyTitle className="font-normal text-2xl tracking-normal">{title}</EmptyTitle>
+        {description ? <EmptyDescription className="leading-[26.16px] text-sm">{description}</EmptyDescription> : null}
       </EmptyHeader>
       {action ? <EmptyContent>{action}</EmptyContent> : null}
     </Empty>

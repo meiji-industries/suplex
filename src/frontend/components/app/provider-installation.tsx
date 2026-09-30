@@ -58,3 +58,23 @@ export function ProviderInstallationInstructions({ provider, checkLabel }: { pro
     <Button size="xs" variant="outline" nativeButton={false} render={<a href={installation.guideUrl} target="_blank" rel="noreferrer" />}><ExternalLink />Open the official guide</Button>
   </div>;
 }
+
+/** One line for a table cell: the command, a copy button, and the guide. The system notes are in the tooltip. */
+export function ProviderInstallCommand({ provider }: { provider: HarnessKind }): ReactElement {
+  const installation = PROVIDER_INSTALLATIONS[provider];
+  const [copyStatus, setCopyStatus] = useState<"idle" | "copied" | "failed">("idle");
+  const copy = async (): Promise<void> => {
+    try {
+      await navigator.clipboard.writeText(installation.command);
+      setCopyStatus("copied");
+    } catch {
+      setCopyStatus("failed");
+    }
+  };
+  const notes = [installation.os, installation.prerequisite].filter(Boolean).join(". ");
+  return <div className="flex min-w-0 max-w-full items-center gap-1">
+    <code className="min-w-0 truncate font-mono text-xs text-muted-foreground select-all" title={`${installation.command}\n${notes}`}>{installation.command}</code>
+    <Button type="button" size="icon-xs" variant="ghost" aria-label={copyStatus === "copied" ? "Command copied" : "Copy the install command"} title={copyStatus === "failed" ? "Select the command and copy it" : "Copy the install command"} onClick={() => void copy()}>{copyStatus === "copied" ? <Check /> : <Copy />}</Button>
+    <Button size="icon-xs" variant="ghost" nativeButton={false} aria-label="Open the official guide" title="Open the official guide" render={<a href={installation.guideUrl} target="_blank" rel="noreferrer" />}><ExternalLink /></Button>
+  </div>;
+}

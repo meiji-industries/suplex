@@ -6,7 +6,7 @@ import { Button } from "../../components/ui/button.js";
 import { useCompanyContext } from "../../shell/company-context.js";
 import { connectionRoute, getSystemHealthLevel, HealthCheckSections, useSystemHealth } from "../../components/app/system-health.js";
 import { isOwnedHealthCheck, isRequiredHealthCheck } from "../../contracts/health-checks.js";
-import { SettingsLayout } from "../settings/settings-layout.js";
+import { SettingsHeader, SettingsLayout, settingsColumnClassName } from "../settings/settings-layout.js";
 import { UpdateSettings } from "../settings/update-settings.js";
 import { withCompany } from "../../lib/api.js";
 
@@ -20,6 +20,8 @@ export function Dashboard(): ReactElement {
   const level = getSystemHealthLevel(snapshot, freshness);
 
   return <SettingsLayout title="Host health" companyId={companyId} backHref={withCompany("/tasks", companyId)} activeHref={withCompany("/health", companyId)}>
+    <div className={settingsColumnClassName}>
+    <div className="pt-8 lg:pt-12"><SettingsHeader title="Host health" /></div>
     <div className="flex flex-wrap items-center gap-3 border-b py-4">
       <div className="flex size-9 shrink-0 items-center justify-center rounded-md border bg-muted/40"><Server className="size-4" /></div>
       <div className="min-w-0 flex-1"><p className="break-all text-sm font-medium">{snapshot?.reachableAddress ?? window.location.origin}</p><p className="text-xs text-muted-foreground">Suplex host · {connectionRoute(snapshot?.reachableAddress ?? window.location.origin)}</p></div>
@@ -31,9 +33,10 @@ export function Dashboard(): ReactElement {
         <div className="mt-2 flex flex-wrap gap-4 text-xs text-muted-foreground"><span className="flex items-center gap-1.5"><CheckCircle2 className="size-3.5 text-emerald-600" />{healthyCount} healthy</span><span className="flex items-center gap-1.5"><CircleAlert className="size-3.5" />{failingCount} issues</span></div>
       </div>
     </section>
-      {snapshot?.herdr ? <div className="flex items-center justify-between border-b px-4 py-2 text-xs"><span>Herdr</span><span>{snapshot.herdr.reachable ? "Running" : "Not running"}</span></div> : null}
-      <HealthCheckSections snapshot={snapshot} />
-      <div id="updates" className="px-4 pt-5 lg:px-6"><UpdateSettings /></div>
-      {snapshot?.version ? <p className="px-4 py-4 font-mono text-xs text-muted-foreground lg:px-6">Suplex {snapshot.version}</p> : null}
+      {snapshot?.herdr ? <div className="flex items-center justify-between border-b py-2 text-xs"><span>Herdr</span><span>{snapshot.herdr.reachable ? "Running" : "Not running"}</span></div> : null}
+      <HealthCheckSections snapshot={snapshot} flush />
+      <div id="updates" className="pt-5"><UpdateSettings /></div>
+      {snapshot?.version ? <p className="py-4 font-mono text-xs text-muted-foreground">Suplex {snapshot.version}</p> : null}
+    </div>
     </SettingsLayout>;
 }

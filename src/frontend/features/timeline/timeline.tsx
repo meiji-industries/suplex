@@ -1,4 +1,4 @@
-import { ChartNoAxesGantt, Minus, Plus, RotateCcw } from "lucide-react";
+import { Minus, Plus, RotateCcw } from "lucide-react";
 import {
   useCallback,
   useEffect,
@@ -181,9 +181,6 @@ export function TimelineView(): ReactElement {
   return (
     <ApplicationFrame
       title="Timeline"
-      headerActions={
-        <ChartNoAxesGantt className="size-3.5 text-muted-foreground" />
-      }
       headerRight={
         <span
           className="hidden text-xs text-muted-foreground sm:inline"
@@ -197,16 +194,16 @@ export function TimelineView(): ReactElement {
       }
     >
       <div className="min-h-[calc(100vh-2.5rem)] bg-background text-foreground">
-        <div className="flex min-h-12 flex-wrap items-center justify-between gap-2 border-b border-border/70 px-3 py-1.5 sm:px-4">
+        <div className="flex min-h-11 flex-wrap items-center justify-between gap-2 border-b border-border p-3">
           <Tabs
             value={preset}
             onValueChange={(value) => setPreset(value as RangePreset)}
           >
             <TabsList variant="pill">
-              <TabsTrigger value="today">Today</TabsTrigger>
-              <TabsTrigger value="7-days">7 days</TabsTrigger>
-              <TabsTrigger value="30-days">30 days</TabsTrigger>
-              <TabsTrigger value="custom">Custom</TabsTrigger>
+              <TabsTrigger className="font-normal" value="today">Today</TabsTrigger>
+              <TabsTrigger className="font-normal" value="7-days">7 days</TabsTrigger>
+              <TabsTrigger className="font-normal" value="30-days">30 days</TabsTrigger>
+              <TabsTrigger className="font-normal" value="custom">Custom</TabsTrigger>
             </TabsList>
           </Tabs>
           <div className="flex items-center gap-2 text-xs text-muted-foreground">
@@ -234,7 +231,7 @@ export function TimelineView(): ReactElement {
             </label>
           </div>
         </div>
-        <div className="flex min-h-8 flex-wrap items-center gap-x-4 gap-y-2 border-b border-border/70 px-3 py-1 text-xs text-muted-foreground sm:px-4">
+        <div className="flex min-h-8 flex-wrap items-center gap-x-4 gap-y-2 border-b border-border px-3 py-1 text-xs text-muted-foreground">
           {(Object.keys(roleColors) as AgentRole[]).map((role) => (
             <span key={role} className="flex items-center gap-1.5">
               <span className={`size-2 rounded-sm ${roleColors[role]}`} />
@@ -245,7 +242,7 @@ export function TimelineView(): ReactElement {
             <span className="h-3 w-px bg-emerald-500" />
             Now
           </span>
-          <span className="ml-auto hidden sm:inline">Drag chart to zoom</span>
+          <span className="ml-auto hidden sm:inline">Drag or pinch the chart to zoom</span>
           <div
             className="flex items-center gap-1"
             aria-label="Timeline zoom controls"

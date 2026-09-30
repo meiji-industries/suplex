@@ -205,7 +205,7 @@ function DiskSpaceUsage({ roots, minFreeBytes }: { roots: DiskRoot[]; minFreeByt
   );
 }
 
-export function HealthRow({ check, compact = false }: { check: HealthCheck; compact?: boolean }): ReactElement {
+export function HealthRow({ check, compact = false, flush = false }: { check: HealthCheck; compact?: boolean; flush?: boolean }): ReactElement {
   const { user } = useCompanyContext();
   const { refresh } = useSystemHealth();
   const [copyState, setCopyState] = useState<"idle" | "copied" | "failed">("idle");
@@ -217,13 +217,13 @@ export function HealthRow({ check, compact = false }: { check: HealthCheck; comp
   }, [copyState]);
   return (
     <Collapsible.Root data-slot="health-row" data-status={check.status} className="group">
-      <Collapsible.Trigger className="flex min-h-9 w-full items-center gap-2.5 px-3 py-2 text-left outline-none transition-colors hover:bg-muted/50 focus-visible:bg-muted/70 focus-visible:ring-1 focus-visible:ring-ring/50 sm:px-4">
+      <Collapsible.Trigger className={`flex min-h-9 w-full items-center gap-2.5 py-2 text-left outline-none transition-colors hover:bg-muted/50 focus-visible:bg-muted/70 focus-visible:ring-1 focus-visible:ring-ring/50 ${flush ? "px-0" : "px-3 sm:px-4"}`}>
         <HealthCheckIcon check={check} />
         <span className="min-w-0 flex-1"><span className="block truncate text-sm font-medium text-foreground">{check.label}</span>{!compact ? <span className="block text-xs text-muted-foreground">{healthCheckPurpose(check.id)}</span> : null}</span>
         <CheckStatusIndicator check={check} />
         <ChevronRight className="size-3.5 shrink-0 text-muted-foreground transition-transform group-data-[panel-open]:rotate-90" />
       </Collapsible.Trigger>
-      <Collapsible.Panel className="bg-muted/20 px-4 py-3 sm:px-11">
+      <Collapsible.Panel className={`bg-muted/20 py-3 ${flush ? "pr-0 pl-7" : "px-4 sm:px-11"}`}>
         {compact ? <p className="mb-1 text-xs font-medium">{healthCheckPurpose(check.id)}</p> : null}
         {disk.length > 0 ? <DiskSpaceUsage roots={disk} minFreeBytes={typeof check.details.minFreeBytes === "number" ? check.details.minFreeBytes : 0} /> : <p className="mb-3 text-xs text-muted-foreground">{check.summary}</p>}
         {check.remedy === "Open the Tailscale app and sign in" ? <Alert><Network /><AlertTitle>Sign in to Tailscale on the host</AlertTitle><AlertDescription>Open the Tailscale app and sign in. Then check the host again.</AlertDescription></Alert> : check.remedy && check.remedyKind === "link" ? <div className="space-y-2 rounded-md border bg-background p-3"><p className="text-xs font-medium">Open the instructions</p><p className="text-xs text-muted-foreground">Install instructions are on the official page. Then check again.</p><Button size="xs" variant="outline" nativeButton={false} render={<a href={check.remedy} target="_blank" rel="noreferrer" />}>Open the instructions</Button></div> : check.remedy ? <div className="space-y-2 rounded-md border bg-background p-3"><p className="text-xs font-medium">Run on the Suplex host</p><p className="text-xs text-muted-foreground">Open the Terminal on the host. Run this command, then check again.</p><div className="flex flex-wrap items-center gap-2"><code className="min-w-0 flex-1 break-all text-xs">{check.remedy}</code><Button size="xs" variant="outline" aria-label="Copy the command" onClick={async () => { try { await navigator.clipboard.writeText(check.remedy ?? ""); setCopyState("copied"); } catch { setCopyState("failed"); } }}>{copyState === "copied" ? <Check /> : <Copy />}{copyState === "copied" ? "Copied" : "Copy"}</Button></div>{copyState === "failed" ? <p role="status" className="text-xs text-destructive">Suplex cannot copy the command. Select the command and copy it manually.</p> : null}</div> : null}
@@ -234,7 +234,8 @@ export function HealthRow({ check, compact = false }: { check: HealthCheck; comp
   );
 }
 
-export function HealthCheckSections({ snapshot, compact = false, attentionOnly = false }: { snapshot: HealthSnapshot | undefined; compact?: boolean; attentionOnly?: boolean }): ReactElement {
+/** "flush" lines the headings and rows up with the page column; the compact popover keeps its padding. */
+export function HealthCheckSections({ snapshot, compact = false, attentionOnly = false, flush = false }: { snapshot: HealthSnapshot | undefined; compact?: boolean; attentionOnly?: boolean; flush?: boolean }): ReactElement {
   const sectionId = useId();
   if (!snapshot) return <div className="p-4 text-xs text-muted-foreground">Health data is not available.</div>;
   const checks = snapshot.checks.filter((check) => !attentionOnly || check.status !== "healthy");
@@ -245,7 +246,7 @@ export function HealthCheckSections({ snapshot, compact = false, attentionOnly =
   ];
   return (
     <div className="space-y-4">
-      {groups.filter(group => group.checks.length > 0).map((group, index) => <section key={group.title} aria-labelledby={`${sectionId}-${index}`}><div className="flex h-8 items-center justify-between px-3 sm:px-4"><h2 id={`${sectionId}-${index}`} className="text-xs font-semibold text-muted-foreground">{group.title}</h2><span className="text-xs text-muted-foreground">{group.checks.length}</span></div><div>{group.checks.map(check => <HealthRow check={check} compact={compact} key={`${check.id}-${check.remedy ?? ""}`} />)}</div></section>)}
+      {groups.filter(group => group.checks.length > 0).map((group, index) => <section key={group.title} aria-labelledby={`${sectionId}-${index}`}><div className={`flex h-8 items-center justify-between ${flush ? "px-0" : "px-3 sm:px-4"}`}><h2 id={`${sectionId}-${index}`} className="text-xs font-semibold text-muted-foreground">{group.title}</h2><span className="text-xs text-muted-foreground">{group.checks.length}</span></div><div>{group.checks.map(check => <HealthRow check={check} compact={compact} flush={flush} key={`${check.id}-${check.remedy ?? ""}`} />)}</div></section>)}
       {checks.length === 0 ? <p className="p-4 text-xs text-muted-foreground">{attentionOnly ? "No checks need attention." : "No checks are available."}</p> : null}
     </div>
   );
@@ -284,7 +285,7 @@ export function SystemHealthIndicator({ sidebar = false }: { sidebar?: boolean }
           <StatusLight level={level} label={label} />
         </span>
         {sidebar ? <span>{label}</span> : null}
-        {sidebar && instanceHost ? <span className="ml-auto min-w-0 truncate rounded-[5px] bg-muted px-1.5 py-0.5 text-xs font-medium text-muted-foreground" title={instanceHost} data-testid="instance-host">{instanceHost}</span> : null}
+        {sidebar && instanceHost ? <span className="ml-auto min-w-0 truncate rounded-[5px] bg-muted px-1.5 py-0.5 text-xs text-muted-foreground font-normal" title={instanceHost} data-testid="instance-host">{instanceHost}</span> : null}
       </DialogTrigger>
       <DialogContent showCloseButton>
         <DialogHeader>

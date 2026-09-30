@@ -145,14 +145,12 @@ export function TaskTemplateSettings({ projectId: initialProjectId }: { projectI
         <SelectTrigger size="sm" aria-label="Template project"><SelectValue /></SelectTrigger>
         <SelectContent>{projects.map((project) => <SelectItem key={project.id} value={project.id}>{project.name}</SelectItem>)}</SelectContent>
       </Select> : null}
-      {templates.length > 0 ? <NewButton disabled={busy} onClick={create}>New template</NewButton> : null}
+      <NewButton disabled={busy} onClick={create}>New template</NewButton>
     </> : null}>
     {projectError ? <div className="mb-4"><Alert variant="destructive"><AlertDescription>{projectError}</AlertDescription></Alert></div> : null}
     {error && editor.kind === "closed" ? <div className="mb-4"><Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert></div> : null}
     {projectId ? <SettingsSection>
-      {templates.length === 0 ? <SettingRow label="No task templates">
-        <Button variant="ghost" size="sm" disabled={busy} onClick={create}><Plus />New template</Button>
-      </SettingRow> : templates.map((template) => <SettingRow key={template.id} label={template.name} description={template.description || workflowDefinition(template.workflow).name}>
+      {templates.length === 0 ? <SettingRow label="No task templates" /> : templates.map((template) => <SettingRow key={template.id} label={template.name} description={template.description || workflowDefinition(template.workflow).name}>
         <div className="flex items-center gap-3">
           <span className="hidden text-xs text-muted-foreground sm:inline">{workflowDefinition(template.workflow).name} · {deliveryLabel(template.deliveryTarget)}</span>
           <Button variant="ghost" size="icon-sm" aria-label={`Edit ${template.name}`} title={`Edit ${template.name}`} onClick={() => edit(template)}><Pencil /></Button>

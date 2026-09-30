@@ -1,4 +1,5 @@
-import type { ComponentProps, ReactElement, ReactNode, TdHTMLAttributes } from "react";
+import { ChevronRight } from "lucide-react"; import { createPortal } from "react-dom";
+import { createContext, useContext, useState, type ComponentProps, type ReactElement, type ReactNode, type TdHTMLAttributes } from "react";
 
 import { cn } from "../../lib/utils.js";
 import { Button } from "../ui/button.js";
@@ -6,18 +7,19 @@ import { Input } from "../ui/input.js";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../ui/select.js";
 import { Skeleton } from "../ui/skeleton.js";
 
-export type SettingsTableColumn = { key: string; label?: ReactNode; width: number };
+/** A column without a width takes the remaining space. */
+export type SettingsTableColumn = { key: string; label?: ReactNode; width?: number; align?: "center" };
 
-export function SettingsToolbar({ searchLabel, searchPlaceholder, searchWidth = "default", searchValue, onSearchChange, filters, actions }: { searchLabel: string; searchPlaceholder: string; searchWidth?: "default" | "compact"; searchValue: string; onSearchChange: (value: string) => void; filters?: { options: readonly string[]; value: string; onChange: (value: string) => void }; actions?: ReactNode }): ReactElement {
+export function SettingsToolbar({ searchLabel, searchPlaceholder, searchWidth = "default", searchValue, onSearchChange, filters, actions, actionsInHeader = false }: { actionsInHeader?: boolean; searchLabel: string; searchPlaceholder: string; searchWidth?: "default" | "compact"; searchValue: string; onSearchChange: (value: string) => void; filters?: { options: readonly string[]; value: string; onChange: (value: string) => void }; actions?: ReactNode }): ReactElement {
   return (
-    <div className="flex min-h-[34px] flex-wrap items-center justify-between gap-x-6 gap-y-2">
+    <div data-settings-toolbar className="flex min-h-[34px] flex-wrap items-center justify-between gap-x-6 gap-y-2 [[data-settings-header]+&]:mb-4 [[data-settings-header]+&+*]:mt-0 [[data-settings-header]+section>&:first-child]:mb-4 [[data-settings-header]+section>&:first-child+*]:mt-0">
       <div className="flex min-w-0 flex-1 basis-[239px] gap-1.5">
         <label className={cn("block max-w-full", searchWidth === "compact" ? "w-[286px]" : "w-[300px]")}>
           <Input size="sm" type="search" aria-label={searchLabel} onChange={(event) => onSearchChange(event.target.value)} placeholder={searchPlaceholder} value={searchValue} />
         </label>
         {filters ? <Select value={filters.value} onValueChange={(value) => { if (value !== null) filters.onChange(value); }}><SelectTrigger size="sm"><SelectValue /></SelectTrigger><SelectContent>{filters.options.map((option) => <SelectItem key={option} value={option}>{option}</SelectItem>)}</SelectContent></Select> : null}
       </div>
-      {actions ? <div className="flex shrink-0 items-center gap-2">{actions}</div> : null}
+      {actions ? <ToolbarActions inHeader={actionsInHeader}>{actions}</ToolbarActions> : null}
     </div>
   );
 }
@@ -32,41 +34,61 @@ export function SettingsToolbarAction({ tone = "secondary", type = "button", ...
   return <Button {...props} size="sm" type={type} variant={tone === "primary" ? "default" : "outline"} />;
 }
 
+/** Minimum width a flexible column keeps before the table scrolls sideways. */
+const FLEXIBLE_COLUMN_MIN = 240;
+
 export function SettingsDataTable({ label, columns, className, children }: { label: string; columns: SettingsTableColumn[]; className?: string; children: ReactNode }): ReactElement {
-  const width = 60 + columns.reduce((sum, column) => sum + column.width, 0);
+  const width = columns.reduce((sum, column) => sum + (column.width ?? FLEXIBLE_COLUMN_MIN), 0);
   return (
-    <div className={cn("-mx-4 overflow-x-auto lg:-mx-6", className)}>
+    <div className={cn("overflow-x-auto", className)}>
       <table aria-label={label} className="w-full table-fixed border-separate border-spacing-0 text-left" style={{ minWidth: width }}>
-        <colgroup><col style={{ width: 60 }} />{columns.map((column) => <col key={column.key} style={{ width: column.width }} />)}</colgroup>
-        <thead><tr className="h-8 text-xs font-medium text-muted-foreground"><th className="font-medium" scope="col" />{columns.map((column) => <th className="font-medium" key={column.key} scope="col">{column.label ? <span className="-ml-[6.5px] inline-flex h-6 items-center rounded-full px-1.5">{column.label}</span> : null}</th>)}</tr></thead>
+        <colgroup>{columns.map((column) => <col key={column.key} style={column.width ? { width: column.width } : undefined} />)}</colgroup>
+        <thead><tr className="h-9 font-medium text-muted-foreground text-[14px] dark:text-[#d1d1d1]">{columns.map((column) => <th className={cn("border-b px-3 font-medium", column.align === "center" && "text-center")} key={column.key} scope="col">{column.label}</th>)}</tr></thead>
         {children}
       </table>
     </div>
   );
 }
 
-export function SettingsTableGroup({ label, count, columnCount, children }: { label: string; count: number; columnCount: number; children: ReactNode }): ReactElement {
+/** A collapsible group of rows. The header shows the group name and its row count. */
+export function SettingsTableGroup({ label, count, columnCount, defaultOpen = true, children }: { label: string; count: number; columnCount: number; defaultOpen?: boolean; children: ReactNode }): ReactElement {
+  const [open, setOpen] = useState(defaultOpen);
   return (
     <tbody>
-      <tr className="h-8"><td className="p-0" colSpan={columnCount + 1}><div className="mx-2 flex h-8 items-center gap-1 rounded-lg bg-muted/60 px-[52px] text-xs text-muted-foreground"><span>{label}</span><span>{count}</span></div></td></tr>
-      {children}
+      <tr><td className={cn("bg-muted/60 p-0", open && "border-b")} colSpan={columnCount}>
+        <button type="button" aria-expanded={open} onClick={() => setOpen(value => !value)} className="flex h-9 w-full items-center gap-1.5 px-3 text-left text-xs font-medium text-muted-foreground hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring">
+          <ChevronRight aria-hidden="true" className={cn("size-3.5 transition-transform duration-150", open && "rotate-90")} />
+          <span>{label}</span><span className="tabular-nums">{count}</span>
+        </button>
+      </td></tr>
+      {open ? children : null}
     </tbody>
   );
 }
 
+/** A 1px divider separates rows. The last row of the table has no divider. */
 export function SettingsTableRow({ size = "compact", className, children, ...props }: ComponentProps<"tr"> & { size?: "compact" | "member" }): ReactElement {
-  return <tr className={cn("text-sm [&>td]:transition-colors hover:[&>td]:bg-muted/40 [&>td:first-child]:rounded-l-lg [&>td:last-child]:rounded-r-lg", props.onClick && "cursor-pointer focus-visible:outline-none focus-visible:[&>td]:bg-muted/60", size === "member" ? "h-[50px]" : "h-11", className)} {...props}><td className="align-middle p-0" />{children}</tr>;
+  return <tr data-settings-row className={cn("text-sm [&>td]:border-b [&>td]:transition-colors [tbody:last-of-type>&:last-child>td]:border-b-0 hover:[&>td]:bg-muted/50", props.onClick && "cursor-pointer focus-visible:outline-none focus-visible:[&>td]:bg-muted/60", size === "member" ? "h-[50px]" : "h-11", className)} {...props}>{children}</tr>;
 }
 
 export function SettingsTableCell({ className, ...props }: TdHTMLAttributes<HTMLTableCellElement>): ReactElement {
-  return <td className={cn("px-1.5 align-middle", className)} {...props} />;
+  return <td className={cn("px-3 py-2.5 align-middle", className)} {...props} />;
 }
 
 export function SettingsTableEmpty({ columnCount, children }: { columnCount: number; children: ReactNode }): ReactElement {
-  return <tbody><tr className="h-11 text-sm text-muted-foreground"><td colSpan={columnCount + 1}><div className="pl-[54px]">{children}</div></td></tr></tbody>;
+  return <tbody><tr className="h-11 text-sm text-muted-foreground"><td className="px-3" colSpan={columnCount}>{children}</td></tr></tbody>;
 }
 
 /** Placeholder rows while a table loads its data. */
 export function SettingsTableLoading({ columnCount, rows = 3 }: { columnCount: number; rows?: number }): ReactElement {
-  return <tbody aria-busy="true" aria-label="Loading">{Array.from({ length: rows }, (_, row) => <tr key={row} className="h-11"><td />{Array.from({ length: columnCount }, (_, column) => <td key={column} className="px-1.5"><Skeleton className="h-3.5 w-2/3" /></td>)}</tr>)}</tbody>;
+  return <tbody aria-busy="true" aria-label="Loading">{Array.from({ length: rows }, (_, row) => <tr key={row} className="h-11">{Array.from({ length: columnCount }, (_, column) => <td key={column} className="px-3"><Skeleton className="h-3.5 w-2/3" /></td>)}</tr>)}</tbody>;
+}
+
+/** The page header's button area. A toolbar can render its buttons there, so every page keeps its buttons top right. */
+export const SettingsHeaderSlotContext = createContext<{ slot: HTMLElement | null; setSlot: (slot: HTMLElement | null) => void }>({ slot: null, setSlot: () => undefined });
+
+function ToolbarActions({ inHeader, children }: { inHeader: boolean; children: ReactNode }): ReactElement {
+  const { slot } = useContext(SettingsHeaderSlotContext);
+  if (inHeader && slot) return createPortal(children, slot);
+  return <div className="flex shrink-0 items-center gap-2">{children}</div>;
 }

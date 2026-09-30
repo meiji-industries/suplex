@@ -123,7 +123,7 @@ export function TriggerSettingsView(): ReactElement {
 
   return <SettingsLayout title="Triggers" companyId={companyId} backHref={backHref} activeHref={withCompany("/admin/triggers", companyId)}>
     <SettingsContent width="wide" title="Triggers" description="A trigger starts a task when a pull request has a specified label. Suplex uses the project and workflow of the trigger.">
-      <SettingsToolbar searchLabel="Filter triggers by name, label, project, or workflow" searchPlaceholder="Filter triggers" searchWidth="compact" searchValue={search} onSearchChange={setSearch} actions={<NewButton disabled={busy} onClick={() => { setError(""); setEditor({ kind: "create", draft: emptyDraft() }); }}>New trigger</NewButton>} />
+      <SettingsToolbar actionsInHeader searchLabel="Filter triggers by name, label, project, or workflow" searchPlaceholder="Filter triggers" searchWidth="compact" searchValue={search} onSearchChange={setSearch} actions={<NewButton disabled={busy} onClick={() => { setError(""); setEditor({ kind: "create", draft: emptyDraft() }); }}>New trigger</NewButton>} />
       {error && editor.kind === "closed" ? <div className="mt-3"><Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert></div> : null}
       <SettingsDataTable label="Triggers" columns={columns} className="mt-4">
         <SettingsTableGroup label="Triggers" count={visible.length} columnCount={columns.length}>

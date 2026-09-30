@@ -29,7 +29,8 @@ export type BootFailure = {
 export type BootEvent =
   | { readonly name: "shown" }
   | { readonly name: "choose"; readonly mode: "local" | "remote" }
-  | { readonly name: "installed" }
+  /** `upgrade`: an earlier install exists, so the new bundle starts without the first-install welcome. */
+  | { readonly name: "installed"; readonly upgrade: boolean }
   | { readonly name: "launch" }
   | { readonly name: "connected"; readonly url: string }
   | { readonly name: "failed"; readonly failure: BootFailure }
@@ -55,7 +56,8 @@ export function next(state: BootState, event: BootEvent): BootState {
       if (state.name !== "choosing") return state;
       return event.mode === "local" ? { name: "installing", from: null } : { name: "connecting-remote", url: null };
     case "installed":
-      return state.name === "installing" ? { name: "ready" } : state;
+      if (state.name !== "installing") return state;
+      return event.upgrade ? { name: "starting" } : { name: "ready" };
     case "launch":
       return state.name === "ready" ? { name: "starting" } : state;
     case "connected":

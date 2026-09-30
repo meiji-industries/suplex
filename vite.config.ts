@@ -20,7 +20,8 @@ export default defineConfig(({ command }) => ({
       output: {
         entryFileNames: "suplex-ui.js",
         chunkFileNames: "[name]-[hash].js",
-        assetFileNames: "suplex-ui.[ext]",
+        // Only the CSS entry keeps a fixed name; fonts get hashed names because the server caches them as immutable.
+        assetFileNames: (asset) => (asset.names.some((name) => name.endsWith(".css")) ? "suplex-ui.[ext]" : "[name]-[hash].[ext]"),
       },
     },
   },

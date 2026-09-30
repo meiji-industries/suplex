@@ -72,6 +72,9 @@ export function TaskWork({ task, activity, onChange }: { task: Task; activity: T
   const summaryQuery = useTaskDiffSummary(task);
   const diffSummary = summaryQuery.isError ? null : summaryQuery.data;
   const checksKey = task.pullRequest ? `${task.pullRequest.number}:${task.pullRequest.state}:${task.pullRequest.headSha}` : null;
+  const pendingTurn = [...activity.turns].reverse().find(turn => (turn.status === "prompted" || turn.status === "pending_prompt") && !turn.result);
+  const pendingSession = pendingTurn ? activity.sessions.find(session => session.id === pendingTurn.sessionId) : undefined;
+  const pendingRole = pendingSession?.label ?? "Coordinator";
   return <Tabs value={tab} onValueChange={value => setTab(String(value))} data-task-work-tabs>
     <WorkflowPlan key={`workflow-plan-${task.id}`} task={task} />
     <TaskActivityTimeline taskId={task.id} createdAt={task.createdAt} checksKey={checksKey} />
@@ -85,6 +88,7 @@ export function TaskWork({ task, activity, onChange }: { task: Task; activity: T
         return <div key={turn.id} className="grid min-w-0 gap-5">{message?.text ? <article className="flex min-w-0 gap-3"><EntityAvatar kind="user" id={message.user?.id ?? user?.id ?? "you"} name={message.user?.name ?? user?.displayName ?? "You"} {...(!message.user && user?.avatarSeed ? { seed: user.avatarSeed } : {})} size="sm" /><div className="min-w-0 flex-1 space-y-2"><header className="flex items-center gap-2 text-xs"><span className="font-medium">{message.author}</span><span className="text-muted-foreground">{answerLabels[turn.status]}</span></header><Markdown source={message.text} /></div></article> : null}{resultText(turn.result) ? <article className="flex min-w-0 gap-3"><EntityAvatar kind="agent" id={session?.profileId ?? task.rootProfile.profileId} name={role} size="sm" /><div className="min-w-0 flex-1 space-y-2"><header className="flex items-center gap-2 text-xs"><span className="font-medium">{role}</span><span className="text-muted-foreground">{turnLabel(turn)}</span></header><Markdown source={resultText(turn.result)} /></div></article> : null}</div>;
       })}
       {!activity.turns.some(turn => resultText(turn.result) || humanMessage(turn.prompt)?.text) ? <p className="text-xs text-muted-foreground">{task.status === "backlog" ? "Start the task to work with Coordinator." : task.status === "queued" ? "Suplex starts this task when its prerequisites are complete." : "Agent replies appear here."}</p> : null}
+      {pendingTurn ? <article className="flex min-w-0 gap-3" aria-busy="true" data-task-turn-pending={pendingTurn.status}><EntityAvatar kind="agent" id={pendingSession?.profileId ?? task.rootProfile.profileId} name={pendingRole} size="sm" /><div className="min-w-0 flex-1"><header className="flex items-center gap-2 text-xs"><span className="font-medium">{pendingRole}</span><Spinner /><span className="text-muted-foreground">{pendingTurn.status === "prompted" ? "Working" : turnLabels.pending_prompt}</span></header></div></article> : null}
       <TaskNoteInput key={`task-note-input-${task.id}`} task={task} onChange={onChange} />
       <TaskArtifacts task={task} />
     </div></TabsContent>

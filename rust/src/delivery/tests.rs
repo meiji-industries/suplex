@@ -339,6 +339,10 @@ fn fixture(target: &str) -> Fixture {
     let worktree = serde_json::from_value(json!({"path": work, "branch": branch, "baseSha": seed.to_string(), "headSha": head.to_string(), "dirty": false})).unwrap();
     root_session_store::set_worktree(&mut database, &task_id, &worktree, now).unwrap();
     let root = root_session_store::reserve_root(&mut database, &task_id, now).unwrap();
+    let turn = root_session_store::ensure_initial_prompt(&mut database, &root, "Deliver", now)
+        .unwrap()
+        .unwrap();
+    root_session_store::complete_root_turn(&mut database, &turn.id, "done", None, now).unwrap();
     let root = RootIdentity {
         task_id: task_id.clone(),
         session_id: root.id,
@@ -710,6 +714,59 @@ async fn refused_merge_reports_github_evidence_and_merge_input_is_checked() {
             .await
             .unwrap(),
         None
+    );
+    std::fs::remove_dir_all(&fixture.base).unwrap();
+}
+
+#[tokio::test]
+async fn a_pull_request_at_its_target_waits_for_the_first_coordinator_turn() {
+    let fixture = fixture("pull_request_ready");
+    let (operations, fake) = operations(&fixture).await;
+    let root = &fixture.root;
+    let (head, review) = reviewed(&operations, root).await;
+    for operation in [
+        DeliveryOperation::PushBranch,
+        DeliveryOperation::CreateOrAdoptPullRequest,
+    ] {
+        operations
+            .execute(
+                root,
+                None,
+                &DeliveryRequest {
+                    operation,
+                    expected_head: Some(&head),
+                    review: Some(&review),
+                    pull_request_title: Some("Add line"),
+                    pull_request_body: Some(BODY),
+                },
+            )
+            .await
+            .unwrap();
+    }
+    // The pull request already meets the target when a new task opens on it.
+    fake.lock().unwrap().pulls[0]["draft"] = json!(false);
+    let set_turns = |status: &str| {
+        SuplexDatabase::open(&fixture.database_path, OpenMode::ReadWrite)
+            .unwrap()
+            .connection()
+            .execute(
+                "UPDATE suplex_task_turns SET status = ?1 WHERE task_id = ?2",
+                [status, fixture.task_id.as_str()],
+            )
+            .unwrap();
+    };
+    set_turns("prompted");
+    operations.observe(&fixture.task_id).await.unwrap();
+    assert_eq!(
+        control(&fixture).status,
+        crate::tasks::control::TaskStatus::Active,
+        "the Coordinator reads the description before the task completes"
+    );
+    set_turns("completed");
+    operations.observe(&fixture.task_id).await.unwrap();
+    assert_eq!(
+        control(&fixture).status,
+        crate::tasks::control::TaskStatus::Delivered
     );
     std::fs::remove_dir_all(&fixture.base).unwrap();
 }

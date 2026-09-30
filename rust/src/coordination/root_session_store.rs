@@ -1497,6 +1497,14 @@ pub fn set_worktree(
     })
 }
 
+/// Whether the Coordinator has finished at least one turn on this task.
+pub fn root_turn_completed(database: &SuplexDatabase, task_id: &str) -> DatabaseResult<bool> {
+    Ok(database.connection().query_row(
+        "SELECT EXISTS(SELECT 1 FROM suplex_task_turns t JOIN suplex_task_sessions s ON s.id = t.session_id WHERE t.task_id = ?1 AND s.kind = 'root' AND t.status = 'completed')",
+        [task_id], |row| row.get(0),
+    )?)
+}
+
 /// Complete a local task and release its queued dependents inside the same
 /// transaction. A dependent stays queued while this task's pull request is
 /// unmerged at a pull request target, or while another task owns its pull request.

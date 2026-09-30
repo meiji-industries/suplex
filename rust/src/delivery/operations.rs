@@ -1654,7 +1654,14 @@ impl DeliveryOperations {
             }
             return Ok(pull);
         }
-        if current.workflow_state.follow_up == Some(true)
+        // Passive observation never completes a task the Coordinator has not
+        // read yet: the description can ask for changes to a finished PR.
+        let awaiting_coordinator = current.workflow_state.follow_up == Some(true)
+            || !root_session_store::root_turn_completed(
+                &self.open(OpenMode::ReadOnly)?,
+                task_id,
+            )?;
+        if awaiting_coordinator
             && !options.explicit
             && options.validated_range.is_none()
         {
@@ -2706,6 +2713,8 @@ pub(crate) mod tests {
             "UPDATE suplex_task_controls SET workflow = ?1, worktree_json = ?2 WHERE task_id = ?3",
             params![workflow, worktree_json.to_string(), task.id],
         ).unwrap();
+        database.connection().execute("INSERT INTO suplex_task_sessions (id,task_id,kind,generation,is_current,lifecycle,created_at,updated_at) VALUES ('root_flow',?1,'root',1,1,'reserved',?2,?2)", params![task.id, stamp]).unwrap();
+        database.connection().execute("INSERT INTO suplex_task_turns (id,task_id,session_id,generation,prompt_hash,prompt_text,status,created_at,updated_at) VALUES ('turn_flow',?1,'root_flow',1,'h','p','completed',?2,?2)", params![task.id, stamp]).unwrap();
         let operations = DeliveryOperations::new(&database_path, &directory.join("artifacts"));
         (directory, operations, task.id, head)
     }

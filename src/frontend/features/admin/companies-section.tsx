@@ -5,6 +5,7 @@ import { adminDate } from "../../shell/view-shared.js";
 import type { ApiCompany, ApiUser } from "../../lib/api.js";
 import { withCompany } from "../../lib/api.js";
 import { Ellipsis } from "lucide-react";
+import { EntityAvatar } from "../../components/app/entity-avatar.js";
 import { useState, type ReactElement } from "react";
 
 const COMPANY_COLUMNS: SettingsTableColumn[] = [{ key: "name", label: "Name ↓", width: 220 }, { key: "issueCode", label: "Issue code", width: 120 }, { key: "status", label: "Status", width: 110 }, { key: "created", label: "Created", width: 170 }, { key: "menu", width: 28 }, { key: "end", width: 32 }];
@@ -19,7 +20,7 @@ export function CompaniesSection({ companies, users, pendingAction, onChangeMemb
               <SettingsTableGroup columnCount={COMPANY_COLUMNS.length} count={visible.length} label="Companies">
                 {visible.map((company) => (
                   <SettingsTableRow key={company.id} size="member">
-                    <SettingsTableCell className="truncate font-medium">{company.name}</SettingsTableCell>
+                    <SettingsTableCell><span className="flex min-w-0 items-center gap-2"><EntityAvatar kind="company" id={company.id} name={company.name} seed={company.name} size="sm" /><span className="truncate font-medium">{company.name}</span></span></SettingsTableCell>
                     <SettingsTableCell className="truncate text-muted-foreground">{company.issueCode ?? "—"}</SettingsTableCell>
                     <SettingsTableCell><span className="flex items-center gap-1.5 text-muted-foreground"><span className={company.status === "active" ? "size-1.5 rounded-full bg-emerald-500" : company.status === "paused" ? "size-1.5 rounded-full bg-amber-500" : "size-1.5 rounded-full bg-muted-foreground"} />{company.status}</span></SettingsTableCell>
                     <SettingsTableCell className="truncate text-muted-foreground">{adminDate(company.createdAt)}</SettingsTableCell>

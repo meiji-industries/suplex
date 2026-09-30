@@ -1,5 +1,5 @@
 import { ChevronRight } from "lucide-react";
-import type { ReactElement } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type ReactElement } from "react";
 import { Collapsible } from "../../components/ui/collapsible.js";
 import { withCompany } from "../../lib/api.js";
 import type { WorkTimelineSummary, WorkTotal } from "./timeline-model.js";
@@ -95,7 +95,7 @@ function SummaryTable({
   );
 }
 
-export function TimelineTotals({
+function TimelineTotalsContent({
   summary,
   groupByProject,
   companyId,
@@ -185,4 +185,34 @@ export function TimelineTotals({
       )}
     </div>
   );
+}
+
+/**
+ * The totals follow the zoomed range, so their length changes while the overview window slides.
+ * While a pointer drag is in progress the area grows but does not shrink, so the page does not jump.
+ * When the drag ends, the area follows its content again.
+ */
+export function TimelineTotals(props: Parameters<typeof TimelineTotalsContent>[0]): ReactElement {
+  const content = useRef<HTMLDivElement>(null);
+  const [dragging, setDragging] = useState(false);
+  const [minHeight, setMinHeight] = useState(0);
+  useEffect(() => {
+    // Read the height before the chart reacts to the press, since pressing the window can already change the range.
+    const start = (): void => { setMinHeight(content.current?.offsetHeight ?? 0); setDragging(true); };
+    const end = (): void => setDragging(false);
+    document.addEventListener("pointerdown", start, { capture: true });
+    document.addEventListener("pointerup", end, { capture: true });
+    document.addEventListener("pointercancel", end, { capture: true });
+    return () => {
+      document.removeEventListener("pointerdown", start, { capture: true });
+      document.removeEventListener("pointerup", end, { capture: true });
+      document.removeEventListener("pointercancel", end, { capture: true });
+    };
+  }, []);
+  // Measure after every render; a resize observer alone misses changes while the tab is in the background.
+  useLayoutEffect(() => {
+    const height = content.current?.offsetHeight ?? 0;
+    setMinHeight((current) => (!dragging ? 0 : height > current ? height : current));
+  });
+  return <div style={{ minHeight: dragging ? minHeight : undefined }}><div ref={content}><TimelineTotalsContent {...props} /></div></div>;
 }

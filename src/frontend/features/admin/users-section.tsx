@@ -39,7 +39,7 @@ export function UsersSection({ users, credentials, pendingAction, onRevokeUser, 
   const visible = users.filter((candidate) => matchesSearch(search, candidate.displayName, candidate.username));
   return (
     <section>
-      <SettingsToolbar searchLabel="Search users" searchPlaceholder="Search by name or username" searchValue={search} onSearchChange={setSearch} actions={<SettingsToolbarAction onClick={() => downloadUsersCsv(users)}>Export CSV</SettingsToolbarAction>} />
+      <SettingsToolbar actionsInHeader searchLabel="Search users" searchPlaceholder="Search by name or username" searchValue={search} onSearchChange={setSearch} actions={<SettingsToolbarAction onClick={() => downloadUsersCsv(users)}>Export CSV</SettingsToolbarAction>} />
       <SettingsDataTable label="Users" columns={USER_COLUMNS} className="mt-5">
         {USER_GROUPS.map((group) => {
           const groupUsers = visible.filter((candidate) => candidate.status === group.status);

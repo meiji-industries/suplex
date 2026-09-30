@@ -131,7 +131,7 @@ export function WorkflowSettingsView(): ReactElement {
 
   return <SettingsLayout title="Workflows" companyId={companyId} backHref={withCompany("/projects", companyId)} activeHref={withCompany("/admin/workflows", companyId)}>
     <SettingsContent width="wide" title="Workflows" description="A workflow sets the steps, default agents, and delivery that Suplex uses for a task.">
-      <SettingsToolbar searchLabel="Filter workflows by name" searchPlaceholder="Filter by name" searchWidth="compact" searchValue={search} onSearchChange={setSearch} actions={admin ? <NewButton disabled={busy} onClick={() => { setError(""); setEditor({ kind: "create", draft: emptyDraft() }); }}>New workflow</NewButton> : null} />
+      <SettingsToolbar actionsInHeader searchLabel="Filter workflows by name" searchPlaceholder="Filter by name" searchWidth="compact" searchValue={search} onSearchChange={setSearch} actions={admin ? <NewButton disabled={busy} onClick={() => { setError(""); setEditor({ kind: "create", draft: emptyDraft() }); }}>New workflow</NewButton> : null} />
       {error && editor.kind === "closed" ? <div className="mt-3"><Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert></div> : null}
       <div className="mt-4 grid gap-3" aria-label="Workflows">
         {visible.map((workflow) => <article key={workflow.id} data-workflow-card={workflow.id}>

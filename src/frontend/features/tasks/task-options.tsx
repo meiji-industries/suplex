@@ -40,7 +40,7 @@ export function TaskOptions({ task, onChange, onError }: { task: Task; onChange:
     catch (error) { onError(error instanceof Error ? error.message : "The action failed"); }
     finally { setBusy(false); }
   };
-  return <><DropdownMenu><DropdownMenuTrigger render={<Button size="icon-xs" variant="ghost" aria-label="Task options" />}><Ellipsis /></DropdownMenuTrigger><DropdownMenuContent align="start" className="w-max">
+  return <><DropdownMenu><DropdownMenuTrigger render={<Button size="icon-xs" variant="ghost" aria-label="Task options" />}><Ellipsis className="size-3.5" /></DropdownMenuTrigger><DropdownMenuContent align="end" className="w-max">
     <DropdownMenuItem disabled={busy} onClick={() => void act("refresh")}><RefreshCw />Refresh</DropdownMenuItem>
     <DropdownMenuItem disabled={busy} onClick={() => { setTitle(task.title); setRenameOpen(true); }}><Pencil />Rename</DropdownMenuItem>
     <DropdownMenuItem disabled={busy} onClick={() => void duplicate()}><Copy />Duplicate</DropdownMenuItem>

@@ -12,6 +12,7 @@ import {
   type WorkTimelineSummary,
 } from "./timeline-model.js";
 import {
+  useMemo,
   useRef,
   useState,
   type PointerEvent as ReactPointerEvent,
@@ -19,6 +20,7 @@ import {
 } from "react";
 import { formatDuration } from "./timeline-format.js";
 import { TimelineMiniMap } from "./timeline-minimap.js";
+import { useTimelineGestures } from "./timeline-gestures.js";
 
 type AgentRole = "root" | "worker";
 
@@ -68,6 +70,7 @@ export function WorkChart({
   onRangeChange: (range: TimelineRange) => void;
 }): ReactElement {
   const durationMs = range.end - range.start;
+  const visibleLanes = useMemo(() => new Map(summary.lanes.map((lane) => [lane.key, lane])), [summary.lanes]);
   const ticks = Array.from(
     { length: 6 },
     (_, index) => range.start + (durationMs * index) / 6,
@@ -79,6 +82,18 @@ export function WorkChart({
     anchor: number;
     current: number;
   } | null>(null);
+  // Pinch zooms and a sideways scroll moves the view. A second finger cancels a drag selection in progress.
+  const touching = useTimelineGestures({
+    chart,
+    labelWidth: 208,
+    range,
+    fullRange,
+    onRangeChange,
+    onGestureStart: () => {
+      selectionRef.current = null;
+      setSelection(null);
+    },
+  });
   const fractionAt = (clientX: number, requirePlot = false): number | null => {
     const rect = chart.current?.getBoundingClientRect();
     if (!rect || (requirePlot && clientX < rect.left + 208)) return null;
@@ -88,7 +103,12 @@ export function WorkChart({
     );
   };
   const startSelection = (event: ReactPointerEvent<HTMLDivElement>): void => {
-    if (event.button !== 0 || (event.target as Element).closest("a, button"))
+    if (
+      event.button !== 0 ||
+      !event.isPrimary ||
+      touching.current ||
+      (event.target as Element).closest("a, button")
+    )
       return;
     const fraction = fractionAt(event.clientX, true);
     if (fraction === null) return;
@@ -101,7 +121,7 @@ export function WorkChart({
   const moveSelection = (event: ReactPointerEvent<HTMLDivElement>): void => {
     const active = selectionRef.current;
     const fraction = fractionAt(event.clientX);
-    if (!active || fraction === null) return;
+    if (!active || fraction === null || touching.current) return;
     const next = { ...active, current: fraction };
     selectionRef.current = next;
     setSelection(next);
@@ -120,6 +140,7 @@ export function WorkChart({
     if (
       !apply ||
       !active ||
+      touching.current ||
       releasedAt === null ||
       !rect ||
       Math.abs(releasedAt - active.anchor) * (rect.width - 208) < 8
@@ -170,21 +191,23 @@ export function WorkChart({
               ))}
             </div>
           </div>
-          {summary.lanes.map((lane) => {
-            const laneHeight = Math.max(38, 10 + lane.trackCount * 22);
+          {overview.lanes.map((row) => {
+            // Every agent in the selected range keeps its row, label, and height while the view slides, so the page does not jump.
+            const lane = visibleLanes.get(row.key) ?? { ...row, intervals: [] };
+            const laneHeight = Math.max(38, 10 + Math.max(row.trackCount, lane.trackCount) * 22);
             return (
               <div
-                key={lane.key}
+                key={row.key}
                 className="flex border-b border-border/55 last:border-b-0"
                 style={{ minHeight: laneHeight }}
               >
                 <div className="flex w-52 shrink-0 items-center gap-2 border-r border-border/70 px-3 sm:px-4">
                   <TimelineAgentLabel
-                    avatarSeed={lane.avatarSeed}
-                    name={lane.name}
-                    role={lane.roleLabels.join(" / ")}
-                    executionCount={lane.intervals.length}
-                    duration={formatDuration(lane.durationMs)}
+                    avatarSeed={row.avatarSeed}
+                    name={row.name}
+                    role={row.roleLabels.join(" / ")}
+                    executionCount={row.intervals.length}
+                    duration={formatDuration(row.durationMs)}
                   />
                 </div>
                 <div className="relative min-w-0 flex-1 overflow-hidden bg-[linear-gradient(to_right,var(--border)_1px,transparent_1px)] bg-[size:16.6667%_100%]">
@@ -255,7 +278,7 @@ export function WorkChart({
               </div>
             );
           })}
-          {summary.lanes.length === 0 ? (
+          {overview.lanes.length === 0 ? (
             <div className="flex h-14 border-b border-border/55">
               <div className="flex w-52 shrink-0 items-center border-r border-border/70 px-3 text-xs text-muted-foreground sm:px-4">
                 No activity

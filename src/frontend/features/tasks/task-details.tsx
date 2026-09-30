@@ -1,6 +1,6 @@
 import { setTaskDependencies, setTaskIssue, runTaskAction, type TaskAction } from "./lib/task-api.js";
 import { useEffect, useState, type ReactElement } from "react";
-import { ChevronRight, ClipboardCopy, X } from "lucide-react";
+import { ArrowLeft, ChevronRight, ClipboardCopy, X } from "lucide-react";
 import { Collapsible } from "../../components/ui/collapsible.js";
 import type { Task } from "../../contracts/tasks.js";
 import { useTaskActivity } from "./lib/task-queries.js";
@@ -70,7 +70,7 @@ export function TaskBlockedByProperty({ task, onChange }: { task: Pick<Task, "id
   return <div className="space-y-1.5"><dt className="text-muted-foreground">Blocked by</dt><dd className="flex min-w-0 flex-col items-start gap-1">{taskBlockers.map(prerequisite => <span key={prerequisite.id} data-blocked-by-task={prerequisite.id} className="flex w-full min-w-0 items-center gap-1"><TaskTitleLink task={prerequisite} companyId={task.companyId} className="min-w-0 flex-1" /><Button type="button" size="icon-xs" variant="ghost" aria-label={`Remove ${prerequisite.title} from Blocked by`} disabled={busy} onClick={() => void submit(ids.filter(id => id !== prerequisite.id))}><X /></Button></span>)}{pullRequests.map(prerequisite => <span key={prerequisite.id} data-blocked-by-pull-request={prerequisite.number} className="flex w-full min-w-0 items-center gap-1"><a className="min-w-0 flex-1" href={prerequisite.url}>#{prerequisite.number} {prerequisite.title} ({prerequisite.state})</a><Button type="button" size="icon-xs" variant="ghost" aria-label={`Remove pull request #${prerequisite.number} from Blocked by`} disabled={busy} onClick={() => void submit(ids, pullRequests.filter(other => other.number !== prerequisite.number).map(other => other.number!))}><X /></Button></span>)}<Button type="button" size="xs" variant="ghost" aria-label={ids.length ? "Add Blocked by task" : undefined} disabled={busy} onClick={openPicker}>{ids.length ? "Add" : "None"}</Button></dd>{error ? <dd role="alert" className="text-destructive">{error}</dd> : null}<BlockedByPickerDialog open={pickerOpen} onOpenChange={setPickerOpen} companyId={task.companyId} projectId={task.projectId} excludeTaskIds={[task.id, ...ids]} onSelect={selected => void submit([...ids, selected.id])} onError={setError} /></div>;
 }
 
-export function TaskDetailsPage({ task, project, onChange }: { task: Task; project: ApiProject | undefined; onChange: (task: Task) => void }): ReactElement {
+export function TaskDetailsPage({ task, project, onChange, backHref, titleActions }: { task: Task; project: ApiProject | undefined; onChange: (task: Task) => void; backHref?: string; titleActions?: ReactElement }): ReactElement {
   const cost = useTaskCosts(task.companyId).get(task.id);
   const costTitle = cost ? undefined : "OpenCode estimates are not bills. Zero does not verify free usage.";
   const activityQuery = useTaskActivity(task.id);
@@ -93,7 +93,7 @@ export function TaskDetailsPage({ task, project, onChange }: { task: Task; proje
   return <article data-task-detail className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
     <div data-task-body className="grid min-h-0 min-w-0 flex-1 overflow-y-auto lg:grid-cols-[minmax(0,1fr)_260px]">
       <div data-task-main className="flex min-w-0 flex-col">
-        <header className="px-4 pb-3 pt-4 sm:px-6 lg:px-10"><div className="mx-auto flex max-w-4xl min-w-0 items-start justify-between gap-3"><h2 className="min-w-0 flex-1 text-xl font-semibold leading-8" aria-label={task.title}>{task.title}</h2>{task.worktree && showWorktreeMenu() ? <TaskWorktreeMenu taskId={task.id} path={task.worktree.path} onError={setError} /> : null}</div></header>
+        <header data-task-detail-header className="px-4 pb-3 pt-4 sm:px-6 lg:px-10"><div className="mx-auto flex max-w-4xl min-w-0 items-center gap-2">{backHref ? <span className="-ml-1.5 flex shrink-0">{/* Offset the button padding so the arrow sits on the column edge. */}<Button variant="ghost" size="icon-sm" nativeButton={false} aria-label="Back to tasks" title="Back to tasks" render={<a href={backHref} />}><ArrowLeft className="size-[19px]" /></Button></span> : null}<h2 className="min-w-0 truncate text-xl font-semibold leading-8" aria-label={task.title} title={task.title}>{task.title}</h2><div className="-mr-[5px] ml-auto flex shrink-0 items-center gap-1">{task.worktree && showWorktreeMenu() ? <TaskWorktreeMenu taskId={task.id} path={task.worktree.path} onError={setError} /> : null}{titleActions}</div></div></header>
         <div data-task-content className="min-w-0 px-4 pb-6 pt-4 sm:px-6 lg:px-10"><div data-task-content-inner className="mx-auto max-w-4xl space-y-7">
           {readError ? <Alert variant="destructive"><AlertDescription>{readError}</AlertDescription></Alert> : null}
           <Markdown source={task.description} />
@@ -110,7 +110,7 @@ export function TaskDetailsPage({ task, project, onChange }: { task: Task; proje
       <aside aria-label="Task properties" className="min-w-0 border-t px-4 py-5 lg:border-l lg:border-t-0">
         <dl className="grid grid-cols-1 gap-5 text-xs">
           <div className="space-y-1.5"><dt className="text-muted-foreground">Status</dt><dd className="flex items-center gap-2"><TaskStatus status={task.status} pullRequestState={task.pullRequest?.state} />{task.archivedAt ? <Badge variant="outline">Archived</Badge> : null}</dd></div>
-          <div className="space-y-3">
+          <div aria-hidden="true" className="-mx-4 border-t" /><div className="space-y-3">
             <Progress className="gap-y-1.5" title={costTitle} aria-label="Estimated cost" value={task.limits.budgetUsd ? Math.min(100, ((cost?.cost ?? 0) / task.limits.budgetUsd) * 100) : null}>
               <ProgressLabel className="text-xs font-normal text-muted-foreground">Cost</ProgressLabel>
               <ProgressValue className="text-xs">{() => <>{cost ? <CostValue value={cost.cost} subsidized={cost.subsidized} partial={cost.partial} /> : "Not available"}{task.limits.budgetUsd ? ` of $${task.limits.budgetUsd.toFixed(2)}` : ""}</>}</ProgressValue>
@@ -119,14 +119,14 @@ export function TaskDetailsPage({ task, project, onChange }: { task: Task; proje
               <ProgressLabel className="text-xs font-normal text-muted-foreground">Turns</ProgressLabel>
               <ProgressValue className="text-xs">{() => task.limits.maxTurns ? `${task.limits.admittedTurns} of ${task.limits.maxTurns}` : `${task.limits.admittedTurns}`}</ProgressValue>
             </Progress>
-          </div>
+          </div><div aria-hidden="true" className="-mx-4 border-t" />
           {task.blockedBy.length ? blockedBy : null}
           {task.issue ? issue : null}
-          <div className="space-y-1.5"><dt className="text-muted-foreground">Project</dt><dd className="flex min-w-0 items-center gap-2"><ProjectLabel project={project} fallback={task.configuration.repository} /></dd></div>
-          {(["root", "worker", ...workflowDefinition(task.workflow).advisorRoles] satisfies TaskAgentRole[]).map(role => <TaskAgent key={role} task={task} role={role} onChange={onChange} onActivityChange={activityQuery.refresh} />)}
+          <div className="space-y-1.5"><dt className="text-muted-foreground">Project</dt><dd className="flex min-w-0 items-center gap-2"><ProjectLabel project={project} fallback={task.configuration.repository} /></dd></div><div aria-hidden="true" className="-mx-4 border-t" />
+          <div className="grid grid-cols-1 gap-5">{(["root", "worker", ...workflowDefinition(task.workflow).advisorRoles] satisfies TaskAgentRole[]).map(role => <TaskAgent key={role} task={task} role={role} onChange={onChange} onActivityChange={activityQuery.refresh} />)}</div><div aria-hidden="true" className="-mx-4 border-t" />
           <div className="space-y-1.5"><dt className="text-muted-foreground">Branch</dt><dd><CopyValue label="branch" value={task.configuration.branch}><code className="truncate" title={task.configuration.branch}>{task.configuration.branch}</code></CopyValue></dd></div>
           {task.worktree ? <div className="space-y-1.5"><dt className="text-muted-foreground">Worktree</dt><dd><CopyValue label="worktree path" value={task.worktree.path}><span className="truncate font-mono text-xs" title={task.worktree.path}>{task.worktree.path.split("/").pop()}</span></CopyValue></dd></div> : null}
-          <Collapsible.Root className="space-y-3">
+          <div aria-hidden="true" className="-mx-4 border-t" /><Collapsible.Root className="space-y-3">
             <Collapsible.Trigger className="group flex items-center gap-1 text-muted-foreground hover:text-foreground"><ChevronRight className="size-3.5 transition-transform group-data-[panel-open]:rotate-90" />Properties</Collapsible.Trigger>
             <Collapsible.Panel className="grid grid-cols-1 gap-5">
               {task.blockedBy.length ? null : blockedBy}

@@ -36,7 +36,7 @@ function HerdrAvailability(): ReactElement {
       <div className="space-y-1"><h3 className="text-base font-medium">Herdr</h3><p className="text-xs text-muted-foreground">The Herdr option needs Herdr running on the Suplex host.</p></div>
       <Button size="icon-sm" variant="ghost" aria-label="Check Herdr again" title="Check again" onClick={() => void refresh()} disabled={refreshing}>{refreshing ? <Spinner /> : <RefreshCw />}</Button>
     </div>
-    <div className="overflow-hidden rounded-lg border bg-card px-4">
+    <div className="overflow-hidden rounded-lg border bg-card px-5 py-2 [&>:last-child:not([data-setting-row])]:pb-3">
     <SettingRow label="Availability" description={check ? `${check.summary}${check.status === "healthy" && typeof version === "string" ? ` · ${version}` : ""}` : "Suplex is checking the host."}>
       {status ?? <Spinner />}
     </SettingRow>

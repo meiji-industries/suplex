@@ -1,6 +1,6 @@
-import { CalendarDays, ChartNoAxesGantt, Columns3, ClipboardList, EllipsisVertical, LogOut, Plus, Search, Settings, Shield, UserRound, type LucideIcon } from "lucide-react";
+import { CalendarDays, ChartNoAxesGantt, Columns3, ClipboardList, EllipsisVertical, LogOut, Plus, Settings, Shield, UserRound, type LucideIcon } from "lucide-react";
 import { useEffect, useMemo, useState, type ReactElement } from "react";
-import { BarChart3 } from "lucide-react";
+import { BarChart3 } from "lucide-react"; import { cn } from "../lib/utils.js";
 
 import { Button, buttonVariants } from "../components/ui/button.js";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "../components/ui/dialog.js";
@@ -73,7 +73,7 @@ function NavigationSearch({ close }: { close?: () => void }): ReactElement {
     window.addEventListener("suplex:command-menu", openMenu);
     return () => window.removeEventListener("suplex:command-menu", openMenu);
   }, []);
-  return <><Dialog open={open} onOpenChange={setOpen}><DialogContent><DialogHeader><DialogTitle>Command menu</DialogTitle></DialogHeader><Input autoFocus aria-label="Search Suplex" placeholder="Search the views" value={query} onChange={(event) => setQuery(event.target.value)} /><div className="space-y-1"><button type="button" className={buttonVariants({ variant: "ghost", className: "w-full justify-start" })} onClick={() => { setOpen(false); close?.(); requestNewTask(); }}><Plus />New task <kbd className="ml-auto text-xs text-muted-foreground">C</kbd></button>{visible.map(({ href, label, icon: Icon }) => <a className={buttonVariants({ variant: "ghost", className: "w-full justify-start" })} href={href} onClick={() => { setOpen(false); close?.(); }} key={href}><Icon />{label}</a>)}</div><p className="text-xs text-muted-foreground">⌘K or / search. G then H, T, or B navigates. C starts a new task.</p></DialogContent></Dialog></>;
+  return <><Dialog open={open} onOpenChange={setOpen}><DialogContent><DialogHeader><DialogTitle>Command menu</DialogTitle></DialogHeader><Input autoFocus aria-label="Search Suplex" placeholder="Search the views" value={query} onChange={(event) => setQuery(event.target.value)} /><div className="space-y-1"><button type="button" className={cn(buttonVariants({ variant: "ghost", className: "w-full justify-start focus-visible:border-foreground/25 focus-visible:ring-0" }))} onClick={() => { setOpen(false); close?.(); requestNewTask(); }}><Plus />New task <kbd className="ml-auto text-xs text-muted-foreground">C</kbd></button>{visible.map(({ href, label, icon: Icon }) => <a className={cn(buttonVariants({ variant: "ghost", className: "w-full justify-start focus-visible:border-foreground/25 focus-visible:ring-0" }))} href={href} onClick={() => { setOpen(false); close?.(); }} key={href}><Icon />{label}</a>)}</div><p className="text-xs text-muted-foreground">⌘K or / search. G then H, T, or B navigates. C starts a new task.</p></DialogContent></Dialog></>;
 }
 
 function SecondaryNavigation(): ReactElement {
@@ -125,7 +125,7 @@ export function AppSidebar(): ReactElement {
   }, [context?.currentCompany?.id, context?.currentCompany?.status, todayPage]);
   return (
     <Sidebar variant="inset" collapsible="offcanvas">
-      <SidebarHeader className="titlebar-drag titlebar-top"><div className="flex h-8 items-center gap-1 pl-2 -mr-2"><img src={wordmark} alt="Suplex" className="h-4 w-auto invert dark:invert-0" /><button type="button" className={buttonVariants({ variant: "ghost", size: "icon-sm", className: "ml-auto" })} onClick={() => window.dispatchEvent(new Event("suplex:command-menu"))} aria-label="Search Suplex" title="Search Suplex (⌘K)"><Search /></button>{context?.user ? <Button variant="ghost" size="icon-sm" nativeButton={false} render={<a href={settingsHref} onClick={close} aria-label="Settings" title="Settings" />}><Settings /></Button> : null}<span className="md:hidden"><SidebarTrigger aria-label="Close navigation" title="Close navigation" /></span></div><CompanySwitcher /></SidebarHeader>
+      <SidebarHeader className="titlebar-drag titlebar-top"><div className="flex h-8 items-center gap-1 pl-2 -mr-2"><img src={wordmark} alt="Suplex" className="h-4 w-auto invert dark:invert-0" />{context?.user ? <span className="ml-auto flex"><Button variant="ghost" size="icon-sm" nativeButton={false} render={<a href={settingsHref} onClick={close} aria-label="Settings" title="Settings" />}><Settings /></Button></span> : null}<span className="md:hidden"><SidebarTrigger aria-label="Close navigation" title="Close navigation" /></span></div><CompanySwitcher /></SidebarHeader>
       <SidebarContent><MainNavigation close={close} /><RecentTasks close={close} /><SecondaryNavigation /></SidebarContent>
       <NavigationSearch close={close} />
       <SidebarFooter><UserMenu /></SidebarFooter>

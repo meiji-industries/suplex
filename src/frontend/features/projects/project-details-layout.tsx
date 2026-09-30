@@ -3,7 +3,7 @@ import type { ReactElement, ReactNode } from "react";
 
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../../components/ui/tabs.js";
 import { withCompany } from "../../lib/api.js";
-import { SettingsLayout } from "../settings/settings-layout.js";
+import { SettingsHeader, SettingsLayout, settingsColumnClassName } from "../settings/settings-layout.js";
 import { isProjectSection, PROJECT_SECTIONS, type ProjectSection } from "./project-details-model.js";
 
 type ProjectNavigation = ProjectSection | "templates";
@@ -18,10 +18,11 @@ export function ProjectDetailsLayout({ projectId, companyId, title, active, onSe
 }): ReactElement {
   const projectHref = withCompany(`/projects/${encodeURIComponent(projectId)}`, companyId);
   return <SettingsLayout title={title} companyId={companyId} backHref={withCompany("/tasks", companyId)} activeHref={withCompany("/projects", companyId)}>
-    <div className="min-w-0">
+    <div className={settingsColumnClassName}>
       <div className="py-3">
         <a className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground" href={withCompany("/projects", companyId)}><ArrowLeft className="size-3.5" />Back to projects</a>
       </div>
+      <SettingsHeader title={title} />
       <Tabs value={active} onValueChange={(value) => { if (typeof value === "string" && onSectionChange && isProjectSection(value)) onSectionChange(value); }}>
         <div className="max-w-full overflow-x-auto border-b">
           <TabsList variant="line">

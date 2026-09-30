@@ -1,4 +1,4 @@
-import { ChartNoAxesGantt, Minus, Plus, RotateCcw } from "lucide-react";
+import { Minus, Plus, RotateCcw } from "lucide-react";
 import {
   useCallback,
   useEffect,
@@ -181,9 +181,6 @@ export function TimelineView(): ReactElement {
   return (
     <ApplicationFrame
       title="Timeline"
-      headerActions={
-        <ChartNoAxesGantt className="size-3.5 text-muted-foreground" />
-      }
       headerRight={
         <span
           className="hidden text-xs text-muted-foreground sm:inline"
@@ -245,7 +242,7 @@ export function TimelineView(): ReactElement {
             <span className="h-3 w-px bg-emerald-500" />
             Now
           </span>
-          <span className="ml-auto hidden sm:inline">Drag chart to zoom</span>
+          <span className="ml-auto hidden sm:inline">Drag or pinch the chart to zoom</span>
           <div
             className="flex items-center gap-1"
             aria-label="Timeline zoom controls"

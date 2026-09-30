@@ -59,11 +59,11 @@ export function TaskActivityTimeline({ taskId, checksKey }: { taskId: string; ch
   return <section aria-label="Task timeline" data-task-timeline className="min-w-0 pb-3">
     {error ? <Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert> : null}
     {!intervals.length ? <p className="text-xs text-muted-foreground">{snapshot ? "No agent time yet." : error ? "Agent time is not available." : "Loading timeline…"}</p> : <div className="overflow-x-auto" aria-label="Task timeline Gantt chart">
-      <div className="grid min-w-[45rem] grid-cols-[13rem_minmax(32rem,1fr)] text-xs">
+      <div className="grid min-w-[45rem] grid-cols-[13rem_minmax(32rem,1fr)_15px] text-xs [&>.contents:last-child>*]:border-b-0">
         <div className="sticky left-0 z-20 truncate border-b border-border bg-background px-2 py-1 tabular-nums text-muted-foreground" title="Total Coordinator and Worker execution time. Concurrent executions count separately. Elapsed span covers agent time and GitHub CI checks.">Worked for {taskTimelineDuration(worked)} during {taskTimelineDuration(end - start)}</div>
         <div className="relative h-6 border-b border-border" data-task-time-axis>
           {ticks.map((tick, index) => <span key={index} className="absolute top-1 whitespace-nowrap text-muted-foreground" style={index === 4 ? { right: 0 } : { left: `${index * 25}%` }}>{new Date(tick).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit", ...(span < 300_000 ? { second: "2-digit" } : {}) })}</span>)}
-        </div>
+        </div><div aria-hidden="true" className="border-b border-border" />
         {lanes.map(lane => <div className="contents" key={lane.agentId}>
           <div className="sticky left-0 z-10 flex min-h-11 items-center border-b border-border bg-background px-3">
             <TimelineAgentLabel avatarSeed={lane.avatarSeed} name={lane.name} role={[...lane.roles].join(" / ")} executionCount={lane.entries.length} duration={taskTimelineDuration(lane.entries.reduce((total, entry) => total + entry.end - entry.start, 0))} />
@@ -77,7 +77,7 @@ export function TaskActivityTimeline({ taskId, checksKey }: { taskId: string; ch
               const label = `${lane.name}, ${role}, session ${entry.attempt}: ${timestamp(entry.start)} to ${timestamp(entry.end)}, ${taskTimelineDuration(entry.end - entry.start)}. ${status}.`;
               return <div role="listitem" tabIndex={0} key={entry.id} data-task-timing={entry.role} data-task-agent-id={entry.agentId} data-task-timing-active={entry.live || undefined} aria-label={label} title={label} className={`absolute top-3 flex h-5 items-center overflow-hidden rounded-sm px-1 text-left text-xs leading-5 outline-none focus-visible:ring-2 focus-visible:ring-ring ${entry.live ? "phase-timing-active text-emerald-950 motion-reduce:animate-none" : entry.status === "failed" ? "bg-destructive/20 text-destructive" : "bg-primary/15 text-foreground"}`} style={{ left: `${left}%`, width: `${width}%` }}><span className="truncate">{role}</span></div>;
             })}
-          </div>
+          </div><div aria-hidden="true" className="border-b border-border/70" />
         </div>)}
         {ciRuns.length ? <div className="contents" data-task-ci-lane>
           <div className="sticky left-0 z-10 flex min-h-11 items-center border-b border-border bg-background px-3">
@@ -94,7 +94,7 @@ export function TaskActivityTimeline({ taskId, checksKey }: { taskId: string; ch
               const label = `${entry.name}: ${timestamp(entry.start)} to ${timestamp(entry.end)}. ${checkRunLabel(entry.run, now)}.`;
               return <div role="listitem" tabIndex={0} key={`${entry.name}:${index}`} data-task-ci-check={entry.status} aria-label={label} title={label} className={`absolute top-3 flex h-5 items-center overflow-hidden rounded-sm px-1 text-left text-xs leading-5 outline-none focus-visible:ring-2 focus-visible:ring-ring ${entry.status === "pending" ? "phase-timing-active text-emerald-950 motion-reduce:animate-none" : entry.status === "failed" ? "bg-destructive/20 text-destructive" : "bg-muted text-muted-foreground"}`} style={{ left: `${left}%`, width: `${width}%` }}><span className="truncate">{entry.name}</span></div>;
             })}
-          </div>
+          </div><div aria-hidden="true" className="border-b border-border/70" />
         </div> : null}
       </div>
     </div>}

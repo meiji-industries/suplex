@@ -27,7 +27,7 @@ import { relativeTime, type ApiProject } from "../../shell/view-shared.js";
 import { useTaskCache, useTaskData } from "./task-data.js";
 import { queueOrder } from "./lib/task-list.js";
 import { LoadingState } from "../../components/app/loading-state.js";
-import { listProjects } from "../projects/lib/project-api.js";
+import { listProjects } from "../projects/lib/project-api.js"; import { readTaskListFilters, taskListReturnHref, useTaskListScroll, useTaskListUrl } from "./lib/task-list-url-state.js";
 
 type BoardView = "compact" | "full";
 
@@ -37,26 +37,26 @@ const listColumns = "lg:grid-cols-[minmax(12rem,1fr)_fit-content(12rem)_10rem_re
 export function TasksView({ mode = "list" }: { mode?: "list" | "board" }): ReactElement {
   const { currentCompany } = useCompanyContext();
   const companyId = currentCompany?.id;
-  const selectedId = /^\/(?:tasks|board)\/([^/]+)$/.exec(window.location.pathname)?.[1];
+  const selectedId = /^\/(?:tasks|board)\/([^/]+)$/.exec(window.location.pathname)?.[1]; const [initialFilters] = useState(readTaskListFilters);
   const taskList = useTaskData();
   const cacheTask = useTaskCache();
   const [archivedTasks, setArchivedTasks] = useState<Task[]>([]);
   const [selected, setSelected] = useState<Task | null>(null);
   const [error, setError] = useState("");
   const [detailsLoaded, setLoaded] = useState(false);
-  const [archived, setArchived] = useState(false);
+  const [archived, setArchived] = useState(initialFilters.archived);
   const tasks = archived ? archivedTasks : taskList.data ?? [];
   const loaded = detailsLoaded && Boolean(selectedId || archived || !companyId || !taskList.isPending);
   const readError = error || (!archived && taskList.error?.message) || "";
-  const [query, setQuery] = useState("");
+  const [query, setQuery] = useState(initialFilters.query);
   const filterInput = useRef<HTMLInputElement>(null);
   useCommandKFocus(filterInput);
-  const [status, setStatus] = useState("all");
+  const [status, setStatus] = useState(initialFilters.status);
   const [projects, setProjects] = useState<ApiProject[]>([]);
-  const [projectId, setProjectId] = useState("all");
-  const [boardView, setBoardView] = useState<BoardView>("compact");
-  const [boardStatus, setBoardStatus] = useState<TaskControlStatus | "all">("all");
-  const costs = useTaskCosts(mode === "list" && !selectedId ? companyId : undefined);
+  const [projectId, setProjectId] = useState(initialFilters.projectId);
+  const [boardView, setBoardView] = useState<BoardView>(initialFilters.boardView);
+  const [boardStatus, setBoardStatus] = useState<TaskControlStatus | "all">(() => { const value = initialFilters.boardStatus; return value !== "all" && TaskControlStatusSchema.safeParse(value).success ? TaskControlStatusSchema.parse(value) : "all"; });
+  const costs = useTaskCosts(mode === "list" && !selectedId ? companyId : undefined); useTaskListUrl({ archived, status, projectId, query, boardView, boardStatus }, !selectedId); useTaskListScroll(!selectedId && loaded);
   const scope = `${companyId}:${selectedId}:${archived}`;
   const currentScope = useRef(scope);
   currentScope.current = scope;
@@ -95,9 +95,9 @@ export function TasksView({ mode = "list" }: { mode?: "list" | "board" }): React
   const visible = tasks.filter(task => (status === "all" || task.status === status || status === "active" && task.status === "waiting_human") && (boardStatus === "all" || task.status === boardStatus) && (projectId === "all" || task.projectId === projectId) && `${task.issueKey ?? ""} ${task.title}`.toLowerCase().includes(query.trim().toLowerCase()));
   const hasFilters = Boolean(query.trim() || status !== "all" || projectId !== "all" || boardStatus !== "all" || archived);
   const groups = ["backlog", "queued", "active", "waiting_human", "delivered", "cancelled"] as const;
-  return <ApplicationFrame title={selected ? `${selected.issueKey ? `${selected.issueKey} · ` : ""}${selected.title}` : mode === "board" ? "Board" : "Tasks"} viewportBound={Boolean(selectedId)} headerActions={selected ? <TaskOptions key={selected.id} task={selected} onChange={updateTask} onError={setError} /> : null} headerRight={<><Button variant="ghost" size="icon-sm" aria-label="Check tasks" onClick={() => void refresh().catch(error => setError(String(error)))}><RefreshCw /></Button></>}>
+  return <ApplicationFrame title={mode === "board" ? "Board" : "Tasks"} viewportBound={Boolean(selectedId)} headerRight={<><Button variant="ghost" size="icon-sm" aria-label="Check tasks" onClick={() => void refresh().catch(error => setError(String(error)))}><RefreshCw /></Button></>}>
     {readError ? <Alert variant="destructive"><AlertDescription>{readError}</AlertDescription></Alert> : null}
-    {selectedId ? selected ? <TaskDetailsPage key={selected.id} task={selected} project={projects.find(project => project.id === selected.projectId)} onChange={updateTask} /> : loaded ? <p className="p-4">Task not found</p> : <p className="flex items-center gap-2 p-4 text-xs text-muted-foreground" aria-busy="true"><Spinner /><span>Loading task…</span></p> : <div data-task-list className="min-w-0">
+    {selectedId ? selected ? <TaskDetailsPage key={selected.id} task={selected} project={projects.find(project => project.id === selected.projectId)} onChange={updateTask} backHref={taskListReturnHref(withCompany(mode === "board" ? "/board" : "/tasks", selected.companyId))} titleActions={<TaskOptions task={selected} onChange={updateTask} onError={setError} />} /> : loaded ? <p className="p-4">Task not found</p> : <p className="flex items-center gap-2 p-4 text-xs text-muted-foreground" aria-busy="true"><Spinner /><span>Loading task…</span></p> : <div data-task-list className="min-w-0">
       <div className="flex min-h-11 flex-wrap items-center justify-between gap-2 border-b px-3 py-1 sm:px-4">
         <div className="flex max-w-full flex-wrap items-center gap-2"><div className="max-w-full overflow-x-auto"><Tabs value={archived ? "archived" : status} onValueChange={value => { setArchived(value === "archived"); setStatus(value === "archived" ? "all" : String(value)); }}><TabsList variant="pill">
           <TabsTrigger value="active">Active</TabsTrigger><TabsTrigger value="backlog">Backlog</TabsTrigger><TabsTrigger value="queued">Queued</TabsTrigger><TabsTrigger value="all">All tasks</TabsTrigger><TabsTrigger value="archived">Archived</TabsTrigger>

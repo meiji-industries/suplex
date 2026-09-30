@@ -1,5 +1,5 @@
 import { ArrowLeft } from "lucide-react";
-import { useEffect, useId, useMemo, useState, type ReactElement, type ReactNode } from "react";
+import { useContext, useEffect, useId, useMemo, useState, type ReactElement, type ReactNode } from "react";
 
 import { Sidebar, SidebarContent, SidebarGroup, SidebarGroupContent, SidebarGroupLabel, SidebarHeader, SidebarInput, SidebarMenu, SidebarMenuButton, SidebarMenuItem, SidebarTrigger, useSidebar } from "../../components/ui/sidebar.js";
 import type { ApiUser } from "../../lib/api.js";
@@ -7,7 +7,7 @@ import { ApplicationFrame } from "../../shell/application-frame.js";
 import { useOptionalCompanyContext } from "../../shell/company-context.js";
 import { CompanySwitcher } from "../../shell/company-switcher.js";
 import { SystemHealthIndicator } from "../../components/app/system-health.js";
-import { buildSettingsGroups, type SettingsNavGroup } from "./settings-nav.js";
+import { buildSettingsGroups, type SettingsNavGroup } from "./settings-nav.js"; import { SettingsHeaderSlotContext } from "../../components/app/settings-table.js";
 
 function useSettingsGroups(companyId: string, user?: ApiUser): SettingsNavGroup[] {
   return useMemo<SettingsNavGroup[]>(() => buildSettingsGroups(companyId, user), [companyId, user?.role]);
@@ -44,8 +44,8 @@ function SettingsSidebar({ companyId, backHref, activeHref }: { companyId: strin
   return (
     <Sidebar variant="inset" collapsible="offcanvas">
       <SidebarHeader className="titlebar-drag titlebar-top">
-        <div className="flex items-center gap-1"><div className="min-w-0 flex-1"><CompanySwitcher /></div><span className="md:hidden"><SidebarTrigger aria-label="Close navigation" title="Close navigation" /></span></div>
-        <SidebarMenu><SidebarMenuItem><SidebarMenuButton render={<a href={backHref} onClick={close}><ArrowLeft />Back to app</a>} tooltip="Back to app" /></SidebarMenuItem></SidebarMenu>
+        <div className="flex items-center gap-1"><div className="min-w-0 flex-1"><SidebarMenu><SidebarMenuItem><SidebarMenuButton render={<a href={backHref} onClick={close}><ArrowLeft />Back to app</a>} tooltip="Back to app" /></SidebarMenuItem></SidebarMenu></div><span className="md:hidden"><SidebarTrigger aria-label="Close navigation" title="Close navigation" /></span></div>
+        <CompanySwitcher />
         <SidebarInput id={searchId} aria-label="Search settings" aria-keyshortcuts="/" placeholder="Search the settings" value={search} onChange={(event) => setSearch(event.target.value)} />
       </SidebarHeader>
       <SidebarContent>
@@ -70,58 +70,64 @@ function SettingsSidebar({ companyId, backHref, activeHref }: { companyId: strin
 }
 
 export function SettingsLayout({ title, companyId, backHref, activeHref, contentClassName = "", children }: { title: string; companyId: string; backHref: string; activeHref: string; contentClassName?: string; children: ReactNode }): ReactElement {
-  return <ApplicationFrame title={title} sidebar={<SettingsSidebar companyId={companyId} backHref={backHref} activeHref={activeHref} />} headerRight={<SystemHealthIndicator />}><div className={`px-4 pb-8 lg:px-6 ${contentClassName}`}>{children}</div></ApplicationFrame>;
+  // The top bar always names the area; each page shows its own title in the body.
+  return <ApplicationFrame title="Settings" documentTitle={title} sidebar={<SettingsSidebar companyId={companyId} backHref={backHref} activeHref={activeHref} />} headerRight={<SystemHealthIndicator />}><div className={`px-4 pb-8 lg:px-6 ${contentClassName}`}>{children}</div></ApplicationFrame>;
 }
 
 type SettingsHeaderProps = { title: string; description?: ReactNode; actions?: ReactNode };
 
-/** Settings headers put their actions on a row below the title and caption. */
+/** Section actions sit on their own row below the section title. */
 function HeaderActions({ actions }: { actions?: ReactNode }): ReactElement | null {
   return actions ? <div className="flex flex-wrap items-center justify-end gap-2">{actions}</div> : null;
 }
 
-function SettingsHeader({ title, description, actions }: SettingsHeaderProps): ReactElement {
-  return (
-    <div className="mb-6 space-y-4">
-      <div className="space-y-1.5">
+export function SettingsHeader({ title, description, actions }: SettingsHeaderProps): ReactElement {
+  const { setSlot } = useContext(SettingsHeaderSlotContext); return (
+    <div data-settings-header className="mb-10 flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between sm:gap-12">
+      <div className="min-w-0 flex-1 space-y-1.5 sm:max-w-[36rem]">
         <h2 className="text-xl font-semibold">{title}</h2>
-        {description ? <p className="text-sm text-muted-foreground">{description}</p> : null}
+        {description ? <p className="text-sm text-balance text-muted-foreground">{description}</p> : null}
       </div>
-      <HeaderActions actions={actions} />
+      {/* Two columns: the text wraps on the left, and the buttons sit on the right, bottom-aligned with the text. A toolbar can send its buttons here. */}<div ref={setSlot} className="flex shrink-0 flex-wrap items-center justify-end gap-2 empty:hidden">{actions}</div>
     </div>
   );
 }
 
-/** Page body with the title and caption. Use "narrow" for setting rows and "wide" for tables. */
-export function SettingsContent({ title, description, actions, width = "narrow", children }: Partial<SettingsHeaderProps> & { width?: "narrow" | "wide"; children: ReactNode }): ReactElement {
-  const wide = width === "wide";
+/** Page body with the title and caption. Every settings page uses the same column width; "width" is kept for existing callers. */
+export function SettingsContent({ title, description, actions, children }: Partial<SettingsHeaderProps> & { width?: "narrow" | "wide"; children: ReactNode }): ReactElement {
+  const [slot, setSlot] = useState<HTMLElement | null>(null);
+  const headerSlot = useMemo(() => ({ slot, setSlot }), [slot]);
   return (
-    <div className={wide ? "mx-auto w-full min-w-0 max-w-5xl pt-8 lg:pt-12" : "mx-auto w-full max-w-2xl pt-8 lg:pt-12"}>
-      {title ? <div className="px-4"><SettingsHeader title={title} description={description} actions={actions} /></div> : null}
-      {children}
-    </div>
+    <SettingsHeaderSlotContext.Provider value={headerSlot}>
+      <div className={`${settingsColumnClassName} pt-8 lg:pt-12`}>
+        {title ? <SettingsHeader title={title} description={description} actions={actions} /> : null}
+        {children}
+      </div>
+    </SettingsHeaderSlotContext.Provider>
   );
 }
 
-/** Secondary title for a group of rows or a table. Table sections render it directly, without the row card. It is indented to line up with row text. */
+/** Secondary title for a group of rows or a table. Table sections render it directly, without the row card. */
 export function SettingsSectionHeader({ title, description, actions }: { title?: string | undefined; description?: string | undefined; actions?: ReactNode }): ReactElement | null {
   if (!title && !description && !actions) return null;
   return (
-    <div className="mb-3 space-y-3 px-4">
-      {title || description ? <div className="space-y-1">
+    <div className="mb-6.25 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between sm:gap-12">
+      {/* Text on the left and buttons on the right, bottom-aligned; both line up with the outer edges of the box. */}
+      {title || description ? <div className="min-w-0 flex-1 space-y-1">
         {title ? <h3 className="text-base font-medium">{title}</h3> : null}
         {description ? <p className="text-xs text-muted-foreground">{description}</p> : null}
       </div> : null}
-      <HeaderActions actions={actions} />
+      {actions ? <div className="shrink-0 sm:ml-auto"><HeaderActions actions={actions} /></div> : null}
     </div>
   );
 }
 
+/** Box padding matches the New task dialog: 20px on every side, including under content that is not a row. */
 export function SettingsSection({ title, description, actions, children }: { title?: string; description?: string; actions?: ReactNode; children: ReactNode }): ReactElement {
   return (
     <section className="mb-10">
       <SettingsSectionHeader title={title} description={description} actions={actions} />
-      <div className="overflow-hidden rounded-lg border bg-card px-4">{children}</div>
+      <div className="overflow-hidden rounded-lg border bg-card px-5 py-2 [&>:last-child:not([data-setting-row])]:pb-3">{children}</div>
     </section>
   );
 }
@@ -129,7 +135,7 @@ export function SettingsSection({ title, description, actions, children }: { tit
 export function SettingRow({ label, description, children, destructive, htmlFor }: { label: string; description?: ReactNode; children?: ReactNode; destructive?: boolean; htmlFor?: string }): ReactElement {
   const labelClassName = destructive ? "text-sm font-medium text-destructive" : "text-sm font-medium";
   return (
-    <div className="flex min-h-15 flex-col gap-2 border-t py-3 first:border-t-0 sm:flex-row sm:items-center sm:justify-between sm:gap-6">
+    <div data-setting-row className="flex min-h-15 flex-col gap-2 border-t py-3 first:border-t-0 sm:flex-row sm:items-center sm:justify-between sm:gap-6">
       <div className="min-w-0 flex-1">
         {htmlFor ? <label className={labelClassName} htmlFor={htmlFor}>{label}</label> : <div className={labelClassName}>{label}</div>}
         {description ? <div className="mt-0.5 text-xs text-muted-foreground">{description}</div> : null}
@@ -138,3 +144,6 @@ export function SettingRow({ label, description, children, destructive, htmlFor 
     </div>
   );
 }
+
+/** The one column width for settings pages: halfway between the old narrow (42rem) and wide (64rem) columns. */
+export const settingsColumnClassName = "mx-auto w-full min-w-0 max-w-[53rem]";

@@ -136,12 +136,12 @@ function fitToContent(root: HTMLElement): void {
   }
 }
 
-export function WorkflowIllustration({ workflow, delivery, agents = {}, agentNames = {}, avatars = {}, pullRequestNumber, fit = false }: { workflow: WorkflowId; delivery: string; agents?: AgentControls; agentNames?: AgentNames; avatars?: AgentControls; pullRequestNumber?: number | undefined; fit?: boolean }) {
+export function WorkflowIllustration({ workflow, delivery, agents = {}, agentNames = {}, avatars = {}, pullRequestNumber }: { workflow: WorkflowId; delivery: string; agents?: AgentControls; agentNames?: AgentNames; avatars?: AgentControls; pullRequestNumber?: number | undefined }) {
   const id = useId();
   const container = useRef<HTMLDivElement>(null);
   useLayoutEffect(() => {
     const root = container.current;
-    if (!fit || !root || typeof ResizeObserver === "undefined") return;
+    if (!root || typeof ResizeObserver === "undefined") return;
     // Refit when the panel opens or the wide/compact artwork swaps.
     const observer = new ResizeObserver(() => fitToContent(root));
     observer.observe(root);

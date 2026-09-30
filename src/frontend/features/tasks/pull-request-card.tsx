@@ -49,17 +49,20 @@ export function TaskPullRequestCard({ task, onChange }: { task: Task; onChange: 
     catch (cause) { setError(cause instanceof Error ? cause.message : "Suplex could not continue delivery."); }
     finally { setPending(false); }
   };
+  const showActions = continuing || canPublish || canMerge;
   return <div data-active-pull-request className="rounded-md border">
-    {pullRequest ? <a href={pullRequest.url} target="_blank" rel="noreferrer" className="flex min-w-0 items-center gap-3 p-3 hover:bg-muted/30">
-      {merged ? <GitMerge className="size-5 shrink-0 text-violet-500" /> : <GitPullRequest className="size-5 shrink-0 text-emerald-500" />}
-      <span className="min-w-0 flex-1"><span className="block truncate text-sm font-medium">{task.title}</span><span className="text-xs text-muted-foreground">{task.configuration.repository} #{pullRequest.number}</span></span>
-      <Badge variant="secondary">{state}</Badge>
-      <ExternalLink className="size-3.5 shrink-0 text-muted-foreground" />
-    </a> : <div className="flex items-center gap-3 p-3"><GitPullRequest className="size-5 shrink-0" /><span className="min-w-0 flex-1 truncate text-sm font-medium">{task.title}</span></div>}
-    {continuing || canPublish || canMerge ? <div className="flex flex-wrap items-center gap-2 border-t px-3 py-2">
-      {continuing ? <span className="text-xs text-muted-foreground">{task.deliveryTarget === "merged" ? "Coordinator works to merge this pull request." : "Coordinator prepares this pull request for review."}</span> : null}
+    <div className="flex min-w-0 items-center gap-3 p-3">
+      {pullRequest ? <a href={pullRequest.url} target="_blank" rel="noreferrer" className="flex min-w-0 flex-1 items-center gap-3 hover:underline">
+        {merged ? <GitMerge className="size-5 shrink-0 text-violet-500" /> : <GitPullRequest className="size-5 shrink-0 text-emerald-500" />}
+        <span className="min-w-0 flex-1"><span className="block truncate text-sm font-medium">{task.title}</span><span className="text-xs text-muted-foreground">{task.configuration.repository} #{pullRequest.number}</span></span>
+      </a> : <><GitPullRequest className="size-5 shrink-0" /><span className="min-w-0 flex-1 truncate text-sm font-medium">{task.title}</span></>}
+      {pullRequest ? <Badge variant="secondary">{state}</Badge> : null}
       {canPublish ? <Button size="sm" disabled={pending} onClick={() => void continueDelivery("pull_request_ready")}>Publish for review</Button> : null}
       {canMerge ? <Button size="sm" variant={canPublish ? "outline" : "default"} disabled={pending} onClick={() => void continueDelivery("merged")}>Continue to merge</Button> : null}
+      {pullRequest ? <a href={pullRequest.url} target="_blank" rel="noreferrer" aria-label="Open pull request on GitHub" className="shrink-0 text-muted-foreground"><ExternalLink className="size-3.5" /></a> : null}
+    </div>
+    {showActions && (continuing || error) ? <div className="flex flex-wrap items-center gap-2 border-t px-3 py-2">
+      {continuing ? <span className="text-xs text-muted-foreground">{task.deliveryTarget === "merged" ? "Coordinator works to merge this pull request." : "Coordinator prepares this pull request for review."}</span> : null}
       {error ? <span role="alert" className="text-xs text-destructive">{error}</span> : null}
     </div> : null}
     {runs.length ? <ul aria-label="Pull request checks" className="border-t">{runs.map((run, index) => <CheckRunRow key={`${run.name}:${index}`} run={run} now={now} />)}</ul> : null}

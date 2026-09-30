@@ -2169,8 +2169,9 @@ pub fn select_delegate(
         finish_selection(database, task_id, request, state, &selection.time)
     })
 }
-/// Check that a delivered pull request task may continue to `next`. Returns
-/// the previous target, or None when the task already works toward `next`.
+/// Check that an active task, or a delivered pull request task, may move
+/// forward to `next`. Returns the previous target, or None when the task
+/// already works toward `next`.
 fn delivery_continuation(
     database: &SuplexDatabase,
     task_id: &str,
@@ -2204,13 +2205,18 @@ fn delivery_continuation(
     if next == previous && matches!(task.status, TaskStatus::Active | TaskStatus::Delivered) {
         return Ok(None);
     }
-    if task.status != TaskStatus::Delivered || !previous.uses_pull_request() {
-        return Err(conflict(
-            "Only delivered pull request tasks can continue delivery.",
-        ));
+    match task.status {
+        TaskStatus::Active => {}
+        TaskStatus::Delivered if previous.uses_pull_request() => {
+            repository::assert_task_pull_requests_available(database, task_id)
+                .map_err(|error| conflict(&error.to_string()))?;
+        }
+        _ => {
+            return Err(conflict(
+                "Only running tasks and delivered pull request tasks can change the delivery target.",
+            ));
+        }
     }
-    repository::assert_task_pull_requests_available(database, task_id)
-        .map_err(|error| conflict(&error.to_string()))?;
     Ok(Some(previous_target))
 }
 
@@ -2225,7 +2231,9 @@ pub fn continue_delivery(
         };
         let time = crate::shared::time::now_millis_rfc3339();
         let rows = root_observation_rows(database, task_id)?;
-        reopen_delivered(database, task_id, rows.control.root_session_id.as_deref(), &rows.control.workflow_state, &time)?;
+        if rows.control.status == TaskStatus::Delivered {
+            reopen_delivered(database, task_id, rows.control.root_session_id.as_deref(), &rows.control.workflow_state, &time)?;
+        }
         database.connection().execute("UPDATE suplex_task_controls SET delivery_target = ?1 WHERE task_id = ?2", params![delivery_target, task_id])?;
         let root = current_or_reserved_root(database, task_id, true, Utc::now())?;
         let prompt = crate::shared::js_json::stringify(&json!({

@@ -19,7 +19,7 @@ import { Markdown } from "../../components/app/markdown.js";
 import { ProjectLabel } from "../../components/app/project-label.js";
 import { TaskStatus, TaskTitleLink } from "./task-status.js";
 import { TaskWork, type TaskActivity } from "./task-work.js";
-import { taskDeliveryTargetOptions } from "./task-delivery-target.js";
+import { TaskDeliveryProperty } from "./task-delivery-property.js";
 import { LivePaneDock } from "./task-chat/live-pane-dock.js";
 import { useTaskCosts } from "../analytics/lib/analytics.js";
 import { CostValue } from "../../components/app/cost-value.js";
@@ -132,7 +132,7 @@ export function TaskDetailsPage({ task, project, onChange }: { task: Task; proje
               {task.blockedBy.length ? null : blockedBy}
               {task.issue ? null : issue}
               <div className="space-y-1.5"><dt className="text-muted-foreground">Workflow</dt><dd data-task-workflow>{workflowDefinition(task.workflow).name}</dd>{task.workflow !== "standard" ? <dd><WorkflowStatus task={task} /></dd> : null}</div>
-              <div className="space-y-1.5"><dt className="text-muted-foreground">Delivery</dt><dd>{taskDeliveryTargetOptions.find(option => option.value === task.deliveryTarget)?.label}</dd></div>
+              <TaskDeliveryProperty task={task} onChange={onChange} />
               <div className="space-y-1.5"><dt className="text-muted-foreground">Run project tests</dt><dd>{task.configuration.runProjectTests ? "Enabled" : "Off"}</dd></div>
               <div className="space-y-1.5"><dt className="text-muted-foreground">Browser evidence</dt><dd>{task.configuration.visualEvidence === "off" ? "Off" : task.configuration.visualEvidence === "capture" ? "Capture" : "Necessary"}</dd></div>
               <div className="space-y-1.5"><dt className="text-muted-foreground">Created</dt><dd>{adminDate(task.createdAt)}</dd></div>

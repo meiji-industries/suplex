@@ -115,6 +115,9 @@ impl SuplexMcpRuntime {
                 let task = state.with_database(|database| {
                     agent_api::update(database, principal, &task_id, &body)
                 })?;
+                if task["status"] == "active" {
+                    self.wake(&task_id);
+                }
                 Ok((200, task))
             }
             "suplex_set_task_dependencies" => {

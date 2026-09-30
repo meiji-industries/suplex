@@ -2936,8 +2936,9 @@ fn detail_edit(
 }
 
 /// `PATCH /api/agent/tasks/{taskId}`: the board's detail edit of a backlog or
-/// queued task, under the command revision and receipt. A refused edit keeps
-/// the revision and writes no receipt or audit event.
+/// queued task, under the command revision and receipt. A running or delivered
+/// task accepts only a later delivery target, which the Coordinator continues
+/// toward. A refused edit keeps the revision and writes no receipt or audit event.
 pub fn update(
     database: &mut SuplexDatabase,
     principal: &Principal,
@@ -2962,6 +2963,42 @@ pub fn update(
             command_revision,
         } => (guard, hash, command_revision),
     };
+    let running = matches!(
+        repository::task_by_id(database, task_id)?.map(|task| task.status),
+        Some(TaskStatus::Active | TaskStatus::Delivered)
+    );
+    if running {
+        let result = database.transaction(true, |database| {
+            advance(database, task_id, command_revision)?;
+            let other_fields = input.title.is_some()
+                || input.description.is_some()
+                || input.workflow_id.is_some()
+                || input.root_profile_id.is_some()
+                || input.worker_profile_id.is_some()
+                || input.advisor_profile_ids.is_some()
+                || input.run_project_tests.is_some()
+                || input.visual_evidence.is_some();
+            let Some(target) = input.delivery_target.filter(|_| !other_fields) else {
+                return Err(fail(
+                    "A running or delivered task accepts only a later deliveryTarget.",
+                    409,
+                    "illegal_command",
+                ));
+            };
+            root_session_store::continue_delivery(database, task_id, target)?;
+            finish(
+                database,
+                principal,
+                task_id,
+                task_id,
+                &input.idempotency_key,
+                &hash,
+                "task_details_updated",
+            )
+        });
+        drop(guard);
+        return result;
+    }
     let (details, selection) = detail_edit(database, input)?;
     let now = Utc::now();
     let result = database.transaction(true, |database| {

@@ -432,7 +432,7 @@
   },
   {
     "name": "suplex_update_task",
-    "description": "Change the details of a backlog or queued task: title, description, workflow, Coordinator, Worker, Advisor profiles, delivery target, project tests, and screenshots. Omitted fields keep their stored values. Name at least one field. A queued task stays queued with the same prerequisites. To hold a queued task while it changes, send disarm_task with suplex_command_task, update it, then send start_task to queue it again. Other task states are refused with illegal_command. Every update requires the current task revision and an idempotency key, and returns the task with its new revision. Rejected profiles and workflows report field, value, and reason.",
+    "description": "Change the details of a backlog or queued task: title, description, workflow, Coordinator, Worker, Advisor profiles, delivery target, project tests, and screenshots. Omitted fields keep their stored values. Name at least one field. A queued task stays queued with the same prerequisites. To hold a queued task while it changes, send disarm_task with suplex_command_task, update it, then send start_task to queue it again. An active or delivered task accepts only deliveryTarget, moved forward: Suplex sets the new target and the Coordinator continues toward it, reopening a delivered task. Other task states are refused with illegal_command. Every update requires the current task revision and an idempotency key, and returns the task with its new revision. Rejected profiles and workflows report field, value, and reason.",
     "inputSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "type": "object",

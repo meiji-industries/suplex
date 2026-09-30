@@ -1774,7 +1774,8 @@ mod tests {
             failure(run(&mut database, "merged").unwrap_err()),
             (
                 409,
-                "Only delivered pull request tasks can continue delivery.".into()
+                "Only running tasks and delivered pull request tasks can change the delivery target."
+                    .into()
             )
         );
         set(&database, "delivered", "pull_request_draft");
@@ -1847,6 +1848,40 @@ mod tests {
             )
         );
         assert_eq!(wakes.load(Ordering::SeqCst), 2);
+        drop(database);
+        let _ = std::fs::remove_file(&filename);
+    }
+
+    #[test]
+    fn a_running_task_moves_to_a_later_delivery_target() {
+        let (filename, mut database, user, prepared) = command_fixture();
+        let task = repository::create(&mut database, &prepared, Utc::now())
+            .unwrap()
+            .task;
+        database
+            .connection()
+            .execute(
+                "UPDATE suplex_task_controls SET status = 'active', delivery_target = 'pull_request_ready' WHERE task_id = ?1",
+                [&task.id],
+            )
+            .unwrap();
+        let root = root_session_store::reserve_root(&mut database, &task.id, Utc::now()).unwrap();
+        let body = TaskContinueDeliveryBody {
+            delivery_target: DeliveryTarget::Merged,
+        };
+        let task = continue_user_delivery(&mut database, &user, &task.id, &body, |_| {}).unwrap();
+        assert_eq!(task.status, TaskStatus::Active);
+        let rows = root_session_store::root_observation_rows(&database, &task.id).unwrap();
+        assert_eq!(
+            rows.control.delivery_target,
+            crate::tasks::control::DeliveryTarget::Merged
+        );
+        assert!(serde_json::json!(rows.control.workflow_state)["followUp"].is_null());
+        assert_eq!(rows.root.unwrap().id, root.id, "the running Coordinator continues");
+        assert!(rows.turns.iter().any(|turn| {
+            turn.prompt_text
+                .contains("from pull_request_ready to merged")
+        }));
         drop(database);
         let _ = std::fs::remove_file(&filename);
     }

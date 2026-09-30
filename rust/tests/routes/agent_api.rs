@@ -1218,7 +1218,12 @@ pub(crate) mod tests {
         assert_eq!((status, started["status"].as_str()), (200, Some("active")), "{started}");
         let (status, active) = agent.call(reqwest::Method::PATCH, &prerequisite_path, Some(json!({"revision": started["revision"], "idempotencyKey": "update-active", "title": "Too late"}))).await;
         assert_eq!((status, active["code"].as_str()), (409, Some("illegal_command")), "{active}");
+        let (status, mixed) = agent.call(reqwest::Method::PATCH, &prerequisite_path, Some(json!({"revision": started["revision"], "idempotencyKey": "update-active-mixed", "title": "Too late", "deliveryTarget": "merged"}))).await;
+        assert_eq!((status, mixed["code"].as_str()), (409, Some("illegal_command")), "{mixed}");
         assert_eq!(audits(), 3);
+        // A running task moves to a later delivery target; the Coordinator continues toward it.
+        let (status, advanced) = agent.call(reqwest::Method::PATCH, &prerequisite_path, Some(json!({"revision": started["revision"], "idempotencyKey": "update-active-target", "deliveryTarget": "merged"}))).await;
+        assert_eq!((status, advanced["status"].as_str(), advanced["deliveryTarget"].as_str()), (200, Some("active"), Some("merged")), "{advanced}");
 
         let (outsider, _) = pair(&agent.server, "Outside agent", &["project_api_2"]);
         let (status, hidden) = agent.call_as(&outsider, reqwest::Method::PATCH, &path, Some(json!({"revision": reviewed["revision"], "idempotencyKey": "update-outside", "title": "Outside"}))).await;

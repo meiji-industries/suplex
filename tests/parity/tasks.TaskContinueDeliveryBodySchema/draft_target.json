@@ -1,0 +1,13 @@
+{
+  "contract": "tasks.TaskContinueDeliveryBodySchema",
+  "case": "draft_target",
+  "input": {
+    "deliveryTarget": "pull_request_draft"
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "deliveryTarget": "pull_request_draft"
+    }
+  }
+}

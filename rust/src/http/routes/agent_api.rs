@@ -419,11 +419,12 @@ async fn update(
         contracts::TaskUpdateBody::parse(body.as_ref()),
         true
     ));
-    respond(
-        state.with_database(|database| agent_api::update(database, &principal, &id, &request)),
-        StatusCode::OK,
-        true,
-    )
+    let result =
+        state.with_database(|database| agent_api::update(database, &principal, &id, &request));
+    if result.as_ref().is_ok_and(|task| task["status"] == "active") {
+        wake(&state, &id);
+    }
+    respond(result, StatusCode::OK, true)
 }
 
 async fn list(

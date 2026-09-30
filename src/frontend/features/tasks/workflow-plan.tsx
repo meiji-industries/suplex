@@ -31,6 +31,6 @@ export function WorkflowPlan({ task }: { task: Task }) {
   const delivery = task.workflow === "refine_pull_request" ? "Merged pull request" : deliveryLabel(task);
   const pullRequestNumber = source?.kind === "pull_request" ? source.number : task.pullRequest?.number;
   return <section aria-label="Workflow plan" data-workflow-plan={task.workflow} className="min-w-0 pb-6">
-    <WorkflowIllustration fit workflow={task.workflow} delivery={delivery} pullRequestNumber={pullRequestNumber} agentNames={agentNames} avatars={avatars} />
+    <WorkflowIllustration workflow={task.workflow} delivery={delivery} pullRequestNumber={pullRequestNumber} agentNames={agentNames} avatars={avatars} />
   </section>;
 }

@@ -47,7 +47,7 @@ test("projects desktop flow creates a project and opens its configuration", { ti
     await page.getByRole("dialog", { name: "New project", exact: true }).getByRole("button", { name: "New project", exact: true }).click();
     await page.getByText("suplex", { exact: true }).waitFor();
     const project = page.locator("article").filter({ has: page.getByText("suplex", { exact: true }) });
-    await project.getByRole("link", { name: "Configure" }).click();
+    await project.getByRole("link").click();
     await page.reload();
     expect(await page.getByLabel("Base branch").inputValue()).toBe("main");
     await page.getByLabel("Project name").fill("Suplex renamed");

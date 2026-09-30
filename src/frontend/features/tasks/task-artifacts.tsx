@@ -138,13 +138,13 @@ export function TaskArtifacts({ task }: { task: Pick<Task, "id" | "artifacts"> }
       </CardContent>
     </Card>
     <Dialog open={selected !== null} onOpenChange={open => { if (!open) closePreview(); }}>
-      <DialogContent>
+      <DialogContent className="w-auto max-w-[calc(100vw-2rem)] sm:max-w-[calc(100vw-2rem)]">
         <DialogHeader><DialogTitle>{selected?.artifact.filename ?? "Artifact preview"}</DialogTitle></DialogHeader>
         {selected && failedFullPreviews.has(selected.artifact.artifactId)
           ? <div className="flex min-h-40 flex-col items-center justify-center gap-2 bg-muted p-4 text-center text-muted-foreground" role="status"><FileText aria-hidden="true" /><span>Preview not available for {selected.artifact.filename}.</span></div>
           : null}
-        {selected?.kind === "image" && !failedFullPreviews.has(selected.artifact.artifactId) ? <img className="max-h-[70dvh] w-full object-contain" src={selected.url} alt={selected.artifact.filename} onError={() => setFailedFullPreviews(previous => new Set(previous).add(selected.artifact.artifactId))} /> : null}
-        {selected?.kind === "video" && !failedFullPreviews.has(selected.artifact.artifactId) ? <video key={selected.artifact.artifactId} className="max-h-[70dvh] w-full object-contain" src={selected.url} controls playsInline onError={() => setFailedFullPreviews(previous => new Set(previous).add(selected.artifact.artifactId))} /> : null}
+        {selected?.kind === "image" && !failedFullPreviews.has(selected.artifact.artifactId) ? <img className="mx-auto h-auto max-h-[calc(100dvh-12rem)] w-auto max-w-full object-contain" src={selected.url} alt={selected.artifact.filename} onError={() => setFailedFullPreviews(previous => new Set(previous).add(selected.artifact.artifactId))} /> : null}
+        {selected?.kind === "video" && !failedFullPreviews.has(selected.artifact.artifactId) ? <video key={selected.artifact.artifactId} className="mx-auto h-auto max-h-[calc(100dvh-12rem)] w-auto max-w-full object-contain" src={selected.url} controls playsInline onError={() => setFailedFullPreviews(previous => new Set(previous).add(selected.artifact.artifactId))} /> : null}
         {selected ? <DialogFooter>
           {visuals.length > 1 ? <div className="mr-auto flex items-center gap-1">
             <Button type="button" variant="outline" size="icon-sm" aria-label="Open previous artifact" onClick={() => openAdjacent(-1)}><ChevronLeft /></Button>

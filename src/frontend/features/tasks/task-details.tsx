@@ -144,6 +144,6 @@ export function TaskDetailsPage({ task, project, onChange, backHref, titleAction
     </div>
     {edit ? <NewTaskDialog open editTask={task} initialDraft={edit} companyId={task.companyId} onOpenChange={open => { if (!open) setEdit(null); }} onCreated={saved => { setEdit(null); onChange(saved); }} /> : null}
     <LivePaneDock taskId={task.id} activity={activity} />
-    <Dialog open={image !== null} onOpenChange={open => { if (!open) setImage(null); }}><DialogContent><DialogHeader><DialogTitle>{image?.filename ?? "Image preview"}</DialogTitle></DialogHeader>{image ? <img className="max-h-[70dvh] w-full object-contain" src={`/api/tasks/${task.id}/images/${image.artifactId}`} alt={image.filename} /> : null}</DialogContent></Dialog>
+    <Dialog open={image !== null} onOpenChange={open => { if (!open) setImage(null); }}><DialogContent className="w-auto max-w-[calc(100vw-2rem)] sm:max-w-[calc(100vw-2rem)]"><DialogHeader><DialogTitle>{image?.filename ?? "Image preview"}</DialogTitle></DialogHeader>{image ? <img className="mx-auto h-auto max-h-[calc(100dvh-12rem)] w-auto max-w-full object-contain" src={`/api/tasks/${task.id}/images/${image.artifactId}`} alt={image.filename} /> : null}</DialogContent></Dialog>
   </article>;
 }

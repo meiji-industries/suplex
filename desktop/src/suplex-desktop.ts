@@ -281,7 +281,7 @@ export async function runSuplexDesktop(input: { readonly argv: readonly string[]
     if (outcome !== "complete") return;
     await writeInstallRecord(installFile(), { completedAt: new Date().toISOString(), runtimeStamp: (await runtimeStamp(runtime.directory)) ?? "", port: record?.port ?? defaultPort });
     localInstalled = true;
-    go({ name: "installed" });
+    go({ name: "installed", upgrade: record !== null });
   };
   const startLocal = async (): Promise<void> => {
     if (networkState.busy || localOrigin) return;

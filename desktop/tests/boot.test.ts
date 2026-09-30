@@ -40,12 +40,18 @@ describe("transitions", () => {
     expect(state).toEqual({ name: "choosing" });
     state = next(state, { name: "choose", mode: "local" });
     expect(state).toEqual({ name: "installing", from: null });
-    state = next(state, { name: "installed" });
+    state = next(state, { name: "installed", upgrade: false });
     expect(state).toEqual({ name: "ready" });
     state = next(state, { name: "launch" });
     expect(state).toEqual({ name: "starting" });
     state = next(state, { name: "connected", url: "http://127.0.0.1:4111/" });
     expect(state).toEqual({ name: "connected", url: "http://127.0.0.1:4111/" });
+  });
+  test("an upgrade starts the server after its install stages, without the welcome", () => {
+    const upgrading = resolveBoot({ record, stamp: "1.0.0", remote: null });
+    expect(next(upgrading, { name: "installed", upgrade: true })).toEqual({ name: "starting" });
+    const retried = next(next(upgrading, { name: "failed", failure: failure("installing", "herdr") }), { name: "retry" });
+    expect(next(retried, { name: "installed", upgrade: true })).toEqual({ name: "starting" });
   });
   test("the remote path opens the form and comes back to the choice screen", () => {
     const remote = next({ name: "choosing" }, { name: "choose", mode: "remote" });
@@ -56,7 +62,7 @@ describe("transitions", () => {
   test("failure is latched until a retry, which reruns from the failed stage", () => {
     const failed = next({ name: "installing", from: null }, { name: "failed", failure: failure("installing", "herdr") });
     expect(failed).toEqual({ name: "failed", failure: failure("installing", "herdr") });
-    for (const event of [{ name: "shown" }, { name: "launch" }, { name: "installed" }, { name: "back" }, { name: "choose", mode: "local" }] as const) {
+    for (const event of [{ name: "shown" }, { name: "launch" }, { name: "installed", upgrade: false }, { name: "back" }, { name: "choose", mode: "local" }] as const) {
       expect(next(failed, event), event.name).toBe(failed);
     }
     expect(next(failed, { name: "retry" })).toEqual({ name: "installing", from: "herdr" });
@@ -64,7 +70,7 @@ describe("transitions", () => {
   });
   test("events that do not belong to the current state change nothing", () => {
     expect(next({ name: "choosing" }, { name: "launch" })).toEqual({ name: "choosing" });
-    expect(next({ name: "ready" }, { name: "installed" })).toEqual({ name: "ready" });
+    expect(next({ name: "ready" }, { name: "installed", upgrade: false })).toEqual({ name: "ready" });
     expect(next({ name: "starting" }, { name: "shown" })).toEqual({ name: "starting" });
   });
 });

@@ -83,7 +83,7 @@ export function NewTaskDialog({ open, onOpenChange, companyId, onCreated, initia
   const [rootProfileId, setRootProfileId] = useState(initialDraft?.rootProfileId ?? remembered.rootProfileId ?? "");
   const [workerProfileId, setWorkerProfileId] = useState(initialDraft?.workerProfileId ?? remembered.workerProfileId ?? "");
   const [startImmediately, setStartImmediately] = useState(initialDraft?.startImmediately ?? remembered.startImmediately ?? true);
-  const [deliveryTarget, setDeliveryTarget] = useState<Delivery["deliveryTarget"]>(initialDraft?.deliveryTarget ?? remembered.deliveryTarget ?? "pull_request_draft");
+  const [deliveryTarget, setDeliveryTarget] = useState<Delivery["deliveryTarget"]>(initialDraft?.deliveryTarget ?? remembered.deliveryTarget ?? "merged");
   const [runProjectTests, setRunProjectTests] = useState(initialDraft?.runProjectTests ?? remembered.runProjectTests ?? true);
   const [visualEvidence, setVisualEvidence] = useState<NonNullable<TaskInput["visualEvidence"]>>(initialDraft?.visualEvidence ?? remembered.visualEvidence ?? "off");
   const [workflow, setWorkflow] = useState<WorkflowId>(initialDraft?.workflow ?? "standard");
@@ -113,7 +113,7 @@ export function NewTaskDialog({ open, onOpenChange, companyId, onCreated, initia
     setWorkerProfileId(explicit.workerProfileId ?? record.workerProfileId ?? fallback.workerProfileId ?? "");
     setAdvisorProfileIds(admittedAdvisors(record.engine, explicit.advisorProfileIds ?? { ...fallback.advisorProfileIds, ...record.advisorProfileIds }));
     setVisualEvidence(explicit.visualEvidence ?? record.visualEvidence ?? fallback.visualEvidence ?? "off");
-    setDeliveryTarget(record.engine === REPAIR ? "merged" : explicit.deliveryTarget ?? record.deliveryTarget ?? fallback.deliveryTarget ?? "pull_request_draft");
+    setDeliveryTarget(record.engine === REPAIR ? "merged" : explicit.deliveryTarget ?? record.deliveryTarget ?? fallback.deliveryTarget ?? "merged");
     setRunProjectTests(explicit.runProjectTests ?? record.runProjectTests ?? fallback.runProjectTests ?? true);
   };
   useEffect(() => {
@@ -139,11 +139,11 @@ export function NewTaskDialog({ open, onOpenChange, companyId, onCreated, initia
     previousDelivery.current = null;
     setRunProjectTests(saved.runProjectTests ?? true);
     if (nextWorkflow === REPAIR) {
-      previousDelivery.current = memory().deliveryTarget ?? "pull_request_draft";
+      previousDelivery.current = memory().deliveryTarget ?? "merged";
       setDeliveryTarget("merged");
       if (initialDraft?.source?.kind !== "pull_request") { setSource(undefined); setSourceSummary(undefined); }
     } else {
-      setDeliveryTarget(saved.deliveryTarget ?? "pull_request_draft");
+      setDeliveryTarget(saved.deliveryTarget ?? "merged");
     }
     let cancelled = false;
     void Promise.all([listProjects(companyId), readJsonUnchecked<{ profiles: ApiProfile[] }>("/api/profiles"), readJsonUnchecked<{ workflows: ApiWorkflow[] }>("/api/workflows?includeArchived=true")]).then(([projectResult, profileResult, workflowResult]) => {

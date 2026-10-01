@@ -1,8 +1,18 @@
 import { TaskInputSchema } from "../../contracts/tasks.js";
-import type { z } from "zod";
+import { z } from "zod";
 
+const { shape } = TaskInputSchema;
 // Workflow and Advisor selections are never remembered: every ordinary fresh task opens as Standard.
-const SettingsSchema = TaskInputSchema.pick({ projectId: true, rootProfileId: true, workerProfileId: true, startImmediately: true, deliveryTarget: true, runProjectTests: true, visualEvidence: true }).partial({ projectId: true });
+// Memory holds only stored choices; the API defaults must not stand in for the dialog's own fallbacks.
+const SettingsSchema = z.object({
+  projectId: shape.projectId.optional(),
+  rootProfileId: shape.rootProfileId,
+  workerProfileId: shape.workerProfileId,
+  startImmediately: shape.startImmediately.removeDefault().optional(),
+  deliveryTarget: shape.deliveryTarget.removeDefault().optional(),
+  runProjectTests: shape.runProjectTests.removeDefault().optional(),
+  visualEvidence: shape.visualEvidence.removeDefault().optional(),
+});
 export type NewTaskMemory = z.input<typeof SettingsSchema>;
 const storageKey = "suplex.newTask.lastSettings";
 
@@ -13,7 +23,7 @@ export function readNewTaskMemory(): NewTaskMemory {
     if (raw.workflow === "refine_pull_request") { delete raw.workflow; delete raw.advisorProfileIds; delete raw.deliveryTarget; delete raw.runProjectTests; }
     return SettingsSchema.parse(raw);
   }
-  catch { return SettingsSchema.parse({}); }
+  catch { return {}; }
 }
 
 export function writeNewTaskMemory(value: NewTaskMemory): void {

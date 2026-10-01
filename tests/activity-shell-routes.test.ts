@@ -177,6 +177,17 @@ describe("Activity shell lifecycle", () => {
     expect(state.viewMounts).toEqual(["tasks:/tasks", "tasks:/tasks/task-a", "tasks:/tasks/task-b", "timeline:/timeline", "tasks:/tasks/task-a"]);
   });
 
+  it("keeps the query when Today falls back to the task list", async () => {
+    state.readTaskList.mockResolvedValue([]);
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => new Response(JSON.stringify(String(input).includes("/api/experiments") ? { todayPage: false, hostTerminal: false } : { tasks: [] })));
+    window.history.replaceState({}, "", "/today?new-task=1");
+
+    await act(async () => root.render(createElement(AppRouter)));
+    await act(async () => vi.advanceTimersByTimeAsync(0));
+    expect(`${window.location.pathname}${window.location.search}`).toBe("/tasks?new-task=1");
+    expect(container.querySelector('main[data-view="tasks"]')).not.toBeNull();
+  });
+
   it("uses the settings sidebar outside the Activity shell", async () => {
     state.readTaskList.mockResolvedValue([task("task-a", "First task")]);
 

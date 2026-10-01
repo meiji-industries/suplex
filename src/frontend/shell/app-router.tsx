@@ -46,7 +46,7 @@ function TodayRoute(): ReactElement | null {
   const experiments = useExperiments();
   useEffect(() => {
     if (!experiments || experiments.todayPage) return;
-    window.history.replaceState({}, "", "/tasks");
+    window.history.replaceState({}, "", `/tasks${window.location.search}`);
     window.dispatchEvent(new Event("suplex:navigate"));
   }, [experiments]);
   return experiments?.todayPage ? <TodayView /> : null;

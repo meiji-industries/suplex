@@ -3,6 +3,7 @@ import { act, StrictMode, useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 import type { ReactNode } from "react";
 import { afterEach, expect, test, vi } from "vitest";
+import type * as NavigationState from "../src/frontend/shell/navigation-state.js";
 
 const company = { id: "company-1", name: "Acme", issueCode: "ACME", status: "active" };
 const fixture = vi.hoisted(() => ({ currentCompany: undefined as typeof company | undefined, loading: false }));
@@ -18,9 +19,14 @@ vi.mock("../src/frontend/features/projects/create-project-dialog.js", () => ({ C
 vi.mock("../src/frontend/components/app/entity-avatar.js", () => ({ AvatarEditor: ({ name, seed }: { name: string; seed?: string }) => <output data-avatar-name={name} data-avatar-seed={seed} /> }));
 vi.mock("../src/frontend/components/app/update-notice.js", () => ({ UpdateNotice: () => null }));
 vi.mock("../src/frontend/components/app/theme.js", () => ({ ThemeToggle: () => null }));
+vi.mock("../src/frontend/shell/navigation-state.js", async importOriginal => {
+  const original = await importOriginal<typeof NavigationState>();
+  return { ...original, navigate: vi.fn(original.navigate) };
+});
 vi.mock("../src/frontend/features/tasks/new-task-dialog.js", () => ({ NewTaskDialog: ({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) => open ? <div role="dialog">New task opened<button onClick={() => onOpenChange(false)}>Close</button></div> : null }));
 
 import { OnboardingView } from "../src/frontend/features/onboarding/onboarding-wizard.js";
+import { navigate } from "../src/frontend/shell/navigation-state.js";
 
 function RoutedOnboarding(): ReactNode {
   const [route, setRoute] = useState(() => `${window.location.pathname}${window.location.search}${window.location.hash}`);
@@ -52,41 +58,37 @@ afterEach(() => {
   fixture.loading = false;
   document.body.replaceChildren();
   window.history.replaceState({}, "", "/");
+  vi.mocked(navigate).mockClear();
 });
 
-test("final Continue remounts the nested frame and opens one New task dialog", async () => {
+test("final Continue shows Done without a New task dialog", async () => {
   fixture.currentCompany = company;
   window.history.replaceState({}, "", "/onboarding?step=projects");
   const container = document.createElement("div");
   document.body.append(container);
   const root = createRoot(container);
   await act(async () => root.render(<StrictMode><RoutedOnboarding /></StrictMode>));
-  expect(container.querySelectorAll('[role="dialog"]')).toHaveLength(0);
   await act(async () => button(container, "Continue").click());
   expect(window.location.search).toContain("step=done");
-  expect(container.querySelectorAll('[role="dialog"]')).toHaveLength(1);
+  expect(container.textContent).toContain("You are all set!");
+  expect(container.querySelectorAll('[role="dialog"]')).toHaveLength(0);
   await act(async () => root.unmount());
 });
 
-test("direct Done waits for the company, stays dismissed across refreshes, and the CTA reopens it", async () => {
+test("direct Done does not open the dialog, and the CTA requests it on Today", async () => {
   window.history.replaceState({}, "", "/onboarding?step=done");
   const container = document.createElement("div");
   document.body.append(container);
   const root = createRoot(container);
   await act(async () => root.render(<StrictMode><MountedOnboarding revision={0} /></StrictMode>));
-  expect(container.querySelectorAll('[role="dialog"]')).toHaveLength(0);
-
   fixture.currentCompany = company;
   await act(async () => root.render(<StrictMode><MountedOnboarding revision={1} /></StrictMode>));
-  expect(container.querySelectorAll('[role="dialog"]')).toHaveLength(1);
-
-  await act(async () => button(container, "Close").click());
-  fixture.loading = true;
-  await act(async () => root.render(<StrictMode><MountedOnboarding revision={2} /></StrictMode>));
   expect(container.querySelectorAll('[role="dialog"]')).toHaveLength(0);
 
   await act(async () => button(container, "Create your first task").click());
-  expect(container.querySelectorAll('[role="dialog"]')).toHaveLength(1);
+  expect(navigate).toHaveBeenLastCalledWith("/today?new-task=1");
+  expect(`${window.location.pathname}${window.location.search}`).toBe("/today?new-task=1");
+  expect(container.querySelectorAll('[role="dialog"]')).toHaveLength(0);
   await act(async () => root.unmount());
 });
 

@@ -34,7 +34,7 @@ import { ONBOARDING_TOOL_CHECKS, ONBOARDING_STEPS, connectedProviders, stepCompl
 import { LoadingState } from "../../components/app/loading-state.js";
 import type { ApiProfile } from "../../shell/view-shared.js";
 import { ProviderInstallationInstructions } from "../../components/app/provider-installation.js";
-import { requestNewTask } from "../../shell/global-new-task-dialog.js";
+import { newTaskRequestPath } from "../../shell/global-new-task-dialog.js";
 
 
 /** The seeded Coordinator and Worker. If one is missing or archived, show every active agent. */
@@ -102,9 +102,6 @@ export function OnboardingView(): ReactElement {
   const [projectsOpen, setProjectsOpen] = useState(false);
   const [customizeAgents, setCustomizeAgents] = useState(false);
   useEffect(() => { setName(currentCompany?.name || "My Company"); setCode(currentCompany?.issueCode ?? "SUPLEX"); }, [currentCompany?.id]);
-  useEffect(() => {
-    if (current === "done" && companyId && currentCompany?.status) requestNewTask();
-  }, [companyId, current, currentCompany?.status]);
   const { login, loginPending, startLogin, closeLogin } = useProviderLogin({ reload });
   const go = (id: OnboardingStepId): void => navigate(withCompany(`/onboarding?step=${id}`, companyId));
   const continueStep = async (): Promise<void> => {
@@ -190,7 +187,7 @@ export function OnboardingView(): ReactElement {
             {body}
             <footer className="mt-auto grid gap-2 pt-8">
               {current === "done" ? <>
-                <Button onClick={() => requestNewTask()}>Create your first task</Button>
+                <Button onClick={() => navigate(newTaskRequestPath)}>Create your first task</Button>
                 <Button variant="outline" nativeButton={false} render={<a href="/today" />}>Today</Button>
               </> : <>
                 <Button disabled={continueDisabled} onClick={() => void continueStep()}>Continue</Button>

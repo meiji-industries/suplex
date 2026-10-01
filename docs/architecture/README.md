@@ -23,7 +23,8 @@ force the person back through a prescribed workflow.
 | Host processes, scheduling, and state ownership | [Runtime](runtime.md) |
 | Task lifecycle, role sessions, and delegation | [Coordination](coordination.md) |
 | Reusable workflows, named presets, templates, and intake | [Workflows and templates](workflows-and-templates.md) |
-| Saved prompts, inputs, and run history | [Moves](moves.md) |
+| Saved prompts and scripts, agents, terminal runs, transcripts, and run history | [Moves](moves.md) |
+| PTYs the Suplex host owns, persistence, transcripts, and the quick shell | [Host terminals](host-terminals.md) |
 | Worktree isolation and task/PR prerequisites | [Parallel work and dependencies](parallel-work-and-dependencies.md) |
 | Provider execution, native results, and display differences | [Native providers](providers.md) |
 | Pane discovery, terminal transport, and display cleanup | [Herdr](herdr.md) |

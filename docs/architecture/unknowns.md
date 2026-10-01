@@ -10,6 +10,20 @@ conversation, candidate-worktree, and trigger proposals with their tradeoffs.
 
 ## Concrete follow-ups
 
+- **Move start cancelled mid-request.** When the client cancels
+  `POST /api/moves/{id}/runs` while it runs, the handler stops at the cancel
+  point. A terminal start can then leave a worktree and an open terminal
+  without a run row. Run the start in a spawned task, or clean up on cancel.
+  See [Moves](moves.md#known-limits).
+- **Move transcript race.** The run row is written just after the terminal
+  opens. A command that ends in that moment keeps no transcript.
+- **Move run worktrees.** Nothing removes `move-<run id>` worktrees, archived
+  or not. Removing one safely needs the unpushed-work check that task archive
+  uses.
+- **Host terminals across restarts.** A Suplex restart ends move runs and the
+  quick shell. Herdr would keep them, but a terminal outside a task has no
+  Herdr binding. See [host terminals](host-terminals.md#known-limits).
+
 - **Disk threshold wording.** Environment Settings says minimum free disk blocks
   worktree operations. Searching the Rust consumers of `min_free_disk_gb` found
   health reporting and settings storage, not a worktree admission check. Reconcile

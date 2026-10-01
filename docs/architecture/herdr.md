@@ -28,7 +28,7 @@ provider wires automatic attachment. See [provider differences](providers.md).
 
 The Suplex option on the Terminal settings page replaces Herdr for the task
 Shell, the session Mirror, and provider sign-in. The Suplex host then runs each terminal in
-a PTY that it owns, see [host terminals](../../rust/src/terminals/host.rs). The
+a PTY that it owns, see [host terminals](host-terminals.md). The
 host reads the setting for each new connection. Terminal ids come from the task
 or session and are not stored. After a restart, the next connection starts a new
 terminal. The host closes a task's terminals on archive, and closes terminals

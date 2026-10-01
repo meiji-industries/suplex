@@ -18,6 +18,7 @@ import { isProfileAllowed } from "../projects/lib/provider-policy.js";
 import { TaskOptionFilter } from "../tasks/task-option-filter.js";
 import { createMove, deleteMove, listProfiles, updateMove } from "./lib/move-api.js";
 import { Textarea } from "../../components/ui/textarea.js";
+import { PlaceholdersHelp } from "./placeholders-help.js";
 import { ScriptEditor } from "./prompt-editor.js";
 
 export const runnerLabels = { prompt: "Prompt", script: "Shell script", pull_request_tasks: "Each pull request" } as const;
@@ -96,6 +97,7 @@ export function MoveDialog({ companyId, projects, move, open, onOpenChange, onSa
               {draft.runner === "script"
                 ? <ScriptEditor label="Script" value={draft.prompt} onChange={value => set("prompt", value)} placeholder={placeholders.script} disabled={busy} />
                 : <Textarea aria-label="Prompt" placeholder={placeholders[draft.runner]} value={draft.prompt} disabled={busy} onChange={event => set("prompt", event.target.value)} className="min-h-20 resize-none border-0 bg-transparent px-0 py-1 text-sm font-normal placeholder:text-muted-foreground/70 shadow-none focus-visible:ring-0 md:text-sm dark:bg-transparent" />}
+              <PlaceholdersHelp text={draft.prompt} />
             </div>
             {error ? <div className="px-5 pt-3"><Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert></div> : null}
             <div className="flex flex-wrap items-center gap-2 p-6">

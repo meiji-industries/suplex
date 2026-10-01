@@ -34,7 +34,7 @@ Use the appropriate authority:
 | Prompt admission, tool execution, and native turn results | Agent runtime |
 | Worktree contents, branches, and commits | Git and the filesystem |
 | Remote branches, pull requests, checks, and merges | Repository service |
-| Pane existence, layout, and live terminal ownership | Herdr, or the Suplex host when the host terminal experiment is on |
+| Pane existence, layout, and live terminal ownership | Herdr, or the Suplex host terminal registry for move runs, the quick shell, and task terminals when the host terminal experiment is on |
 
 Keep durable intent, authorization, and idempotency records. Those are not
 redundant copies of an external fact. Keep observations for display and diagnosis,

@@ -79,7 +79,8 @@ export function LivePaneTerminal({ taskId, role, paneId }: { taskId: string; rol
   return <PaneTerminal path={`/api/tasks/${encodeURIComponent(taskId)}/pane/${encodeURIComponent(role)}/terminal`} interactive={role === "shell"} paneId={paneId} label={`Live pane output for ${role}`} />;
 }
 
-export function PaneTerminal({ path, interactive, paneId, label }: { path: string; interactive: boolean; paneId: string | null; label: string }): JSX.Element {
+/** `onEnded` replaces the ended notice: the owner closes the terminal instead. */
+export function PaneTerminal({ path, interactive, paneId, label, onEnded }: { path: string; interactive: boolean; paneId: string | null; label: string; onEnded?: () => void }): JSX.Element {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const viewportRef = useRef<HTMLDivElement | null>(null);
   const socketRef = useRef<WebSocket | null>(null);
@@ -291,12 +292,16 @@ export function PaneTerminal({ path, interactive, paneId, label }: { path: strin
     connect();
     return () => { disposed = true; window.clearTimeout(retry); window.clearTimeout(resizeTimer); observer.disconnect(); viewport.removeEventListener("scroll", updateLocalScroll); jumpToTailRef.current = () => undefined; socketRef.current?.close(1000); socketRef.current = null; terminal.dispose(); };
   }, [connection, interactive, paneId, path, label]);
+  const ended = status === "ended" && !errorMessage;
+  const endedRef = useRef(onEnded);
+  endedRef.current = onEnded;
+  useEffect(() => { if (ended) endedRef.current?.(); }, [ended]);
   const reconnect = () => { setConnection((value) => value + 1); statusRef.current = "connecting"; setStatus("connecting"); };
   const jumpToBottom = () => {
     jumpToTailRef.current();
     setScrolledUp(false);
     hostRef.current?.querySelector<HTMLElement>(".xterm-helper-textarea")?.focus();
   };
-  const overlay = status === "connecting" ? "Connection in progress" : status === "reconnecting" ? <ReconnectingStatus /> : status === "taken_over" ? "Another viewer took control" : status === "ended" ? (errorMessage ?? (paneId || interactive ? "Pane ended" : "No live pane")) : null;
+  const overlay = status === "connecting" ? "Connection in progress" : status === "reconnecting" ? <ReconnectingStatus /> : status === "taken_over" ? "Another viewer took control" : status === "ended" && !(ended && onEnded) ? (errorMessage ?? (paneId || interactive ? "Pane ended" : "No live pane")) : null;
   return <div className="flex h-full min-h-0 min-w-0 w-full flex-1 flex-col"><div className="relative mt-1 min-h-0 min-w-0 w-full flex-1 overflow-hidden bg-background p-2"><div className={interactive || localScroll ? "h-full w-full overflow-hidden" : "h-full w-full max-w-full overflow-auto"} ref={viewportRef}><div aria-label={label} className="h-full" ref={hostRef} /></div>{overlay ? <div className="absolute inset-0 z-10 flex items-center justify-center gap-2 bg-background/85 text-sm text-foreground"><span>{overlay}</span>{errorMessage || status === "taken_over" ? <Button size="xs" onClick={reconnect}>{status === "taken_over" ? "Take control" : "Retry"}</Button> : null}</div> : null}{status === "live" && scrolledUp ? <div className="absolute bottom-3 right-3 z-10"><Button aria-label="Open latest output" size="icon-xs" variant="secondary" onClick={jumpToBottom}><ArrowDownToLine aria-hidden="true" /></Button></div> : null}</div></div>;
 }

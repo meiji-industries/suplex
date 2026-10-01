@@ -201,7 +201,7 @@ async fn task_sources(
 }
 
 /// Mark each pull request that an open task already uses.
-fn annotate_pull_request_owners(
+pub(crate) fn annotate_pull_request_owners(
     state: &AppState,
     project: &service::Project,
     sources: &mut serde_json::Value,

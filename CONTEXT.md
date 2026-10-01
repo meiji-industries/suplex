@@ -55,6 +55,19 @@ Second opinion, Combined planning, or Pull request repair. A task captures its
 workflow and Advisor profiles at creation.
 _Avoid_: Arbitrary step graph.
 
+**Move**
+A saved prompt or script for a project that you start from the Moves page.
+Placeholders in the text declare its inputs. A move opens a Worker agent with
+the prompt in an interactive terminal, runs the script in a terminal, or starts
+one Pull request repair task for each open pull request that you do not exclude.
+_Avoid_: Runbook, automation, recipe.
+
+**Move run**
+One start of a move. It records the rendered prompt, the inputs, the excluded
+pull requests, and the tasks it started. Each task owns its own status, and the
+host terminal shows whether a terminal run is live.
+_Avoid_: Job, execution, mirrored task status.
+
 **Advisor**
 A read-only delegated session that reports to Coordinator. Individual Advisors
 share the delegated slot with Worker; Plan A and Plan B have separate slots. Its product label is Reviewer, Plan A, Plan B, or Rater.

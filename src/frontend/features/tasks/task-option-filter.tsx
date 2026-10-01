@@ -14,7 +14,8 @@ export function TaskOptionFilter<V extends string | string[]>({ prefix, label, v
   onValueChange: (value: V) => void;
 }) {
   const operator: FilterOperator = { value: "is", label: "is", arity: Array.isArray(value) ? "many" : "one" };
-  const field: FilterField<V> = { id: label, label, type: Array.isArray(value) ? "multiselect" : "select", options, operators: [operator], searchable: false };
+  // The option list grows to its longest option, so no option is cut short.
+  const field: FilterField<V> = { id: label, label, type: Array.isArray(value) ? "multiselect" : "select", options, operators: [operator], searchable: false, className: "w-max min-w-48" };
   const rule = createFilterRule({ id: label, path: [label], operator: "is", value });
   return <Filters fields={[field]} query={createFilterQuery([rule])} disabled={disabled} onQueryChange={query => {
     const next = query.rules[0];

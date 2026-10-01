@@ -3,9 +3,15 @@ import { Input as InputPrimitive } from "@base-ui/react/input"
 
 import { cn } from "../../lib/utils.js"
 
+// Suplex fields hold app data, not identities. Password managers and browser
+// autofill stay out unless a field is a password or names its autofill purpose.
+const unmanaged = { autoComplete: "off", "data-1p-ignore": true, "data-lpignore": "true", "data-bwignore": true, "data-form-type": "other" }
+
 function Input({ className, type, size = "default", ...props }: Omit<React.ComponentProps<"input">, "size"> & { size?: "sm" | "default" }) {
+  const managed = type === "password" || (props.autoComplete !== undefined && props.autoComplete !== "off")
   return (
     <InputPrimitive
+      {...(managed ? {} : unmanaged)}
       type={type}
       data-slot="input"
       data-size={size}

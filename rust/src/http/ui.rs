@@ -76,6 +76,7 @@ pub fn application_page(view: &str) -> String {
         "tasks" => "Tasks",
         "board" => "Board",
         "timeline" => "Timeline",
+        "moves" => "Moves",
         "analytics" => "Analytics",
         "profile" => "Profile",
         "setup" => "Set up",

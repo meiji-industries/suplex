@@ -150,7 +150,7 @@ pub fn existing_user_task(
     repository::task_by_id(database, &task_id)
 }
 
-fn selected_profile(
+pub(crate) fn selected_profile(
     database: &SuplexDatabase,
     project: &Project,
     selected: Option<&str>,

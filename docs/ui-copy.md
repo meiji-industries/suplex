@@ -36,6 +36,7 @@ Approved imperative verbs: Accept, Add, Answer, Approve, Cancel, Check, Continue
 | build | build | development, execution |
 | worktree, branch, base branch, pull request, CI | worktree, branch, base branch, pull request, CI | PR, target base |
 | decision | decision | call |
+| move | move | runbook, automation, recipe |
 | stopped | stopped | interrupted |
 
 Code identifiers, command names, API fields, and log messages are not UI text and keep their names.

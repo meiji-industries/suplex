@@ -8,6 +8,7 @@ export type TaskListFilters = {
   query: string;
   boardView: "compact" | "full";
   boardStatus: string;
+  boardShow: "all" | "tasks" | "moves";
 };
 
 const RETURN_KEY = "suplex.tasks.returnTo";
@@ -26,12 +27,13 @@ export function readTaskListFilters(): TaskListFilters {
     query: params.get("q") ?? "",
     boardView: params.get("view") === "full" ? "full" : "compact",
     boardStatus: params.get("boardStatus") ?? "all",
+    boardShow: params.get("show") === "tasks" ? "tasks" : params.get("show") === "moves" ? "moves" : "all",
   };
 }
 
 /** Writes the filters to the list URL and remembers that URL as the place a task page returns to. */
 export function useTaskListUrl(filters: TaskListFilters, onList: boolean): void {
-  const { archived, status, projectId, query, boardView, boardStatus } = filters;
+  const { archived, status, projectId, query, boardView, boardStatus, boardShow } = filters;
   useEffect(() => {
     if (!onList) return;
     const url = new URL(window.location.href);
@@ -45,10 +47,11 @@ export function useTaskListUrl(filters: TaskListFilters, onList: boolean): void 
     set("q", query, "");
     set("view", boardView, "compact");
     set("boardStatus", boardStatus, "all");
+    set("show", boardShow, "all");
     const next = `${url.pathname}${url.search}${url.hash}`;
     if (next !== `${window.location.pathname}${window.location.search}${window.location.hash}`) window.history.replaceState(window.history.state, "", next);
     try { window.sessionStorage.setItem(RETURN_KEY, next); } catch { /* Browser storage can be disabled. */ }
-  }, [onList, archived, status, projectId, query, boardView, boardStatus]);
+  }, [onList, archived, status, projectId, query, boardView, boardStatus, boardShow]);
 }
 
 /** The Tasks or Board view the person last had open, with its filters, or the fallback. */

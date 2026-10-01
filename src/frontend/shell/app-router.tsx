@@ -34,10 +34,11 @@ const OnboardingSettingsView = lazy(() => import("../features/settings/onboardin
 const AccessView = lazy(() => import("../features/access/access.js").then(module => ({ default: module.AccessView })));
 const OnboardingView = lazy(() => import("../features/onboarding/onboarding-wizard.js").then(module => ({ default: module.OnboardingView })));
 const SetupView = lazy(() => import("../features/settings/setup.js").then(module => ({ default: module.SetupView })));
+const MovesView = lazy(() => import("../features/moves/moves.js").then(module => ({ default: module.MovesView })));
 const TodayView = lazy(() => import("../features/today/today.js").then(module => ({ default: module.TodayView })));
 
 export function activityShellKey(pathname: string): "activity" | undefined {
-  if (pathname === "/today" || pathname === "/tasks" || pathname.startsWith("/tasks/") || pathname === "/board" || pathname.startsWith("/board/") || pathname === "/timeline" || pathname === "/analytics") return "activity";
+  if (pathname === "/today" || pathname === "/tasks" || pathname.startsWith("/tasks/") || pathname === "/board" || pathname.startsWith("/board/") || pathname === "/moves" || pathname.startsWith("/moves/") || pathname === "/timeline" || pathname === "/analytics") return "activity";
   return undefined;
 }
 
@@ -80,6 +81,7 @@ function AppView(): ReactElement {
   if (pathname === "/today") return <TodayRoute />;
   if (pathname === "/tasks" || pathname.startsWith("/tasks/")) return <TasksView />;
   if (pathname === "/board" || pathname.startsWith("/board/")) return <TasksView mode="board" />;
+  if (pathname === "/moves" || pathname.startsWith("/moves/")) return <MovesView />;
   if (pathname === "/timeline") return <TimelineView />;
   if (pathname === "/analytics") return <AnalyticsView />;
   return <Dashboard />;

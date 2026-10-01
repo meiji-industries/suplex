@@ -4,7 +4,8 @@ const applicationPaths = [
   /^\/profile$/,
   /^\/templates$/,
   /^\/projects(?:\/[^/]+(?:\/templates)?)?$/,
-  /^\/(?:today|tasks|board|timeline|analytics|health|setup|onboarding)(?:\/[^/]+)?$/,
+  /^\/moves\/[^/]+\/runs\/[^/]+$/,
+  /^\/(?:today|tasks|board|moves|timeline|analytics|health|setup|onboarding)(?:\/[^/]+)?$/,
 ];
 
 export function isApplicationPath(pathname: string): boolean {

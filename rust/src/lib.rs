@@ -4,6 +4,7 @@ pub mod delivery;
 pub mod http;
 pub mod identity;
 pub mod integrations;
+pub mod moves;
 pub mod platform;
 pub mod profiles;
 pub mod projects;

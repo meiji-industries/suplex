@@ -50,6 +50,9 @@ pub fn router() -> Router<AppState> {
         .route("/board/{task_id}", get(board))
         .route("/board", get(board))
         .route("/timeline", get(timeline))
+        .route("/moves/{move_id}/runs/{run_id}", get(moves))
+        .route("/moves/{move_id}", get(moves))
+        .route("/moves", get(moves))
         .route("/analytics", get(analytics))
         .route("/setup", get(setup))
         .route("/onboarding", get(onboarding))
@@ -210,6 +213,7 @@ page_handler!(projects, "projects");
 page_handler!(tasks, "tasks");
 page_handler!(board, "board");
 page_handler!(timeline, "timeline");
+page_handler!(moves, "moves");
 page_handler!(analytics, "analytics");
 page_handler!(setup, "setup");
 page_handler!(onboarding, "onboarding");

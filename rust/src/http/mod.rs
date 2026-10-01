@@ -42,11 +42,13 @@ pub mod routes {
     pub mod github_triggers;
     pub mod health;
     pub mod mcp;
+    pub mod moves;
     pub mod oauth;
     pub mod pages;
     pub mod profiles;
     pub mod projects;
     pub mod provider_login;
+    pub mod quick_shell;
     pub mod task_agents;
     pub mod task_artifacts;
     pub mod task_history;
@@ -203,6 +205,8 @@ pub fn router(state: AppState) -> Router {
         .merge(routes::task_pane::router())
         .merge(routes::task_worktree::router())
         .merge(routes::task_templates::router())
+        .merge(routes::moves::router())
+        .merge(routes::quick_shell::router())
         .merge(routes::tasks::router())
         .merge(routes::today::router())
         .merge(routes::workflows::router())

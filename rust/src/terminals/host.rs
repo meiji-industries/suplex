@@ -59,6 +59,16 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
+/// The screen and scrollback of a terminal when its process ended.
+pub struct Transcript {
+    pub cols: u16,
+    pub rows: u16,
+    /// Bytes that reproduce the screen on a reset xterm.
+    pub output: Vec<u8>,
+}
+
+type SaveTranscript = Box<dyn FnOnce(Transcript) + Send>;
+
 /// How to start a terminal.
 pub struct Spec {
     program: String,
@@ -66,6 +76,8 @@ pub struct Spec {
     cwd: PathBuf,
     task_id: Option<String>,
     linger: bool,
+    persistent: bool,
+    on_exit: Option<SaveTranscript>,
 }
 
 /// `$SHELL`, else `/bin/zsh`, else `/bin/sh`.
@@ -90,6 +102,8 @@ impl Spec {
             cwd,
             task_id: Some(task_id.to_owned()),
             linger: false,
+            persistent: false,
+            on_exit: None,
         }
     }
 
@@ -101,6 +115,8 @@ impl Spec {
             cwd,
             task_id: Some(task_id.to_owned()),
             linger: true,
+            persistent: false,
+            on_exit: None,
         }
     }
 
@@ -113,7 +129,40 @@ impl Spec {
             cwd,
             task_id: None,
             linger: false,
+            persistent: false,
+            on_exit: None,
         }
+    }
+
+    /// The quick shell: a login shell in the home directory that stays open
+    /// while no browser shows it, until the person exits it or Suplex stops.
+    pub fn quick_shell() -> Self {
+        let home = std::env::var_os("HOME").map_or_else(|| PathBuf::from("/"), PathBuf::from);
+        Self {
+            program: login_shell(),
+            args: vec!["-l".into()],
+            cwd: home,
+            task_id: None,
+            linger: false,
+            persistent: true,
+            on_exit: None,
+        }
+    }
+
+    /// A move run: a command in a login shell that stays open while no
+    /// browser shows it, until the person ends it or Suplex stops.
+    pub fn move_run(command: &str, cwd: PathBuf) -> Self {
+        Self {
+            persistent: true,
+            ..Self::sign_in(command, cwd)
+        }
+    }
+
+    /// Gives the terminal's transcript to `save` when its process ends, for
+    /// any reason. It runs on a blocking thread before shutdown completes.
+    pub fn with_transcript(mut self, save: impl FnOnce(Transcript) + Send + 'static) -> Self {
+        self.on_exit = Some(Box::new(save));
+        self
     }
 
     /// Only the variables a user shell needs. Suplex credentials, provider
@@ -156,6 +205,7 @@ struct Screen {
 struct Terminal {
     task_id: Option<String>,
     linger: bool,
+    persistent: bool,
     /// Output is parsed and broadcast under this lock, and a viewer takes its
     /// snapshot and subscribes under it, so no output is lost or repeated.
     screen: Mutex<Screen>,
@@ -227,9 +277,10 @@ impl HostTerminals {
     }
 
     /// Closes every terminal that no browser shows, sign-in terminals too.
+    /// A move run stays open for its person to return to.
     pub fn close_idle(&self) {
         lock(&self.terminals).retain(|_, terminal| {
-            let idle = terminal.viewers.load(Ordering::SeqCst) == 0;
+            let idle = !terminal.persistent && terminal.viewers.load(Ordering::SeqCst) == 0;
             if idle {
                 terminal.close.cancel();
             }
@@ -286,6 +337,7 @@ fn spawn(
     let terminal = Arc::new(Terminal {
         task_id: spec.task_id,
         linger: spec.linger,
+        persistent: spec.persistent,
         screen: Mutex::new(Screen {
             parser: vt100::Parser::new(rows, cols, SCROLLBACK_LINES),
             exited: None,
@@ -303,6 +355,7 @@ fn spawn(
         terminal.clone(),
         reader,
         child,
+        spec.on_exit,
     ));
     Ok(terminal)
 }
@@ -324,6 +377,7 @@ async fn run(
     terminal: Arc<Terminal>,
     mut reader: pty_process::OwnedReadPty,
     mut child: Child,
+    on_exit: Option<SaveTranscript>,
 ) {
     let pid = child
         .id()
@@ -354,10 +408,16 @@ async fn run(
         }
     };
     let reason = exit_reason(status);
-    {
+    let transcript = {
         let mut screen = lock(&terminal.screen);
         screen.exited = Some(reason.clone());
         let _ = terminal.events.send(Event::Exited(reason.into()));
+        let output = replay(&mut screen.parser);
+        let (rows, cols) = screen.parser.screen().size();
+        Transcript { cols, rows, output }
+    };
+    if let Some(save) = on_exit {
+        let _ = tokio::task::spawn_blocking(move || save(transcript)).await;
     }
     let mut terminals = lock(&registry);
     if terminals
@@ -678,6 +738,24 @@ mod tests {
         after.screen_mut().set_scrollback(0);
         follow(&mut late, &mut after, |text| text.contains("readyafter")).await;
         terminals.close_all().await;
+    }
+
+    #[tokio::test]
+    async fn a_closed_terminal_gives_its_screen_and_scrollback_to_its_transcript() {
+        let terminals = HostTerminals::default();
+        let id = unique();
+        let (sender, received) = tokio::sync::oneshot::channel();
+        let spec = command("seq 1 60; printf ready; cat")
+            .with_transcript(move |transcript| drop(sender.send(transcript)));
+        let mut viewer = terminals.open(&id, spec, 80, 24).unwrap();
+        follow(&mut viewer, &mut parser(), |text| text.contains("ready")).await;
+        terminals.close(&id);
+        let transcript = received.await.unwrap();
+        assert_eq!((transcript.cols, transcript.rows), (80, 24));
+        let mut replayed = vt100::Parser::new(24, 80, SCROLLBACK_LINES);
+        replayed.process(&transcript.output);
+        replayed.screen_mut().set_scrollback(usize::MAX);
+        assert!(replayed.screen().contents().starts_with("1\n2\n"));
     }
 
     #[tokio::test]

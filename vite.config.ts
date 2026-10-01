@@ -6,6 +6,8 @@ export default defineConfig(({ command }) => ({
   // The native host serves the build under /assets/; Vite dev serves from its own root.
   base: command === "build" ? "/assets/" : "/",
   plugins: [react(), tailwindcss()],
+  // Local data holds task and move worktrees; their files must not trigger a full reload.
+  server: { watch: { ignored: ["**/.suplex/**"] } },
   resolve: {
     alias: {
       "@": "/src/frontend",

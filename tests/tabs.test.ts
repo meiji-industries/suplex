@@ -34,11 +34,11 @@ test("the line variant remains transparent and uses the active underline without
   }
 });
 
-test("Timeline, task source picker, and task filter tabs use the pill variant", () => {
+test("Timeline, task source picker, and list view tabs use the pill variant", () => {
   for (const path of [
     "../src/frontend/features/timeline/timeline.tsx",
     "../src/frontend/features/tasks/task-source-picker.tsx",
-    "../src/frontend/features/tasks/tasks.tsx",
+    "../src/frontend/components/app/data-list.tsx",
   ]) {
     const source = readFileSync(new URL(path, import.meta.url), "utf8");
     expect(source).toMatch(/<TabsList variant="pill">/);

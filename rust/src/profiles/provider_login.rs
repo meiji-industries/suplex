@@ -55,7 +55,24 @@ pub fn provider_login_command(
     } else {
         "auth login"
     };
-    let command = format!("{binary} {login}");
+    scoped_command(provider, home_directory, format!("{binary} {login}"))
+}
+
+/// The provider executable for a shell command line, quoted when it resolves.
+pub fn shell_binary(provider: &str) -> String {
+    resolve_executable(provider).map_or_else(
+        |_| binary_name(provider).to_owned(),
+        |path| quoted(&path.to_string_lossy()),
+    )
+}
+
+pub fn shell_quoted(value: &str) -> String {
+    quoted(value)
+}
+
+/// A dedicated Claude Code login scopes the command to its home directory and
+/// removes inherited account and routing variables.
+pub fn scoped_command(provider: &str, home_directory: Option<&str>, command: String) -> String {
     let (Some(home), "claude-code") = (home_directory, provider) else {
         return command;
     };

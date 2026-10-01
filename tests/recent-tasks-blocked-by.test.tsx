@@ -2,6 +2,7 @@
  * @vitest-environment happy-dom
  * @vitest-environment-options { "url": "https://suplex.test/tasks?company=company-1" }
  */
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, expect, test, vi } from "vitest";
@@ -18,6 +19,7 @@ vi.mock("../src/frontend/features/tasks/task-data.js", () => ({
 vi.mock("../src/frontend/features/analytics/lib/analytics.js", () => ({ useTaskCosts: () => new Map() }));
 vi.mock("../src/frontend/features/tasks/recent-task-agents.js", () => ({ RecentTaskAgents: () => null }));
 vi.mock("../src/frontend/features/tasks/recent-pull-request.js", () => ({ RecentPullRequest: () => null }));
+vi.mock("../src/frontend/features/moves/lib/move-api.js", () => ({ listMoves: () => Promise.resolve([]), endMoveRun: vi.fn(), archiveMoveRun: vi.fn() }));
 vi.mock("../src/frontend/shell/company-context.js", () => ({ useOptionalCompanyContext: () => ({ currentCompany: { id: "company-1", status: "active" } }) }));
 
 import { RecentTasks } from "../src/frontend/features/tasks/recent-tasks.js";
@@ -29,7 +31,7 @@ test("Activity labels every Blocked by task of a recent task", async () => {
   const container = document.createElement("div");
   document.body.append(container);
   const root = createRoot(container);
-  await act(async () => { root.render(<RecentTasks />); });
+  await act(async () => { root.render(<QueryClientProvider client={new QueryClient()}><RecentTasks /></QueryClientProvider>); });
   await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)); });
   const label = "Blocked by Repair the poller · Active, Plan the migration · Queued, Manual backlog · Backlog";
   expect(container.querySelector("[data-recent-task-blocked-by]")?.textContent).toBe(` · ${label}`);

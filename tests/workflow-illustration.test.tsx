@@ -3,6 +3,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { expect, test } from "vitest";
 import { WorkflowIllustration } from "../src/frontend/features/tasks/workflow-illustration.js";
 import { WORKFLOWS } from "../src/frontend/features/tasks/workflow-presentation.js";
+import { flowEdges, planFlow } from "../src/frontend/features/tasks/workflow-flow.js";
 import layouts from "../src/frontend/features/tasks/workflow-layouts.json" with { type: "json" };
 
 test.each(WORKFLOWS)("$name describes the actual workflow and delivery in both layouts", definition => {
@@ -100,4 +101,19 @@ test("read-only agent names replace role labels only when their profiles resolve
     expect(diagram.querySelector('[data-illustration-control="reviewer"]')).toBeNull();
     expect(diagram.querySelectorAll("button")).toHaveLength(0);
   }
+});
+
+test.each(WORKFLOWS)("$name flow travels every route and ends at the terminal station", definition => {
+  for (const layout of Object.values(layouts[definition.id])) {
+    const edges = flowEdges(layout, new Set(["review-build", "reviewer-build", "repair-rater"]));
+    const waves = planFlow(edges);
+    expect(new Set(waves.flat())).toEqual(new Set(edges));
+    for (const [index, wave] of waves.entries()) if (index) expect(wave.every(edge => waves[index - 1]!.some(previous => previous.to === edge.from))).toBe(true);
+    const end = waves.at(-1)!;
+    expect(end).toHaveLength(1);
+    expect(edges.some(edge => edge.from === end[0]!.to)).toBe(false);
+  }
+  if (definition.id === "competing_plans") expect(planFlow(flowEdges(layouts.competing_plans.wide, new Set())).map(wave => wave.map(edge => edge.id))).toEqual([
+    ["objective-plan-a", "objective-plan-b"], ["plan-a-combine", "plan-b-combine"], ["combine-build"], ["build-review"], ["review-build"], ["build-review"], ["review-delivery"],
+  ]);
 });

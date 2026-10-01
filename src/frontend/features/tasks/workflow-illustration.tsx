@@ -1,8 +1,9 @@
-import { useId, useLayoutEffect, useRef, type ReactNode } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, type ReactNode } from "react";
 import { Combine, Crosshair, FileText, GitMerge, GitPullRequest, ListChecks, ScanEye, Send, Terminal, UserRound, type LucideIcon } from "lucide-react";
 import type { WorkflowId } from "../../contracts/workflows.js";
 import { REPAIR_RATING_TARGET, type AdvisorRole } from "../../contracts/advisor-reports.js";
 import { workflowDefinition } from "./workflow-presentation.js";
+import { animateFlow, flowEdges } from "./workflow-flow.js";
 import layouts from "./workflow-layouts.json" with { type: "json" };
 import suplexMark from "../../assets/suplex-mark.svg?inline";
 import { EntityAvatar } from "../../components/app/entity-avatar.js";
@@ -69,8 +70,20 @@ const stationMeta = {
   merge: { label: "Suplex", caption: "merges the PR", icon: GitMerge, tone: "source" },
 } as const;
 type StationId = keyof typeof stationMeta;
+const returnRoutes = new Set(["review-build", "reviewer-build", "repair-rater"]);
+type Layout = (typeof layouts)[WorkflowId]["wide"];
 
-function routePath(points: Point[]): string {
+function Flow({ layout }: { layout: Layout }) {
+  const ref = useRef<SVGGElement>(null);
+  useEffect(() => {
+    if (!ref.current) return;
+    const centers = new Map(layout.nodes.map(node => [node.id, { x: node.x + 22, y: node.y + 22 }]));
+    return animateFlow(ref.current, flowEdges(layout, returnRoutes), centers, node => tones[stationMeta[node as StationId].tone]);
+  }, [layout]);
+  return <g ref={ref} data-illustration-flow="" aria-hidden="true" pointerEvents="none" />;
+}
+
+function routePath(points: readonly Point[]): string {
   return points.map((point, index) => `${index ? "L" : "M"}${point.x} ${point.y}`).join("");
 }
 
@@ -82,11 +95,9 @@ function Artwork({ workflow, delivery, compact, agents, agentNames, avatars, arr
   const nodePoints = Object.fromEntries(layout.nodes.map(node => [node.id, { x: node.x + 22 + offsetX, y: node.y + 22 + offsetY }]));
   return <>
     <g transform={`translate(${offsetX} ${offsetY})`}>
-      {layout.edges.map(edge => {
-        const from = edge.id.split("-").slice(0, -1).join("-");
-        const tone = stationMeta[from as StationId]?.tone ?? "source";
-        const returns = edge.id === "review-build" || edge.id === "reviewer-build" || edge.id === "repair-rater";
-        return <path key={edge.id} data-illustration-route={edge.id} d={routePath(edge.points)} className={tones[tone]} fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" strokeDasharray={returns ? "3 5" : undefined} markerEnd={`url(#${arrowId}-${tone})`} />;
+      {flowEdges(layout, returnRoutes).map(edge => {
+        const tone = stationMeta[edge.from as StationId].tone;
+        return <path key={edge.id} data-illustration-route={edge.id} d={routePath(edge.points)} className={tones[tone]} fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" strokeDasharray={edge.returns ? "3 5" : undefined} markerEnd={`url(#${arrowId}-${tone})`} />;
       })}
     </g>
     {layout.nodes.map(node => {
@@ -114,6 +125,7 @@ function Artwork({ workflow, delivery, compact, agents, agentNames, avatars, arr
         tone={meta.tone} sheet={"sheet" in meta && meta.sheet} labelAt={labelAt} viewWidth={viewWidth}
         control={control} avatar={id === "objective" ? authorAvatar : deliveryNode ? <img src={suplexMark} alt="" className="size-8 invert dark:invert-0" /> : role ? avatars[role] : undefined} />;
     })}
+    <g transform={`translate(${offsetX} ${offsetY})`}><Flow layout={layout} /></g>
   </>;
 }
 
@@ -126,7 +138,7 @@ function fitToContent(root: HTMLElement): void {
     const scale = box.height / frame.height;
     let top = Infinity, bottom = -Infinity;
     for (const element of Array.from(svg.querySelectorAll("path, circle, rect, text, foreignObject > div"))) {
-      if (element.closest("defs")) continue;
+      if (element.closest("defs, [data-illustration-flow]")) continue;
       const rect = element.getBoundingClientRect();
       if (!rect.height) continue;
       top = Math.min(top, rect.top - frame.top);

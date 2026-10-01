@@ -12,6 +12,7 @@ import type { TaskDiffSummaryResponse } from "../../../contracts/generated/TaskD
 import type { TimelineResponse } from "../../../contracts/generated/TimelineResponse.js";
 import type { ArchiveConfirmation } from "../../../contracts/generated/ArchiveConfirmation.js";
 import type { ProfileResponse } from "../../../contracts/projects.js";
+import type { TaskSourceSummary } from "../task-source-picker.js";
 
 export type TaskAction = "refresh" | "cancel" | "unarchive" | "disarm" | "start" | "answer";
 
@@ -37,6 +38,13 @@ export async function listTasks(
     options.signal ? { signal: options.signal } : undefined,
   );
   return result.tasks;
+}
+
+export type PullRequestSource = Extract<TaskSourceSummary, { kind: "pull_request" }>;
+
+/** Open pull requests in the project's repository. `available` is false when the repository cannot be read. */
+export function listPullRequestSources(projectId: string): Promise<{ available: boolean; sources: PullRequestSource[] }> {
+  return readJsonUnchecked<{ available: boolean; sources: PullRequestSource[] }>(`/api/projects/${encodeURIComponent(projectId)}/task-sources?kind=pull_request`);
 }
 
 export function createTask(companyId: string, body: TaskInput): Promise<Task> {

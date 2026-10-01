@@ -1,4 +1,4 @@
-import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, screen, session, shell, Tray } from "electron";
+import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, Notification, screen, session, shell, Tray } from "electron";
 import { existsSync } from "node:fs";
 import { readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -121,7 +121,21 @@ export async function runSuplexDesktop(input: { readonly argv: readonly string[]
   }
   const probe = input.environment.SUPLEX_DESKTOP_PROBE === "1";
   const packagedFeed = app.isPackaged && typeof process.resourcesPath === "string" && existsSync(join(process.resourcesPath, "app-update.yml"));
-  const desktopUpdater = createDesktopUpdater({ dialog, configured: packagedFeed });
+  let updateNotice: Notification | undefined; // held so its click handler outlives garbage collection
+  const notify = (message: string, onClick: () => void): void => {
+    updateNotice = new Notification({ title: "Desktop app update", body: message });
+    updateNotice.on("click", onClick);
+    updateNotice.show();
+  };
+  /**
+   * A message box with no visible parent window is app-modal on macOS: this process stops until it is answered, SIGTERM
+   * does nothing, and one opened while Suplex is in the background is invisible. Attached to the window it is none of these.
+   */
+  const ask = async (options: Electron.MessageBoxOptions): Promise<Electron.MessageBoxReturnValue> => {
+    await open();
+    return window ? dialog.showMessageBox(window, options) : dialog.showMessageBox(options);
+  };
+  const desktopUpdater = createDesktopUpdater({ dialog: { showMessageBox: ask }, notify, configured: packagedFeed });
   const connectPage = join(__dirname, "connect.html");
   const targetFile = (): string => join(app.getPath("userData"), "desktop.json");
   const stateFile = (): string => join(app.getPath("userData"), "window-state.json");
@@ -203,7 +217,7 @@ export async function runSuplexDesktop(input: { readonly argv: readonly string[]
   /** Same message without blocking the main thread; a second launch is waiting on this process to acknowledge it. */
   const warn = (message: string): void => {
     process.stderr.write(`${INVALID_TITLE}: ${message}\n`);
-    if (!probe) void dialog.showMessageBox({ type: "error", title: INVALID_TITLE, message });
+    if (!probe) void ask({ type: "error", title: INVALID_TITLE, message });
   };
   const bounds = async (): Promise<Bounds> => {
     let saved: Partial<Bounds> = {};
@@ -401,7 +415,7 @@ export async function runSuplexDesktop(input: { readonly argv: readonly string[]
     try {
       await networkAccess.savePreference(requested);
     } catch (error) {
-      await dialog.showMessageBox({
+      await ask({
         type: "error",
         message: "Suplex could not save network access",
         detail: (error as Error).message,
@@ -569,7 +583,7 @@ export async function runSuplexDesktop(input: { readonly argv: readonly string[]
           app.setLoginItemSettings({ openAtLogin: requested });
           const actual = app.getLoginItemSettings();
           item.checked = actual.openAtLogin;
-          if (actual.openAtLogin !== requested) void dialog.showMessageBox({
+          if (actual.openAtLogin !== requested) void ask({
             type: "warning", message: "Suplex could not change the login setting",
             detail: actual.status === "requires-approval"
               ? "Allow Suplex in System Settings > General > Login Items."

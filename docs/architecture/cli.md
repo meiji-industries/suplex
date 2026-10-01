@@ -96,6 +96,11 @@ that is still running, swaps the bundle, then starts the host and reopens the
 app. Every download and check completes before anything stops. The app's
 **Check for updates** menu item still uses the in-app updater.
 
+macOS refuses the quit event while the app shows a dialog. The command then
+sends SIGTERM, and SIGKILL if the app still runs. A killed app leaves its host
+running; the command stops that host and lets the reopened app start it. See
+[replacing a running Suplex.app](../updates.md#replacing-a-running-suplexapp).
+
 Outside an app bundle, the command exits with instructions to update the
 checkout with Git and restart. The checkout's Git-based updater runs only
 under the server's supervisor, through the web application. See

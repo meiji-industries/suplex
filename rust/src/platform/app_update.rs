@@ -80,16 +80,19 @@ pub async fn run(app: &Path, assume_yes: bool) -> UpdateResult {
         println!("Update cancelled.");
         return Ok(1);
     }
-    if app_running {
+    let app_killed = if app_running {
         println!("Quitting Suplex.app...");
-        quit_app(app)?;
-    }
+        quit_app(app)?
+    } else {
+        false
+    };
     // The app stops a host it started; stop an independent host too and start it after.
+    // A killed app leaves its host running: stop that one, and the app starts it again.
     let restart_host = match &installation {
         Some(installation) if supervisor::host_running(installation) => {
             println!("Stopping the Suplex host...");
             supervisor::stop(installation)?;
-            true
+            !app_killed
         }
         _ => false,
     };
@@ -184,30 +187,60 @@ fn verify_signature(installed: &Path, new_app: &Path) -> Result<(), Box<dyn std:
     }
 }
 
-fn app_running(app: &Path) -> bool {
+fn app_pids(app: &Path) -> Vec<String> {
     let binary = app.join("Contents/MacOS/Suplex");
     Command::new("ps")
-        .args(["-axo", "comm="])
+        .args(["-axo", "pid=,comm="])
         .output()
-        .is_ok_and(|output| {
+        .map(|output| {
             String::from_utf8_lossy(&output.stdout)
                 .lines()
-                .any(|line| Path::new(line.trim()) == binary)
+                .filter_map(|line| line.trim().split_once(' '))
+                .filter(|(_, command)| Path::new(command.trim()) == binary)
+                .map(|(pid, _)| pid.to_owned())
+                .collect()
         })
+        .unwrap_or_default()
 }
 
-fn quit_app(app: &Path) -> Result<(), Box<dyn std::error::Error>> {
-    let script = format!("tell application \"{}\" to quit", app.display());
-    // A modal dialog makes the quit event time out even though the app quits after it; wait for the process either way.
-    let _ = Command::new("osascript").args(["-e", &script]).output();
-    let deadline = Instant::now() + Duration::from_secs(30);
+fn app_running(app: &Path) -> bool {
+    !app_pids(app).is_empty()
+}
+
+fn wait_for_exit(app: &Path, limit: Duration) -> bool {
+    let deadline = Instant::now() + limit;
     while app_running(app) {
         if Instant::now() > deadline {
-            return Err("Suplex.app did not quit within 30 seconds. Quit it, then run 'suplex update' again.".into());
+            return false;
         }
         thread::sleep(Duration::from_millis(250));
     }
-    Ok(())
+    true
+}
+
+/// Returns true when the app had to be killed, which leaves the host it started running.
+fn quit_app(app: &Path) -> Result<bool, Box<dyn std::error::Error>> {
+    let script = format!("tell application \"{}\" to quit", app.display());
+    let accepted = Command::new("osascript")
+        .args(["-e", &script])
+        .output()
+        .is_ok_and(|output| output.status.success());
+    if accepted && wait_for_exit(app, Duration::from_secs(10)) {
+        return Ok(false);
+    }
+    // macOS refuses the quit event while a dialog is open. SIGTERM still quits the app normally, except under the
+    // app-modal dialogs of 1.2.0 and earlier, which stop the whole process until they are answered.
+    println!("Suplex.app did not quit. Stopping it...");
+    for signal in ["-TERM", "-KILL"] {
+        let _ = Command::new("kill")
+            .arg(signal)
+            .args(app_pids(app))
+            .output();
+        if wait_for_exit(app, Duration::from_secs(10)) {
+            return Ok(signal == "-KILL");
+        }
+    }
+    Err("Suplex.app did not stop. Quit it, then run 'suplex update' again.".into())
 }
 
 fn confirm(version: &str, assume_yes: bool) -> io::Result<bool> {

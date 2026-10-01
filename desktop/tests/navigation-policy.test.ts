@@ -209,7 +209,8 @@ describe("lifecycle", () => {
     login.checked = true;
     login.click!(login);
     expect(login.checked).toBe(false);
-    expect(showMessageBox).toHaveBeenCalledWith(expect.objectContaining({ detail: expect.stringContaining("Login Items") }));
+    // Attached to the window: a message box with no parent is app-modal and stops the whole process.
+    await vi.waitFor(() => expect(showMessageBox).toHaveBeenCalledWith(expect.any(FakeWindow), expect.objectContaining({ detail: expect.stringContaining("Login Items") })));
   });
   test.skipIf(process.platform !== "darwin")("a source-run Electron bundle cannot register an incomplete login launcher", async () => {
     await runSuplexDesktop({ argv: [], environment: { SUPLEX_DESKTOP_URL: ORIGIN } });

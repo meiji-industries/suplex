@@ -39,7 +39,58 @@ collisions with temporary Git repositories.
 
 A distributable macOS update requires a consistent Developer ID signature on the existing application and downloaded ZIP, plus notarization and stapling. Production distribution requires the external signing and feed inputs.
 
-Automatic checks stay silent when no feed is configured. A manual check explains that desktop app updates are not configured. When an update exists, Suplex asks before download and before restarting the desktop app. A bundled host started by Suplex.app restarts with it; an independent host remains untouched.
+### In-app updater
+
+`DesktopUpdater` in `desktop/src/desktop-updater.ts` checks the feed at launch and every hour while the app is open. It downloads and installs only after a click: `autoDownload` and `autoInstallOnAppQuit` are off.
+
+| Event | What the viewer sees |
+| --- | --- |
+| An automatic check finds a newer version | A notification, once for each version in an app run. A click opens the download dialog. |
+| **Check for updates** finds a newer version | The download dialog. |
+| **Check for updates** finds no newer version | A dialog that says the app is current. |
+| The download finishes | A notification. A click opens the restart dialog. **Check for updates** opens the restart dialog again. |
+| The download or the installation fails | A notification. A click opens the error. |
+| A check fails | An error dialog for a manual check. Nothing for an automatic check. |
+
+Automatic checks stay silent when no feed is configured. A manual check explains that desktop app updates are not configured. **Restart Suplex** in the restart dialog replaces the app. A bundled host started by Suplex.app restarts with it; an independent host remains untouched.
+
+If macOS notifications are off for Suplex, automatic checks show nothing. **Check for updates** still works.
+
+### Dialog rules
+
+Two rules keep the app replaceable. Both come from an incident: versions 1.2.0 and earlier opened the download dialog from the hourly check, and an app left open at release time could not be quit by `install.sh` or `suplex update`.
+
+1. **Attach every message box to the window.** Use `ask` in `desktop/src/suplex-desktop.ts`, not `dialog.showMessageBox` directly. Electron shows a message box that has no visible parent window as an app-modal alert.
+2. **Open a dialog only as the direct answer to a click.** An event that arrives later posts a notification, and a click on it opens the dialog. macOS refuses a quit request while any dialog is open, and `ask` takes the window to the front.
+
+Measured with Electron 44.2.0 on Darwin 25.5, with the app in the background:
+
+| Message box | Visible | Main process | Quit event | SIGTERM |
+| --- | --- | --- | --- | --- |
+| No parent window | No, opacity 0 | Stopped until answered | Refused, error -128 | Ignored |
+| Attached to the window | Yes | Runs | Refused, error -128 | Quits normally |
+
+A stopped main process does not reap its children, does not drain the host's log pipe, and does not answer a second launch. In the test, the second launch killed the stopped app after about 20 seconds and left its host running.
+
+To put a 1.2.0 or earlier app in the stopped state for a test, run `open -n -a /Applications/Suplex.app --args --url=bogus`, then kill the second `Suplex` process.
+
+### Replacing a running Suplex.app
+
+Three paths replace the app:
+
+| Path | Source | Starts from |
+| --- | --- | --- |
+| In-app updater | `desktop/src/desktop-updater.ts` | **Restart Suplex** in the app |
+| `suplex update` | `rust/src/platform/app_update.rs`, see [the CLI](architecture/cli.md#updates) | A terminal |
+| `install.sh` | `public/install.sh` in `meiji-industries/suplex-web`, served at `https://suplex.sh/install.sh` | `curl -fsSL https://suplex.sh/install.sh \| sh` |
+
+`suplex update` and `install.sh` stop the app with the same sequence:
+
+1. Send the quit event. Wait 10 seconds only if macOS accepts it.
+2. Send SIGTERM and wait 10 seconds. The app quits normally and stops the host it started.
+3. Send SIGKILL and wait 10 seconds. Only an app stopped by an app-modal alert needs this.
+
+A killed app leaves its host running. `suplex update` stops that host and does not start it from the CLI, so the reopened app starts and owns it. `install.sh` runs `suplex down` before each replacement, from a directory that has no `.suplex`, so it stops the desktop installation's host and not a checkout's. It does not start a stopped host again; the app or `suplex up` does.
 
 ## Linux binary distribution
 

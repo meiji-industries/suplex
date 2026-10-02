@@ -8,6 +8,7 @@ import { isApiError } from "../../lib/api.js";
 import { BILLING_SEAT_UNIT_AMOUNT, type BillingSummary, type HostedSeatPreview } from "../../contracts/billing.js";
 import { changeSeats, getBillingSummary, openBillingPortal, previewSeats, startCheckout } from "./lib/billing-api.js";
 import { SettingsSection, SettingRow } from "./settings-layout.js";
+import { Check } from "lucide-react";
 import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactElement } from "react";
 
 // USD has two minor-unit digits; the confirmation must show cents exactly.
@@ -51,6 +52,8 @@ function actionMessage(reason: unknown): string {
   }
   return reason instanceof Error ? reason.message : "Suplex cannot check the subscription.";
 }
+
+const PRO_FEATURES = ["Unlimited projects", "One seat for each active account", "Prorated seat increases", "Payment and invoices in Stripe"];
 
 // Source-derived terminal subscription statuses permit a fresh purchase. Any
 // other real status means a subscription still exists and must not be
@@ -336,45 +339,125 @@ export function BillingSection({ companyId }: { companyId: string }): ReactEleme
   const seatInputValue = summary?.plan === "pro" && seatSeats === "" ? String(summary.purchasedSeats) : seatSeats;
   const seatQuantity = parseSeats(seatInputValue);
 
+  const link = (href: string, label: string): ReactElement => <a className="text-xs text-primary underline underline-offset-2" href={href} target="_blank" rel="noopener noreferrer">{label}</a>;
+  if (state !== "ready" || !summary) {
+    return (
+      <SettingsSection>
+        {state === "error" ? (
+          <div className="space-y-2 py-3">
+            <Alert variant="destructive"><AlertDescription>{errorText}</AlertDescription></Alert>
+            <div><Button size="sm" variant="outline" onClick={checkSubscription} disabled={busy === "check"}>Check subscription</Button></div>
+          </div>
+        ) : (
+          <div className="space-y-2 py-3" aria-busy="true" aria-label="Billing status">
+            <div className="flex items-center gap-2 text-xs text-muted-foreground"><Spinner /><span>Billing status</span></div>
+            <Skeleton className="h-4 w-40" />
+            <Skeleton className="h-8 w-3/4" />
+          </div>
+        )}
+      </SettingsSection>
+    );
+  }
+  const monthlyTotal = summary.plan === "pro" ? formatUsd(summary.monthlySubtotal ?? summary.purchasedSeats * BILLING_SEAT_UNIT_AMOUNT) : "";
+  const planDetail = summary.plan === "pro"
+    ? [
+        `USD 20 per seat each month`,
+        `${summary.purchasedSeats} ${summary.purchasedSeats === 1 ? "seat" : "seats"}`,
+        summary.cancelAtPeriodEnd && summary.accessUntil ? `Ends on ${formatDate(summary.accessUntil)}` : summary.renewalAt ? `Renews at ${monthlyTotal} on ${formatDate(summary.renewalAt)}` : undefined,
+      ].filter(Boolean).join(" · ")
+    : summary.plan === "free"
+      ? [`Free includes ${summary.projectLimit} projects`, accessUntil ? `Paid access ended ${formatDate(accessUntil)}` : undefined].filter(Boolean).join(" · ")
+      : "Suplex cannot check the subscription.";
+  const showDetails = summary.plan === "pro" || hasSubscription || paymentRequired || paymentUrl !== undefined;
+
   return (
-    <SettingsSection>
-      {state === "loading" ? (
-        <div className="space-y-2 px-4 py-3.5" aria-busy="true" aria-label="Billing status">
-          <div className="flex items-center gap-2 text-xs text-muted-foreground"><Spinner /><span>Billing status</span></div>
-          <Skeleton className="h-4 w-40" />
-          <Skeleton className="h-8 w-3/4" />
-        </div>
-      ) : state === "error" ? (
-        <div className="space-y-2 px-4 py-3.5">
-          <Alert variant="destructive"><AlertDescription>{errorText}</AlertDescription></Alert>
-          <div><Button size="sm" variant="outline" onClick={checkSubscription} disabled={busy === "check"}>Check subscription</Button></div>
-        </div>
-      ) : summary ? (
-        <>
+    <>
+      {actionError ? <div className="mb-4"><Alert variant="destructive"><AlertDescription>{actionError}</AlertDescription></Alert></div> : null}
+      <SettingsSection>
+        <SettingRow label={summary.plan === "pro" ? "Pro plan" : summary.plan === "free" ? "Free plan" : "Plan not available"} description={summary.purchaseConfigured ? planDetail : <>{planDetail}<br />Billing is not configured. An operator configures the hosted billing service.</>}>
+          {canManage ? (
+            <div className="flex flex-wrap items-center gap-2">
+              {showPortal ? <Button size="sm" variant="outline" onClick={() => void openPortal()} disabled={busy !== ""}>Open billing</Button> : null}
+              <Button size="sm" variant="outline" onClick={checkSubscription} disabled={busy === "check"}>{busy === "check" ? <Spinner /> : null}Check subscription</Button>
+            </div>
+          ) : null}
+        </SettingRow>
+        {portalUrl ? <SettingRow label="Billing portal" description="The billing portal opens in a new tab.">{link(portalUrl, "Open billing")}</SettingRow> : null}
+      </SettingsSection>
+      {canPurchase ? (
+        <SettingsSection>
+          <SettingRow label="Upgrade to Pro" description="USD 20 per seat each month. Taxes are additional.">
+            {purchaseOpen ? (
+              <form className="flex flex-wrap items-center gap-2 sm:justify-end" onSubmit={(event) => void submitPurchase(event)}>
+                <div className="w-20"><Input aria-label="Seats" type="number" min={1} max={9999} step={1} value={purchaseSeats} onChange={(event) => setPurchaseSeats(event.target.value)} /></div>
+                <Button type="submit" size="sm" disabled={busy !== "" || !seatQuantityValid(purchaseQuantity) || purchaseQuantity < summary.requiredSeats}>{busy === "checkout" ? <Spinner /> : null}Select Pro</Button>
+                <Button type="button" size="sm" variant="ghost" onClick={() => { setPurchaseOpen(false); checkoutKey.current = undefined; }}>Cancel</Button>
+              </form>
+            ) : (
+              <Button size="sm" onClick={() => { setPurchaseSeats(String(summary.requiredSeats)); setPurchaseOpen(true); setActionError(""); }}>Select Pro</Button>
+            )}
+          </SettingRow>
+          {purchaseOpen ? (
+            <p className="pb-3 text-xs text-muted-foreground">
+              {!seatQuantityValid(purchaseQuantity)
+                ? "Select a seat count."
+                : purchaseQuantity < summary.requiredSeats
+                  ? `At least ${summary.requiredSeats} seats are necessary.`
+                  : `${formatUsd(purchaseQuantity * BILLING_SEAT_UNIT_AMOUNT)} each month before tax.`}
+            </p>
+          ) : null}
+          <ul className="grid gap-2 border-t py-3 text-xs sm:grid-cols-2">
+            {PRO_FEATURES.map(feature => <li key={feature} className="flex items-center gap-2"><Check aria-hidden="true" className="size-3.5 text-primary" />{feature}</li>)}
+          </ul>
+          {checkoutUrl ? <SettingRow label="Checkout" description="The checkout page opens in a new tab. Suplex checks the result when you return.">{link(checkoutUrl, "Open checkout")}</SettingRow> : null}
+        </SettingsSection>
+      ) : checkoutUrl ? (
+        <SettingsSection>
+          <SettingRow label="Checkout" description="The checkout page opens in a new tab. Suplex checks the result when you return.">{link(checkoutUrl, "Open checkout")}</SettingRow>
+        </SettingsSection>
+      ) : null}
+      <SettingsSection title="Usage">
+        <SettingRow label="Projects" description="Empty projects count toward the allowance.">
+          <span className="text-xs text-muted-foreground">{summary.projectCount}{" / "}{summary.plan === "unknown" ? "Unknown" : summary.projectLimit === null ? "Unlimited" : summary.projectLimit}</span>
+        </SettingRow>
+        {summary.plan === "pro" && summary.canManageBilling ? (
           <SettingRow
-            label="Plan"
-            description={summary.plan === "pro" ? "Pro costs USD 20 per seat each month. Taxes are additional." : summary.plan === "free" ? `Free includes ${summary.projectLimit} projects.` : "Suplex cannot check the subscription."}
+            label="Seats"
+            description={`${summary.purchasedSeats} purchased, ${summary.requiredSeats} active. ${seatQuantityValid(seatQuantity) && seatQuantity < summary.requiredSeats ? `At least ${summary.requiredSeats} seats are necessary.` : preview ? `Due now ${formatUsd(preview.amountDueNow)}. Each month after ${formatUsd(preview.nextSubtotal)} before tax.` : "Increases charge a prorated amount now."}`}
           >
-            <span className="text-xs text-muted-foreground">{summary.plan === "pro" ? "Pro" : summary.plan === "free" ? "Free" : "Unknown"}</span>
+            {preview ? (
+              <div className="flex flex-wrap items-center justify-end gap-2">
+                <Button size="sm" onClick={() => void confirmIncrease()} disabled={busy !== ""}>{busy === "seats" ? <Spinner /> : null}Save seats</Button>
+                <Button size="sm" variant="ghost" onClick={() => { setPreview(undefined); seatKey.current = undefined; }} disabled={busy !== ""}>Cancel</Button>
+              </div>
+            ) : (
+              <form className="flex items-center gap-2" onSubmit={(event) => void submitSeats(event)}>
+                <div className="w-20">
+                  <Input aria-label="Purchased seats" type="number" min={1} max={9999} step={1} value={seatInputValue} onChange={(event) => { setSeatSeats(event.target.value); setPreview(undefined); seatKey.current = undefined; }} />
+                </div>
+                <Button type="submit" size="sm" disabled={busy !== "" || !seatQuantityValid(seatQuantity) || seatQuantity === summary.purchasedSeats || seatQuantity < summary.requiredSeats}>Save seats</Button>
+              </form>
+            )}
           </SettingRow>
-          <SettingRow label="Projects" description="Empty projects count toward the allowance.">
-            <span className="text-xs text-muted-foreground">
-              {summary.projectCount}{" / "}{summary.plan === "unknown" ? "Unknown" : summary.projectLimit === null ? "Unlimited" : summary.projectLimit}
-            </span>
+        ) : (
+          <SettingRow label="Seats" description="Active Suplex accounts use purchased seats.">
+            <span className="text-xs text-muted-foreground">{summary.plan === "unknown" ? "Unknown" : summary.purchasedSeats}{" purchased, "}{summary.requiredSeats}{" active"}</span>
           </SettingRow>
-          <SettingRow label="Seats" description="Active Suplex accounts use purchased seat capacity.">
-            <span className="text-xs text-muted-foreground">
-              {summary.plan === "unknown" ? "Unknown" : summary.purchasedSeats}{" purchased, "}{summary.requiredSeats}{" active"}
-            </span>
-          </SettingRow>
+        )}
+        {summary.plan === "pro" && summary.restriction === "seat_limit_exceeded" ? (
+          <div className="border-t py-3"><Alert><AlertDescription>Purchased seats do not cover the active accounts. Suplex blocks new projects beyond the Free allowance until you add seats.</AlertDescription></Alert></div>
+        ) : null}
+      </SettingsSection>
+      {showDetails ? (
+        <SettingsSection title="Billing details">
           {summary.plan === "pro" ? (
             <SettingRow label="Monthly total" description={`${formatUsd(BILLING_SEAT_UNIT_AMOUNT)} per seat each month before tax.`}>
-              <span className="text-xs text-muted-foreground">{formatUsd(summary.monthlySubtotal ?? summary.purchasedSeats * BILLING_SEAT_UNIT_AMOUNT)}</span>
+              <span className="text-xs text-muted-foreground">{monthlyTotal}</span>
             </SettingRow>
           ) : null}
-          {summary.plan === "pro" && (summary.renewalAt || summary.cancelAtPeriodEnd) ? (
-            <SettingRow label="Renewal" {...(summary.cancelAtPeriodEnd ? { description: "Cancellation takes effect at the period end. Pro access continues until then." } : {})}>
-              <span className="text-xs text-muted-foreground">{summary.cancelAtPeriodEnd && summary.accessUntil ? formatDate(summary.accessUntil) : summary.renewalAt ? formatDate(summary.renewalAt) : "Not available"}</span>
+          {summary.plan === "pro" && summary.cancelAtPeriodEnd ? (
+            <SettingRow label="Cancellation" description="Cancellation takes effect at the period end. Pro access continues until then.">
+              <span className="text-xs text-muted-foreground">{summary.accessUntil ? formatDate(summary.accessUntil) : "Not available"}</span>
             </SettingRow>
           ) : null}
           {hasSubscription ? (
@@ -382,99 +465,13 @@ export function BillingSection({ companyId }: { companyId: string }): ReactEleme
               <span className="text-xs text-muted-foreground">{lifecycleStatus ?? "Not active"}</span>
             </SettingRow>
           ) : null}
-          {summary.plan === "free" && accessUntil ? (
-            <SettingRow label="Access">
-              <span className="text-xs text-muted-foreground">Paid access ended {formatDate(accessUntil)}</span>
-            </SettingRow>
-          ) : null}
-          {summary.plan === "pro" && summary.restriction === "seat_limit_exceeded" ? (
-            <div className="px-4 py-3">
-              <Alert><AlertDescription>Purchased seats do not cover the active accounts. Suplex blocks new projects beyond the Free allowance until you add seats.</AlertDescription></Alert>
-            </div>
-          ) : null}
-          {!summary.purchaseConfigured ? (
-            <SettingRow label="Setup" description="An operator configures the hosted billing service.">
-              <span className="text-xs text-muted-foreground">Billing is not configured.</span>
-            </SettingRow>
-          ) : null}
           {paymentRequired || paymentUrl ? (
             <SettingRow label="Payment" description="Suplex applies the change after you approve the payment.">
-              {paymentUrl
-                ? <a className="text-xs text-primary underline underline-offset-2" href={paymentUrl} target="_blank" rel="noopener noreferrer">Approve the payment</a>
-                : <span className="text-xs text-muted-foreground">Open billing to approve it.</span>}
+              {paymentUrl ? link(paymentUrl, "Approve the payment") : <span className="text-xs text-muted-foreground">Open billing to approve it.</span>}
             </SettingRow>
           ) : null}
-          {canPurchase ? (
-            <SettingRow label="Pro" description="Pro costs USD 20 per seat each month. Taxes are additional.">
-              {purchaseOpen ? (
-                <form className="flex flex-wrap items-center gap-2" onSubmit={(event) => void submitPurchase(event)}>
-                  <div className="w-24"><Input aria-label="Seats" type="number" min={1} max={9999} step={1} value={purchaseSeats} onChange={(event) => setPurchaseSeats(event.target.value)} /></div>
-                  <span className="text-xs text-muted-foreground">
-                    {!seatQuantityValid(purchaseQuantity)
-                      ? "Select a seat count."
-                      : summary.plan === "free" && purchaseQuantity < summary.requiredSeats
-                        ? `At least ${summary.requiredSeats} seats are necessary.`
-                        : `${formatUsd(purchaseQuantity * BILLING_SEAT_UNIT_AMOUNT)} each month before tax.`}
-                  </span>
-                  <Button type="submit" size="sm" disabled={busy !== "" || !seatQuantityValid(purchaseQuantity) || purchaseQuantity < summary.requiredSeats}>{busy === "checkout" ? <Spinner /> : null}Select Pro</Button>
-                  <Button type="button" size="sm" variant="ghost" onClick={() => { setPurchaseOpen(false); checkoutKey.current = undefined; }}>Cancel</Button>
-                </form>
-              ) : (
-                <Button size="sm" onClick={() => { setPurchaseSeats(String(summary.requiredSeats)); setPurchaseOpen(true); setActionError(""); }}>Select Pro</Button>
-              )}
-            </SettingRow>
-          ) : null}
-          {summary.plan === "pro" && summary.canManageBilling ? (
-            <SettingRow
-              label="Purchased seats"
-              description={seatQuantityValid(seatQuantity) && seatQuantity < summary.requiredSeats ? `At least ${summary.requiredSeats} seats are necessary.` : "Select a new seat count. Increases charge a prorated amount now."}
-            >
-              {preview ? (
-                <div className="flex flex-wrap items-center justify-end gap-2">
-                  <span className="text-xs text-muted-foreground">Due now {formatUsd(preview.amountDueNow)}. Each month after {formatUsd(preview.nextSubtotal)} before tax.</span>
-                  <Button size="sm" onClick={() => void confirmIncrease()} disabled={busy !== ""}>{busy === "seats" ? <Spinner /> : null}Save seats</Button>
-                  <Button size="sm" variant="ghost" onClick={() => { setPreview(undefined); seatKey.current = undefined; }} disabled={busy !== ""}>Cancel</Button>
-                </div>
-              ) : (
-                <form className="flex items-center gap-2" onSubmit={(event) => void submitSeats(event)}>
-                  <div className="w-24">
-                    <Input
-                      aria-label="Purchased seats"
-                      type="number"
-                      min={1}
-                      max={9999}
-                      step={1}
-                      value={seatInputValue}
-                      onChange={(event) => { setSeatSeats(event.target.value); setPreview(undefined); seatKey.current = undefined; }}
-                    />
-                  </div>
-                  <Button type="submit" size="sm" disabled={busy !== "" || !seatQuantityValid(seatQuantity) || seatQuantity === summary.purchasedSeats || seatQuantity < summary.requiredSeats}>Save seats</Button>
-                </form>
-              )}
-            </SettingRow>
-          ) : null}
-          {canManage ? (
-            <SettingRow label="Subscription">
-              <div className="flex flex-wrap items-center gap-2">
-                {showPortal ? <Button size="sm" variant="outline" onClick={() => void openPortal()} disabled={busy !== ""}>Open billing</Button> : null}
-                <Button size="sm" variant="outline" onClick={checkSubscription} disabled={busy === "check"}>{busy === "check" ? <Spinner /> : null}Check subscription</Button>
-              </div>
-            </SettingRow>
-          ) : null}
-          {checkoutUrl ? (
-            <SettingRow label="Checkout" description="The checkout page opens in a new tab. Suplex checks the result when you return.">
-              <a className="text-xs text-primary underline underline-offset-2" href={checkoutUrl} target="_blank" rel="noopener noreferrer">Open checkout</a>
-            </SettingRow>
-          ) : null}
-          {portalUrl ? (
-            <SettingRow label="Billing portal" description="The billing portal opens in a new tab.">
-              <a className="text-xs text-primary underline underline-offset-2" href={portalUrl} target="_blank" rel="noopener noreferrer">Open billing</a>
-            </SettingRow>
-          ) : null}
-          {actionError ? (
-            <div className="px-4 py-3"><Alert variant="destructive"><AlertDescription>{actionError}</AlertDescription></Alert></div>
-          ) : null}
-        </>
+          {summary.plan === "pro" ? <SettingRow label="Payment method and invoices" description="Stripe keeps the payment method, billing address, and invoices. Select Open billing to change them." /> : null}
+        </SettingsSection>
       ) : null}
       <AlertDialog open={decreaseQuantity !== undefined} onOpenChange={(open) => { if (!open) { setDecreaseQuantity(undefined); if (seatKey.current?.kind === "decrease") seatKey.current = undefined; } }}>
         <AlertDialogContent>
@@ -488,6 +485,6 @@ export function BillingSection({ companyId }: { companyId: string }): ReactEleme
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-    </SettingsSection>
+    </>
   );
 }

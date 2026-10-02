@@ -976,6 +976,47 @@ impl Github {
         Ok((reply.status, reply.body))
     }
 
+    /// One conditional GET: `None` when GitHub answers 304 for `etag`, else the new ETag.
+    /// A 304 for an authenticated request does not count against the rate limit.
+    pub(crate) async fn changed_since(
+        &self,
+        path: &str,
+        etag: Option<&str>,
+        operation: &str,
+    ) -> GithubResult<Option<String>> {
+        let unavailable = |error: &dyn std::fmt::Display| {
+            failure(
+                "provider-unavailable",
+                redact_summary(&format!("{operation} failed: {error}")),
+            )
+        };
+        let mut headers = axum::http::HeaderMap::new();
+        if let Some(value) = etag.and_then(|etag| etag.parse().ok()) {
+            headers.insert(axum::http::header::IF_NONE_MATCH, value);
+        }
+        let client = self.access.client();
+        let response = client
+            ._get_with_headers(path, Some(headers))
+            .await
+            .map_err(|error| unavailable(&error))?;
+        let status = response.status().as_u16();
+        let next = response
+            .headers()
+            .get(axum::http::header::ETAG)
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or_default()
+            .to_owned();
+        client
+            .body_to_string(response)
+            .await
+            .map_err(|error| unavailable(&error))?;
+        match status {
+            304 => Ok(None),
+            200..300 => Ok(Some(next)),
+            _ => Err(unavailable(&format!("HTTP {status}"))),
+        }
+    }
+
     /// One GET with the `api` failure classes, for the trigger inspection port.
     pub(crate) async fn get_json(&self, path: &str, operation: &str) -> GithubResult<Value> {
         self.value("GET", path, None, operation).await
@@ -1096,7 +1137,7 @@ impl Github {
     }
 
     /// POST one GraphQL document. A response with errors and no data fails.
-    async fn graphql<T: serde::de::DeserializeOwned>(
+    pub(crate) async fn graphql<T: serde::de::DeserializeOwned>(
         &self,
         query: &str,
         variables: Value,

@@ -38,6 +38,11 @@
         "message": "Request value is invalid"
       },
       {
+        "code": "invalid-invalid_value",
+        "field": ".sortOrder",
+        "message": "Request value is invalid"
+      },
+      {
         "code": "invalid-unrecognized_keys",
         "field": ".",
         "message": "Request value is invalid"

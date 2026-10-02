@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, type ReactElement } from "react";
 import { Archive, ArchiveRestore, Check, CircleAlert, Ellipsis, Pencil, Power, PowerOff } from "lucide-react";
-import type { GithubTriggerActivity, GithubTriggerRule } from "../../contracts/github-triggers.js";
+import type { GithubTriggerActivity, GithubTriggerRule, GithubTriggerSortOrder } from "../../contracts/github-triggers.js";
 import type { ApiProject, ApiWorkflow } from "../../shell/view-shared.js";
 import { readJsonUnchecked, withCompany } from "../../lib/api.js";
 import { useCompanyContext } from "../../shell/company-context.js";
@@ -20,6 +20,13 @@ import { taskDeliveryTargetOptions } from "../tasks/task-delivery-target.js";
 import { LoadingState } from "../../components/app/loading-state.js";
 import { listProjects } from "../projects/lib/project-api.js";
 
+const sortOrderOptions: Array<{ value: GithubTriggerSortOrder; label: string }> = [
+  { value: "created_asc", label: "Oldest created first" },
+  { value: "created_desc", label: "Newest created first" },
+  { value: "labeled_asc", label: "Oldest labelled first" },
+  { value: "labeled_desc", label: "Newest labelled first" },
+];
+
 const columns: SettingsTableColumn[] = [
   { key: "name", label: "Name", width: 180 },
   { key: "project", label: "Project", width: 150 },
@@ -32,11 +39,11 @@ const columns: SettingsTableColumn[] = [
   { key: "edit", width: 36 },
 ];
 
-type Draft = { name: string; projectId: string; label: string; workflowId: string; deliveryTarget: GithubTriggerRule["deliveryTarget"]; protectedPaths: string };
+type Draft = { name: string; projectId: string; label: string; workflowId: string; deliveryTarget: GithubTriggerRule["deliveryTarget"]; sortOrder: GithubTriggerRule["sortOrder"]; protectedPaths: string };
 type Editor = { kind: "closed" } | { kind: "create"; draft: Draft } | { kind: "edit"; rule: GithubTriggerRule; draft: Draft };
 
-const emptyDraft = (): Draft => ({ name: "", projectId: "", label: "", workflowId: "", deliveryTarget: "merged", protectedPaths: "" });
-const draftFor = (rule: GithubTriggerRule): Draft => ({ name: rule.name, projectId: rule.projectId, label: rule.label, workflowId: rule.workflowId, deliveryTarget: rule.deliveryTarget, protectedPaths: rule.protectedPaths.join("\n") });
+const emptyDraft = (): Draft => ({ name: "", projectId: "", label: "", workflowId: "", deliveryTarget: "merged", sortOrder: "labeled_asc", protectedPaths: "" });
+const draftFor = (rule: GithubTriggerRule): Draft => ({ name: rule.name, projectId: rule.projectId, label: rule.label, workflowId: rule.workflowId, deliveryTarget: rule.deliveryTarget, sortOrder: rule.sortOrder, protectedPaths: rule.protectedPaths.join("\n") });
 const paths = (value: string): string[] => value.split("\n").map((path) => path.trim()).filter(Boolean);
 
 export function TriggerSettingsView(): ReactElement {
@@ -157,6 +164,7 @@ export function TriggerSettingsView(): ReactElement {
         <Field><FieldLabel htmlFor="trigger-name">Name</FieldLabel><Input id="trigger-name" autoFocus disabled={busy} value={draft.name} onChange={(event) => updateDraft({ name: event.target.value })} required /></Field>
         <Field><FieldLabel htmlFor="trigger-project">Project</FieldLabel><Select disabled={busy || Boolean(editor.kind === "edit" && editor.rule.enabled)} value={draft.projectId} onValueChange={(value) => updateDraft({ projectId: value ?? "" })}><SelectTrigger id="trigger-project"><SelectValue placeholder="Select a project" /></SelectTrigger><SelectContent>{projects.filter((project) => project.repository).map((project) => <SelectItem key={project.id} value={project.id}>{project.name}</SelectItem>)}</SelectContent></Select>{editor.kind === "edit" && editor.rule.enabled ? <p className="text-xs text-muted-foreground">Disable the rule before you change the project.</p> : null}</Field>
         <Field><FieldLabel htmlFor="trigger-label">Pull request label</FieldLabel><Input id="trigger-label" disabled={busy} value={draft.label} onChange={(event) => updateDraft({ label: event.target.value })} required /></Field>
+        <Field><FieldLabel htmlFor="trigger-sort-order">Sort by</FieldLabel><Select disabled={busy} value={draft.sortOrder} onValueChange={(value) => updateDraft({ sortOrder: value as Draft["sortOrder"] })}><SelectTrigger id="trigger-sort-order"><SelectValue /></SelectTrigger><SelectContent>{sortOrderOptions.map((option) => <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>)}</SelectContent></Select></Field>
         <Field><FieldLabel htmlFor="trigger-workflow">Workflow</FieldLabel><Select disabled={busy} value={draft.workflowId} onValueChange={(value) => { const workflow = workflows.find((candidate) => candidate.id === value); updateDraft({ workflowId: value ?? "", deliveryTarget: workflow?.engine === "refine_pull_request" ? "merged" : workflow?.deliveryTarget ?? "pull_request_draft" }); }}><SelectTrigger id="trigger-workflow"><SelectValue placeholder="Select a workflow" /></SelectTrigger><SelectContent>{workflows.map((workflow) => <SelectItem key={workflow.id} value={workflow.id}>{workflow.name}</SelectItem>)}</SelectContent></Select></Field>
         <Field><FieldLabel htmlFor="trigger-delivery">Delivery</FieldLabel><Select disabled={busy || selectedWorkflow?.engine === "refine_pull_request"} value={draft.deliveryTarget} onValueChange={(value) => updateDraft({ deliveryTarget: value as Draft["deliveryTarget"] })}><SelectTrigger id="trigger-delivery"><SelectValue /></SelectTrigger><SelectContent>{taskDeliveryTargetOptions.map((option) => <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>)}</SelectContent></Select></Field>
         <Field><FieldLabel htmlFor="trigger-paths">Protected paths</FieldLabel><Textarea id="trigger-paths" disabled={busy} value={draft.protectedPaths} onChange={(event) => updateDraft({ protectedPaths: event.target.value })} /><p className="text-xs text-muted-foreground">Enter one file path or directory prefix per line. End each directory prefix with /. No globs. Empty means no file exclusion.</p></Field>

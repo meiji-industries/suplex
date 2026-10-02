@@ -6,7 +6,8 @@
     "label": "x",
     "workflowId": "x",
     "deliveryTarget": "local_worktree",
-    "protectedPaths": []
+    "protectedPaths": [],
+    "sortOrder": "created_asc"
   },
   "expected": {
     "accepted": false,

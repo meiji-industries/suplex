@@ -320,53 +320,177 @@ pub async fn validate_label(github: &Github, name: &str, label: &str) -> GithubR
     }
 }
 
+crate::shared::wire_enum! {
+    /// The order in which a trigger admits its labelled pull requests.
+    pub enum TriggerSortOrder {
+        CreatedAsc = "created_asc",
+        CreatedDesc = "created_desc",
+        LabeledAsc = "labeled_asc",
+        LabeledDesc = "labeled_desc",
+    }
+}
+
+const LABELLED_PULL_REQUESTS: &str = "query($owner:String!,$name:String!,$label:String!,$after:String,$direction:OrderDirection!){repository(owner:$owner,name:$name){pullRequests(states:OPEN,labels:[$label],first:100,after:$after,orderBy:{field:CREATED_AT,direction:$direction}){pageInfo{hasNextPage endCursor}nodes{number createdAt timelineItems(itemTypes:LABELED_EVENT,last:100){nodes{...on LabeledEvent{createdAt label{name}}}}}}}}";
+
+#[derive(Deserialize)]
+struct LabelledPage {
+    data: LabelledData,
+}
+
+#[derive(Deserialize)]
+struct LabelledData {
+    repository: Option<LabelledRepository>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct LabelledRepository {
+    pull_requests: LabelledConnection,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct LabelledConnection {
+    page_info: PageInfo,
+    nodes: Vec<LabelledPullRequest>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PageInfo {
+    has_next_page: bool,
+    end_cursor: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct LabelledPullRequest {
+    number: i64,
+    created_at: String,
+    timeline_items: LabelEvents,
+}
+
+#[derive(Deserialize)]
+struct LabelEvents {
+    nodes: Vec<LabelEvent>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct LabelEvent {
+    created_at: String,
+    label: LabelName,
+}
+
+#[derive(Deserialize)]
+struct LabelName {
+    name: String,
+}
+
+/// The most recently updated open issue with `label`. Labelling a pull request
+/// updates it, so this page's ETag changes whenever a candidate may have appeared.
+pub fn labelled_change_path(name: &str, label: &str) -> GithubResult<String> {
+    label_valid(label)?;
+    Ok(format!(
+        "/repos/{}/issues?state=open&labels={}&sort=updated&direction=desc&per_page=1",
+        repository(name)?,
+        encode_uri_component(label)
+    ))
+}
+
+/// Open pull requests with `label`, in admission order.
 pub async fn list_open_pull_requests_by_label(
     github: &Github,
     name: &str,
     label: &str,
+    order: TriggerSortOrder,
 ) -> GithubResult<Vec<i64>> {
     label_valid(label)?;
     let repo = repository(name)?;
-    let mut candidates = Vec::new();
+    let (owner, name) = repo.split_once('/').ok_or_else(|| invalid("repository"))?;
+    let direction = if order == TriggerSortOrder::CreatedDesc {
+        "DESC"
+    } else {
+        "ASC"
+    };
+    let mut pulls = Vec::new();
     let mut seen = HashSet::new();
-    for page in 1.. {
-        let value = github
-            .get_json(
-                &format!(
-                    "/repos/{repo}/issues?state=open&labels={}&per_page=100&page={page}",
-                    encode_uri_component(label)
-                ),
+    let mut after = None;
+    loop {
+        let page: LabelledPage = github
+            .graphql(
+                LABELLED_PULL_REQUESTS,
+                serde_json::json!({"owner": owner, "name": name, "label": label, "after": after, "direction": direction}),
                 "labelled pull request enumeration",
             )
             .await?;
-        let issues = value
-            .as_array()
-            .filter(|issues| issues.len() <= 100)
-            .ok_or_else(|| invalid("labelled issue page"))?;
-        for issue in issues {
-            let number = issue
-                .get("number")
-                .and_then(Value::as_i64)
-                .filter(|number| *number > 0)
-                .ok_or_else(|| invalid("labelled issue page"))?;
-            if issue
-                .get("pull_request")
-                .is_some_and(|value| !value.is_object())
-            {
-                return Err(invalid("labelled issue page"));
-            }
-            if !seen.insert(number) {
-                return Err(invalid("duplicate labelled issue page"));
-            }
-            if issue.get("pull_request").is_some() {
-                candidates.push(number);
-            }
+        let connection = page
+            .data
+            .repository
+            .ok_or_else(|| invalid("labelled pull request page"))?
+            .pull_requests;
+        if connection.nodes.len() > 100 {
+            return Err(invalid("labelled pull request page"));
         }
-        if issues.len() < 100 {
-            break;
+        for pull in connection.nodes {
+            let pull =
+                candidate(pull, label).ok_or_else(|| invalid("labelled pull request page"))?;
+            if !seen.insert(pull.number) {
+                return Err(invalid("duplicate labelled pull request page"));
+            }
+            pulls.push(pull);
+        }
+        match (
+            connection.page_info.has_next_page,
+            connection.page_info.end_cursor,
+        ) {
+            (true, Some(cursor)) => after = Some(cursor),
+            (true, None) => return Err(invalid("labelled pull request page")),
+            (false, _) => break,
         }
     }
-    Ok(candidates)
+    Ok(order_candidates(pulls, order))
+}
+
+type Time = chrono::DateTime<chrono::FixedOffset>;
+
+/// A labelled pull request with its creation time and the latest time its label was applied.
+#[derive(Debug, Clone, PartialEq)]
+struct Candidate {
+    number: i64,
+    created: Time,
+    labelled: Time,
+}
+
+fn candidate(pull: LabelledPullRequest, label: &str) -> Option<Candidate> {
+    let time = |text: &str| chrono::DateTime::parse_from_rfc3339(text).ok();
+    let created = time(&pull.created_at)?;
+    let mut labelled = None;
+    for event in pull.timeline_items.nodes {
+        if event.label.name.eq_ignore_ascii_case(label) {
+            labelled = labelled.max(Some(time(&event.created_at)?));
+        }
+    }
+    (pull.number > 0).then_some(Candidate {
+        number: pull.number,
+        created,
+        labelled: labelled.unwrap_or(created),
+    })
+}
+
+fn order_candidates(mut pulls: Vec<Candidate>, order: TriggerSortOrder) -> Vec<i64> {
+    use std::cmp::Reverse;
+    match order {
+        TriggerSortOrder::CreatedAsc => pulls.sort_by_key(|pull| (pull.created, pull.number)),
+        TriggerSortOrder::CreatedDesc => {
+            pulls.sort_by_key(|pull| (Reverse(pull.created), pull.number));
+        }
+        TriggerSortOrder::LabeledAsc => pulls.sort_by_key(|pull| (pull.labelled, pull.number)),
+        TriggerSortOrder::LabeledDesc => {
+            pulls.sort_by_key(|pull| (Reverse(pull.labelled), pull.number));
+        }
+    }
+    pulls.into_iter().map(|pull| pull.number).collect()
 }
 
 pub async fn inspect_pull_request(
@@ -466,6 +590,46 @@ mod tests {
 
     fn paths(values: &[&str]) -> Vec<String> {
         values.iter().map(|value| (*value).to_owned()).collect()
+    }
+
+    #[test]
+    fn candidates_sort_by_creation_or_by_the_latest_time_the_label_was_applied() {
+        let pull = |number: i64, created: &str, events: Value| {
+            let pull: LabelledPullRequest = serde_json::from_value(json!({
+                "number": number, "createdAt": created, "timelineItems": {"nodes": events},
+            }))
+            .unwrap();
+            candidate(pull, "ready").unwrap()
+        };
+        let event = |label: &str, at: &str| json!({"createdAt": at, "label": {"name": label}});
+        let pulls = vec![
+            pull(
+                1,
+                "2026-01-01T00:00:00Z",
+                json!([event("Ready", "2026-03-01T00:00:00Z")]),
+            ),
+            pull(
+                2,
+                "2026-01-02T00:00:00Z",
+                json!([
+                    event("ready", "2026-01-05T00:00:00Z"),
+                    event("other", "2026-09-01T00:00:00Z"),
+                    event("ready", "2026-04-01T00:00:00Z"),
+                ]),
+            ),
+            pull(3, "2026-01-03T00:00:00Z", json!([])),
+            pull(4, "2026-01-03T00:00:00Z", json!([])),
+        ];
+        let order = |order| order_candidates(pulls.clone(), order);
+        assert_eq!(order(TriggerSortOrder::CreatedAsc), [1, 2, 3, 4]);
+        assert_eq!(order(TriggerSortOrder::CreatedDesc), [3, 4, 2, 1]);
+        assert_eq!(order(TriggerSortOrder::LabeledAsc), [3, 4, 1, 2]);
+        assert_eq!(order(TriggerSortOrder::LabeledDesc), [2, 1, 3, 4]);
+        let bad: LabelledPullRequest = serde_json::from_value(json!({
+            "number": 5, "createdAt": "yesterday", "timelineItems": {"nodes": []},
+        }))
+        .unwrap();
+        assert_eq!(candidate(bad, "ready"), None);
     }
 
     #[test]

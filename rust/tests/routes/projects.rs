@@ -15,8 +15,6 @@ mod tests {
         body::to_bytes,
         http::{HeaderValue, header},
     };
-    use chrono::DateTime;
-
     use super::*;
     use crate::http::validation::{test_body, test_path};
     use axum::extract::{OriginalUri, Path};
@@ -116,9 +114,7 @@ mod tests {
             crate::shared::ids::random_hex_id("suplex_project_http").unwrap()
         ));
         let mut database = SuplexDatabase::open(&path, OpenMode::Migrate).unwrap();
-        let now = DateTime::parse_from_rfc3339("2026-09-24T12:00:00Z")
-            .unwrap()
-            .with_timezone(&Utc);
+        let now = Utc::now();
         let admin = identity_auth::development_sign_in(&mut database, now).unwrap();
         let company =
             companies::create_company(&mut database, &admin.user.id, "Projects", now).unwrap();

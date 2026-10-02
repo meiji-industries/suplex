@@ -1,5 +1,6 @@
 //! GitHub trigger request contracts.
 
+use crate::integrations::github_triggers_inspection::TriggerSortOrder;
 use crate::tasks::control::DeliveryTarget;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -15,6 +16,7 @@ pub struct GithubTriggerCreate {
     pub workflow_id: String,
     pub delivery_target: DeliveryTarget,
     pub protected_paths: Vec<String>,
+    pub sort_order: TriggerSortOrder,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -32,6 +34,8 @@ pub struct GithubTriggerPatch {
     pub delivery_target: Option<DeliveryTarget>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub protected_paths: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sort_order: Option<TriggerSortOrder>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub enabled: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -55,7 +59,7 @@ pub struct GithubTriggerCompanyParams {
 type Parse = fn(Option<&Value>) -> ContractResult<Value>;
 
 /// `(name, parser)` in schema order; every field is required on create.
-fn fields() -> [(&'static str, Parse); 6] {
+fn fields() -> [(&'static str, Parse); 7] {
     [
         ("projectId", |input| text(1, 128)(input)),
         ("name", |input| trimmed(1, 120)(input)),
@@ -63,6 +67,7 @@ fn fields() -> [(&'static str, Parse); 6] {
         ("workflowId", |input| text(1, 128)(input)),
         ("deliveryTarget", choice::<DeliveryTarget>),
         ("protectedPaths", |input| list(text(1, 512), 0, 100)(input)),
+        ("sortOrder", choice::<TriggerSortOrder>),
     ]
 }
 

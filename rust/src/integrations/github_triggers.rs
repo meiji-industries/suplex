@@ -2,6 +2,8 @@
 //! (`src/integrations/github/triggers.ts`, `trigger-repository.ts`,
 //! `trigger-poller.ts`, and the trigger admission paths of `tasks/tasks.ts`).
 
+use std::collections::HashMap;
+
 use crate::identity::IdentityError;
 use crate::platform::PlatformError;
 use crate::projects::ProjectError;
@@ -28,8 +30,9 @@ use super::{
         TaskBinding,
     },
     github_triggers_inspection::{
-        PullRequestInspection, inspect_pull_request, list_open_pull_requests_by_label,
-        observe_repository, validate_label, validate_protected_paths,
+        PullRequestInspection, TriggerSortOrder, inspect_pull_request, labelled_change_path,
+        list_open_pull_requests_by_label, observe_repository, validate_label,
+        validate_protected_paths,
     },
 };
 use crate::http::contracts::typed::projects::RepositoryConnection;
@@ -146,6 +149,7 @@ pub struct Rule {
     pub workflow_id: String,
     pub delivery_target: String,
     pub protected_paths: Vec<String>,
+    pub sort_order: TriggerSortOrder,
     pub repository_id: i64,
     pub repository_name: String,
     pub authority_user_id: String,
@@ -210,6 +214,16 @@ fn rule(row: &Row<'_>) -> rusqlite::Result<Rule> {
                 Box::new(error),
             )
         })?,
+        sort_order: {
+            let text: String = row.get("sort_order")?;
+            TriggerSortOrder::parse(&text).ok_or_else(|| {
+                rusqlite::Error::FromSqlConversionFailure(
+                    0,
+                    rusqlite::types::Type::Text,
+                    format!("unknown trigger sort order {text}").into(),
+                )
+            })?
+        },
         repository_id: row.get("repository_id")?,
         repository_name: row.get("repository_name")?,
         authority_user_id: row.get("authority_user_id")?,
@@ -323,8 +337,8 @@ fn update_rule(
     expected_revision: i64,
 ) -> DatabaseResult<bool> {
     Ok(database.connection().execute(
-        "UPDATE suplex_github_trigger_rules SET project_id=?1, name=?2, label=?3, workflow_id=?4, delivery_target=?5, protected_paths_json=?6, repository_id=?7, repository_name=?8, authority_user_id=?9, enabled=?10, archived_at=?11, revision=?12, last_successful_check_at=?13, next_retry_at=?14, latest_error=?15, failure_count=?16, updated_at=?17 WHERE id=?18 AND company_id=?19 AND revision=?20",
-        params![next.project_id, next.name, next.label, next.workflow_id, next.delivery_target, serde_json::to_string(&next.protected_paths)?, next.repository_id, next.repository_name, next.authority_user_id, i64::from(next.enabled), next.archived_at, next.revision, next.last_successful_check_at, next.next_retry_at, next.latest_error, next.failure_count, next.updated_at, next.id, next.company_id, expected_revision],
+        "UPDATE suplex_github_trigger_rules SET project_id=?1, name=?2, label=?3, workflow_id=?4, delivery_target=?5, protected_paths_json=?6, repository_id=?7, repository_name=?8, authority_user_id=?9, enabled=?10, archived_at=?11, revision=?12, last_successful_check_at=?13, next_retry_at=?14, latest_error=?15, failure_count=?16, updated_at=?17, sort_order=?21 WHERE id=?18 AND company_id=?19 AND revision=?20",
+        params![next.project_id, next.name, next.label, next.workflow_id, next.delivery_target, serde_json::to_string(&next.protected_paths)?, next.repository_id, next.repository_name, next.authority_user_id, i64::from(next.enabled), next.archived_at, next.revision, next.last_successful_check_at, next.next_retry_at, next.latest_error, next.failure_count, next.updated_at, next.id, next.company_id, expected_revision, next.sort_order.as_str()],
     )? == 1)
 }
 
@@ -623,6 +637,11 @@ fn message(error: &(dyn Error + 'static)) -> (String, Option<String>) {
     if let Some(IdentityError::Auth { message, .. }) = error.downcast_ref() {
         return ((*message).into(), None);
     }
+    if let Some(task @ (TaskError::Failure { .. } | TaskError::Source { .. })) =
+        error.downcast_ref()
+    {
+        return (task.to_string(), None);
+    }
     (UNAVAILABLE.into(), None)
 }
 
@@ -743,6 +762,7 @@ pub async fn create<D: Db>(
         workflow_id: config.workflow_id.clone(),
         delivery_target: config.delivery_target.clone(),
         protected_paths: config.protected_paths.clone(),
+        sort_order: input.sort_order,
         repository_id,
         repository_name,
         authority_user_id: user_id.to_owned(),
@@ -760,8 +780,8 @@ pub async fn create<D: Db>(
         database.transaction(true, |database| {
             same_local(database, user_id, company_id, &config, &expected)?;
             database.connection().execute(
-                "INSERT INTO suplex_github_trigger_rules (id, company_id, project_id, name, label, workflow_id, delivery_target, protected_paths_json, repository_id, repository_name, authority_user_id, enabled, archived_at, revision, last_successful_check_at, next_retry_at, latest_error, failure_count, recent_activity_json, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 0, NULL, 1, NULL, NULL, NULL, 0, '[]', ?12, ?13)",
-                params![created.id, created.company_id, created.project_id, created.name, created.label, created.workflow_id, created.delivery_target, serde_json::to_string(&created.protected_paths)?, created.repository_id, created.repository_name, created.authority_user_id, created.created_at, created.updated_at],
+                "INSERT INTO suplex_github_trigger_rules (id, company_id, project_id, name, label, workflow_id, delivery_target, protected_paths_json, repository_id, repository_name, authority_user_id, enabled, archived_at, revision, last_successful_check_at, next_retry_at, latest_error, failure_count, recent_activity_json, created_at, updated_at, sort_order) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 0, NULL, 1, NULL, NULL, NULL, 0, '[]', ?12, ?13, ?14)",
+                params![created.id, created.company_id, created.project_id, created.name, created.label, created.workflow_id, created.delivery_target, serde_json::to_string(&created.protected_paths)?, created.repository_id, created.repository_name, created.authority_user_id, created.created_at, created.updated_at, created.sort_order.as_str()],
             )?;
             audit(database, user_id, "github_trigger_created", &created)
         })
@@ -839,7 +859,8 @@ pub async fn update<D: Db>(
         || patch.label.is_some()
         || patch.workflow_id.is_some()
         || patch.delivery_target.is_some()
-        || patch.protected_paths.is_some();
+        || patch.protected_paths.is_some()
+        || patch.sort_order.is_some();
     let time = now_millis_rfc3339();
     if patch.enabled == Some(false) || patch.archived == Some(true) {
         if configures || patch.archived == Some(false) {
@@ -918,6 +939,7 @@ pub async fn update<D: Db>(
         workflow_id: config.workflow_id.clone(),
         delivery_target: config.delivery_target.clone(),
         protected_paths: config.protected_paths.clone(),
+        sort_order: patch.sort_order.unwrap_or(current.sort_order),
         authority_user_id: config.authority_user_id.clone(),
         repository_id,
         repository_name,
@@ -1024,8 +1046,13 @@ async fn preview<D: Db>(
             409,
         ));
     }
-    let candidates =
-        list_open_pull_requests_by_label(github, &rule.repository_name, &rule.label).await?;
+    let candidates = list_open_pull_requests_by_label(
+        github,
+        &rule.repository_name,
+        &rule.label,
+        rule.sort_order,
+    )
+    .await?;
     let (mut candidate_failure, mut candidate_retry) = (false, None);
     for number in candidates {
         let observed = preview_candidate(
@@ -1203,6 +1230,33 @@ pub async fn process_enabled_rules<D: Db>(
     for rule in rules {
         // Each repository has its own retry state.
         let _ = dispatch_rule(database, github, &rule, wake).await;
+    }
+}
+
+/// Run a pass for each due rule whose labelled pull requests changed since `etags`.
+/// A failed check waits for the next full pass, which records it.
+pub async fn process_changed_rules<D: Db>(
+    database: &D,
+    github: &Github,
+    etags: &mut HashMap<String, String>,
+    wake: &(dyn Fn(String) + Sync),
+) {
+    let _queue = QUEUE.lock().await;
+    let Ok(rules) = db(database, |database| enabled_due(database)) else {
+        return;
+    };
+    for rule in rules {
+        let Ok(path) = labelled_change_path(&rule.repository_name, &rule.label) else {
+            continue;
+        };
+        let known = etags.get(&rule.id).map(String::as_str);
+        if let Ok(Some(etag)) = github
+            .changed_since(&path, known, "labelled pull request change check")
+            .await
+        {
+            etags.insert(rule.id.clone(), etag);
+            let _ = dispatch_rule(database, github, &rule, wake).await;
+        }
     }
 }
 
@@ -1421,10 +1475,24 @@ impl<D: Db> Pass<'_, D> {
             dispatches::list_by_rule(database, company, rule_id)
         })?;
         for linked in linked.into_iter().filter(|value| value.task_id.is_some()) {
-            if let Err(error) =
-                start_task_from_trigger(self.database, self.github, &linked.id, self.wake).await
-            {
-                self.fail(error, linked.pull_request_number, linked.task_id);
+            match start_task_from_trigger(self.database, self.github, &linked.id, self.wake).await {
+                Err(error) if error.downcast_ref::<TaskError>().is_some() => {
+                    self.activity.push(Activity {
+                        previously_processed: true,
+                        task_status: Some("backlog".into()),
+                        task_id: linked.task_id,
+                        ..Activity::new(
+                            linked.pull_request_number,
+                            None,
+                            "excluded",
+                            &error.to_string(),
+                        )
+                    });
+                }
+                Err(error) => {
+                    self.fail(error, linked.pull_request_number, linked.task_id);
+                }
+                Ok(_) => {}
             }
         }
         Ok(())
@@ -1436,6 +1504,7 @@ impl<D: Db> Pass<'_, D> {
             self.github,
             &self.rule.repository_name,
             &self.rule.label,
+            self.rule.sort_order,
         )
         .await?;
         for number in candidates {
@@ -1786,7 +1855,8 @@ fn startable(database: &SuplexDatabase, task_id: &str) -> DatabaseResult<(String
         [task_id],
         |row| Ok((row.get::<_, String>(0)?, row.get::<_, bool>(1)?)),
     )?;
-    let can_start = live && matches!(status.as_str(), "backlog" | "queued");
+    // A queued task was already started; the scheduler admits it when capacity frees.
+    let can_start = live && status == "backlog";
     Ok((status, can_start))
 }
 
@@ -1921,6 +1991,28 @@ pub fn spawn_poller(
     shutdown: watch::Receiver<bool>,
 ) {
     let wake: std::sync::Arc<dyn Fn(String) + Send + Sync> = std::sync::Arc::new(wake);
+    let etags = std::sync::Arc::new(tokio::sync::Mutex::new(HashMap::new()));
+    tokio::spawn(poller_loop(
+        {
+            let (database_path, wake) = (database_path.clone(), wake.clone());
+            move || {
+                let (database_path, wake, etags) =
+                    (database_path.clone(), wake.clone(), etags.clone());
+                async move {
+                    let database = Mutex::new(
+                        SuplexDatabase::open(&database_path, OpenMode::ReadWrite).map_err(send)?,
+                    );
+                    if let Ok(github) = Github::load().await {
+                        let mut etags = etags.lock().await;
+                        process_changed_rules(&database, &github, &mut etags, wake.as_ref()).await;
+                    }
+                    Ok(())
+                }
+            }
+        },
+        shutdown.clone(),
+        Duration::from_secs(15),
+    ));
     tokio::spawn(poller_loop(
         move || {
             let database_path = database_path.clone();
@@ -1943,7 +2035,7 @@ pub fn spawn_poller(
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::HashMap, sync::Arc};
+    use std::sync::Arc;
 
     use axum::{Json, Router, extract::OriginalUri, http::StatusCode, response::IntoResponse};
 
@@ -1974,37 +2066,71 @@ mod tests {
         );
     }
 
-    /// A loopback GitHub REST API answering each path and query from `replies`.
+    /// A loopback GitHub API answering each path and query from `replies`.
+    /// A GraphQL request with an `after` cursor answers from `/graphql?after=<cursor>`.
+    /// A reply at `etag <path>` sets that path's ETag and answers a matching `If-None-Match` with 304.
     async fn fake_github(replies: Replies) -> (Github, String, tokio::task::JoinHandle<()>) {
-        let app = Router::new().fallback(move |OriginalUri(uri): OriginalUri| {
-            let replies = replies.clone();
-            async move {
-                let key = uri
-                    .path_and_query()
-                    .map(|value| value.as_str().to_owned())
-                    .unwrap_or_default();
-                match replies.lock().unwrap().get(&key).cloned() {
-                    Some((status, body)) => {
-                        let mut response =
-                            (StatusCode::from_u16(status).unwrap(), Json(body)).into_response();
-                        if status == 429 {
-                            let reset = (Utc::now() + chrono::Duration::minutes(10))
-                                .timestamp()
-                                .to_string();
-                            response
-                                .headers_mut()
-                                .insert("x-ratelimit-reset", reset.parse().unwrap());
-                        }
-                        response
+        let app = Router::new().fallback(
+            move |OriginalUri(uri): OriginalUri,
+                  headers: axum::http::HeaderMap,
+                  body: axum::body::Bytes| {
+                let replies = replies.clone();
+                async move {
+                    let mut key = uri
+                        .path_and_query()
+                        .map(|value| value.as_str().to_owned())
+                        .unwrap_or_default();
+                    if let Some(after) =
+                        serde_json::from_slice::<Value>(&body)
+                            .ok()
+                            .and_then(|body| {
+                                body.pointer("/variables/after")?
+                                    .as_str()
+                                    .map(str::to_owned)
+                            })
+                    {
+                        key = format!("{key}?after={after}");
                     }
-                    None => (
-                        StatusCode::NOT_FOUND,
-                        Json(json!({"message": format!("missing {key}")})),
-                    )
-                        .into_response(),
+                    let etag = replies
+                        .lock()
+                        .unwrap()
+                        .get(&format!("etag {key}"))
+                        .and_then(|(_, etag)| etag.as_str().map(str::to_owned));
+                    if let Some(etag) = &etag
+                        && headers
+                            .get(axum::http::header::IF_NONE_MATCH)
+                            .is_some_and(|value| value == etag.as_str())
+                    {
+                        return StatusCode::NOT_MODIFIED.into_response();
+                    }
+                    match replies.lock().unwrap().get(&key).cloned() {
+                        Some((status, body)) => {
+                            let mut response =
+                                (StatusCode::from_u16(status).unwrap(), Json(body)).into_response();
+                            if let Some(etag) = etag {
+                                response
+                                    .headers_mut()
+                                    .insert(axum::http::header::ETAG, etag.parse().unwrap());
+                            }
+                            if status == 429 {
+                                let reset = (Utc::now() + chrono::Duration::minutes(10))
+                                    .timestamp()
+                                    .to_string();
+                                response
+                                    .headers_mut()
+                                    .insert("x-ratelimit-reset", reset.parse().unwrap());
+                            }
+                            response
+                        }
+                        None => (
+                            StatusCode::NOT_FOUND,
+                            Json(json!({"message": format!("missing {key}")})),
+                        )
+                            .into_response(),
+                    }
                 }
-            }
-        });
+            },
+        );
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let base = format!("http://{}/", listener.local_addr().unwrap());
         let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
@@ -2039,19 +2165,19 @@ mod tests {
             "/repos/owner/repo/labels/ready".into(),
             (200, json!({"name": "ready"})),
         );
-        map.insert(
-            "/repos/owner/repo/issues?state=open&labels=ready&per_page=100&page=1".into(),
-            (
-                200,
-                json!(
-                    candidates
-                        .iter()
-                        .map(|number| json!({"number": number, "pull_request": {}}))
-                        .collect::<Vec<_>>()
-                ),
-            ),
-        );
+        map.insert("/graphql".into(), (200, labelled_page(candidates, None)));
         Arc::new(std::sync::Mutex::new(map))
+    }
+
+    fn labelled_page(numbers: &[i64], next: Option<&str>) -> Value {
+        let nodes = numbers
+            .iter()
+            .map(|number| json!({"number": number, "createdAt": "2026-01-01T00:00:00Z", "timelineItems": {"nodes": []}}))
+            .collect::<Vec<_>>();
+        json!({"data": {"repository": {"pullRequests": {
+            "pageInfo": {"hasNextPage": next.is_some(), "endCursor": next},
+            "nodes": nodes,
+        }}}})
     }
 
     struct Fixture {
@@ -2088,6 +2214,7 @@ mod tests {
             workflow_id: "workflow_native_standard".into(),
             delivery_target: crate::tasks::control::DeliveryTarget::PullRequestDraft,
             protected_paths: paths.iter().map(|path| (*path).to_owned()).collect(),
+            sort_order: TriggerSortOrder::LabeledAsc,
         }
     }
 
@@ -2282,7 +2409,7 @@ mod tests {
             .unwrap() = Some(base);
         let app = crate::http::router(f.state.clone());
         let cookie = Some(f.cookie.as_str());
-        let payload = json!({"projectId":"p","name":" Ready ","label":"ready","workflowId":"workflow_native_standard","deliveryTarget":"pull_request_draft","protectedPaths":["src/"]});
+        let payload = json!({"projectId":"p","name":" Ready ","label":"ready","workflowId":"workflow_native_standard","deliveryTarget":"pull_request_draft","protectedPaths":["src/"],"sortOrder":"labeled_asc"});
         let (status, _, body) = call(
             &app,
             "POST",
@@ -2303,9 +2430,16 @@ mod tests {
                 created["enabled"].clone(),
                 created["authorityUserId"].clone(),
                 created["repositoryId"].clone(),
-                created["name"].clone()
+                created["name"].clone(),
+                created["sortOrder"].clone()
             ),
-            (json!(false), json!(f.admin), json!(9), json!("Ready"))
+            (
+                json!(false),
+                json!(f.admin),
+                json!(9),
+                json!("Ready"),
+                json!("labeled_asc")
+            )
         );
         let id = created["id"].as_str().unwrap().to_owned();
         let (status, _, body) = call(
@@ -2597,6 +2731,220 @@ mod tests {
         let _ = std::fs::remove_file(f.filename);
     }
 
+    async fn enabled_rule(f: &Fixture, github: &Github) -> Rule {
+        let rule = create(&f.state, github, &f.admin, "c", create_input(&[]))
+            .await
+            .unwrap();
+        update(
+            &f.state,
+            github,
+            &f.admin,
+            "c",
+            &rule.id,
+            GithubTriggerPatch {
+                enabled: Some(true),
+                ..patch(rule.revision)
+            },
+        )
+        .await
+        .unwrap()
+    }
+
+    fn eligible_pull(replies: &Replies) {
+        let mut replies = replies.lock().unwrap();
+        replies.insert(
+            "/repos/owner/repo/pulls/7".into(),
+            (200, pull(7, "main", 0)),
+        );
+        replies.insert(
+            "/repos/owner/repo/pulls/7/files?per_page=100&page=1".into(),
+            (200, json!([])),
+        );
+    }
+
+    /// Link pull request 7 to `task_x` with `status`, as an earlier pass would have.
+    fn linked_task(f: &Fixture, rule: &Rule, status: &str) {
+        let expected = f
+            .state
+            .with_database(|database| local(database, &f.admin, "c", &Config::from(rule)))
+            .unwrap();
+        let prepared = f
+            .state
+            .with_database(|database| {
+                dispatches::prepare(
+                    database,
+                    DispatchPrepare {
+                        rule_id: rule.id.clone(),
+                        company_id: "c".into(),
+                        project_id: "p".into(),
+                        repository_id: 9,
+                        repository_name: "owner/repo".into(),
+                        pull_request_number: 7,
+                        authority_user_id: f.admin.clone(),
+                        request: json!({"projectId":"p","title":"Candidate","description":"","images":[],
+                            "rootProfileId":"profile_native_root","workerProfileId":"profile_native_worker","advisorProfileIds":{},"workflow":"standard",
+                            "deliveryTarget":"pull_request_draft","runProjectTests":true,"visualEvidence":"off","source":{"kind":"pull_request","number":7}}),
+                        policy: DispatchPolicy {
+                            head_sha: "a".repeat(40),
+                            base_sha: "b".repeat(40),
+                            head_branch: "feature".into(),
+                            base_branch: "main".into(),
+                            protected_paths: vec![],
+                            repository_id: 9,
+                            repository_name: "owner/repo".into(),
+                            delivery_target: "pull_request_draft".into(),
+                        },
+                        preset: expected.preset.clone(),
+                        profiles: expected.dependencies.profiles.clone(),
+                    },
+                )
+            })
+            .unwrap();
+        f.state.with_database(|database| {
+            let time = now_millis_rfc3339();
+            database.connection().execute("INSERT INTO suplex_tasks (id,company_id,project_id,title,description,configuration_json,idempotency_key,request_hash,creator_user_id,created_at,updated_at) VALUES ('task_x','c','p','T','','{}','k','h',?1,?2,?2)", params![f.admin, time]).unwrap();
+            database.connection().execute("INSERT INTO suplex_task_controls (task_id,objective,delivery_target,delivery_intent_json,status,root_profile_json,worker_profile_json,workflow,advisor_profiles_json,workflow_state_json,status_changed_at,created_at,updated_at) VALUES ('task_x','T','pull_request_draft','{}',?1,'{}','{}','standard','{}','{}',?2,?2,?2)", params![status, time]).unwrap();
+            database.connection().execute("UPDATE suplex_github_trigger_dispatches SET task_id = 'task_x' WHERE id = ?1", [&prepared.id]).unwrap();
+        });
+    }
+
+    fn stored_rule(f: &Fixture, rule: &Rule) -> Rule {
+        f.state
+            .with_database(|database| required_rule(database, "c", &rule.id))
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn a_changed_linked_pull_request_is_excluded_without_failing_the_pass() {
+        for (status, excluded) in [("queued", 0), ("backlog", 1)] {
+            let f = fixture();
+            let replies = replies(&[7]);
+            eligible_pull(&replies);
+            let mut moved = pull(7, "main", 0);
+            moved["head"]["sha"] = json!("d".repeat(40));
+            replies
+                .lock()
+                .unwrap()
+                .insert("/repos/owner/repo/pulls/7".into(), (200, moved));
+            let (github, _, server) = fake_github(replies).await;
+            let rule = enabled_rule(&f, &github).await;
+            linked_task(&f, &rule, status);
+            process_enabled_rules(&f.state, &github, &|_| {}).await;
+            let stored = stored_rule(&f, &rule);
+            assert_eq!(
+                (
+                    stored.failure_count,
+                    stored.latest_error,
+                    stored.next_retry_at
+                ),
+                (0, None, None),
+                "{status}"
+            );
+            let saved = activity(&f.state, &f.admin, "c", &rule.id).unwrap();
+            let count = saved
+                .iter()
+                .filter(|entry| {
+                    entry.outcome == "excluded"
+                        && entry.reason == "GitHub trigger pull request is no longer eligible"
+                })
+                .count();
+            assert_eq!(count, excluded, "{status}: {saved:?}");
+            server.abort();
+            let _ = std::fs::remove_file(f.filename);
+        }
+    }
+
+    #[test]
+    fn task_errors_keep_their_message() {
+        let error: Failure = task_failure("GitHub trigger pull request is no longer eligible", 409);
+        assert_eq!(
+            message(error.as_ref()).0,
+            "GitHub trigger pull request is no longer eligible"
+        );
+    }
+
+    #[tokio::test]
+    async fn the_change_check_runs_a_pass_only_when_the_labelled_list_changes() {
+        let f = fixture();
+        let replies = replies(&[]);
+        let path = "/repos/owner/repo/issues?state=open&labels=ready&sort=updated&direction=desc&per_page=1";
+        replies
+            .lock()
+            .unwrap()
+            .insert(path.into(), (200, json!([])));
+        let etag = |value: &str| (format!("etag {path}"), (200, json!(value)));
+        let (key, reply) = etag("\"v1\"");
+        replies.lock().unwrap().insert(key, reply);
+        let (github, _, server) = fake_github(replies.clone()).await;
+        let rule = enabled_rule(&f, &github).await;
+        let mut etags = HashMap::new();
+        process_changed_rules(&f.state, &github, &mut etags, &|_| {}).await;
+        let first = stored_rule(&f, &rule).last_successful_check_at;
+        assert!(first.is_some(), "a first observation runs a pass");
+        assert_eq!(etags.values().collect::<Vec<_>>(), ["\"v1\""]);
+        tokio::time::sleep(Duration::from_millis(5)).await;
+        process_changed_rules(&f.state, &github, &mut etags, &|_| {}).await;
+        assert_eq!(
+            stored_rule(&f, &rule).last_successful_check_at,
+            first,
+            "a 304 runs no pass"
+        );
+        let (key, reply) = etag("\"v2\"");
+        replies.lock().unwrap().insert(key, reply);
+        process_changed_rules(&f.state, &github, &mut etags, &|_| {}).await;
+        assert_ne!(stored_rule(&f, &rule).last_successful_check_at, first);
+        assert_eq!(etags.values().collect::<Vec<_>>(), ["\"v2\""]);
+        server.abort();
+        let _ = std::fs::remove_file(f.filename);
+    }
+
+    #[tokio::test]
+    async fn sort_order_defaults_existing_rules_to_newest_created_and_round_trips() {
+        let f = fixture();
+        let default: String = f.state.with_database(|database| {
+            database
+                .connection()
+                .query_row(
+                    "SELECT dflt_value FROM pragma_table_info('suplex_github_trigger_rules') WHERE name = 'sort_order'",
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap()
+        });
+        assert_eq!(default, "'created_desc'");
+        let (github, _, server) = fake_github(replies(&[])).await;
+        let rule = create(&f.state, &github, &f.admin, "c", create_input(&[]))
+            .await
+            .unwrap();
+        let updated = update(
+            &f.state,
+            &github,
+            &f.admin,
+            "c",
+            &rule.id,
+            GithubTriggerPatch {
+                sort_order: Some(TriggerSortOrder::LabeledDesc),
+                ..patch(rule.revision)
+            },
+        )
+        .await
+        .unwrap();
+        let stored = f
+            .state
+            .with_database(|database| required_rule(database, "c", &rule.id))
+            .unwrap();
+        assert_eq!(
+            (rule.sort_order, updated.sort_order, stored.sort_order),
+            (
+                TriggerSortOrder::LabeledAsc,
+                TriggerSortOrder::LabeledDesc,
+                TriggerSortOrder::LabeledDesc
+            )
+        );
+        server.abort();
+        let _ = std::fs::remove_file(f.filename);
+    }
+
     #[tokio::test]
     async fn unavailable_github_access_records_the_provider_error_on_every_due_rule() {
         let f = fixture();
@@ -2841,19 +3189,21 @@ mod tests {
                 .summary,
             "GitHub trigger response is malformed: incomplete pull request file list"
         );
-        replies.lock().unwrap().insert(
-            "/repos/owner/repo/issues?state=open&labels=ready&per_page=100&page=1".into(),
-            (
-                200,
-                json!([{"number": 3}, {"number": 3, "pull_request": {}}]),
-            ),
-        );
+        replies
+            .lock()
+            .unwrap()
+            .insert("/graphql".into(), (200, labelled_page(&[3, 3], None)));
         assert_eq!(
-            list_open_pull_requests_by_label(&github, "owner/repo", "ready")
-                .await
-                .unwrap_err()
-                .summary,
-            "GitHub trigger response is malformed: duplicate labelled issue page"
+            list_open_pull_requests_by_label(
+                &github,
+                "owner/repo",
+                "ready",
+                TriggerSortOrder::CreatedAsc
+            )
+            .await
+            .unwrap_err()
+            .summary,
+            "GitHub trigger response is malformed: duplicate labelled pull request page"
         );
         replies.lock().unwrap().insert(
             "/repos/owner/repo/labels/ready".into(),
@@ -2903,39 +3253,32 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn labelled_issue_pages_keep_only_pull_requests_and_reject_later_failures() {
+    async fn labelled_pull_request_pages_follow_cursors_and_reject_later_failures() {
         let replies = replies(&[]);
-        let first = (1..=100)
-            .map(|number| json!({"number": number, "pull_request": {}}))
-            .collect::<Vec<_>>();
-        let path = "/repos/owner/repo/issues?state=open&labels=ready&per_page=100&page=";
+        let first = (1..=100).collect::<Vec<_>>();
         replies
             .lock()
             .unwrap()
-            .insert(format!("{path}1"), (200, json!(first)));
+            .insert("/graphql".into(), (200, labelled_page(&first, Some("c1"))));
         replies.lock().unwrap().insert(
-            format!("{path}2"),
-            (
-                200,
-                json!([{"number":101,"pull_request":{}},{"number":102}]),
-            ),
+            "/graphql?after=c1".into(),
+            (200, labelled_page(&[101], None)),
         );
         let (github, _, server) = fake_github(replies.clone()).await;
-        assert_eq!(
-            list_open_pull_requests_by_label(&github, "owner/repo", "ready")
-                .await
-                .unwrap(),
-            (1..=101).collect::<Vec<_>>()
+        let list = || {
+            list_open_pull_requests_by_label(
+                &github,
+                "owner/repo",
+                "ready",
+                TriggerSortOrder::CreatedAsc,
+            )
+        };
+        assert_eq!(list().await.unwrap(), (1..=101).collect::<Vec<_>>());
+        replies.lock().unwrap().insert(
+            "/graphql?after=c1".into(),
+            (500, json!({"message":"offline"})),
         );
-        replies
-            .lock()
-            .unwrap()
-            .insert(format!("{path}2"), (500, json!({"message":"offline"})));
-        assert!(
-            list_open_pull_requests_by_label(&github, "owner/repo", "ready")
-                .await
-                .is_err()
-        );
+        assert!(list().await.is_err());
         server.abort();
     }
 

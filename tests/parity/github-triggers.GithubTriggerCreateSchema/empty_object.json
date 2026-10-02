@@ -34,6 +34,11 @@
         "code": "invalid-invalid_type",
         "field": ".protectedPaths",
         "message": "Request value is invalid"
+      },
+      {
+        "code": "invalid-invalid_value",
+        "field": ".sortOrder",
+        "message": "Request value is invalid"
       }
     ]
   }

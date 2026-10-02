@@ -6,13 +6,18 @@ import { taskDeliveryTargetOptions } from "./task-delivery-target.js";
 import { EntityAvatar } from "../../components/app/entity-avatar.js";
 import { WorkflowIllustration } from "./workflow-illustration.js";
 import { listTaskProfiles } from "./lib/task-api.js";
+import type { TaskActivityResponse } from "../../contracts/generated/TaskActivityResponse.js";
+import { useTaskAgents } from "./task-data.js";
+import { workflowPosition } from "./workflow-position.js";
 
 function deliveryLabel(task: Task): string {
   return taskDeliveryTargetOptions.find(option => option.value === task.deliveryTarget)?.label ?? "Selected target";
 }
 
-export function WorkflowPlan({ task }: { task: Task }) {
+export function WorkflowPlan({ task, activity }: { task: Task; activity: TaskActivityResponse }) {
   const definition = workflowDefinition(task.workflow);
+  const agents = useTaskAgents([task.id]).data?.find(entry => entry.taskId === task.id)?.agents;
+  const position = workflowPosition(task, activity, agents);
   const source = task.configuration.source;
   const [profiles, setProfiles] = useState<ProfileResponse[]>([]);
   useEffect(() => {
@@ -31,6 +36,6 @@ export function WorkflowPlan({ task }: { task: Task }) {
   const delivery = task.workflow === "refine_pull_request" ? "Merged pull request" : deliveryLabel(task);
   const pullRequestNumber = source?.kind === "pull_request" ? source.number : task.pullRequest?.number;
   return <section aria-label="Workflow plan" data-workflow-plan={task.workflow} className="min-w-0 pb-6">
-    <WorkflowIllustration workflow={task.workflow} delivery={delivery} pullRequestNumber={pullRequestNumber} agentNames={agentNames} avatars={avatars} />
+    <WorkflowIllustration workflow={task.workflow} delivery={delivery} pullRequestNumber={pullRequestNumber} agentNames={agentNames} avatars={avatars} position={position} />
   </section>;
 }

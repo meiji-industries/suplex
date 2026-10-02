@@ -4,6 +4,7 @@ import type { WorkflowId } from "../../contracts/workflows.js";
 import { REPAIR_RATING_TARGET, type AdvisorRole } from "../../contracts/advisor-reports.js";
 import { workflowDefinition } from "./workflow-presentation.js";
 import { animateFlow, flowEdges } from "./workflow-flow.js";
+import type { WorkflowPosition } from "./workflow-position.js";
 import layouts from "./workflow-layouts.json" with { type: "json" };
 import suplexMark from "../../assets/suplex-mark.svg?inline";
 import { EntityAvatar } from "../../components/app/entity-avatar.js";
@@ -32,12 +33,13 @@ function SuplexAgent() {
   return <span className="inline-flex h-6 items-center font-medium">Suplex</span>;
 }
 
-function Station({ id, x, y, label, caption, icon: Icon, tone = "source", sheet = false, labelAt = [x, y + 36], viewWidth, control, avatar }: {
-  id: string; x: number; y: number; label: string; caption?: string | undefined; icon: LucideIcon; tone?: Tone; sheet?: boolean; labelAt?: [number, number]; viewWidth: number; control?: ReactNode; avatar?: ReactNode;
+function Station({ id, x, y, label, caption, icon: Icon, tone = "source", sheet = false, labelAt = [x, y + 36], viewWidth, control, avatar, active = false }: {
+  id: string; x: number; y: number; label: string; caption?: string | undefined; icon: LucideIcon; tone?: Tone; sheet?: boolean; labelAt?: [number, number]; viewWidth: number; control?: ReactNode; avatar?: ReactNode; active?: boolean;
 }) {
   const controlX = Math.max(0, Math.min(viewWidth - 160, labelAt[0] - 80));
-  return <g data-illustration-station={id}>
+  return <g data-illustration-station={id} data-active={active || undefined} aria-current={active ? "step" : undefined}>
     <g className={tones[tone]}>
+      {active ? <circle cx={x} cy={y} r="22" fill="none" stroke="currentColor" strokeWidth="1.5" strokeOpacity=".7" /> : null}
       {avatar ? null : sheet ? <>
         <rect x={x - 12} y={y - 20} width="32" height="32" rx="5" className="fill-current opacity-10 dark:opacity-20" />
         <rect x={x - 16} y={y - 16} width="32" height="32" rx="5" className="fill-card" stroke="currentColor" strokeOpacity=".65" />
@@ -73,13 +75,16 @@ type StationId = keyof typeof stationMeta;
 const returnRoutes = new Set(["review-build", "reviewer-build", "repair-rater"]);
 type Layout = (typeof layouts)[WorkflowId]["wide"];
 
-function Flow({ layout }: { layout: Layout }) {
+function Flow({ layout, position }: { layout: Layout; position: WorkflowPosition | null }) {
   const ref = useRef<SVGGElement>(null);
+  const live = useRef(position);
+  live.current = position;
+  const following = position !== null;
   useEffect(() => {
     if (!ref.current) return;
     const centers = new Map(layout.nodes.map(node => [node.id, { x: node.x + 22, y: node.y + 22 }]));
-    return animateFlow(ref.current, flowEdges(layout, returnRoutes), centers, node => tones[stationMeta[node as StationId].tone]);
-  }, [layout]);
+    return animateFlow(ref.current, flowEdges(layout, returnRoutes), centers, node => tones[stationMeta[node as StationId].tone], following ? live : undefined);
+  }, [layout, following]);
   return <g ref={ref} data-illustration-flow="" aria-hidden="true" pointerEvents="none" />;
 }
 
@@ -87,7 +92,7 @@ function routePath(points: readonly Point[]): string {
   return points.map((point, index) => `${index ? "L" : "M"}${point.x} ${point.y}`).join("");
 }
 
-function Artwork({ workflow, delivery, compact, agents, agentNames, avatars, arrowId, author, authorAvatar, pullRequestNumber }: { workflow: WorkflowId; delivery: string; compact: boolean; agents: AgentControls; agentNames: AgentNames; avatars: AgentControls; arrowId: string; author: ReactNode; authorAvatar: ReactNode; pullRequestNumber: number | undefined }) {
+function Artwork({ workflow, delivery, compact, agents, agentNames, avatars, arrowId, author, authorAvatar, pullRequestNumber, position }: { workflow: WorkflowId; delivery: string; compact: boolean; agents: AgentControls; agentNames: AgentNames; avatars: AgentControls; arrowId: string; author: ReactNode; authorAvatar: ReactNode; pullRequestNumber: number | undefined; position: WorkflowPosition | null }) {
   const layout = layouts[workflow][compact ? "compact" : "wide"];
   const viewWidth = compact ? 320 : 768;
   const offsetX = (viewWidth - layout.width) / 2;
@@ -123,9 +128,10 @@ function Artwork({ workflow, delivery, compact, agents, agentNames, avatars, arr
       }
       return <Station key={id} id={id} x={x} y={y} label={id === "source" && pullRequestNumber ? `PR #${pullRequestNumber}` : meta.label} caption={caption} icon={id === "plan" && workflow === "direct_build" ? Send : meta.icon}
         tone={meta.tone} sheet={"sheet" in meta && meta.sheet} labelAt={labelAt} viewWidth={viewWidth}
-        control={control} avatar={id === "objective" ? authorAvatar : deliveryNode ? <img src={suplexMark} alt="" className="size-8 invert dark:invert-0" /> : role ? avatars[role] : undefined} />;
+        control={control} avatar={id === "objective" ? authorAvatar : deliveryNode ? <img src={suplexMark} alt="" className="size-8 invert dark:invert-0" /> : role ? avatars[role] : undefined}
+        active={Boolean(position?.targets.includes(id))} />;
     })}
-    <g transform={`translate(${offsetX} ${offsetY})`}><Flow layout={layout} /></g>
+    <g transform={`translate(${offsetX} ${offsetY})`}><Flow layout={layout} position={position} /></g>
   </>;
 }
 
@@ -148,7 +154,7 @@ function fitToContent(root: HTMLElement): void {
   }
 }
 
-export function WorkflowIllustration({ workflow, delivery, agents = {}, agentNames = {}, avatars = {}, pullRequestNumber }: { workflow: WorkflowId; delivery: string; agents?: AgentControls; agentNames?: AgentNames; avatars?: AgentControls; pullRequestNumber?: number | undefined }) {
+export function WorkflowIllustration({ workflow, delivery, agents = {}, agentNames = {}, avatars = {}, pullRequestNumber, position = null }: { workflow: WorkflowId; delivery: string; agents?: AgentControls; agentNames?: AgentNames; avatars?: AgentControls; pullRequestNumber?: number | undefined; position?: WorkflowPosition | null }) {
   const id = useId();
   const container = useRef<HTMLDivElement>(null);
   useLayoutEffect(() => {
@@ -163,7 +169,8 @@ export function WorkflowIllustration({ workflow, delivery, agents = {}, agentNam
   const author = <span className="inline-flex h-6 items-center font-medium">{user?.displayName ?? "User"}</span>;
   const authorAvatar = user ? <EntityAvatar kind="user" id={user.id} name={user.displayName} seed={user.avatarSeed} size="default" /> : <UserRound className="size-8" />;
   const definition = workflowDefinition(workflow);
-  const description = `${definition.steps.join(" ")}${workflow === "refine_pull_request" ? " Coordinator directs repair or delivery after each rating." : " Coordinator can send changes back to Worker after review."} Delivery: ${delivery}.`;
+  const now = position?.targets.map(target => target in stationMeta ? stationMeta[target as StationId].label : "Coordinator").join(" and ");
+  const description = `${definition.steps.join(" ")}${workflow === "refine_pull_request" ? " Coordinator directs repair or delivery after each rating." : " Coordinator can send changes back to Worker after review."} Delivery: ${delivery}.${now ? ` Current step: ${now} (${position!.state}).` : ""}`;
   const deliveryAction = ({
     "Keep in worktree": "keeps changes local",
     "Push branch": "pushes the branch",
@@ -184,7 +191,7 @@ export function WorkflowIllustration({ workflow, delivery, agents = {}, agentNam
         <desc id={`${id}-${compact}-description`}>{description}</desc>
         <defs>{(Object.entries(tones) as [Tone, string][]).map(([tone, className]) =>
           <marker key={tone} id={`${arrowId}-${tone}`} viewBox="0 0 8 8" refX="8" refY="4" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto"><path d="M0 0 8 4 0 8z" className={className} fill="currentColor" /></marker>)}</defs>
-        <Artwork workflow={workflow} delivery={deliveryAction} compact={compact} agents={agents} agentNames={agentNames} avatars={avatars} arrowId={arrowId} author={author} authorAvatar={authorAvatar} pullRequestNumber={pullRequestNumber} />
+        <Artwork workflow={workflow} delivery={deliveryAction} compact={compact} agents={agents} agentNames={agentNames} avatars={avatars} arrowId={arrowId} author={author} authorAvatar={authorAvatar} pullRequestNumber={pullRequestNumber} position={position} />
       </svg>;
     })}
   </div>;

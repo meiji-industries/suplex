@@ -1,4 +1,6 @@
-// A decorative token that travels every route of a workflow illustration, from its first station to its terminal station.
+// A token that travels a workflow illustration. Without a live position it loops every route as decoration;
+// with one it follows the task's observed position.
+import type { WorkflowPosition } from "./workflow-position.js";
 type Point = { x: number; y: number };
 type Layout = { nodes: readonly { id: string; x: number; y: number }[]; edges: readonly { id: string; points: readonly Point[] }[] };
 export type FlowEdge = { id: string; from: string; to: string; returns: boolean; points: readonly Point[] };
@@ -56,11 +58,13 @@ const RING = 22; // station halo radius
 const MAX_SPEED = 190, THRUST = 900, BRAKE = 420, RESPONSE = 16;
 const SPRING = 520, DAMPING = 2 * Math.sqrt(SPRING) * 0.55;
 const DWELL = 0.24, REST = 3.6, TAIL = 16, RADIUS = 3.5;
+const ORBIT = 1.1, HOLD = 0.5; // live mode: halo orbit speed (rad/s) while working; where on a route the token waits
 
-type Leg = { points: Point[]; lengths: number[]; edge: FlowEdge | undefined; edgeStart: number; edgeLength: number };
+type Leg = { points: Point[]; lengths: number[]; edge: FlowEdge | undefined; edgeStart: number; edgeLength: number; hold?: number };
 type Orb = {
   node: string; angle: number | null; leg: Leg | null; s: number; v: number; hit: boolean; dying: boolean; scale: number;
   target: Point; p: Point; pv: Point; trail: Point[]; body: SVGGElement; shape: SVGEllipseElement; tail: SVGGElement;
+  queue: FlowEdge[]; stop: string | undefined; merging: boolean; fading: boolean;
 };
 type Spark = { element: SVGCircleElement; p: Point; v: Point; age: number; life: number };
 type Ripple = { element: SVGCircleElement; age: number; life: number; from: number; to: number };
@@ -102,7 +106,25 @@ function arc(center: Point, from: number, to: number): Point[] {
   });
 }
 
-export function animateFlow(root: SVGGElement, edges: readonly FlowEdge[], centers: ReadonlyMap<string, Point>, toneOf: (node: string) => string): () => void {
+// Shortest route between two stations, or null when the diagram has none.
+export function route(edges: readonly FlowEdge[], from: string, to: string): FlowEdge[] | null {
+  const via = new Map<string, FlowEdge>();
+  const queue = [from];
+  for (const node of queue) {
+    if (node === to) {
+      const path: FlowEdge[] = [];
+      for (let at = to; at !== from; at = via.get(at)!.from) path.unshift(via.get(at)!);
+      return path;
+    }
+    for (const edge of edges) if (edge.from === node && edge.to !== from && !via.has(edge.to)) {
+      via.set(edge.to, edge);
+      queue.push(edge.to);
+    }
+  }
+  return null;
+}
+
+export function animateFlow(root: SVGGElement, edges: readonly FlowEdge[], centers: ReadonlyMap<string, Point>, toneOf: (node: string) => string, live?: { readonly current: WorkflowPosition | null }): () => void {
   const owner = root.ownerSVGElement;
   const waves = planFlow(edges);
   const start = waves[0]?.[0]?.from;
@@ -119,7 +141,7 @@ export function animateFlow(root: SVGGElement, edges: readonly FlowEdge[], cente
   }]));
   const layer = svg(root, "g", {});
   let orbs: Orb[] = [], sparks: Spark[] = [], ripples: Ripple[] = [];
-  let phase: "rest" | "appear" | "travel" | "land" = "rest", wave = 0, clock = 0.4 + Math.random() * 1.6;
+  let phase: "rest" | "appear" | "travel" | "land" | "live" = live ? "live" : "rest", wave = 0, clock = 0.4 + Math.random() * 1.6;
 
   const spawn = (node: string, from?: Orb): Orb => {
     const tail = svg(layer, "g", {});
@@ -131,7 +153,8 @@ export function animateFlow(root: SVGGElement, edges: readonly FlowEdge[], cente
     for (let index = 0; index < TAIL; index++) svg(tail, "circle", { r: 0, fill: "currentColor" });
     const p = from ? { ...from.p } : { ...center(node) };
     return { node, angle: from?.angle ?? null, leg: null, s: 0, v: 0, hit: false, dying: false, scale: from?.scale ?? 0,
-      target: { ...p }, p, pv: from ? { ...from.pv } : { x: 0, y: 0 }, trail: from ? from.trail.map(point => ({ ...point })) : [], body, shape, tail };
+      target: { ...p }, p, pv: from ? { ...from.pv } : { x: 0, y: 0 }, trail: from ? from.trail.map(point => ({ ...point })) : [], body, shape, tail,
+      queue: [], stop: undefined, merging: false, fading: false };
   };
   const tint = (orb: Orb, node: string) => { orb.body.setAttribute("class", toneOf(node)); orb.tail.setAttribute("class", toneOf(node)); };
   const ripple = (at: Point, node: string, from: number, to: number, life: number, delay = 0) =>
@@ -148,6 +171,7 @@ export function animateFlow(root: SVGGElement, edges: readonly FlowEdge[], cente
     const from = center(edge.from);
     const lead = orb.angle === null ? [from] : arc(from, orb.angle, angleOf(from, edge.points[0]!));
     orb.leg = measure([...lead, ...edge.points, ...(terminal(edge.to) ? [center(edge.to)] : [])], edge, lead.length);
+    if (edge.id === orb.stop) orb.leg.hold = HOLD;
     Object.assign(orb, { s: 0, v: 0, hit: false });
     tint(orb, edge.from);
   };
@@ -183,12 +207,12 @@ export function animateFlow(root: SVGGElement, edges: readonly FlowEdge[], cente
   const step = (orb: Orb, h: number) => {
     const leg = orb.leg;
     if (leg) {
-      const total = leg.lengths.at(-1)!, gap = total - orb.s;
+      const end = leg.lengths.at(-1)!, total = leg.hold === undefined ? end : leg.edgeStart + leg.edgeLength * leg.hold, gap = total - orb.s;
       const desired = Math.sign(gap) * Math.min(MAX_SPEED, Math.sqrt(2 * BRAKE * Math.abs(gap)));
       orb.v += Math.max(-THRUST, Math.min(THRUST, (desired - orb.v) * RESPONSE)) * h;
       orb.s += orb.v * h;
       orb.target = pointAt(leg, orb.s);
-      if (!orb.hit && total - orb.s < 1.5 && leg.edge) {
+      if (!orb.hit && end - orb.s < 1.5 && leg.edge) {
         orb.hit = true;
         const [a, b] = leg.points.slice(-2);
         if (!terminal(leg.edge.to)) {
@@ -196,7 +220,7 @@ export function animateFlow(root: SVGGElement, edges: readonly FlowEdge[], cente
           burst(orb.target, leg.edge.to, 4, a && b ? angleOf(a, b) : null);
         }
       }
-      if (Math.abs(total - orb.s) < 0.5 && Math.abs(orb.v) < 8) arrive(orb, leg);
+      if (leg.hold === undefined && Math.abs(total - orb.s) < 0.5 && Math.abs(orb.v) < 8) arrive(orb, leg);
     }
     orb.pv.x += (SPRING * (orb.target.x - orb.p.x) - DAMPING * orb.pv.x) * h;
     orb.pv.y += (SPRING * (orb.target.y - orb.p.y) - DAMPING * orb.pv.y) * h;
@@ -204,10 +228,92 @@ export function animateFlow(root: SVGGElement, edges: readonly FlowEdge[], cente
     orb.p.y += orb.pv.y * h;
   };
 
+  const finale = (end: string) => {
+    ripple(center(end), end, 6, RING + 10, 0.9);
+    ripple(center(end), end, 6, RING + 4, 0.9, 0.18);
+    burst(center(end), end, 8, null);
+    for (const glow of glows.values()) glow.level = Math.max(glow.level, 0.45);
+  };
+
+  // Live mode: one token per observed station. A token reaches its station along the diagram's routes,
+  // forks for parallel stations, and merges into a remaining token when its station is no longer active.
+  const via = (orb: Orb) => orb.leg?.edge?.to ?? orb.node;
+  const goal = (target: string) => edges.find(edge => edge.id === target);
+  const plan = (orb: Orb, target: string): FlowEdge[] | null => {
+    const hold = goal(target);
+    if (hold && orb.leg?.edge === hold && orb.leg.hold !== undefined) return [];
+    const path = route(edges, via(orb), hold ? hold.from : target);
+    return path && (hold ? [...path, hold] : path);
+  };
+  const assign = (orb: Orb, target: string, path: FlowEdge[]) => {
+    orb.queue = path;
+    orb.stop = goal(target)?.id;
+    if (orb.leg?.hold !== undefined && orb.leg.edge?.id !== target) delete orb.leg.hold;
+  };
+  let seen = "", pulse = 0;
+  const retarget = (position: WorkflowPosition) => {
+    const free = orbs.filter(orb => !orb.fading && !orb.merging);
+    const kept: Orb[] = [];
+    for (const target of position.targets) {
+      let best: { orb: Orb; path: FlowEdge[] } | undefined;
+      for (const orb of free) {
+        const path = plan(orb, target);
+        if (path && (!best || path.length < best.path.length)) best = { orb, path };
+      }
+      if (best) free.splice(free.indexOf(best.orb), 1);
+      else {
+        const parent = kept.find(orb => plan(orb, target));
+        let orb = parent ? spawn(via(parent), parent) : spawn(start);
+        if (!parent) tint(orb, start);
+        let path = plan(orb, target);
+        if (!path) {
+          orb.body.remove(); orb.tail.remove();
+          orb = spawn(goal(target)?.from ?? target);
+          path = plan(orb, target) ?? [];
+        }
+        orbs.push(orb);
+        best = { orb, path };
+      }
+      assign(best.orb, target, best.path);
+      kept.push(best.orb);
+    }
+    for (const orb of free) {
+      const join = position.targets.map(target => plan(orb, target)).find(Boolean);
+      if (join) { orb.queue = join; orb.stop = undefined; orb.merging = true; }
+      else orb.fading = true;
+    }
+  };
+  const follow = (dt: number, position: WorkflowPosition) => {
+    const key = `${position.targets.join()}:${position.state}`;
+    if (key !== seen) { seen = key; retarget(position); pulse = 0.6; }
+    pulse -= dt;
+    const beat = pulse <= 0 && position.state !== "idle" && position.state !== "done";
+    if (beat) pulse = position.state === "working" ? 2.4 : 3.6;
+    for (const orb of orbs) {
+      if (orb.fading) { orb.scale = Math.max(0, orb.scale - dt * 3); continue; }
+      orb.scale += ((position.state === "idle" ? 0.7 : 1) - orb.scale) * (1 - Math.exp(-dt * 6));
+      if (orb.leg) {
+        if (beat && orb.leg.hold !== undefined) ripple(orb.target, orb.leg.edge!.from, 4, 16, 1.2);
+        continue;
+      }
+      const next = orb.queue.shift();
+      if (next) { send(orb, next); continue; }
+      if (orb.merging) { orb.fading = true; continue; }
+      if (position.state === "done" && terminal(orb.node)) { finale(orb.node); orb.fading = true; continue; }
+      const at = center(orb.node);
+      if (orb.angle === null) orb.angle = -Math.PI / 2;
+      if (position.state === "working") orb.angle += ORBIT * dt;
+      orb.target = { x: at.x + RING * Math.cos(orb.angle), y: at.y + RING * Math.sin(orb.angle) };
+      tint(orb, orb.node);
+      if (beat) ripple(at, orb.node, RING, RING + (position.state === "working" ? 8 : 5), position.state === "working" ? 1 : 1.6);
+    }
+  };
+
   const update = (dt: number) => {
     const settle = 1 - Math.exp(-dt * 2.2);
     clock -= dt;
-    if (phase === "rest" && clock <= 0) {
+    if (live?.current) follow(dt, live.current);
+    else if (phase === "rest" && clock <= 0) {
       const orb = spawn(start);
       tint(orb, start);
       orbs = [orb];
@@ -222,11 +328,7 @@ export function animateFlow(root: SVGGElement, edges: readonly FlowEdge[], cente
       else if (clock <= 0) {
         phase = "land";
         clock = 0.5;
-        const end = orbs[0]?.node ?? start;
-        ripple(center(end), end, 6, RING + 10, 0.9);
-        ripple(center(end), end, 6, RING + 4, 0.9, 0.18);
-        burst(center(end), end, 8, null);
-        for (const glow of glows.values()) glow.level = Math.max(glow.level, 0.45);
+        finale(orbs[0]?.node ?? start);
       }
     } else if (phase === "land") {
       for (const orb of orbs) orb.scale = Math.max(0, clock) / 0.5;
@@ -240,7 +342,7 @@ export function animateFlow(root: SVGGElement, edges: readonly FlowEdge[], cente
     const substeps = Math.ceil(dt * 240);
     for (let index = 0; index < substeps; index++) for (const orb of orbs) step(orb, dt / substeps);
     orbs = orbs.filter(orb => {
-      if (!orb.dying || orb.leg) return true;
+      if (orb.fading ? orb.scale > 0 : !orb.dying || orb.leg) return true;
       orb.body.remove();
       orb.tail.remove();
       return false;
@@ -252,6 +354,7 @@ export function animateFlow(root: SVGGElement, edges: readonly FlowEdge[], cente
       const speed = Math.hypot(orb.pv.x, orb.pv.y);
       const stretch = Math.min(speed / 320, 0.7);
       orb.body.setAttribute("transform", `translate(${orb.p.x} ${orb.p.y}) scale(${orb.scale})`);
+      orb.body.setAttribute("opacity", String(Math.min(1, orb.scale) ** 2));
       orb.shape.setAttribute("rx", String(RADIUS * (1 + stretch)));
       orb.shape.setAttribute("ry", String(RADIUS / (1 + stretch * 0.5)));
       orb.shape.setAttribute("transform", `rotate(${Math.atan2(orb.pv.y, orb.pv.x) * 180 / Math.PI})`);

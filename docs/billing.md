@@ -12,6 +12,9 @@ machine identities, and agents do not count. The shared `user_development`
 Operator is one account even when several people use it through trusted-network
 authentication; Suplex does not infer the people behind a shared login.
 
+Members and administrators read the plan in Settings > Billing. Only active
+administrators can purchase, change seats, or open the billing portal.
+
 ## Architecture
 
 Billing runs as two processes:

@@ -111,6 +111,7 @@ mod tests {
             "/admin/terminal",
             "/admin/terminal?company=company_today_root",
             "/profile",
+            "/billing",
             "/templates",
             "/setup",
         ] {

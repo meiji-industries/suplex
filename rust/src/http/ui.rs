@@ -79,6 +79,7 @@ pub fn application_page(view: &str) -> String {
         "moves" => "Moves",
         "analytics" => "Analytics",
         "profile" => "Profile",
+        "billing" => "Billing",
         "setup" => "Set up",
         "onboarding" => "Onboarding",
         "health" => "Host health",

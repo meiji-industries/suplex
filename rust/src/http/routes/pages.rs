@@ -39,6 +39,7 @@ pub fn router() -> Router<AppState> {
         .route("/admin/passkeys", get(admin))
         .route("/companies/{company_id}/settings", get(company_settings))
         .route("/profile", get(profile))
+        .route("/billing", get(billing))
         .route("/templates", get(project_templates))
         .route("/projects/{project_id}/prompts", get(project_prompts))
         .route("/projects/{project_id}/templates", get(project_templates))
@@ -207,6 +208,7 @@ macro_rules! page_handler {
 page_handler!(admin, "admin");
 page_handler!(admin_onboarding, "onboarding");
 page_handler!(profile, "profile");
+page_handler!(billing, "billing");
 page_handler!(project_templates, "project-templates");
 page_handler!(project_prompts, "project-prompts");
 page_handler!(projects, "projects");

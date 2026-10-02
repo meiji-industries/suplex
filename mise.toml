@@ -102,6 +102,18 @@ lsof -nP -iTCP:$port -sTCP:LISTEN || echo "dev stack not running (port $port fre
 description = "Stop owned native development processes, escalating if needed"
 run = "pnpm exec tsx scripts/dev.ts --stop"
 
+[tasks."billing:dev"]
+description = "Run the hosted billing service from source"
+run = "cd rust && cargo run --bin suplex-billing -- serve"
+
+[tasks."billing:tunnel"]
+description = "Run the named Cloudflare Tunnel for the local billing service"
+run = '''
+token=$(op item get 5lbbk347vbx7espnpidrywhsqq --account my --fields label=CLOUDFLARED_BILLING_TUNNEL_TOKEN --reveal)
+case "$token" in eyJ*) ;; *) echo "missing Cloudflare tunnel token in 1Password .env.development"; exit 1 ;; esac
+exec cloudflared tunnel --no-autoupdate run --token "$token"
+'''
+
 [tasks."db:migrate"]
 run = "pnpm exec tsx scripts/dev.ts --migrate"
 [tasks.build]

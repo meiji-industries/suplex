@@ -13,6 +13,7 @@ Start with the [product guide](docs/product.md) for current capabilities,
 integration limits, and positioning. [CONTEXT.md](CONTEXT.md) defines the terms.
 [Current architecture](docs/architecture/README.md) records how the system works.
 [Architecture decisions](docs/adr/) explain why.
+See [billing setup and recovery](docs/billing.md) for Suplex Free and Pro operations.
 
 An agent that never opens the web application starts at
 [machine discovery and the operator handoff](docs/agents/machine-discovery.md).

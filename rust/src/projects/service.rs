@@ -1494,29 +1494,48 @@ async fn finish_local_project(
     )
     .await
     .map_err(|findings| ProjectError::new("Project configuration is invalid", 422, findings))?;
-    // Billing reads never run inside the SQLite transaction: a creation above
-    // the Free limit exits through `RefreshRequired`, reads evidence, retries.
+    commit_local(
+        state,
+        user_id,
+        company_id,
+        &prepared,
+        Some(body),
+        (&fields[7], &fields[8]),
+    )
+    .await
+}
+
+/// Billing reads never run inside the SQLite transaction: a creation above
+/// the Free limit exits through `RefreshRequired`, reads evidence, retries.
+async fn commit_local(
+    state: &AppState,
+    user_id: &str,
+    company_id: &str,
+    prepared: &PreparedLocalProject,
+    configuration: Option<&ProjectCreateBody>,
+    (root_profile_id, worker_profile_id): (&str, &str),
+) -> DatabaseResult<Project> {
     let mut evidence = crate::billing::BillingEvidence::NotChecked;
-    for _ in 0..=MAX_BILLING_REFRESHES {
-        let refresh = match state.with_database(|database| {
+    for attempt in 0..=MAX_BILLING_REFRESHES {
+        match state.with_database(|database| {
             create_local(
                 database,
                 user_id,
                 company_id,
-                &prepared,
+                prepared,
                 CreateLocalOptions {
-                    root_profile_id: &fields[7],
-                    worker_profile_id: &fields[8],
-                    configuration: Some(body),
+                    root_profile_id,
+                    worker_profile_id,
+                    configuration,
                     now: Utc::now(),
                     billing: evidence.clone(),
                 },
             )
         }) {
-            Err(error) if error.is::<crate::billing::Denial>() => true,
+            Err(error) if error.is::<crate::billing::Denial>() => {}
             created => return created,
-        };
-        if refresh {
+        }
+        if attempt < MAX_BILLING_REFRESHES {
             evidence = crate::billing::create_decision(state, company_id).await?;
         }
     }
@@ -2187,5 +2206,86 @@ mod tests {
         let _ = std::fs::remove_file(&filename);
         let _ = std::fs::remove_file(filename.with_extension("sqlite-wal"));
         let _ = std::fs::remove_file(filename.with_extension("sqlite-shm"));
+    }
+
+    #[tokio::test]
+    async fn creation_above_the_free_limit_rechecks_billing_at_commit() {
+        use crate::billing::tests::{active_state, fixture};
+        let f = fixture().await;
+        let prepared = |slug: &str| PreparedLocalProject {
+            name: format!("Project {slug}"),
+            repository_path: PathBuf::from(format!("/tmp/suplex-quota-{slug}")),
+            worktree_root: PathBuf::from(format!("/tmp/suplex-quota-{slug}-worktrees")),
+            repository: format!("acme/{slug}"),
+            base_branch: "main".to_owned(),
+            setup_command: String::new(),
+            verification_command: String::new(),
+        };
+        let commit = |slug: &'static str| {
+            let prepared = prepared(slug);
+            let f = &f;
+            async move {
+                commit_local(
+                    &f.state,
+                    &f.admin_id,
+                    &f.company_id,
+                    &prepared,
+                    None,
+                    ("profile_native_root", "profile_native_worker"),
+                )
+                .await
+            }
+        };
+        let failure = |error: Box<dyn Error>| {
+            let failure = crate::shared::public_failure(error);
+            (failure.status.as_u16(), failure.code)
+        };
+        let reads = || f.fake.with(|hosted| hosted.count("/v1/billing"));
+        commit("one").await.unwrap();
+        commit("two").await.unwrap();
+        // No binding is a locally known Free: the third project needs no hosted read.
+        let refused = commit("three").await.unwrap_err();
+        assert_eq!(failure(refused), (402, Some("project_limit_reached")));
+        assert_eq!(reads(), 0);
+        f.bind(Some("acct_1"));
+        f.fake
+            .with(|hosted| hosted.respond("/v1/billing", 200, active_state(5)));
+        commit("three").await.unwrap();
+        assert_eq!(reads(), 1);
+        let mut expired = active_state(5);
+        expired["accessUntil"] = serde_json::json!("2000-01-01T00:00:00.000Z");
+        f.fake
+            .with(|hosted| hosted.respond("/v1/billing", 200, expired));
+        let stale = commit("four").await.unwrap_err();
+        assert_eq!(failure(stale), (503, Some("billing_unavailable")));
+        assert_eq!(reads(), 4);
+        f.user("member-1", "member", "active");
+        f.member("member-1", &f.company_id);
+        f.fake
+            .with(|hosted| hosted.respond("/v1/billing", 200, active_state(1)));
+        let short = commit("four").await.unwrap_err();
+        assert_eq!(failure(short), (402, Some("seat_limit_exceeded")));
+        // Unchecked evidence at the limit never commits.
+        let unchecked = f.state.with_database(|database| {
+            create_local_default(
+                database,
+                &f.admin_id,
+                &f.company_id,
+                &prepared("five"),
+                "profile_native_root",
+                "profile_native_worker",
+                Utc::now(),
+            )
+            .unwrap_err()
+        });
+        assert!(unchecked.is::<crate::billing::Denial>());
+        let names = f.state.with_database(|database| {
+            list(database, &f.admin_id, Some(&f.company_id))
+                .unwrap()
+                .into_iter()
+                .map(|project| project.name)
+                .collect::<Vec<_>>()
+        });
+        assert_eq!(names.len(), 3);
     }
 }

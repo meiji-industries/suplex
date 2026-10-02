@@ -10,13 +10,15 @@ export class ApiError extends Error {
   readonly statusCode: number;
   readonly findings?: ApiFinding[];
   readonly current?: unknown;
+  readonly code?: string;
 
-  constructor(message: string, statusCode: number, findings?: ApiFinding[], current?: unknown) {
+  constructor(message: string, statusCode: number, findings?: ApiFinding[], current?: unknown, code?: string) {
     super(message);
     this.name = "ApiError";
     this.statusCode = statusCode;
     if (findings) this.findings = findings;
     if (current !== undefined) this.current = current;
+    if (code !== undefined) this.code = code;
   }
 }
 
@@ -64,6 +66,7 @@ export async function readJson(url: string, init?: RequestInit): Promise<unknown
   if (!response.ok) {
     const error = errorField(body, "error");
     const findings = errorField(body, "findings");
+    const code = errorField(body, "code");
     throw new ApiError(
       typeof error === "string" ? error : "Request failed",
       response.status,
@@ -72,6 +75,7 @@ export async function readJson(url: string, init?: RequestInit): Promise<unknown
         return parsed ? [parsed] : [];
       }) : undefined,
       errorField(body, "current"),
+      typeof code === "string" ? code : undefined,
     );
   }
   if (url.startsWith("/api/auth/") && url.endsWith("/verify")) reportAuthenticatedResume(true);

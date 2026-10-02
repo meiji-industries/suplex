@@ -2,6 +2,7 @@ import { QueryClient, QueryClientContext, QueryClientProvider } from "@tanstack/
 import { useContext, useEffect, useState, type ReactNode } from "react";
 import { useCompanyContext } from "./company-context.js";
 import { ApiError } from "../lib/api.js";
+import { clearProjectDrafts } from "../features/projects/lib/project-draft.js";
 
 function UserServerState({ children }: { children: ReactNode }) {
   const [client] = useState(() => new QueryClient({
@@ -28,6 +29,7 @@ export function useSignOut() {
       try { client?.clear(); }
       finally {
         window.localStorage.removeItem("suplex.activeCompanyId");
+        clearProjectDrafts();
         window.location.assign("/auth");
       }
     }

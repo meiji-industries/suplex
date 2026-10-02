@@ -1,7 +1,7 @@
 # Billing
 
-Forge Free allows two projects per company (`FREE_PROJECT_LIMIT` in
-`src/billing/policy.ts`). Forge Pro costs USD 20 per purchased seat each month
+Suplex Free allows two projects per company (`FREE_PROJECT_LIMIT` in
+`rust/src/billing/mod.rs`). Suplex Pro costs USD 20 per purchased seat each month
 before tax and permits unlimited projects while purchased seats cover the
 company's active accounts.
 
@@ -10,22 +10,26 @@ necessary quantity is the distinct count of active administrators plus active
 members of the company, minimum one. Pending and revoked accounts, invitations,
 machine identities, and agents do not count. The shared `user_development`
 Operator is one account even when several people use it through trusted-network
-authentication; Forge does not infer the people behind a shared login.
+authentication; Suplex does not infer the people behind a shared login.
 
 ## Architecture
 
 Billing runs as two processes:
 
-1. The private Forge application. It counts projects and accounts, authorizes
-   the operator, enforces project policy, and calls the billing service over
-   outbound HTTPS. It holds no merchant credentials.
-2. The Forge-operated public billing service (`src/billing/hosted/`). It owns
-   Stripe and RevenueCat credentials, company billing accounts, Checkout and
-   Portal creation, provider reads, and webhooks. It never runs
-   `createForgeServer`, task hosts, or native runtimes.
+1. The private Suplex application (`suplex`, `rust/src/billing/mod.rs`). It
+   counts projects and accounts, authorizes the operator, enforces project
+   policy, and calls the billing service over outbound HTTPS. It holds no
+   merchant credentials.
+2. The Suplex-operated public billing service (`suplex-billing`,
+   `rust/src/billing/hosted/`). It owns Stripe and RevenueCat credentials,
+   company billing accounts, Checkout and Portal creation, provider reads, and
+   webhooks. It never runs the Suplex server, task hosts, or native runtimes.
+
+Both processes share one wire contract, `rust/src/billing/wire.rs`. Release
+packaging ships only `suplex`; `suplex-billing` is deployed separately.
 
 Stripe owns monetary and quantity facts. RevenueCat supplies the imported `pro`
-entitlement and consolidated lifecycle. Forge never treats a webhook payload, a
+entitlement and consolidated lifecycle. Suplex never treats a webhook payload, a
 local row, or a return-page visit as proof of payment; it reads the source.
 
 Paid access derives from settled service-period invoice evidence on the
@@ -42,12 +46,16 @@ full refund. If required Stripe evidence cannot be read, the service answers
 ## Running the hosted service
 
 ```sh
-# Development (TypeScript entrypoint, listens on 127.0.0.1:4211 by default)
-pnpm billing:dev
+# Development: listens on 127.0.0.1:4211 by default
+mise run billing:dev
 
-# Production (built JavaScript entrypoint)
-pnpm billing:start
+# Production: a release build of the same binary
+cargo build --release --manifest-path rust/Cargo.toml --bin suplex-billing
+suplex-billing serve
 ```
+
+The service creates its tables in `BILLING_DATABASE_PATH` at startup. They are
+not part of the Suplex application migrations.
 
 Configuration is read only in the hosted process:
 
@@ -56,21 +64,23 @@ Configuration is read only in the hosted process:
 | `BILLING_PUBLIC_ORIGIN` | Public HTTPS origin for Checkout/Portal return pages. Only loopback hosts may use HTTP. |
 | `BILLING_BIND_ADDRESS` | Listener address. Default `127.0.0.1`. |
 | `BILLING_PORT` | Listener port. Default `4211`. |
-| `BILLING_DATABASE_PATH` | Persistent SQLite path. Must not be a Forge installation database. |
+| `BILLING_DATABASE_PATH` | Persistent SQLite path. Must not be a Suplex installation database. |
 | `BILLING_ENVIRONMENT` | Exactly `sandbox` or `production`. Must match the Stripe key mode and the RevenueCat project. |
 | `STRIPE_SECRET_KEY` | Merchant API secret for the matching environment. |
 | `STRIPE_PRO_MONTHLY_PRICE_ID` | The configured USD 20 monthly licensed seat price. |
-| `STRIPE_PORTAL_CONFIGURATION_ID` | The dedicated Forge portal configuration. |
-| `STRIPE_WEBHOOK_SECRET` | Signing secret of Forge's own Stripe webhook destination. |
+| `STRIPE_PORTAL_CONFIGURATION_ID` | The dedicated Suplex portal configuration. |
+| `STRIPE_WEBHOOK_SECRET` | Signing secret of the Suplex Stripe webhook destination. |
 | `REVENUECAT_SECRET_API_KEY` | Server-side key for subscriber reads. |
 | `REVENUECAT_STRIPE_PUBLIC_API_KEY` | The Stripe app's public key, used for receipt imports. |
-| `REVENUECAT_WEBHOOK_AUTHORIZATION` | The exact Authorization header value RevenueCat sends to Forge. |
+| `REVENUECAT_WEBHOOK_AUTHORIZATION` | The exact Authorization header value RevenueCat sends to Suplex. |
 | `REVENUECAT_APP_ID` | The RevenueCat app/config identity allowlisted for events. |
 
-On private installations set `FORGE_BILLING_SERVICE_URL` to the hosted HTTPS
+On private installations set `SUPLEX_BILLING_SERVICE_URL` to the hosted HTTPS
 origin. An explicit loopback URL is allowed for development. Without it, the
-installation runs Free; a company with an existing billing binding reports the
-subscription as unknown, never as Free.
+installation runs Free: a third project in a company returns 402
+`project_limit_reached`, and existing projects are never touched. A company
+with an existing billing binding reports the subscription as unknown, never as
+Free.
 
 The service verifies the configured price before it serves purchase mutations:
 `usd`, `unit_amount` 2000, monthly interval count 1, `licensed` usage,
@@ -95,7 +105,7 @@ Production uses a separate Stripe configuration and RevenueCat project with
 `BILLING_ENVIRONMENT=production`.
 
 1. Connect Stripe to RevenueCat as the RevenueCat project owner.
-2. Create the Stripe product `Forge Pro` with a USD 20.00 monthly per-unit
+2. Create the Stripe product `Suplex Pro` with a USD 20.00 monthly per-unit
    licensed price (tax-exclusive). Enable Stripe Tax for production Checkout
    and configure the merchant's tax settings before activation.
 3. Import the product into the RevenueCat Stripe configuration and attach the
@@ -109,8 +119,8 @@ Production uses a separate Stripe configuration and RevenueCat project with
    documented event list: `customer.subscription.created`,
    `customer.subscription.updated`, `customer.subscription.deleted`,
    `checkout.session.completed`, `charge.refunded`, and `invoice.updated`.
-   That destination's signing secret belongs to RevenueCat, not to Forge.
-6. Create Forge's separate Stripe webhook destination for
+   That destination's signing secret belongs to RevenueCat, not to Suplex.
+6. Create the separate Suplex Stripe webhook destination for
    `checkout.session.completed`, `checkout.session.expired`,
    `customer.subscription.created`, `customer.subscription.updated`,
    `customer.subscription.deleted`, `invoice.paid`, `invoice.payment_failed`,
@@ -126,8 +136,8 @@ Production uses a separate Stripe configuration and RevenueCat project with
 8. Configure the Stripe customer portal for payment methods, invoices,
    billing details, cancellation at period end, and resuming a scheduled
    cancellation. Disable product switching, quantity updates, trials, coupons,
-   and retention discounts there. Seat changes go through Forge.
-9. Configure Stripe payment retries and customer emails in Stripe. Forge does
+   and retention discounts there. Seat changes go through Suplex.
+9. Configure Stripe payment retries and customer emails in Stripe. Suplex does
    not run dunning or send payment email.
 
 ## Hosted API
@@ -170,8 +180,8 @@ verifying ownership through the existing Stripe customer record:
 ```sh
 NEW_BILLING_CREDENTIAL=$(openssl rand -base64 32 | tr '+/' '-_' | tr -d '=') \
 STRIPE_SECRET_KEY=sk_... \
-pnpm exec tsx src/billing/hosted/rotate-credential.ts \
-  --db /var/lib/forge-billing/billing.sqlite \
+suplex-billing rotate-credential \
+  --db /var/lib/suplex-billing/billing.sqlite \
   --account <accountId>
 ```
 
@@ -179,16 +189,21 @@ The command confirms the account's stored Stripe customer still correlates to
 the account, stores only the new credential's hash, and retains the billing
 account and subscription. Supply the new credential through a protected
 environment variable or secret store, never on the command line or in logs.
-Then update the `credential` column of `forge_company_billing` for the company
+Then update the `credential` column of `suplex_company_billing` for the company
 in the private installation database to the same new credential.
 
 There is no public recovery by email or customer ID.
 
 ## Backup, restore, and rollback
 
-Back up the private `forge_company_billing` row together with the hosted
+Back up the private `suplex_company_billing` row together with the hosted
 billing database. Restoring a database preserves the account binding; the
 process `instanceId` is unrelated to billing identity.
+
+Factory reset replaces the private database, so it deletes the company's
+billing credential. It does not cancel the subscription. To keep billing
+authority, restore the credential from a backup or rotate it as described
+above.
 
 Rollback of application code never deletes billing rows and never cancels
 subscriptions. Keep the hosted service and the Stripe portal reachable so
@@ -199,4 +214,4 @@ customers retain a working cancellation path.
 When the billing service or providers cannot be read, existing projects,
 tasks, workflows, and delivery continue; Free operations within the allowance
 continue; creation beyond the Free allowance returns `billing_unavailable`
-until Forge can verify the subscription.
+until Suplex can verify the subscription.

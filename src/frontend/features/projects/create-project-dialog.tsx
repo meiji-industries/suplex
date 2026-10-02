@@ -9,13 +9,23 @@ import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput, InputGr
 import { RadioGroup, RadioGroupItem } from "../../components/ui/radio-group.js";
 import { NewButton } from "../../components/ui/new-button.js";
 import { GithubDeviceSignIn } from "../../components/app/github-device-sign-in.js";
-import { ApiError, hasApiFinding, readJsonUnchecked, type ApiFinding, type CompanyStatus } from "../../lib/api.js";
+import { ApiError, companySettingsPath, hasApiFinding, isApiError, readJsonUnchecked, type ApiFinding, type CompanyStatus } from "../../lib/api.js";
+import { useOptionalCompanyContext } from "../../shell/company-context.js";
 import { reconcileScopedNotFound } from "../../shell/view-shared.js";
 import { ChevronDown } from "lucide-react";
 import { useCallback, useEffect, useState, type FormEvent, type ReactElement } from "react";
 import { ProjectConnections, REPOSITORY_HOSTS, withRepositoryHost } from "./project-connections.js";
 import { ProjectIntegrationSchema, type ProjectIntegration } from "../../contracts/project-integration.js";
 import { createProject } from "./lib/project-api.js";
+import { clearProjectDraft, readProjectDraft, writeProjectDraft } from "./lib/project-draft.js";
+
+const QUOTA_CODES = new Set(["project_limit_reached", "seat_limit_exceeded", "billing_unavailable"]);
+
+function quotaMessage(code: string, admin: boolean): string {
+  if (code === "billing_unavailable") return "Suplex cannot check the subscription. Retry the request.";
+  if (code === "seat_limit_exceeded") return admin ? "Purchased seats do not cover the active accounts. Add seats in the billing settings." : "Purchased seats do not cover the active accounts. Request more seats from an administrator.";
+  return admin ? "This company reached the Free project allowance." : "This company reached the Free project allowance. Request Pro from an administrator.";
+}
 
 type RepositoryOwnersState =
   | { kind: "idle" }
@@ -59,11 +69,15 @@ export function CreateProjectDialog({
   const [findings, setFindings] = useState<ApiFinding[]>([]);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [quotaCode, setQuotaCode] = useState("");
+  const isAdmin = useOptionalCompanyContext()?.user?.role === "admin";
 
   useEffect(() => {
     if (open) {
-      setSource("clone");
-      setRepository("");
+      const draft = readProjectDraft(companyId);
+      setSource(draft?.source ?? "clone");
+      setRepository(draft?.repository ?? "");
+      setQuotaCode("");
       setIntegration({ repository: { kind: "github" }, tracker: null });
       setBaseBranch("main");
       setOwnersState({ kind: "idle" });
@@ -73,7 +87,11 @@ export function CreateProjectDialog({
       setError("");
       setBusy(false);
     }
-  }, [open]);
+  }, [open, companyId]);
+  const closeDialog = (next: boolean): void => {
+    if (!next) clearProjectDraft(companyId);
+    onOpenChange(next);
+  };
 
   const github = open && integration.repository.kind === "github";
   const confirmGitHubAuthRequired = useCallback((reason: unknown): boolean => {
@@ -119,14 +137,17 @@ export function CreateProjectDialog({
   // A bare owner/repository clones from the selected host.
   const cloneUrl = repositoryPicker ? `https://github.com/${owner}/${repository}` : /^[\w.-]+\/[\w.-]+$/.test(repository.trim()) ? `https://${hostDomain}/${repository.trim()}` : repository.trim();
 
+  const repositoryName = ownerPicker && !repository.includes("/") ? `${owner}/${repository.trim()}` : repository.trim();
   const submit = async (event?: FormEvent): Promise<void> => {
     event?.preventDefault();
     if (!companyId || companyStatus !== "active" || !repository.trim()) return;
     setBusy(true);
     setError("");
+    setQuotaCode("");
     setFindings([]);
     try {
-      await createProject(companyId, { ...(source === "create" ? { repositoryName: ownerPicker && !repository.includes("/") ? `${owner}/${repository.trim()}` : repository.trim() } : { repositoryUrl: cloneUrl }), baseBranch, integration: ProjectIntegrationSchema.parse(integration) });
+      await createProject(companyId, { ...(source === "create" ? { repositoryName } : { repositoryUrl: cloneUrl }), baseBranch, integration: ProjectIntegrationSchema.parse(integration) });
+      clearProjectDraft(companyId);
       onOpenChange(false);
       setRepository("");
       setFindings([]);
@@ -137,6 +158,10 @@ export function CreateProjectDialog({
       if (github && confirmGitHubAuthRequired(reason)) {
         setError("");
         setFindings([]);
+        return;
+      }
+      if (isApiError(reason) && reason.code !== undefined && QUOTA_CODES.has(reason.code)) {
+        setQuotaCode(reason.code);
         return;
       }
       setError(reason instanceof Error ? reason.message : "Project configuration failed");
@@ -152,9 +177,10 @@ export function CreateProjectDialog({
   </InputGroupAddon>;
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog open={open} onOpenChange={closeDialog}>
       <DialogContent showCloseButton>
         <DialogHeader><DialogTitle>New project</DialogTitle></DialogHeader>
+          {quotaCode ? <Alert><AlertDescription><p>{quotaMessage(quotaCode, isAdmin)}</p>{isAdmin && quotaCode !== "billing_unavailable" ? <a href={companySettingsPath(companyId)} onClick={() => writeProjectDraft(companyId, { source, repository: source === "create" ? repositoryName : cloneUrl })}>Open billing settings</a> : null}</AlertDescription></Alert> : null}
           {companyStatus !== "active" ? (
             <p className="text-xs text-muted-foreground">{companyStatus === "paused" ? "Company paused. New projects are unavailable." : "Company archived. New projects are unavailable."}</p>
           ) : (

@@ -5,6 +5,7 @@ import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, 
 import { ApplicationFrame } from "../../shell/application-frame.js";
 import { useCompanyContext } from "../../shell/company-context.js";
 import { AvatarEditor } from "../../components/app/entity-avatar.js";
+import { BillingSection } from "./billing-section.js";
 import { SettingsContent, SettingsLayout, SettingsSection, SettingRow } from "./settings-layout.js";
 import { companySettingsPath, readJsonUnchecked, withCompany, type CompanyStatus } from "../../lib/api.js";
 import { Archive, Building2, RotateCcw, Save, Pause, Trash2 } from "lucide-react";
@@ -104,6 +105,7 @@ export function CompanySettingsView(): ReactElement {
           <span className="text-xs text-muted-foreground">{new Date(company.createdAt).toLocaleDateString()}</span>
         </SettingRow>
        </SettingsSection>
+      <BillingSection companyId={company.id} />
        {error ? <div className="mb-4 text-xs text-destructive"><Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert></div> : null}
       <SettingsSection title="Lifecycle" description="Control workspace activity.">
         {company.status === "active" ? <SettingRow label="Pause company" description="Existing records remain available; new projects and tasks are blocked."><Button variant="outline" size="sm" onClick={() => void mutateStatus("paused")} disabled={busy !== ""}><Pause className="size-3.5" />{busy === "paused" ? "Pausing…" : "Pause company"}</Button></SettingRow> : null}
@@ -114,7 +116,7 @@ export function CompanySettingsView(): ReactElement {
       </SettingsSection>
       </SettingsContent>
       <AlertDialog open={archiveOpen} onOpenChange={setArchiveOpen}><AlertDialogContent><AlertDialogHeader><AlertDialogTitle>Archive {company.name}?</AlertDialogTitle><AlertDialogDescription>You can reverse this action. You can read the project and task history, but you cannot start new work.</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel>Cancel</AlertDialogCancel><AlertDialogAction variant="destructive" onClick={() => void mutateStatus("archived")} disabled={busy !== ""}>{busy === "archived" ? "Archiving…" : "Archive"}</AlertDialogAction></AlertDialogFooter></AlertDialogContent></AlertDialog>
-      <AlertDialog open={clearOpen} onOpenChange={setClearOpen}><AlertDialogContent><AlertDialogHeader><AlertDialogTitle>Factory reset Suplex?</AlertDialogTitle><AlertDialogDescription>Suplex deletes all companies, projects, tasks, users, settings, and artifacts on this host. Suplex keeps backups, repositories, and worktrees. You cannot undo this.</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel>Cancel</AlertDialogCancel><AlertDialogAction variant="destructive" onClick={() => void clearAccount()} disabled={busy !== ""}>{busy === "clear" ? "Resetting…" : "Factory reset"}</AlertDialogAction></AlertDialogFooter></AlertDialogContent></AlertDialog>
+      <AlertDialog open={clearOpen} onOpenChange={setClearOpen}><AlertDialogContent><AlertDialogHeader><AlertDialogTitle>Factory reset Suplex?</AlertDialogTitle><AlertDialogDescription>Suplex deletes all companies, projects, tasks, users, settings, and artifacts on this host. Suplex keeps backups, repositories, and worktrees. Factory reset deletes the billing credential on this host and does not cancel a subscription. You cannot undo this.</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel>Cancel</AlertDialogCancel><AlertDialogAction variant="destructive" onClick={() => void clearAccount()} disabled={busy !== ""}>{busy === "clear" ? "Resetting…" : "Factory reset"}</AlertDialogAction></AlertDialogFooter></AlertDialogContent></AlertDialog>
     </SettingsLayout>
   );
 }

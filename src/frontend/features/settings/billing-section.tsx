@@ -4,9 +4,9 @@ import { Button } from "../../components/ui/button.js";
 import { Input } from "../../components/ui/input.js";
 import { Skeleton } from "../../components/ui/skeleton.js";
 import { Spinner } from "../../components/ui/spinner.js";
-import { isApiError, readJson } from "../../lib/api.js";
-import { BILLING_SEAT_UNIT_AMOUNT, type BillingSummary, type HostedSeatPreview } from "../../../billing/contracts.js";
-import type { BillingCheckoutResponse, BillingPortalResponse, BillingSeatChangeResponse } from "../../../http/contracts/billing.js";
+import { isApiError } from "../../lib/api.js";
+import { BILLING_SEAT_UNIT_AMOUNT, type BillingSummary, type HostedSeatPreview } from "../../contracts/billing.js";
+import { changeSeats, getBillingSummary, openBillingPortal, previewSeats, startCheckout } from "./lib/billing-api.js";
 import { SettingsSection, SettingRow } from "./settings-layout.js";
 import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactElement } from "react";
 
@@ -41,15 +41,15 @@ function summaryPaymentRequired(summary: BillingSummary): boolean {
 
 function actionMessage(reason: unknown): string {
   if (isApiError(reason)) {
-    if (reason.code === "billing_unavailable" || reason.code === "billing_not_configured") return "Forge cannot check the subscription. Retry the request.";
+    if (reason.code === "billing_unavailable" || reason.code === "billing_not_configured") return "Suplex cannot check the subscription. Retry the request.";
     if (reason.code === "invalid_seat_quantity") return "The seat count is not valid.";
-    if (reason.code === "idempotency_conflict") return "Forge saved a different request with this key. Check the subscription and retry.";
+    if (reason.code === "idempotency_conflict") return "Suplex saved a different request with this key. Check the subscription and retry.";
     if (reason.code === "billing_payment_pending") return "A payment is pending. Approve the payment or check the subscription.";
     if (reason.code === "billing_operation_not_applied") return "The change was not applied. Review a new quote and try again.";
     if (reason.code === "no_subscription") return "No subscription exists for this company.";
     return reason.message;
   }
-  return reason instanceof Error ? reason.message : "Forge cannot check the subscription.";
+  return reason instanceof Error ? reason.message : "Suplex cannot check the subscription.";
 }
 
 // Source-derived terminal subscription statuses permit a fresh purchase. Any
@@ -80,7 +80,6 @@ export function BillingSection({ companyId }: { companyId: string }): ReactEleme
   const [paymentUrl, setPaymentUrl] = useState<string>();
   const [externalOpen, setExternalOpen] = useState(false);
 
-  const billingPath = `/api/companies/${encodeURIComponent(companyId)}/billing`;
   const generation = useRef(0);
   const pollTimer = useRef<number | undefined>(undefined);
   const checkoutKey = useRef<{ key: string; quantity: number } | undefined>(undefined);
@@ -108,16 +107,16 @@ export function BillingSection({ companyId }: { companyId: string }): ReactEleme
     const gen = generation.current;
     if (!silent) setState("loading");
     try {
-      const next = await readJson<BillingSummary>(billingPath);
+      const next = await getBillingSummary(companyId);
       if (gen !== generation.current) return;
       applySummary(next);
       if (next.plan === "pro" && !next.paymentActionRequired) stopPolling();
     } catch (reason) {
       if (gen !== generation.current) return;
       setState("error");
-      setErrorText(reason instanceof Error ? reason.message : "Forge cannot check the subscription.");
+      setErrorText(reason instanceof Error ? reason.message : "Suplex cannot check the subscription.");
     }
-  }, [billingPath, applySummary, stopPolling]);
+  }, [companyId, applySummary, stopPolling]);
 
   useEffect(() => {
     generation.current += 1;
@@ -178,11 +177,7 @@ export function BillingSection({ companyId }: { companyId: string }): ReactEleme
       if (!checkoutKey.current || checkoutKey.current.quantity !== quantity) {
         checkoutKey.current = { key: crypto.randomUUID(), quantity };
       }
-      const result = await readJson<BillingCheckoutResponse>(`${billingPath}/checkout`, {
-        method: "POST",
-        headers: { "Idempotency-Key": checkoutKey.current.key },
-        body: JSON.stringify({ quantity }),
-      });
+      const result = await startCheckout(companyId, quantity, checkoutKey.current.key);
       if (result.status === "redirect") {
         setCheckoutUrl(result.url);
         setExternalOpen(true);
@@ -223,11 +218,7 @@ export function BillingSection({ companyId }: { companyId: string }): ReactEleme
     }
     setBusy("preview");
     try {
-      const result = await readJson<HostedSeatPreview>(`${billingPath}/seats/preview`, {
-        method: "POST",
-        headers: { "Idempotency-Key": crypto.randomUUID() },
-        body: JSON.stringify({ quantity }),
-      });
+      const result = await previewSeats(companyId, quantity);
       setPreview(result);
     } catch (reason) {
       setActionError(actionMessage(reason));
@@ -245,11 +236,7 @@ export function BillingSection({ companyId }: { companyId: string }): ReactEleme
       if (seatKey.current?.kind !== "increase" || seatKey.current.quantity !== quote.requestedQuantity || seatKey.current.previewId !== quote.previewId) {
         seatKey.current = { kind: "increase", key: crypto.randomUUID(), quantity: quote.requestedQuantity, previewId: quote.previewId };
       }
-      const result = await readJson<BillingSeatChangeResponse>(`${billingPath}/seats`, {
-        method: "POST",
-        headers: { "Idempotency-Key": seatKey.current.key },
-        body: JSON.stringify({ quantity: quote.requestedQuantity, previewId: quote.previewId }),
-      });
+      const result = await changeSeats(companyId, { quantity: quote.requestedQuantity, previewId: quote.previewId }, seatKey.current.key);
       applySummary(result.summary);
       setPreview(undefined);
       setSeatSeats("");
@@ -264,11 +251,7 @@ export function BillingSection({ companyId }: { companyId: string }): ReactEleme
         // idempotency conflict with the consumed preview.
         seatKey.current = undefined;
         try {
-          const next = await readJson<HostedSeatPreview>(`${billingPath}/seats/preview`, {
-            method: "POST",
-            headers: { "Idempotency-Key": crypto.randomUUID() },
-            body: JSON.stringify({ quantity: quote.requestedQuantity }),
-          });
+          const next = await previewSeats(companyId, quote.requestedQuantity);
           setPreview(next);
           setActionError("The quote changed. Review the new amounts before you save.");
         } catch (previewReason) {
@@ -302,11 +285,7 @@ export function BillingSection({ companyId }: { companyId: string }): ReactEleme
     setBusy("seats");
     setActionError("");
     try {
-      const result = await readJson<BillingSeatChangeResponse>(`${billingPath}/seats`, {
-        method: "POST",
-        headers: { "Idempotency-Key": key },
-        body: JSON.stringify({ quantity, confirmNoRefund: true }),
-      });
+      const result = await changeSeats(companyId, { quantity, confirmNoRefund: true }, key);
       applySummary(result.summary);
       setSeatSeats("");
       seatKey.current = undefined;
@@ -331,7 +310,7 @@ export function BillingSection({ companyId }: { companyId: string }): ReactEleme
     setBusy("portal");
     setActionError("");
     try {
-      const result = await readJson<BillingPortalResponse>(`${billingPath}/portal`, { method: "POST" });
+      const result = await openBillingPortal(companyId);
       setPortalUrl(result.url);
       setExternalOpen(true);
     } catch (reason) {
@@ -358,7 +337,7 @@ export function BillingSection({ companyId }: { companyId: string }): ReactEleme
   const seatQuantity = parseSeats(seatInputValue);
 
   return (
-    <SettingsSection title="Billing" description="Forge checks project capacity before it creates a project.">
+    <SettingsSection title="Billing" description="Suplex checks project capacity before it creates a project.">
       {state === "loading" ? (
         <div className="space-y-2 px-4 py-3.5" aria-busy="true" aria-label="Billing status">
           <div className="flex items-center gap-2 text-xs text-muted-foreground"><Spinner /><span>Billing status</span></div>
@@ -374,7 +353,7 @@ export function BillingSection({ companyId }: { companyId: string }): ReactEleme
         <>
           <SettingRow
             label="Plan"
-            description={summary.plan === "pro" ? "Pro costs USD 20 per seat each month. Taxes are additional." : summary.plan === "free" ? `Free includes ${summary.projectLimit} projects.` : "Forge cannot check the subscription."}
+            description={summary.plan === "pro" ? "Pro costs USD 20 per seat each month. Taxes are additional." : summary.plan === "free" ? `Free includes ${summary.projectLimit} projects.` : "Suplex cannot check the subscription."}
           >
             <span className="text-xs text-muted-foreground">{summary.plan === "pro" ? "Pro" : summary.plan === "free" ? "Free" : "Unknown"}</span>
           </SettingRow>
@@ -383,7 +362,7 @@ export function BillingSection({ companyId }: { companyId: string }): ReactEleme
               {summary.projectCount}{" / "}{summary.plan === "unknown" ? "Unknown" : summary.projectLimit === null ? "Unlimited" : summary.projectLimit}
             </span>
           </SettingRow>
-          <SettingRow label="Seats" description="Active Forge accounts use purchased seat capacity.">
+          <SettingRow label="Seats" description="Active Suplex accounts use purchased seat capacity.">
             <span className="text-xs text-muted-foreground">
               {summary.plan === "unknown" ? "Unknown" : summary.purchasedSeats}{" purchased, "}{summary.requiredSeats}{" active"}
             </span>
@@ -410,7 +389,7 @@ export function BillingSection({ companyId }: { companyId: string }): ReactEleme
           ) : null}
           {summary.plan === "pro" && summary.restriction === "seat_limit_exceeded" ? (
             <div className="px-4 py-3">
-              <Alert><AlertDescription>Purchased seats do not cover the active accounts. Forge blocks new projects beyond the Free allowance until you add seats.</AlertDescription></Alert>
+              <Alert><AlertDescription>Purchased seats do not cover the active accounts. Suplex blocks new projects beyond the Free allowance until you add seats.</AlertDescription></Alert>
             </div>
           ) : null}
           {!summary.purchaseConfigured ? (
@@ -419,7 +398,7 @@ export function BillingSection({ companyId }: { companyId: string }): ReactEleme
             </SettingRow>
           ) : null}
           {paymentRequired || paymentUrl ? (
-            <SettingRow label="Payment" description="A payment needs your approval before Forge applies it.">
+            <SettingRow label="Payment" description="Suplex applies the change after you approve the payment.">
               {paymentUrl
                 ? <a className="text-xs text-primary underline underline-offset-2" href={paymentUrl} target="_blank" rel="noopener noreferrer">Approve the payment</a>
                 : <span className="text-xs text-muted-foreground">Open billing to approve it.</span>}
@@ -483,7 +462,7 @@ export function BillingSection({ companyId }: { companyId: string }): ReactEleme
             </SettingRow>
           ) : null}
           {checkoutUrl ? (
-            <SettingRow label="Checkout" description="The checkout page opens in a new tab. Forge checks the result when you return.">
+            <SettingRow label="Checkout" description="The checkout page opens in a new tab. Suplex checks the result when you return.">
               <a className="text-xs text-primary underline underline-offset-2" href={checkoutUrl} target="_blank" rel="noopener noreferrer">Open checkout</a>
             </SettingRow>
           ) : null}
@@ -501,7 +480,7 @@ export function BillingSection({ companyId }: { companyId: string }): ReactEleme
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>Save fewer seats?</AlertDialogTitle>
-            <AlertDialogDescription>Forge does not refund the remaining paid period. The lower total applies at the next renewal.</AlertDialogDescription>
+            <AlertDialogDescription>Suplex does not refund the remaining paid period. The lower total applies at the next renewal.</AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>

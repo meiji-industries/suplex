@@ -394,7 +394,7 @@ pub struct BillingFreeSummary {
 pub struct BillingProSummary {
     #[serde(flatten)]
     pub base: BillingSummaryBase,
-    /// None means unlimited.
+    /// Null means unlimited.
     pub project_limit: Option<i64>,
     pub purchased_seats: i64,
     pub can_create_project: bool,

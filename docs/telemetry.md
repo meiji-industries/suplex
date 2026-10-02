@@ -62,3 +62,18 @@ Every event has these properties: `app_version` (the build revision), `os`,
 `suplex_telemetry` holds the notice time, the optional email, and the send
 position. `suplex_telemetry_pull_requests` records which pull requests were
 reported. Neither table is authority for any user action.
+
+## Website and downloads
+
+The website and the download service send to the same PostHog project. They
+are not part of the application, and `rust/src/telemetry/mod.rs` does not send
+these events.
+
+- `getsuplex.ai` uses the PostHog browser library. It records page views and
+  clicks for an anonymous browser ID. It makes no person profile.
+- `suplex.sh/download` sends `download_started` for each download, from the
+  install script and from the website. The properties are `platform`
+  (`macos-arm64`, `macos-x64`, `linux-arm64`, or `linux-x64`), `source`
+  (`install_script` or `browser`), and `$lib` (`suplex-web`). Each event has a
+  new random `distinct_id`, so a download is not linked to a browser or to an
+  installation. A request with the header `DNT: 1` sends nothing.

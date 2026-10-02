@@ -35,6 +35,7 @@ pub mod routes {
     pub mod analytics;
     pub mod auth;
     pub mod avatars;
+    pub mod billing;
     pub mod companies;
     pub mod discovery;
     pub mod external_agent_administration;
@@ -88,6 +89,7 @@ pub struct AppState {
     dev_assets_dir: Option<PathBuf>,
     /// Dynamic client registrations per source address in the last hour.
     pub oauth_registrations: OAuthRegistrations,
+    pub billing: Option<crate::billing::BillingClient>,
 }
 
 pub type OAuthRegistrations =
@@ -111,6 +113,7 @@ impl AppState {
             host_terminals,
             dev_assets_dir: None,
             oauth_registrations: OAuthRegistrations::default(),
+            billing: None,
         }
     }
 
@@ -150,6 +153,11 @@ impl AppState {
         self
     }
 
+    pub fn with_billing(mut self, billing: crate::billing::BillingClient) -> Self {
+        self.billing = Some(billing);
+        self
+    }
+
     pub fn with_dev_assets_dir(mut self, directory: PathBuf) -> Self {
         self.dev_assets_dir = Some(directory);
         self
@@ -185,6 +193,7 @@ pub fn router(state: AppState) -> Router {
         .merge(routes::analytics::router())
         .merge(routes::auth::router(&state))
         .merge(routes::avatars::router())
+        .merge(routes::billing::router())
         .merge(routes::mcp::router())
         .merge(routes::oauth::router())
         .merge(routes::discovery::router())
@@ -411,6 +420,7 @@ mod tests {
             host_terminals: Arc::default(),
             dev_assets_dir: None,
             oauth_registrations: OAuthRegistrations::default(),
+            billing: None,
         };
         let observed = Arc::new(AtomicBool::new(false));
         let callback_state = state.clone();

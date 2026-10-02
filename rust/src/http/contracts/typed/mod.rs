@@ -11,6 +11,7 @@ use crate::identity::auth::js_trim;
 pub mod agent_api;
 pub mod auth;
 pub mod avatars;
+pub mod billing;
 pub mod github_auth;
 pub mod github_triggers;
 pub mod moves;

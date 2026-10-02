@@ -255,6 +255,11 @@ async fn create(
         return with_cookies(ApiError::response(error), cookies);
     }
     let operation = tokio::spawn(async move {
+        // The quota check runs before a clone, so a company over its limit
+        // never provisions a repository it cannot keep.
+        if let Err(error) = crate::billing::admit_creation(&state, &company_id).await {
+            return with_cookies(ApiError::response(error), cookies);
+        }
         let response =
             match service::create_project(&state, &roots, &user_id, &company_id, &body).await {
                 Ok(project) => (

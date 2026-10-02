@@ -547,6 +547,7 @@ pub fn create_local_default(
             worker_profile_id,
             configuration: None,
             now,
+            billing: crate::billing::BillingEvidence::NotChecked,
         },
     )
 }
@@ -556,6 +557,8 @@ pub struct CreateLocalOptions<'a> {
     pub worker_profile_id: &'a str,
     pub configuration: Option<&'a ProjectCreateBody>,
     pub now: DateTime<Utc>,
+    /// Evidence for a creation above the Free limit.
+    pub billing: crate::billing::BillingEvidence,
 }
 
 pub fn create_local(
@@ -628,6 +631,16 @@ pub fn create_local(
         if company.status != "active" {
             return Err(failure("Company is not active", 409, vec![]));
         }
+        crate::billing::decide_project_entitlement(
+            crate::billing::project_count(database, company_id)?,
+            crate::billing::required_seats(database, company_id)?,
+            options.now,
+            &options.billing,
+        )
+        .map_err(|denial| match denial {
+            crate::billing::Denial::RefreshRequired => Box::new(denial) as Box<dyn Error>,
+            denial => crate::billing::denial_failure(denial).into(),
+        })?;
         for (role, profile_id) in [("root", root_profile_id), ("worker", worker_profile_id)] {
             let exists: bool = database.connection().query_row(
                 "SELECT EXISTS(SELECT 1 FROM suplex_profiles WHERE id = ?1 AND role = ?2 AND archived_at IS NULL)",
@@ -1481,21 +1494,36 @@ async fn finish_local_project(
     )
     .await
     .map_err(|findings| ProjectError::new("Project configuration is invalid", 422, findings))?;
-    state.with_database(|database| {
-        create_local(
-            database,
-            user_id,
-            company_id,
-            &prepared,
-            CreateLocalOptions {
-                root_profile_id: &fields[7],
-                worker_profile_id: &fields[8],
-                configuration: Some(body),
-                now: Utc::now(),
-            },
-        )
-    })
+    // Billing reads never run inside the SQLite transaction: a creation above
+    // the Free limit exits through `RefreshRequired`, reads evidence, retries.
+    let mut evidence = crate::billing::BillingEvidence::NotChecked;
+    for _ in 0..=MAX_BILLING_REFRESHES {
+        let refresh = match state.with_database(|database| {
+            create_local(
+                database,
+                user_id,
+                company_id,
+                &prepared,
+                CreateLocalOptions {
+                    root_profile_id: &fields[7],
+                    worker_profile_id: &fields[8],
+                    configuration: Some(body),
+                    now: Utc::now(),
+                    billing: evidence.clone(),
+                },
+            )
+        }) {
+            Err(error) if error.is::<crate::billing::Denial>() => true,
+            created => return created,
+        };
+        if refresh {
+            evidence = crate::billing::create_decision(state, company_id).await?;
+        }
+    }
+    Err(crate::billing::unavailable().into())
 }
+
+const MAX_BILLING_REFRESHES: usize = 3;
 
 async fn create_from_repository(
     state: &AppState,
@@ -1877,6 +1905,7 @@ mod tests {
                 worker_profile_id: " profile_native_worker ",
                 configuration: Some(&configured),
                 now,
+                billing: crate::billing::BillingEvidence::NotChecked,
             },
         )
         .unwrap();
@@ -1929,6 +1958,7 @@ mod tests {
                 worker_profile_id: "profile_native_worker",
                 configuration: Some(&missing_instance),
                 now,
+                billing: crate::billing::BillingEvidence::NotChecked,
             },
         )
         .unwrap_err();
@@ -1948,6 +1978,7 @@ mod tests {
                 worker_profile_id: "profile_native_worker",
                 configuration: Some(&missing_workflow),
                 now,
+                billing: crate::billing::BillingEvidence::NotChecked,
             },
         )
         .unwrap_err();

@@ -23,6 +23,7 @@ pub struct Installation {
     pub tailscale_exposure: String,
     pub installation_id: String,
     pub development_auto_login: bool,
+    pub billing_service_url: Option<url::Url>,
 }
 
 impl Installation {
@@ -185,6 +186,10 @@ impl Installation {
             Some(_) => return Err("SUPLEX_INSTALLATION_ID is invalid".into()),
             None => persistent_installation_id(&data)?,
         };
+        let billing_service_url = value("SUPLEX_BILLING_SERVICE_URL")
+            .filter(|url| !url.is_empty())
+            .map(|url| crate::billing::parse_service_url(&url))
+            .transpose()?;
         let path = |key: &str, default: PathBuf| {
             value(key)
                 .map(|path| absolute(&current, Path::new(&path)))
@@ -212,6 +217,7 @@ impl Installation {
                 },
             ),
             development_auto_login,
+            billing_service_url,
             root,
             data,
             configuration,

@@ -134,6 +134,13 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
     .with_artifact_root(installation.artifacts.clone())
     .with_task_host(task_host.clone())
     .with_host_terminals(host_terminals.clone());
+    let state = match installation.billing_service_url.clone() {
+        Some(url) => state.with_billing(suplex::billing::BillingClient::new(
+            url,
+            installation.installation_id.clone(),
+        )),
+        None => state,
+    };
     #[cfg(debug_assertions)]
     let state = match std::env::var_os("SUPLEX_ASSETS_DIR") {
         Some(directory) => state.with_dev_assets_dir(directory.into()),

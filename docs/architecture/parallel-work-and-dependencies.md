@@ -50,6 +50,11 @@ build on earlier work. Capture that intent in the task and source selection.
 
 ## Parallel roles within a task
 
+The project task limit counts active tasks and tasks that await a human answer.
+Archived tasks do not hold a slot. The task response reports when this limit
+keeps a queued task from starting, using the current project limit and task
+count. The task view shows this reason alongside incomplete prerequisites.
+
 Combined planning runs two independent planning Advisors and returns both
 results to Coordinator before implementation. That is separate from several
 tasks running concurrently. Worker and individual Advisors otherwise share

@@ -431,7 +431,7 @@ mod tests {
         let delivery = call("suplex_get_task_delivery", json!({"taskId": task_id})).await;
         assert_eq!(
             delivery,
-            json!({"status": 200, "body": {"taskId": task_id, "taskStatus": "backlog", "revision": revision, "queue": {"waitingOn": []}, "blocker": null, "delivery": null}})
+            json!({"status": 200, "body": {"taskId": task_id, "taskStatus": "backlog", "revision": revision, "queue": {"projectConcurrencyLimited": false, "waitingOn": []}, "blocker": null, "delivery": null}})
         );
         let list = call(
             "suplex_list_tasks",

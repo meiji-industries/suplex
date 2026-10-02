@@ -1780,7 +1780,7 @@ mod tests {
                 project_id: project.into(),
                 title: key.into(),
                 description: String::new(),
-                configuration: serde_json::json!({"repository":"owner/repo","branch":key,"baseBranch":"main","baselineSha":"head","runProjectTests":false,"visualEvidence":"off"}),
+                configuration: serde_json::json!({"repository":"owner/repo","repositoryPath":"/tmp/repo","worktreeRoot":"/tmp/worktrees","branch":key,"baseBranch":"main","baselineSha":"head","startingSha":"head","setupCommand":"","verificationCommand":"","capturedAt":rfc3339_millis(now),"runProjectTests":false,"visualEvidence":"off"}),
                 idempotency_key: key.into(),
                 request_hash: key.into(),
                 creator: TaskCreator::User(user.id.clone()),
@@ -1809,6 +1809,9 @@ mod tests {
         database.connection().execute("UPDATE suplex_task_controls SET status = 'delivered' WHERE task_id IN (?1, ?2)", params![unlimited[0], unlimited[1]]).unwrap();
         database.connection().execute("UPDATE suplex_projects SET task_concurrency = 1 WHERE id = 'limited_project'", []).unwrap();
 
+        let capacity_wait = |database: &SuplexDatabase, id: &str| {
+            serde_json::to_value(repository::task_response(database, id).unwrap().unwrap()).unwrap()["queue"]["projectConcurrencyLimited"].as_bool().unwrap()
+        };
         let running = create(&mut database, "limited_project", "running");
         let newer = create(&mut database, "limited_project", "newer");
         let older = create(&mut database, "limited_project", "older");
@@ -1816,6 +1819,9 @@ mod tests {
         assert_eq!(status(&database, &running), "active");
         assert_eq!(status(&database, &newer), "queued");
         assert_eq!(status(&database, &older), "queued");
+        assert!(capacity_wait(&database, &newer));
+        assert!(!capacity_wait(&database, &running));
+        assert!(!capacity_wait(&database, &other));
         // Another project still starts while this one is full.
         assert_eq!(status(&database, &other), "active");
         // Queue time orders the queue, not creation time.
@@ -1827,13 +1833,16 @@ mod tests {
         database.connection().execute("UPDATE suplex_task_controls SET status = 'waiting_human', human_question = 'Continue?', human_question_id = 'question_limit' WHERE task_id = ?1", [&running]).unwrap();
         assert!(admit_queued(&mut database, now).unwrap().is_empty());
         assert_eq!(status(&database, &older), "queued");
+        assert!(capacity_wait(&database, &older));
 
         database.connection().execute("UPDATE suplex_task_controls SET status = 'delivered', human_question = NULL, human_question_id = NULL WHERE task_id = ?1", [&running]).unwrap();
+        assert!(!capacity_wait(&database, &older));
         assert_eq!(admit_queued(&mut database, now).unwrap(), vec![older.clone()]);
         assert_eq!(status(&database, &newer), "queued");
 
         // An archived task does not hold a slot.
         database.connection().execute("UPDATE suplex_tasks SET archived_at = ?1 WHERE id = ?2", params![rfc3339_millis(now), older]).unwrap();
+        assert!(!capacity_wait(&database, &newer));
         assert_eq!(admit_queued(&mut database, now).unwrap(), vec![newer.clone()]);
         drop(database);
         let _ = std::fs::remove_file(&filename);

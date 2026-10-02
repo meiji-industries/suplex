@@ -5,7 +5,7 @@ import { TaskQueueSchema, type Task } from "../src/frontend/contracts/tasks.js";
 import { TaskQueueWaits, backlogText } from "../src/frontend/features/tasks/task-details.js";
 import { TaskStatus, taskStatusLabel } from "../src/frontend/features/tasks/task-status.js";
 
-const queue: Task["queue"] = { waitingOn: [{
+const queue: Task["queue"] = { projectConcurrencyLimited: false, waitingOn: [{
   kind: "task", id: "blocker", title: "Agent prerequisite", status: "backlog", deliveryTarget: "pull_request_draft",
   reason: "prerequisite_not_started", summary: "Agent prerequisite. Start it to unblock this task.",
 }] };
@@ -22,4 +22,10 @@ test("queued task presentation links its blocker and explains the wait", () => {
   expect(waits).toContain("/tasks/blocker");
   expect(waits).toContain("Agent prerequisite");
   expect(backlogText({ ...task, status: "backlog" })).toContain("Start this task to queue it");
+});
+
+test("queued task explains project capacity and preserves prerequisite reasons", () => {
+  expect(backlogText({ status: "queued", queue: { waitingOn: [], projectConcurrencyLimited: true } })).toBe("Queued. Project concurrency limit reached.");
+  expect(backlogText({ status: "queued", queue: { ...queue, projectConcurrencyLimited: true } })).toBe("Queued. Prerequisites incomplete and project concurrency limit reached.");
+  expect(backlogText({ status: "queued", queue: { waitingOn: [], projectConcurrencyLimited: false } })).toBe("Queued. Suplex will start this task.");
 });

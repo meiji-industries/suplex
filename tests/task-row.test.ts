@@ -46,7 +46,7 @@ const task = {
   },
   humanQuestion: null,
   blockedBy: [{ id: "task-0", title: "Prepare task links", status: "queued" }],
-  queue: { waitingOn: [] },
+  queue: { projectConcurrencyLimited: false, waitingOn: [] },
   limits: { budgetUsd: 15, maxTurns: 40, admittedTurns: 0 },
   wakeAt: null,
   images: [],

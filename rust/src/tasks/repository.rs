@@ -559,6 +559,7 @@ pub fn start(
 }
 
 const TASK_RESPONSE_SELECT: &str = r#"SELECT t.id AS id, t.company_id AS company_id, t.project_id AS project_id, t.issue_json, t.issue_number, cpy.issue_code, t.title, t.description, c.status AS status, c.delivery_target AS delivery_target, c.root_profile_json, c.worker_profile_json, c.workflow, c.advisor_profiles_json, c.workflow_state_json, t.configuration_json, c.worktree_json, c.pull_request_json, c.human_question, c.human_question_id, c.limit_pause_json, c.human_question_options_json, c.recovery_turn_id, c.wake_at, t.created_at, CASE WHEN julianday(t.updated_at) >= julianday(COALESCE(c.updated_at, t.updated_at)) THEN t.updated_at ELSE c.updated_at END AS updated_at, c.status_changed_at, t.archived_at, c.budget_usd, c.max_turns,
+    EXISTS(SELECT 1 FROM suplex_projects p WHERE p.id = t.project_id AND p.task_concurrency IS NOT NULL AND p.task_concurrency <= (SELECT COUNT(*) FROM suplex_tasks s JOIN suplex_task_controls sc ON sc.task_id = s.id WHERE s.project_id = t.project_id AND s.archived_at IS NULL AND sc.status IN ('active', 'waiting_human'))) AS project_concurrency_limited,
     COALESCE((SELECT default_budget_usd FROM suplex_environment_settings WHERE id = 'host'), 15.0) AS default_budget,
     COALESCE((SELECT default_max_turns FROM suplex_environment_settings WHERE id = 'host'), 40) AS default_turns,
     (SELECT COUNT(*) FROM suplex_task_turns WHERE task_id = t.id AND prompted_at IS NOT NULL) AS admitted_turns,

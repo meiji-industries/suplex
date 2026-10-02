@@ -23,7 +23,7 @@ function task(overrides: Partial<Record<keyof Task, unknown>> = {}): Task {
   return {
     id: "task-self", companyId: "company-1", projectId: "project-1", issueKey: null, issue: null, title: "This task", description: "", status: "active",
     deliveryTarget: "local_worktree", workflow: "standard", configuration: { repository: "client/repo", branch: "feature/x", runProjectTests: false, visualEvidence: "off" },
-    worktree: null, pullRequest: null, humanQuestion: null, blockedBy: [], queue: { waitingOn: [] }, limits: { admittedTurns: 0 }, images: [],
+    worktree: null, pullRequest: null, humanQuestion: null, blockedBy: [], queue: { projectConcurrencyLimited: false, waitingOn: [] }, limits: { admittedTurns: 0 }, images: [],
     createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-01T00:00:00.000Z", archivedAt: null, ...overrides,
   } as unknown as Task;
 }

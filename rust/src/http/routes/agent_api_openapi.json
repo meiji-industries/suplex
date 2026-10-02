@@ -1339,6 +1339,9 @@
                         "queue": {
                           "type": "object",
                           "properties": {
+                            "projectConcurrencyLimited": {
+                              "type": "boolean"
+                            },
                             "waitingOn": {
                               "type": "array",
                               "items": {
@@ -1427,6 +1430,7 @@
                             }
                           },
                           "required": [
+                            "projectConcurrencyLimited",
                             "waitingOn"
                           ],
                           "additionalProperties": false,
@@ -2302,6 +2306,9 @@
                     "queue": {
                       "type": "object",
                       "properties": {
+                        "projectConcurrencyLimited": {
+                          "type": "boolean"
+                        },
                         "waitingOn": {
                           "type": "array",
                           "items": {
@@ -2390,6 +2397,7 @@
                         }
                       },
                       "required": [
+                        "projectConcurrencyLimited",
                         "waitingOn"
                       ],
                       "additionalProperties": false,
@@ -4295,6 +4303,9 @@
                     "queue": {
                       "type": "object",
                       "properties": {
+                        "projectConcurrencyLimited": {
+                          "type": "boolean"
+                        },
                         "waitingOn": {
                           "type": "array",
                           "items": {
@@ -4383,6 +4394,7 @@
                         }
                       },
                       "required": [
+                        "projectConcurrencyLimited",
                         "waitingOn"
                       ],
                       "additionalProperties": false,
@@ -5527,6 +5539,9 @@
                     "queue": {
                       "type": "object",
                       "properties": {
+                        "projectConcurrencyLimited": {
+                          "type": "boolean"
+                        },
                         "waitingOn": {
                           "type": "array",
                           "items": {
@@ -5615,6 +5630,7 @@
                         }
                       },
                       "required": [
+                        "projectConcurrencyLimited",
                         "waitingOn"
                       ],
                       "additionalProperties": false,
@@ -7037,6 +7053,9 @@
                         "queue": {
                           "type": "object",
                           "properties": {
+                            "projectConcurrencyLimited": {
+                              "type": "boolean"
+                            },
                             "waitingOn": {
                               "type": "array",
                               "items": {
@@ -7125,6 +7144,7 @@
                             }
                           },
                           "required": [
+                            "projectConcurrencyLimited",
                             "waitingOn"
                           ],
                           "additionalProperties": false,
@@ -8153,6 +8173,9 @@
                     "queue": {
                       "type": "object",
                       "properties": {
+                        "projectConcurrencyLimited": {
+                          "type": "boolean"
+                        },
                         "waitingOn": {
                           "type": "array",
                           "items": {
@@ -8241,6 +8264,7 @@
                         }
                       },
                       "required": [
+                        "projectConcurrencyLimited",
                         "waitingOn"
                       ],
                       "additionalProperties": false,

@@ -108,6 +108,7 @@ export const TaskQueueWaitReasonSchema = z.enum(["prerequisite_not_started", "pr
 export const TaskQueueWaitSchema = z.object({ kind: z.enum(["task", "pull_request"]).optional(), id, title: z.string(), status: TaskControlStatusSchema, deliveryTarget: DeliveryTargetSchema, number: z.number().int().min(1).optional(), state: z.enum(["open", "closed", "merged"]).optional(), url: z.string().url().optional(), reason: TaskQueueWaitReasonSchema, summary: z.string() }).strict();
 
 export const TaskQueueSchema = z.object({
+  projectConcurrencyLimited: z.boolean(),
   waitingOn: z.array(TaskQueueWaitSchema),
 }).strict();
 

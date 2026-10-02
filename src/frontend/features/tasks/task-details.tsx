@@ -48,7 +48,10 @@ export function TaskQueueWaits({ task }: { task: Pick<Task, "companyId" | "queue
 
 /** Start queues a task: Suplex starts it by itself when every Blocked by task is complete. */
 export function backlogText(task: Pick<Task, "status" | "queue">): string {
-  if (task.status === "queued") return task.queue.waitingOn.length ? "Queued. Suplex starts this task when its prerequisites are complete." : "Queued. Suplex can start this task.";
+  if (task.status === "queued") {
+    if (task.queue.waitingOn.length) return task.queue.projectConcurrencyLimited ? "Queued. Prerequisites incomplete and project concurrency limit reached." : "Queued. Suplex starts this task when its prerequisites are complete.";
+    return task.queue.projectConcurrencyLimited ? "Queued. Project concurrency limit reached." : "Queued. Suplex will start this task.";
+  }
   return task.queue.waitingOn.length ? "Backlog. Start this task to queue it after its prerequisites." : "The task is ready to start.";
 }
 

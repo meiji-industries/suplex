@@ -17,7 +17,7 @@ const task = {
   id: "task-1", companyId: "company-1", projectId: "project-1", issue: null, artifacts: [], issueKey: null, title: "Show progress", description: "", status: "active", deliveryTarget: "pull_request_draft",
   rootProfile: profile, workerProfile: profile, workflow: "standard", advisorProfiles: {}, workflowState: { version: 1, reviews: [], acceptedDelivery: null, deliveryWait: null, completion: null },
   configuration: { repository: "meiji-industries/suplex", repositoryPath: "/repo", worktreeRoot: "/worktrees", branch: "progress", baseBranch: "main", baselineSha: "a".repeat(40), startingSha: "a".repeat(40), setupCommand: "", verificationCommand: "", runProjectTests: true, visualEvidence: "off", source: null, capturedAt: "2026-09-08T00:00:00.000Z" },
-  worktree: null, pullRequest: null, humanQuestion: null, blockedBy: [], queue: { waitingOn: [] }, limits: { budgetUsd: 15, maxTurns: 40, admittedTurns: 0 }, wakeAt: null, images: [],
+  worktree: null, pullRequest: null, humanQuestion: null, blockedBy: [], queue: { projectConcurrencyLimited: false, waitingOn: [] }, limits: { budgetUsd: 15, maxTurns: 40, admittedTurns: 0 }, wakeAt: null, images: [],
   dependsOn: [], createdAt: "2026-09-08T00:00:00.000Z", updatedAt: "2026-09-08T00:00:00.000Z", statusChangedAt: "2026-09-08T00:00:00.000Z", archivedAt: null,
 } satisfies Task;
 
@@ -31,13 +31,13 @@ function activityWith(turn: TaskActivity["turns"][number]): TaskActivity {
 
 const cleanups: Array<() => void> = [];
 
-function mount() {
+function mount(taskInput: Task = task) {
   const container = document.createElement("div");
   document.body.append(container);
   const root = createRoot(container);
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   cleanups.push(() => { root.unmount(); client.clear(); container.remove(); });
-  return { container, render: async (activity: TaskActivity) => { await act(async () => { root.render(<QueryClientProvider client={client}><TaskWork task={task} activity={activity} onChange={() => {}} /></QueryClientProvider>); await Promise.resolve(); }); } };
+  return { container, render: async (activity: TaskActivity) => { await act(async () => { root.render(<QueryClientProvider client={client}><TaskWork task={taskInput} activity={activity} onChange={() => {}} /></QueryClientProvider>); await Promise.resolve(); }); } };
 }
 
 afterEach(async () => {
@@ -72,4 +72,10 @@ test("the conversation shows a busy row while the Coordinator turn is queued or 
   expect(pending()).toBeNull();
   expect(view.container.textContent).toContain("Second reply");
   expect(view.container.textContent).toContain("Turn took 7s");
+});
+
+test("a delivered task with no messages explains resuming once", async () => {
+  const view = mount({ ...task, status: "delivered" });
+  await view.render({ sessions: [], turns: [], shellPaneId: null });
+  expect(view.container.textContent?.match(/Send a message to resume this task\./g)).toHaveLength(1);
 });

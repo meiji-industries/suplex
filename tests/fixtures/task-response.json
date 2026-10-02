@@ -79,6 +79,7 @@
     { "id": "task_00", "title": "Prerequisite", "status": "active" }
   ],
   "queue": {
+    "projectConcurrencyLimited": false,
     "waitingOn": [
       {
         "kind": "task",

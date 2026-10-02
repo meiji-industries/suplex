@@ -1,12 +1,13 @@
 import { addTaskNote } from "./lib/task-api.js";
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { z } from "zod";
-import { CircleDashed } from "lucide-react";
+import { CircleDashed, MessageSquare } from "lucide-react";
 import type { Task } from "../../contracts/tasks.js";
 import type { TaskActivityResponse } from "../../contracts/generated/TaskActivityResponse.js";
 import { useTaskDiff, useTaskDiffSummary } from "./lib/task-queries.js";
 import { useTaskChecks } from "./lib/task-checks.js";
 import { Alert, AlertDescription } from "../../components/ui/alert.js";
+import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "../../components/ui/empty.js";
 import { Spinner } from "../../components/ui/spinner.js";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../../components/ui/tabs.js";
 import { Markdown } from "../../components/app/markdown.js";
@@ -75,6 +76,8 @@ export function TaskWork({ task, activity, onChange }: { task: Task; activity: T
   const pendingTurn = [...activity.turns].reverse().find(turn => (turn.status === "prompted" || turn.status === "pending_prompt") && !turn.result);
   const pendingSession = pendingTurn ? activity.sessions.find(session => session.id === pendingTurn.sessionId) : undefined;
   const pendingRole = pendingSession?.label ?? "Coordinator";
+  const showConversationPlaceholder = !pendingTurn && !activity.turns.some(turn => resultText(turn.result) || humanMessage(turn.prompt)?.text);
+  const conversationHint = task.archivedAt ? "Open the archived task before you send a message." : task.status === "backlog" ? "Start the task to work with Coordinator." : task.status === "queued" ? "You can send a message after Suplex starts the task." : task.status === "waiting_human" ? "Answer the current decision to continue with Coordinator." : task.status === "cancelled" ? "The task is cancelled." : task.status === "delivered" ? "Send a message to resume this task." : "Coordinator replies will appear here.";
   return <Tabs value={tab} onValueChange={value => setTab(String(value))} data-task-work-tabs>
     <WorkflowPlan key={`workflow-plan-${task.id}`} task={task} activity={activity} />
     <TaskActivityTimeline taskId={task.id} createdAt={task.createdAt} checksKey={checksKey} />
@@ -87,9 +90,9 @@ export function TaskWork({ task, activity, onChange }: { task: Task; activity: T
         const message = humanMessage(turn.prompt);
         return <div key={turn.id} className="grid min-w-0 gap-5">{message?.text ? <article className="flex min-w-0 gap-3"><EntityAvatar kind="user" id={message.user?.id ?? user?.id ?? "you"} name={message.user?.name ?? user?.displayName ?? "You"} {...(!message.user && user?.avatarSeed ? { seed: user.avatarSeed } : {})} size="sm" /><div className="min-w-0 flex-1 space-y-2"><header className="flex items-center gap-2 text-xs"><span className="font-medium">{message.author}</span><span className="text-muted-foreground">{answerLabels[turn.status]}</span></header><Markdown source={message.text} /></div></article> : null}{resultText(turn.result) ? <article className="flex min-w-0 gap-3"><EntityAvatar kind="agent" id={session?.profileId ?? task.rootProfile.profileId} name={role} size="sm" /><div className="min-w-0 flex-1 space-y-2"><header className="flex items-center gap-2 text-xs"><span className="font-medium">{role}</span><span className="text-muted-foreground">{turnLabel(turn)}</span></header><Markdown source={resultText(turn.result)} /></div></article> : null}</div>;
       })}
-      {!activity.turns.some(turn => resultText(turn.result) || humanMessage(turn.prompt)?.text) ? <p className="text-xs text-muted-foreground">{task.status === "backlog" ? "Start the task to work with Coordinator." : task.status === "queued" ? "Suplex starts this task when its prerequisites are complete." : "Agent replies appear here."}</p> : null}
+      {showConversationPlaceholder ? <Empty><EmptyHeader><EmptyMedia variant="icon"><MessageSquare aria-hidden="true" /></EmptyMedia><EmptyTitle>No messages yet</EmptyTitle><EmptyDescription>{conversationHint}</EmptyDescription></EmptyHeader></Empty> : null}
       {pendingTurn ? <article className="flex min-w-0 gap-3" aria-busy="true" data-task-turn-pending={pendingTurn.status}><EntityAvatar kind="agent" id={pendingSession?.profileId ?? task.rootProfile.profileId} name={pendingRole} size="sm" /><div className="min-w-0 flex-1"><header className="flex items-center gap-2 text-xs"><span className="font-medium">{pendingRole}</span><Spinner /><span className="text-muted-foreground">{pendingTurn.status === "prompted" ? "Working" : turnLabels.pending_prompt}</span></header></div></article> : null}
-      <TaskNoteInput key={`task-note-input-${task.id}`} task={task} onChange={onChange} />
+      <TaskNoteInput key={`task-note-input-${task.id}`} task={task} onChange={onChange} hideStatusHint={showConversationPlaceholder} />
       <TaskArtifacts task={task} />
     </div></TabsContent>
     <TabsContent value="activity"><section aria-label="Task activity" className="grid min-w-0 gap-0 pt-3">{activity.turns.map(turn => <div key={turn.id} className="flex gap-3 border-b py-3 text-xs"><CircleDashed className="size-4 shrink-0 text-muted-foreground" /><span className="font-medium">{activity.sessions.find(session => session.id === turn.sessionId)?.label ?? "Coordinator"}</span><span className="text-muted-foreground">{turnLabel(turn)}</span></div>)}{!activity.turns.length && !execution?.sessions.some(session => session.tools.length) ? <p className="text-xs text-muted-foreground">No activity yet.</p> : null}<TaskTools execution={execution} error={executionError} /></section></TabsContent>
@@ -99,7 +102,7 @@ export function TaskWork({ task, activity, onChange }: { task: Task; activity: T
   </Tabs>;
 }
 
-export function TaskNoteInput({ task, onChange }: { task: Task; onChange: (task: Task) => void }) {
+export function TaskNoteInput({ task, onChange, hideStatusHint = false }: { task: Task; onChange: (task: Task) => void; hideStatusHint?: boolean }) {
   const [text, setText] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
@@ -134,9 +137,10 @@ export function TaskNoteInput({ task, onChange }: { task: Task; onChange: (task:
       if (mounted.current && submittedTaskId === currentTaskId.current) setSubmitting(false);
     }
   };
+  if (!eligible && hideStatusHint) return null;
   if (!eligible) return <p className="text-xs text-muted-foreground">{task.archivedAt ? "Open the archived task before you send a message." : task.status === "backlog" ? "Start the task before you send a message." : task.status === "queued" ? "Wait for Suplex to start the task before you send a message." : task.status === "waiting_human" ? "Answer the current decision before you send a message." : "This task cannot receive messages."}</p>;
   return <section className="border-t pt-3" aria-label="Message Coordinator">
-    {task.status === "delivered" ? <p className="pb-2">Send a message to resume this task.</p> : null}
+    {task.status === "delivered" && !hideStatusHint ? <p className="pb-2">Send a message to resume this task.</p> : null}
     {error ? <Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert> : null}
     <div className={error ? "mt-2" : undefined}><PromptInput maxFiles={0} onError={() => setError("Attachments are not supported. Send text only.")} onSubmit={submit}>
       <PromptInputTextarea aria-label="Message Coordinator" placeholder="What should we steer?" value={text} onChange={event => { revision.current += 1; setText(event.currentTarget.value); }} onPaste={event => { if (Array.from(event.clipboardData.items).some(item => item.kind === "file")) { event.preventDefault(); setError("Attachments are not supported. Send text only."); } }} aria-invalid={trimmed.length > MAX_TASK_NOTE_LENGTH || undefined} />

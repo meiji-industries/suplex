@@ -12,7 +12,7 @@ vi.mock("../src/frontend/components/ui/sidebar.js", () => {
   return { SidebarGroup: box, SidebarGroupContent: box, SidebarGroupLabel: box, SidebarMenu: box, SidebarMenuItem: box, SidebarMenuButton: ({ render, tooltip }: { render: ReactNode; tooltip: string }) => <div data-tooltip={tooltip}>{render}</div> };
 });
 vi.mock("../src/frontend/features/tasks/task-data.js", () => ({
-  useTaskData: () => ({ data: [{ id: "task-3", title: "Ship the release", status: "queued", queue: { waitingOn: [] }, statusChangedAt: "2026-09-09T00:00:00.000Z", pullRequest: null, archivedAt: null, blockedBy: [{ id: "task-1", title: "Repair the poller", status: "active" }, { id: "task-2", title: "Plan the migration", status: "queued" }, { id: "task-4", title: "Manual backlog", status: "backlog" }] }] }),
+  useTaskData: () => ({ data: [{ id: "task-3", title: "Ship the release", status: "queued", queue: { projectConcurrencyLimited: false, waitingOn: [] }, statusChangedAt: "2026-09-09T00:00:00.000Z", pullRequest: null, archivedAt: null, blockedBy: [{ id: "task-1", title: "Repair the poller", status: "active" }, { id: "task-2", title: "Plan the migration", status: "queued" }, { id: "task-4", title: "Manual backlog", status: "backlog" }] }] }),
   useTaskAgents: () => ({ data: [] }),
   useTaskCache: () => vi.fn(),
 }));

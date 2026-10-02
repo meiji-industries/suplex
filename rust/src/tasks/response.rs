@@ -70,6 +70,7 @@ pub(super) struct PublicWorkflowState {
 #[derive(Debug, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub(super) struct TaskQueue {
+    project_concurrency_limited: bool,
     waiting_on: Vec<TaskQueueWait>,
 }
 
@@ -384,7 +385,15 @@ fn dependencies_from_row(
     } else {
         vec![]
     };
-    Ok((depends_on, blocked_by, TaskQueue { waiting_on }))
+    Ok((
+        depends_on,
+        blocked_by,
+        TaskQueue {
+            waiting_on,
+            project_concurrency_limited: status == TaskStatus::Queued
+                && row.get("project_concurrency_limited")?,
+        },
+    ))
 }
 
 /// The task's own timestamps.
@@ -787,6 +796,7 @@ mod fixture_tests {
                 observed_at: None,
             }],
             queue: TaskQueue {
+                project_concurrency_limited: false,
                 waiting_on: vec![TaskQueueWait {
                     kind: DependencyKind::Task,
                     id: "task_00".into(),

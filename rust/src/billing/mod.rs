@@ -24,6 +24,7 @@ use wire::{
     RegistrationBody, RegistrationResponse,
 };
 
+pub mod hosted;
 pub mod wire;
 
 pub const FREE_PROJECT_LIMIT: i64 = 2;

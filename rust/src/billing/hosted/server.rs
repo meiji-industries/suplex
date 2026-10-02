@@ -1,7 +1,7 @@
-//! `suplex-billing`: environment config, the HTTP router, the event
+//! `suplex billing`: environment config, the HTTP router, the event
 //! processor loop, and operator credential rotation.
 
-use std::{path::Path, process::ExitCode, sync::Arc, time::Duration};
+use std::{path::Path, sync::Arc, time::Duration};
 
 use axum::{
     Json, Router,
@@ -34,7 +34,7 @@ const BODY_LIMIT: usize = 1 << 20;
 const PROCESSOR_INTERVAL: Duration = Duration::from_secs(30);
 const RETURN_PAGE: &str = "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><title>Suplex billing</title></head><body><p>You can return to Suplex and check the subscription.</p></body></html>";
 const ROTATE_USAGE: &str =
-    "Usage: suplex-billing rotate-credential --db <path> --account <accountId>";
+    "Usage: suplex billing rotate-credential --db <path> --account <accountId>";
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -51,6 +51,8 @@ pub struct ServiceConfig {
     pub stripe_price_id: String,
     pub stripe_portal_configuration_id: String,
     pub stripe_webhook_secret: String,
+    /// Stripe Tax on Checkout. It needs a head office address in Stripe.
+    pub automatic_tax: bool,
     pub revenuecat_secret_api_key: String,
     pub revenuecat_stripe_public_api_key: String,
     pub revenuecat_webhook_authorization: String,
@@ -65,6 +67,7 @@ impl ServiceConfig {
             stripe_price_id: self.stripe_price_id.clone(),
             stripe_portal_configuration_id: self.stripe_portal_configuration_id.clone(),
             stripe_webhook_secret: self.stripe_webhook_secret.clone(),
+            automatic_tax: self.automatic_tax,
             revenuecat_app_id: self.revenuecat_app_id.clone(),
             revenuecat_webhook_authorization: self.revenuecat_webhook_authorization.clone(),
         }
@@ -114,6 +117,11 @@ pub fn load_config(env: &dyn Fn(&str) -> Option<String>) -> Result<ServiceConfig
     }
     let environment = BillingEnvironment::parse(&require("BILLING_ENVIRONMENT")?)
         .ok_or("BILLING_ENVIRONMENT must be exactly 'sandbox' or 'production'")?;
+    let automatic_tax = match env("STRIPE_AUTOMATIC_TAX").as_deref() {
+        None | Some("" | "true") => true,
+        Some("false") => false,
+        Some(_) => return Err("STRIPE_AUTOMATIC_TAX must be true or false".into()),
+    };
     Ok(ServiceConfig {
         origin: parse_origin(&require("BILLING_PUBLIC_ORIGIN")?)?,
         address: env("BILLING_BIND_ADDRESS")
@@ -126,6 +134,7 @@ pub fn load_config(env: &dyn Fn(&str) -> Option<String>) -> Result<ServiceConfig
         stripe_price_id: require("STRIPE_PRO_MONTHLY_PRICE_ID")?,
         stripe_portal_configuration_id: require("STRIPE_PORTAL_CONFIGURATION_ID")?,
         stripe_webhook_secret: require("STRIPE_WEBHOOK_SECRET")?,
+        automatic_tax,
         revenuecat_secret_api_key: require("REVENUECAT_SECRET_API_KEY")?,
         revenuecat_stripe_public_api_key: require("REVENUECAT_STRIPE_PUBLIC_API_KEY")?,
         revenuecat_webhook_authorization: require("REVENUECAT_WEBHOOK_AUTHORIZATION")?,
@@ -426,7 +435,7 @@ pub async fn serve() -> Result<(), String> {
         .await
         .map_err(|error| error.to_string())?;
     eprintln!(
-        "suplex-billing listening on {}:{}",
+        "suplex billing listening on {}:{}",
         config.address, config.port
     );
     let served = axum::serve(listener, router(hosted.clone()))
@@ -511,10 +520,11 @@ pub async fn rotate_credential(
     ))
 }
 
-/// `suplex-billing [serve]` or `suplex-billing rotate-credential --db <path> --account <id>`.
-pub async fn main(args: Vec<String>) -> ExitCode {
+/// `suplex billing serve` or `suplex billing rotate-credential --db <path> --account <id>`.
+/// Returns the process exit code.
+pub async fn main(args: &[String]) -> i32 {
     let outcome = match args.first().map(String::as_str) {
-        None | Some("serve") => serve().await,
+        Some("serve") => serve().await,
         Some("rotate-credential") => rotate_credential(
             &args[1..],
             &|name| std::env::var(name).ok(),
@@ -522,15 +532,16 @@ pub async fn main(args: Vec<String>) -> ExitCode {
         )
         .await
         .map(|message| println!("{message}")),
-        Some(other) => Err(format!(
-            "Unknown command {other}. Usage: suplex-billing [serve | rotate-credential --db <path> --account <accountId>]"
-        )),
+        _ => Err(
+            "Usage: suplex billing serve | suplex billing rotate-credential --db <path> --account <accountId>"
+                .to_owned(),
+        ),
     };
     match outcome {
-        Ok(()) => ExitCode::SUCCESS,
+        Ok(()) => 0,
         Err(message) => {
             eprintln!("{message}");
-            ExitCode::FAILURE
+            1
         }
     }
 }

@@ -20,6 +20,8 @@ export type CompanyContextValue = {
   renameCompany: (companyId: string, name: string) => Promise<ApiCompany>;
   setCompanyIssueCode: (companyId: string, issueCode: string | null) => Promise<ApiCompany>;
   setCompanyStatus: (companyId: string, status: CompanyStatus) => Promise<ApiCompany>;
+  /** Updates the plan label after a live billing read, without reloading companies. */
+  setCompanyPlan: (companyId: string, plan: "free" | "pro") => void;
   updateProfile: (profile: { displayName: string; username: string; avatarSeed: string }) => Promise<ApiUser>;
   avatars: Record<string, AvatarRecord>;
   saveAvatar: (ownerId: string, patch: AvatarUpdateBody) => Promise<AvatarRecord>;
@@ -164,6 +166,12 @@ export function CompanyProvider({ children }: { children: ReactNode }): ReactEle
     return updated;
   }, [reloadCompanies]);
 
+  const setCompanyPlan = useCallback((companyId: string, plan: "free" | "pro"): void => {
+    const label = (company: ApiCompany): ApiCompany => company.id === companyId ? { ...company, plan } : company;
+    setCompanies((current) => current.map(label));
+    setCurrentCompany((current) => current && label(current));
+  }, []);
+
   const updateProfile = useCallback(async (profile: { displayName: string; username: string; avatarSeed: string }): Promise<ApiUser> => {
     const result = await readJsonUnchecked<{ user: ApiUser }>("/api/auth/me", { method: "PATCH", body: JSON.stringify(profile) });
     setUser(result.user);
@@ -191,11 +199,12 @@ export function CompanyProvider({ children }: { children: ReactNode }): ReactEle
     renameCompany,
     setCompanyIssueCode,
     setCompanyStatus,
+    setCompanyPlan,
     updateProfile,
     avatars,
     saveAvatar,
     reloadCompanies,
-  }), [avatars, companies, createCompany, currentCompany, error, loading, reloadCompanies, renameCompany, saveAvatar, selectCompany, setCompanyIssueCode, setCompanyStatus, updateProfile, user]);
+  }), [avatars, companies, createCompany, currentCompany, error, loading, reloadCompanies, renameCompany, saveAvatar, selectCompany, setCompanyIssueCode, setCompanyPlan, setCompanyStatus, updateProfile, user]);
   return <CompanyContext.Provider value={value}>{children}</CompanyContext.Provider>;
 }
 

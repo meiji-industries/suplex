@@ -47,6 +47,9 @@ Diagnostic Commands:
   task        Show the stored state of one task
   serve       Run the server in the foreground
 
+Operator Commands:
+  billing     Run the hosted billing service (billing serve, billing rotate-credential)
+
 Backup Commands:
   backup          Write a backup archive
   verify-backup   Check a backup archive

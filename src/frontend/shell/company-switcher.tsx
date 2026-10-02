@@ -14,7 +14,6 @@ import { withCompany } from "../lib/api.js";
 import { navigate } from "./navigation-state.js";
 import { useOptionalCompanyContext } from "./company-context.js";
 import { EntityAvatar } from "../components/app/entity-avatar.js";
-import { useCompanyPlan } from "../features/settings/lib/billing-api.js";
 
 function SuplexMark(): ReactElement {
   return <span className="flex size-5 shrink-0 items-center justify-center rounded-[5px] bg-foreground text-xs font-bold text-background">F</span>;
@@ -25,9 +24,8 @@ function StatusBadge({ status }: { status: "active" | "paused" | "archived" }): 
   return <Badge variant="secondary" className="ml-auto text-xs">{status[0]!.toUpperCase() + status.slice(1)}</Badge>;
 }
 
-function PlanBadge({ companyId }: { companyId: string }): ReactElement | null {
-  const plan = useCompanyPlan(companyId);
-  return plan ? <Badge variant="secondary">{plan}</Badge> : null;
+function PlanBadge({ plan }: { plan: "free" | "pro" | null | undefined }): ReactElement | null {
+  return plan ? <Badge variant="secondary">{plan === "pro" ? "Pro" : "Free"}</Badge> : null;
 }
 
 function CreateCompanyDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }): ReactElement {
@@ -80,7 +78,7 @@ export function CompanySwitcher(): ReactElement {
         <DropdownMenuTrigger aria-label="Switch company" title="Switch company" render={<SidebarMenuButton className="data-[slot=sidebar-menu-button]:p-1.5! h-14" />}>
           {currentCompany ? <EntityAvatar kind="company" id={currentCompany.id} name={currentCompany.name} seed={currentCompany.name} size="sm" /> : <CircleGauge className="size-5!" />}
           <span className="min-w-0 flex-1 truncate text-base font-semibold">{label}</span>
-          {currentCompany ? <PlanBadge companyId={currentCompany.id} /> : null}
+          <PlanBadge plan={currentCompany?.plan} />
         </DropdownMenuTrigger>
         <DropdownMenuContent className="w-64" align="start">
               <DropdownMenuGroup>
@@ -88,7 +86,7 @@ export function CompanySwitcher(): ReactElement {
                   {companies.length ? companies.map((company, index) => <span className="block" key={company.id}>{company.status === "archived" && companies[index - 1]?.status !== "archived" ? <div className="px-2 pb-1 pt-2 text-xs font-medium text-muted-foreground">Archived</div> : null}<DropdownMenuItem onClick={() => context.selectCompany(company.id)}>
                     <EntityAvatar kind="company" id={company.id} name={company.name} seed={company.name} size="sm" />
                     <span className="min-w-0 flex-1 truncate">{company.name}</span>
-                    <PlanBadge companyId={company.id} />
+                    <PlanBadge plan={company.plan} />
                     <StatusBadge status={company.status} />
                     {company.id === currentCompany?.id ? <Check className="ml-1 size-3.5 shrink-0 text-primary" /> : null}
                   </DropdownMenuItem></span>) : <div className="px-2 py-2 text-xs text-muted-foreground">{user?.role === "admin" ? "No companies yet" : "No company access"}</div>}

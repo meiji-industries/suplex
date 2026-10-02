@@ -86,6 +86,8 @@ mod tests {
         assert_eq!((config.address.as_str(), config.port), ("127.0.0.1", 4211));
         assert_eq!(config.environment, BillingEnvironment::Sandbox);
         assert_eq!(config.hosted().revenuecat_webhook_authorization, "rc-auth");
+        assert!(config.automatic_tax);
+        assert!(!load(&[("STRIPE_AUTOMATIC_TAX", "false")]).unwrap().automatic_tax);
         let custom = load(&[
             ("BILLING_PUBLIC_ORIGIN", "http://localhost:4211"),
             ("BILLING_BIND_ADDRESS", "0.0.0.0"),
@@ -117,6 +119,7 @@ mod tests {
                 "BILLING_PUBLIC_ORIGIN must not contain credentials",
             ),
             (vec![("BILLING_PUBLIC_ORIGIN", "not a url")], "BILLING_PUBLIC_ORIGIN must be a valid URL"),
+            (vec![("STRIPE_AUTOMATIC_TAX", "no")], "STRIPE_AUTOMATIC_TAX must be true or false"),
             (vec![("BILLING_PORT", "0")], "BILLING_PORT must be an integer between 1 and 65535"),
             (vec![("BILLING_PORT", "65536")], "BILLING_PORT must be an integer between 1 and 65535"),
         ] {

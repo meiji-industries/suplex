@@ -450,6 +450,11 @@ mod tests {
         );
         let pending = normalize_subscription(&json!({"pending_update": {"subscription_items": [{"id": "si_1", "price": "price_pro", "quantity": 5}]}}));
         assert_eq!(pending.pending_update.unwrap()[0].quantity, 5);
+        let portal_cancel = normalize_subscription(
+            &json!({"cancel_at_period_end": false, "cancel_at": 1_762_000_000}),
+        );
+        assert!(portal_cancel.cancel_at_period_end);
+        assert!(!normalize_subscription(&json!({"cancel_at": null})).cancel_at_period_end);
     }
 
     #[tokio::test]

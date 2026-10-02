@@ -287,4 +287,45 @@ mod tests {
         );
         assert!(!root.exists(), "no repository was provisioned");
     }
+
+    #[tokio::test]
+    async fn the_company_list_carries_each_plan_label_from_local_data() {
+        let f = fixture().await;
+        let other = f.state.with_database(|database| {
+            crate::identity::companies::create_company(database, &f.admin_id, "Other", Utc::now())
+                .unwrap()
+                .id
+        });
+        f.bind(Some("acct_1"));
+        f.fake
+            .with(|hosted| hosted.respond("/v1/billing", 200, active_state(1)));
+        let base = serve(f.state.clone()).await;
+        let list = || async {
+            reqwest::Client::new()
+                .get(format!("{base}/api/companies"))
+                .header("cookie", format!("sid_v1={}", f.admin_token))
+                .send()
+                .await
+                .unwrap()
+                .json::<Value>()
+                .await
+                .unwrap()["companies"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|company| (company["id"].as_str().unwrap().to_owned(), company["plan"].clone()))
+                .collect::<std::collections::HashMap<_, _>>()
+        };
+        // The first list answers from local data; the bound company has no
+        // snapshot yet, so it has no label and is read in the background.
+        let first = list().await;
+        assert_eq!(first[&other], json!("free"));
+        assert_eq!(first[&f.company_id], Value::Null);
+        while list().await[&f.company_id] != json!("pro") {
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        let reads = f.fake.with(|hosted| hosted.count("/v1/billing"));
+        list().await;
+        assert_eq!(f.fake.with(|hosted| hosted.count("/v1/billing")), reads);
+    }
 }

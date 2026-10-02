@@ -1,0 +1,6 @@
+# Only rust/ and migrations/ go into the billing image.
+*
+!rust
+!migrations
+!scripts/shared-resource-command.py
+rust/target

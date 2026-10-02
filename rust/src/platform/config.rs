@@ -186,10 +186,8 @@ impl Installation {
             Some(_) => return Err("SUPLEX_INSTALLATION_ID is invalid".into()),
             None => persistent_installation_id(&data)?,
         };
-        let billing_service_url = value("SUPLEX_BILLING_SERVICE_URL")
-            .filter(|url| !url.is_empty())
-            .map(|url| crate::billing::parse_service_url(&url))
-            .transpose()?;
+        let billing_service_url =
+            billing_service_url(value("SUPLEX_BILLING_SERVICE_URL"), experimental.is_some())?;
         let path = |key: &str, default: PathBuf| {
             value(key)
                 .map(|path| absolute(&current, Path::new(&path)))
@@ -248,6 +246,21 @@ fn locate_configuration(
         return (desktop, root);
     }
     (local, None)
+}
+
+/// Installations use the production billing service unless configured. An
+/// empty value turns billing off. Development roots never default to
+/// production, so development data does not register production accounts.
+fn billing_service_url(
+    configured: Option<String>,
+    development: bool,
+) -> Result<Option<url::Url>, String> {
+    match configured {
+        Some(url) if url.is_empty() => Ok(None),
+        Some(url) => crate::billing::parse_service_url(&url).map(Some),
+        None if development => Ok(None),
+        None => crate::billing::parse_service_url(crate::billing::PRODUCTION_SERVICE_URL).map(Some),
+    }
 }
 
 fn desktop_configuration(home: &Path) -> PathBuf {
@@ -384,6 +397,25 @@ mod tests {
         assert!(!is_tailscale_address("0.0.0.0"));
         assert!(!is_tailscale_address("192.168.1.2"));
         assert!(!is_tailscale_address("fd00::1"));
+    }
+    #[test]
+    fn billing_defaults_to_production_except_in_development() {
+        let url = |configured: Option<&str>, development| {
+            billing_service_url(configured.map(str::to_owned), development)
+                .unwrap()
+                .map(|url| url.to_string())
+        };
+        assert_eq!(
+            url(None, false).as_deref(),
+            Some("https://billing.suplex.sh/")
+        );
+        assert_eq!(url(None, true), None);
+        assert_eq!(url(Some(""), false), None);
+        assert_eq!(
+            url(Some("http://127.0.0.1:4211"), true).as_deref(),
+            Some("http://127.0.0.1:4211/")
+        );
+        assert!(billing_service_url(Some("http://billing.example.test".into()), false).is_err());
     }
     #[test]
     fn rejects_invalid_port() {

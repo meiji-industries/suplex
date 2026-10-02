@@ -7,17 +7,15 @@ import { Spinner } from "../../components/ui/spinner.js";
 import { isApiError } from "../../lib/api.js";
 import { BILLING_SEAT_UNIT_AMOUNT, type BillingSummary, type HostedSeatPreview } from "../../contracts/billing.js";
 import { changeSeats, getBillingSummary, openBillingPortal, previewSeats, startCheckout } from "./lib/billing-api.js";
+import { useOptionalCompanyContext } from "../../shell/company-context.js";
 import { SettingsSection, SettingRow } from "./settings-layout.js";
 import { Check } from "lucide-react";
 import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactElement } from "react";
 
-// USD has two minor-unit digits; the confirmation must show cents exactly.
-const usdFormatter = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", currencyDisplay: "code", minimumFractionDigits: 2, maximumFractionDigits: 2 });
-
+// USD has two minor-unit digits. Whole dollars read "$40"; any cents are exact: "$13.33".
 export function formatUsd(minorUnits: number): string {
-  // ICU separates the currency code with a non-breaking space; use a plain
-  // space so copy reads "USD 40.00" everywhere.
-  return usdFormatter.format(minorUnits / 100).replace(/\u00A0/g, " ");
+  const digits = minorUnits % 100 === 0 ? 0 : 2;
+  return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", minimumFractionDigits: digits, maximumFractionDigits: digits }).format(minorUnits / 100);
 }
 
 function formatDate(timestamp: string): string {
@@ -55,6 +53,17 @@ function actionMessage(reason: unknown): string {
 
 const PRO_FEATURES = ["Unlimited projects", "One seat for each active account", "Prorated seat increases", "Payment and invoices in Stripe"];
 
+// A browser allows a new tab only during the click, so open it before the
+// request and send it to the hosted URL when the answer arrives.
+function pendingTab(): { go: (url: string) => void; close: () => void } {
+  const tab = window.open("", "_blank");
+  if (tab) tab.opener = null;
+  return {
+    go: (url) => { if (tab) tab.location.href = url; else window.location.assign(url); },
+    close: () => tab?.close(),
+  };
+}
+
 // Source-derived terminal subscription statuses permit a fresh purchase. Any
 // other real status means a subscription still exists and must not be
 // duplicated, even when paid access is gone.
@@ -78,33 +87,25 @@ export function BillingSection({ companyId }: { companyId: string }): ReactEleme
   const [seatSeats, setSeatSeats] = useState("");
   const [preview, setPreview] = useState<HostedSeatPreview>();
   const [decreaseQuantity, setDecreaseQuantity] = useState<number>();
-  const [checkoutUrl, setCheckoutUrl] = useState<string>();
-  const [portalUrl, setPortalUrl] = useState<string>();
   const [paymentUrl, setPaymentUrl] = useState<string>();
   const [externalOpen, setExternalOpen] = useState(false);
 
   const generation = useRef(0);
-  const pollTimer = useRef<number | undefined>(undefined);
   const checkoutKey = useRef<{ key: string; quantity: number } | undefined>(undefined);
   const seatKey = useRef<SeatCommandIntent | undefined>(undefined);
 
-  const stopPolling = useCallback((): void => {
-    if (pollTimer.current !== undefined) {
-      window.clearInterval(pollTimer.current);
-      pollTimer.current = undefined;
-    }
-  }, []);
-
+  const setCompanyPlan = useOptionalCompanyContext()?.setCompanyPlan;
   const applySummary = useCallback((next: BillingSummary): void => {
     setSummary(next);
+    // A live read refreshes the switcher label; an unknown plan keeps the last one.
+    if (next.plan !== "unknown") setCompanyPlan?.(companyId, next.plan);
     setState("ready");
     setErrorText("");
     setPaymentUrl(summaryPaymentUrl(next));
     if (next.plan === "pro" && !next.paymentActionRequired) {
       setExternalOpen(false);
-      setCheckoutUrl(undefined);
     }
-  }, []);
+  }, [companyId, setCompanyPlan]);
 
   const load = useCallback(async (silent = false): Promise<void> => {
     const gen = generation.current;
@@ -113,13 +114,12 @@ export function BillingSection({ companyId }: { companyId: string }): ReactEleme
       const next = await getBillingSummary(companyId);
       if (gen !== generation.current) return;
       applySummary(next);
-      if (next.plan === "pro" && !next.paymentActionRequired) stopPolling();
     } catch (reason) {
       if (gen !== generation.current) return;
       setState("error");
       setErrorText(reason instanceof Error ? reason.message : "Suplex cannot check the subscription.");
     }
-  }, [companyId, applySummary, stopPolling]);
+  }, [companyId, applySummary]);
 
   useEffect(() => {
     generation.current += 1;
@@ -133,18 +133,13 @@ export function BillingSection({ companyId }: { companyId: string }): ReactEleme
     setSeatSeats("");
     setPreview(undefined);
     setDecreaseQuantity(undefined);
-    setCheckoutUrl(undefined);
-    setPortalUrl(undefined);
     setPaymentUrl(undefined);
     setExternalOpen(false);
     checkoutKey.current = undefined;
     seatKey.current = undefined;
     void load();
-    return () => {
-      generation.current += 1;
-      stopPolling();
-    };
-  }, [companyId, load, stopPolling]);
+    return () => { generation.current += 1; };
+  }, [companyId, load]);
 
   useEffect(() => {
     if (!externalOpen) return;
@@ -153,39 +148,24 @@ export function BillingSection({ companyId }: { companyId: string }): ReactEleme
     return () => window.removeEventListener("focus", onFocus);
   }, [externalOpen, load]);
 
-  const checkSubscription = useCallback((): void => {
-    setBusy("check");
-    void load().finally(() => setBusy(""));
-    if (!externalOpen) return;
-    // The administrator explicitly checks after an external payment. Poll the
-    // server state for at most 30 seconds; a return URL never grants Pro.
-    stopPolling();
-    const deadline = Date.now() + 30_000;
-    pollTimer.current = window.setInterval(() => {
-      if (Date.now() >= deadline) {
-        stopPolling();
-        return;
-      }
-      void load(true);
-    }, 2_000);
-  }, [externalOpen, load, stopPolling]);
-
   const submitPurchase = async (event: FormEvent): Promise<void> => {
     event.preventDefault();
     const quantity = parseSeats(purchaseSeats);
     if (!seatQuantityValid(quantity) || busy !== "") return;
     setBusy("checkout");
     setActionError("");
+    const tab = pendingTab();
     try {
       if (!checkoutKey.current || checkoutKey.current.quantity !== quantity) {
         checkoutKey.current = { key: crypto.randomUUID(), quantity };
       }
       const result = await startCheckout(companyId, quantity, checkoutKey.current.key);
       if (result.status === "redirect") {
-        setCheckoutUrl(result.url);
+        tab.go(result.url);
         setExternalOpen(true);
         setPurchaseOpen(false);
       } else {
+        tab.close();
         applySummary(result.summary);
         if (result.status === "subscribed") checkoutKey.current = undefined;
         if (result.status === "payment_required") {
@@ -195,6 +175,7 @@ export function BillingSection({ companyId }: { companyId: string }): ReactEleme
         setPurchaseOpen(false);
       }
     } catch (reason) {
+      tab.close();
       if (isApiError(reason) && reason.code === "billing_operation_not_applied") {
         // The hosted service marked this checkout command terminal. Clearing
         // the key lets a new confirmation start a fresh purchase; it never
@@ -312,11 +293,13 @@ export function BillingSection({ companyId }: { companyId: string }): ReactEleme
     if (busy !== "") return;
     setBusy("portal");
     setActionError("");
+    const tab = pendingTab();
     try {
       const result = await openBillingPortal(companyId);
-      setPortalUrl(result.url);
+      tab.go(result.url);
       setExternalOpen(true);
     } catch (reason) {
+      tab.close();
       setActionError(actionMessage(reason));
     } finally {
       setBusy("");
@@ -344,10 +327,7 @@ export function BillingSection({ companyId }: { companyId: string }): ReactEleme
     return (
       <SettingsSection>
         {state === "error" ? (
-          <div className="space-y-2 py-3">
-            <Alert variant="destructive"><AlertDescription>{errorText}</AlertDescription></Alert>
-            <div><Button size="sm" variant="outline" onClick={checkSubscription} disabled={busy === "check"}>Check subscription</Button></div>
-          </div>
+          <div className="py-3"><Alert variant="destructive"><AlertDescription>{/[.!?]$/.test(errorText) ? errorText : `${errorText}.`} Reload the page to retry.</AlertDescription></Alert></div>
         ) : (
           <div className="space-y-2 py-3" aria-busy="true" aria-label="Billing status">
             <div className="flex items-center gap-2 text-xs text-muted-foreground"><Spinner /><span>Billing status</span></div>
@@ -361,7 +341,7 @@ export function BillingSection({ companyId }: { companyId: string }): ReactEleme
   const monthlyTotal = summary.plan === "pro" ? formatUsd(summary.monthlySubtotal ?? summary.purchasedSeats * BILLING_SEAT_UNIT_AMOUNT) : "";
   const planDetail = summary.plan === "pro"
     ? [
-        `USD 20 per seat each month`,
+        `${formatUsd(BILLING_SEAT_UNIT_AMOUNT)} per seat each month`,
         `${summary.purchasedSeats} ${summary.purchasedSeats === 1 ? "seat" : "seats"}`,
         summary.cancelAtPeriodEnd && summary.accessUntil ? `Ends on ${formatDate(summary.accessUntil)}` : summary.renewalAt ? `Renews at ${monthlyTotal} on ${formatDate(summary.renewalAt)}` : undefined,
       ].filter(Boolean).join(" · ")
@@ -375,18 +355,12 @@ export function BillingSection({ companyId }: { companyId: string }): ReactEleme
       {actionError ? <div className="mb-4"><Alert variant="destructive"><AlertDescription>{actionError}</AlertDescription></Alert></div> : null}
       <SettingsSection>
         <SettingRow label={summary.plan === "pro" ? "Pro plan" : summary.plan === "free" ? "Free plan" : "Plan not available"} description={summary.purchaseConfigured ? planDetail : <>{planDetail}<br />Billing is not configured. An operator configures the hosted billing service.</>}>
-          {canManage ? (
-            <div className="flex flex-wrap items-center gap-2">
-              {showPortal ? <Button size="sm" variant="outline" onClick={() => void openPortal()} disabled={busy !== ""}>Open billing</Button> : null}
-              <Button size="sm" variant="outline" onClick={checkSubscription} disabled={busy === "check"}>{busy === "check" ? <Spinner /> : null}Check subscription</Button>
-            </div>
-          ) : null}
+          {showPortal ? <Button size="sm" variant="outline" onClick={() => void openPortal()} disabled={busy !== ""}>Open billing</Button> : null}
         </SettingRow>
-        {portalUrl ? <SettingRow label="Billing portal" description="The billing portal opens in a new tab.">{link(portalUrl, "Open billing")}</SettingRow> : null}
       </SettingsSection>
       {canPurchase ? (
         <SettingsSection>
-          <SettingRow label="Upgrade to Pro" description="USD 20 per seat each month. Taxes are additional.">
+          <SettingRow label="Upgrade to Pro" description={`${formatUsd(BILLING_SEAT_UNIT_AMOUNT)} per seat each month. Taxes are additional.`}>
             {purchaseOpen ? (
               <form className="flex flex-wrap items-center gap-2 sm:justify-end" onSubmit={(event) => void submitPurchase(event)}>
                 <div className="w-20"><Input aria-label="Seats" type="number" min={1} max={9999} step={1} value={purchaseSeats} onChange={(event) => setPurchaseSeats(event.target.value)} /></div>
@@ -409,11 +383,6 @@ export function BillingSection({ companyId }: { companyId: string }): ReactEleme
           <ul className="grid gap-2 border-t py-3 text-xs sm:grid-cols-2">
             {PRO_FEATURES.map(feature => <li key={feature} className="flex items-center gap-2"><Check aria-hidden="true" className="size-3.5 text-primary" />{feature}</li>)}
           </ul>
-          {checkoutUrl ? <SettingRow label="Checkout" description="The checkout page opens in a new tab. Suplex checks the result when you return.">{link(checkoutUrl, "Open checkout")}</SettingRow> : null}
-        </SettingsSection>
-      ) : checkoutUrl ? (
-        <SettingsSection>
-          <SettingRow label="Checkout" description="The checkout page opens in a new tab. Suplex checks the result when you return.">{link(checkoutUrl, "Open checkout")}</SettingRow>
         </SettingsSection>
       ) : null}
       <SettingsSection title="Usage">
@@ -423,7 +392,7 @@ export function BillingSection({ companyId }: { companyId: string }): ReactEleme
         {summary.plan === "pro" && summary.canManageBilling ? (
           <SettingRow
             label="Seats"
-            description={`${summary.purchasedSeats} purchased, ${summary.requiredSeats} active. ${seatQuantityValid(seatQuantity) && seatQuantity < summary.requiredSeats ? `At least ${summary.requiredSeats} seats are necessary.` : preview ? `Due now ${formatUsd(preview.amountDueNow)}. Each month after ${formatUsd(preview.nextSubtotal)} before tax.` : "Increases charge a prorated amount now."}`}
+            description={`${summary.purchasedSeats} purchased, ${summary.requiredSeats} active. ${seatQuantityValid(seatQuantity) && seatQuantity < summary.requiredSeats ? `At least ${summary.requiredSeats} seats are necessary.` : preview ? `New total ${preview.requestedQuantity} seats. Due now ${formatUsd(preview.amountDueNow)}. Each month after ${formatUsd(preview.nextSubtotal)} before tax.` : "Increases charge a prorated amount now."}`}
           >
             {preview ? (
               <div className="flex flex-wrap items-center justify-end gap-2">

@@ -53,6 +53,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             std::path::Path::new(directory),
         )?);
     }
+    if command.first().map(String::as_str) == Some("billing") {
+        std::process::exit(suplex::billing::hosted::server::main(&command[1..]).await);
+    }
     match command.first().map(String::as_str) {
         None => {
             print!("{}", suplex::cli::HELP);

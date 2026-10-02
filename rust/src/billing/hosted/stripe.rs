@@ -121,6 +121,7 @@ pub struct CheckoutParams<'a> {
     pub customer_id: &'a str,
     pub price_id: &'a str,
     pub quantity: i64,
+    pub automatic_tax: bool,
     pub success_url: &'a str,
     pub cancel_url: &'a str,
     pub metadata: &'a [(&'a str, String)],
@@ -241,7 +242,12 @@ pub fn normalize_subscription(subscription: &Value) -> Subscription {
         id: text(subscription, "id").unwrap_or_default(),
         status: text(subscription, "status").unwrap_or_default(),
         created: number(subscription, "created"),
-        cancel_at_period_end: flag(subscription, "cancel_at_period_end"),
+        // The customer portal schedules a period-end cancellation through
+        // `cancel_at` and leaves `cancel_at_period_end` false.
+        cancel_at_period_end: flag(subscription, "cancel_at_period_end")
+            || subscription
+                .get("cancel_at")
+                .is_some_and(|at| !at.is_null()),
         latest_invoice_id: expandable_id(subscription.get("latest_invoice")),
         pending_update: subscription
             .get("pending_update")
@@ -728,7 +734,7 @@ impl StripeClient {
             ("customer", params.customer_id.to_owned()),
             ("line_items[0][price]", params.price_id.to_owned()),
             ("line_items[0][quantity]", params.quantity.to_string()),
-            ("automatic_tax[enabled]", "true".into()),
+            ("automatic_tax[enabled]", params.automatic_tax.to_string()),
             ("billing_address_collection", "auto".into()),
             ("customer_update[address]", "auto".into()),
             ("customer_update[name]", "auto".into()),

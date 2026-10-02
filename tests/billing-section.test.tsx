@@ -6,6 +6,8 @@ import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
 const api = vi.hoisted(() => ({ readJson: vi.fn() }));
 vi.mock("../src/frontend/lib/api.js", async importOriginal => ({ ...(await importOriginal()), readJsonUnchecked: api.readJson }));
+const company = vi.hoisted(() => ({ setCompanyPlan: vi.fn() }));
+vi.mock("../src/frontend/shell/company-context.js", () => ({ useOptionalCompanyContext: () => company }));
 vi.mock("../src/frontend/features/settings/settings-layout.js", () => ({
   SettingsSection: ({ title, description, children }: { title?: string; description?: string; children: ReactNode }) => (
     <section><h2>{title}</h2>{description ? <p>{description}</p> : null}<div>{children}</div></section>
@@ -55,23 +57,28 @@ const postsTo = (suffix: string) => api.readJson.mock.calls.filter(([url, init])
 const idempotencyKeyOf = (call: unknown[]) => (call[1] as RequestInit).headers as Record<string, string>;
 
 let roots: Root[] = [];
+let tab: { opener: unknown; location: { href: string }; close: ReturnType<typeof vi.fn> };
 
 beforeEach(() => {
   api.readJson.mockReset();
   roots = [];
   window.sessionStorage.clear();
+  tab = { opener: window, location: { href: "" }, close: vi.fn() };
+  vi.spyOn(window, "open").mockReturnValue(tab as unknown as Window);
 });
 afterEach(async () => {
+  vi.restoreAllMocks();
   for (const root of roots) await act(async () => { root.unmount(); });
   roots = [];
   document.body.replaceChildren();
 });
 
-test("formats USD minor units with exactly two fraction digits", () => {
-  expect(formatUsd(0)).toBe("USD 0.00");
-  expect(formatUsd(1)).toBe("USD 0.01");
-  expect(formatUsd(2550)).toBe("USD 25.50");
-  expect(formatUsd(2599)).toBe("USD 25.99");
+test("formats USD minor units as whole dollars or exact cents", () => {
+  expect(formatUsd(0)).toBe("$0");
+  expect(formatUsd(2000)).toBe("$20");
+  expect(formatUsd(1)).toBe("$0.01");
+  expect(formatUsd(2550)).toBe("$25.50");
+  expect(formatUsd(2599)).toBe("$25.99");
 });
 
 test("renders the free plan and offers Select Pro to an administrator", async () => {
@@ -83,7 +90,6 @@ test("renders the free plan and offers Select Pro to an administrator", async ()
   expect(text).toContain("2 / 2");
   expect(text).toContain("0 purchased, 2 active");
   expect(button(container, "Select Pro")).toBeDefined();
-  expect(button(container, "Check subscription")).toBeDefined();
   expect(button(container, "Open billing")).toBeUndefined();
 });
 
@@ -95,10 +101,9 @@ test("renders the pro plan with formatted price, subtotal, and renewal", async (
   expect(text).toContain("Pro");
   expect(text).toContain("2 / Unlimited");
   expect(text).toContain("3 purchased, 2 active");
-  expect(text).toContain("USD 20 per seat each month");
-  expect(text).toContain("USD 60.00");
+  expect(text).toContain("$20 per seat each month");
+  expect(text).toContain("$60");
   expect(text).toContain("Open billing");
-  expect(text).toContain("Check subscription");
 });
 
 test("renders unknown plan without inventing seat or project capacity", async () => {
@@ -111,7 +116,6 @@ test("renders unknown plan without inventing seat or project capacity", async ()
   expect(text).not.toContain("0 purchased");
   expect(button(container, "Select Pro")).toBeUndefined();
   expect(button(container, "Open billing")).toBeUndefined();
-  expect(button(container, "Check subscription")).toBeDefined();
 });
 
 test("explains the seat shortage while keeping the Pro label", async () => {
@@ -124,16 +128,11 @@ test("explains the seat shortage while keeping the Pro label", async () => {
   expect(text).toContain("2 purchased, 5 active");
 });
 
-test("shows an error state on a failed fetch and retries with Check subscription", async () => {
+test("shows an error state on a failed fetch", async () => {
   api.readJson.mockRejectedValueOnce(apiError("Suplex cannot check the subscription", 503, "billing_unavailable"));
   const { container, root } = renderSection(); roots.push(root);
   await mount(root);
-  expect(container.textContent).toContain("Suplex cannot check the subscription");
-  const retry = button(container, "Check subscription");
-  expect(retry).toBeDefined();
-  api.readJson.mockResolvedValueOnce(proSummary);
-  await act(async () => { retry!.click(); });
-  expect(container.textContent).toContain("Pro");
+  expect(container.textContent).toContain("Suplex cannot check the subscription. Reload the page to retry.");
 });
 
 test("does not offer a purchase when billing is not configured", async () => {
@@ -145,12 +144,11 @@ test("does not offer a purchase when billing is not configured", async () => {
   expect(button(container, "Select Pro")).toBeUndefined();
 });
 
-test("a free plan with subscriptionStatus none still offers Select Pro and Check subscription", async () => {
+test("a free plan with subscriptionStatus none still offers Select Pro", async () => {
   api.readJson.mockResolvedValue({ ...freeSummary, subscriptionStatus: "none" });
   const { container, root } = renderSection(); roots.push(root);
   await mount(root);
   expect(button(container, "Select Pro")).toBeDefined();
-  expect(button(container, "Check subscription")).toBeDefined();
   expect(button(container, "Open billing")).toBeUndefined();
 });
 
@@ -164,20 +162,17 @@ test("Select Pro after an abandoned checkout recovers through the hosted command
   await act(async () => { button(container, "Select Pro")!.click(); });
   await act(async () => { container.querySelector<HTMLInputElement>('input[aria-label="Seats"]')!.form!.querySelector<HTMLButtonElement>('button[type="submit"]')!.click(); });
   expect(postsTo("/billing/checkout")).toHaveLength(1);
-  const link = container.querySelector<HTMLAnchorElement>('a[href="https://checkout.example/session_resumed"]');
-  expect(link).not.toBeNull();
-  expect(link!.target).toBe("_blank");
+  expect(tab.location.href).toBe("https://checkout.example/session_resumed");
   expect(window.sessionStorage.length).toBe(0);
   expect(window.localStorage?.length ?? 0).toBe(0);
 });
 
-test.each(["canceled", "incomplete_expired"])("a free plan with a terminal %s subscription offers Select Pro, Open billing, and Check subscription", async (subscriptionStatus) => {
+test.each(["canceled", "incomplete_expired"])("a free plan with a terminal %s subscription offers Select Pro and Open billing", async (subscriptionStatus) => {
   api.readJson.mockResolvedValue({ ...freeSummary, subscriptionStatus, accessUntil: "2026-08-01T00:00:00.000Z", cancelAtPeriodEnd: false, paymentActionRequired: false, paymentActionUrl: null });
   const { container, root } = renderSection(); roots.push(root);
   await mount(root);
   expect(button(container, "Select Pro")).toBeDefined();
   expect(button(container, "Open billing")).toBeDefined();
-  expect(button(container, "Check subscription")).toBeDefined();
 });
 
 test.each(["incomplete", "past_due", "unpaid", "paused"])("a free plan with a recoverable %s subscription keeps payment and management controls without a new purchase", async (subscriptionStatus) => {
@@ -186,7 +181,6 @@ test.each(["incomplete", "past_due", "unpaid", "paused"])("a free plan with a re
   await mount(root);
   expect(button(container, "Select Pro")).toBeUndefined();
   expect(button(container, "Open billing")).toBeDefined();
-  expect(button(container, "Check subscription")).toBeDefined();
   const link = container.querySelector<HTMLAnchorElement>('a[href="https://billing.example/pay"]');
   expect(link?.target).toBe("_blank");
 });
@@ -198,11 +192,9 @@ test("a free plan with a source-active but fully refunded subscription keeps man
   expect(container.textContent).toContain("The subscription has no paid access.");
   expect(button(container, "Select Pro")).toBeUndefined();
   expect(button(container, "Open billing")).toBeDefined();
-  expect(button(container, "Check subscription")).toBeDefined();
 });
 
-test("Select Pro posts the quantity with an Idempotency-Key and renders a normal checkout link", async () => {
-  const openSpy = vi.spyOn(window, "open");
+test("Select Pro posts the quantity with an Idempotency-Key and opens checkout in a new tab", async () => {
   api.readJson.mockImplementation(async (url: string, init?: RequestInit) => {
     if (init?.method === "POST" && String(url).endsWith("/billing/checkout")) return { status: "redirect", url: "https://checkout.example/session_1" };
     return freeSummary;
@@ -212,19 +204,15 @@ test("Select Pro posts the quantity with an Idempotency-Key and renders a normal
   await act(async () => { button(container, "Select Pro")!.click(); });
   const input = container.querySelector<HTMLInputElement>('input[aria-label="Seats"]');
   expect(input?.value).toBe("2");
-  expect(container.textContent).toContain("USD 40.00 each month before tax.");
+  expect(container.textContent).toContain("$40 each month before tax.");
   await act(async () => { input!.form!.querySelector<HTMLButtonElement>('button[type="submit"]')!.click(); });
   const checkoutCalls = postsTo("/billing/checkout");
   expect(checkoutCalls).toHaveLength(1);
   expect(checkoutCalls[0]![1]?.body).toBe(JSON.stringify({ quantity: 2 }));
   expect((idempotencyKeyOf(checkoutCalls[0]!)["Idempotency-Key"] ?? "").length).toBeGreaterThanOrEqual(8);
-  const link = container.querySelector<HTMLAnchorElement>('a[href="https://checkout.example/session_1"]');
-  expect(link).not.toBeNull();
-  expect(link!.target).toBe("_blank");
-  expect(link!.rel).toContain("noopener");
-  expect(link!.rel).toContain("noreferrer");
-  expect(openSpy).not.toHaveBeenCalled();
-  openSpy.mockRestore();
+  expect(window.open).toHaveBeenCalledWith("", "_blank");
+  expect(tab.opener).toBeNull();
+  expect(tab.location.href).toBe("https://checkout.example/session_1");
 });
 
 test("a retried checkout reuses the idempotency key for the same intent", async () => {
@@ -264,8 +252,8 @@ test("a seat increase previews exact amounts and confirms with the preview id", 
   expect(postsTo("/billing/seats/preview")).toHaveLength(1);
   expect(postsTo("/billing/seats/preview")[0]![1]?.body).toBe(JSON.stringify({ quantity: 5 }));
   const text = container.textContent ?? "";
-  expect(text).toContain("Due now USD 25.00");
-  expect(text).toContain("Each month after USD 100.00 before tax.");
+  expect(text).toContain("New total 5 seats. Due now $25");
+  expect(text).toContain("Each month after $100 before tax.");
   await act(async () => { button(container, "Save seats")!.click(); });
   const seatCalls = postsTo("/billing/seats");
   expect(seatCalls).toHaveLength(1);
@@ -318,7 +306,7 @@ test("a changed quote displays the new quote for re-confirmation", async () => {
   await act(async () => { input.form!.querySelector<HTMLButtonElement>('button[type="submit"]')!.click(); });
   await act(async () => { button(container, "Save seats")!.click(); });
   expect(container.textContent).toContain("The quote changed. Review the new amounts before you save.");
-  expect(container.textContent).toContain("Due now USD 30.00");
+  expect(container.textContent).toContain("Due now $30");
   await act(async () => { button(container, "Save seats")!.click(); });
   const seatCalls = postsTo("/billing/seats");
   expect(seatCalls).toHaveLength(2);
@@ -381,7 +369,7 @@ test("payment_required keeps the old seats and renders the payment link", async 
   expect(container.textContent).toContain("3 purchased, 2 active");
 });
 
-test("Open billing renders the portal url as a normal link", async () => {
+test("Open billing opens the portal in a new tab, and a failure closes the tab", async () => {
   api.readJson.mockImplementation(async (url: string, init?: RequestInit) => {
     if (init?.method === "POST" && String(url).endsWith("/billing/portal")) return { url: "https://billing.example/portal" };
     return proSummary;
@@ -389,9 +377,14 @@ test("Open billing renders the portal url as a normal link", async () => {
   const { container, root } = renderSection(); roots.push(root);
   await mount(root);
   await act(async () => { button(container, "Open billing")!.click(); });
-  const link = container.querySelector<HTMLAnchorElement>('a[href="https://billing.example/portal"]');
-  expect(link).not.toBeNull();
-  expect(link!.target).toBe("_blank");
+  expect(tab.location.href).toBe("https://billing.example/portal");
+  expect(container.querySelector('a[href="https://billing.example/portal"]')).toBeNull();
+  api.readJson.mockRejectedValueOnce(apiError("Suplex cannot check the subscription", 503, "billing_unavailable"));
+  tab = { opener: window, location: { href: "" }, close: vi.fn() };
+  vi.mocked(window.open).mockReturnValue(tab as unknown as Window);
+  await act(async () => { button(container, "Open billing")!.click(); });
+  expect(tab.close).toHaveBeenCalled();
+  expect(tab.location.href).toBe("");
 });
 
 test("a window focus after checkout refreshes the summary", async () => {
@@ -411,37 +404,11 @@ test("a window focus after checkout refreshes the summary", async () => {
   expect(container.textContent).toContain("3 purchased, 2 active");
 });
 
-test("an explicit check after checkout polls the summary and stops after 30 seconds", async () => {
-  vi.useFakeTimers();
-  try {
-    api.readJson.mockImplementation(async (url: string, init?: RequestInit) => {
-      if (init?.method === "POST" && String(url).endsWith("/billing/checkout")) return { status: "redirect", url: "https://checkout.example/session_4" };
-      return freeSummary;
-    });
-    const { container, root } = renderSection(); roots.push(root);
-    await mount(root);
-    await act(async () => { button(container, "Select Pro")!.click(); });
-    await act(async () => { container.querySelector<HTMLInputElement>('input[aria-label="Seats"]')!.form!.querySelector<HTMLButtonElement>('button[type="submit"]')!.click(); });
-    const before = billingGets();
-    await act(async () => { button(container, "Check subscription")!.click(); });
-    expect(billingGets()).toBe(before + 1);
-    await act(async () => { await vi.advanceTimersByTimeAsync(2_000); });
-    expect(billingGets()).toBe(before + 2);
-    await act(async () => { await vi.advanceTimersByTimeAsync(40_000); });
-    const stopped = billingGets();
-    await act(async () => { await vi.advanceTimersByTimeAsync(10_000); });
-    expect(billingGets()).toBe(stopped);
-  } finally {
-    vi.useRealTimers();
-  }
-});
-
 test("members see the summary without billing actions", async () => {
   api.readJson.mockResolvedValue({ ...proSummary, canManageBilling: false });
   const { container, root } = renderSection(); roots.push(root);
   await mount(root);
   expect(container.textContent).toContain("Pro");
-  expect(button(container, "Check subscription")).toBeUndefined();
   expect(button(container, "Open billing")).toBeUndefined();
   expect(button(container, "Save seats")).toBeUndefined();
 });
@@ -452,7 +419,6 @@ test("a member on the free plan sees no purchase or check actions", async () => 
   await mount(root);
   expect(container.textContent).toContain("Free");
   expect(button(container, "Select Pro")).toBeUndefined();
-  expect(button(container, "Check subscription")).toBeUndefined();
   expect(button(container, "Open billing")).toBeUndefined();
 });
 
@@ -540,5 +506,18 @@ test("billing_operation_not_applied on checkout keeps the form open and a retry 
   const checkoutCalls = postsTo("/billing/checkout");
   expect(checkoutCalls).toHaveLength(2);
   expect(idempotencyKeyOf(checkoutCalls[0]!)["Idempotency-Key"]).not.toBe(idempotencyKeyOf(checkoutCalls[1]!)["Idempotency-Key"]);
-  expect(container.querySelector<HTMLAnchorElement>('a[href="https://checkout.example/session_new"]')).not.toBeNull();
+  expect(tab.location.href).toBe("https://checkout.example/session_new");
+});
+
+test("a live summary updates the switcher plan label, and an unknown plan keeps the last one", async () => {
+  company.setCompanyPlan.mockClear();
+  api.readJson.mockResolvedValue(proSummary);
+  const pro = renderSection(); roots.push(pro.root);
+  await mount(pro.root);
+  expect(company.setCompanyPlan).toHaveBeenCalledWith("c1", "pro");
+  company.setCompanyPlan.mockClear();
+  api.readJson.mockResolvedValue(unknownSummary);
+  const unknown = renderSection(); roots.push(unknown.root);
+  await mount(unknown.root, "c2");
+  expect(company.setCompanyPlan).not.toHaveBeenCalled();
 });

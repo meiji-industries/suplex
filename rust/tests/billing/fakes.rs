@@ -893,6 +893,7 @@ pub fn hosted_config(environment: BillingEnvironment) -> HostedConfig {
         stripe_price_id: PRICE_ID.into(),
         stripe_portal_configuration_id: "bpc_fake".into(),
         stripe_webhook_secret: WEBHOOK_SECRET.into(),
+        automatic_tax: true,
         revenuecat_app_id: RC_APP_ID.into(),
         revenuecat_webhook_authorization: RC_AUTHORIZATION.into(),
     }

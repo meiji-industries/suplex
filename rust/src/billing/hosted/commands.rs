@@ -471,6 +471,7 @@ impl Hosted {
                     customer_id: &customer_id,
                     price_id: &self.config.stripe_price_id,
                     quantity,
+                    automatic_tax: self.config.automatic_tax,
                     success_url: &format!("{}/checkout/return", self.config.origin),
                     cancel_url: &format!("{}/checkout/cancel", self.config.origin),
                     metadata: &[

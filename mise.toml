@@ -103,13 +103,33 @@ description = "Stop owned native development processes, escalating if needed"
 run = "pnpm exec tsx scripts/dev.ts --stop"
 
 [tasks."billing:dev"]
-description = "Run the hosted billing service from source"
-run = "cd rust && cargo run --bin suplex-billing -- serve"
+description = "Run the hosted billing service from source against the Stripe and RevenueCat sandboxes"
+run = '''
+source scripts/onepassword.sh
+onepassword_setup_service_account
+# `mise run billing:tunnel` routes https://billing-sandbox.example.com to this port.
+# The sandbox has no head office address, which Stripe Tax needs.
+export STRIPE_AUTOMATIC_TAX=false BILLING_ENVIRONMENT=sandbox BILLING_PORT=4212 BILLING_PUBLIC_ORIGIN=https://billing-sandbox.example.com BILLING_DATABASE_PATH="$PWD/.suplex/billing.sqlite"
+mkdir -p .suplex
+op run --env-file scripts/billing-dev.env -- cargo run --manifest-path rust/Cargo.toml -- billing serve
+'''
+
+[tasks."billing:dns"]
+description = "Point billing.suplex.sh at the Fly app with Cloudflare DNS records"
+run = '''
+source scripts/onepassword.sh
+onepassword_setup_service_account
+export CF_DNS_ACCOUNT_ID="$(op read op://Suplex/4dhocwhz4orklgrt3mbvvdx4ay/CF_DNS_ACCOUNT_ID)"
+export CF_DNS_API_TOKEN="$(op read op://Suplex/4dhocwhz4orklgrt3mbvvdx4ay/CF_DNS_API_TOKEN)"
+sh scripts/billing-dns.sh
+'''
 
 [tasks."billing:tunnel"]
 description = "Run the named Cloudflare Tunnel for the local billing service"
 run = '''
-token=$(op item get 5lbbk347vbx7espnpidrywhsqq --account my --fields label=CLOUDFLARED_BILLING_TUNNEL_TOKEN --reveal)
+source scripts/onepassword.sh
+onepassword_setup_service_account
+token=$(op read op://Suplex/5lbbk347vbx7espnpidrywhsqq/CLOUDFLARED_BILLING_TUNNEL_TOKEN)
 case "$token" in eyJ*) ;; *) echo "missing Cloudflare tunnel token in 1Password .env.development"; exit 1 ;; esac
 exec cloudflared tunnel --no-autoupdate run --token "$token"
 '''

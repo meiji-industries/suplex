@@ -810,4 +810,50 @@ pub(crate) mod tests {
         assert_eq!(failure(error), (503, Some("billing_unavailable")));
         assert_eq!(f.fake.with(|hosted| hosted.count("/v1/billing")), 2);
     }
+
+    #[tokio::test]
+    async fn live_reads_keep_a_plan_label_that_expires_and_refreshes_in_the_background() {
+        let f = fixture().await;
+        let now = Utc::now();
+        let label = |now| {
+            f.state
+                .with_database(|database| plan_label(database, &f.company_id, now).unwrap())
+        };
+        // No billing account is a known Free that never needs a hosted read.
+        assert_eq!(label(now), (Some("free"), false));
+        f.bind(Some("acct_1"));
+        // A bound company without a snapshot has no label and is due a read.
+        assert_eq!(label(now), (None, true));
+        f.fake
+            .with(|hosted| hosted.respond("/v1/billing", 200, active_state(2)));
+        f.summary(&f.admin_id).await;
+        assert_eq!(label(now), (Some("pro"), false));
+        assert_eq!(label(now + chrono::TimeDelta::hours(2)), (Some("pro"), true));
+        // A day-old snapshot, or Pro past its paid access, has no label.
+        assert_eq!(label(now + chrono::TimeDelta::hours(25)), (None, true));
+        let past_access = chrono::DateTime::parse_from_rfc3339("2099-01-01T00:00:01Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        assert_eq!(label(past_access).0, None);
+        // A failed read keeps the last snapshot.
+        f.fake
+            .with(|hosted| hosted.respond("/v1/billing", 503, json!({"error": "down"})));
+        assert_eq!(f.summary(&f.admin_id).await["plan"], "unknown");
+        assert_eq!(label(now).0, Some("pro"));
+        // The background refresh records a lapsed subscription as Free.
+        f.sql(
+            "UPDATE suplex_company_billing SET checked_at = '2026-01-01T00:00:00.000Z'",
+            &[],
+        );
+        f.fake
+            .with(|hosted| hosted.respond("/v1/billing", 200, inactive_state()));
+        let reads = f.fake.with(|hosted| hosted.count("/v1/billing"));
+        refresh_plans(&f.state, vec![f.company_id.clone()]);
+        while f.fake.with(|hosted| hosted.count("/v1/billing")) == reads
+            || label(Utc::now()).0 != Some("free")
+        {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        assert_eq!(label(Utc::now()), (Some("free"), false));
+    }
 }

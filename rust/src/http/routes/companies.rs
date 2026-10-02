@@ -27,7 +27,16 @@ use super::{
 
 #[derive(Serialize)]
 struct CompanyList {
-    companies: Vec<companies::Company>,
+    companies: Vec<CompanyItem>,
+}
+
+/// A company with its plan label for the switcher. The label comes from local
+/// data only; `None` means Suplex has no recent plan for the company.
+#[derive(Serialize)]
+struct CompanyItem {
+    #[serde(flatten)]
+    company: companies::Company,
+    plan: Option<&'static str>,
 }
 
 pub fn router() -> Router<AppState> {
@@ -90,10 +99,23 @@ fn respond<T: Serialize>(
 }
 
 async fn list(State(state): State<AppState>, headers: HeaderMap) -> Response {
-    respond(&state, &headers, None, StatusCode::OK, |database, user| {
-        companies::list_visible_companies(database, &user.id)
-            .map(|companies| CompanyList { companies })
-    })
+    let mut stale = Vec::new();
+    let response = respond(&state, &headers, None, StatusCode::OK, |database, user| {
+        let now = Utc::now();
+        let companies = companies::list_visible_companies(database, &user.id)?
+            .into_iter()
+            .map(|company| {
+                let (plan, refresh) = crate::billing::plan_label(database, &company.id, now)?;
+                if refresh {
+                    stale.push(company.id.clone());
+                }
+                Ok(CompanyItem { company, plan })
+            })
+            .collect::<Result<Vec<_>, Box<dyn std::error::Error>>>()?;
+        Ok(CompanyList { companies })
+    });
+    crate::billing::refresh_plans(&state, stale);
+    response
 }
 
 async fn get_company(

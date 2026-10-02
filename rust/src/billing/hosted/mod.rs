@@ -47,6 +47,7 @@ pub struct HostedConfig {
     pub stripe_price_id: String,
     pub stripe_portal_configuration_id: String,
     pub stripe_webhook_secret: String,
+    pub automatic_tax: bool,
     pub revenuecat_app_id: String,
     pub revenuecat_webhook_authorization: String,
 }

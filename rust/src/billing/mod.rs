@@ -2,7 +2,14 @@
 //! evidence; this module reads it, forwards money commands to it, and gates
 //! project creation above the Free limit.
 
-use std::{error::Error, sync::Arc, time::Duration};
+use std::{
+    error::Error,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::Duration,
+};
 
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use chrono::{DateTime, Utc};
@@ -28,6 +35,9 @@ pub mod hosted;
 pub mod wire;
 
 pub const FREE_PROJECT_LIMIT: i64 = 2;
+
+/// The Suplex-operated billing service on Fly.
+pub const PRODUCTION_SERVICE_URL: &str = "https://billing.suplex.sh";
 
 pub fn unavailable() -> PublicFailure {
     PublicFailure::new(503, "Suplex cannot check the subscription").with_code("billing_unavailable")
@@ -131,6 +141,8 @@ pub struct BillingClient {
     http: reqwest::Client,
     // ponytail: global registration lock; per-company map if registration contention matters
     registration: Arc<tokio::sync::Mutex<()>>,
+    /// One background plan refresh runs at a time.
+    refreshing: Arc<AtomicBool>,
 }
 
 /// Hosted 4xx codes that keep their meaning for the caller. Any other
@@ -167,6 +179,7 @@ impl BillingClient {
                 .build()
                 .expect("billing HTTP client builds"),
             registration: Arc::default(),
+            refreshing: Arc::default(),
         }
     }
 
@@ -516,14 +529,16 @@ pub async fn summary(
         return Ok(BillingSummary::Free(free(base)));
     };
     let remote = match &state.billing {
-        Some(client) => client.read(&binding.credential).await.and_then(|remote| {
-            // Members see the status but never a billing URL they could open.
-            let url = match &remote.payment_action_url {
-                Some(url) if base.can_manage_billing => Some(client.forwarded_url(url)?),
-                _ => None,
-            };
-            Ok((remote, url))
-        }),
+        Some(client) => read_and_remember(state, client, company_id, &binding.credential)
+            .await
+            .and_then(|remote| {
+                // Members see the status but never a billing URL they could open.
+                let url = match &remote.payment_action_url {
+                    Some(url) if base.can_manage_billing => Some(client.forwarded_url(url)?),
+                    _ => None,
+                };
+                Ok((remote, url))
+            }),
         None => Err(unavailable()),
     };
     let Ok((remote, payment_action_url)) = remote else {
@@ -566,6 +581,92 @@ pub async fn summary(
     }))
 }
 
+/// How long a remembered plan labels a company, and when it is read again.
+const PLAN_LABEL_LIFETIME: chrono::TimeDelta = chrono::TimeDelta::hours(24);
+const PLAN_REFRESH_AFTER: chrono::TimeDelta = chrono::TimeDelta::hours(1);
+
+/// Reads the hosted state and keeps a display snapshot of it. The snapshot
+/// only labels the company in the interface; no decision reads it.
+async fn read_and_remember(
+    state: &AppState,
+    client: &BillingClient,
+    company_id: &str,
+    credential: &str,
+) -> Result<HostedBillingState, PublicFailure> {
+    let remote = client.read(credential).await?;
+    let _ = state.with_database(|database| {
+        database.connection().execute(
+            "UPDATE suplex_company_billing SET plan = ?1, access_until = ?2, checked_at = ?3 WHERE company_id = ?4",
+            params![
+                if remote.active { "pro" } else { "free" },
+                remote.access_until,
+                rfc3339_millis(Utc::now()),
+                company_id
+            ],
+        )
+    });
+    Ok(remote)
+}
+
+/// The plan label for a company from local data, and whether its snapshot is
+/// due for a refresh. No billing account is a known Free. A Pro snapshot past
+/// its paid access, or any snapshot older than a day, has no label.
+pub fn plan_label(
+    database: &SuplexDatabase,
+    company_id: &str,
+    now: DateTime<Utc>,
+) -> DatabaseResult<(Option<&'static str>, bool)> {
+    let snapshot: Option<(Option<String>, Option<String>, Option<String>)> = database
+        .connection()
+        .query_row(
+            "SELECT plan, access_until, checked_at FROM suplex_company_billing WHERE company_id = ?1",
+            [company_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .optional()?;
+    let Some((plan, access_until, checked_at)) = snapshot else {
+        return Ok((Some("free"), false));
+    };
+    let time = |text: Option<String>| {
+        text.and_then(|text| DateTime::parse_from_rfc3339(&text).ok())
+            .map(|time| time.with_timezone(&Utc))
+    };
+    let checked_at = time(checked_at);
+    let fresh = checked_at.is_some_and(|checked| now - checked < PLAN_LABEL_LIFETIME);
+    let label = match plan.as_deref() {
+        Some("pro") if fresh && time(access_until).is_some_and(|until| until > now) => Some("pro"),
+        Some("free") if fresh => Some("free"),
+        _ => None,
+    };
+    let stale = checked_at.is_none_or(|checked| now - checked >= PLAN_REFRESH_AFTER);
+    Ok((label, stale))
+}
+
+/// Reads the hosted state again for companies with an old snapshot, one at a
+/// time, after the response that found them. It never blocks a request.
+pub fn refresh_plans(state: &AppState, company_ids: Vec<String>) {
+    let Some(client) = state.billing.clone() else {
+        return;
+    };
+    if company_ids.is_empty() || client.refreshing.swap(true, Ordering::AcqRel) {
+        return;
+    }
+    let state = state.clone();
+    tokio::spawn(async move {
+        for company_id in company_ids {
+            let credential = state
+                .with_database(|database| binding(database, &company_id))
+                .ok()
+                .flatten()
+                .map(|binding| binding.credential);
+            if let Some(credential) = credential {
+                let _ = read_and_remember(&state, &client, &company_id, &credential).await;
+            }
+        }
+        client.refreshing.store(false, Ordering::Release);
+    });
+}
+
 /// The billing read project creation uses. It never registers an account.
 pub async fn create_decision(
     state: &AppState,
@@ -577,14 +678,16 @@ pub async fn create_decision(
     let Some(client) = &state.billing else {
         return Ok(BillingEvidence::Unknown);
     };
-    Ok(match client.read(&binding.credential).await {
-        Ok(remote) if remote.active => BillingEvidence::Paid {
-            purchased_seats: remote.purchased_seats,
-            access_until: remote.access_until,
+    Ok(
+        match read_and_remember(state, client, company_id, &binding.credential).await {
+            Ok(remote) if remote.active => BillingEvidence::Paid {
+                purchased_seats: remote.purchased_seats,
+                access_until: remote.access_until,
+            },
+            Ok(_) => BillingEvidence::Free,
+            Err(_) => BillingEvidence::Unknown,
         },
-        Ok(_) => BillingEvidence::Free,
-        Err(_) => BillingEvidence::Unknown,
-    })
+    )
 }
 
 /// The early quota check before a clone or provisioning. Below the Free

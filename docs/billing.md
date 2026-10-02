@@ -12,6 +12,14 @@ machine identities, and agents do not count. The shared `user_development`
 Operator is one account even when several people use it through trusted-network
 authentication; Suplex does not infer the people behind a shared login.
 
+The company switcher shows each company's plan from local data. Every live
+read of the hosted service (the Billing page, the project-creation check) saves
+a display snapshot in `suplex_company_billing`. A company without a billing
+account is Free. A snapshot older than an hour is read again in the background
+after `/api/companies` answers. A snapshot older than a day, or a Pro snapshot
+past its paid access, shows no label. No decision reads the snapshot: project
+creation and money commands always read the hosted service.
+
 Members and administrators read the plan in Settings > Billing. Only active
 administrators can purchase, change seats, or open the billing portal.
 
@@ -23,13 +31,14 @@ Billing runs as two processes:
    counts projects and accounts, authorizes the operator, enforces project
    policy, and calls the billing service over outbound HTTPS. It holds no
    merchant credentials.
-2. The Suplex-operated public billing service (`suplex-billing`,
-   `rust/src/billing/hosted/`). It owns Stripe and RevenueCat credentials,
+2. The Suplex-operated public billing service (`suplex billing serve`,
+   `rust/src/billing/hosted/`), at `https://billing.suplex.sh` on Fly. It owns Stripe and RevenueCat credentials,
    company billing accounts, Checkout and Portal creation, provider reads, and
    webhooks. It never runs the Suplex server, task hosts, or native runtimes.
 
-Both processes share one wire contract, `rust/src/billing/wire.rs`. Release
-packaging ships only `suplex`; `suplex-billing` is deployed separately.
+Both processes are the same `suplex` binary and share one wire contract,
+`rust/src/billing/wire.rs`. Installations never hold the service's provider
+secrets, so the billing code they carry is inert there.
 
 Stripe owns monetary and quantity facts. RevenueCat supplies the imported `pro`
 entitlement and consolidated lifecycle. Suplex never treats a webhook payload, a
@@ -49,13 +58,44 @@ full refund. If required Stripe evidence cannot be read, the service answers
 ## Running the hosted service
 
 ```sh
-# Development: listens on 127.0.0.1:4211 by default
-mise run billing:dev
-
-# Production: a release build of the same binary
-cargo build --release --manifest-path rust/Cargo.toml --bin suplex-billing
-suplex-billing serve
+# Any build of the suplex binary; listens on 127.0.0.1:4211 by default
+suplex billing serve
 ```
+
+### Local sandbox
+
+The Stripe sandbox and the RevenueCat project send webhooks to
+`https://billing-sandbox.example.com`, a named Cloudflare Tunnel to
+`127.0.0.1:4212`. Run the tunnel, the service, and Suplex in three terminals:
+
+```sh
+mise run billing:tunnel
+mise run billing:dev     # sandbox secrets from 1Password .env.development
+SUPLEX_BILLING_SERVICE_URL=http://127.0.0.1:4212 mise run dev
+```
+
+Both billing tasks read 1Password through the Suplex service account. The
+sandbox has no head office address, so `billing:dev` sets
+`STRIPE_AUTOMATIC_TAX=false`. Pay with Stripe test cards such as
+`4242 4242 4242 4242`.
+
+Production runs on Fly as the app `suplex-billing` (`fly.toml` and
+`Dockerfile.billing` at the repository root). It has one machine in `yyz`, a
+volume `billing_data` mounted at `/data`, and the custom domain
+`billing.suplex.sh`. `fly.toml` sets the non-secret variables. Set the provider
+secrets once, then deploy:
+
+```sh
+fly secrets set --app suplex-billing STRIPE_SECRET_KEY=... \
+  STRIPE_PRO_MONTHLY_PRICE_ID=... STRIPE_PORTAL_CONFIGURATION_ID=... \
+  STRIPE_WEBHOOK_SECRET=... REVENUECAT_SECRET_API_KEY=... \
+  REVENUECAT_STRIPE_PUBLIC_API_KEY=... REVENUECAT_WEBHOOK_AUTHORIZATION=... \
+  REVENUECAT_APP_ID=...
+fly deploy
+```
+
+The service refuses to start until every variable is set. Keep one machine:
+the database is SQLite on the volume.
 
 The service creates its tables in `BILLING_DATABASE_PATH` at startup. They are
 not part of the Suplex application migrations.
@@ -73,14 +113,17 @@ Configuration is read only in the hosted process:
 | `STRIPE_PRO_MONTHLY_PRICE_ID` | The configured USD 20 monthly licensed seat price. |
 | `STRIPE_PORTAL_CONFIGURATION_ID` | The dedicated Suplex portal configuration. |
 | `STRIPE_WEBHOOK_SECRET` | Signing secret of the Suplex Stripe webhook destination. |
+| `STRIPE_AUTOMATIC_TAX` | `true` (default) or `false`. Stripe Tax on Checkout needs a head office address in the Stripe account. |
 | `REVENUECAT_SECRET_API_KEY` | Server-side key for subscriber reads. |
 | `REVENUECAT_STRIPE_PUBLIC_API_KEY` | The Stripe app's public key, used for receipt imports. |
 | `REVENUECAT_WEBHOOK_AUTHORIZATION` | The exact Authorization header value RevenueCat sends to Suplex. |
 | `REVENUECAT_APP_ID` | The RevenueCat app/config identity allowlisted for events. |
 
-On private installations set `SUPLEX_BILLING_SERVICE_URL` to the hosted HTTPS
-origin. An explicit loopback URL is allowed for development. Without it, the
-installation runs Free: a third project in a company returns 402
+Installations use `https://billing.suplex.sh` by default. Set
+`SUPLEX_BILLING_SERVICE_URL` to use another HTTPS origin, or a loopback URL for
+development. Development roots (`SUPLEX_ROOT`) have no default, so development
+data never registers production accounts. An empty value turns billing off:
+the installation runs Free, a third project in a company returns 402
 `project_limit_reached`, and existing projects are never touched. A company
 with an existing billing binding reports the subscription as unknown, never as
 Free.
@@ -123,6 +166,10 @@ Production uses a separate Stripe configuration and RevenueCat project with
    `customer.subscription.updated`, `customer.subscription.deleted`,
    `checkout.session.completed`, `charge.refunded`, and `invoice.updated`.
    That destination's signing secret belongs to RevenueCat, not to Suplex.
+   The service imports each subscription into RevenueCat itself, so purchases
+   work without this destination. Without it, RevenueCat learns about a
+   cancellation or refund made outside Suplex only at the next import, so its
+   dashboard lags Stripe. Suplex reads Stripe, so access is still correct.
 6. Create the separate Suplex Stripe webhook destination for
    `checkout.session.completed`, `checkout.session.expired`,
    `customer.subscription.created`, `customer.subscription.updated`,
@@ -183,12 +230,13 @@ verifying ownership through the existing Stripe customer record:
 ```sh
 NEW_BILLING_CREDENTIAL=$(openssl rand -base64 32 | tr '+/' '-_' | tr -d '=') \
 STRIPE_SECRET_KEY=sk_... \
-suplex-billing rotate-credential \
-  --db /var/lib/suplex-billing/billing.sqlite \
+suplex billing rotate-credential \
+  --db /data/billing.sqlite \
   --account <accountId>
 ```
 
-The command confirms the account's stored Stripe customer still correlates to
+On Fly, run the command inside the machine with `fly ssh console`, where
+`STRIPE_SECRET_KEY` is already set. The command confirms the account's stored Stripe customer still correlates to
 the account, stores only the new credential's hash, and retains the billing
 account and subscription. Supply the new credential through a protected
 environment variable or secret store, never on the command line or in logs.

@@ -190,10 +190,12 @@ for arch in arm64 x64; do
 done
 '''
 [tasks."linux:dist"]
-description = "Build the Linux suplex binary in Docker for arm64 and x64 and pack each under dist/linux/<arch>"
+description = "Build the Linux suplex binary in Docker for arm64 and x64 and pack each under dist/linux/<arch>; the telemetry key comes from the 1Password Suplex vault"
 run = '''
+source scripts/onepassword.sh
+onepassword_setup_service_account
 for arch in arm64 x64; do
-  SUPLEX_LINUX_ARCH=$arch sh scripts/build-linux.sh
+  SUPLEX_LINUX_ARCH=$arch op run --env-file desktop/signing.env -- sh scripts/build-linux.sh
 done
 '''
 [tasks."linux:publish"]

@@ -542,8 +542,13 @@ pub async fn summary(
         None => Err(unavailable()),
     };
     let Ok((remote, payment_action_url)) = remote else {
+        let covered = state
+            .with_database(|database| remembered_pro(database, company_id, Utc::now()))?
+            .is_some_and(|evidence| {
+                matches!(evidence, BillingEvidence::Paid { purchased_seats, .. } if purchased_seats >= base.required_seats)
+            });
         return Ok(BillingSummary::Unknown(BillingUnknownSummary {
-            can_create_project: below_limit.then_some(true),
+            can_create_project: (below_limit || covered).then_some(true),
             base,
             checked_at: None,
             reason: "billing_unavailable",
@@ -585,8 +590,9 @@ pub async fn summary(
 const PLAN_LABEL_LIFETIME: chrono::TimeDelta = chrono::TimeDelta::hours(24);
 const PLAN_REFRESH_AFTER: chrono::TimeDelta = chrono::TimeDelta::hours(1);
 
-/// Reads the hosted state and keeps a display snapshot of it. The snapshot
-/// only labels the company in the interface; no decision reads it.
+/// Reads the hosted state and keeps a snapshot of it. The snapshot labels the
+/// company in the interface. Only `remembered_pro` reads it for a decision,
+/// and only when the hosted service cannot answer.
 async fn read_and_remember(
     state: &AppState,
     client: &BillingClient,
@@ -596,11 +602,12 @@ async fn read_and_remember(
     let remote = client.read(credential).await?;
     let _ = state.with_database(|database| {
         database.connection().execute(
-            "UPDATE suplex_company_billing SET plan = ?1, access_until = ?2, checked_at = ?3 WHERE company_id = ?4",
+            "UPDATE suplex_company_billing SET plan = ?1, access_until = ?2, checked_at = ?3, purchased_seats = ?4 WHERE company_id = ?5",
             params![
                 if remote.active { "pro" } else { "free" },
                 remote.access_until,
                 rfc3339_millis(Utc::now()),
+                remote.purchased_seats,
                 company_id
             ],
         )
@@ -675,19 +682,52 @@ pub async fn create_decision(
     let Some(binding) = state.with_database(|database| binding(database, company_id))? else {
         return Ok(BillingEvidence::Free);
     };
-    let Some(client) = &state.billing else {
-        return Ok(BillingEvidence::Unknown);
+    let remote = match &state.billing {
+        Some(client) => read_and_remember(state, client, company_id, &binding.credential)
+            .await
+            .ok(),
+        None => None,
     };
-    Ok(
-        match read_and_remember(state, client, company_id, &binding.credential).await {
-            Ok(remote) if remote.active => BillingEvidence::Paid {
-                purchased_seats: remote.purchased_seats,
-                access_until: remote.access_until,
-            },
-            Ok(_) => BillingEvidence::Free,
-            Err(_) => BillingEvidence::Unknown,
+    Ok(match remote {
+        Some(remote) if remote.active => BillingEvidence::Paid {
+            purchased_seats: remote.purchased_seats,
+            access_until: remote.access_until,
         },
-    )
+        Some(_) => BillingEvidence::Free,
+        None => state
+            .with_database(|database| remembered_pro(database, company_id, Utc::now()))?
+            .unwrap_or(BillingEvidence::Unknown),
+    })
+}
+
+/// Pro the hosted service confirmed earlier, while its paid period lasts. A
+/// hosted outage keeps Pro usable; it never extends or grants Pro. A
+/// confirmed lapse replaces the snapshot with Free.
+fn remembered_pro(
+    database: &SuplexDatabase,
+    company_id: &str,
+    now: DateTime<Utc>,
+) -> DatabaseResult<Option<BillingEvidence>> {
+    let row: Option<(Option<String>, Option<i64>, Option<String>)> = database
+        .connection()
+        .query_row(
+            "SELECT plan, purchased_seats, access_until FROM suplex_company_billing WHERE company_id = ?1",
+            [company_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .optional()?;
+    Ok(match row {
+        Some((Some(plan), Some(purchased_seats), Some(until)))
+            if plan == "pro"
+                && DateTime::parse_from_rfc3339(&until).is_ok_and(|until| until > now) =>
+        {
+            Some(BillingEvidence::Paid {
+                purchased_seats,
+                access_until: Some(until),
+            })
+        }
+        _ => None,
+    })
 }
 
 /// The early quota check before a clone or provisioning. Below the Free

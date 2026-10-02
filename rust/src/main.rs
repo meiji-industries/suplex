@@ -108,6 +108,8 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
     suplex::projects::git::set_libgit2_transport(
         suplex::platform::environment_settings::read(&database)?.git2_enabled,
     );
+    let telemetry =
+        suplex::telemetry::spawn(installation.database.clone(), &installation.installation_id);
     let task_host = suplex::tasks::host::spawn_task_host(
         installation.database.clone(),
         installation.artifacts.clone(),
@@ -189,6 +191,9 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
         })
         .await;
     heartbeat.abort();
+    if let Some(telemetry) = telemetry {
+        telemetry.abort();
+    }
     task_host.stop().await;
     host_terminals.close_all().await;
     server_event("stopped", json!({}));

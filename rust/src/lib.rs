@@ -12,4 +12,5 @@ pub mod projects;
 pub mod runtimes;
 pub mod shared;
 pub mod tasks;
+pub mod telemetry;
 pub mod terminals;

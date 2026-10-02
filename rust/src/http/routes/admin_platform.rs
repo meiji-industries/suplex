@@ -19,7 +19,9 @@ use tokio::io::AsyncWriteExt;
 use crate::{
     http::{
         AppState,
-        contracts::typed::system::{EnvironmentPatch, ExperimentsResponse},
+        contracts::typed::system::{
+            EnvironmentPatch, ExperimentsResponse, TelemetryNoticeBody, TelemetryResponse,
+        },
         session,
         validation::Valid,
     },
@@ -43,6 +45,8 @@ pub fn router() -> Router<AppState> {
             get(read_environment).patch(update_environment),
         )
         .route("/api/experiments", get(read_experiments))
+        .route("/api/telemetry", get(read_telemetry))
+        .route("/api/admin/telemetry/notice", post(acknowledge_telemetry))
         .route("/api/admin/backups", get(list_backups).post(create_backup))
         .route("/api/admin/backups/restore", post(restore_backup))
         .route("/api/admin/backups/{name}", get(download_backup))
@@ -182,6 +186,52 @@ async fn read_experiments(
     }
 }
 
+/// Whether this build and environment send telemetry at all.
+fn telemetry_configured(state: &AppState) -> bool {
+    state.installation.as_ref().is_some_and(|installation| {
+        crate::telemetry::config(&installation.installation_id).is_some()
+    })
+}
+
+/// `GET /api/telemetry`: whether this user must see the telemetry notice.
+async fn read_telemetry(
+    State(state): State<AppState>,
+    crate::http::access::SessionUser(user): crate::http::access::SessionUser,
+) -> Response {
+    let configured = telemetry_configured(&state);
+    let required = user.role == "admin"
+        && state
+            .with_database(|database| crate::telemetry::notice_required(database, configured))
+            .unwrap_or(false);
+    private(
+        Json(TelemetryResponse {
+            notice_required: required,
+        })
+        .into_response(),
+    )
+}
+
+/// `POST /api/admin/telemetry/notice`: an administrator saw the notice, with
+/// an optional email.
+async fn acknowledge_telemetry(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Valid(body): Valid<TelemetryNoticeBody>,
+) -> Response {
+    let (_, cookies) = match administrator(&state, &headers, &Method::POST, ADMIN_REQUIRED) {
+        Ok(value) => value,
+        Err(response) => return *response,
+    };
+    let result = state.with_database(|database| {
+        crate::telemetry::acknowledge(database, body.email.as_deref(), Utc::now())
+    });
+    let response = match result {
+        Ok(()) => private(StatusCode::NO_CONTENT.into_response()),
+        Err(_) => internal(),
+    };
+    finish(response, cookies)
+}
+
 async fn update_environment(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -210,6 +260,9 @@ async fn update_environment(
                     .host_terminal_enabled
                     .unwrap_or(previous.host_terminal_enabled),
                 git2_enabled: patch.git2_enabled.unwrap_or(previous.git2_enabled),
+                telemetry_enabled: patch
+                    .telemetry_enabled
+                    .unwrap_or(previous.telemetry_enabled),
             },
         )?;
         record_audit(
@@ -229,6 +282,8 @@ async fn update_environment(
                 "hostTerminalEnabled": updated.host_terminal_enabled.to_string(),
                 "previousGit2Enabled": previous.git2_enabled.to_string(),
                 "git2Enabled": updated.git2_enabled.to_string(),
+                "previousTelemetryEnabled": previous.telemetry_enabled.to_string(),
+                "telemetryEnabled": updated.telemetry_enabled.to_string(),
             }),
         )?;
         Ok::<_, Box<dyn std::error::Error>>(updated)

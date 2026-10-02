@@ -1,6 +1,6 @@
 import { readJsonUnchecked } from "../../../lib/api.js";
 
-export type EnvironmentSettings = { minFreeDiskGb: number; defaultBudgetUsd: number; defaultMaxTurns: number; todayPageEnabled: boolean; hostTerminalEnabled: boolean; git2Enabled: boolean };
+export type EnvironmentSettings = { minFreeDiskGb: number; defaultBudgetUsd: number; defaultMaxTurns: number; todayPageEnabled: boolean; hostTerminalEnabled: boolean; git2Enabled: boolean; telemetryEnabled: boolean };
 
 export function getEnvironmentSettings(): Promise<EnvironmentSettings> {
   return readJsonUnchecked<EnvironmentSettings>("/api/admin/environment");

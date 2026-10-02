@@ -7,7 +7,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use super::{
-    Contract, ContractResult, Fields, MAX, flag, formatted, int, number, one_of, rule, text,
+    Contract, ContractResult, Fields, MAX, flag, formatted, int, nullable, number, one_of, rule,
+    text,
 };
 use crate::platform::environment_settings::MAX_MIN_FREE_DISK_GB;
 
@@ -103,6 +104,41 @@ pub struct ExperimentsResponse {
     pub host_terminal: bool,
 }
 
+#[derive(Debug, Clone, Serialize, ts_rs::TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct TelemetryResponse {
+    /// True only for an administrator who still has to see the notice.
+    pub notice_required: bool,
+}
+
+/// A plain `name@domain.tld` shape; the address is only a PostHog person key.
+fn email(value: &str, _: &()) -> garde::Result {
+    let valid = value.split_once('@').is_some_and(|(local, domain)| {
+        !local.is_empty()
+            && domain.contains('.')
+            && !domain.starts_with('.')
+            && !domain.ends_with('.')
+            && !domain.contains('@')
+    }) && !value.chars().any(char::is_whitespace);
+    rule(valid, "invalid_format")
+}
+
+/// The notice acknowledgement: an optional email, or none to stay anonymous.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TelemetryNoticeBody {
+    pub email: Option<String>,
+}
+
+impl Contract for TelemetryNoticeBody {
+    fn schema(input: Option<&Value>) -> ContractResult<Value> {
+        Fields::new(input)?
+            .opt("email", nullable(formatted(3, 254, email)))
+            .finish()
+    }
+}
+
 /// `EnvironmentSettingsBodySchema`: at least one bounded setting.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -113,6 +149,7 @@ pub struct EnvironmentPatch {
     pub today_page_enabled: Option<bool>,
     pub host_terminal_enabled: Option<bool>,
     pub git2_enabled: Option<bool>,
+    pub telemetry_enabled: Option<bool>,
 }
 
 impl Contract for EnvironmentPatch {
@@ -123,7 +160,8 @@ impl Contract for EnvironmentPatch {
             .opt("defaultMaxTurns", int(0.0, f64::MAX))
             .opt("todayPageEnabled", flag)
             .opt("hostTerminalEnabled", flag)
-            .opt("git2Enabled", flag);
+            .opt("git2Enabled", flag)
+            .opt("telemetryEnabled", flag);
         if fields.refinable()
             && [
                 "minFreeDiskGb",
@@ -132,6 +170,7 @@ impl Contract for EnvironmentPatch {
                 "todayPageEnabled",
                 "hostTerminalEnabled",
                 "git2Enabled",
+                "telemetryEnabled",
             ]
             .iter()
             .all(|name| fields.raw(name).is_none())

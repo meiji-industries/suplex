@@ -23,6 +23,8 @@ pub struct EnvironmentSettings {
     pub host_terminal_enabled: bool,
     /// Experiment: use libgit2 for Git network operations. Off by default.
     pub git2_enabled: bool,
+    /// Send product telemetry. On by default. docs/telemetry.md lists it.
+    pub telemetry_enabled: bool,
 }
 
 /// JSON number as JavaScript prints it: whole numbers without a fraction.
@@ -43,6 +45,7 @@ impl EnvironmentSettings {
             "todayPageEnabled": self.today_page_enabled,
             "hostTerminalEnabled": self.host_terminal_enabled,
             "git2Enabled": self.git2_enabled,
+            "telemetryEnabled": self.telemetry_enabled,
         })
     }
 }
@@ -51,7 +54,7 @@ pub fn read(database: &SuplexDatabase) -> DatabaseResult<EnvironmentSettings> {
     Ok(database
         .connection()
         .query_row(
-            "SELECT min_free_disk_gb, default_budget_usd, default_max_turns, today_page_enabled, host_terminal_enabled, git2_enabled FROM suplex_environment_settings WHERE id = 'host'",
+            "SELECT min_free_disk_gb, default_budget_usd, default_max_turns, today_page_enabled, host_terminal_enabled, git2_enabled, telemetry_enabled FROM suplex_environment_settings WHERE id = 'host'",
             [],
             |row| {
                 Ok(EnvironmentSettings {
@@ -61,6 +64,7 @@ pub fn read(database: &SuplexDatabase) -> DatabaseResult<EnvironmentSettings> {
                     today_page_enabled: row.get(3)?,
                     host_terminal_enabled: row.get(4)?,
                     git2_enabled: row.get(5)?,
+                    telemetry_enabled: row.get(6)?,
                 })
             },
         )
@@ -72,6 +76,7 @@ pub fn read(database: &SuplexDatabase) -> DatabaseResult<EnvironmentSettings> {
             today_page_enabled: false,
             host_terminal_enabled: false,
             git2_enabled: false,
+            telemetry_enabled: true,
         }))
 }
 
@@ -97,7 +102,7 @@ pub fn update(
     }
     database.transaction(false, |database| {
         database.connection().execute(
-            "INSERT INTO suplex_environment_settings (id, min_free_disk_gb, default_budget_usd, default_max_turns, today_page_enabled, host_terminal_enabled, git2_enabled, updated_at) VALUES ('host', ?1, ?2, ?3, ?4, ?5, ?6, ?7) ON CONFLICT(id) DO UPDATE SET min_free_disk_gb = excluded.min_free_disk_gb, default_budget_usd = excluded.default_budget_usd, default_max_turns = excluded.default_max_turns, today_page_enabled = excluded.today_page_enabled, host_terminal_enabled = excluded.host_terminal_enabled, git2_enabled = excluded.git2_enabled, updated_at = excluded.updated_at",
+            "INSERT INTO suplex_environment_settings (id, min_free_disk_gb, default_budget_usd, default_max_turns, today_page_enabled, host_terminal_enabled, git2_enabled, telemetry_enabled, updated_at) VALUES ('host', ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8) ON CONFLICT(id) DO UPDATE SET min_free_disk_gb = excluded.min_free_disk_gb, default_budget_usd = excluded.default_budget_usd, default_max_turns = excluded.default_max_turns, today_page_enabled = excluded.today_page_enabled, host_terminal_enabled = excluded.host_terminal_enabled, git2_enabled = excluded.git2_enabled, telemetry_enabled = excluded.telemetry_enabled, updated_at = excluded.updated_at",
             params![
                 settings.min_free_disk_gb,
                 settings.default_budget_usd,
@@ -105,6 +110,7 @@ pub fn update(
                 settings.today_page_enabled,
                 settings.host_terminal_enabled,
                 settings.git2_enabled,
+                settings.telemetry_enabled,
                 now_millis_rfc3339()
             ],
         )?;

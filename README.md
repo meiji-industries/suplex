@@ -250,6 +250,14 @@ credentials. Restore requires an empty destination and fresh authentication.
 OpenCode's native storage and Git repositories are separate host data. A Suplex
 backup alone cannot restore missing native sessions or repository contents.
 
+## Telemetry
+
+Release builds send event names and counts to PostHog after an administrator
+answers the first-use notice. Suplex never sends code, prompts, names,
+repository names, or file paths. Turn it off in **Settings → Environment**, or
+set `DO_NOT_TRACK=1`. [docs/telemetry.md](docs/telemetry.md) lists every event
+and property.
+
 ## Verify changes
 
 Run the frontend, desktop and protocol tests, then the native engine tests:

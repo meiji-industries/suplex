@@ -9,7 +9,7 @@ import { useCompanyContext } from "../../shell/company-context.js";
 import { withCompany } from "../../lib/api.js";
 import { getEnvironmentSettings, updateEnvironmentSettings, type EnvironmentSettings } from "./lib/environment-api.js";
 
-type ExperimentSettings = Pick<EnvironmentSettings, "todayPageEnabled" | "git2Enabled">;
+type ExperimentSettings = Pick<EnvironmentSettings, "todayPageEnabled" | "git2Enabled" | "telemetryEnabled">;
 
 export function EnvironmentSettingsView(): ReactElement {
   const { currentCompany } = useCompanyContext();
@@ -26,7 +26,7 @@ export function EnvironmentSettingsView(): ReactElement {
 
   useEffect(() => {
     void getEnvironmentSettings()
-      .then((settings) => { setMinFreeDiskGb(String(settings.minFreeDiskGb)); setSavedMinFreeDiskGb(settings.minFreeDiskGb); setDefaultBudgetUsd(String(settings.defaultBudgetUsd)); setSavedDefaultBudgetUsd(settings.defaultBudgetUsd); setDefaultMaxTurns(String(settings.defaultMaxTurns)); setSavedDefaultMaxTurns(settings.defaultMaxTurns); setExperimentSettings({ todayPageEnabled: settings.todayPageEnabled, git2Enabled: settings.git2Enabled }); })
+      .then((settings) => { setMinFreeDiskGb(String(settings.minFreeDiskGb)); setSavedMinFreeDiskGb(settings.minFreeDiskGb); setDefaultBudgetUsd(String(settings.defaultBudgetUsd)); setSavedDefaultBudgetUsd(settings.defaultBudgetUsd); setDefaultMaxTurns(String(settings.defaultMaxTurns)); setSavedDefaultMaxTurns(settings.defaultMaxTurns); setExperimentSettings({ todayPageEnabled: settings.todayPageEnabled, git2Enabled: settings.git2Enabled, telemetryEnabled: settings.telemetryEnabled }); })
       .catch((error: unknown) => setMessage(error instanceof Error ? error.message : "Environment settings could not be loaded"));
   }, []);
 
@@ -64,7 +64,7 @@ export function EnvironmentSettingsView(): ReactElement {
     setMessage("");
     try {
       const settings = await updateEnvironmentSettings({ [key]: enabled });
-      setExperimentSettings({ todayPageEnabled: settings.todayPageEnabled, git2Enabled: settings.git2Enabled });
+      setExperimentSettings({ todayPageEnabled: settings.todayPageEnabled, git2Enabled: settings.git2Enabled, telemetryEnabled: settings.telemetryEnabled });
       setExperiments({ todayPage: settings.todayPageEnabled, hostTerminal: settings.hostTerminalEnabled });
     } catch (error) {
       setExperimentSettings((current) => current && { ...current, [key]: !enabled });
@@ -107,6 +107,11 @@ export function EnvironmentSettingsView(): ReactElement {
         </SettingRow>
         <SettingRow label="Built-in Git" description="Suplex uses libgit2 and the GitHub sign-in to clone, fetch, and push. When this is off, Suplex uses the Git on this host and its credentials." htmlFor="experiment-git2">
           <Switch id="experiment-git2" checked={experimentSettings?.git2Enabled ?? false} disabled={experimentSettings === null} onCheckedChange={(checked) => void toggleExperiment("git2Enabled", checked)} />
+        </SettingRow>
+      </SettingsSection>
+      <SettingsSection title="Usage data" description="Suplex sends event names and counts to PostHog. Suplex does not send code, prompts, repository names, or file paths.">
+        <SettingRow label="Send usage data" description="This setting applies to all users on this host. DO_NOT_TRACK=1 also stops it." htmlFor="telemetry-enabled">
+          <Switch id="telemetry-enabled" checked={experimentSettings?.telemetryEnabled ?? false} disabled={experimentSettings === null} onCheckedChange={(checked) => void toggleExperiment("telemetryEnabled", checked)} />
         </SettingRow>
       </SettingsSection>
       {!validDisk ? <p className="text-xs text-destructive" role="alert">Enter a value from 0 to 1024 GB.</p> : null}

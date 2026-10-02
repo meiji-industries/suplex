@@ -114,7 +114,7 @@ mod tests {
         assert_eq!(headers[header::CACHE_CONTROL], "private, no-store");
         assert_eq!(
             json_body(&body),
-            json!({"minFreeDiskGb":5,"defaultBudgetUsd":15,"defaultMaxTurns":40,"todayPageEnabled":false,"hostTerminalEnabled":false,"git2Enabled":false})
+            json!({"minFreeDiskGb":5,"defaultBudgetUsd":15,"defaultMaxTurns":40,"todayPageEnabled":false,"hostTerminalEnabled":false,"git2Enabled":false,"telemetryEnabled":true})
         );
         let patch = |body: &str| {
             fixture.call(
@@ -126,7 +126,7 @@ mod tests {
         };
         assert_eq!(
             json_body(&patch(r#"{"minFreeDiskGb":7.5}"#).await.2),
-            json!({"minFreeDiskGb":7.5,"defaultBudgetUsd":15,"defaultMaxTurns":40,"todayPageEnabled":false,"hostTerminalEnabled":false,"git2Enabled":false})
+            json!({"minFreeDiskGb":7.5,"defaultBudgetUsd":15,"defaultMaxTurns":40,"todayPageEnabled":false,"hostTerminalEnabled":false,"git2Enabled":false,"telemetryEnabled":true})
         );
         assert_eq!(
             json_body(
@@ -134,7 +134,7 @@ mod tests {
                     .await
                     .2
             ),
-            json!({"minFreeDiskGb":7.5,"defaultBudgetUsd":20,"defaultMaxTurns":30,"todayPageEnabled":false,"hostTerminalEnabled":false,"git2Enabled":false})
+            json!({"minFreeDiskGb":7.5,"defaultBudgetUsd":20,"defaultMaxTurns":30,"todayPageEnabled":false,"hostTerminalEnabled":false,"git2Enabled":false,"telemetryEnabled":true})
         );
         assert_eq!(
             json_body(&patch(r#"{"todayPageEnabled":true}"#).await.2)["todayPageEnabled"],
@@ -155,7 +155,7 @@ mod tests {
                     .await
                     .2
             ),
-            json!({"minFreeDiskGb":7.5,"defaultBudgetUsd":20,"defaultMaxTurns":30,"todayPageEnabled":true,"hostTerminalEnabled":true,"git2Enabled":true})
+            json!({"minFreeDiskGb":7.5,"defaultBudgetUsd":20,"defaultMaxTurns":30,"todayPageEnabled":true,"hostTerminalEnabled":true,"git2Enabled":true,"telemetryEnabled":true})
         );
         // The transport is process-wide: put it back for parallel tests.
         assert_eq!(
@@ -171,11 +171,36 @@ mod tests {
             r#"{"todayPageEnabled":"yes"}"#,
             r#"{"hostTerminalEnabled":"yes"}"#,
             r#"{"git2Enabled":"yes"}"#,
+            r#"{"telemetryEnabled":"yes"}"#,
         ] {
             assert_eq!(patch(invalid).await.0, StatusCode::BAD_REQUEST, "{invalid}");
         }
         let audit: String = state.with_database(|database| database.connection().query_row("SELECT metadata_json FROM suplex_audit_events WHERE action = 'environment_settings_updated' ORDER BY created_at LIMIT 1", [], |row| row.get(0))).unwrap();
         assert_eq!(json_body(audit.as_bytes())["minFreeDiskGb"], "7.5");
+        assert_eq!(
+            json_body(&patch(r#"{"telemetryEnabled":false}"#).await.2)["telemetryEnabled"],
+            false
+        );
+        // A build without a PostHog key never asks for the notice.
+        let (status, _, body) = fixture.call("GET", "/api/telemetry", None, vec![]).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(json_body(&body), json!({"noticeRequired": false}));
+        let notice = |body: &str| {
+            fixture.call(
+                "POST",
+                "/api/admin/telemetry/notice",
+                Some("application/json"),
+                body.as_bytes().to_vec(),
+            )
+        };
+        for invalid in [r#"{"email":"not an email"}"#, r#"{"email":"a@b"}"#, r#"{"email":5}"#] {
+            assert_eq!(notice(invalid).await.0, StatusCode::BAD_REQUEST, "{invalid}");
+        }
+        assert_eq!(notice(r#"{"email":"Adam@Example.com"}"#).await.0, StatusCode::NO_CONTENT);
+        assert_eq!(notice(r#"{"email":null}"#).await.0, StatusCode::NO_CONTENT);
+        let stored: (Option<String>, Option<String>) = state.with_database(|database| database.connection().query_row("SELECT email, notice_at FROM suplex_telemetry WHERE id = 'host'", [], |row| Ok((row.get(0)?, row.get(1)?)))).unwrap();
+        assert_eq!(stored.0.as_deref(), Some("adam@example.com"));
+        assert!(stored.1.is_some());
         state.with_database(|database| {
             database
                 .connection()
@@ -193,6 +218,7 @@ mod tests {
         let (status, _, body) = fixture.call("GET", "/api/experiments", None, vec![]).await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(json_body(&body), json!({"todayPage":true,"hostTerminal":true}));
+        assert_eq!(notice(r#"{"email":null}"#).await.0, StatusCode::FORBIDDEN);
     }
 
     #[tokio::test]

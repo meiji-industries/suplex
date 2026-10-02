@@ -14,11 +14,12 @@ authentication; Suplex does not infer the people behind a shared login.
 
 The company switcher shows each company's plan from local data. Every live
 read of the hosted service (the Billing page, the project-creation check) saves
-a display snapshot in `suplex_company_billing`. A company without a billing
+a snapshot (plan, purchased seats, paid access) in `suplex_company_billing`. A company without a billing
 account is Free. A snapshot older than an hour is read again in the background
 after `/api/companies` answers. A snapshot older than a day, or a Pro snapshot
-past its paid access, shows no label. No decision reads the snapshot: project
-creation and money commands always read the hosted service.
+past its paid access, shows no label. Project creation and money commands
+always read the hosted service first; only project creation falls back to the
+snapshot, and only when the hosted service cannot answer (see Availability).
 
 Members and administrators read the plan in Settings > Billing. Only active
 administrators can purchase, change seats, or open the billing portal.
@@ -264,5 +265,8 @@ customers retain a working cancellation path.
 
 When the billing service or providers cannot be read, existing projects,
 tasks, workflows, and delivery continue; Free operations within the allowance
-continue; creation beyond the Free allowance returns `billing_unavailable`
+continue. During an outage, creation beyond the Free allowance uses the last
+confirmed Pro snapshot (its purchased seats) until its paid access ends. A
+confirmed lapse replaces the snapshot with Free. With no unexpired Pro
+snapshot, creation beyond the Free allowance returns `billing_unavailable`
 until Suplex can verify the subscription.

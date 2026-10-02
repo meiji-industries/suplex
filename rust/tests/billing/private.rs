@@ -789,7 +789,7 @@ pub(crate) mod tests {
         f.fake
             .with(|hosted| hosted.respond("/v1/billing", 500, json!({"error": "down"})));
         let error = admit_creation(&f.state, &f.company_id).await.unwrap_err();
-        assert_eq!(failure(error), (503, Some("billing_unavailable")));
+        assert_eq!(failure(error), (402, Some("seat_limit_exceeded")));
         let mut expired = active_state(5);
         expired["accessUntil"] = json!("2000-01-01T00:00:00.000Z");
         f.fake.with(|hosted| {
@@ -855,5 +855,42 @@ pub(crate) mod tests {
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
         assert_eq!(label(Utc::now()), (Some("free"), false));
+    }
+
+    #[tokio::test]
+    async fn a_hosted_outage_keeps_confirmed_pro_until_its_paid_period_ends() {
+        let f = fixture().await;
+        f.project("one");
+        f.project("two");
+        f.bind(Some("acct_1"));
+        let down = |f: &Fixture| {
+            f.fake
+                .with(|hosted| hosted.respond("/v1/billing", 500, json!({"error": "down"})));
+        };
+        // Never confirmed: an outage is unknown, not Pro.
+        down(&f);
+        let error = admit_creation(&f.state, &f.company_id).await.unwrap_err();
+        assert_eq!(failure(error), (503, Some("billing_unavailable")));
+        f.fake
+            .with(|hosted| hosted.respond("/v1/billing", 200, active_state(3)));
+        assert!(admit_creation(&f.state, &f.company_id).await.is_ok());
+        down(&f);
+        assert!(admit_creation(&f.state, &f.company_id).await.is_ok());
+        assert_eq!(f.summary(&f.admin_id).await["canCreateProject"], json!(true));
+        // A confirmed lapse replaces the snapshot with Free.
+        f.fake
+            .with(|hosted| hosted.respond("/v1/billing", 200, inactive_state()));
+        let error = admit_creation(&f.state, &f.company_id).await.unwrap_err();
+        assert_eq!(failure(error), (402, Some("project_limit_reached")));
+        down(&f);
+        let error = admit_creation(&f.state, &f.company_id).await.unwrap_err();
+        assert_eq!(failure(error), (503, Some("billing_unavailable")));
+        // An elapsed paid period is never used.
+        f.sql(
+            "UPDATE suplex_company_billing SET plan = 'pro', purchased_seats = 3, access_until = '2000-01-01T00:00:00.000Z'",
+            &[],
+        );
+        let error = admit_creation(&f.state, &f.company_id).await.unwrap_err();
+        assert_eq!(failure(error), (503, Some("billing_unavailable")));
     }
 }

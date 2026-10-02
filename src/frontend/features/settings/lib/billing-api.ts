@@ -1,4 +1,7 @@
+import { skipToken, useQuery } from "@tanstack/react-query";
+
 import { readJsonUnchecked } from "../../../lib/api.js";
+import { useOptionalCompanyContext } from "../../../shell/company-context.js";
 import type { BillingCheckoutResponse, BillingPortalResponse, BillingSeatChangeBody, BillingSeatChangeResponse, BillingSummary, HostedSeatPreview } from "../../../contracts/billing.js";
 
 function billingPath(companyId: string): string {
@@ -23,4 +26,12 @@ export function changeSeats(companyId: string, body: BillingSeatChangeBody, idem
 
 export function openBillingPortal(companyId: string): Promise<BillingPortalResponse> {
   return readJsonUnchecked<BillingPortalResponse>(`${billingPath(companyId)}/portal`, { method: "POST" });
+}
+
+/** The plan label for a company badge. Undefined while loading or when Suplex cannot check the subscription. */
+export function useCompanyPlan(companyId: string | undefined): "Free" | "Pro" | undefined {
+  const user = useOptionalCompanyContext()?.user;
+  const summary = useQuery({ queryKey: ["billing", user?.id, companyId], queryFn: companyId ? () => getBillingSummary(companyId) : skipToken, staleTime: 60_000, retry: false });
+  const plan = summary.data?.plan;
+  return plan === "free" ? "Free" : plan === "pro" ? "Pro" : undefined;
 }

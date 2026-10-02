@@ -1860,7 +1860,8 @@ fn startable(database: &SuplexDatabase, task_id: &str) -> DatabaseResult<(String
     Ok((status, can_start))
 }
 
-/// The pull request still matches its capture, carries the label, and changes no protected path.
+/// The pull request keeps its captured identity and branches, carries the label, and changes
+/// no protected path. New commits and an advanced base do not count; the start rebinds to them.
 fn still_eligible(dispatch: &Dispatch, pull: &PullRequestInspection, label: &str) -> bool {
     let policy = &dispatch.policy;
     let repository = dispatch.repository_name.as_str();
@@ -1874,8 +1875,6 @@ fn still_eligible(dispatch: &Dispatch, pull: &PullRequestInspection, label: &str
             .head_repository
             .as_ref()
             .is_some_and(|head| head.id == dispatch.repository_id && head.full_name == repository)
-        && pull.head_sha == policy.head_sha
-        && pull.base_sha == policy.base_sha
         && pull.head_branch == policy.head_branch
         && pull.base_branch == policy.base_branch
         && pull.labels.iter().any(|value| value == label)
@@ -1887,6 +1886,7 @@ fn start_linked_task(
     database: &mut SuplexDatabase,
     dispatch_id: &str,
     task_id: &str,
+    (head_sha, base_sha): (&str, &str),
     wake: impl FnOnce(String) + Send + 'static,
 ) -> DatabaseResult<(String, String)> {
     let current = dispatches::get(database, dispatch_id)?
@@ -1910,6 +1910,7 @@ fn start_linked_task(
     {
         return Err(TaskError::new("GitHub trigger task source changed", 409).into());
     }
+    dispatches::rebind_revisions(database, &current, task_id, head_sha, base_sha)?;
     let task = commands::start_user_task(
         database,
         &current.authority_user_id,
@@ -1920,7 +1921,7 @@ fn start_linked_task(
     Ok((task.id, task.status.to_string()))
 }
 
-/// `startTaskFromGithubTrigger`: start the linked task once the pull request still matches its capture.
+/// `startTaskFromGithubTrigger`: start the linked task on the pull request's current revisions.
 pub async fn start_task_from_trigger<D: Db>(
     database: &D,
     github: &Github,
@@ -1957,9 +1958,15 @@ pub async fn start_task_from_trigger<D: Db>(
     let (sender, receiver) = std::sync::mpsc::channel();
     let started = db(database, |database| {
         database.transaction(true, |database| {
-            start_linked_task(database, dispatch_id, &task_id, move |id| {
-                let _ = sender.send(id);
-            })
+            start_linked_task(
+                database,
+                dispatch_id,
+                &task_id,
+                (&pull.head_sha, &pull.base_sha),
+                move |id| {
+                    let _ = sender.send(id);
+                },
+            )
         })
     })?;
     if let Ok(id) = receiver.try_recv() {
@@ -2800,10 +2807,17 @@ mod tests {
                 )
             })
             .unwrap();
+        let configuration = json!({"repository": "owner/repo", "source": {"kind": "pull_request", "number": 7},
+            "branch": "feature", "baseBranch": "main", "startingSha": "a".repeat(40), "baselineSha": "b".repeat(40)})
+        .to_string();
+        let intent =
+            json!({"repository": "owner/repo", "headBranch": "feature", "baseBranch": "main",
+            "baselineSha": "b".repeat(40), "pullRequestNumber": 7})
+            .to_string();
         f.state.with_database(|database| {
             let time = now_millis_rfc3339();
-            database.connection().execute("INSERT INTO suplex_tasks (id,company_id,project_id,title,description,configuration_json,idempotency_key,request_hash,creator_user_id,created_at,updated_at) VALUES ('task_x','c','p','T','','{}','k','h',?1,?2,?2)", params![f.admin, time]).unwrap();
-            database.connection().execute("INSERT INTO suplex_task_controls (task_id,objective,delivery_target,delivery_intent_json,status,root_profile_json,worker_profile_json,workflow,advisor_profiles_json,workflow_state_json,status_changed_at,created_at,updated_at) VALUES ('task_x','T','pull_request_draft','{}',?1,'{}','{}','standard','{}','{}',?2,?2,?2)", params![status, time]).unwrap();
+            database.connection().execute("INSERT INTO suplex_tasks (id,company_id,project_id,title,description,configuration_json,idempotency_key,request_hash,creator_user_id,created_at,updated_at) VALUES ('task_x','c','p','T','',?3,'k','h',?1,?2,?2)", params![f.admin, time, configuration]).unwrap();
+            database.connection().execute("INSERT INTO suplex_task_controls (task_id,objective,delivery_target,delivery_intent_json,status,root_profile_json,worker_profile_json,workflow,advisor_profiles_json,workflow_state_json,status_changed_at,created_at,updated_at) VALUES ('task_x','T','pull_request_draft',?3,?1,'{}','{}','standard','{}','{}',?2,?2,?2)", params![status, time, intent]).unwrap();
             database.connection().execute("UPDATE suplex_github_trigger_dispatches SET task_id = 'task_x' WHERE id = ?1", [&prepared.id]).unwrap();
         });
     }
@@ -2815,13 +2829,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_changed_linked_pull_request_is_excluded_without_failing_the_pass() {
-        for (status, excluded) in [("queued", 0), ("backlog", 1)] {
+    async fn a_moved_linked_pull_request_starts_on_its_current_revisions() {
+        for status in ["queued", "backlog"] {
             let f = fixture();
             let replies = replies(&[7]);
             eligible_pull(&replies);
             let mut moved = pull(7, "main", 0);
             moved["head"]["sha"] = json!("d".repeat(40));
+            moved["base"]["sha"] = json!("e".repeat(40));
             replies
                 .lock()
                 .unwrap()
@@ -2840,18 +2855,84 @@ mod tests {
                 (0, None, None),
                 "{status}"
             );
-            let saved = activity(&f.state, &f.admin, "c", &rule.id).unwrap();
-            let count = saved
-                .iter()
-                .filter(|entry| {
-                    entry.outcome == "excluded"
-                        && entry.reason == "GitHub trigger pull request is no longer eligible"
-                })
-                .count();
-            assert_eq!(count, excluded, "{status}: {saved:?}");
+            let (task_status, configuration, intent): (String, String, String) =
+                f.state.with_database(|database| {
+                    database
+                        .connection()
+                        .query_row(
+                            "SELECT c.status, t.configuration_json, c.delivery_intent_json FROM suplex_tasks t JOIN suplex_task_controls c ON c.task_id = t.id WHERE t.id = 'task_x'",
+                            [],
+                            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                        )
+                        .unwrap()
+                });
+            let configuration: Value = serde_json::from_str(&configuration).unwrap();
+            let policy = f
+                .state
+                .with_database(|database| dispatches::trigger_delivery_policy(database, "task_x"))
+                .unwrap()
+                .unwrap();
+            if status == "queued" {
+                assert_eq!(task_status, "queued");
+                assert_eq!(
+                    policy.head_sha,
+                    "a".repeat(40),
+                    "a queued task is not rebound"
+                );
+            } else {
+                assert_ne!(
+                    task_status,
+                    "backlog",
+                    "{:?}",
+                    activity(&f.state, &f.admin, "c", &rule.id).unwrap()
+                );
+                assert_eq!(
+                    (
+                        configuration["startingSha"].as_str(),
+                        configuration["baselineSha"].as_str(),
+                        serde_json::from_str::<Value>(&intent).unwrap()["baselineSha"].as_str(),
+                        policy.head_sha.as_str(),
+                        policy.base_sha.as_str()
+                    ),
+                    (
+                        Some("d".repeat(40).as_str()),
+                        Some("e".repeat(40).as_str()),
+                        Some("e".repeat(40).as_str()),
+                        "d".repeat(40).as_str(),
+                        "e".repeat(40).as_str()
+                    )
+                );
+            }
             server.abort();
             let _ = std::fs::remove_file(f.filename);
         }
+    }
+
+    #[tokio::test]
+    async fn a_linked_pull_request_without_the_label_is_excluded_without_failing_the_pass() {
+        let f = fixture();
+        let replies = replies(&[]);
+        eligible_pull(&replies);
+        let mut unlabelled = pull(7, "main", 0);
+        unlabelled["labels"] = json!([]);
+        replies
+            .lock()
+            .unwrap()
+            .insert("/repos/owner/repo/pulls/7".into(), (200, unlabelled));
+        let (github, _, server) = fake_github(replies).await;
+        let rule = enabled_rule(&f, &github).await;
+        linked_task(&f, &rule, "backlog");
+        process_enabled_rules(&f.state, &github, &|_| {}).await;
+        let stored = stored_rule(&f, &rule);
+        assert_eq!((stored.failure_count, stored.latest_error), (0, None));
+        let saved = activity(&f.state, &f.admin, "c", &rule.id).unwrap();
+        assert!(
+            saved.iter().any(|entry| entry.outcome == "excluded"
+                && entry.reason == "GitHub trigger pull request is no longer eligible"),
+            "{saved:?}"
+        );
+        server.abort();
+        let _ = std::fs::remove_file(f.filename);
     }
 
     #[test]

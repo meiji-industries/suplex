@@ -564,6 +564,42 @@ impl LinkedTask {
     }
 }
 
+/// Move a linked task that has not started onto the pull request's current revisions.
+/// New commits and an advanced base are normal; the task starts from what GitHub shows now.
+pub fn rebind_revisions(
+    database: &SuplexDatabase,
+    dispatch: &Dispatch,
+    task_id: &str,
+    head_sha: &str,
+    base_sha: &str,
+) -> DatabaseResult<()> {
+    if dispatch.policy.head_sha == head_sha && dispatch.policy.base_sha == base_sha {
+        return Ok(());
+    }
+    if !SHA.is_match(head_sha) || !SHA.is_match(base_sha) {
+        return Err(fail("GitHub trigger pull request revision is invalid"));
+    }
+    let policy = DispatchPolicy {
+        head_sha: head_sha.to_owned(),
+        base_sha: base_sha.to_owned(),
+        ..dispatch.policy.clone()
+    };
+    let connection = database.connection();
+    connection.execute(
+        "UPDATE suplex_github_trigger_dispatches SET policy_json = ?1, updated_at = ?2 WHERE id = ?3 AND task_id = ?4",
+        params![serde_json::to_string(&policy)?, crate::shared::time::now_millis_rfc3339(), dispatch.id, task_id],
+    )?;
+    connection.execute(
+        "UPDATE suplex_tasks SET configuration_json = json_set(configuration_json, '$.startingSha', ?1, '$.baselineSha', ?2) WHERE id = ?3",
+        params![head_sha, base_sha, task_id],
+    )?;
+    connection.execute(
+        "UPDATE suplex_task_controls SET delivery_intent_json = json_set(delivery_intent_json, '$.baselineSha', ?1) WHERE task_id = ?2",
+        params![base_sha, task_id],
+    )?;
+    Ok(())
+}
+
 /// Bind the dispatch to the task created from its exact capture.
 pub fn link_task(
     database: &mut SuplexDatabase,

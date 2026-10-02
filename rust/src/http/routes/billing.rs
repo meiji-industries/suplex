@@ -29,12 +29,18 @@ use crate::{
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/api/companies/{company_id}/billing", get(summary))
-        .route("/api/companies/{company_id}/billing/checkout", post(checkout))
+        .route(
+            "/api/companies/{company_id}/billing/checkout",
+            post(checkout),
+        )
         .route(
             "/api/companies/{company_id}/billing/seats/preview",
             post(preview_seats),
         )
-        .route("/api/companies/{company_id}/billing/seats", post(change_seats))
+        .route(
+            "/api/companies/{company_id}/billing/seats",
+            post(change_seats),
+        )
         .route("/api/companies/{company_id}/billing/portal", post(portal))
 }
 
@@ -136,7 +142,10 @@ async fn portal(
         Ok(value) => value,
         Err(response) => return *response,
     };
-    respond(billing::portal(&state, &user_id, &company_id).await, cookies)
+    respond(
+        billing::portal(&state, &user_id, &company_id).await,
+        cookies,
+    )
 }
 
 #[cfg(test)]

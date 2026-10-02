@@ -237,7 +237,8 @@ impl BillingClient {
             && if url.host_str() == self.base.host_str() {
                 url.port_or_known_default() == self.base.port_or_known_default()
             } else {
-                url.host_str().is_some_and(|host| STRIPE_HOSTS.contains(&host))
+                url.host_str()
+                    .is_some_and(|host| STRIPE_HOSTS.contains(&host))
                     && url.port().is_none_or(|port| port == 443)
             };
         allowed.then(|| url.to_string()).ok_or_else(unavailable)
@@ -565,7 +566,10 @@ pub async fn summary(
 }
 
 /// The billing read project creation uses. It never registers an account.
-pub async fn create_decision(state: &AppState, company_id: &str) -> DatabaseResult<BillingEvidence> {
+pub async fn create_decision(
+    state: &AppState,
+    company_id: &str,
+) -> DatabaseResult<BillingEvidence> {
     let Some(binding) = state.with_database(|database| binding(database, company_id))? else {
         return Ok(BillingEvidence::Free);
     };
@@ -619,9 +623,11 @@ fn administered<'a>(
         if let Some(quantity) = quantity
             && quantity < required_seats(database, company_id)?
         {
-            return Err(PublicFailure::new(422, "Seat quantity is below active accounts")
-                .with_code("invalid_seat_quantity")
-                .into());
+            return Err(
+                PublicFailure::new(422, "Seat quantity is below active accounts")
+                    .with_code("invalid_seat_quantity")
+                    .into(),
+            );
         }
         Ok(client)
     })

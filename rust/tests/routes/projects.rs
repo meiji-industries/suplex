@@ -590,6 +590,16 @@ mod tests {
                 .contains(r#""repository":"owner/new""#)
         );
         assert!(root.join("repositories/owner/new/.git").is_dir());
+        // Stay below the Free project limit so the request reaches duplicate detection.
+        state.with_database(|database| {
+            database
+                .connection()
+                .execute(
+                    "DELETE FROM suplex_projects WHERE repository_identity = 'owner/repo'",
+                    [],
+                )
+                .unwrap()
+        });
         let short_name = Bytes::from_static(br#"{"repositoryName":"new"}"#);
         let duplicate = create(State(state.clone()), Path(company.id), headers, short_name).await;
         assert_eq!(duplicate.status(), StatusCode::CONFLICT);

@@ -314,12 +314,13 @@ mod tests {
         ));
         assert!(matches!(
             parse(json!({"quantity": 2.0, "confirmNoRefund": true})),
-            Ok(HostedSeatChangeBody::Decrease(SeatDecrease { quantity: 2, .. }))
+            Ok(HostedSeatChangeBody::Decrease(SeatDecrease {
+                quantity: 2,
+                ..
+            }))
         ));
         assert!(parse(json!({"quantity": 2, "confirmNoRefund": false})).is_err());
-        assert!(
-            parse(json!({"quantity": 2, "previewId": "p", "confirmNoRefund": true})).is_err()
-        );
+        assert!(parse(json!({"quantity": 2, "previewId": "p", "confirmNoRefund": true})).is_err());
         assert!(parse(json!({"quantity": 2.5, "previewId": "p"})).is_err());
         assert!(parse(json!({"quantity": 10000, "previewId": "p"})).is_err());
     }
@@ -342,7 +343,9 @@ mod tests {
 
     #[test]
     fn idempotency_keys_are_bounded_opaque_tokens() {
-        assert!(valid_idempotency_key("0f8e2a8c-1d7b-4b8e-9d55-5f0f0a1b2c3d"));
+        assert!(valid_idempotency_key(
+            "0f8e2a8c-1d7b-4b8e-9d55-5f0f0a1b2c3d"
+        ));
         assert!(valid_idempotency_key("seat:abc.def_1"));
         assert!(!valid_idempotency_key("short"));
         assert!(!valid_idempotency_key("-leading-dash"));

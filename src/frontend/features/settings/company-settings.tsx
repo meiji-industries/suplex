@@ -5,7 +5,6 @@ import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, 
 import { ApplicationFrame } from "../../shell/application-frame.js";
 import { useCompanyContext } from "../../shell/company-context.js";
 import { AvatarEditor } from "../../components/app/entity-avatar.js";
-import { BillingSection } from "./billing-section.js";
 import { SettingsContent, SettingsLayout, SettingsSection, SettingRow } from "./settings-layout.js";
 import { companySettingsPath, readJsonUnchecked, withCompany, type CompanyStatus } from "../../lib/api.js";
 import { Archive, Building2, RotateCcw, Save, Pause, Trash2 } from "lucide-react";
@@ -105,7 +104,6 @@ export function CompanySettingsView(): ReactElement {
           <span className="text-xs text-muted-foreground">{new Date(company.createdAt).toLocaleDateString()}</span>
         </SettingRow>
        </SettingsSection>
-      <BillingSection companyId={company.id} />
        {error ? <div className="mb-4 text-xs text-destructive"><Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert></div> : null}
       <SettingsSection title="Lifecycle" description="Control workspace activity.">
         {company.status === "active" ? <SettingRow label="Pause company" description="Existing records remain available; new projects and tasks are blocked."><Button variant="outline" size="sm" onClick={() => void mutateStatus("paused")} disabled={busy !== ""}><Pause className="size-3.5" />{busy === "paused" ? "Pausing…" : "Pause company"}</Button></SettingRow> : null}

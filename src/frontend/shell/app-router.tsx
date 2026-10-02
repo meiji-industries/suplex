@@ -30,6 +30,7 @@ const BackupSettingsView = lazy(() => import("../features/settings/backup-settin
 const EnvironmentSettingsView = lazy(() => import("../features/settings/environment-settings.js").then(module => ({ default: module.EnvironmentSettingsView })));
 const WorkflowSettingsView = lazy(() => import("../features/settings/workflow-settings.js").then(module => ({ default: module.WorkflowSettingsView })));
 const TriggerSettingsView = lazy(() => import("../features/settings/trigger-settings.js").then(module => ({ default: module.TriggerSettingsView })));
+const BillingSettingsView = lazy(() => import("../features/settings/billing-settings.js").then(module => ({ default: module.BillingSettingsView })));
 const OnboardingSettingsView = lazy(() => import("../features/settings/onboarding-settings.js").then(module => ({ default: module.OnboardingSettingsView })));
 const AccessView = lazy(() => import("../features/access/access.js").then(module => ({ default: module.AccessView })));
 const OnboardingView = lazy(() => import("../features/onboarding/onboarding-wizard.js").then(module => ({ default: module.OnboardingView })));
@@ -75,6 +76,7 @@ function AppView(): ReactElement {
   if (/^\/companies\/[^/]+\/settings$/.test(pathname)) return <CompanySettingsView />;
   if (pathname === "/profile") return <ProfileView />;
   if (pathname === "/projects") return <ProjectsView />;
+  if (pathname === "/billing") return <BillingSettingsView />;
   if (/^\/projects\/[^/]+\/templates$/.test(pathname)) return <TaskTemplateSettings key={pathname} projectId={pathname.split("/")[2]!} />;
   if (/^\/projects\/[^/]+$/.test(pathname)) return <ProjectDetails projectId={pathname.split("/")[2]!} />;
   if (pathname === "/templates") return <TaskTemplateSettings />;

@@ -1,6 +1,6 @@
-import { Archive, Braces, Building2, FileText, FolderGit2, HardDrive, KeyRound, ListChecks, Mail, Plug, ShieldCheck, SquareTerminal, UserRound, Users, Webhook, Workflow, type LucideIcon } from "lucide-react";
+import { Archive, Braces, CreditCard, Building2, FileText, FolderGit2, HardDrive, KeyRound, ListChecks, Mail, Plug, ShieldCheck, SquareTerminal, UserRound, Users, Webhook, Workflow, type LucideIcon } from "lucide-react";
 
-import { companySettingsPath, withCompany, type ApiUser } from "../../lib/api.js";
+import { billingSettingsPath, companySettingsPath, withCompany, type ApiUser } from "../../lib/api.js";
 
 export type SettingsNavItem = { label: string; href: string; icon: LucideIcon };
 
@@ -11,6 +11,7 @@ export function buildSettingsGroups(companyId: string, user?: ApiUser): Settings
   const companyItems: SettingsNavItem[] = [
     { label: "Profile", href: withCompany("/profile", companyId), icon: UserRound },
     { label: "Projects", href: withCompany("/projects", companyId), icon: FolderGit2 },
+    ...(companyId ? [{ label: "Billing", href: billingSettingsPath(companyId), icon: CreditCard }] : []),
     { label: "Templates", href: withCompany("/templates", companyId), icon: FileText },
     ...(admin && companyId ? [{ label: "Workspace", href: companySettingsPath(companyId), icon: Building2 }] : []),
     ...(admin ? [

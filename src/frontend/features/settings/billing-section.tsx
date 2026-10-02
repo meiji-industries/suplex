@@ -337,7 +337,7 @@ export function BillingSection({ companyId }: { companyId: string }): ReactEleme
   const seatQuantity = parseSeats(seatInputValue);
 
   return (
-    <SettingsSection title="Billing" description="Suplex checks project capacity before it creates a project.">
+    <SettingsSection>
       {state === "loading" ? (
         <div className="space-y-2 px-4 py-3.5" aria-busy="true" aria-label="Billing status">
           <div className="flex items-center gap-2 text-xs text-muted-foreground"><Spinner /><span>Billing status</span></div>

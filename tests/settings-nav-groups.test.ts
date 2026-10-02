@@ -15,15 +15,15 @@ const hrefs = (groups: SettingsNavGroup[]): Record<string, string> =>
 test("admin sees Company, AI, and System groups in order", () => {
   const groups = buildSettingsGroups("company-1", admin);
   expect(titles(groups)).toEqual(["Company", "Features", "System"]);
-  expect(items(groups, "Company")).toEqual(["Profile", "Projects", "Templates", "Workspace", "Onboarding"]);
+  expect(items(groups, "Company")).toEqual(["Profile", "Projects", "Billing", "Templates", "Workspace", "Onboarding"]);
   expect(items(groups, "Features")).toEqual(["Agents", "Providers", "Terminal", "API & MCP", "Workflows", "Triggers"]);
   expect(items(groups, "System")).toEqual(["Users", "Companies", "Access", "Invitations", "Environment", "Backups", "Host health"]);
 });
 
-test("member sees Profile, Projects, Templates, and Host health only", () => {
+test("member sees Profile, Projects, Billing, Templates, and Host health only", () => {
   const groups = buildSettingsGroups("company-1", member);
   expect(titles(groups)).toEqual(["Company", "System"]);
-  expect(items(groups, "Company")).toEqual(["Profile", "Projects", "Templates"]);
+  expect(items(groups, "Company")).toEqual(["Profile", "Projects", "Billing", "Templates"]);
   expect(items(groups, "System")).toEqual(["Host health"]);
 });
 
@@ -38,6 +38,7 @@ test("items keep their existing hrefs", () => {
     Onboarding: "/admin/onboarding?company=company-1",
     Profile: "/profile?company=company-1",
     Projects: "/projects?company=company-1",
+    Billing: "/billing?company=company-1",
     Templates: "/templates?company=company-1",
     Workspace: "/companies/company-1/settings?company=company-1",
     Workflows: "/admin/workflows?company=company-1",

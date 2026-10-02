@@ -105,6 +105,10 @@ export function withCompany(path: string, companyId?: string): string {
   return `${pathname}${suffix ? `?${suffix}` : ""}${hash ? `#${hash}` : ""}`;
 }
 
+export function billingSettingsPath(companyId: string): string {
+  return withCompany("/billing", companyId);
+}
+
 export function companySettingsPath(companyId: string): string {
   return withCompany(`/companies/${encodeURIComponent(companyId)}/settings`, companyId);
 }

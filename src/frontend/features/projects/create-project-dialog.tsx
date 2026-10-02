@@ -9,7 +9,7 @@ import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput, InputGr
 import { RadioGroup, RadioGroupItem } from "../../components/ui/radio-group.js";
 import { NewButton } from "../../components/ui/new-button.js";
 import { GithubDeviceSignIn } from "../../components/app/github-device-sign-in.js";
-import { ApiError, companySettingsPath, hasApiFinding, isApiError, readJsonUnchecked, type ApiFinding, type CompanyStatus } from "../../lib/api.js";
+import { ApiError, billingSettingsPath, hasApiFinding, isApiError, readJsonUnchecked, type ApiFinding, type CompanyStatus } from "../../lib/api.js";
 import { useOptionalCompanyContext } from "../../shell/company-context.js";
 import { reconcileScopedNotFound } from "../../shell/view-shared.js";
 import { ChevronDown } from "lucide-react";
@@ -180,7 +180,7 @@ export function CreateProjectDialog({
     <Dialog open={open} onOpenChange={closeDialog}>
       <DialogContent showCloseButton>
         <DialogHeader><DialogTitle>New project</DialogTitle></DialogHeader>
-          {quotaCode ? <Alert><AlertDescription><p>{quotaMessage(quotaCode, isAdmin)}</p>{isAdmin && quotaCode !== "billing_unavailable" ? <a href={companySettingsPath(companyId)} onClick={() => writeProjectDraft(companyId, { source, repository: source === "create" ? repositoryName : cloneUrl })}>Open billing settings</a> : null}</AlertDescription></Alert> : null}
+          {quotaCode ? <Alert><AlertDescription><p>{quotaMessage(quotaCode, isAdmin)}</p>{isAdmin && quotaCode !== "billing_unavailable" ? <a href={billingSettingsPath(companyId)} onClick={() => writeProjectDraft(companyId, { source, repository: source === "create" ? repositoryName : cloneUrl })}>Open billing settings</a> : null}</AlertDescription></Alert> : null}
           {companyStatus !== "active" ? (
             <p className="text-xs text-muted-foreground">{companyStatus === "paused" ? "Company paused. New projects are unavailable." : "Company archived. New projects are unavailable."}</p>
           ) : (

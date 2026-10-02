@@ -30,6 +30,11 @@ pub mod source;
 pub mod store;
 pub mod stripe;
 
+#[cfg(test)]
+pub(crate) mod fakes {
+    include!("../../../tests/billing/fakes.rs");
+}
+
 const RETRY_DELAYS_MS: [i64; 3] = [30_000, 120_000, 600_000];
 const RETRY_STEADY_MS: i64 = 60 * 60 * 1000;
 

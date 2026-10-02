@@ -534,3 +534,6 @@ pub async fn main(args: Vec<String>) -> ExitCode {
         }
     }
 }
+
+#[cfg(test)]
+include!("../../../tests/billing/server.rs");

@@ -370,3 +370,6 @@ impl Hosted {
         Ok(())
     }
 }
+
+#[cfg(test)]
+include!("../../../tests/billing/events.rs");

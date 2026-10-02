@@ -227,3 +227,6 @@ impl RevenueCatClient {
         parse_subscriber(&body).map(Some)
     }
 }
+
+#[cfg(test)]
+include!("../../../tests/billing/revenuecat.rs");

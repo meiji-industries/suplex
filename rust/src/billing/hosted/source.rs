@@ -599,3 +599,6 @@ impl Hosted {
         Ok(self.inspect_source(account).await?.state)
     }
 }
+
+#[cfg(test)]
+include!("../../../tests/billing/accounts_state.rs");

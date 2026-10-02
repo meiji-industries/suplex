@@ -865,3 +865,6 @@ impl StripeClient {
         ))
     }
 }
+
+#[cfg(test)]
+include!("../../../tests/billing/stripe.rs");

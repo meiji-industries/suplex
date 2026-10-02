@@ -1311,3 +1311,6 @@ impl Hosted {
         })
     }
 }
+
+#[cfg(test)]
+include!("../../../tests/billing/commands.rs");

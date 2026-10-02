@@ -150,13 +150,16 @@ pub(crate) mod tests {
             let company = companies::create_company(database, &admin.user.id, "Acme", now).unwrap();
             (admin, company.id)
         });
-        Fixture {
+        let f = Fixture {
             state,
             fake,
             admin_id: admin.user.id,
             admin_token: admin.session_token,
             company_id,
-        }
+        };
+        // The administrator works in the company, so it holds one seat.
+        f.member(&f.admin_id, &f.company_id);
+        f
     }
 
     impl Fixture {
@@ -214,17 +217,20 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
-    async fn required_seats_count_active_admins_and_company_members_once() {
+    async fn seats_count_company_members_that_are_not_revoked() {
         let f = fixture().await;
         let seats = || {
             f.state
                 .with_database(|database| required_seats(database, &f.company_id).unwrap())
         };
         assert_eq!(seats(), 1);
+        // An administrator holds a seat only where it is a member.
         f.user("admin-2", "admin", "active");
+        assert_eq!(seats(), 1);
+        f.member("admin-2", &f.company_id);
         f.user("member-1", "member", "active");
         f.member("member-1", &f.company_id);
-        f.member("admin-2", &f.company_id);
+        // A pending member holds its seat; a revoked one does not.
         f.user("pending-1", "member", "pending");
         f.user("revoked-1", "member", "revoked");
         f.member("pending-1", &f.company_id);
@@ -236,7 +242,7 @@ pub(crate) mod tests {
         });
         f.user("other-member", "member", "active");
         f.member("other-member", &other);
-        assert_eq!(seats(), 3);
+        assert_eq!(seats(), 4);
     }
 
     #[test]

@@ -1,7 +1,9 @@
 import { Alert, AlertDescription } from "../../components/ui/alert.js";
 import { useCompanyContext } from "../../shell/company-context.js";
 import { SettingRow, SettingsContent, SettingsLayout, SettingsSection } from "../settings/settings-layout.js";
-import { readJsonUnchecked, withCompany, type ApiUser } from "../../lib/api.js";
+import { isApiError, readJsonUnchecked, withCompany, type ApiUser } from "../../lib/api.js";
+import { changeSeats, getBillingSummary, previewSeats } from "../settings/lib/billing-api.js";
+import { AddSeatDialog, type SeatOffer } from "./add-seat-dialog.js";
 import { useCallback, useEffect, useState, type ReactElement } from "react";
 import type {
   ApiProfile,
@@ -36,6 +38,8 @@ export function AdminView(): ReactElement {
   const [inviteExpiresAt, setInviteExpiresAt] = useState("");
   const [copied, setCopied] = useState(false);
   const [pendingAction, setPendingAction] = useState("");
+  const [seatOffer, setSeatOffer] = useState<SeatOffer>();
+  const [seatBusy, setSeatBusy] = useState(false);
   const [error, setError] = useState("");
   const [initialReloading, setInitialReloading] = useState(true);
 
@@ -250,8 +254,47 @@ export function AdminView(): ReactElement {
       );
       await reload();
       setPendingAction("");
-    } catch {
+    } catch (reason) {
+      if (add && isApiError(reason) && reason.code === "seat_required") {
+        await offerSeat(companyId, targetUserId);
+        return;
+      }
       setError("Unable to change membership");
+    }
+  };
+  // A Pro company has no free seat: quote one more seat, as GitHub does before an invitation.
+  const offerSeat = async (companyId: string, targetUserId: string): Promise<void> => {
+    try {
+      const summary = await getBillingSummary(companyId);
+      const preview = await previewSeats(companyId, summary.requiredSeats + 1);
+      setSeatOffer({
+        companyId,
+        companyName: companies.find((company) => company.id === companyId)?.name ?? "This company",
+        userId: targetUserId,
+        userName: users.find((candidate) => candidate.id === targetUserId)?.displayName ?? "the member",
+        preview,
+      });
+    } catch {
+      setError("Suplex cannot check the subscription. Reload the page to retry.");
+    }
+  };
+  const confirmSeat = async (): Promise<void> => {
+    const offer = seatOffer;
+    if (!offer || seatBusy) return;
+    setSeatBusy(true);
+    try {
+      const result = await changeSeats(offer.companyId, { quantity: offer.preview.requestedQuantity, previewId: offer.preview.previewId }, crypto.randomUUID());
+      setSeatOffer(undefined);
+      if (result.status === "payment_required") {
+        setError("Approve the seat payment in Settings > Billing. Then add the member again.");
+        return;
+      }
+      await changeMembership(offer.companyId, offer.userId, true);
+    } catch {
+      setSeatOffer(undefined);
+      setError("Suplex did not add the seat. Add the member again to see the current price.");
+    } finally {
+      setSeatBusy(false);
     }
   };
   const revokeUser = async (candidate: ApiUser): Promise<void> => {
@@ -440,6 +483,7 @@ export function AdminView(): ReactElement {
           />
         ) : null}
 
+        <AddSeatDialog offer={seatOffer} busy={seatBusy} onConfirm={() => void confirmSeat()} onCancel={() => setSeatOffer(undefined)} />
         {error ? (
           <div className="px-4 py-3 text-xs text-destructive">
             <Alert variant="destructive">

@@ -328,4 +328,43 @@ mod tests {
         list().await;
         assert_eq!(f.fake.with(|hosted| hosted.count("/v1/billing")), reads);
     }
+
+    #[tokio::test]
+    async fn adding_a_member_to_pro_needs_a_free_seat() {
+        let f = fixture().await;
+        for id in ["member-1", "member-2", "member-3"] {
+            f.user(id, "member", "active");
+        }
+        let base = serve(f.state.clone()).await;
+        let admin = format!("sid_v1={}", f.admin_token);
+        let add = |user_id: &'static str| {
+            post(
+                &base,
+                &format!("/api/admin/companies/{}/members", f.company_id),
+                &[("cookie", &admin), ("origin", ORIGIN)],
+                Some(json!({"userId": user_id})),
+            )
+            .send()
+        };
+        // Free has no seats: any number of members can join.
+        assert_eq!(add("member-1").await.unwrap().status(), 204);
+        assert!(f.fake.with(|hosted| hosted.calls.is_empty()));
+        // Pro with 2 seats: the administrator and member-1 hold both seats.
+        f.bind(Some("acct_1"));
+        f.fake
+            .with(|hosted| hosted.respond("/v1/billing", 200, active_state(2)));
+        let refused = add("member-2").await.unwrap();
+        assert_eq!(refused.status(), 402);
+        assert_eq!(
+            refused.json::<Value>().await.unwrap(),
+            json!({"error": "Add a seat before you add a member", "code": "seat_required"})
+        );
+        f.fake
+            .with(|hosted| hosted.respond("/v1/billing", 200, active_state(3)));
+        assert_eq!(add("member-2").await.unwrap().status(), 204);
+        // Missing evidence does not block a member: the project limit still applies.
+        f.fake
+            .with(|hosted| hosted.respond("/v1/billing", 503, json!({"error": "down"})));
+        assert_eq!(add("member-3").await.unwrap().status(), 204);
+    }
 }

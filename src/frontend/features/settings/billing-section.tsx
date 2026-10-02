@@ -51,7 +51,7 @@ function actionMessage(reason: unknown): string {
   return reason instanceof Error ? reason.message : "Suplex cannot check the subscription.";
 }
 
-const PRO_FEATURES = ["Unlimited projects", "One seat for each active account", "Prorated seat increases", "Payment and invoices in Stripe"];
+const PRO_FEATURES = ["Unlimited projects", "One seat for each member", "Prorated seat increases", "Payment and invoices in Stripe"];
 
 // A browser allows a new tab only during the click, so open it before the
 // request and send it to the hosted URL when the answer arrives.
@@ -392,7 +392,7 @@ export function BillingSection({ companyId }: { companyId: string }): ReactEleme
         {summary.plan === "pro" && summary.canManageBilling ? (
           <SettingRow
             label="Seats"
-            description={`${summary.purchasedSeats} purchased, ${summary.requiredSeats} active. ${seatQuantityValid(seatQuantity) && seatQuantity < summary.requiredSeats ? `At least ${summary.requiredSeats} seats are necessary.` : preview ? `New total ${preview.requestedQuantity} seats. Due now ${formatUsd(preview.amountDueNow)}. Each month after ${formatUsd(preview.nextSubtotal)} before tax.` : "Increases charge a prorated amount now."}`}
+            description={`${summary.purchasedSeats} purchased, ${summary.requiredSeats} used. ${seatQuantityValid(seatQuantity) && seatQuantity < summary.requiredSeats ? `At least ${summary.requiredSeats} seats are necessary.` : preview ? `New total ${preview.requestedQuantity} seats. Due now ${formatUsd(preview.amountDueNow)}. Each month after ${formatUsd(preview.nextSubtotal)} before tax.` : "Increases charge a prorated amount now."}`}
           >
             {preview ? (
               <div className="flex flex-wrap items-center justify-end gap-2">
@@ -409,12 +409,12 @@ export function BillingSection({ companyId }: { companyId: string }): ReactEleme
             )}
           </SettingRow>
         ) : (
-          <SettingRow label="Seats" description="Active Suplex accounts use purchased seats.">
-            <span className="text-xs text-muted-foreground">{summary.plan === "unknown" ? "Unknown" : summary.purchasedSeats}{" purchased, "}{summary.requiredSeats}{" active"}</span>
+          <SettingRow label="Seats" description="Each member of the company uses one seat.">
+            <span className="text-xs text-muted-foreground">{summary.plan === "unknown" ? "Unknown" : summary.purchasedSeats}{" purchased, "}{summary.requiredSeats}{" used"}</span>
           </SettingRow>
         )}
         {summary.plan === "pro" && summary.restriction === "seat_limit_exceeded" ? (
-          <div className="border-t py-3"><Alert><AlertDescription>Purchased seats do not cover the active accounts. Suplex blocks new projects beyond the Free allowance until you add seats.</AlertDescription></Alert></div>
+          <div className="border-t py-3"><Alert><AlertDescription>The company has more members than seats. Suplex blocks new projects beyond the Free allowance until you add seats.</AlertDescription></Alert></div>
         ) : null}
       </SettingsSection>
       {showDetails ? (

@@ -1,16 +1,25 @@
 # Billing
 
 Suplex Free allows two projects per company (`FREE_PROJECT_LIMIT` in
-`rust/src/billing/mod.rs`). Suplex Pro costs USD 20 per purchased seat each month
-before tax and permits unlimited projects while purchased seats cover the
-company's active accounts.
+`rust/src/billing/mod.rs`) and any number of members. Suplex Pro costs $20 per
+purchased seat each month before tax and permits unlimited projects.
 
-A seat is prepaid capacity, not an automatic charge on membership changes. The
-necessary quantity is the distinct count of active administrators plus active
-members of the company, minimum one. Pending and revoked accounts, invitations,
-machine identities, and agents do not count. The shared `user_development`
-Operator is one account even when several people use it through trusted-network
-authentication; Suplex does not infer the people behind a shared login.
+Seats work as on GitHub: an administrator buys a seat, then adds a member into
+it. Each member of the company that is not revoked holds one seat. An
+administrator holds a seat only in companies where it is a member.
+Invitations, machine identities, and agents do not hold seats. The shared
+`user_development` Operator is one account even when several people use it
+through trusted-network authentication.
+
+When a Pro company has no free seat, adding a member returns 402
+`seat_required`. The admin interface then quotes one more seat, buys it with
+the administrator's confirmation, and adds the member. If the billing service
+cannot be read, Suplex adds the member. A company whose members outnumber its
+seats keeps its projects, but new projects stop at the Free limit
+(`seat_limit_exceeded`) until it adds seats. A company that downgrades keeps
+all of its projects and stops creating projects above the Free limit. Suplex
+has no way to archive or delete a project, so such a company creates new
+projects again only on Pro.
 
 The company switcher shows each company's plan from local data. Every live
 read of the hosted service (the Billing page, the project-creation check) saves

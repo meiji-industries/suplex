@@ -23,7 +23,7 @@ const QUOTA_CODES = new Set(["project_limit_reached", "seat_limit_exceeded", "bi
 
 function quotaMessage(code: string, admin: boolean): string {
   if (code === "billing_unavailable") return "Suplex cannot check the subscription. Retry the request.";
-  if (code === "seat_limit_exceeded") return admin ? "Purchased seats do not cover the active accounts. Add seats in the billing settings." : "Purchased seats do not cover the active accounts. Request more seats from an administrator.";
+  if (code === "seat_limit_exceeded") return admin ? "The company has more members than seats. Add seats in the billing settings." : "The company has more members than seats. Request more seats from an administrator.";
   return admin ? "This company reached the Free project allowance." : "This company reached the Free project allowance. Request Pro from an administrator.";
 }
 

@@ -47,13 +47,19 @@ fn not_configured() -> PublicFailure {
     PublicFailure::new(503, "Billing is not configured").with_code("billing_not_configured")
 }
 
-pub fn required_seats(database: &SuplexDatabase, company_id: &str) -> DatabaseResult<i64> {
-    let count: i64 = database.connection().query_row(
-        "SELECT COUNT(DISTINCT u.id) FROM suplex_users u WHERE u.status = 'active' AND (u.role = 'admin' OR EXISTS (SELECT 1 FROM suplex_memberships m WHERE m.user_id = u.id AND m.company_id = ?1))",
+/// Members of the company that hold a seat: every member account that is not
+/// revoked. Administrators hold a seat only in companies where they are members.
+fn seat_holders(database: &SuplexDatabase, company_id: &str) -> DatabaseResult<i64> {
+    Ok(database.connection().query_row(
+        "SELECT COUNT(*) FROM suplex_memberships m JOIN suplex_users u ON u.id = m.user_id WHERE m.company_id = ?1 AND u.status != 'revoked'",
         [company_id],
         |row| row.get(0),
-    )?;
-    Ok(count.max(1))
+    )?)
+}
+
+/// The seats a Pro company needs: one for each seat holder, minimum one.
+pub fn required_seats(database: &SuplexDatabase, company_id: &str) -> DatabaseResult<i64> {
+    Ok(seat_holders(database, company_id)?.max(1))
 }
 
 pub fn project_count(database: &SuplexDatabase, company_id: &str) -> DatabaseResult<i64> {
@@ -672,6 +678,32 @@ pub fn refresh_plans(state: &AppState, company_ids: Vec<String>) {
         }
         client.refreshing.store(false, Ordering::Release);
     });
+}
+
+/// A new member of a Pro company takes a free seat, as on GitHub: the
+/// administrator adds a seat first. A Free company, or a company whose billing
+/// cannot be read, admits the member. The project limit still applies to a
+/// seat shortage.
+// ponytail: two concurrent adds can share the last free seat; the project limit catches the overage
+pub async fn admit_member(state: &AppState, company_id: &str) -> DatabaseResult<()> {
+    let Some(binding) = state.with_database(|database| binding(database, company_id))? else {
+        return Ok(());
+    };
+    let Some(client) = &state.billing else {
+        return Ok(());
+    };
+    let Ok(remote) = read_and_remember(state, client, company_id, &binding.credential).await else {
+        return Ok(());
+    };
+    let holders = state.with_database(|database| seat_holders(database, company_id))?;
+    if !remote.active || remote.purchased_seats > holders {
+        return Ok(());
+    }
+    Err(
+        PublicFailure::new(402, "Add a seat before you add a member")
+            .with_code("seat_required")
+            .into(),
+    )
 }
 
 /// The billing read project creation uses. It never registers an account.

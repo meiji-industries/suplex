@@ -88,7 +88,7 @@ test("renders the free plan and offers Select Pro to an administrator", async ()
   const text = container.textContent ?? "";
   expect(text).toContain("Free");
   expect(text).toContain("2 / 2");
-  expect(text).toContain("0 purchased, 2 active");
+  expect(text).toContain("0 purchased, 2 used");
   expect(button(container, "Select Pro")).toBeDefined();
   expect(button(container, "Open billing")).toBeUndefined();
 });
@@ -100,7 +100,7 @@ test("renders the pro plan with formatted price, subtotal, and renewal", async (
   const text = container.textContent ?? "";
   expect(text).toContain("Pro");
   expect(text).toContain("2 / Unlimited");
-  expect(text).toContain("3 purchased, 2 active");
+  expect(text).toContain("3 purchased, 2 used");
   expect(text).toContain("$20 per seat each month");
   expect(text).toContain("$60");
   expect(text).toContain("Open billing");
@@ -111,7 +111,7 @@ test("renders unknown plan without inventing seat or project capacity", async ()
   const { container, root } = renderSection(); roots.push(root);
   await mount(root);
   const text = container.textContent ?? "";
-  expect(text).toContain("Unknown purchased, 2 active");
+  expect(text).toContain("Unknown purchased, 2 used");
   expect(text).toContain("2 / Unknown");
   expect(text).not.toContain("0 purchased");
   expect(button(container, "Select Pro")).toBeUndefined();
@@ -124,8 +124,8 @@ test("explains the seat shortage while keeping the Pro label", async () => {
   await mount(root);
   const text = container.textContent ?? "";
   expect(text).toContain("Pro");
-  expect(text).toContain("Purchased seats do not cover the active accounts. Suplex blocks new projects beyond the Free allowance until you add seats.");
-  expect(text).toContain("2 purchased, 5 active");
+  expect(text).toContain("The company has more members than seats. Suplex blocks new projects beyond the Free allowance until you add seats.");
+  expect(text).toContain("2 purchased, 5 used");
 });
 
 test("shows an error state on a failed fetch", async () => {
@@ -258,7 +258,7 @@ test("a seat increase previews exact amounts and confirms with the preview id", 
   const seatCalls = postsTo("/billing/seats");
   expect(seatCalls).toHaveLength(1);
   expect(seatCalls[0]![1]?.body).toBe(JSON.stringify({ quantity: 5, previewId: "pv_1" }));
-  expect(container.textContent).toContain("5 purchased, 2 active");
+  expect(container.textContent).toContain("5 purchased, 2 used");
 });
 
 test("a retried seat confirmation reuses the same idempotency key", async () => {
@@ -331,7 +331,7 @@ test("a seat decrease requires confirmation and sends confirmNoRefund", async ()
   const seatCalls = postsTo("/billing/seats");
   expect(seatCalls).toHaveLength(1);
   expect(seatCalls[0]![1]?.body).toBe(JSON.stringify({ quantity: 2, confirmNoRefund: true }));
-  expect(container.textContent).toContain("2 purchased, 2 active");
+  expect(container.textContent).toContain("2 purchased, 2 used");
 });
 
 test("a stale response for the previous company never lands on the new view", async () => {
@@ -344,10 +344,10 @@ test("a stale response for the previous company never lands on the new view", as
   await mount(root, "a");
   await act(async () => { root.render(<BillingSection companyId="b" />); });
   expect(container.textContent).toContain("7 / Unlimited");
-  expect(container.textContent).toContain("9 purchased, 2 active");
+  expect(container.textContent).toContain("9 purchased, 2 used");
   await act(async () => { resolveA(freeSummary); });
   expect(container.textContent).toContain("7 / Unlimited");
-  expect(container.textContent).not.toContain("0 purchased, 2 active");
+  expect(container.textContent).not.toContain("0 purchased, 2 used");
 });
 
 test("payment_required keeps the old seats and renders the payment link", async () => {
@@ -366,7 +366,7 @@ test("payment_required keeps the old seats and renders the payment link", async 
   const link = container.querySelector<HTMLAnchorElement>('a[href="https://billing.example/authenticate"]');
   expect(link).not.toBeNull();
   expect(link!.target).toBe("_blank");
-  expect(container.textContent).toContain("3 purchased, 2 active");
+  expect(container.textContent).toContain("3 purchased, 2 used");
 });
 
 test("Open billing opens the portal in a new tab, and a failure closes the tab", async () => {
@@ -401,7 +401,7 @@ test("a window focus after checkout refreshes the summary", async () => {
   const before = billingGets();
   await act(async () => { window.dispatchEvent(new Event("focus")); });
   expect(billingGets()).toBeGreaterThan(before);
-  expect(container.textContent).toContain("3 purchased, 2 active");
+  expect(container.textContent).toContain("3 purchased, 2 used");
 });
 
 test("members see the summary without billing actions", async () => {
@@ -453,7 +453,7 @@ test("canceling a confirmation and previewing the same quantity again uses a new
   expect(seatCalls[1]![1]?.body).toBe(JSON.stringify({ quantity: 5, previewId: "pv_2" }));
   // A fresh preview is a fresh command even at the same quantity.
   expect(idempotencyKeyOf(seatCalls[0]!)["Idempotency-Key"]).not.toBe(idempotencyKeyOf(seatCalls[1]!)["Idempotency-Key"]);
-  expect(container.textContent).toContain("5 purchased, 2 active");
+  expect(container.textContent).toContain("5 purchased, 2 used");
 });
 
 test("billing_operation_not_applied clears the seat command and a new preview gets a new key", async () => {
@@ -484,7 +484,7 @@ test("billing_operation_not_applied clears the seat command and a new preview ge
   expect(seatCalls).toHaveLength(2);
   expect(seatCalls[1]![1]?.body).toBe(JSON.stringify({ quantity: 5, previewId: "pv_3" }));
   expect(idempotencyKeyOf(seatCalls[0]!)["Idempotency-Key"]).not.toBe(idempotencyKeyOf(seatCalls[1]!)["Idempotency-Key"]);
-  expect(container.textContent).toContain("5 purchased, 2 active");
+  expect(container.textContent).toContain("5 purchased, 2 used");
 });
 
 test("billing_operation_not_applied on checkout keeps the form open and a retry uses a new key", async () => {

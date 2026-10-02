@@ -204,15 +204,32 @@ async fn add_membership(
     ValidPath(CompanyIdParams { company_id }): ValidPath<CompanyIdParams>,
     Valid(parsed): Valid<MembershipBody>,
 ) -> Response {
-    respond(
-        &state,
-        &headers,
-        Some("POST"),
-        StatusCode::NO_CONTENT,
-        |database, user| {
-            companies::add_membership(database, &user.id, &parsed.user_id, &company_id, Utc::now())
-        },
-    )
+    if !session::csrf_allowed(&state.session_config, &headers, "POST", false) {
+        return auth_routes::error(StatusCode::FORBIDDEN, "request_origin_invalid");
+    }
+    let (user, cookies) = match authenticated(&state, &headers) {
+        Ok(value) => value,
+        Err(error) => return *error,
+    };
+    // Authorize before the billing read, so only an administrator causes one.
+    if let Err(error) = state.with_database(|database| {
+        companies::require_admin_company(database, &user.id, &company_id).map(drop)
+    }) {
+        return respond_with_cookies(ApiError::response(error), cookies);
+    }
+    if let Err(failure) = crate::billing::admit_member(&state, &company_id)
+        .await
+        .map_err(crate::shared::public_failure)
+    {
+        return respond_with_cookies(failure.into_response(), cookies);
+    }
+    let response = match state.with_database(|database| {
+        companies::add_membership(database, &user.id, &parsed.user_id, &company_id, Utc::now())
+    }) {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(error) => ApiError::response(error),
+    };
+    respond_with_cookies(response, cookies)
 }
 
 async fn remove_membership(

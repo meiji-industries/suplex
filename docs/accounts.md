@@ -7,7 +7,7 @@ account; everyone on that host works under it.
 ## Hosted service
 
 `suplex hosted serve` (`rust/src/hosted/`) is one process on the Fly app
-`suplex-billing` at `https://suplex.sh`. It serves billing
+`suplex-production` at `https://suplex.sh`. It serves billing
 ([billing](billing.md)), accounts (`rust/src/accounts/hosted/`), and the
 suplex.sh site (`rust/src/hosted/site.rs`) from one router. Every absolute URL
 it builds (Stripe return pages, OAuth callbacks, magic links) uses
@@ -17,7 +17,6 @@ it builds (Stripe return pages, OAuth callbacks, magic links) uses
 | --- | --- |
 | `suplex.sh` | The origin. |
 | `www.suplex.sh` | 301 to `BILLING_PUBLIC_ORIGIN` with the same path and query. |
-| `billing.suplex.sh` | Legacy alias: the same router, no redirect, because installed hosts POST to it and do not follow redirects. Keep it until those clients age out. |
 
 The site serves `/download`, `/install.sh`, `/terms`, `/privacy`, and a 302 to
 `https://getsuplex.ai/` for every other path, as the Cloudflare Worker in
@@ -116,11 +115,13 @@ startup.
 
 ### Deploy
 
-`fly deploy` builds `Dockerfile.billing`. `fly.toml` sets
+`mise run deploy_production` builds `Dockerfile.billing` on Fly's remote builder
+and deploys this checkout to `suplex-production`, including `/terms` and
+`/privacy`. It waits for Fly's deployment checks. `fly.toml` sets
 `BILLING_PUBLIC_ORIGIN=https://suplex.sh`. Set the account secrets once:
 
 ```sh
-fly secrets set --app suplex-billing \
+fly secrets set --app suplex-production \
   ACCOUNT_GOOGLE_CLIENT_ID=... ACCOUNT_GOOGLE_CLIENT_SECRET=... \
   ACCOUNT_GITHUB_CLIENT_ID=... ACCOUNT_GITHUB_CLIENT_SECRET=... \
   RESEND_API_KEY=... ACCOUNT_EMAIL_FROM='Suplex <login@suplex.sh>'
@@ -202,21 +203,20 @@ the app never asks for a login.
 These steps need a person with access to Cloudflare, Fly, Google Cloud,
 GitHub, Resend, Stripe, RevenueCat, 1Password, and Framer.
 
-1. Deploy with `fly deploy` before setting account secrets, and do steps 2 and
+1. Deploy with `mise run deploy_production` before setting account secrets, and do steps 2 and
    3 right after it: Checkout and portal return URLs now point at `suplex.sh`.
-   Through the legacy alias, check that `https://billing.suplex.sh/health`
+   Through `https://suplex-production.fly.dev`, check that `/health`
    answers, `/auth/start` answers 503 `account_unavailable`, and `/install.sh`
    returns the script.
 2. In Cloudflare, remove the `suplex.sh` and `www.suplex.sh` custom domains from
    the `suplex-web` Worker, and disconnect its CI/CD from this repository.
-3. Run `mise run billing:dns`. It points `billing.suplex.sh`, `suplex.sh`, and
-   `www.suplex.sh` at the Fly app, adds missing Fly certificates, and checks
+3. Run `mise run billing:dns`. It points `suplex.sh` and `www.suplex.sh` at
+   the Fly app, adds missing Fly certificates, and checks
    them. Then check `curl -I https://suplex.sh/install.sh`,
    `curl -I 'https://suplex.sh/download?platform=macos-arm64'`, and
    `curl -I https://www.suplex.sh/terms`.
 4. Change the Stripe webhook destination to `https://suplex.sh/webhooks/stripe`
-   and the RevenueCat webhook to `https://suplex.sh/webhooks/revenuecat`. The
-   old `billing.suplex.sh` URLs keep working until then.
+   and the RevenueCat webhook to `https://suplex.sh/webhooks/revenuecat`.
 5. To keep `download_started`, set `BILLING_TELEMETRY=true` and
    `BILLING_POSTHOG_KEY` as Fly secrets, if they are not set.
 6. Create the Google OAuth client, the two GitHub OAuth apps, and the Resend
@@ -234,5 +234,3 @@ GitHub, Resend, Stripe, RevenueCat, 1Password, and Framer.
     delete `src/web` (the Worker, `wrangler.jsonc`, and its package files).
     Disconnect the Worker's Cloudflare CI if step 2 did not, and archive the
     `meiji-industries/suplex-web` repository.
-11. Remove `billing.suplex.sh` when no supported Suplex release uses it as the
-    billing service URL.

@@ -1,7 +1,7 @@
-# The hosted service at https://suplex.sh: billing, accounts, and the site. billing.suplex.sh
-# is a legacy alias. Deploy with `fly deploy`. Provider secrets are Fly secrets; see
+# The hosted service at https://suplex.sh: billing, accounts, and the site.
+# Deploy with `fly deploy`. Provider secrets are Fly secrets; see
 # "Running the hosted service" in docs/billing.md and "Deploy" in docs/accounts.md.
-app = "suplex-billing"
+app = "suplex-production"
 primary_region = "yyz"
 
 [build]

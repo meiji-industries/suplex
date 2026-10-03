@@ -90,22 +90,20 @@ sandbox has no head office address, so `billing:dev` sets
 `STRIPE_AUTOMATIC_TAX=false`. Pay with Stripe test cards such as
 `4242 4242 4242 4242`.
 
-Production runs on Fly as the app `suplex-billing` (`fly.toml` and
-`Dockerfile.billing` at the repository root). It has one machine in `yyz`, a
-volume `billing_data` mounted at `/data`, and three hostnames: `suplex.sh`
-(the origin), `www.suplex.sh` (301 to the origin), and `billing.suplex.sh`. The
-last is a legacy alias that serves the same routes without a redirect, because
-installed clients POST to it and do not follow redirects; keep it until those
-clients age out. `mise run billing:dns` points all three at Fly. `fly.toml` sets
+Production targets the Fly app `suplex-production` (`fly.toml` and
+`Dockerfile.billing` at the repository root). The configuration uses one machine
+in `yyz` and a `billing_data` volume mounted at `/data`. The public origin is
+`suplex.sh`; `www.suplex.sh` redirects to the origin. There is no legacy billing
+hostname. `mise run billing:dns` points both hostnames at Fly. `fly.toml` sets
 the non-secret variables. Set the provider secrets once, then deploy:
 
 ```sh
-fly secrets set --app suplex-billing STRIPE_SECRET_KEY=... \
+fly secrets set --app suplex-production STRIPE_SECRET_KEY=... \
   STRIPE_PRO_MONTHLY_PRICE_ID=... STRIPE_PORTAL_CONFIGURATION_ID=... \
   STRIPE_WEBHOOK_SECRET=... REVENUECAT_SECRET_API_KEY=... \
   REVENUECAT_STRIPE_PUBLIC_API_KEY=... REVENUECAT_WEBHOOK_AUTHORIZATION=... \
   REVENUECAT_APP_ID=...
-fly deploy
+mise run deploy_production
 ```
 
 The service refuses to start until every variable is set. Keep one machine:

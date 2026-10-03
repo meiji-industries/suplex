@@ -16,6 +16,7 @@ const environment: NodeJS.ProcessEnv = {
   // Tailscale Serve forwards its own Host header; local mode would reject it as a foreign authority.
   SUPLEX_ACCESS_MODE: process.env.SUPLEX_ACCESS_MODE ?? (process.env.SUPLEX_TAILSCALE_EXPOSURE === "serve" && process.env.SUPLEX_TAILSCALE_ADDRESS ? "tailscale" : "local"),
   SUPLEX_BIND_ADDRESS: process.env.SUPLEX_BIND_ADDRESS ?? "127.0.0.1",
+  SUPLEX_ACCOUNT_SERVICE_URL: process.env.SUPLEX_ACCOUNT_SERVICE_URL ?? "https://suplex.sh",
   SUPLEX_DEVELOPMENT_AUTO_LOGIN: "1",
   SUPLEX_FRONTEND_DEV_URL: `http://127.0.0.1:${port + 1}`,
 };

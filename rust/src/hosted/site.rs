@@ -139,8 +139,7 @@ async fn website() -> Response {
 }
 
 /// `www.` hosts redirect to `BILLING_PUBLIC_ORIGIN`, never to the request
-/// host. Other hosts, such as the legacy `billing.suplex.sh`, are served
-/// as they are: installed hosts POST there and do not follow redirects.
+/// host. Other hosts are served without a redirect.
 pub async fn redirect_www(State(origin): State<String>, request: Request, next: Next) -> Response {
     let www = request
         .headers()

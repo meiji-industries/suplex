@@ -113,6 +113,7 @@ export function AppRouter(): ReactElement {
       document.removeEventListener("click", intercept);
     };
   }, []);
+  if (import.meta.env.DEV && new URLSearchParams(window.location.search).get("preview") === "account-login") return <AccountLoginView preview />;
   if (window.__SUPLEX_VIEW__ === "auth") return <SystemHealthProvider initialSnapshot={window.__SUPLEX_HEALTH__}><AuthView /><DesktopHostBar /></SystemHealthProvider>;
   if (window.__SUPLEX_VIEW__ === "account-login") return <SystemHealthProvider initialSnapshot={window.__SUPLEX_HEALTH__}><AccountLoginView /><DesktopHostBar /></SystemHealthProvider>;
   if (window.__SUPLEX_VIEW__ === "oauth-consent") return <SystemHealthProvider initialSnapshot={window.__SUPLEX_HEALTH__}><OAuthConsentView /><DesktopHostBar /></SystemHealthProvider>;

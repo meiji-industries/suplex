@@ -114,8 +114,13 @@ mkdir -p .suplex
 op run --env-file scripts/billing-dev.env -- cargo run --manifest-path rust/Cargo.toml -- hosted serve
 '''
 
+[tasks.deploy_production]
+description = "Deploy the hosted service (billing, accounts, and suplex.sh) to Fly production"
+dir = "{{config_root}}"
+run = "fly deploy --config fly.toml --app suplex-production --remote-only"
+
 [tasks."billing:dns"]
-description = "Point billing.suplex.sh, suplex.sh, and www.suplex.sh at the Fly app with Cloudflare DNS records"
+description = "Point suplex.sh and www.suplex.sh at suplex-production with Cloudflare DNS records"
 run = '''
 source scripts/onepassword.sh
 onepassword_setup_service_account

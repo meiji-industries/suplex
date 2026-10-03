@@ -14,7 +14,7 @@ import type { ArchiveConfirmation } from "../../../contracts/generated/ArchiveCo
 import type { ProfileResponse } from "../../../contracts/projects.js";
 import type { TaskSourceSummary } from "../task-source-picker.js";
 
-export type TaskAction = "refresh" | "cancel" | "unarchive" | "disarm" | "start" | "answer";
+export type TaskAction = "refresh" | "cancel" | "unarchive" | "disarm" | "start" | "force-start" | "answer";
 
 const taskPath = (taskId: string, suffix = ""): string =>
   `/api/tasks/${encodeURIComponent(taskId)}${suffix}`;

@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { Info } from "lucide-react";
 import { useTaskTimeline } from "./lib/task-queries.js";
 import { checkRunLabel, checkRunName, checkRunStatus, useTaskChecks } from "./lib/task-checks.js";
 import { taskTimelineDuration } from "../timeline/lib/task-timeline-duration.js";
@@ -60,7 +61,7 @@ export function TaskActivityTimeline({ taskId, createdAt, checksKey }: { taskId:
 
   return <section aria-label="Task timeline" data-task-timeline className="min-w-0 pb-0">
     {error ? <Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert> : null}
-    {!intervals.length ? <p className="text-xs text-muted-foreground">{snapshot ? "No agent time yet." : error ? "Agent time is not available." : "Loading timeline…"}</p> : <div className="overflow-x-auto dark:bg-[color-mix(in_oklch,_var(--background),_white_6%)] not-dark:bg-[color-mix(in_oklch,_var(--background),_black_3%)] rounded-tl-[var(--radius)] rounded-tr-[var(--radius)] rounded-br-[var(--radius)] rounded-bl-[var(--radius)] pt-[15px] pb-1" aria-label="Task timeline Gantt chart">
+    {!intervals.length ? snapshot || error ? <Alert><Info /><AlertDescription>{snapshot ? "No agent time yet." : "Agent time is not available."}</AlertDescription></Alert> : <p className="text-xs text-muted-foreground">Loading timeline…</p> : <div className="overflow-x-auto dark:bg-[color-mix(in_oklch,_var(--background),_white_6%)] not-dark:bg-[color-mix(in_oklch,_var(--background),_black_3%)] rounded-tl-[var(--radius)] rounded-tr-[var(--radius)] rounded-br-[var(--radius)] rounded-bl-[var(--radius)] pt-[15px] pb-1" aria-label="Task timeline Gantt chart">
       <div className="grid min-w-[45rem] grid-cols-[13rem_minmax(32rem,1fr)_15px] text-xs [&>.contents:last-child>*]:border-b-0">
         <div className="sticky left-0 z-20 truncate border-b border-border bg-background px-2 py-1 tabular-nums text-muted-foreground dark:bg-[color-mix(in_oklch,_var(--background),_white_6%)] not-dark:bg-[color-mix(in_oklch,_var(--background),_black_3%)] pl-[15px]" title="Total Coordinator and Worker execution time. Concurrent executions count separately. Elapsed span covers agent time and GitHub CI checks.">Worked for {taskTimelineDuration(worked)} during {taskTimelineDuration(end - start)}</div>
         <div className="relative h-6 border-b border-border" data-task-time-axis>

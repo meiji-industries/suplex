@@ -2,7 +2,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { expect, test } from "vitest";
 import { TaskQueueSchema, type Task } from "../src/frontend/contracts/tasks.js";
-import { TaskQueueWaits, backlogText } from "../src/frontend/features/tasks/task-details.js";
+import { TaskQueueStatus, TaskQueueWaits, backlogText } from "../src/frontend/features/tasks/task-details.js";
 import { TaskStatus, taskStatusLabel } from "../src/frontend/features/tasks/task-status.js";
 
 const queue: Task["queue"] = { projectConcurrencyLimited: false, waitingOn: [{
@@ -28,4 +28,16 @@ test("queued task explains project capacity and preserves prerequisite reasons",
   expect(backlogText({ status: "queued", queue: { waitingOn: [], projectConcurrencyLimited: true } })).toBe("Queued. Project concurrency limit reached.");
   expect(backlogText({ status: "queued", queue: { ...queue, projectConcurrencyLimited: true } })).toBe("Queued. Prerequisites incomplete and project concurrency limit reached.");
   expect(backlogText({ status: "queued", queue: { waitingOn: [], projectConcurrencyLimited: false } })).toBe("Queued. Suplex will start this task.");
+});
+
+test("queued task status offers Start anyway beside Send to backlog", () => {
+  const props = { editable: true, busy: false, onEdit: () => {}, onAction: () => {} };
+  const queued = renderToStaticMarkup(createElement(TaskQueueStatus, { ...props, task: { companyId: "company", status: "queued", queue } }));
+  expect(queued).toContain('data-slot="alert"');
+  expect(queued).toContain("Start anyway");
+  expect(queued).toContain("Send to backlog");
+  expect(queued).toContain('data-task-queue-wait="blocker"');
+  const backlog = renderToStaticMarkup(createElement(TaskQueueStatus, { ...props, task: { companyId: "company", status: "backlog", queue } }));
+  expect(backlog).not.toContain("Start anyway");
+  expect(backlog).toContain("Queue task");
 });

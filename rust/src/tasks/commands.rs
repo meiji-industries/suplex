@@ -578,6 +578,29 @@ pub fn start_user_task(
     Ok(task)
 }
 
+/// Start a queued task now, without waiting for its prerequisites or a project slot.
+pub fn force_start_user_task(
+    database: &mut SuplexDatabase,
+    actor_user_id: &str,
+    task_id: &str,
+    now: DateTime<Utc>,
+    wake: impl FnOnce(String) + Send + 'static,
+) -> DatabaseResult<TaskRecord> {
+    let task = database.transaction(true, |database| {
+        require_user_task(database, actor_user_id, task_id)?;
+        if archive::in_progress(task_id) {
+            return Err(TaskError::new("Archive cleanup is in progress", 409).into());
+        }
+        let task = repository::force_start(database, task_id, now)?
+            .ok_or_else(|| TaskError::new("Only a queued task can be started anyway", 409))?;
+        let id = task.id.clone();
+        database.after_commit(move || wake(id));
+        Ok(task)
+    })?;
+    audit(database, actor_user_id, "task_force_started", &task, now)?;
+    Ok(task)
+}
+
 /// TypeScript `getTask`: the task exists and the live user can read its company.
 fn require_user_task(
     database: &SuplexDatabase,
@@ -1746,6 +1769,68 @@ mod tests {
             failure(disarm_user_task(&mut database, &user, &blocker.id, now).unwrap_err()),
             (409, "Only a task in the backlog can be disarmed".into())
         );
+        drop(database);
+        let _ = std::fs::remove_file(&filename);
+    }
+
+    #[test]
+    fn force_start_admits_a_queued_task_past_prerequisites_and_concurrency() {
+        let (filename, mut database, user, prepared) = command_fixture();
+        let now = Utc::now();
+        database
+            .connection()
+            .execute(
+                "UPDATE suplex_projects SET task_concurrency = 1 WHERE id = 'command_project'",
+                [],
+            )
+            .unwrap();
+        let running = repository::create(&mut database, &prepared, now)
+            .unwrap()
+            .task;
+        start_user_task(&mut database, &user, &running.id, now, |_| {}).unwrap();
+        let blocker =
+            repository::create(&mut database, &another(&prepared, "command-blocker"), now)
+                .unwrap()
+                .task;
+        let queued_input = PreparedTask {
+            start_queued: true,
+            depends_on: vec![blocker.id.clone()],
+            pull_request_dependencies: vec![],
+            ..another(&prepared, "command-queued")
+        };
+        let queued = repository::create(&mut database, &queued_input, now)
+            .unwrap()
+            .task;
+        assert_eq!(queued.status, TaskStatus::Queued);
+        assert_eq!(
+            failure(
+                force_start_user_task(&mut database, &user, &blocker.id, now, |_| {}).unwrap_err()
+            ),
+            (409, "Only a queued task can be started anyway".into())
+        );
+        let wakes = Arc::new(AtomicUsize::new(0));
+        let count = Arc::clone(&wakes);
+        let started = force_start_user_task(&mut database, &user, &queued.id, now, move |_| {
+            count.fetch_add(1, Ordering::SeqCst);
+        })
+        .unwrap();
+        assert_eq!(started.status, TaskStatus::Active);
+        assert_eq!(wakes.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            failure(
+                force_start_user_task(&mut database, &user, &queued.id, now, |_| {}).unwrap_err()
+            ),
+            (409, "Only a queued task can be started anyway".into())
+        );
+        let audits: i64 = database
+            .connection()
+            .query_row(
+                "SELECT COUNT(*) FROM suplex_audit_events WHERE action = 'task_force_started'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(audits, 1);
         drop(database);
         let _ = std::fs::remove_file(&filename);
     }

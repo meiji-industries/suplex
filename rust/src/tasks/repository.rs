@@ -522,6 +522,28 @@ pub fn disarm(
     Ok(changed.is_some())
 }
 
+/// Admit a queued task now. The user overrides incomplete prerequisites and the
+/// project task concurrency; another task that owns the same pull request still rejects.
+pub fn force_start(
+    database: &mut SuplexDatabase,
+    task_id: &str,
+    now: DateTime<Utc>,
+) -> DatabaseResult<Option<TaskRecord>> {
+    database.transaction(true, |database| {
+        assert_task_pull_requests_available(database, task_id)?;
+        let admitted = database.connection().execute(
+            "UPDATE suplex_task_controls SET status = 'active', wake_at = ?1, updated_at = ?1 WHERE task_id = ?2 AND status = 'queued' AND EXISTS(SELECT 1 FROM suplex_tasks WHERE id = ?2 AND archived_at IS NULL)",
+            params![rfc3339_millis(now), task_id],
+        )? == 1;
+        if !admitted {
+            return Ok(None);
+        }
+        root_session_store::observe_lifecycle(database, task_id)?;
+        root_session_store::observe_admission(database, task_id, "force start", None);
+        task_by_id(database, task_id)
+    })
+}
+
 /// Start records intent as queued; admission rechecks prerequisites in this transaction.
 pub fn start(
     database: &mut SuplexDatabase,

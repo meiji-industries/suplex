@@ -203,6 +203,7 @@
   "POST /api/tasks/:taskId/cancel",
   "POST /api/tasks/:taskId/continue-delivery",
   "POST /api/tasks/:taskId/disarm",
+  "POST /api/tasks/:taskId/force-start",
   "POST /api/tasks/:taskId/note",
   "POST /api/tasks/:taskId/refresh",
   "POST /api/tasks/:taskId/rename",

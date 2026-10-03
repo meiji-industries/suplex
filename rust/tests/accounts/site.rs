@@ -121,10 +121,19 @@ mod tests {
             location(&f, "/pricing", &[]).await,
             (302, "https://getsuplex.ai/".to_owned())
         );
-        for path in ["/terms", "/privacy"] {
+        for (path, title, policy) in [
+            ("/terms", "Suplex terms of service", "14-day first-purchase guarantee"),
+            ("/privacy", "Suplex privacy policy", "separately and explicitly opt in"),
+        ] {
             let page = f.get(path, &[]).await;
             assert_eq!(page.status(), 200);
-            assert!(page.text().await.unwrap().contains("not yet published"));
+            assert_eq!(page.headers()["content-type"], "text/html; charset=utf-8");
+            let html = page.text().await.unwrap();
+            assert!(html.contains(&format!("<h1>{title}</h1>")));
+            assert!(html.contains(policy));
+            assert!(html.contains("Meiji Heavy Industries, Inc."));
+            assert!(!html.contains("not yet published"));
+            assert!(!html.contains("[CONFIRM"));
         }
     }
 }

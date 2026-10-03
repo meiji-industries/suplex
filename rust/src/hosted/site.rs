@@ -17,10 +17,8 @@ use crate::accounts::hosted::{Accounts, VISITOR_COOKIE, valid_visitor};
 
 const WEBSITE: &str = "https://getsuplex.ai/";
 const INSTALL_SCRIPT: &str = include_str!("../../../src/web/public/install.sh");
-// Placeholders until src/web/public/{terms,privacy}.html land; then
-// include_str! those files.
-const TERMS_PAGE: &str = "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width\"><title>Suplex Terms of Service</title></head><body><p>This page is not yet published.</p><p><a href=\"https://getsuplex.ai/\">Open the Suplex website</a></p></body></html>";
-const PRIVACY_PAGE: &str = "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width\"><title>Suplex Privacy Policy</title></head><body><p>This page is not yet published.</p><p><a href=\"https://getsuplex.ai/\">Open the Suplex website</a></p></body></html>";
+const TERMS_PAGE: &str = include_str!("legal/terms.html");
+const PRIVACY_PAGE: &str = include_str!("legal/privacy.html");
 
 /// The release feed directory, its manifest, and its formats. The first
 /// format is the default download.

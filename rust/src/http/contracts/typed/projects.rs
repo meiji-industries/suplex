@@ -658,10 +658,10 @@ pub struct RecentRepositoriesQuery {
 impl Contract for RecentRepositoriesQuery {
     fn schema(input: Option<&Value>) -> ContractResult<Value> {
         let mut input = input.cloned().unwrap_or_else(|| json!({}));
-        if let Some(page) = input.get_mut("page") {
-            if let Some(number) = page.as_str().and_then(|value| value.parse::<u32>().ok()) {
-                *page = json!(number);
-            }
+        if let Some(page) = input.get_mut("page")
+            && let Some(number) = page.as_str().and_then(|value| value.parse::<u32>().ok())
+        {
+            *page = json!(number);
         }
         Fields::new(Some(&input))?
             .or("page", json!(1), int(1.0, f64::from(u32::MAX) - 1.0))

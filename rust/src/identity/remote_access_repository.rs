@@ -166,7 +166,6 @@ pub fn update(
     policy: RemoteAccessPolicy,
 ) -> DatabaseResult<RemoteAccessPolicy> {
     let policy = normalize(database, policy)?;
-    let previous = read(database)?;
     database.transaction(false, |database| {
         let now = rfc3339_millis(Utc::now());
         let (mode, require_https, default_user_id, external_https_origin) = match &policy {
@@ -181,22 +180,6 @@ pub fn update(
             "UPDATE suplex_remote_access_policy SET mode = ?1, require_https = ?2, default_user_id = ?3, external_https_origin = ?4, updated_at = ?5 WHERE id = 'host'",
             params![mode, require_https, default_user_id, external_https_origin, now],
         )?;
-        let tightened = !previous.requires_passkeys() && policy.requires_passkeys();
-        let changed_default = match (&previous, &policy) {
-            (RemoteAccessPolicy::Open { default_user_id: left, .. }, RemoteAccessPolicy::Open { default_user_id: right, .. }) => left != right,
-            _ => false,
-        };
-        if tightened {
-            database.connection().execute(
-                "UPDATE suplex_sessions SET revoked_at = ?1 WHERE provenance IN ('legacy', 'automatic') AND revoked_at IS NULL",
-                [&now],
-            )?;
-        } else if changed_default {
-            database.connection().execute(
-                "UPDATE suplex_sessions SET revoked_at = ?1 WHERE provenance = 'automatic' AND revoked_at IS NULL",
-                [&now],
-            )?;
-        }
         Ok(())
     })?;
     read(database)

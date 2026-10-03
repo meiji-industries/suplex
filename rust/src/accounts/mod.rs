@@ -23,6 +23,7 @@ use wire::{
 };
 
 pub mod hosted;
+pub mod members;
 pub mod wire;
 
 const ATTEMPT_LIFETIME: Duration = Duration::from_secs(15 * 60);
@@ -171,6 +172,29 @@ impl AccountClient {
             return Err(unavailable());
         }
         response.json().await.map_err(|_| unavailable())
+    }
+
+    pub async fn send_company_invitation(
+        &self,
+        token: &str,
+        body: &wire::CompanyInvitationBody,
+    ) -> Result<(), PublicFailure> {
+        let response = self
+            .send(
+                Method::POST,
+                "/v1/company-invitations",
+                Some(token),
+                Some(body),
+            )
+            .await?;
+        if response.status().is_success() {
+            Ok(())
+        } else {
+            Err(
+                PublicFailure::new(503, "Suplex could not send the invitation. Retry.")
+                    .with_code("email_unavailable"),
+            )
+        }
     }
 
     /// Starts a login attempt. Only the challenge leaves this host; the

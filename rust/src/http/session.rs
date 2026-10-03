@@ -4,10 +4,7 @@ use chrono::{DateTime, Utc};
 use getrandom::fill as rand_bytes;
 
 use crate::{
-    identity::{
-        auth::{self, AuthUser},
-        remote_access_repository as remote_access,
-    },
+    identity::auth::{self, AuthUser},
     platform::database::{DatabaseResult, SuplexDatabase},
 };
 
@@ -141,7 +138,6 @@ pub fn session_user(
     config: Option<&SessionConfig>,
     now: DateTime<Utc>,
 ) -> DatabaseResult<SessionUser> {
-    let policy = remote_access::read(database)?;
     let current_token = cookie(headers, SESSION_COOKIE_NAME).unwrap_or_default();
     if is_local_recovery(headers) {
         if let Some((user, _)) =
@@ -165,57 +161,16 @@ pub fn session_user(
             set_cookies: set_session_cookies(config, &signed_in.session_token, Some(false))?,
         });
     }
-    if let Some((user, provenance)) =
-        auth::get_user_by_session_with_provenance(database, &current_token, now)?
-        && (!policy.requires_passkeys() || provenance == "passkey")
+    if is_verified_https(headers)
+        && let Some(user) = auth::get_user_by_session(database, &current_token, now)?
+        && crate::accounts::members::session_verified(database, &current_token, &user)?
     {
         return Ok(SessionUser {
             user: Some(user),
             set_cookies: Vec::new(),
         });
     }
-    let legacy_token = cookie(headers, LEGACY_SESSION_COOKIE_NAME).unwrap_or_default();
-    let user = if policy.requires_passkeys() {
-        None
-    } else {
-        auth::get_user_by_session(database, &legacy_token, now)?
-    };
-    let set_cookies = match (user.as_ref(), config) {
-        (Some(_), Some(config)) => auth::rollover_legacy_session(database, &legacy_token, now)?
-            .map(|replacement| {
-                set_session_cookies(config, &replacement, Some(is_verified_https(headers)))
-            })
-            .transpose()?
-            .unwrap_or_default(),
-        _ => Vec::new(),
-    };
-    if user.is_some() {
-        return Ok(SessionUser { user, set_cookies });
-    }
-    if !headers
-        .get(REQUEST_CLASS_HEADER)
-        .and_then(|value| value.to_str().ok())
-        .is_some_and(|value| matches!(value, "local" | "remote"))
-    {
-        return Ok(SessionUser {
-            user: None,
-            set_cookies: Vec::new(),
-        });
-    }
-    if let Some(config) = config
-        && let Some(user) = remote_access::default_user(database, &policy)?
-    {
-        let session_token =
-            auth::create_session_with_provenance(database, &user.id, "automatic", now)?;
-        return Ok(SessionUser {
-            user: Some(user),
-            set_cookies: set_session_cookies(
-                config,
-                &session_token,
-                Some(is_verified_https(headers)),
-            )?,
-        });
-    }
+
     Ok(SessionUser {
         user: None,
         set_cookies: Vec::new(),
@@ -366,22 +321,18 @@ mod tests {
             session_token.replace("session_v1_", "session%5Fv1%5F")
         );
         headers.insert("cookie", HeaderValue::from_str(&encoded).unwrap());
-        assert_eq!(
+        assert!(
             session_user(&mut database, &headers, Some(&config()), now)
                 .unwrap()
                 .user
-                .unwrap()
-                .id,
-            "user_development"
+                .is_none()
         );
         headers.append("cookie", HeaderValue::from_static("other=value"));
-        assert_eq!(
+        assert!(
             session_user(&mut database, &headers, Some(&config()), now)
                 .unwrap()
                 .user
-                .unwrap()
-                .id,
-            "user_development"
+                .is_none()
         );
         headers.remove("cookie");
         let no_reply = session_user(&mut database, &headers, None, now).unwrap();

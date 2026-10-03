@@ -14,7 +14,7 @@ mod tests {
 
     use crate::{
         accounts::{AccountClient, linked, wire},
-        http::{AppState, routes::avatars::tests::call},
+        http::AppState,
     };
 
     const ACCOUNT_ID: &str = "user_67e55044-10b1-426f-9247-bb680e5fe0c8";
@@ -154,6 +154,22 @@ mod tests {
         }
     }
 
+    async fn call(app: &axum::Router, method: &str, path: &str, cookie: Option<&str>, body: Option<Value>) -> (StatusCode, HeaderMap, Vec<u8>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(axum::serve(listener, app.clone().into_make_service_with_connect_info::<std::net::SocketAddr>()).into_future());
+        let mut request = reqwest::Client::new().request(method.parse().unwrap(), format!("http://{address}{path}")).header("host", "localhost:4111").header("origin", "http://localhost:4111");
+        if let Some(cookie) = cookie { request = request.header("cookie", cookie); }
+        if let Some(body) = body { request = request.json(&body); }
+        let response = request.send().await.unwrap();
+        let status = response.status(); let headers = response.headers().clone(); let body = response.bytes().await.unwrap().to_vec();
+        server.abort(); (status, headers, body)
+    }
+
+    fn login_cookie(headers: &HeaderMap) -> String {
+        headers.get_all("set-cookie").iter().filter_map(|value| value.to_str().ok()).find(|value| value.starts_with("suplex_login=")).unwrap().split(';').next().unwrap().to_owned()
+    }
+
     fn body(bytes: &[u8]) -> Value {
         serde_json::from_slice(bytes).unwrap()
     }
@@ -164,7 +180,7 @@ mod tests {
         let app = crate::http::router(f.state.clone());
         let (status, _, read) = call(&app, "GET", "/api/account", Some(&f.member), None).await;
         assert_eq!(status, StatusCode::OK);
-        assert_eq!(body(&read), json!({"configured": true, "canManage": false}));
+        assert_eq!(body(&read), json!({"configured": true, "canManage": true}));
 
         let (status, headers, started) = call(
             &app,
@@ -176,6 +192,7 @@ mod tests {
         .await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(headers["cache-control"], "no-store");
+        let browser_cookie = login_cookie(&headers);
         let started = body(&started);
         assert_eq!(started["attemptId"], ATTEMPT_ID);
         assert_eq!(
@@ -187,7 +204,7 @@ mod tests {
         );
         let status_path = format!("/api/account/login/{ATTEMPT_ID}");
         let poll = || async {
-            let (status, _, polled) = call(&app, "GET", &status_path, Some(&f.member), None).await;
+            let (status, _, polled) = call(&app, "GET", &status_path, Some(&browser_cookie), None).await;
             (status, body(&polled))
         };
         assert_eq!(poll().await, (StatusCode::OK, json!({"status": "pending"})));
@@ -211,7 +228,7 @@ mod tests {
             (ACCOUNT_ID, "ada@example.com", Some("Ada"))
         );
         // The attempt is used: this host forgets the verifier.
-        assert_eq!(poll().await, (StatusCode::OK, json!({"status": "expired"})));
+        assert_eq!(poll().await.0, StatusCode::FORBIDDEN);
         assert_eq!(f.fake.with(|hosted| hosted.verifiers.len()), 3);
 
         let (_, _, read) = call(&app, "GET", "/api/account", Some(&f.admin), None).await;
@@ -239,14 +256,14 @@ mod tests {
         let status_path = format!("/api/account/login/{ATTEMPT_ID}");
         // Unknown here: the hosted service is not asked.
         let (_, _, polled) = call(&app, "GET", &status_path, Some(&f.admin), None).await;
-        assert_eq!(body(&polled), json!({"status": "expired"}));
+        assert!(body(&polled)["error"].is_string());
         assert!(f.fake.with(|hosted| hosted.verifiers.is_empty()));
 
         for (poll, expected) in [
             (Poll::Gone, StatusCode::OK),
             (Poll::Invalid, StatusCode::SERVICE_UNAVAILABLE),
         ] {
-            let (status, _, _) = call(
+            let (status, headers, _) = call(
                 &app,
                 "POST",
                 "/api/account/login",
@@ -256,12 +273,14 @@ mod tests {
             .await;
             assert_eq!(status, StatusCode::OK);
             f.fake.with(|hosted| hosted.poll = Some(poll));
-            let (status, _, polled) = call(&app, "GET", &status_path, Some(&f.admin), None).await;
+            let cookie = login_cookie(&headers);
+            let (status, _, polled) = call(&app, "GET", &status_path, Some(&cookie), None).await;
             assert_eq!(status, expected);
             if expected == StatusCode::OK {
                 assert_eq!(body(&polled), json!({"status": "expired"}));
             }
             assert!(f.state.with_database(|database| linked(database).unwrap()).is_none());
+            f.state.with_database(|db| db.connection().execute("DELETE FROM suplex_account_login_attempts", []).unwrap());
         }
     }
 
@@ -320,9 +339,6 @@ mod tests {
             .unwrap();
         });
         f.fake.with(|hosted| hosted.logout_fails = true);
-        let (status, _, _) = call(&app, "POST", "/api/account/logout", Some(&f.member), None).await;
-        assert_eq!(status, StatusCode::FORBIDDEN);
-        assert!(f.state.with_database(|database| linked(database).unwrap()).is_some());
         let (status, _, _) = call(&app, "POST", "/api/account/logout", Some(&f.admin), None).await;
         assert_eq!(status, StatusCode::NO_CONTENT);
         assert!(f.state.with_database(|database| linked(database).unwrap()).is_none());
@@ -337,18 +353,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn only_administrators_on_this_origin_start_a_login() {
+    async fn login_requires_the_host_origin_and_a_configured_service() {
         let f = fixture().await;
         let app = crate::http::router(f.state.clone());
-        let (status, _, _) = call(
-            &app,
-            "POST",
-            "/api/account/login",
-            Some(&f.member),
-            Some(json!({"provider": "google"})),
-        )
-        .await;
-        assert_eq!(status, StatusCode::FORBIDDEN);
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         tokio::spawn(
@@ -371,7 +378,7 @@ mod tests {
             .unwrap();
         assert_eq!(missing_origin.status(), StatusCode::FORBIDDEN);
         let missing_origin: Value = missing_origin.json().await.unwrap();
-        assert_eq!(missing_origin["error"], "request_origin_invalid");
+        assert_eq!(missing_origin["error"], "Open the HTTPS host address to log in");
         assert!(f.fake.with(|hosted| hosted.challenge.is_none()));
 
         let (state, _) = crate::http::routes::auth::tests::state();
@@ -393,4 +400,38 @@ mod tests {
         let (_, _, read) = call(&unconfigured, "GET", "/api/account", Some(&cookie), None).await;
         assert_eq!(body(&read), json!({"configured": false, "canManage": true}));
     }
+    #[tokio::test]
+    async fn remote_login_is_bound_to_browser_and_invited_email() {
+        use crate::http::routes::avatars::tests::call as remote;
+        let f = fixture().await;
+        let owner = wire::HostedAccount { id: "user_67e55044-10b1-426f-9247-bb680e5fe0c9".into(), email: "owner@example.com".into(), name: None };
+        f.state.with_database(|db| {
+            crate::accounts::link(db, &owner, &"o".repeat(43)).unwrap();
+            db.connection().execute("INSERT INTO suplex_companies (id, name, status, created_at) VALUES ('company_test', 'Test', 'active', '2026-10-03T00:00:00.000Z')", []).unwrap();
+            let invitation = crate::accounts::members::prepare(db, "user_development", "company_test", "Ada", "ada@example.com", "https://suplex.example.test:4111", Utc::now()).unwrap();
+            db.connection().execute("UPDATE suplex_company_invitations SET sent_at = created_at WHERE id = ?1", [&invitation.id]).unwrap();
+        });
+        let app = crate::http::router(f.state.clone());
+        let (status, headers, _) = remote(&app, "POST", "/api/account/login", None, Some(json!({"provider":"google"}))).await;
+        assert_eq!(status, StatusCode::OK);
+        let cookie = login_cookie(&headers);
+        assert!(headers.get_all("set-cookie").iter().any(|header| header.to_str().unwrap().contains("Secure")));
+        let path = format!("/api/account/login/{ATTEMPT_ID}");
+        assert_eq!(remote(&app, "GET", &path, None, None).await.0, StatusCode::FORBIDDEN);
+        assert!(f.fake.with(|hosted| hosted.verifiers.is_empty()));
+        f.fake.with(|hosted| hosted.poll = Some(Poll::Complete));
+        let (status, headers, _) = remote(&app, "GET", &path, Some(&cookie), None).await;
+        assert_eq!(status, StatusCode::OK);
+        let session = headers.get_all("set-cookie").iter().map(|h| h.to_str().unwrap()).find(|h| h.starts_with("sid_v1=")).unwrap().split(';').next().unwrap();
+        let (status, _, profile) = remote(&app, "GET", "/api/auth/me", Some(session), None).await;
+        assert_eq!(status, StatusCode::OK);
+        let profile = body(&profile);
+        assert_ne!(profile["user"]["id"], "user_development");
+        assert_eq!(profile["user"]["companyIds"], json!(["company_test"]));
+        assert_eq!(f.state.with_database(|db| linked(db).unwrap().unwrap().account_id), owner.id);
+        assert_eq!(f.fake.with(|hosted| hosted.logouts.len()), 1);
+        f.state.with_database(|db| crate::identity::companies::remove_membership(db, "user_development", profile["user"]["id"].as_str().unwrap(), "company_test", Utc::now()).unwrap());
+        assert_eq!(remote(&app, "GET", "/api/auth/me", Some(session), None).await.0, StatusCode::UNAUTHORIZED);
+    }
+
 }

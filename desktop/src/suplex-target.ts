@@ -90,3 +90,14 @@ export function classifyNavigation(url: string, origin: string | null): Navigati
   if (parsed.protocol === "http:" || parsed.protocol === "https:") return { kind: "external", url: parsed.href };
   return { kind: "blocked", reason: `${parsed.protocol} is not allowed` };
 }
+
+/** Invitations carry only a host address. Authentication stays on that host. */
+export function invitationTarget(value: string): SuplexTarget | null {
+  try {
+    const link = new URL(value);
+    if (link.protocol !== "suplex:" || link.hostname !== "join" || link.username || link.password || link.hash) return null;
+    const values = link.searchParams.getAll("url");
+    if (values.length !== 1 || !values[0]?.startsWith("https://")) return null;
+    return parseSuplexTarget(values[0]);
+  } catch { return null; }
+}

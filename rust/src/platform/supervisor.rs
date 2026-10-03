@@ -132,7 +132,14 @@ fn http_ready(host: &str, port: u16) -> bool {
     io::BufReader::new(stream.take(64))
         .read_line(&mut status)
         .is_ok()
-        && (status.starts_with("HTTP/1.1 200 ") || status.starts_with("HTTP/1.0 200 "))
+        && [
+            "HTTP/1.1 200 ",
+            "HTTP/1.0 200 ",
+            "HTTP/1.1 303 ",
+            "HTTP/1.0 303 ",
+        ]
+        .iter()
+        .any(|prefix| status.starts_with(prefix))
 }
 fn read(path: &Path) -> io::Result<Option<Registry>> {
     match fs::read(path) {
@@ -564,7 +571,11 @@ mod tests {
     }
     #[test]
     fn readiness_requires_an_http_response_from_the_application() {
-        for (status, expected) in [("500 Broken", false), ("200 OK", true)] {
+        for (status, expected) in [
+            ("500 Broken", false),
+            ("200 OK", true),
+            ("303 See Other", true),
+        ] {
             let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
             let port = listener.local_addr().unwrap().port();
             let server = thread::spawn(move || {

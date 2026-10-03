@@ -1,3 +1,7 @@
+import { CompanyInvitations } from "./company-invitations.js";
+import { listCompanyInvitations } from "./company-users-api.js";
+import type { CompanyInvitation } from "../../contracts/generated/CompanyInvitation.js";
+import { Button } from "../../components/ui/button.js";
 import { Alert, AlertDescription } from "../../components/ui/alert.js";
 import { useCompanyContext } from "../../shell/company-context.js";
 import { SettingRow, SettingsContent, SettingsLayout, SettingsSection } from "../settings/settings-layout.js";
@@ -7,14 +11,11 @@ import { AddSeatDialog, type SeatOffer } from "./add-seat-dialog.js";
 import { useCallback, useEffect, useState, type ReactElement } from "react";
 import type {
   ApiProfile,
-  ApiCredential,
   ApiExternalAgent,
-  ApiInvitation,
   ApiProject,
 } from "../../shell/view-shared.js";
 import { UsersSection } from "./users-section.js";
 import { CompaniesSection } from "./companies-section.js";
-import { InvitationsSection } from "./invitations-section.js";
 import { InternalAgentsManager } from "./internal-agents-manager.js";
 import { ExternalAgentsSection } from "./external-agents-section.js";
 import { ExternalAgentAvatarDialog } from "./external-agent-avatar-dialog.js";
@@ -27,16 +28,11 @@ import { LoadingState } from "../../components/app/loading-state.js";
 export function AdminView(): ReactElement {
   const { user, companies, currentCompany, loading } = useCompanyContext();
   const [users, setUsers] = useState<ApiUser[]>([]);
-  const [invitations, setInvitations] = useState<ApiInvitation[]>([]);
-  const [credentials, setCredentials] = useState<ApiCredential[]>([]);
+  const [invitations, setInvitations] = useState<CompanyInvitation[]>([]);
   const [agents, setAgents] = useState<ApiProfile[]>([]);
   const [externalAgents, setExternalAgents] = useState<ApiExternalAgent[]>([]);
   const [companyProjects, setCompanyProjects] = useState<ApiProject[]>([]);
-  const [displayName, setDisplayName] = useState("");
   const [inviteOpen, setInviteOpen] = useState(false);
-  const [inviteToken, setInviteToken] = useState("");
-  const [inviteExpiresAt, setInviteExpiresAt] = useState("");
-  const [copied, setCopied] = useState(false);
   const [pendingAction, setPendingAction] = useState("");
   const [seatOffer, setSeatOffer] = useState<SeatOffer>();
   const [seatBusy, setSeatBusy] = useState(false);
@@ -70,19 +66,16 @@ export function AdminView(): ReactElement {
 
   const isAgents = window.location.pathname.endsWith("/agents");
   const isCompanies = window.location.pathname.endsWith("/companies");
-  const isInvitations = window.location.pathname.endsWith("/invitations");
 
   const reload = useCallback(
     async (signal?: AbortSignal): Promise<void> => {
       const options = signal ? { signal } : {};
-      const needsUsers = isCompanies || (!isAgents && !isInvitations);
-      const needsCredentials = !isAgents && !isCompanies && !isInvitations;
+      const needsUsers = !isAgents;
       try {
         setError("");
         const [
           userList,
           invitationList,
-          credentialList,
           agentList,
           externalAgentList,
           projectList,
@@ -90,18 +83,9 @@ export function AdminView(): ReactElement {
           needsUsers
             ? readJsonUnchecked<{ users: ApiUser[] }>("/api/admin/users", options)
             : { users: [] },
-          isInvitations
-            ? readJsonUnchecked<{ invitations: ApiInvitation[] }>(
-                "/api/admin/invitations",
-                options,
-              )
+          !isAgents && !isCompanies && currentCompany
+            ? listCompanyInvitations(currentCompany.id, signal)
             : { invitations: [] },
-          needsCredentials
-            ? readJsonUnchecked<{ credentials: ApiCredential[] }>(
-                "/api/admin/credentials",
-                options,
-              )
-            : { credentials: [] },
           isAgents
             ? readJsonUnchecked<{ profiles: ApiProfile[] }>(
                 "/api/profiles?includeArchived=true",
@@ -124,7 +108,6 @@ export function AdminView(): ReactElement {
         if (signal?.aborted) return;
         setUsers(userList.users);
         setInvitations(invitationList.invitations);
-        setCredentials(credentialList.credentials);
         setAgents(agentList.profiles);
         setExternalAgents(externalAgentList.agents);
         setCompanyProjects(projectList.projects);
@@ -151,7 +134,6 @@ export function AdminView(): ReactElement {
       currentCompany,
       isAgents,
       isCompanies,
-      isInvitations,
     ],
   );
 
@@ -167,33 +149,6 @@ export function AdminView(): ReactElement {
     };
   }, [loading, reload, user?.role]);
 
-  const invite = async (): Promise<void> => {
-    try {
-      const result = await readJsonUnchecked<{ token: string; expiresAt: string }>(
-        "/api/admin/invitations",
-        {
-          method: "POST",
-          body: JSON.stringify({ displayName: displayName || "Suplex user" }),
-        },
-      );
-      setInviteToken(result.token);
-      setInviteExpiresAt(result.expiresAt);
-      setCopied(false);
-      setDisplayName("");
-      await reload();
-    } catch {
-      setError("Unable to invite user");
-    }
-  };
-  const copyInvitation = async (): Promise<void> => {
-    if (!inviteToken) return;
-    try {
-      await navigator.clipboard.writeText(inviteToken);
-      setCopied(true);
-    } catch {
-      setError("Unable to copy invitation");
-    }
-  };
   const {
     openNewExternalAgent,
     createExternalAgent,
@@ -298,36 +253,30 @@ export function AdminView(): ReactElement {
     }
   };
   const revokeUser = async (candidate: ApiUser): Promise<void> => {
+    if (!currentCompany) return;
     const action = `user:${candidate.id}`;
     if (pendingAction !== action) {
       setPendingAction(action);
       return;
     }
     try {
-      await readJsonUnchecked(`/api/admin/users/${candidate.id}/revoke`, {
-        method: "POST",
-        body: "{}",
-      });
+      await readJsonUnchecked(`/api/admin/companies/${currentCompany.id}/members/${candidate.id}`, { method: "DELETE" });
       setPendingAction("");
       await reload();
     } catch {
-      setError("Unable to revoke user");
+      setError("Unable to remove user");
     }
   };
   const viewTitle = isAgents
     ? "Agents"
     : isCompanies
       ? "Companies"
-      : isInvitations
-        ? "Invitations"
-        : "Users";
+      : "Users";
   const viewDescription = isAgents
     ? "Agents plan and build the work of each task. Suplex runs internal agents. External agents connect to Suplex."
     : isCompanies
       ? "Each company has its own projects and tasks. Select the accounts that can open each company."
-      : isInvitations
-        ? "An invitation lets a person create an account on this Suplex host."
-        : "These accounts can sign in to this Suplex host.";
+      : "Members must connect to this company’s host over Tailscale or the same local network.";
   const activeHref = withCompany(window.location.pathname, currentCompany?.id);
   const backHref = withCompany("/projects", currentCompany?.id);
 
@@ -370,13 +319,11 @@ export function AdminView(): ReactElement {
       activeHref={activeHref}
       contentClassName=""
     >
-      <SettingsContent width="wide" title={viewTitle} description={viewDescription}>
+      <SettingsContent width="wide" title={viewTitle} description={viewDescription} actions={!isAgents && !isCompanies ? <Button size="sm" disabled={!currentCompany} onClick={() => setInviteOpen(true)}>Add User</Button> : null}>
         {!isAgents &&
-        !isCompanies &&
-        !isInvitations ? (
+        !isCompanies ? (
           <UsersSection
-            users={users}
-            credentials={credentials}
+            users={users.filter(candidate => candidate.role === "admin" || candidate.companyIds.includes(currentCompany?.id ?? ""))}
             pendingAction={pendingAction}
             onRevokeUser={(candidate) => void revokeUser(candidate)}
             onClearPendingAction={() => setPendingAction("")}
@@ -457,31 +404,7 @@ export function AdminView(): ReactElement {
           />
         ) : null}
 
-        {isInvitations ? (
-          <InvitationsSection
-            invitations={invitations}
-            inviteOpen={inviteOpen}
-            inviteToken={inviteToken}
-            inviteExpiresAt={inviteExpiresAt}
-            copied={copied}
-            displayName={displayName}
-            onOpenChange={(open) => {
-              setInviteOpen(open);
-              if (!open) {
-                setInviteToken("");
-                setCopied(false);
-              }
-            }}
-            onOpenInvite={() => {
-              setInviteToken("");
-              setCopied(false);
-              setInviteOpen(true);
-            }}
-            onDisplayNameChange={setDisplayName}
-            onInvite={() => void invite()}
-            onCopyInvitation={() => void copyInvitation()}
-          />
-        ) : null}
+        {!isAgents && !isCompanies && currentCompany ? <CompanyInvitations companyId={currentCompany.id} invitations={invitations} open={inviteOpen} onOpenChange={setInviteOpen} onSaved={reload} /> : null}
 
         <AddSeatDialog offer={seatOffer} busy={seatBusy} onConfirm={() => void confirmSeat()} onCancel={() => setSeatOffer(undefined)} />
         {error ? (

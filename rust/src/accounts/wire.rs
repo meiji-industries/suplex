@@ -189,3 +189,36 @@ mod tests {
         assert!(matches!(complete, AuthPollResponse::Complete { .. }));
     }
 }
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CompanyInvitationBody {
+    pub id: String,
+    pub company_id: String,
+    pub company_name: String,
+    pub full_name: String,
+    pub email: String,
+    pub host_origin: String,
+}
+
+impl CompanyInvitationBody {
+    pub fn valid(&self) -> bool {
+        token_shape(&self.id)
+            && !self.company_id.is_empty()
+            && self.company_id.len() <= 128
+            && !self.company_name.trim().is_empty()
+            && self.company_name.chars().count() <= 120
+            && !self.full_name.trim().is_empty()
+            && self.full_name.chars().count() <= 120
+            && valid_email(&self.email)
+            && url::Url::parse(&self.host_origin).ok().is_some_and(|url| {
+                url.scheme() == "https"
+                    && url.host_str().is_some()
+                    && url.username().is_empty()
+                    && url.password().is_none()
+                    && url.query().is_none()
+                    && url.fragment().is_none()
+                    && url.path() == "/"
+            })
+    }
+}

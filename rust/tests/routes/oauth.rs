@@ -121,6 +121,9 @@ pub(crate) mod tests {
         let response = server
             .client
             .post(format!("{}{path}", server.base))
+            .header("host", "suplex.example.test:4111")
+            .header("x-forwarded-host", "suplex.example.test:4111")
+            .header("x-forwarded-proto", "https")
             .header("host", HOST)
             .header("content-type", "application/x-www-form-urlencoded")
             .body(body)

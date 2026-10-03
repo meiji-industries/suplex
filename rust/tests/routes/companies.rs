@@ -66,7 +66,6 @@ mod tests {
     company_body!(rename, issue_code, add_membership);
     use crate::shared::time::{now_millis_rfc3339, rfc3339_millis};
     use crate::{
-        identity::auth,
         platform::database::{OpenMode, SuplexDatabase},
     };
     use axum::{body::to_bytes, http::HeaderValue};
@@ -80,7 +79,7 @@ mod tests {
             Utc::now().timestamp_nanos_opt().unwrap()
         ));
         let mut database = SuplexDatabase::open(&filename, OpenMode::Migrate).unwrap();
-        let admin = auth::development_sign_in(&mut database, Utc::now()).unwrap();
+        let admin = crate::http::routes::auth::tests::verified_sign_in(&mut database, Utc::now()).unwrap();
         database.connection().execute(
             "INSERT INTO suplex_users (id, display_name, username, role, status, created_at, updated_at, identity_version) VALUES ('member_route', 'Member', 'user_v1_member_route', 'member', 'active', ?1, ?1, 1)",
             [Utc::now().to_rfc3339()],
@@ -98,6 +97,10 @@ mod tests {
             "INSERT INTO suplex_sessions (id, token_hash, user_id, expires_at, created_at, token_version) VALUES ('member_route_session', ?1, 'member_route', ?2, ?3, 1)",
             rusqlite::params![member_hash, rfc3339_millis(Utc::now() + chrono::Duration::days(1)), now_millis_rfc3339()],
         ).unwrap();
+        database.connection().execute("INSERT INTO suplex_account_users (user_id, account_id, email) VALUES ('member_route', 'test_verified_account', 'member_route@example.com')", []).unwrap();
+        database.connection().execute("INSERT INTO suplex_account_sessions (token_hash, account_id) VALUES (?1, 'test_verified_account')", [crate::shared::hash::sha256_hex("member_route_token")]).unwrap();
+        database.connection().execute("INSERT INTO suplex_companies (id, name, status, created_at) VALUES ('other_member_company', 'Other', 'active', '2026-10-03T00:00:00.000Z')", []).unwrap();
+        database.connection().execute("INSERT INTO suplex_memberships (user_id, company_id, created_at) VALUES ('member_route', 'other_member_company', '2026-10-03T00:00:00.000Z')", []).unwrap();
         let state = AppState::new(
             database,
             session::SessionConfig {
@@ -112,6 +115,7 @@ mod tests {
             StatusCode::UNAUTHORIZED
         );
         let mut admin_headers = HeaderMap::new();
+        admin_headers.insert(crate::http::session::VERIFIED_HTTPS_HEADER, "1".parse().unwrap());
         admin_headers.insert("host", HeaderValue::from_static("suplex.example.test:4111"));
         admin_headers.insert(
             "cookie",
@@ -176,6 +180,7 @@ mod tests {
         );
         let created_id = created_json["id"].as_str().unwrap().to_owned();
         let mut member_headers = HeaderMap::new();
+        member_headers.insert(crate::http::session::VERIFIED_HTTPS_HEADER, "1".parse().unwrap());
         member_headers.insert("host", HeaderValue::from_static("suplex.example.test:4111"));
         member_headers.insert(
             "cookie",

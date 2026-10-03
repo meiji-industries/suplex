@@ -2,7 +2,7 @@ import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, Notification, scr
 import { existsSync } from "node:fs";
 import { readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { classifyNavigation, parseSuplexTarget, resolveSuplexTarget, type SuplexTarget } from "./suplex-target";
+import { invitationTarget, classifyNavigation, parseSuplexTarget, resolveSuplexTarget, type SuplexTarget } from "./suplex-target";
 import { forgetTarget, readTargets, rememberTarget, type TargetRegistry } from "./target-store";
 import { createDesktopUpdater } from "./desktop-updater";
 import { DEFAULT_PORT, next, readInstallRecord, resolveBoot, runtimePaths, runtimeStamp, writeInstallRecord, type BootEvent, type BootState } from "./boot";
@@ -144,6 +144,7 @@ export async function runSuplexDesktop(input: { readonly argv: readonly string[]
   const logsDirectory = (): string => join(app.getPath("userData"), "logs");
   const runtime = runtimePaths(input.environment, typeof process.resourcesPath === "string" ? process.resourcesPath : "");
   let window: BrowserWindow | undefined;
+  let pendingInvitation: SuplexTarget | null = process.argv.map(invitationTarget).find(target => target !== null) ?? null;
   let origin: string | null = null;
   let retryUrl: string | null = null;
   let registry: TargetRegistry = { current: null, targets: [] };
@@ -717,7 +718,7 @@ export async function runSuplexDesktop(input: { readonly argv: readonly string[]
   const openWith = async (argv: readonly string[]): Promise<void> => {
     let requested: SuplexTarget | null;
     try {
-      requested = resolveSuplexTarget({ argv, environment: {}, persisted: null })?.target ?? null;
+      requested = argv.map(invitationTarget).find(target => target !== null) ?? resolveSuplexTarget({ argv, environment: {}, persisted: null })?.target ?? null;
     } catch (error) {
       warn((error as Error).message);
       return;
@@ -813,9 +814,12 @@ export async function runSuplexDesktop(input: { readonly argv: readonly string[]
   app.on("second-instance", (_event, argv) => { void openWith(argv); });
   app.on("window-all-closed", () => { if (process.platform !== "darwin") app.quit(); });
   app.on("activate", () => { void open(); });
-  // suplex:// only brings Suplex to the front. The URL is never read or loaded: the host learns
-  // about a finished login by polling the account service, so a deep link carries no secret.
-  app.on("open-url", (event) => { event.preventDefault(); if (app.isReady()) void open(); });
+  app.on("open-url", (event, url) => {
+    event.preventDefault();
+    const target = invitationTarget(url);
+    if (!app.isReady()) { if (target) pendingInvitation = target; return; }
+    void open().then(async () => { if (target && window) await switchTo(window, target); });
+  });
   app.setAboutPanelOptions({ applicationName: "Suplex", applicationVersion: app.getVersion() });
   await app.whenReady();
   await networkAccess.loadPreference();
@@ -835,4 +839,5 @@ export async function runSuplexDesktop(input: { readonly argv: readonly string[]
   void desktopUpdater.check(false);
   setInterval(() => { void desktopUpdater.check(false); }, UPDATE_CHECK_INTERVAL_MS); // an app left open still sees new releases
   await open();
+  if (pendingInvitation && window) await switchTo(window, pendingInvitation);
 }

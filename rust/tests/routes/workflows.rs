@@ -2,7 +2,6 @@
 mod tests {
     use super::*;
     use crate::{
-        identity::auth as identity_auth,
         platform::database::{OpenMode, SuplexDatabase},
     };
     use axum::{
@@ -198,7 +197,7 @@ mod tests {
             crate::shared::ids::random_hex_id("suplex_workflow_list").unwrap()
         ));
         let mut database = SuplexDatabase::open(&path, OpenMode::Migrate).unwrap();
-        let signed_in = identity_auth::development_sign_in(&mut database, Utc::now()).unwrap();
+        let signed_in = crate::http::routes::auth::tests::verified_sign_in(&mut database, Utc::now()).unwrap();
         database.connection().execute(
             "UPDATE suplex_workflows SET archived_at = '2026-09-24T12:00:00.000Z' WHERE id = 'workflow_native_standard'",
             [],
@@ -216,6 +215,7 @@ mod tests {
             },
         );
         let mut headers = HeaderMap::new();
+        headers.insert(crate::http::session::VERIFIED_HTTPS_HEADER, "1".parse().unwrap());
         headers.insert("host", HeaderValue::from_static("suplex.example.test:4111"));
         headers.insert(
             "cookie",

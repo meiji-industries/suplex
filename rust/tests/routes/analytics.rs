@@ -7,7 +7,6 @@ mod tests {
     use crate::shared::time::rfc3339_millis;
     use crate::{
         http::routes::avatars::tests::{call, json_body},
-        identity::auth as identity_auth,
         tasks::analytics::{AnalyticsSession, record},
     };
 
@@ -28,7 +27,9 @@ mod tests {
             }
             connection.execute("INSERT INTO suplex_task_sessions (id,task_id,kind,generation,is_current,lifecycle,native_session_id,created_at,updated_at) VALUES ('s','active_task','root',1,1,'live','codex-a',?1,?1)", [&time]).unwrap();
             connection.execute("INSERT INTO suplex_users (id, display_name, username, role, status, created_at, updated_at, identity_version) VALUES ('member', 'Member', 'member', 'member', 'active', ?1, ?1, 1)", [&time]).unwrap();
-            identity_auth::create_session(database, "member", now).unwrap()
+            connection.execute("INSERT OR IGNORE INTO suplex_companies (id, name, status, created_at) VALUES ('other_member_company', 'Other', 'active', ?1)", [&time]).unwrap();
+            connection.execute("INSERT OR IGNORE INTO suplex_memberships (user_id, company_id, created_at) VALUES ('member', 'other_member_company', ?1)", [&time]).unwrap();
+            crate::http::routes::auth::tests::verified_session(database, "member", now).unwrap()
         });
         state.with_database(|database| {
             let usage = crate::tasks::analytics::TaskUsage {

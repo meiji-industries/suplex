@@ -1,4 +1,4 @@
-import { Archive, Braces, CreditCard, Building2, FileText, FolderGit2, HardDrive, KeyRound, ListChecks, Mail, Plug, ShieldCheck, SquareTerminal, UserRound, Users, Webhook, Workflow, type LucideIcon } from "lucide-react";
+import { Archive, Braces, CreditCard, Building2, FileText, FolderGit2, HardDrive, KeyRound, ListChecks, Plug, ShieldCheck, SquareTerminal, UserRound, Users, Webhook, Workflow, type LucideIcon } from "lucide-react";
 
 import { billingSettingsPath, companySettingsPath, withCompany, type ApiUser } from "../../lib/api.js";
 
@@ -10,6 +10,7 @@ export function buildSettingsGroups(companyId: string, user?: ApiUser): Settings
   const admin = user?.role === "admin";
   const companyItems: SettingsNavItem[] = [
     { label: "Profile", href: withCompany("/profile", companyId), icon: UserRound },
+    ...(admin ? [{ label: "Users", href: withCompany("/admin", companyId), icon: Users }] : []),
     { label: "Projects", href: withCompany("/projects", companyId), icon: FolderGit2 },
     ...(companyId ? [{ label: "Billing", href: billingSettingsPath(companyId), icon: CreditCard }] : []),
     { label: "Templates", href: withCompany("/templates", companyId), icon: FileText },
@@ -30,10 +31,8 @@ export function buildSettingsGroups(companyId: string, user?: ApiUser): Settings
     ] }] : []),
     { title: "System", items: [
       ...(admin ? [
-        { label: "Users", href: withCompany("/admin", companyId), icon: Users },
         { label: "Companies", href: withCompany("/admin/companies", companyId), icon: Building2 },
-        { label: "Access", href: withCompany("/admin/access", companyId), icon: KeyRound },
-        { label: "Invitations", href: withCompany("/admin/invitations", companyId), icon: Mail },
+        { label: "Remote Access", href: withCompany("/admin/access", companyId), icon: KeyRound },
         { label: "Environment", href: withCompany("/admin/environment", companyId), icon: HardDrive },
         { label: "Backups", href: withCompany("/admin/backups", companyId), icon: Archive },
       ] : []),

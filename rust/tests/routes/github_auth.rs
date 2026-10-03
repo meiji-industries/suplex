@@ -99,6 +99,7 @@ mod tests {
         );
         state.github_device = Arc::new(DeviceAuth::for_endpoints(&endpoint, &endpoint).unwrap());
         let mut headers = HeaderMap::new();
+        headers.insert(crate::http::session::REQUEST_CLASS_HEADER, "local".parse().unwrap());
         headers.insert(header::HOST, HeaderValue::from_static("127.0.0.1:4111"));
         headers.insert(
             header::ORIGIN,

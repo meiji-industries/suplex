@@ -53,8 +53,8 @@ mod tests {
             .send()
             .await
             .unwrap();
-        assert_eq!(response.status(), 409);
-        assert_eq!(response.headers().get_all(header::SET_COOKIE).iter().count(), 2);
+        assert_eq!(response.status(), 403);
+        assert_eq!(response.headers().get_all(header::SET_COOKIE).iter().count(), 0);
         server.abort();
         drop(state);
         let _ = std::fs::remove_file(path);
@@ -84,7 +84,8 @@ mod tests {
             2
         );
         let response = client
-            .post(format!("http://{address}/api/auth/options"))
+            .post(format!("http://{address}/api/account/logout"))
+            .header("host", "localhost:4111")
             .header("origin", "https://untrusted.example")
             .header("cookie", "sid_v1=present")
             .send()
@@ -101,14 +102,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn serve_requests_are_remote_and_tightening_rejects_automatic_cookies() {
+    async fn remote_access_always_rejects_automatic_cookies() {
         let (state, path) = crate::http::routes::auth::tests::state();
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let server = tokio::spawn(axum::serve(listener, crate::http::router(state.clone()).into_make_service_with_connect_info::<std::net::SocketAddr>()).into_future());
         let client = reqwest::Client::new();
         let automatic = client.get(format!("http://{address}/api/auth/me"))
-            .header("host", "remote.example.test:4111")
+            .header("host", "localhost:4111")
             .send().await.unwrap();
         assert_eq!(automatic.status(), 200);
         let cookie = automatic.headers().get(header::SET_COOKIE).unwrap().to_str().unwrap()
@@ -152,7 +153,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn whitespace_https_origin_is_rejected_without_changing_policy() {
+    async fn insecure_https_origin_is_rejected_without_changing_policy() {
         let (mut state, path) = crate::http::routes::auth::tests::state();
         state.session_config.reachable_address = "http://127.0.0.1:4111".into();
         let before = state
@@ -173,8 +174,7 @@ mod tests {
             .header("host", "localhost:4111")
             .header("origin", "http://localhost:4111")
             .json(&serde_json::json!({
-                "kind": "passkeys",
-                "externalHttpsOrigin": "   "
+                "externalHttpsOrigin": "http://remote.example.test"
             }))
             .send()
             .await

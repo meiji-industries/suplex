@@ -20,6 +20,7 @@ use crate::{
 };
 use providers::{Endpoints, Profile};
 
+pub mod invitations;
 pub mod providers;
 pub mod server;
 pub mod store;

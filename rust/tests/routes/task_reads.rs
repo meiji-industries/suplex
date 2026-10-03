@@ -21,7 +21,6 @@ mod tests {
     task_path!(activity, execution, diff_summary, diff);
     use crate::http::session;
     use crate::{
-        identity::auth as identity_auth,
         platform::database::{OpenMode, SuplexDatabase},
         tasks::repository::{self, PreparedTask, TaskCreator},
     };
@@ -50,7 +49,7 @@ mod tests {
         let database_path = root.join("suplex.sqlite");
         let mut database = SuplexDatabase::open(&database_path, OpenMode::Migrate).unwrap();
         let now = Utc::now();
-        let admin = identity_auth::development_sign_in(&mut database, now).unwrap();
+        let admin = crate::http::routes::auth::tests::verified_sign_in(&mut database, now).unwrap();
         let stamp = now.to_rfc3339();
         database.connection().execute(
             "INSERT INTO suplex_companies (id,name,status,created_at) VALUES ('read_company','Read','active',?1)",
@@ -84,6 +83,7 @@ mod tests {
             },
         );
         let mut headers = HeaderMap::new();
+        headers.insert(crate::http::session::VERIFIED_HTTPS_HEADER, "1".parse().unwrap());
         headers.insert("host", HeaderValue::from_static("suplex.example.test:4113"));
         assert_eq!(
             activity(State(state.clone()), Path("".into()), headers.clone())
@@ -608,6 +608,10 @@ mod tests {
                 [&root_session.id],
             ).unwrap();
         });
+        state.with_database(|db| {
+            db.connection().execute("INSERT INTO suplex_account_users (user_id, account_id, email) VALUES ('read_member', 'test_verified_account', 'read_member@example.com')", []).unwrap();
+            db.connection().execute("INSERT INTO suplex_account_sessions (token_hash, account_id) VALUES (?1, 'test_verified_account')", [crate::shared::hash::sha256_hex("read_member_token")]).unwrap();
+        });
         headers.insert(
             "cookie",
             HeaderValue::from_static("sid_v1=read_member_token"),
@@ -628,25 +632,25 @@ mod tests {
             activity(State(state.clone()), Path(task.id.clone()), headers.clone())
                 .await
                 .status(),
-            StatusCode::NOT_FOUND
+            StatusCode::UNAUTHORIZED
         );
         assert_eq!(
             diff_summary(State(state.clone()), Path(task.id.clone()), headers.clone())
                 .await
                 .status(),
-            StatusCode::NOT_FOUND
+            StatusCode::UNAUTHORIZED
         );
         assert_eq!(
             diff(State(state.clone()), Path(task.id.clone()), headers.clone())
                 .await
                 .status(),
-            StatusCode::NOT_FOUND
+            StatusCode::UNAUTHORIZED
         );
         assert_eq!(
             execution(State(state.clone()), Path(task.id), headers)
                 .await
                 .status(),
-            StatusCode::NOT_FOUND
+            StatusCode::UNAUTHORIZED
         );
         api_task.abort();
         drop(state);
@@ -685,7 +689,7 @@ mod tests {
             runtime.join("turn-msg_ui_read.jsonl"),
         )
         .unwrap();
-        let token = identity_auth::create_session(&database, &user_id, Utc::now()).unwrap();
+        let token = crate::http::routes::auth::tests::verified_session(&database, &user_id, Utc::now()).unwrap();
         let state = AppState::new(
             database,
             session::SessionConfig {
@@ -695,6 +699,7 @@ mod tests {
             },
         );
         let mut headers = HeaderMap::new();
+        headers.insert(crate::http::session::VERIFIED_HTTPS_HEADER, "1".parse().unwrap());
         headers.insert("host", HeaderValue::from_static("127.0.0.1:4111"));
         headers.insert(
             "cookie",

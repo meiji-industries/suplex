@@ -73,7 +73,7 @@ mod tests {
             .unwrap();
             let mut database = SuplexDatabase::open(&path, OpenMode::Migrate).unwrap();
             let admin =
-                crate::identity::auth::development_sign_in(&mut database, Utc::now()).unwrap();
+                crate::http::routes::auth::tests::verified_sign_in(&mut database, Utc::now()).unwrap();
             let (session_id, task_id, company_id): (String,String,String) = database.connection().query_row("SELECT s.id,s.task_id,t.company_id FROM suplex_task_sessions s JOIN suplex_tasks t ON t.id=s.task_id WHERE s.native_session_id='codex-idle'", [], |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?))).unwrap();
             database
                 .connection()
@@ -113,6 +113,7 @@ mod tests {
             fs::create_dir_all(&runtime).unwrap();
             fs::write(runtime.join("server.json"), json!({"pid":4321,"baseUrl":url,"password":"a".repeat(64),"directory":"/repo","executable":"/bin/opencode","generation":"b775df17-718a-4cb2-8e23-6912b8aa0d39","configHash":"a".repeat(64),"processIdentity":{"command":"opencode serve","executable":"/bin/opencode","argv":["opencode","serve"],"processGroup":4321,"startTime":"start","ownerUid":501}}).to_string()).unwrap();
             let mut headers = HeaderMap::new();
+        headers.insert(crate::http::session::VERIFIED_HTTPS_HEADER, "1".parse().unwrap());
             headers.insert("host", HeaderValue::from_static("remote.test:4113"));
             headers.insert(
                 "cookie",
@@ -255,7 +256,7 @@ mod tests {
             )
             .unwrap();
         let token =
-            crate::identity::auth::create_session(&database, &user_id, chrono::Utc::now()).unwrap();
+            crate::http::routes::auth::tests::verified_session(&database, &user_id, chrono::Utc::now()).unwrap();
         let state = AppState::new(
             database,
             session::SessionConfig {
@@ -265,6 +266,7 @@ mod tests {
             },
         );
         let mut headers = HeaderMap::new();
+        headers.insert(crate::http::session::VERIFIED_HTTPS_HEADER, "1".parse().unwrap());
         headers.insert("host", HeaderValue::from_static("remote.test:4113"));
         headers.insert(
             "cookie",

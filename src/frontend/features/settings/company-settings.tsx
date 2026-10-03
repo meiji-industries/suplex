@@ -82,22 +82,22 @@ export function CompanySettingsView(): ReactElement {
     <SettingsLayout title="Workspace" companyId={company.id} backHref={backHref} activeHref={companySettingsPath(company.id)}>
       <SettingsContent title="Workspace">
       <SettingsSection title="Profile">
-        <SettingRow label="Company name" description="Public workspace name.">
+        <SettingRow label="Company name" htmlFor="company-name">
           <form className="flex items-end gap-2" onSubmit={(event) => { event.preventDefault(); void save(); }}>
             <Input size="sm" id="company-name" value={name} onChange={(event) => { setName(event.target.value); setSaved(false); }} />
             <Button type="submit" size="sm" disabled={busy !== "" || !name.trim() || name.trim() === company.name}><Save className="size-3.5" />{busy === "rename" ? "Saving…" : saved ? "Saved" : "Save"}</Button>
           </form>
         </SettingRow>
-        <SettingRow label="Avatar" description="Shown in the company switcher.">
-          <AvatarEditor kind="company" id={company.id} name={avatarName} seed={avatarName} />
+        <SettingRow label="Company picture">
+          <AvatarEditor compact kind="company" id={company.id} name={avatarName} seed={avatarName} />
         </SettingRow>
-        <SettingRow label="Issue code" description="2–10 letters or numbers, beginning with a letter. Once set, it locks after the company has an issue.">
+        <SettingRow label="Issue code" htmlFor="company-issue-code">
           <form className="flex items-end gap-2" onSubmit={(event) => { event.preventDefault(); void saveIssueCode(); }}>
             <Input size="sm" id="company-issue-code" aria-label="Issue code" maxLength={10} pattern="[A-Za-z][A-Za-z0-9]{1,9}" placeholder="ADAM" value={issueCode} onChange={(event) => { setIssueCode(event.target.value.toUpperCase()); setCodeSaved(false); }} />
             <Button type="submit" size="sm" disabled={busy !== "" || (issueCode.trim().toUpperCase() || null) === company.issueCode}><Save className="size-3.5" />{busy === "issue-code" ? "Saving…" : codeSaved ? "Saved" : "Save"}</Button>
           </form>
         </SettingRow>
-        <SettingRow label="Company ID" description="Unique identifier.">
+        <SettingRow label="Company ID">
           <code className="select-all text-xs text-muted-foreground">{company.id}</code>
         </SettingRow>
         <SettingRow label="Created">
@@ -105,12 +105,12 @@ export function CompanySettingsView(): ReactElement {
         </SettingRow>
        </SettingsSection>
        {error ? <div className="mb-4 text-xs text-destructive"><Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert></div> : null}
-      <SettingsSection title="Lifecycle" description="Control workspace activity.">
-        {company.status === "active" ? <SettingRow label="Pause company" description="Existing records remain available; new projects and tasks are blocked."><Button variant="outline" size="sm" onClick={() => void mutateStatus("paused")} disabled={busy !== ""}><Pause className="size-3.5" />{busy === "paused" ? "Pausing…" : "Pause company"}</Button></SettingRow> : null}
-        {company.status === "paused" ? <SettingRow label="Reactivate company" description="Restore creation of new projects and tasks."><Button size="sm" onClick={() => void mutateStatus("active")} disabled={busy !== ""}><RotateCcw className="size-3.5" />{busy === "active" ? "Reactivating…" : "Reactivate company"}</Button></SettingRow> : null}
-        {company.status !== "archived" ? <SettingRow label="Archive company" description="Archive is reversible, retains history, and blocks new work." destructive><Button variant="destructive" size="sm" onClick={() => setArchiveOpen(true)} disabled={busy !== ""}><Archive className="size-3.5" />Archive company</Button></SettingRow> : null}
-        {company.status === "archived" ? <SettingRow label="Restore company" description="Restore the company to active status."><Button size="sm" onClick={() => void mutateStatus("active")} disabled={busy !== ""}><RotateCcw className="size-3.5" />{busy === "active" ? "Restoring…" : "Restore company"}</Button></SettingRow> : null}
-        <SettingRow label="Factory reset" description="Delete all Suplex data on this host and start onboarding again." destructive><Button variant="destructive" size="sm" onClick={() => setClearOpen(true)} disabled={busy !== ""}><Trash2 className="size-3.5" />Factory reset</Button></SettingRow>
+      <SettingsSection title="Lifecycle">
+        {company.status === "active" ? <SettingRow label="Pause company"><Button variant="outline" size="sm" onClick={() => void mutateStatus("paused")} disabled={busy !== ""}><Pause className="size-3.5" />{busy === "paused" ? "Pausing…" : "Pause company"}</Button></SettingRow> : null}
+        {company.status === "paused" ? <SettingRow label="Reactivate company"><Button size="sm" onClick={() => void mutateStatus("active")} disabled={busy !== ""}><RotateCcw className="size-3.5" />{busy === "active" ? "Reactivating…" : "Reactivate company"}</Button></SettingRow> : null}
+        {company.status !== "archived" ? <SettingRow label="Archive company" destructive><Button variant="destructive" size="sm" onClick={() => setArchiveOpen(true)} disabled={busy !== ""}><Archive className="size-3.5" />Archive company</Button></SettingRow> : null}
+        {company.status === "archived" ? <SettingRow label="Restore company"><Button size="sm" onClick={() => void mutateStatus("active")} disabled={busy !== ""}><RotateCcw className="size-3.5" />{busy === "active" ? "Restoring…" : "Restore company"}</Button></SettingRow> : null}
+        <SettingRow label="Factory reset" destructive><Button variant="destructive" size="sm" onClick={() => setClearOpen(true)} disabled={busy !== ""}><Trash2 className="size-3.5" />Factory reset</Button></SettingRow>
       </SettingsSection>
       </SettingsContent>
       <AlertDialog open={archiveOpen} onOpenChange={setArchiveOpen}><AlertDialogContent><AlertDialogHeader><AlertDialogTitle>Archive {company.name}?</AlertDialogTitle><AlertDialogDescription>You can reverse this action. You can read the project and task history, but you cannot start new work.</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel>Cancel</AlertDialogCancel><AlertDialogAction variant="destructive" onClick={() => void mutateStatus("archived")} disabled={busy !== ""}>{busy === "archived" ? "Archiving…" : "Archive"}</AlertDialogAction></AlertDialogFooter></AlertDialogContent></AlertDialog>

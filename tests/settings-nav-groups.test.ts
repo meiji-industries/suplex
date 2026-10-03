@@ -15,9 +15,9 @@ const hrefs = (groups: SettingsNavGroup[]): Record<string, string> =>
 test("admin sees Company, AI, and System groups in order", () => {
   const groups = buildSettingsGroups("company-1", admin);
   expect(titles(groups)).toEqual(["Company", "Features", "System"]);
-  expect(items(groups, "Company")).toEqual(["Profile", "Projects", "Billing", "Templates", "Workspace", "Onboarding"]);
+  expect(items(groups, "Company")).toEqual(["Profile", "Users", "Projects", "Billing", "Templates", "Workspace", "Onboarding"]);
   expect(items(groups, "Features")).toEqual(["Agents", "Providers", "Terminal", "API & MCP", "Workflows", "Triggers"]);
-  expect(items(groups, "System")).toEqual(["Users", "Companies", "Access", "Invitations", "Environment", "Backups", "Host health"]);
+  expect(items(groups, "System")).toEqual(["Companies", "Remote Access", "Environment", "Backups", "Host health"]);
 });
 
 test("member sees Profile, Projects, Billing, Templates, and Host health only", () => {
@@ -49,8 +49,7 @@ test("items keep their existing hrefs", () => {
     "API & MCP": "/admin/api-mcp?company=company-1",
     Users: "/admin?company=company-1",
     Companies: "/admin/companies?company=company-1",
-    Access: "/admin/access?company=company-1",
-    Invitations: "/admin/invitations?company=company-1",
+    "Remote Access": "/admin/access?company=company-1",
     Environment: "/admin/environment?company=company-1",
     Backups: "/admin/backups?company=company-1",
     "Host health": "/health?company=company-1",

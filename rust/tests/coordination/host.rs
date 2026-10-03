@@ -307,7 +307,7 @@ mod host_tests {
         });
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let api = format!("http://{}/", listener.local_addr().unwrap());
-        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let server = tokio::spawn(async move { axum::serve(listener, app.into_make_service_with_connect_info::<std::net::SocketAddr>()).await.unwrap() });
         let access =
             crate::integrations::github::Access::for_api(&api, Some("test-token".into())).unwrap();
         let mut github = crate::integrations::github_delivery::Github::new(access);

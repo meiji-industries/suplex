@@ -80,7 +80,7 @@ mod tests {
             .json()
             .await
             .unwrap();
-        assert_eq!(remote, json!({"apps":[]}));
+        assert_eq!(remote, json!({"error":"Remote access requires HTTPS"}));
         let forwarded: Value = get("127.0.0.1:4113")
             .header("x-forwarded-for", "127.0.0.1")
             .send()
@@ -89,7 +89,7 @@ mod tests {
             .json()
             .await
             .unwrap();
-        assert_eq!(forwarded, json!({"apps":[]}));
+        assert_eq!(forwarded, json!({"error":"Remote access requires HTTPS"}));
         let post = |host: &'static str, body: Value| {
             client
                 .post(&open)
@@ -105,7 +105,7 @@ mod tests {
         assert_eq!(remote.status(), 403);
         assert_eq!(
             remote.json::<Value>().await.unwrap(),
-            json!({"ok":false,"error":"Opening a worktree is available only from the Suplex host"})
+            json!({"error":"Remote access requires HTTPS"})
         );
         let invalid = post("127.0.0.1:4113", json!({"app":"not-an-app"}))
             .await
@@ -137,6 +137,7 @@ mod tests {
             &[&worktree, &fixture.task_id],
         );
         let mut headers = HeaderMap::new();
+        headers.insert(crate::http::session::REQUEST_CLASS_HEADER, "local".parse().unwrap());
         headers.insert("host", "127.0.0.1:4113".parse().unwrap());
         headers.insert("origin", "http://127.0.0.1:4113".parse().unwrap());
         headers.insert("cookie", fixture.cookie.parse().unwrap());

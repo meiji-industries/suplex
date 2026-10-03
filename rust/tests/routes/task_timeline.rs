@@ -21,7 +21,6 @@ mod tests {
     task_path!(task_timeline);
     use crate::http::session;
     use crate::{
-        identity::auth as identity_auth,
         platform::database::OpenMode,
         tasks::repository::{self, PreparedTask, TaskCreator},
     };
@@ -36,7 +35,7 @@ mod tests {
         let mut database =
             SuplexDatabase::open(&root.join("suplex.sqlite"), OpenMode::Migrate).unwrap();
         let now = Utc::now();
-        let admin = identity_auth::development_sign_in(&mut database, now).unwrap();
+        let admin = crate::http::routes::auth::tests::verified_sign_in(&mut database, now).unwrap();
         let stamp = now.to_rfc3339();
         database.connection().execute("INSERT INTO suplex_companies (id,name,status,created_at) VALUES ('timeline_company','Timeline','active',?1)", [&stamp]).unwrap();
         database.connection().execute("INSERT INTO suplex_projects (id,company_id,name,repository_path,worktree_root,repository_identity,base_branch,setup_command,verification_command,root_profile_id,worker_profile_id,agent_task_policy_json,created_at,updated_at) VALUES ('timeline_project','timeline_company','Timeline','/tmp/repo','/tmp/worktrees',NULL,'main','','','root_profile','worker_profile','{}',?1,?1)", [&stamp]).unwrap();
@@ -54,7 +53,7 @@ mod tests {
         }, now).unwrap().task;
         database.connection().execute("INSERT INTO suplex_users (id,display_name,username,role,status,created_at,updated_at,identity_version) VALUES ('timeline_member','Member','user_v1_timeline_member','member','active',?1,?1,1)", [&stamp]).unwrap();
         database.connection().execute("INSERT INTO suplex_memberships (user_id,company_id,created_at) VALUES ('timeline_member','timeline_company',?1)", [&stamp]).unwrap();
-        let token = identity_auth::create_session(&database, "timeline_member", now).unwrap();
+        let token = crate::http::routes::auth::tests::verified_session(&database, "timeline_member", now).unwrap();
         let state = AppState::new(
             database,
             session::SessionConfig {
@@ -64,6 +63,7 @@ mod tests {
             },
         );
         let mut headers = HeaderMap::new();
+        headers.insert(crate::http::session::VERIFIED_HTTPS_HEADER, "1".parse().unwrap());
         headers.insert("host", HeaderValue::from_static("untrusted.invalid"));
         assert_eq!(
             task_timeline(State(state.clone()), Path(task.id.clone()), headers.clone())
@@ -98,7 +98,7 @@ mod tests {
             task_timeline(State(state.clone()), Path(task.id), headers)
                 .await
                 .status(),
-            StatusCode::NOT_FOUND
+            StatusCode::UNAUTHORIZED
         );
         drop(state);
         std::fs::remove_dir_all(root).unwrap();

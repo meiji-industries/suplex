@@ -6,7 +6,7 @@ mod tests {
     async fn only_an_admin_can_open_the_quick_shell() {
         let (state, _filename) = super::super::auth::tests::state();
         let admin = state.with_database(|database| {
-            crate::identity::auth::development_sign_in(database, chrono::Utc::now()).unwrap()
+            crate::http::routes::auth::tests::verified_sign_in(database, chrono::Utc::now()).unwrap()
         });
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
@@ -21,6 +21,9 @@ mod tests {
         let open = || {
             reqwest::Client::new()
                 .get(format!("http://{address}/api/quick-shell/terminal?cols=80&rows=24"))
+                .header("host", "suplex.example.test:4111")
+                .header("x-forwarded-host", "suplex.example.test:4111")
+                .header("x-forwarded-proto", "https")
                 .header("origin", "https://suplex.example.test:4111")
                 .header("cookie", format!("sid_v1={}", admin.session_token))
                 .header("connection", "upgrade")

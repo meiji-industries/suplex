@@ -9,6 +9,7 @@ const company = { id: "company-1", name: "Acme", issueCode: "ACME", status: "act
 const fixture = vi.hoisted(() => ({ currentCompany: undefined as (Omit<typeof company, "issueCode"> & { issueCode: string | undefined }) | undefined, loading: false, projects: [{ id: "project-1" }], reload: vi.fn(), updateProfile: vi.fn(), renameCompany: vi.fn(), setCompanyIssueCode: vi.fn() }));
 vi.mock("../src/frontend/shell/company-context.js", () => ({ useCompanyContext: () => ({ currentCompany: fixture.currentCompany, user: { id: "user_development", role: "admin", displayName: "Operator", username: "operator@suplex.local", avatarSeed: "operator@suplex.local", title: "" }, updateProfile: fixture.updateProfile, reloadCompanies: vi.fn(), renameCompany: fixture.renameCompany, setCompanyIssueCode: fixture.setCompanyIssueCode }), useOptionalCompanyContext: () => fixture.currentCompany ? { currentCompany: fixture.currentCompany } : undefined }));
 vi.mock("../src/frontend/features/account/lib/account-api.js", () => ({ getAccount: vi.fn(async () => ({ configured: true, canManage: true, account: { email: "adam@example.com" } })) }));
+vi.mock("../src/frontend/features/settings/lib/billing-api.js", () => ({ getBillingSummary: vi.fn(), startCheckout: vi.fn() }));
 vi.mock("../src/frontend/features/onboarding/onboarding.js", async importOriginal => ({ ...(await importOriginal()), useOnboardingData: () => ({ state: { company: fixture.currentCompany, checks: [], providers: [], profiles: [], projects: fixture.projects }, loading: fixture.loading, error: "", reload: fixture.reload }) }));
 vi.mock("../src/frontend/components/app/system-health.js", () => ({ useSystemHealth: () => ({ refresh: vi.fn(), freshness: "fresh", refreshing: false }), CheckStatusIndicator: () => null, SystemHealthAlert: () => null, healthCheckPurpose: () => "" }));
 vi.mock("../src/frontend/shell/company-switcher.js", () => ({ CompanySwitcher: () => null }));
@@ -30,6 +31,7 @@ vi.mock("../src/frontend/features/tasks/new-task-dialog.js", () => ({ NewTaskDia
 import { OnboardingView } from "../src/frontend/features/onboarding/onboarding-wizard.js";
 import { navigate } from "../src/frontend/shell/navigation-state.js";
 import { useExperiments } from "../src/frontend/shell/experiments-api.js";
+import { getBillingSummary, startCheckout } from "../src/frontend/features/settings/lib/billing-api.js";
 
 function RoutedOnboarding(): ReactNode {
   const [route, setRoute] = useState(() => `${window.location.pathname}${window.location.search}${window.location.hash}`);
@@ -68,9 +70,12 @@ afterEach(() => {
   window.history.replaceState({}, "", "/");
   vi.mocked(navigate).mockClear();
   vi.mocked(useExperiments).mockReset();
+  vi.mocked(getBillingSummary).mockReset();
+  vi.mocked(startCheckout).mockReset();
+  vi.restoreAllMocks();
 });
 
-test("final Continue shows Done without a New task dialog", async () => {
+test("Projects continues to Plan, then Free continues to Done without checkout", async () => {
   fixture.currentCompany = company;
   window.history.replaceState({}, "", "/onboarding?step=projects");
   const container = document.createElement("div");
@@ -78,7 +83,11 @@ test("final Continue shows Done without a New task dialog", async () => {
   const root = createRoot(container);
   await act(async () => root.render(<StrictMode><RoutedOnboarding /></StrictMode>));
   await act(async () => button(container, "Continue").click());
+  expect(window.location.search).toContain("step=plan");
+  expect(container.querySelector('[role="radio"][aria-label="Free"]')?.getAttribute("aria-checked")).toBe("true");
+  await act(async () => button(container, "Continue").click());
   expect(window.location.search).toContain("step=done");
+  expect(startCheckout).not.toHaveBeenCalled();
   expect(container.querySelector("h2")?.textContent).toBe("Your agents do the work. Suplex runs the workflow.");
   expect(container.querySelectorAll('[role="dialog"]')).toHaveLength(0);
   await act(async () => root.unmount());
@@ -98,6 +107,95 @@ test("direct Done does not open the dialog, and the CTA requests it on Today", a
   expect(navigate).toHaveBeenLastCalledWith("/today?new-task=1");
   expect(`${window.location.pathname}${window.location.search}`).toBe("/today?new-task=1");
   expect(container.querySelectorAll('[role="dialog"]')).toHaveLength(0);
+  await act(async () => root.unmount());
+});
+
+test.each([0, 1, 2, 3, 4])("Plan selects the eligible default with %i projects", async count => {
+  fixture.currentCompany = company;
+  fixture.projects = Array.from({ length: count }, (_, index) => ({ id: `project-${index}` }));
+  window.history.replaceState({}, "", "/onboarding?step=plan");
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  await act(async () => root.render(<OnboardingView />));
+  const radio = (label: string): HTMLElement => container.querySelector(`[role="radio"][aria-label="${label}"]`)!;
+  expect(radio("Free").getAttribute("aria-checked")).toBe(String(count < 3));
+  expect(radio("Pro").getAttribute("aria-checked")).toBe(String(count >= 3));
+  expect(radio("Free").hasAttribute("data-disabled")).toBe(count >= 3);
+  expect(radio("Enterprise").hasAttribute("data-disabled")).toBe(true);
+  await act(async () => radio("Enterprise").click());
+  expect(radio("Enterprise").getAttribute("aria-checked")).toBe("false");
+  await act(async () => radio("Pro").closest("label")!.click());
+  expect(radio("Pro").getAttribute("aria-checked")).toBe("true");
+  await act(async () => radio("Free").closest("label")!.click());
+  expect(radio("Free").getAttribute("aria-checked")).toBe(String(count < 3));
+  expect(container.textContent).not.toContain("Startup");
+  expect(container.querySelector("footer")?.textContent).toBe("Continue");
+  await act(async () => root.unmount());
+});
+
+test("Plan updates its default when projects load and when the company changes", async () => {
+  fixture.currentCompany = company;
+  fixture.loading = true;
+  fixture.projects = [];
+  window.history.replaceState({}, "", "/onboarding?step=plan");
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  await act(async () => root.render(<OnboardingView />));
+  expect(button(container, "Continue").disabled).toBe(true);
+  fixture.projects = [{ id: "one" }, { id: "two" }, { id: "three" }];
+  fixture.loading = false;
+  await act(async () => root.render(<OnboardingView />));
+  expect(container.querySelector('[aria-label="Pro"]')?.getAttribute("aria-checked")).toBe("true");
+  fixture.currentCompany = { ...company, id: "company-2" };
+  fixture.projects = [{ id: "other" }];
+  await act(async () => root.render(<OnboardingView />));
+  expect(container.querySelector('[aria-label="Free"]')?.getAttribute("aria-checked")).toBe("true");
+  await act(async () => root.unmount());
+});
+
+const freeSummary = { plan: "free", companyId: "company-1", projectCount: 3, projectLimit: 2, requiredSeats: 2, purchasedSeats: 0, canCreateProject: false, checkedAt: "2026-10-03T00:00:00Z", canManageBilling: true, purchaseConfigured: true } as const;
+
+test("Pro opens checkout with the current member count and reuses the intent after a failed request", async () => {
+  fixture.currentCompany = company;
+  fixture.projects = [{ id: "one" }, { id: "two" }, { id: "three" }];
+  const tab = { opener: null, location: { href: "" }, close: vi.fn() };
+  vi.spyOn(window, "open").mockReturnValue(tab as unknown as Window);
+  vi.mocked(getBillingSummary).mockResolvedValue(freeSummary);
+  vi.mocked(startCheckout).mockRejectedValueOnce(new Error("Connection lost")).mockResolvedValueOnce({ status: "redirect", url: "https://checkout.example/session" });
+  window.history.replaceState({}, "", "/onboarding?step=plan");
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  await act(async () => root.render(<OnboardingView />));
+  await act(async () => button(container, "Continue").click());
+  expect(window.location.search).toContain("step=plan");
+  expect(container.textContent).toContain("Connection lost");
+  const key = vi.mocked(startCheckout).mock.calls[0]![2];
+  await act(async () => button(container, "Continue").click());
+  expect(startCheckout).toHaveBeenNthCalledWith(2, "company-1", 2, key);
+  expect(getBillingSummary).toHaveBeenCalledTimes(2);
+  expect(tab.location.href).toBe("https://checkout.example/session");
+  expect(window.location.search).toContain("step=done");
+  await act(async () => root.unmount());
+});
+
+test("an existing Pro subscription continues without another checkout", async () => {
+  fixture.currentCompany = company;
+  fixture.projects = [{ id: "one" }, { id: "two" }, { id: "three" }];
+  const close = vi.fn();
+  vi.spyOn(window, "open").mockReturnValue({ opener: null, close } as unknown as Window);
+  vi.mocked(getBillingSummary).mockResolvedValue({ ...freeSummary, plan: "pro", purchasedSeats: 2, projectLimit: null, canCreateProject: true, subscriptionStatus: "active", renewalAt: null, accessUntil: null, cancelAtPeriodEnd: false, paymentActionRequired: false, paymentActionUrl: null });
+  window.history.replaceState({}, "", "/onboarding?step=plan");
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  await act(async () => root.render(<OnboardingView />));
+  await act(async () => button(container, "Continue").click());
+  expect(startCheckout).not.toHaveBeenCalled();
+  expect(close).toHaveBeenCalledOnce();
+  expect(window.location.search).toContain("step=done");
   await act(async () => root.unmount());
 });
 

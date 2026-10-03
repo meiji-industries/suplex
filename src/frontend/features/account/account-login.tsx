@@ -22,6 +22,14 @@ function failureMessage(error: unknown): string {
 }
 
 /** Shown on open until this host links a Suplex account. */
+function completedLoginPath(): string {
+  const query = new URLSearchParams(window.location.search);
+  const returnTo = query.get("returnTo");
+  if (returnTo?.startsWith("/oauth/consent?")) return returnTo;
+  const company = query.get("company");
+  return company ? `/?company=${encodeURIComponent(company)}` : "/";
+}
+
 export function AccountLoginView({ preview = false, previewState }: { preview?: boolean; previewState?: "browser" | "email" | undefined }): ReactElement {
   const [canManage, setCanManage] = useState<boolean>();
   const [emailForm, setEmailForm] = useState(false);
@@ -33,7 +41,8 @@ export function AccountLoginView({ preview = false, previewState }: { preview?: 
   useEffect(() => {
     if (preview) { setCanManage(true); return; }
     void getAccount().then((account) => {
-      if (account.account || !account.configured) window.location.assign("/");
+      if (account.account) window.location.assign(completedLoginPath());
+      else if (!account.configured) { setCanManage(false); setError("Suplex login is not configured on this host."); }
       else setCanManage(account.canManage);
     }).catch(() => setCanManage(true));
   }, [preview]);
@@ -50,9 +59,10 @@ export function AccountLoginView({ preview = false, previewState }: { preview?: 
       try {
         const { status } = await pollAccountLogin(waiting.attemptId);
         failures = 0;
-        if (status === "complete") { window.location.assign("/"); return; }
+        if (status === "complete") { window.location.assign(completedLoginPath()); return; }
         if (status === "expired") { setWaiting(undefined); setError("The login expired. Retry."); return; }
-      } catch {
+      } catch (failure) {
+        if (failure instanceof ApiError && failure.statusCode === 403) { setWaiting(undefined); setError(failure.message); return; }
         failures += 1;
         if (failures >= FAILURE_LIMIT) { setWaiting(undefined); setError("Suplex cannot reach the account service."); return; }
       }

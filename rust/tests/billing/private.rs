@@ -128,7 +128,7 @@ pub(crate) mod tests {
         );
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = Url::parse(&format!("http://{}/", listener.local_addr().unwrap())).unwrap();
-        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        tokio::spawn(async move { axum::serve(listener, app.into_make_service_with_connect_info::<std::net::SocketAddr>()).await.unwrap() });
         FakeHosted { url, hosted }
     }
 
@@ -146,7 +146,7 @@ pub(crate) mod tests {
         let state = state.with_billing(fake.client());
         let now = Utc::now();
         let (admin, company_id) = state.with_database(|database| {
-            let admin = crate::identity::auth::development_sign_in(database, now).unwrap();
+            let admin = crate::http::routes::auth::tests::verified_sign_in(database, now).unwrap();
             let company = companies::create_company(database, &admin.user.id, "Acme", now).unwrap();
             (admin, company.id)
         });

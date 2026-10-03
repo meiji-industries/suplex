@@ -8,7 +8,7 @@ mod tests {
         let (state, _filename) = super::super::auth::tests::state();
         let now = Utc::now();
         let (admin, company_id) = state.with_database(|database| {
-            let admin = crate::identity::auth::development_sign_in(database, now).unwrap();
+            let admin = crate::http::routes::auth::tests::verified_sign_in(database, now).unwrap();
             let company =
                 crate::identity::companies::create_company(database, &admin.user.id, "Moves", now)
                     .unwrap();
@@ -33,6 +33,9 @@ mod tests {
         let send = |method: reqwest::Method, path: &str, body: Option<Value>| {
             let request = client
                 .request(method, format!("http://{address}{path}"))
+                .header("host", "suplex.example.test:4111")
+                .header("x-forwarded-host", "suplex.example.test:4111")
+                .header("x-forwarded-proto", "https")
                 .header("origin", "https://suplex.example.test:4111")
                 .header("cookie", &cookie);
             match body {

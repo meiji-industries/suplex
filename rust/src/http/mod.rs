@@ -38,6 +38,7 @@ pub mod routes {
     pub mod avatars;
     pub mod billing;
     pub mod companies;
+    pub mod company_invitations;
     pub mod discovery;
     pub mod external_agent_administration;
     pub mod github_auth;
@@ -195,6 +196,7 @@ pub fn router(state: AppState) -> Router {
     Router::new()
         .merge(routes::access::router())
         .merge(routes::account::router())
+        .merge(routes::company_invitations::router())
         .merge(routes::admin_identity::router())
         .merge(routes::agent_pairing::router())
         .merge(routes::external_agent_administration::router())
@@ -245,11 +247,40 @@ pub fn router(state: AppState) -> Router {
         .with_state(state)
 }
 
-async fn auth_page() -> impl IntoResponse {
-    (
-        [(header::CONTENT_TYPE, "text/html; charset=utf-8")],
-        ui::auth_page(),
-    )
+async fn auth_page(
+    axum::extract::State(state): axum::extract::State<AppState>,
+    headers: axum::http::HeaderMap,
+) -> axum::response::Response {
+    match state.with_database(|db| {
+        session::session_user(
+            db,
+            &headers,
+            Some(&state.session_config),
+            chrono::Utc::now(),
+        )
+    }) {
+        Ok(session) => {
+            let ready = session.user.is_some()
+                && (state.accounts.is_none()
+                    || !session::is_local_recovery(&headers)
+                    || state
+                        .with_database(|db| crate::accounts::linked(db))
+                        .ok()
+                        .flatten()
+                        .is_some());
+            let response = if ready {
+                axum::response::Redirect::to("/").into_response()
+            } else {
+                (
+                    [(header::CONTENT_TYPE, "text/html; charset=utf-8")],
+                    ui::auth_page(),
+                )
+                    .into_response()
+            };
+            access::with_cookies(response, session.set_cookies)
+        }
+        Err(error) => error::ApiError::response(error),
+    }
 }
 
 async fn asset(

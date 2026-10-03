@@ -2047,10 +2047,7 @@ mod tests {
     use axum::{Json, Router, extract::OriginalUri, http::StatusCode, response::IntoResponse};
 
     use super::*;
-    use crate::{
-        http::routes::avatars::tests::{call, json_body},
-        identity::auth as identity_auth,
-    };
+    use crate::http::routes::avatars::tests::{call, json_body};
 
     type Replies = Arc<std::sync::Mutex<HashMap<String, (u16, Value)>>>;
 
@@ -2564,7 +2561,7 @@ mod tests {
         let member = f.state.with_database(|database| {
             database.connection().execute("INSERT INTO suplex_users (id, display_name, username, role, status, created_at, updated_at, identity_version) VALUES ('member', 'M', 'member', 'member', 'active', ?1, ?1, 1)", [now_millis_rfc3339()]).unwrap();
             database.connection().execute("INSERT INTO suplex_memberships (company_id, user_id, created_at) VALUES ('c', 'member', ?1)", [now_millis_rfc3339()]).unwrap();
-            identity_auth::create_session(database, "member", Utc::now()).unwrap()
+            crate::http::routes::auth::tests::verified_session(database, "member", Utc::now()).unwrap()
         });
         let (status, _, body) = call(
             &app,

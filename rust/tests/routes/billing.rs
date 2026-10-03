@@ -8,6 +8,14 @@ mod tests {
 
     const ORIGIN: &str = "https://suplex.example.test:4111";
 
+    fn client() -> reqwest::Client {
+        let mut headers = reqwest::header::HeaderMap::new();
+        headers.insert("host", "suplex.example.test:4111".parse().unwrap());
+        headers.insert("x-forwarded-host", "suplex.example.test:4111".parse().unwrap());
+        headers.insert("x-forwarded-proto", "https".parse().unwrap());
+        reqwest::Client::builder().default_headers(headers).build().unwrap()
+    }
+
     async fn serve(state: crate::http::AppState) -> String {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
@@ -28,7 +36,7 @@ mod tests {
         headers: &[(&str, &str)],
         body: Option<Value>,
     ) -> reqwest::RequestBuilder {
-        let mut request = reqwest::Client::new().post(format!("{base}{path}"));
+        let mut request = client().post(format!("{base}{path}"));
         for (name, value) in headers {
             request = request.header(*name, *value);
         }
@@ -44,7 +52,7 @@ mod tests {
         f.user("member-1", "member", "active");
         f.member("member-1", &f.company_id);
         let member_token = f.state.with_database(|database| {
-            crate::identity::auth::create_session(database, "member-1", Utc::now()).unwrap()
+            crate::http::routes::auth::tests::verified_session(database, "member-1", Utc::now()).unwrap()
         });
         let other = f.state.with_database(|database| {
             crate::identity::companies::create_company(database, &f.admin_id, "Other", Utc::now())
@@ -52,7 +60,7 @@ mod tests {
                 .id
         });
         let base = serve(f.state.clone()).await;
-        let client = reqwest::Client::new();
+        let client = client();
         let member = format!("sid_v1={member_token}");
         let admin = format!("sid_v1={}", f.admin_token);
         let read = |company: &str, cookie: &str| {
@@ -301,7 +309,7 @@ mod tests {
             .with(|hosted| hosted.respond("/v1/billing", 200, active_state(1)));
         let base = serve(f.state.clone()).await;
         let list = || async {
-            reqwest::Client::new()
+            client()
                 .get(format!("{base}/api/companies"))
                 .header("cookie", format!("sid_v1={}", f.admin_token))
                 .send()

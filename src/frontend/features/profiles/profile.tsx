@@ -23,7 +23,7 @@ export function ProfileView(): ReactElement {
 
   useEffect(() => { void getAccount().then(setAccount).catch(() => undefined); }, []);
 
-  const { profile, changeProfile } = useProfileDraft(user, user?.id === "user_development" ? account?.account?.email : undefined);
+  const { profile, changeProfile } = useProfileDraft(user, account?.account?.email);
   const { displayName, title, username, avatarSeed } = profile;
 
 
@@ -49,7 +49,7 @@ export function ProfileView(): ReactElement {
     {loading || !user ? <LoadingState /> : <>
     <form id="profile-form" onSubmit={(event) => { event.preventDefault(); void save(); }}>
       <SettingsSection>
-        <ProfileFields userId={user.id} email={user.id === "user_development" ? account?.account?.email : undefined} value={profile} disabled={busy} onChange={changes => { changeProfile(changes); setSaved(false); }} />
+        <ProfileFields userId={user.id} email={account?.account?.email} value={profile} disabled={busy} onChange={changes => { changeProfile(changes); setSaved(false); }} />
       </SettingsSection>
     </form>
     <SettingsSection>
@@ -59,7 +59,7 @@ export function ProfileView(): ReactElement {
           <SelectContent>{taskAgentExpiryOptions.map(option => <SelectItem key={option.value} value={String(option.value)}>{option.label}</SelectItem>)}</SelectContent>
         </Select>
       </SettingRow>
-      {account?.configured && account.account && account.canManage ? <SettingRow label="Suplex account">
+      {account?.configured && account.account ? <SettingRow label="Suplex account">
         <Button type="button" variant="destructive" size="sm" onClick={() => void logout()}>Log out</Button>
       </SettingRow> : null}
     </SettingsSection>

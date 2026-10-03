@@ -86,7 +86,7 @@ fn page_user(
         .map_err(Box::new)?;
     match session.user {
         Some(user) => Ok((user, session.set_cookies)),
-        None => Err(Box::new(redirect("/auth"))),
+        None => Err(Box::new(page("account-login", session.set_cookies))),
     }
 }
 
@@ -98,7 +98,7 @@ fn app_page_user(
     headers: &HeaderMap,
 ) -> Result<(AuthUser, Vec<String>), Box<Response>> {
     let (user, cookies) = page_user(state, headers)?;
-    if state.accounts.is_none() {
+    if state.accounts.is_none() || !session::is_local_recovery(headers) {
         return Ok((user, cookies));
     }
     match state.with_database(|database| crate::accounts::linked(database)) {
@@ -115,20 +115,37 @@ fn authenticated_page(state: AppState, headers: HeaderMap, view: &str) -> Respon
     }
 }
 
-async fn root(State(state): State<AppState>, headers: HeaderMap) -> Response {
+async fn root(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    RawQuery(query): RawQuery,
+) -> Response {
     let (user, cookies) = match app_page_user(&state, &headers) {
         Ok(value) => value,
         Err(response) => return *response,
     };
     let destination = match state.with_database(|database| service::list(database, &user.id, None))
     {
-        Ok(projects) if projects.is_empty() => "/onboarding",
+        Ok(projects) if projects.is_empty() && user.role == "admin" => "/onboarding",
         Ok(_) => "/today",
         Err(source) => {
             return with_cookies(ApiError::response(source), cookies);
         }
     };
-    let mut response = redirect(destination);
+    let company = url::form_urlencoded::parse(query.as_deref().unwrap_or_default().as_bytes())
+        .find(|(key, _)| key == "company")
+        .map(|(_, value)| value.into_owned());
+    let destination = if let Some(company) = company {
+        format!(
+            "{destination}?{}",
+            url::form_urlencoded::Serializer::new(String::new())
+                .append_pair("company", &company)
+                .finish()
+        )
+    } else {
+        destination.to_owned()
+    };
+    let mut response = redirect(&destination);
     auth::append_cookies(&mut response, cookies);
     response
 }
@@ -171,7 +188,7 @@ async fn oauth_consent(
     };
     let (_, cookies) = match page_user(&state, &headers) {
         Ok(value) => value,
-        Err(response) if response.status() == StatusCode::FOUND => {
+        Err(response) if response.status() == StatusCode::OK => {
             let return_to = format!("/oauth/consent?request={request_id}");
             let encoded: String =
                 url::form_urlencoded::byte_serialize(return_to.as_bytes()).collect();

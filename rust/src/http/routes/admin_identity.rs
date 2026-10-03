@@ -11,26 +11,15 @@ use chrono::Utc;
 use serde::Serialize;
 
 use crate::{
-    http::{
-        contracts::typed::auth::{CredentialIdParams, DisplayNameBody, UserIdParams},
-        validation::{Valid, ValidPath},
-    },
+    http::{contracts::typed::auth::UserIdParams, validation::ValidPath},
     identity::admin,
 };
 
 use super::super::AppState;
 
 #[derive(Serialize)]
-struct Invitations {
-    invitations: Vec<admin::InvitationSummary>,
-}
-#[derive(Serialize)]
 struct Users {
     users: Vec<crate::identity::auth::AuthUser>,
-}
-#[derive(Serialize)]
-struct Credentials {
-    credentials: Vec<admin::CredentialSummary>,
 }
 #[derive(Serialize)]
 struct AuditEvents {
@@ -40,50 +29,9 @@ use crate::http::access::authorize_method as authenticated;
 
 pub fn router() -> Router<AppState> {
     Router::new()
-        .route(
-            "/api/admin/invitations",
-            get(list_invitations).post(invite_user),
-        )
         .route("/api/admin/users", get(list_users))
-        .route("/api/admin/credentials", get(list_credentials))
-        .route(
-            "/api/admin/credentials/{credential_id}/revoke",
-            post(revoke_credential),
-        )
         .route("/api/admin/users/{user_id}/revoke", post(revoke_user))
         .route("/api/admin/audit", get(list_audit))
-}
-
-async fn invite_user(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Valid(parsed): Valid<DisplayNameBody>,
-) -> Response {
-    let (actor, cookies) = match authenticated(&state, &headers, "POST") {
-        Ok(value) => value,
-        Err(error) => return *error,
-    };
-    let response = match state.with_database(|database| {
-        admin::invite_user(database, &actor, &parsed.display_name, Utc::now())
-    }) {
-        Ok(invitation) => (StatusCode::CREATED, Json(invitation)).into_response(),
-        Err(error) => ApiError::response(error),
-    };
-    with_cookies(response, cookies)
-}
-
-async fn list_invitations(State(state): State<AppState>, headers: HeaderMap) -> Response {
-    let (actor, cookies) = match authenticated(&state, &headers, "GET") {
-        Ok(value) => value,
-        Err(error) => return *error,
-    };
-    let response = match state
-        .with_database(|database| admin::list_invitations(database, &actor, Utc::now()))
-    {
-        Ok(invitations) => Json(Invitations { invitations }).into_response(),
-        Err(error) => ApiError::response(error),
-    };
-    with_cookies(response, cookies)
 }
 
 async fn list_users(State(state): State<AppState>, headers: HeaderMap) -> Response {
@@ -93,36 +41,6 @@ async fn list_users(State(state): State<AppState>, headers: HeaderMap) -> Respon
     };
     let response = match state.with_database(|database| admin::list_users(database, &actor)) {
         Ok(users) => Json(Users { users }).into_response(),
-        Err(error) => ApiError::response(error),
-    };
-    with_cookies(response, cookies)
-}
-
-async fn list_credentials(State(state): State<AppState>, headers: HeaderMap) -> Response {
-    let (actor, cookies) = match authenticated(&state, &headers, "GET") {
-        Ok(value) => value,
-        Err(error) => return *error,
-    };
-    let response = match state.with_database(|database| admin::list_credentials(database, &actor)) {
-        Ok(credentials) => Json(Credentials { credentials }).into_response(),
-        Err(error) => ApiError::response(error),
-    };
-    with_cookies(response, cookies)
-}
-
-async fn revoke_credential(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    ValidPath(CredentialIdParams { credential_id }): ValidPath<CredentialIdParams>,
-) -> Response {
-    let (actor, cookies) = match authenticated(&state, &headers, "POST") {
-        Ok(value) => value,
-        Err(error) => return *error,
-    };
-    let response = match state.with_database(|database| {
-        admin::revoke_credential(database, &actor, &credential_id, Utc::now())
-    }) {
-        Ok(()) => StatusCode::NO_CONTENT.into_response(),
         Err(error) => ApiError::response(error),
     };
     with_cookies(response, cookies)

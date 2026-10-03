@@ -10,17 +10,18 @@ import { listProjects } from "../projects/lib/project-api.js";
 
 export type ApiProfile = ProfileResponse;
 export type ApiProject = ProjectResponse;
-export type OnboardingStepId = "company" | "tools" | "providers" | "agents" | "projects" | "done";
+export type OnboardingStepId = "company" | "tools" | "providers" | "agents" | "projects" | "plan" | "done";
 
 export const ONBOARDING_TOOL_CHECKS: readonly (HealthCheck["id"] & ToolIconId)[] = ["git", "gh-auth", "herdr-readiness"];
 
-export const ONBOARDING_STEPS: readonly { id: OnboardingStepId; label: string; description: string }[] = [
-  { id: "company", label: "Profile", description: "Add your profile and company." },
-  { id: "tools", label: "Tools", description: "Check the host tools." },
-  { id: "providers", label: "Providers", description: "Connect one provider." },
-  { id: "agents", label: "Agents", description: "Review your team." },
-  { id: "projects", label: "Projects", description: "Add one project." },
-  { id: "done", label: "Done", description: "Start the first task." },
+export const ONBOARDING_STEPS: readonly { id: OnboardingStepId; label: string }[] = [
+  { id: "company", label: "Profile" },
+  { id: "tools", label: "Tools" },
+  { id: "providers", label: "Providers" },
+  { id: "agents", label: "Agents" },
+  { id: "projects", label: "Projects" },
+  { id: "plan", label: "Plan" },
+  { id: "done", label: "Done" },
 ];
 
 export type OnboardingState = { company: ApiCompany | undefined; checks: readonly HealthCheck[]; providers: readonly ProviderSummary[]; profiles: readonly ApiProfile[]; projects: readonly ApiProject[] };
@@ -39,6 +40,7 @@ export function stepComplete(state: OnboardingState, id: OnboardingStepId): bool
       return ["root", "worker"].every(role => state.profiles.some(profile => profile.role === role && profile.archivedAt === null && connected.has(profile.provider)));
     }
     case "projects": return state.projects.length >= 1;
+    case "plan": return true;
     case "done": return ONBOARDING_STEPS.filter(step => step.id !== "done").every(step => stepComplete(state, step.id));
   }
 }

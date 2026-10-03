@@ -97,7 +97,7 @@ mod tests {
         }
     }
     use crate::{
-        identity::{auth as identity_auth, companies},
+        identity::companies,
         platform::database::{OpenMode, SuplexDatabase},
     };
 
@@ -122,7 +122,7 @@ mod tests {
         ));
         let mut database = SuplexDatabase::open(&path, OpenMode::Migrate).unwrap();
         let now = Utc::now();
-        let admin = identity_auth::development_sign_in(&mut database, now).unwrap();
+        let admin = crate::http::routes::auth::tests::verified_sign_in(&mut database, now).unwrap();
         let company =
             companies::create_company(&mut database, &admin.user.id, "Projects", now).unwrap();
         database.connection().execute(
@@ -139,6 +139,10 @@ mod tests {
             "INSERT INTO suplex_sessions (id, token_hash, user_id, expires_at, created_at, token_version) VALUES ('project_member_session', ?1, 'project_member', ?2, ?3, 1)",
             rusqlite::params![member_hash, (member_now + chrono::Duration::days(1)).to_rfc3339(), member_now.to_rfc3339()],
         ).unwrap();
+        database.connection().execute("INSERT INTO suplex_account_users (user_id, account_id, email) VALUES ('project_member', 'test_verified_account', 'project_member@example.com')", []).unwrap();
+        database.connection().execute("INSERT INTO suplex_account_sessions (token_hash, account_id) VALUES (?1, 'test_verified_account')", [crate::shared::hash::sha256_hex("project_member_token")]).unwrap();
+        database.connection().execute("INSERT INTO suplex_companies (id, name, status, created_at) VALUES ('other_member_company', 'Other', 'active', '2026-10-03T00:00:00.000Z')", []).unwrap();
+        database.connection().execute("INSERT INTO suplex_memberships (user_id, company_id, created_at) VALUES ('project_member', 'other_member_company', '2026-10-03T00:00:00.000Z')", []).unwrap();
         let state = AppState::new(
             database,
             session::SessionConfig {
@@ -148,6 +152,7 @@ mod tests {
             },
         );
         let mut headers = HeaderMap::new();
+        headers.insert(crate::http::session::VERIFIED_HTTPS_HEADER, "1".parse().unwrap());
         headers.insert(
             "cookie",
             HeaderValue::from_str(&format!("sid_v1={}", admin.session_token)).unwrap(),
@@ -167,6 +172,7 @@ mod tests {
                 .contains("projectId")
         );
         let mut member_headers = HeaderMap::new();
+        member_headers.insert(crate::http::session::VERIFIED_HTTPS_HEADER, "1".parse().unwrap());
         member_headers.insert(
             "cookie",
             HeaderValue::from_static("sid_v1=project_member_token"),
@@ -364,7 +370,7 @@ mod tests {
         let mut database =
             SuplexDatabase::open(&root.join("test.sqlite"), OpenMode::Migrate).unwrap();
         let now = Utc::now();
-        let admin = identity_auth::development_sign_in(&mut database, now).unwrap();
+        let admin = crate::http::routes::auth::tests::verified_sign_in(&mut database, now).unwrap();
         let company =
             companies::create_company(&mut database, &admin.user.id, "Create", now).unwrap();
         let state = AppState::new(
@@ -392,6 +398,7 @@ mod tests {
             .unwrap(),
         );
         let mut headers = HeaderMap::new();
+        headers.insert(crate::http::session::VERIFIED_HTTPS_HEADER, "1".parse().unwrap());
         headers.insert(
             header::CONTENT_TYPE,
             HeaderValue::from_static("application/json"),
@@ -622,7 +629,7 @@ mod tests {
         ));
         let mut database = SuplexDatabase::open(&path, OpenMode::Migrate).unwrap();
         let now = Utc::now();
-        let admin = identity_auth::development_sign_in(&mut database, now).unwrap();
+        let admin = crate::http::routes::auth::tests::verified_sign_in(&mut database, now).unwrap();
         let company =
             companies::create_company(&mut database, &admin.user.id, "Sources", now).unwrap();
         database.connection().execute(
@@ -638,6 +645,7 @@ mod tests {
             },
         );
         let mut headers = HeaderMap::new();
+        headers.insert(crate::http::session::VERIFIED_HTTPS_HEADER, "1".parse().unwrap());
         headers.insert(
             "cookie",
             HeaderValue::from_str(&format!("sid_v1={}", admin.session_token)).unwrap(),
@@ -784,7 +792,7 @@ mod tests {
         let mut database =
             SuplexDatabase::open(&root.join("test.sqlite"), OpenMode::Migrate).unwrap();
         let now = Utc::now();
-        let admin = identity_auth::development_sign_in(&mut database, now).unwrap();
+        let admin = crate::http::routes::auth::tests::verified_sign_in(&mut database, now).unwrap();
         let company =
             companies::create_company(&mut database, &admin.user.id, "Patch", now).unwrap();
         // The stored paths do not exist: a patch that leaves the repository alone must not read Git.
@@ -818,6 +826,7 @@ mod tests {
             git: None,
         });
         let mut headers = HeaderMap::new();
+        headers.insert(crate::http::session::VERIFIED_HTTPS_HEADER, "1".parse().unwrap());
         headers.insert(
             header::CONTENT_TYPE,
             HeaderValue::from_static("application/json"),

@@ -19,7 +19,7 @@ mod tests {
         let (state, filename) = super::super::auth::tests::state();
         let now = Utc::now();
         let (admin, project) = state.with_database(|database| {
-            let admin = crate::identity::auth::development_sign_in(database, now).unwrap();
+            let admin = crate::http::routes::auth::tests::verified_sign_in(database, now).unwrap();
             let company =
                 crate::identity::companies::create_company(database, &admin.user.id, "Templates", now)
                     .unwrap();
@@ -40,6 +40,9 @@ mod tests {
         let send = |method: reqwest::Method, path: &str, body: Option<Value>| {
             let request = client
                 .request(method, format!("http://{address}{path}"))
+                .header("host", "suplex.example.test:4111")
+                .header("x-forwarded-host", "suplex.example.test:4111")
+                .header("x-forwarded-proto", "https")
                 .header("origin", "https://suplex.example.test:4111")
                 .header("cookie", &cookie);
             match body {
@@ -271,7 +274,7 @@ mod tests {
             .connection()
             .query_row("SELECT id FROM suplex_users LIMIT 1", [], |row| row.get(0))
             .unwrap();
-        let token = crate::identity::auth::create_session(&database, &user_id, Utc::now()).unwrap();
+        let token = crate::http::routes::auth::tests::verified_session(&database, &user_id, Utc::now()).unwrap();
         let state = AppState::new(
             database,
             crate::http::session::SessionConfig {
@@ -286,6 +289,7 @@ mod tests {
         .unwrap();
         let case = &expected[0];
         let mut headers = HeaderMap::new();
+        headers.insert(crate::http::session::VERIFIED_HTTPS_HEADER, "1".parse().unwrap());
         headers.insert("host", HeaderValue::from_static("127.0.0.1:4111"));
         headers.insert(
             "cookie",

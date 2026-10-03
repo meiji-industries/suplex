@@ -5,7 +5,7 @@ use axum::{
     response::{IntoResponse, Response},
     routing::get,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::{
     http::{
@@ -13,11 +13,7 @@ use crate::{
         access::{authorize_profile, with_cookies},
         error::ApiError,
     },
-    identity::{
-        admin::CredentialSummary,
-        auth::AuthUser,
-        remote_access_repository::{self as remote_access, RemoteAccessPolicy},
-    },
+    identity::remote_access_repository::{self as remote_access, RemoteAccessPolicy},
 };
 
 crate::shared::wire_enum! {
@@ -32,18 +28,23 @@ crate::shared::wire_enum! {
 #[serde(rename_all = "camelCase")]
 #[ts(export)]
 pub struct AccessResponse {
-    policy: RemoteAccessPolicy,
-    users: Vec<AuthUser>,
-    credentials: Vec<CredentialSummary>,
+    settings: AccessSettings,
     https_origin: Option<String>,
     network_mode: Option<NetworkAccessMode>,
+}
+
+#[derive(Serialize, Deserialize, ts_rs::TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct AccessSettings {
+    external_https_origin: Option<String>,
 }
 
 pub fn router() -> Router<AppState> {
     Router::new().route("/api/admin/access", get(read).put(update))
 }
 
-fn response(state: &AppState, actor: &str) -> Result<AccessResponse, Box<dyn std::error::Error>> {
+fn response(state: &AppState, _actor: &str) -> Result<AccessResponse, Box<dyn std::error::Error>> {
     state.with_database(|database| {
         let policy = remote_access::read(database)?;
         Ok(AccessResponse {
@@ -51,9 +52,9 @@ fn response(state: &AppState, actor: &str) -> Result<AccessResponse, Box<dyn std
                 &policy,
                 &state.session_config.reachable_address,
             ),
-            policy,
-            users: crate::identity::admin::list_users(database, actor)?,
-            credentials: crate::identity::admin::list_credentials(database, actor)?,
+            settings: AccessSettings {
+                external_https_origin: policy.external_https_origin().map(str::to_owned),
+            },
             network_mode: state
                 .installation
                 .as_ref()
@@ -77,28 +78,19 @@ async fn read(State(state): State<AppState>, headers: HeaderMap) -> Response {
 async fn update(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Json(policy): Json<RemoteAccessPolicy>,
+    Json(settings): Json<AccessSettings>,
 ) -> Response {
     let (actor, cookies) = match authorize_profile(&state, &headers, "PUT", true) {
         Ok(value) => value,
         Err(response) => return *response,
     };
     let updated = state.with_database(|database| {
-        let policy = remote_access::normalize(database, policy)?;
-        if policy.requires_https()
-            && remote_access::effective_https_origin(
-                &policy,
-                &state.session_config.reachable_address,
-            )
-            .is_none()
-        {
-            return Err(crate::identity::IdentityError::auth(
-                "Configure an external HTTPS origin before HTTPS is necessary",
-                400,
-                "remote_access_invalid",
-            )
-            .into());
-        }
+        let policy = remote_access::normalize(
+            database,
+            RemoteAccessPolicy::Passkeys {
+                external_https_origin: settings.external_https_origin,
+            },
+        )?;
         remote_access::update(database, policy)
     });
     let response = match updated.and_then(|_| response(&state, &actor)) {

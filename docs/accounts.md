@@ -1,8 +1,8 @@
 # Suplex accounts
 
 A Suplex account is a hosted identity at `https://suplex.sh`. People log in
-with Google, GitHub, or an emailed link. A Suplex installation links one
-account; everyone on that host works under it.
+with Google, GitHub, or an emailed link. A Suplex installation links one owner account. Remote members log in with
+their own accounts and receive access through company invitations.
 
 ## Hosted service
 
@@ -85,6 +85,7 @@ account token is minted at poll time, so no plaintext token rests in SQLite.
 | `account_attempts` | Challenge, installation ID, provider and OAuth state, the completed account. Swept one hour after expiry. |
 | `account_magic_links` | Token hash, attempt, email, `used_at`. Deleted with their attempt. |
 | `account_tokens` | Token hash, account, installation. |
+| `company_invitations` | Invitation hash, owner account, company, recipient, host address, expiry, and delivery time. |
 
 ### Configuration
 
@@ -172,31 +173,34 @@ selects the service: installations default to `https://suplex.sh`, development
 roots default to none, and an empty value turns accounts off. Without a service
 the app never asks for a login.
 
-- **Gate.** Application pages (`/`, `/today`, `/profile`, company settings, and
-  the other app views) show the login view (`window.__SUPLEX_VIEW__ =
-  "account-login"`) after the passkey session check and until the
-  `suplex_account` row exists. The gate reads only that row. `/auth`,
-  `/oauth/consent`, `/health`, the API, MCP, and agents are not gated.
-- **Login.** `POST /api/account/login` (administrator, same origin) creates a
-  random 32-byte verifier, sends only its S256 challenge to
-  `POST /v1/auth/attempts`, and returns the attempt and, for Google and GitHub,
-  the `suplex.sh/auth/start` URL. For email it calls `POST /v1/auth/email` and
-  returns no URL. The verifier stays in host memory for 15 minutes; a restart
-  means the person retries.
-- **Completion.** The login view polls `GET /api/account/login/{attemptId}`
-  every 2 seconds. The host polls `POST /v1/auth/attempts/{id}/poll` with the
-  verifier. `complete` writes `suplex_account` (account ID, email, name, token)
-  and records the audit action `account_linked`. An unknown or used attempt is
-  `expired`. A payload that does not match the wire contract fails closed.
-- **Logout.** `POST /api/account/logout` (administrator) deletes the row first,
-  records `account_unlinked`, then calls `POST /v1/auth/logout` best effort.
-- **Read.** `GET /api/account` returns `configured`, `canManage`, and the linked
-  email. Profile shows **Logged in as** with **Log out**.
-- **Telemetry.** The host keys PostHog events by the account ID once linked and
-  sends one `$identify` that merges the installation person. See
-  [telemetry](telemetry.md#identity).
-- **Desktop.** The app registers `suplex://`. `suplex://auth/done` only brings
-  the window to the front; the app never reads the URL.
+- **Local owner.** Loopback HTTP requests keep owner mode. When accounts are
+  configured, application pages require the installation's linked account.
+- **Remote members.** All remote requests require HTTPS. Tailscale Serve or a
+  loopback HTTPS proxy supplies the verified origin. Remote browser sessions
+  require a hosted account login and current company membership. Old automatic
+  and passkey sessions do not grant remote access.
+- **Login.** `POST /api/account/login` creates a verifier and sends its challenge
+  to the hosted service. A separate HttpOnly cookie binds the attempt to the
+  browser. Polling requires that cookie and the same local/remote context.
+  Local completion links the owner. Remote completion matches the verified
+  account email to a sent, live invitation, then issues a secure host session.
+  It never replaces the owner link or shares the owner's account token.
+- **Logout.** Local logout removes the owner link before best-effort token
+  revocation. Remote logout revokes only that browser's session.
+- **Invitations.** Company > Users contains Add User (full name and email),
+  pending invitations, and company membership removal. The host checks the
+  company's existing seat admission rule and reserves membership. The hosted
+  service sends the Resend email with a stable idempotency key. Failed delivery
+  remains retryable. The seven-day invitation page offers download, app, and
+  browser links; opening it does not grant access. Recipients must log in with
+  the invited email and connect to the company host over Tailscale or LAN.
+  Company data and membership remain on that host; suplex.sh does not relay
+  multiplayer traffic. Removing membership also revokes its invitations.
+- **Desktop.** `suplex://auth/done` focuses the app. `suplex://join?url=...`
+  opens the invited HTTPS host. Credentials and fragments are rejected.
+- **Availability.** Existing sessions use current local membership, so hosted
+  service downtime does not block ongoing work. New logins and invitation
+  emails require the hosted service.
 
 ## Setup checklist
 

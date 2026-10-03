@@ -38,3 +38,17 @@ CREATE TABLE IF NOT EXISTS account_tokens (
 
 CREATE INDEX IF NOT EXISTS account_attempts_expires ON account_attempts (expires_at);
 CREATE INDEX IF NOT EXISTS account_magic_links_email_created ON account_magic_links (email, created_at);
+
+CREATE TABLE IF NOT EXISTS company_invitations (
+  id TEXT PRIMARY KEY,
+  owner_account_id TEXT NOT NULL REFERENCES accounts(id),
+  company_id TEXT NOT NULL,
+  company_name TEXT NOT NULL,
+  full_name TEXT NOT NULL,
+  email TEXT NOT NULL COLLATE NOCASE,
+  host_origin TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  expires_at TEXT NOT NULL,
+  sent_at TEXT,
+  accepted_account_id TEXT REFERENCES accounts(id)
+);

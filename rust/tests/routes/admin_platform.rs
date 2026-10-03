@@ -42,7 +42,7 @@ mod tests {
         let address = listener.local_addr().unwrap();
         let router = crate::http::router(state.clone());
         let server = tokio::spawn(async move {
-            let _ = axum::serve(listener, router).await;
+            let _ = axum::serve(listener, router.into_make_service_with_connect_info::<std::net::SocketAddr>()).await;
         });
         Fixture {
             root,

@@ -92,7 +92,6 @@ function settingsView(name: string) {
   });
 }
 
-vi.mock("../src/frontend/features/auth/auth.js", () => ({ AuthView: view("auth") }));
 vi.mock("../src/frontend/features/admin/admin.js", () => ({ AdminView: view("admin") }));
 vi.mock("../src/frontend/features/settings/company-settings.js", () => ({ CompanySettingsView: view("company-settings") }));
 vi.mock("../src/frontend/features/profiles/profile.js", () => ({ ProfileView: settingsView("profile") }));

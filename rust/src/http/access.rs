@@ -93,7 +93,7 @@ pub async fn remote_access_boundary(
             .and_then(|value| value.to_str().ok())
             == Some("https");
     let verified_https = !local && (forwarded_https || serve_https);
-    if !local && policy.requires_https() && !verified_https {
+    if !local && !verified_https {
         return PublicFailure::new(403, "Remote access requires HTTPS").into_response();
     }
     let class = if local { "local" } else { "remote" };

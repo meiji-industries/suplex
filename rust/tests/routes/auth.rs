@@ -12,13 +12,6 @@ pub(crate) mod tests {
 
     // The handlers validate their body in an extractor; these adapters run
     // that validation for direct calls.
-    async fn invitation_options(state: State<AppState>, headers: HeaderMap, body: Bytes) -> Response {
-        match test_body(&headers, &body) {
-            Ok(body) => super::invitation_options(state, headers, body).await,
-            Err(response) => *response,
-        }
-    }
-
     async fn update_me(state: State<AppState>, headers: HeaderMap, body: Bytes) -> Response {
         match test_body(&headers, &body) {
             Ok(body) => super::update_me(state, headers, body).await,
@@ -121,11 +114,31 @@ pub(crate) mod tests {
             .unwrap();
     }
 
+    pub(crate) fn verified_sign_in(database: &mut SuplexDatabase, now: chrono::DateTime<Utc>) -> crate::platform::database::DatabaseResult<auth::AuthResult> {
+        let mut result = auth::development_sign_in(database, now)?;
+        result.session_token = verified_session(database, &result.user.id, now)?;
+        Ok(result)
+    }
+
+    pub(crate) fn verified_session(database: &SuplexDatabase, user_id: &str, now: chrono::DateTime<Utc>) -> crate::platform::database::DatabaseResult<String> {
+        let id = if user_id == "user_development" { "user_67e55044-10b1-426f-9247-bb680e5fe0c8".to_owned() } else { format!("user_{}", uuid::Uuid::new_v4()) };
+        if user_id == "user_development" {
+            crate::accounts::link(database, &crate::accounts::wire::HostedAccount { id: id.clone(), email: "owner@example.com".into(), name: None }, &"k".repeat(43))?;
+        } else {
+            database.connection().execute("INSERT OR REPLACE INTO suplex_account_users (user_id, account_id, email) VALUES (?1, ?2, ?3)", rusqlite::params![user_id, id, format!("{user_id}@example.com")])?;
+        }
+        let token = auth::create_session(database, user_id, now)?;
+        database.connection().execute("INSERT INTO suplex_account_sessions (token_hash, account_id) VALUES (?1, ?2)", rusqlite::params![crate::shared::hash::sha256_hex(&token), id])?;
+        Ok(token)
+    }
+
     pub(crate) fn operator_passkey(state: &AppState, now: chrono::DateTime<Utc>) -> String {
         state
             .with_database(|database| {
                 auth::development_sign_in(database, now)?;
-                auth::create_session(database, "user_development", now)
+                let owner = crate::accounts::wire::HostedAccount { id: "user_67e55044-10b1-426f-9247-bb680e5fe0c8".into(), email: "owner@example.com".into(), name: None };
+                crate::accounts::link(database, &owner, &"k".repeat(43))?;
+                crate::accounts::members::accept(database, &owner, now)
             })
             .unwrap()
     }
@@ -193,213 +206,13 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
-    async fn ceremony_body_validation_precedes_csrf_and_consumes_no_challenge() {
-        let (state, filename) = state();
-        let mut headers = HeaderMap::new();
-        headers.insert(
-            header::CONTENT_TYPE,
-            HeaderValue::from_static("application/json"),
-        );
-        headers.insert(
-            header::COOKIE,
-            HeaderValue::from_static("sid_v1=session_v1_fake"),
-        );
-        let malformed = invitation_options(
-            State(state.clone()),
-            headers.clone(),
-            Bytes::from_static(br#"{"token":42}"#),
-        )
-        .await;
-        assert_eq!(malformed.status(), StatusCode::BAD_REQUEST);
-        let malformed_body = to_bytes(malformed.into_body(), 4096).await.unwrap();
-        assert_eq!(
-            malformed_body,
-            r#"{"error":"Invalid request","findings":[{"code":"invalid-invalid_type","field":".token","message":"Request value is invalid"}]}"#
-        );
-        let csrf = invitation_options(
-            State(state.clone()),
-            headers.clone(),
-            Bytes::from_static(br#"{"token":"invalid"}"#),
-        )
-        .await;
-        assert_eq!(csrf.status(), StatusCode::FORBIDDEN);
-        let mut authentication_headers = HeaderMap::new();
-        authentication_headers.insert(session::VERIFIED_HTTPS_HEADER, HeaderValue::from_static("1"));
-        authentication_headers.insert("origin", HeaderValue::from_static("https://suplex.example.test:4111"));
-        let no_credentials = authentication_options(State(state.clone()), authentication_headers).await;
-        assert_eq!(no_credentials.status(), StatusCode::BAD_REQUEST);
-        let no_credentials_body = to_bytes(no_credentials.into_body(), 1024).await.unwrap();
-        assert_eq!(no_credentials_body, r#"{"error":"No passkey is enrolled"}"#);
-        drop(state);
-        let _ = std::fs::remove_file(&filename);
-        let _ = std::fs::remove_file(filename.with_extension("sqlite-wal"));
-        let _ = std::fs::remove_file(filename.with_extension("sqlite-shm"));
-    }
-
-    #[tokio::test]
-    async fn signed_fresh_passkey_over_isolated_tcp_listener() {
-        use chrono::Duration;
-        use rusqlite::params;
-        use tokio::io::{AsyncReadExt, AsyncWriteExt};
-
-        use crate::identity::webauthn::test_support::synthetic;
-
-        async fn post(address: std::net::SocketAddr, path: &str, body: String) -> String {
-            let mut stream = tokio::net::TcpStream::connect(address).await.unwrap();
-            let request = format!(
-                "POST {path} HTTP/1.1\r\nHost: suplex.example.test:4111\r\nOrigin: https://suplex.example.test:4111\r\nX-Forwarded-Host: suplex.example.test:4111\r\nX-Forwarded-Proto: https\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-                body.len()
-            );
-            stream.write_all(request.as_bytes()).await.unwrap();
-            let mut response = Vec::new();
-            stream.read_to_end(&mut response).await.unwrap();
-            String::from_utf8(response).unwrap()
+    async fn passkey_endpoints_are_retired() {
+        let (state, _) = state();
+        let app = crate::http::router(state);
+        for path in ["/api/auth/options", "/api/auth/verify", "/api/auth/passkeys/options", "/api/auth/invitation/options"] {
+            let (status, _, _) = crate::http::routes::avatars::tests::call(&app, "POST", path, None, Some(json!({}))).await;
+            assert_eq!(status, StatusCode::NOT_FOUND, "{path}");
         }
-        fn body(response: &str) -> serde_json::Value {
-            serde_json::from_str(response.split_once("\r\n\r\n").unwrap().1).unwrap()
-        }
-
-        let (state, filename) = state();
-        let token = format!("invite_v1_user_{}", "A".repeat(43));
-        let now = Utc::now();
-        state.with_database(|database| {
-            database.connection().execute("INSERT INTO suplex_users (id, display_name, username, avatar_seed, role, status, created_at, updated_at, identity_version) VALUES ('user_existing', 'Fixture member', 'user_v1_user_existing', 'user_v1_user_existing', 'member', 'pending', ?1, ?1, 1)", [now.to_rfc3339()]).unwrap();
-            database.connection().execute("INSERT INTO suplex_invitations (id, token_hash, kind, display_name, user_id, expires_at, created_at, metadata_json) VALUES ('invitation_tcp', ?1, 'user', 'Fixture member', 'user_existing', ?2, ?3, '{}')", params![crate::shared::hash::sha256_hex(&token), (now + Duration::days(1)).to_rfc3339(), now.to_rfc3339()]).unwrap();
-        });
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let address = listener.local_addr().unwrap();
-        let server_state = state.clone();
-        let server = tokio::spawn(async move {
-            axum::serve(listener, crate::http::router(server_state).into_make_service_with_connect_info::<std::net::SocketAddr>())
-                .await
-                .unwrap();
-        });
-        let offered = post(
-            address,
-            "/api/auth/invitation/options",
-            json!({"token":token}).to_string(),
-        )
-        .await;
-        assert!(offered.starts_with("HTTP/1.1 200 OK\r\n"), "{offered}");
-        let offered = body(&offered);
-        let signed = synthetic(&json!({
-            "mode":"register", "options":offered["options"],
-            "origin":"https://suplex.example.test:4111"
-        }));
-        let enrolled = post(
-            address,
-            "/api/auth/invitation/verify",
-            json!({
-                "token":token, "challengeId":offered["challengeId"], "response":signed["response"]
-            })
-            .to_string(),
-        )
-        .await;
-        assert!(enrolled.starts_with("HTTP/1.1 200 OK\r\n"), "{enrolled}");
-        assert!(
-            enrolled.contains("set-cookie: sid_v1=session_v1_"),
-            "{enrolled}"
-        );
-        assert!(enrolled.contains("set-cookie: csrf_v1="), "{enrolled}");
-        assert!(enrolled.ends_with(r#"{"user":{"id":"user_existing","displayName":"Fixture member","title":"","username":"user_v1_user_existing","avatarSeed":"user_v1_user_existing","role":"member","status":"active","companyIds":[]}}"#), "{enrolled}");
-        let authentication = post(address, "/api/auth/options", "{}".into()).await;
-        assert!(
-            authentication.starts_with("HTTP/1.1 200 OK\r\n"),
-            "{authentication}"
-        );
-        let authentication = body(&authentication);
-        let assertion = synthetic(&json!({
-            "mode":"authenticate", "options":authentication["options"],
-            "origin":"https://suplex.example.test:4111",
-            "credentialId":signed["credentialId"],
-            "token":signed["token"]
-        }));
-        let signed_in = post(
-            address,
-            "/api/auth/verify",
-            json!({
-                "challengeId":authentication["challengeId"], "response":assertion["response"]
-            })
-            .to_string(),
-        )
-        .await;
-        assert!(signed_in.starts_with("HTTP/1.1 200 OK\r\n"), "{signed_in}");
-        assert!(signed_in.ends_with(r#"{"user":{"id":"user_existing","displayName":"Fixture member","title":"","username":"user_v1_user_existing","avatarSeed":"user_v1_user_existing","role":"member","status":"active","companyIds":[]}}"#), "{signed_in}");
-        let counter: u32 = state.with_database(|database| {
-            database
-                .connection()
-                .query_row(
-                    "SELECT counter FROM suplex_credentials WHERE credential_id = ?1",
-                    [signed["credentialId"].as_str().unwrap()],
-                    |row| row.get(0),
-                )
-                .unwrap()
-        });
-        assert_eq!(counter, 1);
-        let detached_token = format!("invite_v1_user_{}", "B".repeat(43));
-        state.with_database(|database| {
-            database.connection().execute("INSERT INTO suplex_users (id, display_name, username, avatar_seed, role, status, created_at, updated_at, identity_version) VALUES ('user_detached', 'Detached member', 'user_v1_user_detached', 'user_v1_user_detached', 'member', 'pending', ?1, ?1, 1)", [now.to_rfc3339()]).unwrap();
-            database.connection().execute("INSERT INTO suplex_invitations (id, token_hash, kind, display_name, user_id, expires_at, created_at, metadata_json) VALUES ('invitation_detached', ?1, 'user', 'Detached member', 'user_detached', ?2, ?3, '{}')", params![crate::shared::hash::sha256_hex(&detached_token), (now + Duration::days(1)).to_rfc3339(), now.to_rfc3339()]).unwrap();
-        });
-        let detached_options = state.with_database(|database| {
-            ceremony::begin_registration(
-                database,
-                "user",
-                &detached_token,
-                WebAuthnSite {
-                    origin: "https://suplex.example.test:4111",
-                    rp_id: "suplex.example.test",
-                },
-                now,
-            )
-            .unwrap()
-        });
-        let detached_signed = synthetic(&json!({
-            "mode":"register", "options":detached_options.options,
-            "origin":"https://suplex.example.test:4111"
-        }));
-        let detached_state = state.clone();
-        let detached = tokio::task::spawn_blocking(move || {
-            run_registration_ceremony(RegistrationAttempt {
-                state: detached_state,
-                kind: "user",
-                token: detached_token,
-                challenge_id: detached_options.challenge_id,
-                response: PreparedCredential {
-                    shape_valid: true,
-                    payload: Some(detached_signed["response"].clone()),
-                },
-                origin: "https://suplex.example.test:4111".into(),
-                rp_id: "suplex.example.test".into(),
-                secure_cookie: true,
-            })
-        });
-        drop(detached);
-        tokio::time::timeout(std::time::Duration::from_secs(5), async {
-            loop {
-                let active: bool = state.with_database(|database| {
-                    database
-                        .connection()
-                        .query_row(
-                            "SELECT status = 'active' FROM suplex_users WHERE id = 'user_detached'",
-                            [],
-                            |row| row.get(0),
-                        )
-                        .unwrap()
-                });
-                if active {
-                    break;
-                }
-                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-            }
-        })
-        .await
-        .unwrap();
-        server.abort();
-        drop(state);
-        let _ = std::fs::remove_file(&filename);
-        let _ = std::fs::remove_file(filename.with_extension("sqlite-wal"));
-        let _ = std::fs::remove_file(filename.with_extension("sqlite-shm"));
     }
 
     #[tokio::test]

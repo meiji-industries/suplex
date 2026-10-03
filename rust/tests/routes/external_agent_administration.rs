@@ -6,7 +6,6 @@ pub(crate) mod tests {
 
     use crate::{
         http::{AppState, routes::auth},
-        identity::auth as identity_auth,
     };
 
     pub(crate) struct Server {
@@ -33,7 +32,7 @@ pub(crate) mod tests {
 
     /// A served app with an admin session, a member session, a company, and two projects.
     pub(crate) async fn server(state: Option<(AppState, std::path::PathBuf)>) -> Server {
-        let (state, path) = state.unwrap_or_else(auth::tests::state);
+        let (mut state, path) = state.unwrap_or_else(auth::tests::state);
         let now = chrono::Utc::now();
         let stamp = rfc3339_millis(now);
         let admin = auth::tests::operator_passkey(&state, now);
@@ -44,9 +43,11 @@ pub(crate) mod tests {
             for (id, name) in [("project_api", "API Project"), ("project_api_2", "API Project 2")] {
                 connection.execute("INSERT INTO suplex_projects (id, company_id, name, repository_path, worktree_root, repository_identity, base_branch, setup_command, verification_command, created_at, updated_at) VALUES (?1, 'company_api', ?2, ?3, ?4, ?5, 'main', '', '', ?6, ?6)", params![id, name, format!("/tmp/{id}"), format!("/tmp/{id}-worktrees"), format!("meiji/{id}"), stamp]).unwrap();
             }
-            identity_auth::create_session(database, "member_user", now).unwrap()
+            connection.execute("INSERT INTO suplex_memberships (user_id, company_id, created_at) VALUES ('member_user', 'company_api', ?1)", [&stamp]).unwrap();
+            auth::tests::verified_session(database, "member_user", now).unwrap()
         });
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        state.session_config.port = listener.local_addr().unwrap().port();
         let base = format!("http://{}", listener.local_addr().unwrap());
         let app = crate::http::router(state.clone())
             .into_make_service_with_connect_info::<std::net::SocketAddr>();

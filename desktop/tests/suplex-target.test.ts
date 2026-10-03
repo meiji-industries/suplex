@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { classifyNavigation, parseSuplexTarget, resolveSuplexTarget } from "../src/suplex-target";
+import { invitationTarget, classifyNavigation, parseSuplexTarget, resolveSuplexTarget } from "../src/suplex-target";
 
 describe("parseSuplexTarget", () => {
   test("normalizes and keeps the scheme, host, and port", () => {
@@ -77,4 +77,13 @@ describe("classifyNavigation", () => {
   test("with no configured origin nothing is internal", () => {
     expect(classifyNavigation("https://suplex.tail1234.ts.net/", null).kind).toBe("external");
   });
+});
+
+test("company invitation links accept only validated HTTPS targets", () => {
+  expect(invitationTarget("suplex://join?url=" + encodeURIComponent("https://company.example/?company=one"))?.url).toBe("https://company.example/?company=one");
+  for (const target of ["http://127.0.0.1:4111", "http://company.example", "javascript:alert(1)", "https://user:password@company.example", "https://company.example/#token"]) {
+    expect(invitationTarget("suplex://join?url=" + encodeURIComponent(target))).toBeNull();
+  }
+  expect(invitationTarget("suplex://auth/done")).toBeNull();
+  expect(invitationTarget("suplex://join?url=https://one.example&url=https://two.example")).toBeNull();
 });

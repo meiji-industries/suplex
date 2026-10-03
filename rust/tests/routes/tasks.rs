@@ -74,7 +74,6 @@ mod tests {
         update_details
     );
     use crate::{
-        identity::auth as identity_auth,
         platform::database::{OpenMode, SuplexDatabase},
     };
     use axum::{body::to_bytes, http::HeaderValue};
@@ -177,7 +176,7 @@ mod tests {
         let db_path = root.join("suplex.sqlite");
         let mut database = SuplexDatabase::open(&db_path, OpenMode::Migrate).unwrap();
         let now = Utc::now();
-        let admin = identity_auth::development_sign_in(&mut database, now).unwrap();
+        let admin = crate::http::routes::auth::tests::verified_sign_in(&mut database, now).unwrap();
         database.connection().execute(
             "INSERT INTO suplex_companies (id, name, status, created_at) VALUES ('task_http_company', 'Task company', 'active', ?1)",
             [now.to_rfc3339()],
@@ -199,8 +198,9 @@ mod tests {
         .with_artifact_root(root.join("artifacts"))
         .with_project_github(github);
         let app = crate::http::router(state.clone());
-        let server = tokio::spawn(async move { axum::serve(listener, app).await });
+        let server = tokio::spawn(async move { axum::serve(listener, app.into_make_service_with_connect_info::<std::net::SocketAddr>()).await });
         let mut headers = HeaderMap::new();
+        headers.insert(crate::http::session::VERIFIED_HTTPS_HEADER, "1".parse().unwrap());
         headers.insert(
             "host",
             HeaderValue::from_str(&format!("127.0.0.1:{}", address.port())).unwrap(),
@@ -447,6 +447,7 @@ mod tests {
             OriginalUri("/api/companies/task_http_company/tasks".parse().unwrap()),
             {
                 let mut value = HeaderMap::new();
+        value.insert(crate::http::session::VERIFIED_HTTPS_HEADER, "1".parse().unwrap());
                 value.insert(
                     "host",
                     HeaderValue::from_str(&format!("127.0.0.1:{}", address.port())).unwrap(),
@@ -1342,6 +1343,7 @@ mod tests {
             Path("task_http_company".into()),
             {
                 let mut replay_headers = HeaderMap::new();
+        replay_headers.insert(crate::http::session::VERIFIED_HTTPS_HEADER, "1".parse().unwrap());
                 replay_headers.insert(
                     "host",
                     HeaderValue::from_str(&format!("127.0.0.1:{}", address.port())).unwrap(),
@@ -1525,7 +1527,7 @@ mod tests {
             .connection()
             .query_row("SELECT id FROM suplex_users LIMIT 1", [], |row| row.get(0))
             .unwrap();
-        let token = identity_auth::create_session(&database, &user_id, Utc::now()).unwrap();
+        let token = crate::http::routes::auth::tests::verified_session(&database, &user_id, Utc::now()).unwrap();
         let state = AppState::new(
             database,
             crate::http::session::SessionConfig {
@@ -1539,6 +1541,7 @@ mod tests {
         ))
         .unwrap();
         let mut headers = HeaderMap::new();
+        headers.insert(crate::http::session::VERIFIED_HTTPS_HEADER, "1".parse().unwrap());
         headers.insert("host", HeaderValue::from_static("127.0.0.1:4111"));
         headers.insert(
             "cookie",

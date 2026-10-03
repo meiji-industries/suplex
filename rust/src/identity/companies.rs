@@ -380,6 +380,7 @@ pub fn remove_membership(
         {
             return Err(IdentityError::not_found().into());
         }
+        database.connection().execute("UPDATE suplex_company_invitations SET revoked_at = ?3 WHERE user_id = ?1 AND company_id = ?2 AND revoked_at IS NULL", params![target_user_id, company_id, rfc3339_millis(now)])?;
         audit(
             database,
             actor_user_id,

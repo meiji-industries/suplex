@@ -55,9 +55,10 @@ mod tests {
     #[tokio::test]
     async fn root_and_application_pages_follow_live_session_and_project_state() {
         let (state, path) = test_state();
-        let anonymous = root(State(state.clone()), HeaderMap::new()).await;
-        assert_eq!(anonymous.status(), StatusCode::FOUND);
-        assert_eq!(anonymous.headers().get(header::LOCATION).unwrap(), "/auth");
+        let anonymous = root(State(state.clone()), HeaderMap::new(), RawQuery(None)).await;
+        assert_eq!(anonymous.status(), StatusCode::OK);
+        let html = to_bytes(anonymous.into_body(), usize::MAX).await.unwrap();
+        assert!(String::from_utf8_lossy(&html).contains("account-login"));
 
         let mut loopback = HeaderMap::new();
         loopback.insert(header::HOST, "127.0.0.1:4113".parse().unwrap());
@@ -65,7 +66,7 @@ mod tests {
             session::REQUEST_CLASS_HEADER,
             "local".parse().unwrap(),
         );
-        let onboarding = root(State(state.clone()), loopback.clone()).await;
+        let onboarding = root(State(state.clone()), loopback.clone(), RawQuery(None)).await;
         assert_eq!(onboarding.status(), StatusCode::FOUND);
         assert_eq!(
             onboarding.headers().get(header::LOCATION).unwrap(),
@@ -91,7 +92,7 @@ mod tests {
         });
         let mut authenticated_root_headers = loopback.clone();
         authenticated_root_headers.insert(header::COOKIE, cookie.parse().unwrap());
-        let default_page = root(State(state.clone()), authenticated_root_headers).await;
+        let default_page = root(State(state.clone()), authenticated_root_headers, RawQuery(None)).await;
         assert_eq!(default_page.status(), StatusCode::FOUND);
         assert_eq!(default_page.headers().get(header::LOCATION).unwrap(), "/today");
         // A database file cannot be an artifact directory. Broken optional host
@@ -116,7 +117,7 @@ mod tests {
             "/setup",
         ] {
             let (status, headers, _) =
-                super::super::avatars::tests::call(&app, "GET", uri, Some(&cookie), None).await;
+                super::super::avatars::tests::local_call(&app, "GET", uri, Some(&cookie), None).await;
             assert_eq!(status, StatusCode::OK, "{uri}");
             assert!(!headers.contains_key(header::LOCATION), "{uri}");
         }
@@ -223,7 +224,7 @@ mod tests {
         let call = |app: Router, uri: &'static str| {
             let cookie = cookie.clone();
             async move {
-                super::super::avatars::tests::call(&app, "GET", uri, Some(&cookie), None).await
+                super::super::avatars::tests::local_call(&app, "GET", uri, Some(&cookie), None).await
             }
         };
 

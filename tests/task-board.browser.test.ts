@@ -14,7 +14,7 @@ test.each([1280, 390])("tasks can be created, started and viewed on the board at
     await page.goto(`${value.base}/tasks?company=${value.company.id}`);
     for (const immediate of [true, false]) {
       await page.getByRole("heading", { name: "Tasks", exact: true }).waitFor();
-      const newTask = page.getByRole("button", { name: "New task", exact: true });
+      const newTask = page.getByRole("button", { name: "New task", exact: true }).first();
       if (!(await newTask.isVisible())) await page.getByRole("button", { name: "Open navigation" }).click();
       await newTask.click();
       const dialog = page.getByRole("dialog", { name: "New task", exact: true });

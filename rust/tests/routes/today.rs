@@ -7,7 +7,6 @@ mod tests {
 
     use crate::{
         http::routes::avatars::tests::{call, json_body},
-        identity::auth as identity_auth,
         shared::time::rfc3339_millis,
         tasks::analytics::{TaskUsage, Tokens},
     };
@@ -40,7 +39,7 @@ mod tests {
             for company in ["today_c1", "today_c2"] {
                 connection.execute("INSERT INTO suplex_memberships (user_id,company_id,created_at) VALUES ('today_member',?1,?2)", rusqlite::params![company, prior]).unwrap();
             }
-            identity_auth::create_session(database, "today_member", Utc::now()).unwrap()
+            crate::http::routes::auth::tests::verified_session(database, "today_member", Utc::now()).unwrap()
         });
         state.with_database(|database| {
             let connection = database.connection();

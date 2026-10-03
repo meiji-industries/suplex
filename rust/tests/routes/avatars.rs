@@ -4,7 +4,6 @@ pub(crate) mod tests {
     use serde_json::Value;
 
     use super::*;
-    use crate::identity::auth as identity_auth;
 
     // Smallest valid PNG: 1x1 transparent pixel.
     const PNG: &str = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
@@ -18,6 +17,14 @@ pub(crate) mod tests {
         cookie: Option<&str>,
         body: Option<Value>,
     ) -> (StatusCode, reqwest::header::HeaderMap, Vec<u8>) {
+        request(app, method, uri, cookie, body, false).await
+    }
+
+    pub(crate) async fn local_call(app: &Router, method: &str, uri: &str, cookie: Option<&str>, body: Option<Value>) -> (StatusCode, reqwest::header::HeaderMap, Vec<u8>) {
+        request(app, method, uri, cookie, body, true).await
+    }
+
+    async fn request(app: &Router, method: &str, uri: &str, cookie: Option<&str>, body: Option<Value>, local: bool) -> (StatusCode, reqwest::header::HeaderMap, Vec<u8>) {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let server = tokio::spawn(
@@ -32,12 +39,8 @@ pub(crate) mod tests {
             .redirect(reqwest::redirect::Policy::none())
             .build()
             .unwrap();
-        let mut request = client
-            .request(method.parse().unwrap(), format!("http://{address}{uri}"))
-            .header("host", "suplex.example.test:4111")
-            .header("origin", ORIGIN)
-            .header("x-forwarded-host", "suplex.example.test:4111")
-            .header("x-forwarded-proto", "https");
+        let mut request = client.request(method.parse().unwrap(), format!("http://{address}{uri}"));
+        request = if local { request.header("host", "127.0.0.1:4113").header("origin", "http://127.0.0.1:4113") } else { request.header("host", "suplex.example.test:4111").header("origin", ORIGIN).header("x-forwarded-host", "suplex.example.test:4111").header("x-forwarded-proto", "https") };
         if let Some(cookie) = cookie {
             request = request.header("cookie", cookie);
         }
@@ -72,7 +75,9 @@ pub(crate) mod tests {
             connection.execute("INSERT INTO suplex_companies (id, name, status, created_at) VALUES ('company_avatar', 'Avatar Company', 'active', ?1)", [&time]).unwrap();
             connection.execute("INSERT INTO suplex_projects (id, company_id, name, repository_path, worktree_root, repository_identity, base_branch, setup_command, verification_command, created_at, updated_at) VALUES ('project_avatar', 'company_avatar', 'Avatar Project', ?1, ?2, 'meiji/avatar', 'main', '', '', ?3, ?3)", rusqlite::params![root.join("repo").to_str().unwrap(), root.join("worktrees").to_str().unwrap(), time]).unwrap();
             connection.execute("INSERT INTO suplex_users (id, display_name, username, role, status, created_at, updated_at, identity_version) VALUES ('member', 'Member', 'member', 'member', 'active', ?1, ?1, 1)", [&time]).unwrap();
-            identity_auth::create_session(database, "member", now).unwrap()
+            connection.execute("INSERT OR IGNORE INTO suplex_companies (id, name, status, created_at) VALUES ('other_member_company', 'Other', 'active', ?1)", [&time]).unwrap();
+            connection.execute("INSERT OR IGNORE INTO suplex_memberships (user_id, company_id, created_at) VALUES ('member', 'other_member_company', ?1)", [&time]).unwrap();
+            crate::http::routes::auth::tests::verified_session(database, "member", now).unwrap()
         });
         auth::tests::require_passkeys(&state);
         let app = crate::http::router(state.clone());

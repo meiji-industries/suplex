@@ -214,7 +214,7 @@ mod tests {
             .query_row("SELECT id FROM suplex_users LIMIT 1", [], |row| row.get(0))
             .unwrap();
         let token =
-            crate::identity::auth::create_session(&database, &user_id, chrono::Utc::now()).unwrap();
+            crate::http::routes::auth::tests::verified_session(&database, &user_id, chrono::Utc::now()).unwrap();
         let session_id = initial["sessionId"].as_str().unwrap().to_owned();
         let runtime = crate::runtimes::task_harness::task_session_runtime_directory(
             &database_path,
@@ -264,6 +264,7 @@ mod tests {
                 .unwrap();
         });
         let mut headers = HeaderMap::new();
+        headers.insert(crate::http::session::VERIFIED_HTTPS_HEADER, "1".parse().unwrap());
         headers.insert("host", HeaderValue::from_str(&address.to_string()).unwrap());
         headers.insert(
             "cookie",

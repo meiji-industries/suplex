@@ -90,15 +90,33 @@ fn page_user(
     }
 }
 
+/// `page_user` for the application: when this host uses the account service
+/// and no account is linked yet, it shows the login view instead. The gate
+/// reads only the local link row, never the hosted service.
+fn app_page_user(
+    state: &AppState,
+    headers: &HeaderMap,
+) -> Result<(AuthUser, Vec<String>), Box<Response>> {
+    let (user, cookies) = page_user(state, headers)?;
+    if state.accounts.is_none() {
+        return Ok((user, cookies));
+    }
+    match state.with_database(|database| crate::accounts::linked(database)) {
+        Ok(Some(_)) => Ok((user, cookies)),
+        Ok(None) => Err(Box::new(page("account-login", cookies))),
+        Err(error) => Err(Box::new(with_cookies(ApiError::response(error), cookies))),
+    }
+}
+
 fn authenticated_page(state: AppState, headers: HeaderMap, view: &str) -> Response {
-    match page_user(&state, &headers) {
+    match app_page_user(&state, &headers) {
         Ok((_, cookies)) => page(view, cookies),
         Err(response) => *response,
     }
 }
 
 async fn root(State(state): State<AppState>, headers: HeaderMap) -> Response {
-    let (user, cookies) = match page_user(&state, &headers) {
+    let (user, cookies) = match app_page_user(&state, &headers) {
         Ok(value) => value,
         Err(response) => return *response,
     };
@@ -178,7 +196,7 @@ async fn company_settings(
     Path(company_id): Path<String>,
     headers: HeaderMap,
 ) -> Response {
-    let (user, cookies) = match page_user(&state, &headers) {
+    let (user, cookies) = match app_page_user(&state, &headers) {
         Ok(value) => value,
         Err(response) => return *response,
     };

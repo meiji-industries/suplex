@@ -36,9 +36,6 @@ pub mod wire;
 
 pub const FREE_PROJECT_LIMIT: i64 = 2;
 
-/// The Suplex-operated billing service on Fly.
-pub const PRODUCTION_SERVICE_URL: &str = "https://billing.suplex.sh";
-
 pub fn unavailable() -> PublicFailure {
     PublicFailure::new(503, "Suplex cannot check the subscription").with_code("billing_unavailable")
 }
@@ -265,14 +262,15 @@ impl BillingClient {
     }
 }
 
-pub fn parse_service_url(value: &str) -> Result<Url, String> {
-    let url = Url::parse(value).map_err(|_| "SUPLEX_BILLING_SERVICE_URL is invalid")?;
+/// A hosted service URL from the variable `name`: HTTPS, or HTTP on loopback.
+pub fn parse_service_url(value: &str, name: &str) -> Result<Url, String> {
+    let url = Url::parse(value).map_err(|_| format!("{name} is invalid"))?;
     let loopback = matches!(url.host_str(), Some("localhost" | "127.0.0.1" | "[::1]"));
     if url.scheme() != "https" && !(url.scheme() == "http" && loopback) {
-        return Err("SUPLEX_BILLING_SERVICE_URL must use HTTPS".into());
+        return Err(format!("{name} must use HTTPS"));
     }
     if !url.username().is_empty() || url.password().is_some() {
-        return Err("SUPLEX_BILLING_SERVICE_URL must not contain credentials".into());
+        return Err(format!("{name} must not contain credentials"));
     }
     Ok(url)
 }

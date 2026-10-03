@@ -48,7 +48,8 @@ Diagnostic Commands:
   serve       Run the server in the foreground
 
 Operator Commands:
-  billing     Run the hosted billing service (billing serve, billing rotate-credential)
+  hosted      Run the hosted billing, account, and suplex.sh service (hosted serve)
+  billing     Rotate a hosted billing credential (billing rotate-credential)
 
 Backup Commands:
   backup          Write a backup archive

@@ -10,6 +10,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from ".
 import { RefreshCw, Save } from "lucide-react";
 import { useEffect, useState, type ReactElement } from "react";
 import { LoadingState } from "../../components/app/loading-state.js";
+import type { AccountResponse } from "../../contracts/generated/AccountResponse.js";
+import { getAccount, logoutAccount } from "../account/lib/account-api.js";
 
 export function ProfileView(): ReactElement {
   const { user, currentCompany, loading, updateProfile } = useCompanyContext();
@@ -20,6 +22,9 @@ export function ProfileView(): ReactElement {
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState("");
   const [taskAgentExpiry, setTaskAgentExpiry] = useState(readTaskAgentExpiry);
+  const [account, setAccount] = useState<AccountResponse>();
+
+  useEffect(() => { void getAccount().then(setAccount).catch(() => undefined); }, []);
 
   useEffect(() => { setDisplayName(user?.displayName ?? ""); setUsername(user?.username ?? ""); setAvatarSeed(user?.avatarSeed ?? ""); setSaved(false); }, [user?.avatarSeed, user?.displayName, user?.username]);
 
@@ -34,6 +39,11 @@ export function ProfileView(): ReactElement {
     finally { setBusy(false); }
   };
   const companyId = currentCompany?.id;
+  const logout = async (): Promise<void> => {
+    setError("");
+    try { await logoutAccount(); window.location.assign("/"); }
+    catch { setError("Suplex could not log out of the Suplex account."); }
+  };
 
   return <SettingsLayout title="Profile" companyId={companyId ?? ""} backHref={withCompany("/tasks", companyId)} activeHref={withCompany("/profile", companyId)}>
     <SettingsContent title="Profile">
@@ -56,6 +66,9 @@ export function ProfileView(): ReactElement {
           <SelectContent>{taskAgentExpiryOptions.map(option => <SelectItem key={option.value} value={String(option.value)}>{option.label}</SelectItem>)}</SelectContent>
         </Select>
       </SettingRow>
+      {account?.configured && account.account ? <SettingRow label="Suplex account" description={`Logged in as ${account.account.email}`}>
+        {account.canManage ? <Button type="button" variant="outline" size="sm" onClick={() => void logout()}>Log out</Button> : null}
+      </SettingRow> : null}
     </SettingsSection>
     {error ? <Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert> : null}
     </>}

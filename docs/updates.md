@@ -82,7 +82,7 @@ Three paths replace the app:
 | --- | --- | --- |
 | In-app updater | `desktop/src/desktop-updater.ts` | **Restart Suplex** in the app |
 | `suplex update` | `rust/src/platform/app_update.rs`, see [the CLI](architecture/cli.md#updates) | A terminal |
-| `install.sh` | `src/web/public/install.sh`, served at `https://suplex.sh/install.sh` | `curl -fsSL https://suplex.sh/install.sh \| sh` |
+| `install.sh` | `src/web/public/install.sh`, compiled into `suplex hosted serve` and served at `https://suplex.sh/install.sh` | `curl -fsSL https://suplex.sh/install.sh \| sh` |
 
 `suplex update` and `install.sh` stop the app with the same sequence:
 

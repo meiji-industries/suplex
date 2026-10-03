@@ -765,14 +765,14 @@ pub(crate) mod tests {
             "http://localhost:4211",
             "http://[::1]:4211",
         ] {
-            assert!(parse_service_url(url).is_ok(), "{url}");
+            assert!(parse_service_url(url, "SUPLEX_BILLING_SERVICE_URL").is_ok(), "{url}");
         }
         for url in [
             "http://billing.example.test",
             "https://user:secret@billing.example.test",
             "not a url",
         ] {
-            assert!(parse_service_url(url).is_err(), "{url}");
+            assert!(parse_service_url(url, "SUPLEX_BILLING_SERVICE_URL").is_err(), "{url}");
         }
     }
 

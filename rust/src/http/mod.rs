@@ -28,6 +28,7 @@ pub mod error;
 mod logging;
 pub mod routes {
     pub mod access;
+    pub mod account;
     pub mod admin_identity;
     pub mod admin_platform;
     pub mod agent_api;
@@ -90,6 +91,7 @@ pub struct AppState {
     /// Dynamic client registrations per source address in the last hour.
     pub oauth_registrations: OAuthRegistrations,
     pub billing: Option<crate::billing::BillingClient>,
+    pub accounts: Option<crate::accounts::AccountClient>,
 }
 
 pub type OAuthRegistrations =
@@ -114,6 +116,7 @@ impl AppState {
             dev_assets_dir: None,
             oauth_registrations: OAuthRegistrations::default(),
             billing: None,
+            accounts: None,
         }
     }
 
@@ -158,6 +161,11 @@ impl AppState {
         self
     }
 
+    pub fn with_accounts(mut self, accounts: crate::accounts::AccountClient) -> Self {
+        self.accounts = Some(accounts);
+        self
+    }
+
     pub fn with_dev_assets_dir(mut self, directory: PathBuf) -> Self {
         self.dev_assets_dir = Some(directory);
         self
@@ -186,6 +194,7 @@ impl AppState {
 pub fn router(state: AppState) -> Router {
     Router::new()
         .merge(routes::access::router())
+        .merge(routes::account::router())
         .merge(routes::admin_identity::router())
         .merge(routes::agent_pairing::router())
         .merge(routes::external_agent_administration::router())
@@ -421,6 +430,7 @@ mod tests {
             dev_assets_dir: None,
             oauth_registrations: OAuthRegistrations::default(),
             billing: None,
+            accounts: None,
         };
         let observed = Arc::new(AtomicBool::new(false));
         let callback_state = state.clone();

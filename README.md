@@ -158,6 +158,13 @@ preserved; credential formats are not shared between the two implementations.
 runs, and `pnpm run suplex install --stage <name> --json` runs one of them. Each
 stage is idempotent and prints one JSON result on stdout.
 
+On first open, Suplex asks an administrator to log in to a Suplex account with
+Google, GitHub, or email. The login runs in the system browser against
+`suplex.sh`. One account covers the host and everyone on it. **Profile → Log out**
+unlinks it. Set `SUPLEX_ACCOUNT_SERVICE_URL=` (empty) to turn the requirement off
+for a self-hosted checkout; development roots never ask. See
+[Suplex accounts](docs/accounts.md).
+
 Configure companies, projects, and native profiles in the web application.
 Project creation copies a GitHub repository into the configured repository root.
 `SUPLEX_REPOSITORY_ROOT` and `SUPLEX_WORKTREE_ROOT` override the default paths.

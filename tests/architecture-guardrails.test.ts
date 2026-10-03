@@ -13,7 +13,7 @@ test("task and project configuration have no phase, mirror gate, or harness capa
 });
 
 test("TypeScript application source is confined to the browser", () => {
-  expect(readdirSync("src")).toEqual(["frontend"]);
+  expect(readdirSync("src")).toEqual(["frontend", "web"]);
   const frontend = resolve("src/frontend") + sep;
   const paths = readdirSync("src/frontend", { recursive: true, encoding: "utf8" }).filter(path => /\.[jt]sx?$/.test(path));
   for (const path of paths) {

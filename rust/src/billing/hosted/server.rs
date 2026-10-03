@@ -1,7 +1,7 @@
-//! `suplex billing`: environment config, the HTTP router, the event
-//! processor loop, and operator credential rotation.
+//! Hosted billing: environment config, the HTTP router, and operator
+//! credential rotation. `crate::hosted` serves the router.
 
-use std::{path::Path, sync::Arc, time::Duration};
+use std::path::Path;
 
 use axum::{
     Json, Router,
@@ -18,7 +18,6 @@ use url::Url;
 
 use super::{
     Hosted, HostedConfig, HostedError, HostedResult, credential_shape,
-    revenuecat::{REVENUECAT_API_BASE, RevenueCatClient},
     store::{self, AccountRow},
     stripe::{STRIPE_API_BASE, StripeClient},
 };
@@ -31,7 +30,6 @@ use crate::{
 };
 
 const BODY_LIMIT: usize = 1 << 20;
-const PROCESSOR_INTERVAL: Duration = Duration::from_secs(30);
 const RETURN_PAGE: &str = "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><title>Suplex billing</title></head><body><p>You can return to Suplex and check the subscription.</p></body></html>";
 const ROTATE_USAGE: &str =
     "Usage: suplex billing rotate-credential --db <path> --account <accountId>";
@@ -76,16 +74,18 @@ impl ServiceConfig {
     }
 }
 
-fn parse_origin(raw: &str) -> Result<String, String> {
-    let url = Url::parse(raw).map_err(|_| "BILLING_PUBLIC_ORIGIN must be a valid URL")?;
+pub(crate) fn parse_origin(name: &str, raw: &str) -> Result<String, String> {
+    let url = Url::parse(raw).map_err(|_| format!("{name} must be a valid URL"))?;
     if !url.username().is_empty() || url.password().is_some() {
-        return Err("BILLING_PUBLIC_ORIGIN must not contain credentials".into());
+        return Err(format!("{name} must not contain credentials"));
     }
     let loopback = matches!(url.host_str(), Some("localhost" | "127.0.0.1" | "[::1]"));
     if url.scheme() == "https" || (url.scheme() == "http" && loopback) {
         return Ok(url.origin().ascii_serialization());
     }
-    Err("BILLING_PUBLIC_ORIGIN must use HTTPS except on explicit loopback hosts".into())
+    Err(format!(
+        "{name} must use HTTPS except on explicit loopback hosts"
+    ))
 }
 
 fn parse_port(raw: Option<&str>) -> Result<u16, String> {
@@ -144,7 +144,7 @@ pub fn load_config(env: &dyn Fn(&str) -> Option<String>) -> Result<ServiceConfig
         Some(_) => return Err("BILLING_TELEMETRY must be 1, true, 0, false, or off".into()),
     };
     Ok(ServiceConfig {
-        origin: parse_origin(&require("BILLING_PUBLIC_ORIGIN")?)?,
+        origin: parse_origin("BILLING_PUBLIC_ORIGIN", &require("BILLING_PUBLIC_ORIGIN")?)?,
         address: env("BILLING_BIND_ADDRESS")
             .filter(|address| !address.is_empty())
             .unwrap_or_else(|| "127.0.0.1".into()),
@@ -218,7 +218,7 @@ impl<S: Send + Sync> FromRequest<S> for RawBody {
 }
 
 /// A parsed JSON body; an absent body is `null`.
-struct JsonBody(Value);
+pub(crate) struct JsonBody(pub(crate) Value);
 
 impl<S: Send + Sync> FromRequest<S> for JsonBody {
     type Rejection = Response;
@@ -396,78 +396,6 @@ pub fn router(hosted: Hosted) -> Router {
 // Commands
 // ---------------------------------------------------------------------------
 
-fn system_clock() -> super::Clock {
-    Arc::new(|| chrono::Utc::now().timestamp_millis())
-}
-
-async fn shutdown_signal() {
-    let interrupt = tokio::signal::ctrl_c();
-    #[cfg(unix)]
-    {
-        let Ok(mut terminate) =
-            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-        else {
-            let _ = interrupt.await;
-            return;
-        };
-        tokio::select! {
-            _ = interrupt => {}
-            _ = terminate.recv() => {}
-        }
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = interrupt.await;
-    }
-}
-
-/// Serves until SIGINT or SIGTERM. The processor runs at startup and every
-/// 30 seconds, and once more after the listener closes.
-pub async fn serve() -> Result<(), String> {
-    let config = load_config(&|name| std::env::var(name).ok())?;
-    let connection =
-        store::open(Path::new(&config.database_path)).map_err(|error| error.to_string())?;
-    let hosted = Hosted::new(
-        config.hosted(),
-        connection,
-        StripeClient::new(STRIPE_API_BASE, &config.stripe_secret_key),
-        RevenueCatClient::new(
-            REVENUECAT_API_BASE,
-            &config.revenuecat_secret_api_key,
-            &config.revenuecat_stripe_public_api_key,
-        ),
-        system_clock(),
-    );
-    let processor = {
-        let hosted = hosted.clone();
-        tokio::spawn(async move {
-            let mut interval = tokio::time::interval(PROCESSOR_INTERVAL);
-            loop {
-                interval.tick().await;
-                if let Err(error) = hosted.run_processor_pass().await {
-                    eprintln!(
-                        "billing: event processor pass failed: {}",
-                        error.code.as_deref().unwrap_or("internal")
-                    );
-                }
-            }
-        })
-    };
-    let listener = tokio::net::TcpListener::bind((config.address.as_str(), config.port))
-        .await
-        .map_err(|error| error.to_string())?;
-    eprintln!(
-        "suplex billing listening on {}:{}",
-        config.address, config.port
-    );
-    let served = axum::serve(listener, router(hosted.clone()))
-        .with_graceful_shutdown(shutdown_signal())
-        .await;
-    processor.abort();
-    let _ = hosted.run_processor_pass().await;
-    served.map_err(|error| error.to_string())
-}
-
 /// Operator credential recovery. Verifies ownership through the stored
 /// Stripe customer (`metadata.account_id`), then replaces the credential
 /// hash. The account, subscription, and history stay; the old credential
@@ -542,11 +470,10 @@ pub async fn rotate_credential(
     ))
 }
 
-/// `suplex billing serve` or `suplex billing rotate-credential --db <path> --account <id>`.
-/// Returns the process exit code.
+/// `suplex billing rotate-credential --db <path> --account <id>`. Returns
+/// the process exit code.
 pub async fn main(args: &[String]) -> i32 {
     let outcome = match args.first().map(String::as_str) {
-        Some("serve") => serve().await,
         Some("rotate-credential") => rotate_credential(
             &args[1..],
             &|name| std::env::var(name).ok(),
@@ -554,10 +481,7 @@ pub async fn main(args: &[String]) -> i32 {
         )
         .await
         .map(|message| println!("{message}")),
-        _ => Err(
-            "Usage: suplex billing serve | suplex billing rotate-credential --db <path> --account <accountId>"
-                .to_owned(),
-        ),
+        _ => Err(ROTATE_USAGE.to_owned()),
     };
     match outcome {
         Ok(()) => 0,

@@ -67,6 +67,7 @@ await import(`${{origin}}/src/frontend/main.tsx`);
 pub fn application_page(view: &str) -> String {
     let title = match view {
         "auth" => "Sign in",
+        "account-login" => "Log in",
         "oauth-consent" => "Approve connection",
         "admin" => "Administration",
         "projects" => "Projects",

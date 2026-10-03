@@ -146,6 +146,14 @@ Set `window.SUPLEX_POSTHOG_CONFIG = { downloadVersion: "1.2.3" }` before the
 snippet when Framer has the current release version; a link-level
 `data-suplex-version` overrides it.
 
+After consent, a click on a `https://suplex.sh/download` link also sets its
+`visitor` query parameter to the visitor's PostHog distinct ID, if that ID
+matches `^[A-Za-z0-9._:-]{8,64}$`. The download service keeps it in a
+first-party `suplex_visitor` cookie on suplex.sh. A later Suplex account login
+in the same browser sends `$identify`, which joins this visitor to the account.
+See [Suplex accounts](accounts.md#posthog-identity-bridge). Without consent, or
+with a Do Not Track or Global Privacy Control signal, links stay unchanged.
+
 Only the CTA label, destination hostname, platform, version, safe page fields,
 and bounded attribution fields are sent. Destination and referrer query strings
 are discarded. Automatic capture is off. Replay is off by default; if its

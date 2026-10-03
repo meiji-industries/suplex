@@ -27,15 +27,24 @@ user action.
 
 ## Identity
 
-- `distinct_id` is the installation ID in `<root>/installation-id`.
+- `distinct_id` is the linked [Suplex account](accounts.md) ID (`user_<uuid>`).
+  Before an account is linked, and on hosts without the account service, it is
+  the installation ID in `<root>/installation-id`.
 - Every event carries the PostHog groups `host` (the installation ID) and,
   when the event belongs to a company, `company` (the company ID).
-- The notice has an optional email field. When you enter an address, Suplex
-  sets it as a person property on the installation identity. The address does
-  not replace the installation ID, and accepting telemetry is not a signup.
-- Browser identities include the installation ID and authenticated user ID.
-  Browser and host events join through the `host` and `company` groups.
-  Browser properties include the user role and company plan, without names.
+- After a link, the host sends one `$identify` with `distinct_id` set to the
+  account ID, `$anon_distinct_id` set to the installation ID, and
+  `$set.email`. PostHog merges the installation person into the account person.
+  The hosted service sends a second `$identify` when the login browser carried
+  a `suplex_visitor` cookie from `suplex.sh/download`. That merges the website
+  visitor into the same person.
+- Browser identities use the account ID when an account is linked. Otherwise
+  they use the installation ID and authenticated user ID. Browser and host
+  events also join through the `host` and `company` groups. Browser properties
+  include the user role and company plan, without names.
+- Hosts that sent an email through the retired telemetry notice keep that
+  email on the installation person. They join an account person only through
+  the `host` group, unless the host later links an account.
 
 ## Events
 
@@ -47,7 +56,7 @@ Native usage events have these properties: `app_version` (the semantic version),
 | Event | Source | Extra properties |
 | --- | --- | --- |
 | `host_started` | first send after the host starts | none |
-| `$identify` | notice answered with an email | `$set.email` |
+| `$identify` | first send after an account is linked | `$anon_distinct_id` (the installation ID), `$set.email` |
 | `host_upgraded` | first observation of a different semantic version | `previous_app_version`, `previous_app_revision` |
 | `company_created` | audit event | none |
 | `project_created` | audit event | `git_host` (`github`, `bitbucket`, or `none`), `tracker` (`github`, `jira`, or `none`) |
@@ -95,6 +104,15 @@ code. Error text must not contain original application messages or user content.
 Feature flags are optional presentation controls and never decide task authority,
 paid access, or delivery permission.
 
+## Accounts
+
+The hosted account service at `suplex.sh` sends `account_signed_up` when a login
+creates an account and `account_logged_in` when it reuses one. `distinct_id` is
+the account ID. Properties are `provider` (`google`, `github`, or `email`),
+`$lib` (`suplex-hosted`), `$groups.host` (the installation ID), and `$set.email`.
+These events use the hosted outbox and need `BILLING_TELEMETRY`. See
+[Suplex accounts](accounts.md).
+
 ## Billing and monetization
 
 Hosted billing capture is off by default. The service operator must set
@@ -138,7 +156,7 @@ The integration prepares a local conversion event and an optional data-layer
 handoff. It installs no advertising pixel. See the
 [Framer setup](posthog.md#install-on-framer) for the supported consent interface.
 
-The `suplex.sh/download` service (`src/web/worker.js`) sends `download_started` for download
+The `suplex.sh/download` route ([`rust/src/hosted/site.rs`](../rust/src/hosted/site.rs)) sends `download_started` for download
 requests from the install script and website. Properties are `platform`
 (`macos-arm64`, `macos-x64`, `linux-arm64`, or `linux-x64`), `source`
 (`install_script` or `browser`), and `$lib` (`suplex-web`). Each request uses a
@@ -148,7 +166,7 @@ events are separate from consented website download clicks.
 
 ## Local state
 
-`suplex_telemetry` holds the notice time, optional email, replay choice, last
-observed version, and send position. `suplex_telemetry_pull_requests` records
+`suplex_telemetry` holds the notice time, replay choice, last observed version,
+and send position. `suplex_account.identify_sent_at` records the account merge. `suplex_telemetry_pull_requests` records
 which pull requests were reported. Hosted billing has a separate analytics
 outbox. None of this telemetry state is authority for a user action.

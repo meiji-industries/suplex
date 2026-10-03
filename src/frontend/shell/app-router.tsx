@@ -5,6 +5,7 @@ import { SystemHealthProvider } from "../components/app/system-health.js";
 import { UpdateProvider } from "../components/app/update-provider.js";
 import { isApplicationPath, navigate, shouldNavigate } from "./navigation-state.js";
 import { AuthView } from "../features/auth/auth.js";
+import { AccountLoginView } from "../features/account/account-login.js";
 import { OAuthConsentView } from "../features/auth/oauth-consent.js";
 import { TasksView } from "../features/tasks/tasks.js";
 import { ApplicationShell } from "./application-frame.js";
@@ -114,6 +115,7 @@ export function AppRouter(): ReactElement {
     };
   }, []);
   if (window.__SUPLEX_VIEW__ === "auth") return <SystemHealthProvider initialSnapshot={window.__SUPLEX_HEALTH__}><AuthView /><DesktopHostBar /></SystemHealthProvider>;
+  if (window.__SUPLEX_VIEW__ === "account-login") return <SystemHealthProvider initialSnapshot={window.__SUPLEX_HEALTH__}><AccountLoginView /><DesktopHostBar /></SystemHealthProvider>;
   if (window.__SUPLEX_VIEW__ === "oauth-consent") return <SystemHealthProvider initialSnapshot={window.__SUPLEX_HEALTH__}><OAuthConsentView /><DesktopHostBar /></SystemHealthProvider>;
   const shellKey = activityShellKey(window.location.pathname);
   const view = <Suspense fallback={<LoadingState />}><AppView key={route} /></Suspense>;

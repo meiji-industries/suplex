@@ -24,6 +24,7 @@ pub struct Installation {
     pub installation_id: String,
     pub development_auto_login: bool,
     pub billing_service_url: Option<url::Url>,
+    pub account_service_url: Option<url::Url>,
 }
 
 impl Installation {
@@ -186,8 +187,18 @@ impl Installation {
             Some(_) => return Err("SUPLEX_INSTALLATION_ID is invalid".into()),
             None => persistent_installation_id(&data)?,
         };
-        let billing_service_url =
-            billing_service_url(value("SUPLEX_BILLING_SERVICE_URL"), experimental.is_some())?;
+        let billing_service_url = service_url(
+            "SUPLEX_BILLING_SERVICE_URL",
+            value("SUPLEX_BILLING_SERVICE_URL"),
+            HOSTED_SERVICE_URL,
+            experimental.is_some(),
+        )?;
+        let account_service_url = service_url(
+            "SUPLEX_ACCOUNT_SERVICE_URL",
+            value("SUPLEX_ACCOUNT_SERVICE_URL"),
+            HOSTED_SERVICE_URL,
+            experimental.is_some(),
+        )?;
         let path = |key: &str, default: PathBuf| {
             value(key)
                 .map(|path| absolute(&current, Path::new(&path)))
@@ -216,6 +227,7 @@ impl Installation {
             ),
             development_auto_login,
             billing_service_url,
+            account_service_url,
             root,
             data,
             configuration,
@@ -248,18 +260,26 @@ fn locate_configuration(
     (local, None)
 }
 
-/// Installations use the production billing service unless configured. An
-/// empty value turns billing off. Development roots never default to
-/// production, so development data does not register production accounts.
-fn billing_service_url(
+/// The Suplex-operated hosted service on Fly: billing and accounts.
+/// `billing.suplex.sh` stays an alias of the same process for installations
+/// configured before the move.
+const HOSTED_SERVICE_URL: &str = "https://suplex.sh";
+
+/// Installations use the production billing and account services unless
+/// configured. An empty value turns the service off. Development roots never
+/// default to production, so development data does not register production
+/// accounts.
+fn service_url(
+    name: &str,
     configured: Option<String>,
+    production: &str,
     development: bool,
 ) -> Result<Option<url::Url>, String> {
     match configured {
         Some(url) if url.is_empty() => Ok(None),
-        Some(url) => crate::billing::parse_service_url(&url).map(Some),
+        Some(url) => crate::billing::parse_service_url(&url, name).map(Some),
         None if development => Ok(None),
-        None => crate::billing::parse_service_url(crate::billing::PRODUCTION_SERVICE_URL).map(Some),
+        None => crate::billing::parse_service_url(production, name).map(Some),
     }
 }
 
@@ -399,16 +419,34 @@ mod tests {
         assert!(!is_tailscale_address("fd00::1"));
     }
     #[test]
-    fn billing_defaults_to_production_except_in_development() {
+    fn services_default_to_production_except_in_development() {
+        let billing_service_url = |configured: Option<String>, development| {
+            service_url(
+                "SUPLEX_BILLING_SERVICE_URL",
+                configured,
+                HOSTED_SERVICE_URL,
+                development,
+            )
+        };
         let url = |configured: Option<&str>, development| {
             billing_service_url(configured.map(str::to_owned), development)
                 .unwrap()
                 .map(|url| url.to_string())
         };
-        assert_eq!(
-            url(None, false).as_deref(),
-            Some("https://billing.suplex.sh/")
-        );
+        let account = |configured: Option<&str>, development| {
+            service_url(
+                "SUPLEX_ACCOUNT_SERVICE_URL",
+                configured.map(str::to_owned),
+                HOSTED_SERVICE_URL,
+                development,
+            )
+            .unwrap()
+            .map(|url| url.to_string())
+        };
+        assert_eq!(account(None, false).as_deref(), Some("https://suplex.sh/"));
+        assert_eq!(account(None, true), None);
+        assert_eq!(account(Some(""), false), None);
+        assert_eq!(url(None, false).as_deref(), Some("https://suplex.sh/"));
         assert_eq!(url(None, true), None);
         assert_eq!(url(Some(""), false), None);
         assert_eq!(

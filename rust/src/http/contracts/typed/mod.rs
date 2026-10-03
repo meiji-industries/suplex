@@ -8,6 +8,7 @@ use serde_json::{Map, Value, json};
 
 use crate::identity::auth::js_trim;
 
+pub mod account;
 pub mod agent_api;
 pub mod auth;
 pub mod avatars;

@@ -20,7 +20,9 @@
 - End a question in a title with "?". State what Suplex does and what Suplex keeps in the body.
 - Describe present status. Use the past for completed states.
 
-Approved imperative verbs: Accept, Add, Answer, Approve, Cancel, Check, Continue, Copy, Create, Delete, Describe, Discard, Keep, Open, Publish, Recreate, Reject, Repair, Report, Request, Resolve, Restart, Resume, Retry, Review, Revise, Save, Select, Send, Sign in, Start, Submit, Write.
+`Sign in` names the passkey session. `Log in`, `Log out`, and `Sign up` name the Suplex account.
+
+Approved imperative verbs: Accept, Add, Answer, Approve, Cancel, Check, Continue, Copy, Create, Delete, Describe, Discard, Keep, Log in, Log out, Open, Publish, Recreate, Reject, Repair, Report, Request, Resolve, Restart, Resume, Retry, Review, Revise, Save, Select, Send, Sign in, Sign up, Start, Submit, Write.
 
 ## Glossary
 
@@ -38,6 +40,7 @@ Approved imperative verbs: Accept, Add, Answer, Approve, Cancel, Check, Continue
 | decision | decision | call |
 | move | move | runbook, automation, recipe |
 | stopped | stopped | interrupted |
+| Suplex account | Suplex account | user account, profile, login |
 
 Code identifiers, command names, API fields, and log messages are not UI text and keep their names.
 

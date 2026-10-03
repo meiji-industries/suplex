@@ -163,6 +163,12 @@ A passkey-authenticated person with explicit company membership. An instance
 administrator also controls host setup and recovery.
 _Avoid_: Anonymous operator, provider identity.
 
+**Suplex account**
+The hosted identity at `suplex.sh` (Google, GitHub, or email) linked to one
+installation. Every person on that host is covered by it. It is the PostHog
+person, not an access credential: passkeys still sign each person in.
+_Avoid_: User account, login, profile.
+
 **External agent**
 A paired machine identity, such as Hermes, with a revocable credential and
 company/project grants. It can read tasks in granted projects. Task mutations

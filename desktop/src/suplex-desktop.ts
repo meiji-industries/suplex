@@ -813,6 +813,9 @@ export async function runSuplexDesktop(input: { readonly argv: readonly string[]
   app.on("second-instance", (_event, argv) => { void openWith(argv); });
   app.on("window-all-closed", () => { if (process.platform !== "darwin") app.quit(); });
   app.on("activate", () => { void open(); });
+  // suplex:// only brings Suplex to the front. The URL is never read or loaded: the host learns
+  // about a finished login by polling the account service, so a deep link carries no secret.
+  app.on("open-url", (event) => { event.preventDefault(); if (app.isReady()) void open(); });
   app.setAboutPanelOptions({ applicationName: "Suplex", applicationVersion: app.getVersion() });
   await app.whenReady();
   await networkAccess.loadPreference();

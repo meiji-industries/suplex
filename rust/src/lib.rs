@@ -1,7 +1,9 @@
+pub mod accounts;
 pub mod billing;
 pub mod cli;
 pub mod coordination;
 pub mod delivery;
+pub mod hosted;
 pub mod http;
 pub mod identity;
 pub mod integrations;

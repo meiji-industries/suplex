@@ -194,6 +194,20 @@
     }
     posthog.capture(eventName, properties);
     signalConversion(eventName, properties);
+    if (link.isDownload) addVisitor(element);
+  }
+
+  // Carries the consented visitor ID to suplex.sh, which keeps it in a first-party cookie so a
+  // later Suplex account login joins this visitor (docs/accounts.md).
+  function addVisitor(element) {
+    var visitor = typeof posthog.get_distinct_id === "function" ? posthog.get_distinct_id() : "";
+    if (typeof visitor !== "string" || !/^[A-Za-z0-9._:-]{8,64}$/.test(visitor)) return;
+    try {
+      var href = new URL(element.href || "", window.location.href);
+      if (href.origin !== "https://suplex.sh" || href.pathname !== "/download") return;
+      href.searchParams.set("visitor", visitor);
+      element.href = href.toString();
+    } catch (_) { /* leave the link unchanged */ }
   }
 
   function installSpaPageviews() {

@@ -103,7 +103,7 @@ description = "Stop owned native development processes, escalating if needed"
 run = "pnpm exec tsx scripts/dev.ts --stop"
 
 [tasks."billing:dev"]
-description = "Run the hosted billing service from source against the Stripe and RevenueCat sandboxes"
+description = "Run the hosted service (billing, accounts, suplex.sh) from source against the provider sandboxes"
 run = '''
 source scripts/onepassword.sh
 onepassword_setup_service_account
@@ -111,11 +111,11 @@ onepassword_setup_service_account
 # The sandbox has no head office address, which Stripe Tax needs.
 export STRIPE_AUTOMATIC_TAX=false BILLING_ENVIRONMENT=sandbox BILLING_PORT=4212 BILLING_PUBLIC_ORIGIN=https://billing-sandbox.example.com BILLING_DATABASE_PATH="$PWD/.suplex/billing.sqlite"
 mkdir -p .suplex
-op run --env-file scripts/billing-dev.env -- cargo run --manifest-path rust/Cargo.toml -- billing serve
+op run --env-file scripts/billing-dev.env -- cargo run --manifest-path rust/Cargo.toml -- hosted serve
 '''
 
 [tasks."billing:dns"]
-description = "Point billing.suplex.sh at the Fly app with Cloudflare DNS records"
+description = "Point billing.suplex.sh, suplex.sh, and www.suplex.sh at the Fly app with Cloudflare DNS records"
 run = '''
 source scripts/onepassword.sh
 onepassword_setup_service_account

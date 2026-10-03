@@ -56,6 +56,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if command.first().map(String::as_str) == Some("billing") {
         std::process::exit(suplex::billing::hosted::server::main(&command[1..]).await);
     }
+    if command.first().map(String::as_str) == Some("hosted") {
+        std::process::exit(suplex::hosted::main(&command[1..]).await);
+    }
     match command.first().map(String::as_str) {
         None => {
             print!("{}", suplex::cli::HELP);
@@ -141,6 +144,13 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
     .with_host_terminals(host_terminals.clone());
     let state = match installation.billing_service_url.clone() {
         Some(url) => state.with_billing(suplex::billing::BillingClient::new(
+            url,
+            installation.installation_id.clone(),
+        )),
+        None => state,
+    };
+    let state = match installation.account_service_url.clone() {
+        Some(url) => state.with_accounts(suplex::accounts::AccountClient::new(
             url,
             installation.installation_id.clone(),
         )),

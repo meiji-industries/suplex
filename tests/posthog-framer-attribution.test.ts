@@ -193,13 +193,14 @@ test("emits consented download conversion without leaking the destination query"
   win.SuplexAnalytics.grantConsent();
   const options = win.posthog._i[0]![1];
   const capture = vi.fn();
-  (options.loaded as (client: unknown) => void)({ capture, opt_in_capturing: vi.fn(), opt_out_capturing: vi.fn(), onFeatureFlags: vi.fn(), isFeatureEnabled: vi.fn(), set_config: vi.fn(), startSessionRecording: vi.fn() });
+  (options.loaded as (client: unknown) => void)({ capture, get_distinct_id: () => "0190a1b2-c3d4-7e5f", opt_in_capturing: vi.fn(), opt_out_capturing: vi.fn(), onFeatureFlags: vi.fn(), isFeatureEnabled: vi.fn(), set_config: vi.fn(), startSessionRecording: vi.fn() });
   capture.mockClear();
-  const link = window.document.querySelector("#download") as unknown as { click(): void };
+  const link = window.document.querySelector("#download") as unknown as { click(): void; href: string };
   link.click();
   expect(capture).toHaveBeenCalledWith("website_download_clicked", expect.objectContaining({ platform: "macos-arm64", version: "unknown", destination_domain: "suplex.sh" }));
   expect(JSON.stringify(capture.mock.calls)).not.toContain("token=private");
   expect(win.dataLayer).toBeUndefined();
+  expect(new URL(link.href).searchParams.get("visitor")).toBe("0190a1b2-c3d4-7e5f");
 
   capture.mockClear();
   const unapproved = window.document.createElement("a");
@@ -207,5 +208,6 @@ test("emits consented download conversion without leaking the destination query"
   window.document.body.appendChild(unapproved);
   unapproved.click();
   expect(capture).not.toHaveBeenCalled();
+  expect(unapproved.href).not.toContain("visitor");
   window.close();
 });

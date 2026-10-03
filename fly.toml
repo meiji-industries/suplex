@@ -1,5 +1,6 @@
-# The hosted billing service at https://billing.suplex.sh. Deploy with `fly deploy`.
-# Provider secrets are Fly secrets; see "Running the hosted service" in docs/billing.md.
+# The hosted service at https://suplex.sh: billing, accounts, and the site. billing.suplex.sh
+# is a legacy alias. Deploy with `fly deploy`. Provider secrets are Fly secrets; see
+# "Running the hosted service" in docs/billing.md and "Deploy" in docs/accounts.md.
 app = "suplex-billing"
 primary_region = "yyz"
 
@@ -7,7 +8,7 @@ primary_region = "yyz"
   dockerfile = "Dockerfile.billing"
 
 [env]
-  BILLING_PUBLIC_ORIGIN = "https://billing.suplex.sh"
+  BILLING_PUBLIC_ORIGIN = "https://suplex.sh"
   BILLING_ENVIRONMENT = "production"
   BILLING_BIND_ADDRESS = "0.0.0.0"
   BILLING_PORT = "8080"

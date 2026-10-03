@@ -108,6 +108,16 @@ test("loads PostHog only for active consent and stops immediately after opt out"
   expect(captured.stack).not.toContain("secret");
 });
 
+test("a linked account is the person and unlinking resets it", async () => {
+  await applyTelemetry(active({ accountId: "user_67e55044-10b1-426f-9247-bb680e5fe0c8" }));
+  expect(sdk.posthog.identify).toHaveBeenLastCalledWith("user_67e55044-10b1-426f-9247-bb680e5fe0c8", expect.objectContaining({ user_role: "member" }));
+  expect(sdk.posthog.group).toHaveBeenCalledWith("host", "install-1");
+  sdk.posthog.reset.mockClear();
+  await applyTelemetry(active());
+  expect(sdk.posthog.reset).toHaveBeenCalledOnce();
+  expect(sdk.posthog.identify).toHaveBeenLastCalledWith("install-1:user:user-1", expect.anything());
+});
+
 test("browser DNT prevents SDK initialization", async () => {
   Object.defineProperty(navigator, "doNotTrack", { configurable: true, value: "1" });
   await applyTelemetry(active());

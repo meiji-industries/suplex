@@ -1,6 +1,7 @@
-# Only rust/ and migrations/ go into the billing image.
+# Only rust/, migrations/, and install.sh (compiled in) go into the hosted image.
 *
 !rust
 !migrations
 !scripts/shared-resource-command.py
+!src/web/public/install.sh
 rust/target

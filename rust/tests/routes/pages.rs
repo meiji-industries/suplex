@@ -204,4 +204,83 @@ mod tests {
         assert!(rendered.contains(r#""summary":"\u003c/script>""#));
         let _ = std::fs::remove_file(path);
     }
+
+    #[tokio::test]
+    async fn a_host_with_the_account_service_shows_login_until_an_account_is_linked() {
+        let (state, path) = test_state();
+        let signed_in = state.with_database(|database| {
+            crate::identity::auth::development_sign_in(database, Utc::now()).unwrap()
+        });
+        let cookie = format!("sid_v1={}", signed_in.session_token);
+        let view = |body: &[u8]| {
+            let html = String::from_utf8_lossy(body);
+            html.split("window.__SUPLEX_VIEW__ = \"")
+                .nth(1)
+                .and_then(|rest| rest.split('"').next())
+                .map(str::to_owned)
+        };
+        let gated = ["/today", "/profile", "/companies/company_x/settings"];
+        let call = |app: Router, uri: &'static str| {
+            let cookie = cookie.clone();
+            async move {
+                super::super::avatars::tests::call(&app, "GET", uri, Some(&cookie), None).await
+            }
+        };
+
+        // Without the account service, nothing changes.
+        let unconfigured = crate::http::router(state.clone());
+        let (_, _, body) = call(unconfigured.clone(), "/today").await;
+        assert_eq!(view(&body).as_deref(), Some("today"));
+
+        // The account service is never called: an unreachable URL is enough.
+        let configured = state.clone().with_accounts(crate::accounts::AccountClient::new(
+            "http://127.0.0.1:9".parse().unwrap(),
+            "install-1".to_owned(),
+        ));
+        let app = crate::http::router(configured);
+        let (status, _, body) = call(app.clone(), "/").await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(view(&body).as_deref(), Some("account-login"));
+        assert!(String::from_utf8_lossy(&body).contains("<title>Suplex · Log in</title>"));
+        for uri in gated {
+            let (status, _, body) = call(app.clone(), uri).await;
+            assert_eq!(status, StatusCode::OK, "{uri}");
+            assert_eq!(view(&body).as_deref(), Some("account-login"), "{uri}");
+        }
+        let (status, headers, _) = call(app.clone(), "/health").await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(headers.get("content-type").is_some());
+        let (status, _, body) = call(
+            app.clone(),
+            "/oauth/consent?request=oauth_request_0123456789abcdef0123456789abcdef",
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(view(&body).as_deref(), Some("oauth-consent"));
+
+        state.with_database(|database| {
+            crate::accounts::link(
+                database,
+                &crate::accounts::wire::HostedAccount {
+                    id: "user_67e55044-10b1-426f-9247-bb680e5fe0c8".to_owned(),
+                    email: "ada@example.com".to_owned(),
+                    name: None,
+                },
+                &"t".repeat(43),
+            )
+            .unwrap();
+        });
+        let (status, headers, _) = call(app.clone(), "/").await;
+        assert_eq!(status, StatusCode::FOUND);
+        assert_eq!(headers["location"], "/onboarding");
+        let (_, _, body) = call(app.clone(), "/today").await;
+        assert_eq!(view(&body).as_deref(), Some("today"));
+        let (_, _, body) = call(app.clone(), "/profile").await;
+        assert_eq!(view(&body).as_deref(), Some("profile"));
+        let (status, _, _) = call(app, "/companies/company_x/settings").await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+
+        drop(state);
+        let _ = std::fs::remove_file(path);
+    }
 }

@@ -1,0 +1,177 @@
+//! suplex.sh: `/download`, `/install.sh`, `/terms`, `/privacy`, and a
+//! redirect to the website at getsuplex.ai, a Framer site, for every other
+//! path. The pages are compiled in; nothing is read from disk.
+
+use axum::{
+    Router,
+    extract::{Query, Request, State},
+    http::{HeaderMap, StatusCode, header},
+    middleware::Next,
+    response::{Html, IntoResponse, Response},
+    routing::get,
+};
+use serde::Deserialize;
+use serde_json::json;
+
+use crate::accounts::hosted::{Accounts, VISITOR_COOKIE, valid_visitor};
+
+const WEBSITE: &str = "https://getsuplex.ai/";
+const INSTALL_SCRIPT: &str = include_str!("../../../src/web/public/install.sh");
+// Placeholders until src/web/public/{terms,privacy}.html land; then
+// include_str! those files.
+const TERMS_PAGE: &str = "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width\"><title>Suplex Terms of Service</title></head><body><p>This page is not yet published.</p><p><a href=\"https://getsuplex.ai/\">Open the Suplex website</a></p></body></html>";
+const PRIVACY_PAGE: &str = "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width\"><title>Suplex Privacy Policy</title></head><body><p>This page is not yet published.</p><p><a href=\"https://getsuplex.ai/\">Open the Suplex website</a></p></body></html>";
+
+/// The release feed directory, its manifest, and its formats. The first
+/// format is the default download.
+fn feed(platform: &str) -> Option<(&'static str, &'static str, &'static [&'static str])> {
+    Some(match platform {
+        "macos-arm64" => ("mac/arm64", "latest-mac.yml", &["dmg", "zip"]),
+        "macos-x64" => ("mac/x64", "latest-mac.yml", &["dmg", "zip"]),
+        "linux-arm64" => ("linux/arm64", "latest-linux.yml", &["tar.gz"]),
+        "linux-x64" => ("linux/x64", "latest-linux.yml", &["tar.gz"]),
+        _ => return None,
+    })
+}
+
+#[derive(Deserialize)]
+struct DownloadQuery {
+    platform: Option<String>,
+    format: Option<String>,
+    visitor: Option<String>,
+}
+
+/// Redirects to the file named in the live release manifest, so the link
+/// follows each release.
+// ponytail: reads the manifest on every download; cache it for a minute if
+// download volume grows.
+async fn download(
+    State(accounts): State<Accounts>,
+    Query(query): Query<DownloadQuery>,
+    headers: HeaderMap,
+) -> Response {
+    let platform = query.platform.as_deref().unwrap_or("macos-arm64");
+    let Some((directory, manifest, formats)) = feed(platform) else {
+        return (StatusCode::NOT_FOUND, "Unknown platform.").into_response();
+    };
+    let format = query.format.as_deref().unwrap_or(formats[0]);
+    if !formats.contains(&format) {
+        return (StatusCode::NOT_FOUND, "Unknown format.").into_response();
+    }
+    let base = format!("{}/stable/{directory}/", accounts.endpoints.downloads);
+    let text = match accounts.http.get(format!("{base}{manifest}")).send().await {
+        Ok(response) if response.status().is_success() => response.text().await.ok(),
+        _ => None,
+    };
+    let Some(text) = text else {
+        return (StatusCode::BAD_GATEWAY, "No release is published.").into_response();
+    };
+    let file = regex::Regex::new(&format!(r"url:\s*(\S+\.{})", regex::escape(format)))
+        .ok()
+        .and_then(|pattern| pattern.captures(&text))
+        .and_then(|captures| captures.get(1))
+        .map(|file| file.as_str())
+        .filter(|file| !file.contains('/') && !file.contains(".."));
+    let Some(file) = file else {
+        return (
+            StatusCode::BAD_GATEWAY,
+            format!("No {format} in the latest release."),
+        )
+            .into_response();
+    };
+    let mut response = (
+        StatusCode::FOUND,
+        [(header::LOCATION, format!("{base}{file}"))],
+    )
+        .into_response();
+    if headers.get("dnt").is_some_and(|value| value == "1") {
+        return response;
+    }
+    if let Some(visitor) = query.visitor.filter(|visitor| valid_visitor(visitor)) {
+        let secure = if accounts.hosted.config.origin.starts_with("https:") {
+            "; Secure"
+        } else {
+            ""
+        };
+        let cookie = format!(
+            "{VISITOR_COOKIE}={visitor}; Max-Age=31536000; Path=/; HttpOnly; SameSite=Lax{secure}"
+        );
+        if let Ok(cookie) = cookie.parse() {
+            response.headers_mut().insert(header::SET_COOKIE, cookie);
+        }
+    }
+    // Anonymous: a fresh id and no person profile (docs/telemetry.md).
+    let source = headers
+        .get(header::USER_AGENT)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|agent| agent.starts_with("curl/"));
+    let tracked = accounts.hosted.query(|db| {
+        accounts.track(
+            db,
+            "download_started",
+            &uuid::Uuid::new_v4().to_string(),
+            json!({
+                "$lib": "suplex-web",
+                "$process_person_profile": false,
+                "$geoip_disable": true,
+                "platform": platform,
+                "source": if source { "install_script" } else { "browser" },
+            }),
+        )
+    });
+    if tracked.is_err() {
+        eprintln!("site: download_started enqueue failed");
+    }
+    response
+}
+
+async fn install_script() -> Response {
+    (
+        [
+            (header::CONTENT_TYPE, "text/plain; charset=utf-8"),
+            (header::CACHE_CONTROL, "public, max-age=300"),
+        ],
+        INSTALL_SCRIPT,
+    )
+        .into_response()
+}
+
+async fn website() -> Response {
+    (StatusCode::FOUND, [(header::LOCATION, WEBSITE)]).into_response()
+}
+
+/// `www.` hosts redirect to `BILLING_PUBLIC_ORIGIN`, never to the request
+/// host. Other hosts, such as the legacy `billing.suplex.sh`, are served
+/// as they are: installed hosts POST there and do not follow redirects.
+pub async fn redirect_www(State(origin): State<String>, request: Request, next: Next) -> Response {
+    let www = request
+        .headers()
+        .get(header::HOST)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|host| host.starts_with("www."));
+    if !www {
+        return next.run(request).await;
+    }
+    let path = request
+        .uri()
+        .path_and_query()
+        .map_or("/", |path| path.as_str());
+    (
+        StatusCode::MOVED_PERMANENTLY,
+        [(header::LOCATION, format!("{origin}{path}"))],
+    )
+        .into_response()
+}
+
+pub fn router(accounts: Accounts) -> Router {
+    Router::new()
+        .route("/download", get(download))
+        .route("/install.sh", get(install_script))
+        .route("/terms", get(|| async { Html(TERMS_PAGE) }))
+        .route("/privacy", get(|| async { Html(PRIVACY_PAGE) }))
+        .fallback(website)
+        .with_state(accounts)
+}
+
+#[cfg(test)]
+include!("../../tests/accounts/site.rs");

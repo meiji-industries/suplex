@@ -216,22 +216,12 @@ mod tests {
                 body.as_bytes().to_vec(),
             )
         };
-        for invalid in [
-            r#"{"email":"not an email"}"#,
-            r#"{"email":"a@b"}"#,
-            r#"{"email":5}"#,
-            r#"{"email":null,"sessionReplayEnabled":"yes"}"#,
-        ] {
-            assert_eq!(
-                notice(invalid).await.0,
-                StatusCode::BAD_REQUEST,
-                "{invalid}"
-            );
-        }
         assert_eq!(
-            notice(r#"{"email":"Adam@Example.com","sessionReplayEnabled":true}"#)
-                .await
-                .0,
+            notice(r#"{"sessionReplayEnabled":"yes"}"#).await.0,
+            StatusCode::BAD_REQUEST
+        );
+        assert_eq!(
+            notice(r#"{"sessionReplayEnabled":true}"#).await.0,
             StatusCode::NO_CONTENT
         );
         assert_eq!(
@@ -258,12 +248,11 @@ mod tests {
                 .0,
             StatusCode::NO_CONTENT
         );
-        assert_eq!(notice(r#"{"email":null}"#).await.0, StatusCode::NO_CONTENT);
-        let stored: (Option<String>, Option<String>, bool) = state.with_database(|database| database.connection().query_row("SELECT email, notice_at, session_replay_enabled FROM suplex_telemetry WHERE id = 'host'", [], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))).unwrap();
-        assert_eq!(stored.0.as_deref(), Some("adam@example.com"));
-        assert!(stored.1.is_some());
+        assert_eq!(notice("{}").await.0, StatusCode::NO_CONTENT);
+        let stored: (Option<String>, bool) = state.with_database(|database| database.connection().query_row("SELECT notice_at, session_replay_enabled FROM suplex_telemetry WHERE id = 'host'", [], |row| Ok((row.get(0)?, row.get(1)?)))).unwrap();
+        assert!(stored.0.is_some());
         assert!(
-            !stored.2,
+            !stored.1,
             "the later explicit false acknowledgement disables replay"
         );
         state.with_database(|database| {
@@ -286,7 +275,7 @@ mod tests {
             json_body(&body),
             json!({"todayPage":true,"hostTerminal":true})
         );
-        assert_eq!(notice(r#"{"email":null}"#).await.0, StatusCode::FORBIDDEN);
+        assert_eq!(notice("{}").await.0, StatusCode::FORBIDDEN);
     }
 
     #[tokio::test]

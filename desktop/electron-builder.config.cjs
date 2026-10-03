@@ -11,6 +11,8 @@ const notarize = Boolean(process.env.APPLE_ID && process.env.APPLE_APP_SPECIFIC_
 module.exports = {
   appId: "dev.suplex.desktop",
   productName: "Suplex",
+  // suplex://auth/done brings the window to the front after a browser login.
+  protocols: [{ name: "Suplex", schemes: ["suplex"] }],
   directories: { output: `release/${arch}` },
   files: ["dist/src/**"],
   extraResources: [{ from: "runtime", to: "runtime" }],

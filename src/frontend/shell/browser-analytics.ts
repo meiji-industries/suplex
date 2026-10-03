@@ -108,9 +108,14 @@ function syncReplay(): void {
   if (enabled) client.startSessionRecording(); else client.stopSessionRecording();
 }
 
+/** The linked Suplex account, else this signed-in user on this host. */
+function personId(telemetry: TelemetryResponse): string {
+  return telemetry.accountId ?? `${telemetry.installationId}:user:${telemetry.userId}`;
+}
+
 function identify(): void {
   if (!client || !currentTelemetry?.installationId || !currentTelemetry.userId) return;
-  client.identify(`${currentTelemetry.installationId}:user:${currentTelemetry.userId}`, {
+  client.identify(personId(currentTelemetry), {
     app_version: currentTelemetry.appVersion,
     app_revision: currentTelemetry.appRevision,
     platform: currentContext.platform,
@@ -130,7 +135,7 @@ function captureScreen(): void {
 
 function analyticsScope(): string | undefined {
   if (!currentTelemetry?.installationId || !currentTelemetry.userId) return undefined;
-  return `${currentTelemetry.installationId}:user:${currentTelemetry.userId}:${currentContext.companyId ?? "none"}`;
+  return `${personId(currentTelemetry)}:${currentContext.companyId ?? "none"}`;
 }
 
 function captureScreenForNewScope(): void {
@@ -175,10 +180,8 @@ export async function applyTelemetry(response: TelemetryResponse): Promise<void>
     disableCapture();
     return;
   }
-  const previousUser = currentTelemetry?.installationId && currentTelemetry.userId
-    ? `${currentTelemetry.installationId}:user:${currentTelemetry.userId}`
-    : undefined;
-  const nextUser = `${response.installationId}:user:${response.userId}`;
+  const previousUser = currentTelemetry?.installationId && currentTelemetry.userId ? personId(currentTelemetry) : undefined;
+  const nextUser = personId(response);
   const imported = await import("posthog-js");
   if (generation !== refreshGeneration) return;
   if (!client) client = imported.posthog;

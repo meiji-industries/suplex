@@ -23,7 +23,7 @@ declare global {
       restartNetworkAccess(): Promise<DesktopNetworkAccess>;
       onNetworkAccessChange(listener: (state: DesktopNetworkAccess) => void): () => void;
     };
-  __SUPLEX_VIEW__?: "auth" | "oauth-consent" | "admin" | "projects" | "tasks" | "board" | "timeline" | "company-settings" | "setup";
+  __SUPLEX_VIEW__?: "auth" | "account-login" | "oauth-consent" | "admin" | "projects" | "tasks" | "board" | "timeline" | "company-settings" | "setup";
   }
 }
 

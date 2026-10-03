@@ -41,8 +41,9 @@ Billing runs as two processes:
    counts projects and accounts, authorizes the operator, enforces project
    policy, and calls the billing service over outbound HTTPS. It holds no
    merchant credentials.
-2. The Suplex-operated public billing service (`suplex billing serve`,
-   `rust/src/billing/hosted/`), at `https://billing.suplex.sh` on Fly. It owns Stripe and RevenueCat credentials,
+2. The Suplex-operated public billing service (`rust/src/billing/hosted/`),
+   part of `suplex hosted serve` at `https://suplex.sh` on Fly with
+   [accounts](accounts.md) and the suplex.sh site. It owns Stripe and RevenueCat credentials,
    company billing accounts, Checkout and Portal creation, provider reads, and
    webhooks. It never runs the Suplex server, task hosts, or native runtimes.
 
@@ -69,7 +70,7 @@ full refund. If required Stripe evidence cannot be read, the service answers
 
 ```sh
 # Any build of the suplex binary; listens on 127.0.0.1:4211 by default
-suplex billing serve
+suplex hosted serve
 ```
 
 ### Local sandbox
@@ -91,9 +92,12 @@ sandbox has no head office address, so `billing:dev` sets
 
 Production runs on Fly as the app `suplex-billing` (`fly.toml` and
 `Dockerfile.billing` at the repository root). It has one machine in `yyz`, a
-volume `billing_data` mounted at `/data`, and the custom domain
-`billing.suplex.sh`. `fly.toml` sets the non-secret variables. Set the provider
-secrets once, then deploy:
+volume `billing_data` mounted at `/data`, and three hostnames: `suplex.sh`
+(the origin), `www.suplex.sh` (301 to the origin), and `billing.suplex.sh`. The
+last is a legacy alias that serves the same routes without a redirect, because
+installed clients POST to it and do not follow redirects; keep it until those
+clients age out. `mise run billing:dns` points all three at Fly. `fly.toml` sets
+the non-secret variables. Set the provider secrets once, then deploy:
 
 ```sh
 fly secrets set --app suplex-billing STRIPE_SECRET_KEY=... \
@@ -114,7 +118,7 @@ Configuration is read only in the hosted process:
 
 | Variable | Meaning |
 | --- | --- |
-| `BILLING_PUBLIC_ORIGIN` | Public HTTPS origin for Checkout/Portal return pages. Only loopback hosts may use HTTP. |
+| `BILLING_PUBLIC_ORIGIN` | Public HTTPS origin of the hosted service: Checkout/Portal return pages, OAuth callbacks, magic links, and the `www.` redirect. `https://suplex.sh` in production. Only loopback hosts may use HTTP. |
 | `BILLING_BIND_ADDRESS` | Listener address. Default `127.0.0.1`. |
 | `BILLING_PORT` | Listener port. Default `4211`. |
 | `BILLING_DATABASE_PATH` | Persistent SQLite path. Must not be a Suplex installation database. |
@@ -129,7 +133,7 @@ Configuration is read only in the hosted process:
 | `REVENUECAT_WEBHOOK_AUTHORIZATION` | The exact Authorization header value RevenueCat sends to Suplex. |
 | `REVENUECAT_APP_ID` | The RevenueCat app/config identity allowlisted for events. |
 
-Installations use `https://billing.suplex.sh` by default. Set
+Installations use `https://suplex.sh` by default. Set
 `SUPLEX_BILLING_SERVICE_URL` to use another HTTPS origin, or a loopback URL for
 development. Development roots (`SUPLEX_ROOT`) have no default, so development
 data never registers production accounts. An empty value turns billing off:

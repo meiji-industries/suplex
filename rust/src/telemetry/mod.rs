@@ -55,6 +55,8 @@ pub struct Config {
     pub key: String,
     pub host: String,
     pub installation_id: String,
+    /// The PostHog person: the linked Suplex account, else the installation.
+    pub distinct_id: String,
 }
 
 /// `DO_NOT_TRACK=1` or `SUPLEX_TELEMETRY=0|false|off` turn telemetry off.
@@ -79,13 +81,12 @@ pub fn config(installation_id: &str) -> Option<Config> {
         key,
         host: variable("SUPLEX_POSTHOG_HOST").unwrap_or_else(|| DEFAULT_HOST.to_owned()),
         installation_id: installation_id.to_owned(),
+        distinct_id: installation_id.to_owned(),
     })
 }
 
 struct State {
     notice_at: Option<String>,
-    email: Option<String>,
-    email_sent_at: Option<String>,
     audit_cursor: Option<i64>,
     lifecycle_cursor: Option<i64>,
     daily_at: Option<String>,
@@ -97,18 +98,16 @@ fn state(database: &SuplexDatabase) -> DatabaseResult<Option<State>> {
     Ok(database
         .connection()
         .query_row(
-            "SELECT notice_at, email, email_sent_at, audit_cursor, lifecycle_cursor, daily_at, last_app_version, last_app_revision FROM suplex_telemetry WHERE id = 'host'",
+            "SELECT notice_at, audit_cursor, lifecycle_cursor, daily_at, last_app_version, last_app_revision FROM suplex_telemetry WHERE id = 'host'",
             [],
             |row| {
                 Ok(State {
                     notice_at: row.get(0)?,
-                    email: row.get(1)?,
-                    email_sent_at: row.get(2)?,
-                    audit_cursor: row.get(3)?,
-                    lifecycle_cursor: row.get(4)?,
-                    daily_at: row.get(5)?,
-                    last_app_version: row.get(6)?,
-                    last_app_revision: row.get(7)?,
+                    audit_cursor: row.get(1)?,
+                    lifecycle_cursor: row.get(2)?,
+                    daily_at: row.get(3)?,
+                    last_app_version: row.get(4)?,
+                    last_app_revision: row.get(5)?,
                 })
             },
         )
@@ -123,17 +122,11 @@ pub fn notice_required(database: &SuplexDatabase, configured: bool) -> DatabaseR
         && state(database)?.and_then(|state| state.notice_at).is_none())
 }
 
-/// Records that an administrator saw the notice, with an optional email that
-/// links this host to the person who downloaded Suplex.
-pub fn acknowledge(
-    database: &mut SuplexDatabase,
-    email: Option<&str>,
-    now: DateTime<Utc>,
-) -> DatabaseResult<()> {
-    let email = email.map(|email| email.trim().to_lowercase());
+/// Records that an administrator saw the notice.
+pub fn acknowledge(database: &mut SuplexDatabase, now: DateTime<Utc>) -> DatabaseResult<()> {
     database.connection().execute(
-        "INSERT INTO suplex_telemetry (id, notice_at, email) VALUES ('host', ?1, ?2) ON CONFLICT(id) DO UPDATE SET notice_at = COALESCE(notice_at, excluded.notice_at), email = COALESCE(excluded.email, email), email_sent_at = CASE WHEN excluded.email IS NULL THEN email_sent_at END",
-        params![rfc3339_millis(now), email],
+        "INSERT INTO suplex_telemetry (id, notice_at) VALUES ('host', ?1) ON CONFLICT(id) DO UPDATE SET notice_at = COALESCE(notice_at, excluded.notice_at)",
+        [rfc3339_millis(now)],
     )?;
     Ok(())
 }
@@ -171,7 +164,8 @@ struct Collected {
     audit_cursor: i64,
     lifecycle_cursor: i64,
     pull_requests: Vec<(String, bool)>,
-    email_sent: bool,
+    /// The linked account this batch merges with the installation person.
+    identified: Option<String>,
     daily: bool,
     version_observed: bool,
 }
@@ -245,7 +239,7 @@ fn event_with_seed(
     let uuid = deterministic_uuid(&format!("{}\0{seed}", config.installation_id));
     json!({
         "event": name,
-        "distinct_id": config.installation_id,
+        "distinct_id": config.distinct_id,
         "timestamp": timestamp,
         "uuid": uuid,
         "properties": properties,
@@ -566,7 +560,7 @@ fn collect_daily(
         let (plan, _) = crate::billing::plan_label(database, &company_id, Utc::now())?;
         collected.events.push(json!({
             "event": "$groupidentify",
-            "distinct_id": config.installation_id,
+            "distinct_id": config.distinct_id,
             "timestamp": now,
             "uuid": deterministic_uuid(&format!("groupidentify\0{}\0{}\0{}", config.installation_id, company_id, now)),
             "properties": {
@@ -587,6 +581,7 @@ fn collect(
     database: &SuplexDatabase,
     config: &Config,
     state: &State,
+    account: Option<&crate::accounts::LinkedAccount>,
     now: DateTime<Utc>,
     first_since_start: bool,
 ) -> DatabaseResult<Collected> {
@@ -595,6 +590,21 @@ fn collect(
         version_observed: true,
         ..Collected::default()
     };
+    // One merge of the installation person into the account person, before
+    // any event keyed by the account.
+    if let Some(account) = account.filter(|account| account.identify_sent_at.is_none()) {
+        collected.identified = Some(account.account_id.clone());
+        collected.events.push(json!({
+            "event": "$identify",
+            "distinct_id": account.account_id,
+            "timestamp": stamp,
+            "uuid": deterministic_uuid(&format!("identify\0{}\0{}", config.installation_id, account.account_id)),
+            "properties": {
+                "$anon_distinct_id": config.installation_id,
+                "$set": {"email": account.email},
+            },
+        }));
+    }
     if first_since_start {
         collected
             .events
@@ -615,17 +625,6 @@ fn collect(
             properties,
             &format!("upgrade:{previous}:{}", env!("CARGO_PKG_VERSION")),
         ));
-    }
-    if let (Some(email), None) = (&state.email, &state.email_sent_at) {
-        collected.email_sent = true;
-        let identified_at = state.notice_at.as_deref().unwrap_or(&stamp);
-        collected.events.push(json!({
-            "event": "$identify",
-            "distinct_id": config.installation_id,
-            "timestamp": identified_at,
-            "uuid": deterministic_uuid(&format!("identify\0{}\0{}", config.installation_id, email)),
-            "properties": {"$set": {"email": email}},
-        }));
     }
     collect_audit(
         database,
@@ -654,18 +653,23 @@ fn collect(
 fn commit(database: &mut SuplexDatabase, collected: &Collected, now: &str) -> DatabaseResult<()> {
     database.transaction(true, |database| {
         database.connection().execute(
-            "UPDATE suplex_telemetry SET audit_cursor = ?1, lifecycle_cursor = ?2, email_sent_at = CASE WHEN ?3 THEN COALESCE(email_sent_at, ?4) ELSE email_sent_at END, daily_at = CASE WHEN ?5 THEN ?4 ELSE daily_at END, last_app_version = CASE WHEN ?6 THEN ?7 ELSE last_app_version END, last_app_revision = CASE WHEN ?6 THEN ?8 ELSE last_app_revision END WHERE id = 'host'",
+            "UPDATE suplex_telemetry SET audit_cursor = ?1, lifecycle_cursor = ?2, daily_at = CASE WHEN ?4 THEN ?3 ELSE daily_at END, last_app_version = CASE WHEN ?5 THEN ?6 ELSE last_app_version END, last_app_revision = CASE WHEN ?5 THEN ?7 ELSE last_app_revision END WHERE id = 'host'",
             params![
                 collected.audit_cursor,
                 collected.lifecycle_cursor,
-                collected.email_sent,
                 now,
-                collected.daily
-                ,collected.version_observed
-                ,env!("CARGO_PKG_VERSION")
-                ,env!("SUPLEX_REVISION")
+                collected.daily,
+                collected.version_observed,
+                env!("CARGO_PKG_VERSION"),
+                env!("SUPLEX_REVISION")
             ],
         )?;
+        if let Some(account_id) = &collected.identified {
+            database.connection().execute(
+                "UPDATE suplex_account SET identify_sent_at = COALESCE(identify_sent_at, ?1) WHERE id = 'host' AND account_id = ?2",
+                params![now, account_id],
+            )?;
+        }
         for (task_id, merged) in &collected.pull_requests {
             database.connection().execute(
                 "INSERT INTO suplex_telemetry_pull_requests (task_id, merged) VALUES (?1, ?2) ON CONFLICT(task_id) DO UPDATE SET merged = excluded.merged",
@@ -698,10 +702,19 @@ fn prepare(
         baseline(database)?;
     }
     let current = state(database)?.ok_or("Telemetry state disappeared")?;
+    let account = crate::accounts::linked(database)?;
+    let config = Config {
+        distinct_id: account.as_ref().map_or_else(
+            || config.installation_id.clone(),
+            |account| account.account_id.clone(),
+        ),
+        ..config.clone()
+    };
     Ok(Some(collect(
         database,
-        config,
+        &config,
         &current,
+        account.as_ref(),
         now,
         first_since_start,
     )?))
@@ -769,6 +782,7 @@ mod tests {
             key: "phc_test".to_owned(),
             host: DEFAULT_HOST.to_owned(),
             installation_id: "install-1".to_owned(),
+            distinct_id: "install-1".to_owned(),
         }
     }
 
@@ -843,7 +857,7 @@ mod tests {
         assert!(notice_required(&database, true).unwrap());
         assert!(!notice_required(&database, false).unwrap());
 
-        acknowledge(&mut database, Some(" Adam@Example.com "), now).unwrap();
+        acknowledge(&mut database, now).unwrap();
         assert!(!notice_required(&database, true).unwrap());
         // History before the notice is never sent.
         let collected = prepare(&mut database, &test_config(), now, true)
@@ -851,18 +865,13 @@ mod tests {
             .unwrap();
         assert_eq!(
             names(&collected),
-            ["host_started", "$identify", "host_daily", "$groupidentify"]
+            ["host_started", "host_daily", "$groupidentify"]
         );
         assert_eq!(
-            collected.events[3]["properties"]["$group_set"],
+            collected.events[2]["properties"]["$group_set"],
             json!({"seats": 1, "projects": 0, "plan": "free"})
         );
-        assert_eq!(collected.events[1]["distinct_id"], "install-1");
-        assert_eq!(
-            collected.events[1]["properties"]["$set"]["email"],
-            "adam@example.com"
-        );
-        assert!(collected.events[1]["properties"]["$anon_distinct_id"].is_null());
+        assert_eq!(collected.events[0]["distinct_id"], "install-1");
         commit(&mut database, &collected, &rfc3339_millis(now)).unwrap();
 
         // Rows written while the setting is off are never sent later.
@@ -902,7 +911,7 @@ mod tests {
     fn lifecycle_and_pull_requests_report_each_step_once() {
         let mut database = database();
         let now = Utc::now();
-        acknowledge(&mut database, None, now).unwrap();
+        acknowledge(&mut database, now).unwrap();
         let collected = prepare(&mut database, &test_config(), now, false)
             .unwrap()
             .unwrap();
@@ -962,6 +971,53 @@ mod tests {
     }
 
     #[test]
+    fn a_linked_account_becomes_the_person_after_one_identify() {
+        let mut database = database();
+        let now = Utc::now();
+        acknowledge(&mut database, now).unwrap();
+        let account = crate::accounts::wire::HostedAccount {
+            id: "user_67e55044-10b1-426f-9247-bb680e5fe0c8".to_owned(),
+            email: "ada@example.com".to_owned(),
+            name: None,
+        };
+        crate::accounts::link(&database, &account, &"t".repeat(43)).unwrap();
+        let collected = prepare(&mut database, &test_config(), now, true)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            names(&collected),
+            ["$identify", "host_started", "host_daily", "$groupidentify"]
+        );
+        let identify = &collected.events[0];
+        assert_eq!(identify["distinct_id"], account.id);
+        assert_eq!(identify["properties"]["$anon_distinct_id"], "install-1");
+        assert_eq!(identify["properties"]["$set"]["email"], "ada@example.com");
+        for event in &collected.events[1..] {
+            assert_eq!(event["distinct_id"], account.id);
+        }
+        assert_eq!(
+            collected.events[1]["properties"]["$groups"]["host"],
+            "install-1"
+        );
+        commit(&mut database, &collected, &rfc3339_millis(now)).unwrap();
+        audit(&database, "task_created", r#"{"taskId":"task_on"}"#);
+        let collected = prepare(&mut database, &test_config(), now, false)
+            .unwrap()
+            .unwrap();
+        assert_eq!(names(&collected), ["task_created"]);
+        assert_eq!(collected.events[0]["distinct_id"], account.id);
+
+        crate::accounts::unlink(&database).unwrap();
+        audit(&database, "task_created", r#"{"taskId":"task_after"}"#);
+        commit(&mut database, &collected, &rfc3339_millis(now)).unwrap();
+        let collected = prepare(&mut database, &test_config(), now, false)
+            .unwrap()
+            .unwrap();
+        assert_eq!(names(&collected), ["task_created"]);
+        assert_eq!(collected.events[0]["distinct_id"], "install-1");
+    }
+
+    #[test]
     fn events_carry_only_listed_properties() {
         let event = event(&test_config(), "task_started", Some("c"), "t", json!({}));
         assert!(uuid::Uuid::parse_str(event["uuid"].as_str().unwrap()).is_ok());
@@ -989,7 +1045,7 @@ mod tests {
     fn a_semver_change_is_reported_once_separately_from_the_revision() {
         let mut database = database();
         let now = Utc::now();
-        acknowledge(&mut database, None, now).unwrap();
+        acknowledge(&mut database, now).unwrap();
         let initial = prepare(&mut database, &test_config(), now, false)
             .unwrap()
             .unwrap();

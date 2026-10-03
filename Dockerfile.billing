@@ -1,10 +1,13 @@
-# The hosted billing service on Fly (see fly.toml). It runs `suplex billing serve`.
+# The hosted service on Fly (see fly.toml): billing, accounts, and suplex.sh.
+# It runs `suplex hosted serve`.
 FROM rust:1.93.1-bookworm AS build
 WORKDIR /suplex
 COPY rust rust
 COPY migrations migrations
 COPY scripts/shared-resource-command.py scripts/
-# The billing service serves no UI. A release build only checks that these entry files exist.
+# Compiled into the binary and served at /install.sh.
+COPY src/web/public/install.sh src/web/public/
+# The hosted service serves no app UI. A release build only checks that these entry files exist.
 RUN mkdir -p dist/web && touch dist/web/suplex-ui.js dist/web/suplex-ui.css
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/suplex/rust/target \
@@ -13,4 +16,4 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
 FROM debian:bookworm-slim
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates && rm -rf /var/lib/apt/lists/*
 COPY --from=build /usr/local/bin/suplex /usr/local/bin/suplex
-CMD ["suplex", "billing", "serve"]
+CMD ["suplex", "hosted", "serve"]

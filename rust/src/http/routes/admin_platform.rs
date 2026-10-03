@@ -204,9 +204,11 @@ async fn read_telemetry(
             [],
             |row| Ok((row.get::<_, bool>(0)?, row.get::<_, bool>(1)?)),
         ).unwrap_or((false, false));
-        Ok::<_, Box<dyn std::error::Error>>((settings.telemetry_enabled, consent.0, consent.1))
+        let account_id = crate::accounts::linked(database)?.map(|account| account.account_id);
+        Ok::<_, Box<dyn std::error::Error>>((settings.telemetry_enabled, consent.0, consent.1, account_id))
     });
-    let (setting_enabled, acknowledged, replay_enabled) = status.unwrap_or((false, false, false));
+    let (setting_enabled, acknowledged, replay_enabled, account_id) =
+        status.unwrap_or((false, false, false, None));
     let required = user.role == "admin" && config.is_some() && setting_enabled && !acknowledged;
     let enabled = config.is_some() && setting_enabled && acknowledged;
     let (project_key, host, installation_id, app_version, app_revision, user_id, user_role) =
@@ -235,14 +237,14 @@ async fn read_telemetry(
             app_revision,
             user_id,
             user_role,
+            account_id: account_id.filter(|_| enabled),
             session_replay_enabled: replay_enabled,
         })
         .into_response(),
     )
 }
 
-/// `POST /api/admin/telemetry/notice`: an administrator saw the notice, with
-/// an optional email.
+/// `POST /api/admin/telemetry/notice`: an administrator saw the notice.
 async fn acknowledge_telemetry(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -253,7 +255,7 @@ async fn acknowledge_telemetry(
         Err(response) => return *response,
     };
     let result = state.with_database(|database| {
-        crate::telemetry::acknowledge(database, body.email.as_deref(), Utc::now())?;
+        crate::telemetry::acknowledge(database, Utc::now())?;
         database.connection().execute(
             "UPDATE suplex_telemetry SET session_replay_enabled = ?1 WHERE id = 'host'",
             [body.session_replay_enabled],

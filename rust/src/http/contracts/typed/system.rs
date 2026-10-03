@@ -7,8 +7,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use super::{
-    Contract, ContractResult, Fields, MAX, flag, formatted, int, nullable, number, one_of, rule,
-    text,
+    Contract, ContractResult, Fields, MAX, flag, formatted, int, number, one_of, rule, text,
 };
 use crate::platform::environment_settings::MAX_MIN_FREE_DISK_GB;
 
@@ -133,6 +132,10 @@ pub struct TelemetryResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub user_role: Option<TelemetryUserRole>,
+    /// The linked Suplex account, the browser's PostHog person.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub account_id: Option<String>,
     pub session_replay_enabled: bool,
 }
 
@@ -143,23 +146,10 @@ crate::shared::wire_enum! {
     }
 }
 
-/// A plain `name@domain.tld` shape; the address is only a PostHog person key.
-fn email(value: &str, _: &()) -> garde::Result {
-    let valid = value.split_once('@').is_some_and(|(local, domain)| {
-        !local.is_empty()
-            && domain.contains('.')
-            && !domain.starts_with('.')
-            && !domain.ends_with('.')
-            && !domain.contains('@')
-    }) && !value.chars().any(char::is_whitespace);
-    rule(valid, "invalid_format")
-}
-
-/// The notice acknowledgement: an optional email, or none to stay anonymous.
+/// The notice acknowledgement.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TelemetryNoticeBody {
-    pub email: Option<String>,
     #[serde(default)]
     pub session_replay_enabled: bool,
 }
@@ -167,7 +157,6 @@ pub struct TelemetryNoticeBody {
 impl Contract for TelemetryNoticeBody {
     fn schema(input: Option<&Value>) -> ContractResult<Value> {
         Fields::new(input)?
-            .opt("email", nullable(formatted(3, 254, email)))
             .opt("sessionReplayEnabled", flag)
             .finish()
     }

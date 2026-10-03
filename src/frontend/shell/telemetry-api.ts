@@ -7,9 +7,9 @@ export function getTelemetry(): Promise<TelemetryResponse> {
 
 const telemetryRefreshKey = "suplex.telemetry.refresh";
 
-/** Records that an administrator saw the notice. `null` keeps the host anonymous. */
-export async function acknowledgeTelemetry(email: string | null, sessionReplayEnabled: boolean): Promise<void> {
-  await readJsonUnchecked<unknown>("/api/admin/telemetry/notice", { method: "POST", body: JSON.stringify({ email, sessionReplayEnabled }) });
+/** Records that an administrator saw the notice. */
+export async function acknowledgeTelemetry(sessionReplayEnabled: boolean): Promise<void> {
+  await readJsonUnchecked<unknown>("/api/admin/telemetry/notice", { method: "POST", body: JSON.stringify({ sessionReplayEnabled }) });
   notifyTelemetryChanged();
 }
 

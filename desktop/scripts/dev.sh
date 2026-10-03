@@ -13,12 +13,15 @@ app=.electron-dev/Suplex.app
 app_id=dev.suplex.desktop.dev
 if [ ! -d "$app" ] || [ "$(cat .electron-dev/source 2>/dev/null)" != "$stock" ] ||
    [ "$(plutil -extract CFBundleIdentifier raw "$app/Contents/Info.plist" 2>/dev/null)" != "$app_id" ] ||
+   [ "$(plutil -extract CFBundleURLTypes.0.CFBundleURLSchemes.0 raw "$app/Contents/Info.plist" 2>/dev/null)" != suplex ] ||
    ! codesign --verify "$app" >/dev/null 2>&1; then
   rm -rf .electron-dev && mkdir .electron-dev
   cp -Rc "$stock" "$app"
   plutil -replace CFBundleName -string Suplex "$app/Contents/Info.plist"
   plutil -replace CFBundleDisplayName -string Suplex "$app/Contents/Info.plist"
   plutil -replace CFBundleIdentifier -string "$app_id" "$app/Contents/Info.plist"
+  # suplex://auth/done brings the window to the front after a browser login.
+  plutil -replace CFBundleURLTypes -json '[{"CFBundleURLName":"Suplex","CFBundleURLSchemes":["suplex"]}]' "$app/Contents/Info.plist"
   codesign --force --deep --sign - "$app"
   echo "$stock" > .electron-dev/source
 fi

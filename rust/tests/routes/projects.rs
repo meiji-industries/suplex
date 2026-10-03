@@ -32,7 +32,14 @@ mod tests {
         )*};
     }
     with_path!("projectId": get_one, repository_defaults, provider_instances);
-    with_path!("companyId": list_company, repository_owners, recent_repositories);
+    with_path!("companyId": list_company, repository_owners);
+
+    async fn recent_repositories(state: State<AppState>, Path(id): Path<String>, headers: HeaderMap) -> Response {
+        match test_path(json!({"companyId": id})) {
+            Ok(path) => super::recent_repositories(state, path, OriginalUri("/recent-repositories".parse().unwrap()), headers).await,
+            Err(response) => *response,
+        }
+    }
 
     macro_rules! with_query {
         ($($name:ident),*) => {$(
@@ -497,7 +504,7 @@ mod tests {
                 )
             })
             .collect();
-        assert_eq!(recent, [("owner/fresh", "trunk"), ("org/empty", "main")]);
+        assert_eq!(recent, [("owner/fresh", "trunk"), ("org/empty", "main"), ("owner/old", "main")]);
         let denied_recent = recent_repositories(
             State(state.clone()),
             Path(company.id.clone()),

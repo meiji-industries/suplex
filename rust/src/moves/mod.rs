@@ -2,6 +2,7 @@
 //! what it started. The tasks own their own status.
 
 pub mod prompt;
+pub mod recommend;
 pub mod shell;
 
 use std::{collections::BTreeMap, error::Error};

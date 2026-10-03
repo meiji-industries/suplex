@@ -7,12 +7,11 @@ import { Combobox, ComboboxContent, ComboboxEmpty, ComboboxInput, ComboboxItem, 
 import { DropdownMenu, DropdownMenuContent, DropdownMenuRadioGroup, DropdownMenuRadioItem, DropdownMenuTrigger } from "../../components/ui/dropdown-menu.js";
 import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput, InputGroupText } from "../../components/ui/input-group.js";
 import { RadioGroup, RadioGroupItem } from "../../components/ui/radio-group.js";
-import { NewButton } from "../../components/ui/new-button.js";
 import { GithubDeviceSignIn } from "../../components/app/github-device-sign-in.js";
 import { ApiError, billingSettingsPath, hasApiFinding, isApiError, readJsonUnchecked, type ApiFinding, type CompanyStatus } from "../../lib/api.js";
 import { useOptionalCompanyContext } from "../../shell/company-context.js";
 import { reconcileScopedNotFound } from "../../shell/view-shared.js";
-import { ChevronDown } from "lucide-react";
+import { ChevronDown, Plus } from "lucide-react";
 import { useCallback, useEffect, useState, type FormEvent, type ReactElement } from "react";
 import { ProjectConnections, REPOSITORY_HOSTS, withRepositoryHost } from "./project-connections.js";
 import { ProjectIntegrationSchema, type ProjectIntegration } from "../../contracts/project-integration.js";
@@ -179,7 +178,7 @@ export function CreateProjectDialog({
   return (
     <Dialog open={open} onOpenChange={closeDialog}>
       <DialogContent showCloseButton>
-        <DialogHeader><DialogTitle>New project</DialogTitle></DialogHeader>
+        <DialogHeader><DialogTitle>Add project</DialogTitle></DialogHeader>
           {quotaCode ? <Alert><AlertDescription><p>{quotaMessage(quotaCode, isAdmin)}</p>{isAdmin && quotaCode !== "billing_unavailable" ? <a href={billingSettingsPath(companyId)} onClick={() => writeProjectDraft(companyId, { source, repository: source === "create" ? repositoryName : cloneUrl })}>Open billing settings</a> : null}</AlertDescription></Alert> : null}
           {companyStatus !== "active" ? (
             <p className="text-xs text-muted-foreground">{companyStatus === "paused" ? "Company paused. New projects are unavailable." : "Company archived. New projects are unavailable."}</p>
@@ -203,7 +202,7 @@ export function CreateProjectDialog({
               <ProjectConnections value={integration} onChange={setIntegration} repositoryHost={false} />
               {github && ownersState.kind === "auth-required" ? <Alert><AlertDescription><div className="space-y-2"><p>GitHub is not signed in.</p>{canSignInToGitHub ? <GithubDeviceSignIn onConnected={async () => { setRepositories(null); await loadOwners(); }} /> : <p>An administrator must sign in to GitHub.</p>}</div></AlertDescription></Alert> : null}
               {github && ownersState.kind === "failed" ? <Alert><AlertDescription><div className="space-y-2"><p>Suplex could not load GitHub repositories. Enter a repository URL or select Check again.</p><Button type="button" size="xs" variant="outline" onClick={() => void loadOwners()}>Check again</Button></div></AlertDescription></Alert> : null}
-              <div className="grid"><NewButton type="submit" disabled={busy || !companyId || !repository.trim()}>{busy ? source === "clone" ? "Cloning…" : "Creating…" : "New project"}</NewButton></div>
+              <div className="grid"><Button size="sm" type="submit" disabled={busy || !companyId || !repository.trim()}><Plus />{busy ? source === "clone" ? "Cloning…" : "Creating…" : "Add project"}</Button></div>
             </form>
           )}
           {error ? <div className="mt-3 text-xs text-destructive"><Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert></div> : null}

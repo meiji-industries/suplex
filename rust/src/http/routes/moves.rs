@@ -34,6 +34,10 @@ pub fn router() -> Router<AppState> {
         .route("/api/companies/{company_id}/moves", get(list).post(create))
         .route("/api/moves/{move_id}", patch(update).delete(delete))
         .route("/api/moves/{move_id}/runs", get(runs).post(start))
+        .route(
+            "/api/projects/{project_id}/move-recommendations",
+            post(recommend),
+        )
         .route("/api/move-runs/{run_id}", get(run))
         .route("/api/move-runs/{run_id}/archive", post(archive))
         .route("/api/move-runs/{run_id}/transcript", get(transcript))
@@ -239,6 +243,24 @@ async fn end(
             Ok(())
         },
     )
+}
+
+/// Proposed moves for a project, read by its default Worker. Nothing is saved.
+async fn recommend(
+    State(state): State<AppState>,
+    Path(project_id): Path<String>,
+    headers: HeaderMap,
+) -> Response {
+    let (user_id, cookies) = match admitted(&state, &headers, &Method::POST) {
+        Ok(value) => value,
+        Err(response) => return *response,
+    };
+    let mut response = match moves::recommend::recommend(&state, &user_id, &project_id).await {
+        Ok(recommendations) => Json(recommendations).into_response(),
+        Err(error) => ApiError::response(error),
+    };
+    auth::append_cookies(&mut response, cookies);
+    response
 }
 
 async fn transcript(

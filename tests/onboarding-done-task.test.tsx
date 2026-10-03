@@ -6,16 +6,17 @@ import { afterEach, expect, test, vi } from "vitest";
 import type * as NavigationState from "../src/frontend/shell/navigation-state.js";
 
 const company = { id: "company-1", name: "Acme", issueCode: "ACME", status: "active" };
-const fixture = vi.hoisted(() => ({ currentCompany: undefined as typeof company | undefined, loading: false }));
+const fixture = vi.hoisted(() => ({ currentCompany: undefined as typeof company | undefined, loading: false, projects: [{ id: "project-1" }], reload: vi.fn() }));
 vi.mock("../src/frontend/shell/company-context.js", () => ({ useCompanyContext: () => ({ currentCompany: fixture.currentCompany, user: { role: "admin" }, reloadCompanies: vi.fn(), renameCompany: vi.fn(), setCompanyIssueCode: vi.fn() }), useOptionalCompanyContext: () => fixture.currentCompany ? { currentCompany: fixture.currentCompany } : undefined }));
-vi.mock("../src/frontend/features/onboarding/onboarding.js", async importOriginal => ({ ...(await importOriginal()), useOnboardingData: () => ({ state: { company: fixture.currentCompany, checks: [], providers: [], profiles: [], projects: [{ id: "project-1" }] }, loading: fixture.loading, error: "", reload: vi.fn() }) }));
+vi.mock("../src/frontend/features/onboarding/onboarding.js", async importOriginal => ({ ...(await importOriginal()), useOnboardingData: () => ({ state: { company: fixture.currentCompany, checks: [], providers: [], profiles: [], projects: fixture.projects }, loading: fixture.loading, error: "", reload: fixture.reload }) }));
 vi.mock("../src/frontend/components/app/system-health.js", () => ({ useSystemHealth: () => ({ refresh: vi.fn(), freshness: "fresh", refreshing: false }), CheckStatusIndicator: () => null, SystemHealthAlert: () => null, healthCheckPurpose: () => "" }));
 vi.mock("../src/frontend/shell/company-switcher.js", () => ({ CompanySwitcher: () => null }));
+vi.mock("../src/frontend/shell/experiments-api.js", () => ({ useExperiments: vi.fn() }));
 vi.mock("../src/frontend/components/ui/sidebar.js", () => ({ Sidebar: ({ children }: { children: ReactNode }) => <>{children}</>, SidebarContent: ({ children }: { children: ReactNode }) => <>{children}</>, SidebarFooter: ({ children }: { children: ReactNode }) => <>{children}</>, SidebarHeader: ({ children }: { children: ReactNode }) => <>{children}</>, SidebarInset: ({ children }: { children: ReactNode }) => <>{children}</>, SidebarMenu: ({ children }: { children: ReactNode }) => <>{children}</>, SidebarMenuButton: ({ children }: { children: ReactNode }) => <>{children}</>, SidebarMenuItem: ({ children }: { children: ReactNode }) => <>{children}</>, SidebarProvider: ({ children }: { children: ReactNode }) => <>{children}</>, SidebarTrigger: () => null, useSidebar: () => ({ setOpenMobile: vi.fn() }) }));
 vi.mock("../src/frontend/features/settings/provider-login.js", () => ({ ProviderLoginTerminal: () => null, useProviderLogin: () => ({ login: null, loginPending: null, startLogin: vi.fn(), closeLogin: vi.fn() }) }));
 vi.mock("../src/frontend/features/projects/project-cards.js", () => ({ ProjectCards: () => null }));
 vi.mock("../src/frontend/features/projects/recent-repositories.js", () => ({ RecentRepositories: () => null }));
-vi.mock("../src/frontend/features/projects/create-project-dialog.js", () => ({ CreateProjectDialog: () => null }));
+vi.mock("../src/frontend/features/projects/create-project-dialog.js", () => ({ CreateProjectDialog: ({ open, onCreated }: { open: boolean; onCreated: () => Promise<void> }) => open ? <div role="dialog"><button onClick={() => void onCreated()}>Save project</button></div> : null }));
 vi.mock("../src/frontend/components/app/entity-avatar.js", () => ({ AvatarEditor: ({ name, seed }: { name: string; seed?: string }) => <output data-avatar-name={name} data-avatar-seed={seed} /> }));
 vi.mock("../src/frontend/components/app/update-notice.js", () => ({ UpdateNotice: () => null }));
 vi.mock("../src/frontend/components/app/theme.js", () => ({ ThemeToggle: () => null }));
@@ -27,6 +28,7 @@ vi.mock("../src/frontend/features/tasks/new-task-dialog.js", () => ({ NewTaskDia
 
 import { OnboardingView } from "../src/frontend/features/onboarding/onboarding-wizard.js";
 import { navigate } from "../src/frontend/shell/navigation-state.js";
+import { useExperiments } from "../src/frontend/shell/experiments-api.js";
 
 function RoutedOnboarding(): ReactNode {
   const [route, setRoute] = useState(() => `${window.location.pathname}${window.location.search}${window.location.hash}`);
@@ -56,9 +58,12 @@ function setInput(input: HTMLInputElement, value: string): void {
 afterEach(() => {
   fixture.currentCompany = undefined;
   fixture.loading = false;
+  fixture.projects = [{ id: "project-1" }];
+  fixture.reload.mockReset();
   document.body.replaceChildren();
   window.history.replaceState({}, "", "/");
   vi.mocked(navigate).mockClear();
+  vi.mocked(useExperiments).mockReset();
 });
 
 test("final Continue shows Done without a New task dialog", async () => {
@@ -70,7 +75,7 @@ test("final Continue shows Done without a New task dialog", async () => {
   await act(async () => root.render(<StrictMode><RoutedOnboarding /></StrictMode>));
   await act(async () => button(container, "Continue").click());
   expect(window.location.search).toContain("step=done");
-  expect(container.textContent).toContain("You are all set!");
+  expect(container.querySelector("h2")?.textContent).toBe("Your agents do the work. Suplex runs the workflow.");
   expect(container.querySelectorAll('[role="dialog"]')).toHaveLength(0);
   await act(async () => root.unmount());
 });
@@ -92,6 +97,25 @@ test("direct Done does not open the dialog, and the CTA requests it on Today", a
   await act(async () => root.unmount());
 });
 
+test("Done shows Today only while the experiment is enabled", async () => {
+  fixture.currentCompany = company;
+  window.history.replaceState({}, "", "/onboarding?step=done");
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+
+  for (const todayPage of [undefined, false, true, false]) {
+    vi.mocked(useExperiments).mockReturnValue(todayPage === undefined ? undefined : { todayPage, hostTerminal: false });
+    await act(async () => root.render(<OnboardingView />));
+    const today = Array.from(container.querySelectorAll("a")).find(link => link.textContent === "Today");
+    expect(Boolean(today)).toBe(todayPage === true);
+    if (today) expect(today.getAttribute("href")).toBe("/today");
+    expect(button(container, "Create your first task").disabled).toBe(false);
+  }
+
+  await act(async () => root.unmount());
+});
+
 test("company avatar uses the trimmed name draft and falls back to the saved name", async () => {
   fixture.currentCompany = { ...company, name: "My Company" };
   window.history.replaceState({}, "", "/onboarding?step=company");
@@ -108,5 +132,31 @@ test("company avatar uses the trimmed name draft and falls back to the saved nam
   expect(avatar.dataset.avatarSeed).toBe("ACME Agency");
   await act(async () => setInput(input, "   "));
   expect(avatar.dataset.avatarSeed).toBe("My Company");
+  await act(async () => root.unmount());
+});
+
+test("Projects shares the empty state and refreshes onboarding after creation", async () => {
+  fixture.currentCompany = company;
+  fixture.projects = [];
+  window.history.replaceState({}, "", "/onboarding?step=projects");
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  const render = (): void => root.render(<OnboardingView />);
+  fixture.reload.mockImplementation(async () => {
+    fixture.projects = [{ id: "project-1" }];
+    render();
+  });
+  await act(async () => render());
+  expect(container.querySelector("h2")?.textContent).toBe("Projects");
+  expect(container.textContent).toContain("Add a repository to create your first project.");
+  expect(button(container, "Continue").disabled).toBe(true);
+  expect(container.querySelector('[aria-label="Check again"]')).toBeNull();
+  await act(async () => button(container, "Add project").click());
+  await act(async () => button(container, "Save project").click());
+  expect(fixture.reload).toHaveBeenCalledOnce();
+  expect(window.location.search).toContain("step=projects");
+  expect(container.textContent).not.toContain("No projects");
+  expect(button(container, "Continue").disabled).toBe(false);
   await act(async () => root.unmount());
 });

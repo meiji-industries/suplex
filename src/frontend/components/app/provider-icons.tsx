@@ -7,8 +7,16 @@ export const providerIcons = {
   devin: { label: "Devin", src: new URL("./provider-icons/devin.svg", import.meta.url).href },
 } satisfies Record<HarnessKind, { label: string; src: string }>;
 
-/** "brand" keeps Claude Code orange; "mono" draws every logo in the current text colour. */
+const colorIcons = {
+  codex: new URL("./provider-icons/codex-color.svg", import.meta.url).href,
+  devin: new URL("./provider-icons/devin-color.svg", import.meta.url).href,
+};
+
+/** "brand" uses provider artwork; "mono" draws every logo in the current text colour. */
 export function ProviderIcon({ provider, tone = "brand", size = "sm" }: { provider: HarnessKind; tone?: "brand" | "mono"; size?: "sm" | "md" }) {
+  if (tone === "brand" && (provider === "codex" || provider === "devin")) {
+    return <img aria-hidden="true" alt="" src={colorIcons[provider]} className={`${size === "md" ? "size-5" : "size-4"} shrink-0`} />;
+  }
   const mask = `url("${providerIcons[provider].src}") center / contain no-repeat`;
   return <span aria-hidden="true" className={`inline-block ${size === "md" ? "size-5" : "size-4"} shrink-0 bg-current`} style={{ mask, WebkitMask: mask, color: tone === "brand" && provider === "claude-code" ? "#D97757" : undefined }} />;
 }

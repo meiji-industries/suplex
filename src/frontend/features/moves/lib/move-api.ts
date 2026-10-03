@@ -4,6 +4,7 @@ import type { MoveResponse } from "../../../contracts/generated/MoveResponse.js"
 import type { MoveRunResponse } from "../../../contracts/generated/MoveRunResponse.js";
 import type { MoveRunsResponse } from "../../../contracts/generated/MoveRunsResponse.js";
 import type { MoveRunTranscript } from "../../../contracts/generated/MoveRunTranscript.js";
+import type { MoveRecommendationsResponse } from "../../../contracts/generated/MoveRecommendationsResponse.js";
 import type { MovesResponse } from "../../../contracts/generated/MovesResponse.js";
 import type { ApiProfile } from "../../../shell/view-shared.js";
 
@@ -41,6 +42,11 @@ export function getMoveRun(runId: string): Promise<MoveRunResponse> {
 
 export async function endMoveRun(runId: string): Promise<void> {
   await readJsonUnchecked<unknown>(`/api/move-runs/${encodeURIComponent(runId)}/terminal`, { method: "DELETE" });
+}
+
+/** The project's default Worker reads the repository and proposes moves. It can take minutes. */
+export function recommendMoves(projectId: string, signal?: AbortSignal): Promise<MoveRecommendationsResponse> {
+  return readJsonUnchecked<MoveRecommendationsResponse>(`/api/projects/${encodeURIComponent(projectId)}/move-recommendations`, { method: "POST", ...(signal ? { signal } : {}) });
 }
 
 export async function listProfiles(): Promise<ApiProfile[]> {

@@ -21,7 +21,7 @@ use crate::{
             auth::CompanyIdParams,
             projects::{
                 IssueSearchQuery, LocalProjectCreate, OwnerParams, ProjectCreateBody,
-                ProjectIdParams, ProjectPatch, TaskSourceQuery,
+                ProjectIdParams, ProjectPatch, RecentRepositoriesQuery, TaskSourceQuery,
             },
         },
         session,
@@ -441,16 +441,23 @@ async fn repository_owners(
 
 #[derive(serde::Serialize, ts_rs::TS)]
 #[ts(export)]
+#[serde(rename_all = "camelCase")]
 struct RecentRepositories {
     repositories: Vec<provisioning::RecentRepository>,
+    next_page: Option<u32>,
 }
 
-/// Suggestions for a new project: repositories pushed to in the last 30 days.
+/// Suggestions for a new project, newest pushed first.
 async fn recent_repositories(
     State(state): State<AppState>,
     ValidPath(CompanyIdParams { company_id }): ValidPath<CompanyIdParams>,
+    axum::extract::OriginalUri(uri): axum::extract::OriginalUri,
     headers: HeaderMap,
 ) -> Response {
+    let page = match valid::<RecentRepositoriesQuery>(query_object(&uri)) {
+        Ok(query) => query.page,
+        Err(response) => return *response,
+    };
     let (user_id, cookies) = match authorize(&state, &headers) {
         Ok(value) => value,
         Err(response) => return *response,
@@ -464,12 +471,15 @@ async fn recent_repositories(
     {
         return with_cookies(response, cookies);
     }
-    let since = chrono::Utc::now() - chrono::Duration::days(30);
-    let response =
-        match provisioning::recent_github_repositories(&state.project_github, since).await {
-            Ok(repositories) => axum::Json(RecentRepositories { repositories }).into_response(),
-            Err(error) => ApiError::response(Box::new(error)),
-        };
+    let response = match provisioning::recent_github_repositories(&state.project_github, page).await
+    {
+        Ok((repositories, next_page)) => axum::Json(RecentRepositories {
+            repositories,
+            next_page,
+        })
+        .into_response(),
+        Err(error) => ApiError::response(Box::new(error)),
+    };
     with_cookies(response, cookies)
 }
 

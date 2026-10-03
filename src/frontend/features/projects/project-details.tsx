@@ -279,8 +279,8 @@ export function ProjectDetails({ projectId }: { projectId: string }): ReactEleme
       {section === "general" ? <form onSubmit={(event) => { event.preventDefault(); void saveGeneral(); }}>
         {sectionError(general.status) ? <Alert variant="destructive"><AlertDescription>{sectionError(general.status)}</AlertDescription></Alert> : null}
         <SettingsSection title="Profile">
-          <SettingRow label="Project name" description="Name shown in Suplex." htmlFor="project-name"><div className="w-full sm:w-80"><Input size="sm" id="project-name" autoFocus disabled={general.status.kind === "saving"} aria-invalid={fieldFindings(general.status, "name").length > 0} value={general.draft.name} onChange={(event) => updateGeneral("name", event.target.value)} /><FieldError errors={fieldFindings(general.status, "name")} /></div></SettingRow>
-          <SettingRow label="Avatar" description="Shown with this project."><AvatarEditor kind="project" id={project.id} name={general.draft.name || project.name} /></SettingRow>
+          <SettingRow label="Project name" htmlFor="project-name"><div className="w-full sm:w-80"><Input size="sm" id="project-name" autoFocus disabled={general.status.kind === "saving"} aria-invalid={fieldFindings(general.status, "name").length > 0} value={general.draft.name} onChange={(event) => updateGeneral("name", event.target.value)} /><FieldError errors={fieldFindings(general.status, "name")} /></div></SettingRow>
+          <SettingRow label="Avatar"><AvatarEditor compact kind="project" id={project.id} name={general.draft.name || project.name} /></SettingRow>
         </SettingsSection>
         <SettingsSection title="Repository">
           {project.integration?.repository.kind !== "bitbucket" ? <SettingRow label="GitHub connection"><ProjectRepositoryConnection key={JSON.stringify([project.id, project.repository, project.repositoryPath, project.baseBranch, project.updatedAt])} projectId={project.id} /></SettingRow> : null}

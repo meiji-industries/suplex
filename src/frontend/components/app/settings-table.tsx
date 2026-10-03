@@ -37,8 +37,8 @@ export function SettingsToolbarAction({ tone = "secondary", type = "button", ...
 /** Minimum width a flexible column keeps before the table scrolls sideways. */
 const FLEXIBLE_COLUMN_MIN = 240;
 
-export function SettingsDataTable({ label, columns, className, children }: { label: string; columns: SettingsTableColumn[]; className?: string; children: ReactNode }): ReactElement {
-  const width = columns.reduce((sum, column) => sum + (column.width ?? FLEXIBLE_COLUMN_MIN), 0);
+export function SettingsDataTable({ label, columns, className, minWidth, children }: { label: string; columns: SettingsTableColumn[]; className?: string; minWidth?: number; children: ReactNode }): ReactElement {
+  const width = minWidth ?? columns.reduce((sum, column) => sum + (column.width ?? FLEXIBLE_COLUMN_MIN), 0);
   return (
     <div className={cn("overflow-x-auto", className)}>
       <table aria-label={label} className="w-full table-fixed border-separate border-spacing-0 text-left" style={{ minWidth: width }}>

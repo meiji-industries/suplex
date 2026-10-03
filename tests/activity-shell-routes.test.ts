@@ -16,7 +16,6 @@ const state = vi.hoisted(() => ({
   sidebarUnmounts: 0,
   viewMounts: [] as string[],
   readTaskList: vi.fn<(companyId: string) => Promise<TaskRow[]>>(),
-  analyticsImport: undefined as Promise<void> | undefined,
 }));
 
 vi.mock("../src/frontend/components/ui/sidebar.js", async () => {
@@ -101,10 +100,7 @@ vi.mock("../src/frontend/features/tasks/dashboard.js", () => ({ Dashboard: view(
 vi.mock("../src/frontend/features/projects/projects.js", () => ({ ProjectsView: view("projects") }));
 vi.mock("../src/frontend/features/tasks/tasks.js", () => ({ TasksView: view("tasks") }));
 vi.mock("../src/frontend/features/timeline/timeline.js", () => ({ TimelineView: view("timeline") }));
-vi.mock("../src/frontend/features/analytics/analytics.js", async () => {
-  await state.analyticsImport;
-  return { AnalyticsView: view("analytics") };
-});
+vi.mock("../src/frontend/features/analytics/analytics.js", () => ({ AnalyticsView: view("analytics") }));
 vi.mock("../src/frontend/features/settings/task-template-settings.js", () => ({ TaskTemplateSettings: view("templates") }));
 vi.mock("../src/frontend/features/settings/provider-settings.js", () => ({ ProviderSettingsView: view("providers") }));
 vi.mock("../src/frontend/features/settings/terminal-settings.js", () => ({ TerminalSettingsView: view("terminal") }));
@@ -201,10 +197,8 @@ describe("Activity shell lifecycle", () => {
     expect(state.sidebarUnmounts).toBe(1);
   });
 
-  it("keeps Activity mounted while a secondary route chunk loads", async () => {
+  it("opens a secondary page directly and keeps Activity mounted", async () => {
     state.readTaskList.mockResolvedValue([task("task-a", "First task")]);
-    let resolveImport: (() => void) | undefined;
-    state.analyticsImport = new Promise(resolve => { resolveImport = resolve; });
 
     await act(async () => root.render(createElement(AppRouter)));
     const taskLink = container.querySelector('a[href*="/tasks/task-a"]');
@@ -212,12 +206,8 @@ describe("Activity shell lifecycle", () => {
 
     await act(async () => navigate("/analytics?company=company-a"));
     expect(container.querySelector('[aria-busy="true"]')).toBeNull();
-    expect(container.querySelector('main[data-view="tasks"]')).not.toBeNull();
-    expect(container.querySelector('a[href*="/tasks/task-a"]')).toBe(taskLink);
+    expect(container.querySelector('main[data-view="tasks"]')).toBeNull();
     expect(state.sidebarUnmounts).toBe(0);
-
-    await act(async () => resolveImport?.());
-    expect(container.querySelector('[aria-busy="true"]')).toBeNull();
     expect(container.querySelector('main[data-view="analytics"]')?.textContent).toBe("/analytics");
     expect(state.sidebarMounts).toBe(1);
     expect(container.querySelector('a[href*="/tasks/task-a"]')).toBe(taskLink);

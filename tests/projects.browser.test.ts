@@ -41,12 +41,12 @@ test("projects desktop flow creates a project and opens its configuration", { ti
     const page = fixture.page;
     await page.goto(`${fixture.base}/projects?company=${fixture.company.id}`);
     await page.getByRole("heading", { name: "Projects", exact: true, level: 2 }).waitFor();
-    await page.getByRole("button", { name: "New project", exact: true }).click();
+    await page.getByRole("button", { name: "Add project", exact: true }).click();
     await page.getByLabel("Repository", { exact: true }).click();
     await page.getByRole("option", { name: "suplex", exact: true }).click();
-    await page.getByRole("dialog", { name: "New project", exact: true }).getByRole("button", { name: "New project", exact: true }).click();
+    await page.getByRole("dialog", { name: "Add project", exact: true }).getByRole("button", { name: "Add project", exact: true }).click();
     await page.getByText("suplex", { exact: true }).waitFor();
-    const project = page.locator("article").filter({ has: page.getByText("suplex", { exact: true }) });
+    const project = page.getByRole("list", { name: "Projects", exact: true }).getByRole("listitem").filter({ has: page.getByText("suplex", { exact: true }) });
     await project.getByRole("link").click();
     await page.reload();
     expect(await page.getByLabel("Base branch").inputValue()).toBe("main");

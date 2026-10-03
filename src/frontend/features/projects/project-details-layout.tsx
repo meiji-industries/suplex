@@ -24,7 +24,7 @@ export function ProjectDetailsLayout({ projectId, companyId, title, active, onSe
       </div>
       <SettingsHeader title={title} />
       <Tabs value={active} onValueChange={(value) => { if (typeof value === "string" && onSectionChange && isProjectSection(value)) onSectionChange(value); }}>
-        <div className="max-w-full overflow-x-auto border-b">
+        <div className="max-w-full overflow-x-auto border-b pb-px">
           <TabsList variant="line">
             {PROJECT_SECTIONS.map((section) => onSectionChange
               ? <TabsTrigger key={section.id} value={section.id}>{section.label}</TabsTrigger>

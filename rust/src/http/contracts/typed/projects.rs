@@ -650,6 +650,48 @@ pub struct IssueSearchQuery {
     pub query: String,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+pub struct RecentRepositoriesQuery {
+    pub page: u32,
+}
+
+impl Contract for RecentRepositoriesQuery {
+    fn schema(input: Option<&Value>) -> ContractResult<Value> {
+        let mut input = input.cloned().unwrap_or_else(|| json!({}));
+        if let Some(page) = input.get_mut("page") {
+            if let Some(number) = page.as_str().and_then(|value| value.parse::<u32>().ok()) {
+                *page = json!(number);
+            }
+        }
+        Fields::new(Some(&input))?
+            .or("page", json!(1), int(1.0, f64::from(u32::MAX) - 1.0))
+            .finish()
+    }
+}
+
+#[cfg(test)]
+mod recent_repository_query_tests {
+    use super::*;
+
+    #[test]
+    fn page_defaults_and_validates_positive_integers() {
+        assert_eq!(
+            RecentRepositoriesQuery::schema(Some(&json!({}))).unwrap()["page"],
+            1
+        );
+        assert_eq!(
+            RecentRepositoriesQuery::schema(Some(&json!({"page":"2"}))).unwrap()["page"],
+            2
+        );
+        for page in ["0", "-1", "1.5", "bad", "4294967295"] {
+            assert!(
+                RecentRepositoriesQuery::schema(Some(&json!({"page":page}))).is_err(),
+                "{page}"
+            );
+        }
+    }
+}
+
 impl Contract for IssueSearchQuery {
     fn schema(input: Option<&Value>) -> ContractResult<Value> {
         Fields::new(input)?

@@ -1,4 +1,4 @@
-import { lazy, startTransition, Suspense, useEffect, useState, type ReactElement } from "react";
+import { startTransition, useEffect, useState, type ReactElement } from "react";
 
 import { CompanyProvider } from "./company-context.js";
 import { SystemHealthProvider } from "../components/app/system-health.js";
@@ -11,34 +11,33 @@ import { TasksView } from "../features/tasks/tasks.js";
 import { ApplicationShell } from "./application-frame.js";
 import { ServerStateProvider } from "./server-state.js";
 import { TaskDataProvider } from "../features/tasks/task-data.js";
-import { LoadingState } from "../components/app/loading-state.js";
 import { DesktopHostBar } from "./desktop-host-bar.js";
 import { useExperiments } from "./experiments-api.js";
 import { BrowserAnalytics } from "./browser-analytics-provider.js";
 
-const AdminView = lazy(() => import("../features/admin/admin.js").then(module => ({ default: module.AdminView })));
-const CompanySettingsView = lazy(() => import("../features/settings/company-settings.js").then(module => ({ default: module.CompanySettingsView })));
-const ProfileView = lazy(() => import("../features/profiles/profile.js").then(module => ({ default: module.ProfileView })));
-const Dashboard = lazy(() => import("../features/tasks/dashboard.js").then(module => ({ default: module.Dashboard })));
-const ProjectsView = lazy(() => import("../features/projects/projects.js").then(module => ({ default: module.ProjectsView })));
-const ProjectDetails = lazy(() => import("../features/projects/project-details.js").then(module => ({ default: module.ProjectDetails })));
-const TimelineView = lazy(() => import("../features/timeline/timeline.js").then(module => ({ default: module.TimelineView })));
-const AnalyticsView = lazy(() => import("../features/analytics/analytics.js").then(module => ({ default: module.AnalyticsView })));
-const TaskTemplateSettings = lazy(() => import("../features/settings/task-template-settings.js").then(module => ({ default: module.TaskTemplateSettings })));
-const ApiMcpSettingsView = lazy(() => import("../features/settings/api-mcp-settings.js").then(module => ({ default: module.ApiMcpSettingsView })));
-const ProviderSettingsView = lazy(() => import("../features/settings/provider-settings.js").then(module => ({ default: module.ProviderSettingsView })));
-const TerminalSettingsView = lazy(() => import("../features/settings/terminal-settings.js").then(module => ({ default: module.TerminalSettingsView })));
-const BackupSettingsView = lazy(() => import("../features/settings/backup-settings.js").then(module => ({ default: module.BackupSettingsView })));
-const EnvironmentSettingsView = lazy(() => import("../features/settings/environment-settings.js").then(module => ({ default: module.EnvironmentSettingsView })));
-const WorkflowSettingsView = lazy(() => import("../features/settings/workflow-settings.js").then(module => ({ default: module.WorkflowSettingsView })));
-const TriggerSettingsView = lazy(() => import("../features/settings/trigger-settings.js").then(module => ({ default: module.TriggerSettingsView })));
-const BillingSettingsView = lazy(() => import("../features/settings/billing-settings.js").then(module => ({ default: module.BillingSettingsView })));
-const OnboardingSettingsView = lazy(() => import("../features/settings/onboarding-settings.js").then(module => ({ default: module.OnboardingSettingsView })));
-const AccessView = lazy(() => import("../features/access/access.js").then(module => ({ default: module.AccessView })));
-const OnboardingView = lazy(() => import("../features/onboarding/onboarding-wizard.js").then(module => ({ default: module.OnboardingView })));
-const SetupView = lazy(() => import("../features/settings/setup.js").then(module => ({ default: module.SetupView })));
-const MovesView = lazy(() => import("../features/moves/moves.js").then(module => ({ default: module.MovesView })));
-const TodayView = lazy(() => import("../features/today/today.js").then(module => ({ default: module.TodayView })));
+import { AdminView } from "../features/admin/admin.js";
+import { CompanySettingsView } from "../features/settings/company-settings.js";
+import { ProfileView } from "../features/profiles/profile.js";
+import { Dashboard } from "../features/tasks/dashboard.js";
+import { ProjectsView } from "../features/projects/projects.js";
+import { ProjectDetails } from "../features/projects/project-details.js";
+import { TimelineView } from "../features/timeline/timeline.js";
+import { AnalyticsView } from "../features/analytics/analytics.js";
+import { TaskTemplateSettings } from "../features/settings/task-template-settings.js";
+import { ApiMcpSettingsView } from "../features/settings/api-mcp-settings.js";
+import { ProviderSettingsView } from "../features/settings/provider-settings.js";
+import { TerminalSettingsView } from "../features/settings/terminal-settings.js";
+import { BackupSettingsView } from "../features/settings/backup-settings.js";
+import { EnvironmentSettingsView } from "../features/settings/environment-settings.js";
+import { WorkflowSettingsView } from "../features/settings/workflow-settings.js";
+import { TriggerSettingsView } from "../features/settings/trigger-settings.js";
+import { BillingSettingsView } from "../features/settings/billing-settings.js";
+import { OnboardingSettingsView } from "../features/settings/onboarding-settings.js";
+import { AccessView } from "../features/access/access.js";
+import { OnboardingView } from "../features/onboarding/onboarding-wizard.js";
+import { SetupView } from "../features/settings/setup.js";
+import { MovesView } from "../features/moves/moves.js";
+import { TodayView } from "../features/today/today.js";
 
 export function activityShellKey(pathname: string): "activity" | undefined {
   if (pathname === "/today" || pathname === "/tasks" || pathname.startsWith("/tasks/") || pathname === "/board" || pathname.startsWith("/board/") || pathname === "/moves" || pathname.startsWith("/moves/") || pathname === "/timeline" || pathname === "/analytics") return "activity";
@@ -118,7 +117,7 @@ export function AppRouter(): ReactElement {
   if (window.__SUPLEX_VIEW__ === "account-login") return <SystemHealthProvider initialSnapshot={window.__SUPLEX_HEALTH__}><AccountLoginView /><DesktopHostBar /></SystemHealthProvider>;
   if (window.__SUPLEX_VIEW__ === "oauth-consent") return <SystemHealthProvider initialSnapshot={window.__SUPLEX_HEALTH__}><OAuthConsentView /><DesktopHostBar /></SystemHealthProvider>;
   const shellKey = activityShellKey(window.location.pathname);
-  const view = <Suspense fallback={<LoadingState />}><AppView key={route} /></Suspense>;
+  const view = <AppView key={route} />;
   return <CompanyProvider><BrowserAnalytics /><ServerStateProvider><TaskDataProvider><UpdateProvider><SystemHealthProvider initialSnapshot={window.__SUPLEX_HEALTH__}>{shellKey ? <ApplicationShell key={shellKey}>{view}</ApplicationShell> : view}<DesktopHostBar /></SystemHealthProvider></UpdateProvider></TaskDataProvider></ServerStateProvider></CompanyProvider>;
 }
 

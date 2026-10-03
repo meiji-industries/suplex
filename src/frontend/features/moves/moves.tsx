@@ -1,5 +1,5 @@
 import { Fragment, useCallback, useEffect, useRef, useState, type MouseEvent, type ReactElement } from "react";
-import { Archive, ChevronDown, ChevronRight, Ellipsis, Pencil, Play, RotateCcw, Square, SquareTerminal, Trash2, Zap } from "lucide-react";
+import { Archive, ChevronDown, ChevronRight, Ellipsis, Pencil, Play, RotateCcw, Sparkles, Square, SquareTerminal, Trash2, Zap } from "lucide-react";
 
 import { EmptyState } from "../../components/app/empty-state.js";
 import { EntityAvatar } from "../../components/app/entity-avatar.js";
@@ -11,6 +11,7 @@ import { DataList, DataListRow, FilterInput, ListToolbar, ViewTabs } from "../..
 import { Alert, AlertDescription } from "../../components/ui/alert.js";
 import { Badge } from "../../components/ui/badge.js";
 import { Button } from "../../components/ui/button.js";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "../../components/ui/dialog.js";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "../../components/ui/dropdown-menu.js";
 import { NewButton } from "../../components/ui/new-button.js";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../components/ui/table.js";
@@ -31,6 +32,7 @@ import { DeleteMoveDialog, MoveDialog, runnerLabels } from "./move-dialog.js";
 import { MovesIllustration } from "./moves-illustration.js";
 import { MoveRunView } from "./move-run.js";
 import { runsInTerminal } from "./lib/move-runs.js";
+import { RecommendMoves } from "./recommend-moves.js";
 import { RunBadge } from "./run-badge.js";
 import { asksForInputs, StartMoveDialog } from "./start-move-dialog.js";
 
@@ -56,6 +58,7 @@ export function MovesView(): ReactElement {
   const [starting, setStarting] = useState<{ move: MoveResponse; prefill: MoveRunResponse | null } | null>(null);
   const launching = useRef(false);
   const [deleting, setDeleting] = useState<MoveResponse | null>(null);
+  const [recommending, setRecommending] = useState(false);
   const [query, setQuery] = useState("");
   const [projectId, setProjectId] = useState("all");
   const [view, setView] = useState<(typeof moveViews)[number][0]>("all");
@@ -91,7 +94,9 @@ export function MovesView(): ReactElement {
   };
   const headerPrimary = selected
     ? <><Button variant="ghost" size="sm" onClick={() => setEditing({ move: selected })}><Pencil />Edit</Button><Button size="sm" onClick={() => begin(selected, null)}><Play />Start</Button></>
-    : moveId ? undefined : <NewButton disabled={!projects.length} onClick={() => setEditing({ move: null })}>New move</NewButton>;
+    : moveId ? undefined : <>{moves?.length && projects.length ? <Button variant="ghost" size="sm" aria-label="Recommend moves" title="Recommend moves" onClick={() => setRecommending(true)}><Sparkles /><span className="hidden sm:inline">Recommend moves</span></Button> : null}<NewButton disabled={!projects.length} onClick={() => setEditing({ move: null })}>New move</NewButton></>;
+  const recommendFor = projectId !== "all" ? projectId : projects[0]?.id ?? "";
+  const imported = (): void => { setRecommending(false); void reload(); };
   return <ApplicationFrame title={selected?.name ?? "Moves"} headerPrimary={headerPrimary} viewportBound={Boolean(selected && runId)}>
     {error ? <Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert> : null}
     {!moves ? <LoadingState /> : moveId ? selected ? runId ? <MoveRunView key={runId} move={selected} runId={runId} project={project(selected.projectId)} onClose={() => { navigate(withCompany(`/moves/${selected.id}`, selected.companyId)); }} onStartAgain={run => begin(selected, run)} /> : <RunHistory runs={runs} tasks={tasks} companyId={selected.companyId} onStart={() => begin(selected, null)} onStartAgain={run => begin(selected, run)} onStop={run => change(endMoveRun(run.id))} onArchive={run => change(archiveMoveRun(run.id))} /> : <EmptyState icon={Zap} title="Move not found" /> : moves.length ? <div className="flex min-w-0 flex-1 flex-col">
@@ -101,7 +106,8 @@ export function MovesView(): ReactElement {
       {visible.length ? <DataList columns={moveColumns} label="Moves" header={<><span>Move</span><span>Project</span><span>Runs</span><span>Status</span><span className="text-right">Last run</span><span /></>}>
         {visible.map(move => <MoveRow key={move.id} move={move} project={project(move.projectId)} tasks={tasks} onStart={() => begin(move, null)} onDelete={() => setDeleting(move)} />)}
       </DataList> : <EmptyState icon={Zap} title="No matching moves" description="Change the filters to find your moves." action={<Button variant="outline" onClick={() => { setQuery(""); setProjectId("all"); setView("all"); }}>Clear filters</Button>} />}
-    </div> : <Empty><MovesIllustration /><EmptyHeader><h2 className="whitespace-nowrap text-center text-xl font-extralight tracking-tight sm:text-3xl">You write the move. <span className="text-primary">Suplex runs it.</span></h2></EmptyHeader><EmptyContent><NewButton disabled={!projects.length} onClick={() => setEditing({ move: null })}>New move</NewButton></EmptyContent></Empty>}
+    </div> : <Empty><MovesIllustration /><EmptyHeader><h2 className="whitespace-nowrap text-center text-xl font-extralight tracking-tight sm:text-3xl">You write the move. <span className="text-primary">Suplex runs it.</span></h2></EmptyHeader><EmptyContent><NewButton disabled={!projects.length} onClick={() => setEditing({ move: null })}>New move</NewButton></EmptyContent>{companyId && recommendFor ? <div className="w-full max-w-4xl text-left"><RecommendMoves companyId={companyId} projects={projects} moves={moves} initialProjectId={recommendFor} onImported={imported} /></div> : null}</Empty>}
+    {companyId && recommendFor ? <Dialog open={recommending} onOpenChange={setRecommending}><DialogContent className="sm:max-w-3xl"><DialogHeader><DialogTitle>Recommend moves</DialogTitle><DialogDescription>Your default agent reads the project and proposes moves for the commands it defines.</DialogDescription></DialogHeader>{recommending ? <RecommendMoves companyId={companyId} projects={projects} moves={moves ?? []} initialProjectId={recommendFor} onImported={imported} /> : null}</DialogContent></Dialog> : null}
     {companyId ? <MoveDialog companyId={companyId} projects={projects} move={editing?.move ?? null} open={Boolean(editing)} onOpenChange={open => { if (!open) setEditing(null); }} onSaved={move => { setEditing(null); void reload(); if (!moveId) navigate(withCompany(`/moves/${move.id}`, move.companyId)); }} onDeleted={() => { setEditing(null); navigate(withCompany("/moves", companyId)); }} /> : null}
     <DeleteMoveDialog move={deleting} open={Boolean(deleting)} onOpenChange={open => { if (!open) setDeleting(null); }} onDeleted={() => void reload()} />
     {starting ? <StartMoveDialog move={starting.move} prefill={starting.prefill} open onOpenChange={open => { if (!open) setStarting(null); }} onStarted={started} /> : null}

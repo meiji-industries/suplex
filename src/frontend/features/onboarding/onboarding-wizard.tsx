@@ -1,4 +1,5 @@
-import { ArrowLeft, Check, Copy, PartyPopper, RefreshCw } from "lucide-react";
+import { ProjectsContent } from "../projects/projects-content.js";
+import { ArrowLeft, Check, Copy, RefreshCw } from "lucide-react";
 import { useEffect, useState, type ReactElement } from "react";
 
 import { CheckStatusIndicator, healthCheckPurpose, useSystemHealth } from "../../components/app/system-health.js";
@@ -16,33 +17,25 @@ import { Input } from "../../components/ui/input.js";
 import { Spinner } from "../../components/ui/spinner.js";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../../components/ui/tooltip.js";
 import { Skeleton } from "../../components/ui/skeleton.js";
-import { NewButton } from "../../components/ui/new-button.js";
 import { Sidebar, SidebarContent, SidebarFooter, SidebarHeader, SidebarMenu, SidebarMenuButton, SidebarMenuItem, SidebarTrigger, useSidebar } from "../../components/ui/sidebar.js";
 import { Stepper, StepperIndicator, StepperItem, StepperNav, StepperSeparator, StepperTitle, StepperTrigger } from "../../components/ui/stepper.js";
 import { ApplicationFrame } from "../../shell/application-frame.js";
 import { useCompanyContext } from "../../shell/company-context.js";
 import { CompanySwitcher } from "../../shell/company-switcher.js";
+import { useExperiments } from "../../shell/experiments-api.js";
 import { navigate } from "../../shell/navigation-state.js";
 import { withCompany } from "../../lib/api.js";
 import { InternalAgentsManager } from "../admin/internal-agents-manager.js";
-import { AgentCard, isDefaultAgent } from "../admin/internal-agents-section.js";
-import { ProjectCards } from "../projects/project-cards.js";
-import { CreateProjectDialog } from "../projects/create-project-dialog.js";
-import { RecentRepositories } from "../projects/recent-repositories.js";
+import { AgentCard } from "../admin/internal-agents-section.js";
+import { AddCard } from "../../components/app/add-card.js";
+import { MovesIllustration } from "../moves/moves-illustration.js";
 import { ProviderLoginTerminal, useProviderLogin } from "../settings/provider-login.js";
 import { ONBOARDING_TOOL_CHECKS, ONBOARDING_STEPS, connectedProviders, stepComplete, useOnboardingData, type OnboardingData, type OnboardingStepId } from "./onboarding.js";
 import { LoadingState } from "../../components/app/loading-state.js";
-import type { ApiProfile } from "../../shell/view-shared.js";
 import { ProviderInstallationInstructions } from "../../components/app/provider-installation.js";
 import { newTaskRequestPath } from "../../shell/global-new-task-dialog.js";
 
 
-/** The seeded Coordinator and Worker. If one is missing or archived, show every active agent. */
-function defaultTeam(profiles: readonly ApiProfile[]): readonly ApiProfile[] {
-  const active = profiles.filter(profile => !profile.archivedAt);
-  const defaults = active.filter(isDefaultAgent);
-  return defaults.length === 2 ? defaults : active;
-}
 
 function stepFromUrl(state: OnboardingData["state"]): OnboardingStepId {
   const requested = new URLSearchParams(window.location.search).get("step");
@@ -90,6 +83,7 @@ function OnboardingSidebar({ companyId, current, state }: { companyId: string; c
 
 export function OnboardingView(): ReactElement {
   const { currentCompany, user, renameCompany, setCompanyIssueCode, reloadCompanies } = useCompanyContext();
+  const todayPage = useExperiments()?.todayPage ?? false;
   const companyId = currentCompany?.id ?? "";
   const { state, reload, loading, error: loadError } = useOnboardingData(currentCompany);
   const { refresh, freshness, refreshing } = useSystemHealth();
@@ -99,8 +93,6 @@ export function OnboardingView(): ReactElement {
   const [name, setName] = useState(currentCompany?.name || "My Company");
   const [code, setCode] = useState(currentCompany?.issueCode ?? "SUPLEX");
   const [error, setError] = useState("");
-  const [projectsOpen, setProjectsOpen] = useState(false);
-  const [customizeAgents, setCustomizeAgents] = useState(false);
   useEffect(() => { setName(currentCompany?.name || "My Company"); setCode(currentCompany?.issueCode ?? "SUPLEX"); }, [currentCompany?.id]);
   const { login, loginPending, startLogin, closeLogin } = useProviderLogin({ reload });
   const go = (id: OnboardingStepId): void => navigate(withCompany(`/onboarding?step=${id}`, companyId));
@@ -117,11 +109,13 @@ export function OnboardingView(): ReactElement {
     } catch (reason) { setError(reason instanceof Error ? reason.message : "Suplex could not save the onboarding step."); }
   };
   const avatarName = name.trim() || currentCompany?.name || "";
-  const body = current === "company" ? <FieldGroup>
-    <Field><FieldLabel htmlFor="onboarding-name">Company name</FieldLabel><Input id="onboarding-name" value={name} onChange={event => setName(event.target.value)} /></Field>
-    {currentCompany ? <Field><FieldLabel>Avatar</FieldLabel><AvatarEditor kind="company" id={currentCompany.id} name={avatarName} seed={avatarName} /></Field> : null}
+  const body = current === "company" ? <div className="min-w-0 sm:w-[calc(50%+3.25rem)]"><FieldGroup>
+    <div className="flex min-w-0 items-end gap-3">
+      {currentCompany ? <div className="shrink-0"><AvatarEditor compact kind="company" id={currentCompany.id} name={avatarName} seed={avatarName} /></div> : null}
+      <div className="min-w-0 flex-1"><Field><Input id="onboarding-name" aria-label="Company name" value={name} onChange={event => setName(event.target.value)} /></Field></div>
+    </div>
     <Field><FieldLabel htmlFor="onboarding-code">Company code</FieldLabel><Input id="onboarding-code" maxLength={10} pattern="[A-Z][A-Z0-9]{1,9}" value={code} onChange={event => setCode(event.target.value.toUpperCase())} /></Field>
-  </FieldGroup>
+  </FieldGroup></div>
     : current === "tools" ? <div className="space-y-3" aria-busy={freshness === "checking" && state.checks.length === 0}>
       {ONBOARDING_TOOL_CHECKS.map(id => {
         const check = state.checks.find(check => check.id === id);
@@ -151,13 +145,18 @@ export function OnboardingView(): ReactElement {
         </div>;
       })}
     </div>
-    : current === "providers" ? <div className="space-y-3"><div className="grid gap-3 sm:grid-cols-2" aria-busy={loading} aria-label="Providers">{loading && state.providers.length === 0 ? [0, 1, 2, 3].map(index => <Card key={index} size="sm" aria-label="Provider check in progress"><CardHeader><CardTitle><Skeleton className="h-5 w-20" /></CardTitle><CardAction><Skeleton className="h-5 w-20" /></CardAction></CardHeader><CardContent><Skeleton className="h-4 w-16" /><div className="space-y-1"><Skeleton className="h-4 w-full" /><Skeleton className="h-4 w-3/4" /></div><Skeleton className="h-8 w-full" /></CardContent></Card>) : state.providers.map(provider => <Card key={provider.id} size="sm"><CardHeader><CardTitle><span className="flex items-center gap-2.5 text-base"><ProviderIcon provider={provider.id} tone="mono" size="md" />{provider.label}</span></CardTitle><CardAction>{provider.status === "missing" ? <><StatusLight level="red" label="Not installed" /><Badge variant="outline">Not installed</Badge></> : provider.connection.status === "connected" ? <><StatusLight level="green" label="Connected" /><Badge variant="secondary">Connected</Badge></> : <><StatusLight level="amber" label="Needs auth" /><Badge variant="outline">Needs auth</Badge></>}</CardAction></CardHeader><CardContent className="flex flex-col gap-0 text-xs text-muted-foreground [&>*]:border-t [&>*]:border-border/50 [&>*]:py-4 [&>*:last-child]:pb-0"><div><Tooltip><TooltipTrigger><span className="cursor-help underline decoration-dashed underline-offset-4">{provider.modelCount} models available</span></TooltipTrigger><TooltipContent side="bottom" align="start"><ul className="max-h-60 overflow-y-auto font-mono text-xs">{provider.models.length ? provider.models.map(model => <li key={model.id} className="break-all">{model.id}</li>) : <li>No models available</li>}</ul></TooltipContent></Tooltip></div>{provider.connection.status === "connected" ? <p className="flex items-start gap-1"><Check aria-hidden="true" className="mt-0.5 size-3 shrink-0" /><span className="min-w-0 break-words">{provider.connection.account ? `Signed in as ${provider.connection.account}` : "Signed in"}</span></p> : provider.id === "opencode" && provider.connection.status === "not-connected" && provider.status !== "missing" ? null : <p>{provider.connection.summary}</p>}{provider.status === "missing" ? <ProviderInstallationInstructions provider={provider.id} checkLabel="Check again" /> : provider.connection.status !== "connected" ? <Button size="sm" disabled={loginPending !== null} onClick={() => void startLogin(`provider:${provider.id}`, provider.label, `/api/admin/providers/${provider.id}/login`).catch(reason => setError(reason instanceof Error ? reason.message : "Suplex could not open a sign-in pane."))}>Sign in</Button> : null}</CardContent></Card>)}</div></div>
-    : current === "agents" ? loading && state.profiles.length === 0 ? <LoadingState /> : customizeAgents ? <InternalAgentsManager agents={state.profiles} onSaved={reload} /> : <div className="grid gap-3 sm:grid-cols-2" aria-label="Your team">{defaultTeam(state.profiles).map(agent => <AgentCard key={agent.id} agent={agent} />)}</div>
-    : current === "projects" ? <div className="space-y-3">{state.projects.length ? <div className="grid gap-3"><ProjectCards projects={state.projects} agents={state.profiles} /></div> : null}<RecentRepositories companyId={companyId} projects={state.projects} canSignInToGitHub={user?.role === "admin"} onAdded={() => setProjectsOpen(false)} onCreated={reload} fallback={state.projects.length ? null : <div className="rounded-md border border-dashed p-6 text-center"><p className="text-sm">No projects yet.</p><p className="mt-1 text-xs text-muted-foreground">Suplex needs one connected GitHub repository before you can create a task.</p></div>} /><div className="grid"><NewButton onClick={() => setProjectsOpen(true)}>Add a project</NewButton></div><CreateProjectDialog open={projectsOpen} onOpenChange={setProjectsOpen} companyId={companyId} companyStatus={currentCompany?.status} canSignInToGitHub={user?.role === "admin"} onCreated={reload} reloadCompanies={reloadCompanies} /></div>
-    : <div className="flex flex-1 flex-col items-center justify-center gap-4 text-center" aria-live="polite">
-      <PartyPopper aria-hidden="true" className="size-12 text-amber-500" />
-      <h2 className="text-xl font-semibold">You are all set!</h2>
-      <p className="text-sm text-muted-foreground">Create your first task and put your agents to work.</p>
+    : current === "providers" ? <div className="space-y-3"><div className="grid gap-3 sm:grid-cols-2" aria-busy={loading} aria-label="Providers">{loading && state.providers.length === 0 ? [0, 1, 2, 3].map(index => <Card key={index} size="sm" aria-label="Provider check in progress"><CardHeader><CardTitle><Skeleton className="h-5 w-20" /></CardTitle><CardAction><Skeleton className="h-5 w-20" /></CardAction></CardHeader><CardContent><Skeleton className="h-4 w-16" /><div className="space-y-1"><Skeleton className="h-4 w-full" /><Skeleton className="h-4 w-3/4" /></div><Skeleton className="h-8 w-full" /></CardContent></Card>) : state.providers.map(provider => <Card highlighted key={provider.id} size="sm"><CardHeader><CardTitle><span className="flex items-center gap-2.5 text-base"><ProviderIcon provider={provider.id} size="md" />{provider.label}</span></CardTitle><CardAction>{provider.status === "missing" ? <><StatusLight level="red" label="Not installed" /><Badge variant="outline">Not installed</Badge></> : provider.connection.status === "connected" ? <><StatusLight level="green" label="Connected" /><Badge variant="secondary">Connected</Badge></> : <><StatusLight level="amber" label="Needs auth" /><Badge variant="outline">Needs auth</Badge></>}</CardAction></CardHeader><CardContent className="flex flex-col gap-0 text-xs text-muted-foreground [&>*]:border-t [&>*]:border-border/50 [&>*]:py-4 [&>*:last-child]:pb-0"><div><Tooltip><TooltipTrigger><span className="cursor-help underline decoration-dashed underline-offset-4">{provider.modelCount} models available</span></TooltipTrigger><TooltipContent side="bottom" align="start"><ul className="max-h-60 overflow-y-auto font-mono text-xs">{provider.models.length ? provider.models.map(model => <li key={model.id} className="break-all">{model.id}</li>) : <li>No models available</li>}</ul></TooltipContent></Tooltip></div>{provider.connection.status === "connected" ? <p className="flex items-start gap-1"><Check aria-hidden="true" className="mt-0.5 size-3 shrink-0" /><span className="min-w-0 break-words">{provider.connection.account ? `Signed in as ${provider.connection.account}` : "Signed in"}</span></p> : provider.id === "opencode" && provider.connection.status === "not-connected" && provider.status !== "missing" ? null : <p>{provider.connection.summary}</p>}{provider.status === "missing" ? <ProviderInstallationInstructions provider={provider.id} checkLabel="Check again" /> : provider.connection.status !== "connected" ? <Button size="sm" disabled={loginPending !== null} onClick={() => void startLogin(`provider:${provider.id}`, provider.label, `/api/admin/providers/${provider.id}/login`).catch(reason => setError(reason instanceof Error ? reason.message : "Suplex could not open a sign-in pane."))}>Sign in</Button> : null}</CardContent></Card>)}</div></div>
+    : current === "agents" ? loading && state.profiles.length === 0 ? <LoadingState /> : <InternalAgentsManager agents={state.profiles} onSaved={reload} renderCards={openNewAgent => <div className="grid gap-3 sm:grid-cols-2" aria-label="Your team">{state.profiles.filter(agent => !agent.archivedAt).map(agent => <AgentCard key={agent.id} agent={agent} />)}<AddCard label="Add agent" onClick={openNewAgent} /></div>} />
+    : current === "projects" ? <ProjectsContent currentCompany={currentCompany} projects={state.projects} agents={state.profiles} loading={loading} projectsLoading={loading && state.projects.length === 0} loadError={error || loadError} canSignInToGitHub={user?.role === "admin"} reload={reload} reloadCompanies={reloadCompanies} />
+    : <div className="flex flex-1 flex-col items-center justify-center gap-6 text-center">
+      <MovesIllustration />
+      <div className="space-y-4" aria-live="polite">
+        <h2 className="text-balance text-2xl font-extralight tracking-tight sm:text-3xl">
+          <span className="block">Your agents do the work.</span>{" "}
+          <span className="block text-primary">Suplex runs the workflow.</span>
+        </h2>
+        <p className="font-mono text-xs tracking-widest text-muted-foreground">PLAN. BUILD. REVIEW. SHIP.</p>
+      </div>
     </div>;
   const continueDisabled = current === "company" ? !name.trim() || !code.trim() : current === "providers" ? connected.length === 0 : current === "projects" ? state.projects.length === 0 : false;
   const heading = current === "company" ? "Set up your company" : current === "tools" ? "Check the host tools" : current === "providers" ? "Connect your accounts" : current === "agents" ? "Your team" : current === "projects" ? "Add a project" : "Onboarding complete";
@@ -170,32 +169,35 @@ export function OnboardingView(): ReactElement {
   const checking = current === "tools" ? refreshing : loading;
   const visibleError = error || loadError || (current === "tools" && freshness === "stale" ? "Suplex could not check the host. Select Check again." : "");
   return (
-    <ApplicationFrame title="Onboarding" sidebar={<OnboardingSidebar companyId={companyId} current={current} state={state} />}>
-      <div className="flex min-w-0 flex-1 p-3 sm:p-6">
-        <section id={`stepper-panel-${currentIndex + 1}`} role="tabpanel" aria-labelledby={`stepper-tab-${currentIndex + 1}`} className="flex min-w-0 flex-1 px-5 py-8 sm:px-10 sm:py-14 lg:py-20">
+    <ApplicationFrame title="Onboarding" viewportBound sidebar={<OnboardingSidebar companyId={companyId} current={current} state={state} />}>
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+      <div className={current === "projects" ? "flex min-h-0 min-w-0 flex-1 overflow-y-auto px-4 pb-8 lg:px-6" : "flex min-h-0 min-w-0 flex-1 overflow-y-auto p-3 sm:p-6"}>
+        <section id={`stepper-panel-${currentIndex + 1}`} role="tabpanel" aria-labelledby={`stepper-tab-${currentIndex + 1}`} className={current === "projects" ? "flex min-w-0 flex-1" : "flex min-w-0 flex-1 px-5 py-8 sm:px-10 sm:py-14 lg:py-20"}>
           <div className="mx-auto flex w-full max-w-[53rem] flex-col gap-8 lg:min-h-[32rem]">
-            {current !== "done" ? <div className="space-y-2" aria-live="polite">
+            {current !== "done" && current !== "projects" ? <div className="space-y-2" aria-live="polite">
               <div className="flex items-center justify-between gap-3">
                 <h2 className="text-xl font-semibold">{heading}</h2>
-                <Button size="icon-sm" variant="ghost" aria-label={checking ? "Check in progress" : "Check again"} title={checking ? "Check in progress" : "Check again"} disabled={checking} onClick={() => void (current === "tools" ? refresh() : reload())}>
+                {current !== "company" ? <Button size="icon-sm" variant="ghost" aria-label={checking ? "Check in progress" : "Check again"} title={checking ? "Check in progress" : "Check again"} disabled={checking} onClick={() => void (current === "tools" ? refresh() : reload())}>
                   {checking ? <Spinner /> : <RefreshCw />}
-                </Button>
+                </Button> : null}
               </div>
               <FieldDescription>{description}</FieldDescription>
             </div> : null}
-            {visibleError ? <Alert variant="destructive"><AlertDescription>{visibleError}</AlertDescription></Alert> : null}
+            {visibleError && current !== "projects" ? <Alert variant="destructive"><AlertDescription>{visibleError}</AlertDescription></Alert> : null}
             {body}
-            <footer className="mt-auto grid gap-2 pt-8">
-              {current === "done" ? <>
-                <Button onClick={() => navigate(newTaskRequestPath)}>Create your first task</Button>
-                <Button variant="outline" nativeButton={false} render={<a href="/today" />}>Today</Button>
-              </> : <>
-                <Button disabled={continueDisabled} onClick={() => void continueStep()}>Continue</Button>
-                {current === "agents" && !customizeAgents ? <Button variant="outline" onClick={() => setCustomizeAgents(true)}>Customize</Button> : null}
-              </>}
-            </footer>
           </div>
         </section>
+      </div>
+            <footer className="shrink-0 border-t bg-background px-4 py-3 sm:px-6">
+              <div className="mx-auto grid w-full max-w-[53rem] gap-2">
+              {current === "done" ? <>
+                <Button onClick={() => navigate(newTaskRequestPath)}>Create your first task</Button>
+                {todayPage ? <Button variant="outline" nativeButton={false} render={<a href="/today" />}>Today</Button> : null}
+              </> : <>
+                <Button variant={continueDisabled ? "secondary" : "default"} disabled={continueDisabled} onClick={() => void continueStep()}>Continue</Button>
+              </>}
+              </div>
+            </footer>
       </div>
       <ProviderLoginTerminal login={login} onClose={() => void closeLogin()} />
     </ApplicationFrame>

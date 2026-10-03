@@ -165,24 +165,29 @@ impl Spec {
         self
     }
 
-    /// Only the variables a user shell needs. Suplex credentials, provider
-    /// keys, and Herdr or Conductor variables do not reach the terminal.
     fn environment(&self) -> Vec<(OsString, OsString)> {
-        let mut kept = std::env::vars_os()
-            .filter(|(key, _)| {
-                key.to_str()
-                    .is_some_and(|key| KEPT_ENVIRONMENT.contains(&key) || key.starts_with("LC_"))
-            })
-            .collect::<Vec<_>>();
-        for (key, value) in [
-            ("SHELL", login_shell()),
-            ("TERM", "xterm-256color".into()),
-            ("COLORTERM", "truecolor".into()),
-        ] {
-            kept.push((key.into(), value.into()));
-        }
-        kept
+        user_environment()
     }
+}
+
+/// Only the variables a user shell needs. Suplex credentials, provider keys,
+/// and Herdr or Conductor variables do not reach a process that Suplex starts
+/// for a person.
+pub(crate) fn user_environment() -> Vec<(OsString, OsString)> {
+    let mut kept = std::env::vars_os()
+        .filter(|(key, _)| {
+            key.to_str()
+                .is_some_and(|key| KEPT_ENVIRONMENT.contains(&key) || key.starts_with("LC_"))
+        })
+        .collect::<Vec<_>>();
+    for (key, value) in [
+        ("SHELL", login_shell()),
+        ("TERM", "xterm-256color".into()),
+        ("COLORTERM", "truecolor".into()),
+    ] {
+        kept.push((key.into(), value.into()));
+    }
+    kept
 }
 
 #[derive(Clone)]

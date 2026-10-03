@@ -2,7 +2,6 @@ import { readJsonUnchecked } from "../../../lib/api.js";
 import type { ProjectResponse } from "../../../contracts/projects.js";
 import type { ProjectIntegration } from "../../../contracts/project-integration.js";
 import type { RecentRepositories } from "../../../contracts/generated/RecentRepositories.js";
-import type { RecentRepository } from "../../../contracts/generated/RecentRepository.js";
 
 const companyPath = (companyId: string, suffix: string): string =>
   `/api/companies/${encodeURIComponent(companyId)}${suffix}`;
@@ -18,8 +17,7 @@ export function createProject(companyId: string, body: ProjectCreate): Promise<P
   return readJsonUnchecked<ProjectResponse>(companyPath(companyId, "/projects"), { method: "POST", body: JSON.stringify(body) });
 }
 
-/** Repositories pushed to in the last 30 days, newest first. */
-export async function listRecentRepositories(companyId: string): Promise<RecentRepository[]> {
-  const result = await readJsonUnchecked<RecentRepositories>(companyPath(companyId, "/recent-repositories"));
-  return result.repositories;
+/** Accessible repositories, newest pushed first. */
+export function listRecentRepositories(companyId: string, page = 1): Promise<RecentRepositories> {
+  return readJsonUnchecked<RecentRepositories>(companyPath(companyId, `/recent-repositories?page=${page}`));
 }

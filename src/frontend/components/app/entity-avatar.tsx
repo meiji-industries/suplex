@@ -1,10 +1,11 @@
-import { Trash2, Upload } from "lucide-react";
+import { Circle, Square, Trash2, Upload } from "lucide-react";
 import { useRef, useState, type ReactElement } from "react";
 import { AVATAR_DEFAULTS, dicebearUrl, type AvatarKind } from "./avatar-presentation.js";
 import { MAX_AVATAR_IMAGE_BYTES } from "../../contracts/avatar-limits.js";
 import type { AvatarUpdateBody } from "../../contracts/avatars.js";
 import { Avatar, AvatarFallback, AvatarImage } from "../ui/avatar.js";
 import { Button } from "../ui/button.js";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "../ui/dropdown-menu.js";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../ui/select.js";
 import { useOptionalCompanyContext } from "../../shell/company-context.js";
 
@@ -31,12 +32,14 @@ export function EntityAvatar({ kind, id, name, seed, size = "sm" }: EntityAvatar
 }
 
 /** Shape choice plus image upload. Saves on every change. */
-export function AvatarEditor({ kind, id, name, seed }: Omit<EntityAvatarProps, "size">): ReactElement {
+export function AvatarEditor({ kind, id, name, seed, compact = false }: Omit<EntityAvatarProps, "size"> & { compact?: boolean }): ReactElement {
   const context = useOptionalCompanyContext();
   const input = useRef<HTMLInputElement>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [menuOpen, setMenuOpen] = useState(false);
   const record = context?.avatars[id];
+  const nextShape = (record?.shape ?? AVATAR_DEFAULTS[kind].shape) === "square" ? "circle" : "square";
   const save = async (patch: AvatarUpdateBody): Promise<void> => {
     if (!context) return;
     setBusy(true); setError("");
@@ -52,6 +55,17 @@ export function AvatarEditor({ kind, id, name, seed }: Omit<EntityAvatarProps, "
     reader.readAsDataURL(file);
   };
   return <div className="flex flex-wrap items-center gap-2">
+    {compact ? <DropdownMenu open={menuOpen} onOpenChange={setMenuOpen}>
+      <DropdownMenuTrigger render={<Button type="button" variant="ghost" size="icon-lg" disabled={busy || !context} aria-label="Edit avatar" />} onContextMenu={event => { if (busy || !context) return; event.preventDefault(); setMenuOpen(true); }}>
+        <EntityAvatar kind={kind} id={id} name={name} {...(seed ? { seed } : {})} size="lg" />
+      </DropdownMenuTrigger>
+      <DropdownMenuContent className="w-40">
+        <DropdownMenuItem disabled={busy} onClick={() => void save({ shape: nextShape })}>{nextShape === "circle" ? <Circle /> : <Square />}Use {nextShape}</DropdownMenuItem>
+        {record?.imageVersion
+          ? <DropdownMenuItem disabled={busy} onClick={() => void save({ image: null })}><Trash2 />Remove avatar</DropdownMenuItem>
+          : <DropdownMenuItem disabled={busy} onClick={() => input.current?.click()}><Upload />Upload avatar</DropdownMenuItem>}
+      </DropdownMenuContent>
+    </DropdownMenu> : <>
     <EntityAvatar kind={kind} id={id} name={name} {...(seed ? { seed } : {})} size="lg" />
     <Select value={record?.shape ?? AVATAR_DEFAULTS[kind].shape} onValueChange={(value) => { if (value === "square" || value === "circle") void save({ shape: value }); }}>
       <SelectTrigger size="sm" aria-label="Avatar shape"><SelectValue /></SelectTrigger>
@@ -59,6 +73,7 @@ export function AvatarEditor({ kind, id, name, seed }: Omit<EntityAvatarProps, "
     </Select>
     <Button type="button" variant="outline" size="sm" disabled={busy || !context} onClick={() => input.current?.click()}><Upload className="size-3.5" />Upload image</Button>
     {record?.imageVersion ? <Button type="button" variant="ghost" size="sm" disabled={busy} onClick={() => void save({ image: null })}><Trash2 className="size-3.5" />Delete image</Button> : null}
+    </>}
     <input ref={input} type="file" accept="image/png,image/jpeg,image/webp,image/gif" className="sr-only" aria-label="Avatar image" onChange={(event) => { upload(event.target.files?.[0]); event.target.value = ""; }} />
     {error ? <span className="text-xs text-destructive">{error}</span> : null}
   </div>;

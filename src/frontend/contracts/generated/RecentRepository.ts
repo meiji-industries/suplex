@@ -4,4 +4,4 @@ export type RecentRepository = {
 /**
  * `owner/name`.
  */
-repository: string, defaultBranch: string, pushedAt: string, };
+repository: string, defaultBranch: string, pushedAt: string, ownerAvatarUrl: string | null, };

@@ -1,5 +1,7 @@
-import { Card, CardContent, CardHeader, CardTitle } from "../../components/ui/card.js";
+import { CompactCard } from "../../components/app/compact-card.js";
 import { EntityAvatar } from "../../components/app/entity-avatar.js";
+import { ToolIcon } from "../../components/app/tool-icons.js";
+import { Badge } from "../../components/ui/badge.js";
 import { withCompany } from "../../lib/api.js";
 import type { ReactElement } from "react";
 import type { ApiProfile, ApiProject } from "../../shell/view-shared.js";
@@ -31,27 +33,21 @@ function ProjectIcon({ project }: { project: ApiProject }): ReactElement {
 }
 
 export function ProjectCards({ projects, agents }: { projects: readonly ApiProject[]; agents: readonly ApiProfile[] }): ReactElement {
-  return <>
+  return <ul aria-label="Projects" className="grid min-w-0 gap-2 sm:grid-cols-2">
     {projects.map((project) => (
-      <article key={project.id}>
-        <Card className="pt-[20px]" size="sm">
-          <CardHeader>
-            <CardTitle><a className="flex items-center gap-2" href={withCompany(`/projects/${encodeURIComponent(project.id)}`, project.companyId)}><ProjectIcon project={project} /><span className="text-sm">{project.name}</span></a></CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="grid gap-3 text-xs">
-              <div className="min-w-0">
-                <div className="truncate font-medium text-[14px] leading-[20px]" title={project.repository}>{project.repository ?? "Repository unavailable"}</div>
-                <div className="truncate text-muted-foreground text-[13px] leading-[18px]" title={project.repositoryPath}>{project.repositoryPath}</div>
-              </div>
-              <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-                <span>Base <span className="font-mono text-foreground">{project.baseBranch}</span></span>
-              </div>
-              <ProjectDefaultAgents project={project} agents={agents} />
+      <li key={project.id} className="min-w-0">
+        <CompactCard highlighted href={withCompany(`/projects/${encodeURIComponent(project.id)}`, project.companyId)}>
+          <ProjectIcon project={project} />
+          <div className="grid min-w-0 flex-1 gap-1.5 text-xs">
+            <span className="truncate text-sm font-medium">{project.name}</span>
+            <div className="min-w-0">
+              <div className="flex min-w-0 flex-wrap items-center gap-1.5 font-medium text-[14px] leading-[20px]" title={project.repository}>{project.repository ? <ToolIcon tool="gh-auth" /> : null}<span className="min-w-0 truncate">{project.repository ?? "Repository unavailable"}</span><Badge variant="outline">{project.baseBranch}</Badge></div>
+              <div className="truncate text-muted-foreground text-[13px] leading-[18px]" title={project.repositoryPath}>{project.repositoryPath}</div>
             </div>
-          </CardContent>
-        </Card>
-      </article>
+            <ProjectDefaultAgents project={project} agents={agents} />
+          </div>
+        </CompactCard>
+      </li>
     ))}
-  </>;
+  </ul>;
 }

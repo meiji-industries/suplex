@@ -74,7 +74,7 @@ export function AgentCard({
   actions?: ReactNode;
 }): ReactElement {
   return (
-    <Card size="sm" aria-label={agent.name}>
+    <Card highlighted size="sm" aria-label={agent.name}>
       <CardHeader>
         <CardTitle>
           <span className="flex min-w-0 items-center gap-2">

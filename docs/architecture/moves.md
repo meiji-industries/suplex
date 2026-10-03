@@ -67,6 +67,46 @@ The editor lists Worker profiles that the project allows. For a prompt it
 lists only Claude Code and Codex profiles. "The default agent" shows the
 avatar of the project's default Worker.
 
+## Recommendations
+
+`POST /api/projects/{project_id}/move-recommendations`
+([`recommend.rs`](../../rust/src/moves/recommend.rs)) asks the project's
+default Worker to read the repository once and propose moves. It saves
+nothing. The person imports the moves they want through the normal create
+route.
+
+- **Agent run.** One headless call in the project's repository clone, with the
+  person's login and the reduced user environment from
+  [host terminals](host-terminals.md). Claude Code runs with `-p`,
+  `--output-format json`, `--tools Read,Glob,Grep`, and `--strict-mcp-config`,
+  so it cannot run commands, change files, use the web, start subagents, or
+  load MCP servers. Codex runs `exec` with `sandbox_mode="read-only"` and
+  `approval_policy="never"`. The default Worker must be Claude Code or Codex.
+- **Prompt.** It lists dozens of places where projects define commands
+  (package manifests, task runners, build files, CI, deploy configs, scripts,
+  and docs). It explains the runners and the placeholder syntax, and asks for
+  5 to 15 moves as one JSON object. It tells the agent to use only commands it
+  found.
+- **Parsing.** `extract` reads the result event, alone or last in an array of
+  events, then the reply text, and takes the first JSON object with a `moves`
+  list. `admitted` keeps only `script` and `prompt` moves with a name and text,
+  drops names that repeat or that the project uses already, and keeps at most
+  20.
+- **Limits.** The call has a 5-minute limit (504). A reply without moves
+  returns 502 with the last line of the agent's error output. A cancelled
+  request ends the agent, because the child process dies with the request.
+
+In the browser, [`recommend-moves.tsx`](../../src/frontend/features/moves/recommend-moves.tsx)
+shows a spinner and rotating shimmer phrases while the agent reads, then a
+card for each move, all selected, with "Select none" and "Import N moves".
+Import creates the selected moves one at a time and reports any that fail. The
+result is cached for each project during the session (query key
+`["move-recommendations", project]`), and "Read again" runs the agent again.
+Recommendations whose names the project already uses stay hidden, so an import
+never starts another read. With no moves, the Moves page starts reading at
+once, under the empty state. With moves, "Recommend moves" in the header opens
+the same panel in a dialog.
+
 ## Inputs
 
 Placeholders in the text declare inputs. `{{name}}` is text, and
@@ -143,6 +183,7 @@ Deleting a move deletes its runs (the foreign key cascades).
 | `GET`, `POST /api/companies/{company_id}/moves` | List moves with each one's latest unarchived run, or create a move. |
 | `PATCH`, `DELETE /api/moves/{move_id}` | Edit or delete a move. |
 | `GET`, `POST /api/moves/{move_id}/runs` | Read up to 50 unarchived runs, newest first, or start a run. |
+| `POST /api/projects/{project_id}/move-recommendations` | Ask the default Worker to propose moves. Saves nothing. |
 | `GET /api/move-runs/{run_id}` | Read one run, archived or not. |
 | `POST /api/move-runs/{run_id}/archive` | Archive a run. |
 | `GET /api/move-runs/{run_id}/transcript` | Read a saved terminal. |
@@ -170,7 +211,7 @@ run with foreign keys off, so the rebuild keeps run history.
 
 | Surface | Source | Behavior |
 | --- | --- | --- |
-| Moves list | `moves.tsx`, `MoveRow` | Tabs All, Live, and Ended; the ⌘K filter; the project filter; columns Move, Project, Runs, Status, and Last run; Start; a row menu with Delete. |
+| Moves list | `moves.tsx`, `MoveRow` | Tabs All, Live, and Ended; the ⌘K filter; the project filter; columns Move, Project, Runs, Status, and Last run; Start; a row menu with Delete. "Recommend moves" in the header, or the empty state, shows [recommendations](#recommendations). |
 | Move page | `moves.tsx`, `RunHistory` | Run history. Live rows offer Stop, ended rows offer Archive, every row offers Start again. A row opens its terminal or task. Empty history offers Run now. |
 | Run view | `move-run.tsx` | The terminal inside the app frame, with a bar for project, inputs, status, starter, Stop, Start again, full screen, and Close. Full screen shows the Suplex logo. |
 | Editor | `move-dialog.tsx` | The New Task layout. A plain field for a prompt, a terminal-styled `ScriptEditor` for a script, and the option bar "Run … with … and …". A "Placeholders" link (`placeholders-help.tsx`) opens on hover or click, explains the input syntax, and lists the inputs in the draft. `DeleteMoveDialog` is shared with the row menu. |

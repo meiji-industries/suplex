@@ -215,6 +215,12 @@ pub struct RecentRepository {
     pub repository: String,
     pub default_branch: String,
     pub pushed_at: String,
+    pub owner_avatar_url: Option<String>,
+}
+
+#[derive(serde::Deserialize)]
+struct RepositoryOwner {
+    avatar_url: Option<String>,
 }
 
 #[derive(serde::Deserialize)]
@@ -223,14 +229,38 @@ struct UserRepository {
     default_branch: Option<String>,
     pushed_at: Option<String>,
     archived: bool,
+    owner: Option<RepositoryOwner>,
 }
 
-/// Repositories the signed-in account can reach that anyone pushed to since `since`, newest first.
-// ponytail: one page of 100; page further if people miss repositories.
+pub const RECENT_REPOSITORIES_PAGE_SIZE: usize = 30;
+
+fn repository_page(rows: Vec<UserRepository>, page: u32) -> (Vec<RecentRepository>, Option<u32>) {
+    let next_page = (rows.len() == RECENT_REPOSITORIES_PAGE_SIZE).then(|| page + 1);
+    let repositories = rows
+        .into_iter()
+        .filter(|row| !row.archived)
+        .filter_map(|row| {
+            let pushed_at = row.pushed_at?;
+            chrono::DateTime::parse_from_rfc3339(&pushed_at).ok()?;
+            Some(RecentRepository {
+                repository: row.full_name,
+                default_branch: row
+                    .default_branch
+                    .filter(|branch| !branch.is_empty())
+                    .unwrap_or_else(|| "main".to_owned()),
+                pushed_at,
+                owner_avatar_url: row.owner.and_then(|owner| owner.avatar_url),
+            })
+        })
+        .collect();
+    (repositories, next_page)
+}
+
+/// One page of accessible repositories, newest pushed first.
 pub async fn recent_github_repositories(
     github: &Github,
-    since: chrono::DateTime<chrono::Utc>,
-) -> Result<Vec<RecentRepository>, ProjectError> {
+    page: u32,
+) -> Result<(Vec<RecentRepository>, Option<u32>), ProjectError> {
     let list = async {
         let access = github
             .access()
@@ -240,27 +270,11 @@ pub async fn recent_github_repositories(
             .client()
             .get(
                 "/user/repos",
-                Some(&json!({"sort": "pushed", "direction": "desc", "per_page": 100, "affiliation": "owner,collaborator,organization_member"})),
+                Some(&json!({"sort": "pushed", "direction": "desc", "per_page": RECENT_REPOSITORIES_PAGE_SIZE, "page": page, "affiliation": "owner,collaborator,organization_member"})),
             )
             .await
             .map_err(|error| github_reason(&error))?;
-        Ok::<_, String>(
-            rows.into_iter()
-                .filter(|row| !row.archived)
-                .filter_map(|row| {
-                    let pushed_at = row.pushed_at?;
-                    let pushed = chrono::DateTime::parse_from_rfc3339(&pushed_at).ok()?;
-                    (pushed >= since).then(|| RecentRepository {
-                        repository: row.full_name,
-                        default_branch: row
-                            .default_branch
-                            .filter(|branch| !branch.is_empty())
-                            .unwrap_or_else(|| "main".to_owned()),
-                        pushed_at,
-                    })
-                })
-                .collect(),
-        )
+        Ok::<_, String>(repository_page(rows, page))
     };
     list.await.map_err(|error| {
         failure(
@@ -698,6 +712,65 @@ mod tests {
     };
 
     use super::{super::git::fixtures::*, *};
+
+    #[tokio::test]
+    async fn recent_repository_request_forwards_page_and_sort() {
+        let api = github_api(Router::new().route(
+            "/user/repos",
+            get(
+                |axum::extract::Query(query): axum::extract::Query<
+                    std::collections::HashMap<String, String>,
+                >| async move {
+                    assert_eq!(query.get("page").map(String::as_str), Some("2"));
+                    assert_eq!(query.get("per_page").map(String::as_str), Some("30"));
+                    assert_eq!(query.get("sort").map(String::as_str), Some("pushed"));
+                    assert_eq!(query.get("direction").map(String::as_str), Some("desc"));
+                    Json(json!([]))
+                },
+            ),
+        ))
+        .await;
+        let github = Github {
+            api: Some((api, "fixture-token".to_owned())),
+            git: None,
+        };
+        let (rows, next) = recent_github_repositories(&github, 2).await.unwrap();
+        assert!(rows.is_empty());
+        assert_eq!(next, None);
+    }
+
+    #[test]
+    fn recent_repository_pages_keep_older_repositories_and_owner_avatars() {
+        let rows = serde_json::from_value(json!([
+            {"full_name":"acme/new", "default_branch":"trunk", "pushed_at":"2026-10-01T00:00:00Z", "archived":false, "owner":{"avatar_url":"https://avatars.githubusercontent.com/u/1"}},
+            {"full_name":"acme/old", "default_branch":null, "pushed_at":"2020-01-01T00:00:00Z", "archived":false},
+            {"full_name":"acme/archived", "pushed_at":"2020-01-01T00:00:00Z", "archived":true}
+        ])).unwrap();
+        let (repositories, next) = repository_page(rows, 1);
+        assert_eq!(next, None);
+        assert_eq!(
+            repositories
+                .iter()
+                .map(|row| row.repository.as_str())
+                .collect::<Vec<_>>(),
+            ["acme/new", "acme/old"]
+        );
+        assert_eq!(
+            repositories[0].owner_avatar_url.as_deref(),
+            Some("https://avatars.githubusercontent.com/u/1")
+        );
+        assert_eq!(repositories[1].owner_avatar_url, None);
+        assert_eq!(repositories[1].default_branch, "main");
+    }
+
+    #[test]
+    fn recent_repository_continuation_uses_raw_page_before_filtering() {
+        let rows = serde_json::from_value(json!((0..30).map(|index| json!({"full_name":format!("acme/{index}"), "pushed_at":null, "archived":true})).collect::<Vec<_>>())).unwrap();
+        let (repositories, next) = repository_page(rows, 2);
+        assert!(repositories.is_empty());
+        assert_eq!(next, Some(3));
+        assert_eq!(repository_page(vec![], 3).1, None);
+    }
 
     #[tokio::test]
     async fn repository_owner_errors_distinguish_signed_out_from_provider_failures() {

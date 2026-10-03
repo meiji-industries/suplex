@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactElement } from "react";
+import { useEffect, useState, type ReactElement, type ReactNode } from "react";
 import type { ApiProfile, ApiModel } from "../../shell/view-shared.js";
 import type { ProviderInstanceSchema } from "../../contracts/providers.js";
 import type { z } from "zod";
@@ -10,7 +10,7 @@ import {
   type AgentProviderOption,
 } from "./internal-agent-editor-dialog.js";
 
-export function InternalAgentsManager({ agents, onSaved }: { agents: readonly ApiProfile[]; onSaved: () => Promise<void> }): ReactElement {
+export function InternalAgentsManager({ agents, onSaved, renderCards }: { agents: readonly ApiProfile[]; onSaved: () => Promise<void>; renderCards?: (openNewAgent: () => void) => ReactNode }): ReactElement {
   const [agentName, setAgentName] = useState("");
   const [agentRole, setAgentRole] = useState<"root" | "worker">("root");
   const [agentAvatarSeed, setAgentAvatarSeed] = useState("");
@@ -164,7 +164,7 @@ export function InternalAgentsManager({ agents, onSaved }: { agents: readonly Ap
       Number(Boolean(left.archivedAt)) - Number(Boolean(right.archivedAt)),
   );
   return <>
-    <InternalAgentsSection
+    {renderCards ? renderCards(openNewAgent) : <InternalAgentsSection
       agents={agents}
       sortedAgents={sortedAgents}
       archiveTarget={archiveTarget}
@@ -176,7 +176,7 @@ export function InternalAgentsManager({ agents, onSaved }: { agents: readonly Ap
       deleteTarget={deleteTarget}
       onDeleteTargetChange={setDeleteTarget}
       onDeleteAgent={deleteAgent}
-    />
+    />}
     <InternalAgentDialog
       open={agentOpen}
       editingAgentId={editingAgentId}

@@ -31,6 +31,8 @@ pub struct MembershipBody {
 #[serde(rename_all = "camelCase")]
 pub struct ProfileBody {
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub display_name: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub username: Option<String>,
@@ -139,13 +141,13 @@ impl Contract for CompanyIssueCodeBody {
 /// At least one profile field.
 impl Contract for ProfileBody {
     fn schema(input: Option<&Value>) -> ContractResult<Value> {
-        let mut fields = ["displayName", "username", "avatarSeed"]
+        let mut fields = ["displayName", "username", "avatarSeed", "title"]
             .iter()
             .fold(Fields::new(input)?, |fields, name| {
                 fields.opt(name, text(0, MAX))
             });
         if fields.refinable()
-            && ["displayName", "username", "avatarSeed"]
+            && ["displayName", "username", "avatarSeed", "title"]
                 .iter()
                 .all(|name| fields.raw(name).is_none())
         {

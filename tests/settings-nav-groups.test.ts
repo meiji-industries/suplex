@@ -3,7 +3,7 @@ import { expect, test } from "vitest";
 import type { ApiUser } from "../src/frontend/lib/api.js";
 import { buildSettingsGroups, type SettingsNavGroup } from "../src/frontend/features/settings/settings-nav.js";
 
-const admin: ApiUser = { id: "user-1", displayName: "Admin", username: "admin", avatarSeed: "seed", role: "admin", status: "active", companyIds: ["company-1"] };
+const admin: ApiUser = { id: "user-1", displayName: "Admin", title: "", username: "admin", avatarSeed: "seed", role: "admin", status: "active", companyIds: ["company-1"] };
 const member: ApiUser = { ...admin, id: "user-2", username: "member", role: "member" };
 
 const titles = (groups: SettingsNavGroup[]): string[] => groups.map((group) => group.title);

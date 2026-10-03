@@ -6,7 +6,7 @@ import type { AuthOptions } from "../../contracts/generated/AuthOptions.js";
 import type { RemoteAccessPolicy } from "../../contracts/generated/RemoteAccessPolicy.js";
 import { readJson } from "../../lib/api.js";
 
-const UserSchema = z.object({ id: z.string(), displayName: z.string(), username: z.string(), avatarSeed: z.string(), role: z.string(), status: z.string(), companyIds: z.array(z.string()) });
+const UserSchema = z.object({ id: z.string(), displayName: z.string(), title: z.string(), username: z.string(), avatarSeed: z.string(), role: z.string(), status: z.string(), companyIds: z.array(z.string()) });
 const CredentialSchema = z.object({ id: z.string(), userId: z.string(), credentialId: z.string(), label: z.string(), rpId: z.string().nullable(), createdAt: z.string(), revokedAt: z.string().nullable() });
 const PolicySchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("open"), requireHttps: z.boolean(), defaultUserId: z.string(), externalHttpsOrigin: z.string().nullable() }),

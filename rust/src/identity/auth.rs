@@ -42,6 +42,7 @@ pub(crate) fn metadata_with_string(raw: &str, name: &str, value: &str) -> String
 pub struct AuthUser {
     pub id: String,
     pub display_name: String,
+    pub title: String,
     pub username: String,
     pub avatar_seed: String,
     pub role: String,
@@ -58,6 +59,7 @@ pub struct AuthResult {
 #[derive(Default)]
 pub struct ProfileUpdate {
     pub display_name: Option<String>,
+    pub title: Option<String>,
     pub username: Option<String>,
     pub avatar_seed: Option<String>,
 }
@@ -88,7 +90,7 @@ pub(crate) fn public_user(
     let user = database
         .connection()
         .query_row(
-            "SELECT id, display_name, username, avatar_seed, role, status FROM suplex_users WHERE id = ?1",
+            "SELECT id, display_name, username, avatar_seed, role, status, title FROM suplex_users WHERE id = ?1",
             [user_id],
             |row| {
                 Ok(AuthUser {
@@ -98,6 +100,7 @@ pub(crate) fn public_user(
                     avatar_seed: row.get(3)?,
                     role: row.get(4)?,
                     status: row.get(5)?,
+                    title: row.get(6)?,
                     company_ids: Vec::new(),
                 })
             },
@@ -309,6 +312,18 @@ pub fn update_profile(
             IdentityError::auth("Name must be 1–120 characters", 400, "auth_failure").into(),
         );
     }
+    let title = input.title.map(|value| js_trim(&value).to_owned());
+    if title
+        .as_ref()
+        .is_some_and(|value| value.encode_utf16().count() > 120)
+    {
+        return Err(IdentityError::auth(
+            "Title must be 120 characters or fewer",
+            400,
+            "auth_failure",
+        )
+        .into());
+    }
     let username = input.username.map(|value| js_trim(&value).to_owned());
     if username.as_ref().is_some_and(|value| {
         let bytes = value.as_bytes();
@@ -349,6 +364,7 @@ pub fn update_profile(
             raw_avatar_seed.clone()
         };
         let next_display_name = display_name.unwrap_or_else(|| user.display_name.clone());
+        let next_title = title.unwrap_or_else(|| user.title.clone());
         let next_username = username.unwrap_or_else(|| user.username.clone());
         let chosen_avatar_seed = avatar_seed.unwrap_or(raw_avatar_seed);
         let next_avatar_seed = if chosen_avatar_seed.is_empty() {
@@ -357,6 +373,7 @@ pub fn update_profile(
             chosen_avatar_seed
         };
         if user.display_name == next_display_name
+            && user.title == next_title
             && user.username == next_username
             && previous_avatar_seed == next_avatar_seed
         {
@@ -377,6 +394,7 @@ pub fn update_profile(
             );
         }
         for (changed, column, value) in [
+            (user.title != next_title, "title", &next_title),
             (
                 user.display_name != next_display_name,
                 "display_name",
@@ -398,6 +416,7 @@ pub fn update_profile(
             }
         }
         for (changed, action) in [
+            (user.title != next_title, "title_updated"),
             (
                 user.display_name != next_display_name,
                 "display_name_updated",
@@ -538,6 +557,64 @@ mod tests {
     }
 
     #[test]
+    fn profile_title_persists_clears_and_rejects_oversized_values() {
+        let filename =
+            std::env::temp_dir().join(format!("{}.sqlite", random_hex_id("suplex_title").unwrap()));
+        let mut database = SuplexDatabase::open(&filename, OpenMode::Migrate).unwrap();
+        let now = Utc::now();
+        let original = development_sign_in(&mut database, now).unwrap().user;
+        assert_eq!(original.title, "");
+        let changed = update_profile(
+            &mut database,
+            &original.id,
+            ProfileUpdate {
+                title: Some("  CTO  ".into()),
+                ..Default::default()
+            },
+            now,
+        )
+        .unwrap();
+        assert_eq!(changed.title, "CTO");
+        drop(database);
+        let mut database = SuplexDatabase::open(&filename, OpenMode::ReadWrite).unwrap();
+        assert_eq!(
+            public_user(&database, &original.id).unwrap().unwrap().title,
+            "CTO"
+        );
+        assert!(
+            update_profile(
+                &mut database,
+                &original.id,
+                ProfileUpdate {
+                    title: Some("x".repeat(121)),
+                    ..Default::default()
+                },
+                now
+            )
+            .is_err()
+        );
+        assert_eq!(
+            public_user(&database, &original.id).unwrap().unwrap().title,
+            "CTO"
+        );
+        let cleared = update_profile(
+            &mut database,
+            &original.id,
+            ProfileUpdate {
+                title: Some("  ".into()),
+                ..Default::default()
+            },
+            now,
+        )
+        .unwrap();
+        assert_eq!(cleared.title, "");
+        drop(database);
+        let _ = std::fs::remove_file(&filename);
+        let _ = std::fs::remove_file(filename.with_extension("sqlite-wal"));
+        let _ = std::fs::remove_file(filename.with_extension("sqlite-shm"));
+    }
+
+    #[test]
     fn profile_changes_are_atomic_and_audited_once_per_field() {
         let filename = std::env::temp_dir().join(format!(
             "{}.sqlite",
@@ -562,6 +639,7 @@ mod tests {
                 display_name: Some("  Renamed Operator  ".into()),
                 username: Some("  operator-new  ".into()),
                 avatar_seed: None,
+                title: None,
             },
             now,
         )
@@ -590,6 +668,7 @@ mod tests {
                 display_name: Some("Renamed Operator".into()),
                 username: Some("operator-new".into()),
                 avatar_seed: None,
+                title: None,
             },
             now,
         )
@@ -612,6 +691,7 @@ mod tests {
                 display_name: Some("Should Roll Back".into()),
                 username: Some("taken".into()),
                 avatar_seed: None,
+                title: None,
             },
             now,
         )

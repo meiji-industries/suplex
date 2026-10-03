@@ -145,7 +145,7 @@ mod tests {
             raw.replace(token, "TOKEN")
                 .replace(user_id, "user_ID")
                 .replace(expires_at, "TIMESTAMP"),
-            r#"{"token":"TOKEN","kind":"user","expiresAt":"TIMESTAMP","user":{"id":"user_ID","displayName":"API member","username":"user_v1_user_ID","avatarSeed":"user_v1_user_ID","role":"member","status":"pending","companyIds":[]}}"#
+            r#"{"token":"TOKEN","kind":"user","expiresAt":"TIMESTAMP","user":{"id":"user_ID","displayName":"API member","title":"","username":"user_v1_user_ID","avatarSeed":"user_v1_user_ID","role":"member","status":"pending","companyIds":[]}}"#
         );
         assert_eq!(
             list_users(State(state.clone()), headers.clone())

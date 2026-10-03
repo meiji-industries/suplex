@@ -1,0 +1,1 @@
+ALTER TABLE suplex_users ADD COLUMN title TEXT NOT NULL DEFAULT '';

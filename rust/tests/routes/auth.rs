@@ -164,7 +164,7 @@ pub(crate) mod tests {
         let current_body = to_bytes(current.into_body(), 4096).await.unwrap();
         assert_eq!(
             current_body,
-            r#"{"user":{"id":"user_development","displayName":"Operator","username":"operator@suplex.local","avatarSeed":"operator@suplex.local","role":"admin","status":"active","companyIds":[]}}"#
+            r#"{"user":{"id":"user_development","displayName":"Operator","title":"","username":"operator@suplex.local","avatarSeed":"operator@suplex.local","role":"admin","status":"active","companyIds":[]}}"#
         );
         let wrong_origin = sign_out(State(state.clone()), headers.clone()).await;
         assert_eq!(wrong_origin.status(), StatusCode::FORBIDDEN);
@@ -301,7 +301,7 @@ pub(crate) mod tests {
             "{enrolled}"
         );
         assert!(enrolled.contains("set-cookie: csrf_v1="), "{enrolled}");
-        assert!(enrolled.ends_with(r#"{"user":{"id":"user_existing","displayName":"Fixture member","username":"user_v1_user_existing","avatarSeed":"user_v1_user_existing","role":"member","status":"active","companyIds":[]}}"#), "{enrolled}");
+        assert!(enrolled.ends_with(r#"{"user":{"id":"user_existing","displayName":"Fixture member","title":"","username":"user_v1_user_existing","avatarSeed":"user_v1_user_existing","role":"member","status":"active","companyIds":[]}}"#), "{enrolled}");
         let authentication = post(address, "/api/auth/options", "{}".into()).await;
         assert!(
             authentication.starts_with("HTTP/1.1 200 OK\r\n"),
@@ -324,7 +324,7 @@ pub(crate) mod tests {
         )
         .await;
         assert!(signed_in.starts_with("HTTP/1.1 200 OK\r\n"), "{signed_in}");
-        assert!(signed_in.ends_with(r#"{"user":{"id":"user_existing","displayName":"Fixture member","username":"user_v1_user_existing","avatarSeed":"user_v1_user_existing","role":"member","status":"active","companyIds":[]}}"#), "{signed_in}");
+        assert!(signed_in.ends_with(r#"{"user":{"id":"user_existing","displayName":"Fixture member","title":"","username":"user_v1_user_existing","avatarSeed":"user_v1_user_existing","role":"member","status":"active","companyIds":[]}}"#), "{signed_in}");
         let counter: u32 = state.with_database(|database| {
             database
                 .connection()
@@ -473,7 +473,7 @@ pub(crate) mod tests {
             json!({ "error": "Invalid request", "findings": [{ "code": "invalid-invalid_type", "field": ".", "message": "Request value is invalid" }] })
         );
         let valid = Bytes::from_static(
-            br#"{"displayName":"\uFEFFUpdated Operator\uFEFF","username":"\uFEFFupdated-operator\uFEFF","avatarSeed":"\uFEFFupdated-avatar\uFEFF"}"#,
+            br#"{"displayName":"\uFEFFUpdated Operator\uFEFF","username":"\uFEFFupdated-operator\uFEFF","avatarSeed":"\uFEFFupdated-avatar\uFEFF","title":" CTO "}"#,
         );
         let wrong_origin = update_me(State(state.clone()), headers.clone(), valid.clone()).await;
         assert_eq!(wrong_origin.status(), StatusCode::FORBIDDEN);
@@ -483,7 +483,7 @@ pub(crate) mod tests {
         let body = to_bytes(updated.into_body(), 4096).await.unwrap();
         assert_eq!(
             body,
-            r#"{"user":{"id":"user_development","displayName":"Updated Operator","username":"updated-operator","avatarSeed":"updated-avatar","role":"admin","status":"active","companyIds":[]}}"#
+            r#"{"user":{"id":"user_development","displayName":"Updated Operator","title":"CTO","username":"updated-operator","avatarSeed":"updated-avatar","role":"admin","status":"active","companyIds":[]}}"#
         );
         headers.remove("cookie");
         headers.remove("origin");

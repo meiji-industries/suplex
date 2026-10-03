@@ -6,15 +6,16 @@ import { afterEach, expect, test, vi } from "vitest";
 import type * as NavigationState from "../src/frontend/shell/navigation-state.js";
 
 const company = { id: "company-1", name: "Acme", issueCode: "ACME", status: "active" };
-const fixture = vi.hoisted(() => ({ currentCompany: undefined as typeof company | undefined, loading: false, projects: [{ id: "project-1" }], reload: vi.fn() }));
-vi.mock("../src/frontend/shell/company-context.js", () => ({ useCompanyContext: () => ({ currentCompany: fixture.currentCompany, user: { role: "admin" }, reloadCompanies: vi.fn(), renameCompany: vi.fn(), setCompanyIssueCode: vi.fn() }), useOptionalCompanyContext: () => fixture.currentCompany ? { currentCompany: fixture.currentCompany } : undefined }));
+const fixture = vi.hoisted(() => ({ currentCompany: undefined as (Omit<typeof company, "issueCode"> & { issueCode: string | undefined }) | undefined, loading: false, projects: [{ id: "project-1" }], reload: vi.fn(), updateProfile: vi.fn(), renameCompany: vi.fn(), setCompanyIssueCode: vi.fn() }));
+vi.mock("../src/frontend/shell/company-context.js", () => ({ useCompanyContext: () => ({ currentCompany: fixture.currentCompany, user: { id: "user_development", role: "admin", displayName: "Operator", username: "operator@suplex.local", avatarSeed: "operator@suplex.local", title: "" }, updateProfile: fixture.updateProfile, reloadCompanies: vi.fn(), renameCompany: fixture.renameCompany, setCompanyIssueCode: fixture.setCompanyIssueCode }), useOptionalCompanyContext: () => fixture.currentCompany ? { currentCompany: fixture.currentCompany } : undefined }));
+vi.mock("../src/frontend/features/account/lib/account-api.js", () => ({ getAccount: vi.fn(async () => ({ configured: true, canManage: true, account: { email: "adam@example.com" } })) }));
 vi.mock("../src/frontend/features/onboarding/onboarding.js", async importOriginal => ({ ...(await importOriginal()), useOnboardingData: () => ({ state: { company: fixture.currentCompany, checks: [], providers: [], profiles: [], projects: fixture.projects }, loading: fixture.loading, error: "", reload: fixture.reload }) }));
 vi.mock("../src/frontend/components/app/system-health.js", () => ({ useSystemHealth: () => ({ refresh: vi.fn(), freshness: "fresh", refreshing: false }), CheckStatusIndicator: () => null, SystemHealthAlert: () => null, healthCheckPurpose: () => "" }));
 vi.mock("../src/frontend/shell/company-switcher.js", () => ({ CompanySwitcher: () => null }));
 vi.mock("../src/frontend/shell/experiments-api.js", () => ({ useExperiments: vi.fn() }));
 vi.mock("../src/frontend/components/ui/sidebar.js", () => ({ Sidebar: ({ children }: { children: ReactNode }) => <>{children}</>, SidebarContent: ({ children }: { children: ReactNode }) => <>{children}</>, SidebarFooter: ({ children }: { children: ReactNode }) => <>{children}</>, SidebarHeader: ({ children }: { children: ReactNode }) => <>{children}</>, SidebarInset: ({ children }: { children: ReactNode }) => <>{children}</>, SidebarMenu: ({ children }: { children: ReactNode }) => <>{children}</>, SidebarMenuButton: ({ children }: { children: ReactNode }) => <>{children}</>, SidebarMenuItem: ({ children }: { children: ReactNode }) => <>{children}</>, SidebarProvider: ({ children }: { children: ReactNode }) => <>{children}</>, SidebarTrigger: () => null, useSidebar: () => ({ setOpenMobile: vi.fn() }) }));
 vi.mock("../src/frontend/features/settings/provider-login.js", () => ({ ProviderLoginTerminal: () => null, useProviderLogin: () => ({ login: null, loginPending: null, startLogin: vi.fn(), closeLogin: vi.fn() }) }));
-vi.mock("../src/frontend/features/projects/project-cards.js", () => ({ ProjectCards: () => null }));
+vi.mock("../src/frontend/features/projects/project-cards.js", () => ({ ProjectCards: ({ onAdd }: { onAdd?: () => void }) => onAdd ? <button onClick={onAdd}>Add Project</button> : null }));
 vi.mock("../src/frontend/features/projects/recent-repositories.js", () => ({ RecentRepositories: () => null }));
 vi.mock("../src/frontend/features/projects/create-project-dialog.js", () => ({ CreateProjectDialog: ({ open, onCreated }: { open: boolean; onCreated: () => Promise<void> }) => open ? <div role="dialog"><button onClick={() => void onCreated()}>Save project</button></div> : null }));
 vi.mock("../src/frontend/components/app/entity-avatar.js", () => ({ AvatarEditor: ({ name, seed }: { name: string; seed?: string }) => <output data-avatar-name={name} data-avatar-seed={seed} /> }));
@@ -60,6 +61,9 @@ afterEach(() => {
   fixture.loading = false;
   fixture.projects = [{ id: "project-1" }];
   fixture.reload.mockReset();
+  fixture.updateProfile.mockReset();
+  fixture.renameCompany.mockReset();
+  fixture.setCompanyIssueCode.mockReset();
   document.body.replaceChildren();
   window.history.replaceState({}, "", "/");
   vi.mocked(navigate).mockClear();
@@ -117,15 +121,16 @@ test("Done shows Today only while the experiment is enabled", async () => {
 });
 
 test("company avatar uses the trimmed name draft and falls back to the saved name", async () => {
-  fixture.currentCompany = { ...company, name: "My Company" };
+  fixture.currentCompany = { ...company, name: "My Company", issueCode: undefined };
   window.history.replaceState({}, "", "/onboarding?step=company");
   const container = document.createElement("div");
   document.body.append(container);
   const root = createRoot(container);
   await act(async () => root.render(<OnboardingView />));
-  const avatar = container.querySelector<HTMLOutputElement>("output[data-avatar-seed]")!;
+  const avatar = container.querySelector<HTMLOutputElement>('output[data-avatar-name="My Company"]')!;
   const input = container.querySelector<HTMLInputElement>("#onboarding-name")!;
 
+  expect(input.value).toBe("");
   expect(avatar.dataset.avatarSeed).toBe("My Company");
   await act(async () => setInput(input, "  ACME Agency  "));
   expect(avatar.dataset.avatarName).toBe("ACME Agency");
@@ -149,14 +154,40 @@ test("Projects shares the empty state and refreshes onboarding after creation", 
   });
   await act(async () => render());
   expect(container.querySelector("h2")?.textContent).toBe("Projects");
-  expect(container.textContent).toContain("Add a repository to create your first project.");
+  expect(container.textContent).toContain("Add Project");
   expect(button(container, "Continue").disabled).toBe(true);
   expect(container.querySelector('[aria-label="Check again"]')).toBeNull();
-  await act(async () => button(container, "Add project").click());
+  await act(async () => button(container, "Add Project").click());
   await act(async () => button(container, "Save project").click());
   expect(fixture.reload).toHaveBeenCalledOnce();
   expect(window.location.search).toContain("step=projects");
   expect(container.textContent).not.toContain("No projects");
   expect(button(container, "Continue").disabled).toBe(false);
+  await act(async () => root.unmount());
+});
+
+ test("first step saves the profile before the company and stays on errors", async () => {
+  fixture.currentCompany = company;
+  window.history.replaceState({}, "", "/onboarding?step=company");
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  await act(async () => root.render(<OnboardingView />));
+  expect(container.querySelector<HTMLInputElement>("#display-name")?.value).toBe("");
+  expect(container.querySelector<HTMLInputElement>("#username")?.value).toBe("adam");
+  await act(async () => {
+    setInput(container.querySelector<HTMLInputElement>("#display-name")!, "Adam Meghji");
+    setInput(container.querySelector<HTMLInputElement>("#profile-title")!, "CTO");
+    setInput(container.querySelector<HTMLInputElement>("#onboarding-name")!, "New Company");
+  });
+  fixture.updateProfile.mockRejectedValueOnce(new Error("Profile could not be saved"));
+  await act(async () => button(container, "Continue").click());
+  expect(container.textContent).toContain("Profile could not be saved");
+  expect(fixture.renameCompany).not.toHaveBeenCalled();
+  expect(navigate).not.toHaveBeenCalled();
+  await act(async () => button(container, "Continue").click());
+  expect(fixture.updateProfile).toHaveBeenLastCalledWith({ displayName: "Adam Meghji", username: "adam", title: "CTO", avatarSeed: "adam" });
+  expect(fixture.renameCompany).toHaveBeenCalledWith("company-1", "New Company");
+  expect(navigate).toHaveBeenCalledWith("/onboarding?step=tools&company=company-1");
   await act(async () => root.unmount());
 });

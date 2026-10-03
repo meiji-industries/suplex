@@ -1,3 +1,4 @@
+import { saveProfile } from "../features/profiles/lib/profile-api.js";
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactElement, type ReactNode } from "react";
 import { flushSync } from "react-dom";
 
@@ -22,7 +23,7 @@ export type CompanyContextValue = {
   setCompanyStatus: (companyId: string, status: CompanyStatus) => Promise<ApiCompany>;
   /** Updates the plan label after a live billing read, without reloading companies. */
   setCompanyPlan: (companyId: string, plan: "free" | "pro") => void;
-  updateProfile: (profile: { displayName: string; username: string; avatarSeed: string }) => Promise<ApiUser>;
+  updateProfile: (profile: { displayName: string; username: string; avatarSeed: string; title: string }) => Promise<ApiUser>;
   avatars: Record<string, AvatarRecord>;
   saveAvatar: (ownerId: string, patch: AvatarUpdateBody) => Promise<AvatarRecord>;
   reloadCompanies: () => Promise<void>;
@@ -172,10 +173,10 @@ export function CompanyProvider({ children }: { children: ReactNode }): ReactEle
     setCurrentCompany((current) => current && label(current));
   }, []);
 
-  const updateProfile = useCallback(async (profile: { displayName: string; username: string; avatarSeed: string }): Promise<ApiUser> => {
-    const result = await readJsonUnchecked<{ user: ApiUser }>("/api/auth/me", { method: "PATCH", body: JSON.stringify(profile) });
-    setUser(result.user);
-    return result.user;
+  const updateProfile = useCallback(async (profile: { displayName: string; username: string; avatarSeed: string; title: string }): Promise<ApiUser> => {
+    const updated = await saveProfile(profile);
+    setUser(updated);
+    return updated;
   }, []);
 
   const saveAvatar = useCallback(async (ownerId: string, patch: AvatarUpdateBody): Promise<AvatarRecord> => {

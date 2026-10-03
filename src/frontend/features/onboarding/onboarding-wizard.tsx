@@ -1,3 +1,7 @@
+import { ProfileFields } from "../profiles/profile-fields.js";
+import { SettingsSection, SettingRow } from "../settings/settings-layout.js";
+import { getAccount } from "../account/lib/account-api.js";
+import { useProfileDraft } from "../profiles/lib/profile-draft.js";
 import { ProjectsContent } from "../projects/projects-content.js";
 import { ArrowLeft, Check, Copy, RefreshCw } from "lucide-react";
 import { useEffect, useState, type ReactElement } from "react";
@@ -12,7 +16,7 @@ import { Alert, AlertDescription } from "../../components/ui/alert.js";
 import { Badge } from "../../components/ui/badge.js";
 import { Button } from "../../components/ui/button.js";
 import { Card, CardAction, CardContent, CardHeader, CardTitle } from "../../components/ui/card.js";
-import { Field, FieldDescription, FieldGroup, FieldLabel } from "../../components/ui/field.js";
+import { FieldDescription } from "../../components/ui/field.js";
 import { Input } from "../../components/ui/input.js";
 import { Spinner } from "../../components/ui/spinner.js";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../../components/ui/tooltip.js";
@@ -82,7 +86,7 @@ function OnboardingSidebar({ companyId, current, state }: { companyId: string; c
 }
 
 export function OnboardingView(): ReactElement {
-  const { currentCompany, user, renameCompany, setCompanyIssueCode, reloadCompanies } = useCompanyContext();
+  const { currentCompany, user, updateProfile, renameCompany, setCompanyIssueCode, reloadCompanies } = useCompanyContext();
   const todayPage = useExperiments()?.todayPage ?? false;
   const companyId = currentCompany?.id ?? "";
   const { state, reload, loading, error: loadError } = useOnboardingData(currentCompany);
@@ -90,32 +94,50 @@ export function OnboardingView(): ReactElement {
   const connected = connectedProviders(state.providers);
   const current = stepFromUrl(state);
   const currentIndex = ONBOARDING_STEPS.findIndex(step => step.id === current);
-  const [name, setName] = useState(currentCompany?.name || "My Company");
+  const defaultCompanyName = currentCompany?.name === "My Company" && !currentCompany.issueCode ? "" : currentCompany?.name ?? "";
+  const [name, setName] = useState(defaultCompanyName);
   const [code, setCode] = useState(currentCompany?.issueCode ?? "SUPLEX");
   const [error, setError] = useState("");
-  useEffect(() => { setName(currentCompany?.name || "My Company"); setCode(currentCompany?.issueCode ?? "SUPLEX"); }, [currentCompany?.id]);
+  const [email, setEmail] = useState<string>();
+  const [saving, setSaving] = useState(false);
+  useEffect(() => { if (user?.id === "user_development") void getAccount().then(result => setEmail(result.account?.email)).catch(() => undefined); }, [user?.id]);
+  const { profile, changeProfile } = useProfileDraft(user, email);
+  useEffect(() => { setName(defaultCompanyName); setCode(currentCompany?.issueCode ?? "SUPLEX"); }, [currentCompany?.id]);
   const { login, loginPending, startLogin, closeLogin } = useProviderLogin({ reload });
   const go = (id: OnboardingStepId): void => navigate(withCompany(`/onboarding?step=${id}`, companyId));
   const continueStep = async (): Promise<void> => {
+    if (saving) return;
     setError("");
+    setSaving(true);
     try {
       if (current === "company" && currentCompany) {
-        if (!name.trim() || !code.trim()) return;
+        if (!name.trim() || !code.trim() || !profile.displayName.trim() || !profile.username.trim()) return;
+        await updateProfile({ ...profile, displayName: profile.displayName.trim(), username: profile.username.trim(), title: profile.title.trim() });
         if (name !== currentCompany.name) await renameCompany(currentCompany.id, name);
         if (code !== currentCompany.issueCode) await setCompanyIssueCode(currentCompany.id, code);
         await reloadCompanies();
       }
       if (currentIndex < ONBOARDING_STEPS.length - 1) go(ONBOARDING_STEPS[currentIndex + 1]!.id);
     } catch (reason) { setError(reason instanceof Error ? reason.message : "Suplex could not save the onboarding step."); }
+    finally { setSaving(false); }
   };
   const avatarName = name.trim() || currentCompany?.name || "";
-  const body = current === "company" ? <div className="min-w-0 sm:w-[calc(50%+3.25rem)]"><FieldGroup>
-    <div className="flex min-w-0 items-end gap-3">
-      {currentCompany ? <div className="shrink-0"><AvatarEditor compact kind="company" id={currentCompany.id} name={avatarName} seed={avatarName} /></div> : null}
-      <div className="min-w-0 flex-1"><Field><Input id="onboarding-name" aria-label="Company name" value={name} onChange={event => setName(event.target.value)} /></Field></div>
-    </div>
-    <Field><FieldLabel htmlFor="onboarding-code">Company code</FieldLabel><Input id="onboarding-code" maxLength={10} pattern="[A-Z][A-Z0-9]{1,9}" value={code} onChange={event => setCode(event.target.value.toUpperCase())} /></Field>
-  </FieldGroup></div>
+  const body = current === "company" ? <div>
+    <SettingsSection title="Profile">
+      {user ? <ProfileFields userId={user.id} email={email} value={profile} onChange={changeProfile} disabled={saving} /> : <LoadingState />}
+    </SettingsSection>
+    <SettingsSection title="Company">
+      <SettingRow label="Company picture">
+        {currentCompany ? <AvatarEditor compact kind="company" id={currentCompany.id} name={avatarName} seed={avatarName} /> : null}
+      </SettingRow>
+      <SettingRow label="Company name" htmlFor="onboarding-name">
+        <div className="w-full sm:w-60"><Input size="sm" id="onboarding-name" disabled={saving} value={name} onChange={event => setName(event.target.value)} /></div>
+      </SettingRow>
+      <SettingRow label="Company code" htmlFor="onboarding-code">
+        <div className="w-full sm:w-60"><Input size="sm" id="onboarding-code" disabled={saving} maxLength={10} pattern="[A-Z][A-Z0-9]{1,9}" value={code} onChange={event => setCode(event.target.value.toUpperCase())} /></div>
+      </SettingRow>
+    </SettingsSection>
+  </div>
     : current === "tools" ? <div className="space-y-3" aria-busy={freshness === "checking" && state.checks.length === 0}>
       {ONBOARDING_TOOL_CHECKS.map(id => {
         const check = state.checks.find(check => check.id === id);
@@ -145,7 +167,7 @@ export function OnboardingView(): ReactElement {
         </div>;
       })}
     </div>
-    : current === "providers" ? <div className="space-y-3"><div className="grid gap-3 sm:grid-cols-2" aria-busy={loading} aria-label="Providers">{loading && state.providers.length === 0 ? [0, 1, 2, 3].map(index => <Card key={index} size="sm" aria-label="Provider check in progress"><CardHeader><CardTitle><Skeleton className="h-5 w-20" /></CardTitle><CardAction><Skeleton className="h-5 w-20" /></CardAction></CardHeader><CardContent><Skeleton className="h-4 w-16" /><div className="space-y-1"><Skeleton className="h-4 w-full" /><Skeleton className="h-4 w-3/4" /></div><Skeleton className="h-8 w-full" /></CardContent></Card>) : state.providers.map(provider => <Card highlighted key={provider.id} size="sm"><CardHeader><CardTitle><span className="flex items-center gap-2.5 text-base"><ProviderIcon provider={provider.id} size="md" />{provider.label}</span></CardTitle><CardAction>{provider.status === "missing" ? <><StatusLight level="red" label="Not installed" /><Badge variant="outline">Not installed</Badge></> : provider.connection.status === "connected" ? <><StatusLight level="green" label="Connected" /><Badge variant="secondary">Connected</Badge></> : <><StatusLight level="amber" label="Needs auth" /><Badge variant="outline">Needs auth</Badge></>}</CardAction></CardHeader><CardContent className="flex flex-col gap-0 text-xs text-muted-foreground [&>*]:border-t [&>*]:border-border/50 [&>*]:py-4 [&>*:last-child]:pb-0"><div><Tooltip><TooltipTrigger><span className="cursor-help underline decoration-dashed underline-offset-4">{provider.modelCount} models available</span></TooltipTrigger><TooltipContent side="bottom" align="start"><ul className="max-h-60 overflow-y-auto font-mono text-xs">{provider.models.length ? provider.models.map(model => <li key={model.id} className="break-all">{model.id}</li>) : <li>No models available</li>}</ul></TooltipContent></Tooltip></div>{provider.connection.status === "connected" ? <p className="flex items-start gap-1"><Check aria-hidden="true" className="mt-0.5 size-3 shrink-0" /><span className="min-w-0 break-words">{provider.connection.account ? `Signed in as ${provider.connection.account}` : "Signed in"}</span></p> : provider.id === "opencode" && provider.connection.status === "not-connected" && provider.status !== "missing" ? null : <p>{provider.connection.summary}</p>}{provider.status === "missing" ? <ProviderInstallationInstructions provider={provider.id} checkLabel="Check again" /> : provider.connection.status !== "connected" ? <Button size="sm" disabled={loginPending !== null} onClick={() => void startLogin(`provider:${provider.id}`, provider.label, `/api/admin/providers/${provider.id}/login`).catch(reason => setError(reason instanceof Error ? reason.message : "Suplex could not open a sign-in pane."))}>Sign in</Button> : null}</CardContent></Card>)}</div></div>
+    : current === "providers" ? <div className="space-y-3"><div className="grid gap-3 sm:grid-cols-2" aria-busy={loading} aria-label="Providers">{loading && state.providers.length === 0 ? [0, 1, 2, 3].map(index => <Card key={index} size="sm" aria-label="Provider check in progress"><CardHeader><CardTitle><Skeleton className="h-5 w-20" /></CardTitle><CardAction><Skeleton className="h-5 w-20" /></CardAction></CardHeader><CardContent><Skeleton className="h-4 w-16" /><div className="space-y-1"><Skeleton className="h-4 w-full" /><Skeleton className="h-4 w-3/4" /></div><Skeleton className="h-8 w-full" /></CardContent></Card>) : state.providers.map(provider => <Card highlighted key={provider.id} size="sm"><CardHeader><CardTitle><span className="flex items-center gap-2.5 text-base"><ProviderIcon provider={provider.id} size="md" />{provider.label}</span></CardTitle><CardAction>{provider.status === "missing" ? <><StatusLight level="red" label="Not installed" /><Badge variant="outline">Not installed</Badge></> : provider.connection.status === "connected" ? <><StatusLight level="green" label="Connected" /><Badge variant="secondary">Connected</Badge></> : <><StatusLight level="amber" label="Needs auth" /><Badge variant="outline">Needs auth</Badge></>}</CardAction></CardHeader><CardContent><div className="flex flex-col text-xs text-muted-foreground [&>*]:border-t [&>*]:border-border/50 [&>*]:py-4 [&>*:last-child]:pb-0">{provider.connection.status === "connected" ? <div><Tooltip><TooltipTrigger><span className="cursor-help underline decoration-dashed underline-offset-4">{provider.modelCount} models available</span></TooltipTrigger><TooltipContent side="bottom" align="start"><ul className="max-h-60 overflow-y-auto font-mono text-xs">{provider.models.length ? provider.models.map(model => <li key={model.id} className="break-all">{model.id}</li>) : <li>No models available</li>}</ul></TooltipContent></Tooltip></div> : null}{provider.connection.status === "connected" ? <p className="flex items-start gap-1"><Check aria-hidden="true" className="mt-0.5 size-3 shrink-0" /><span className="min-w-0 break-words">{provider.connection.account ? `Signed in as ${provider.connection.account}` : "Signed in"}</span></p> : provider.id === "opencode" && provider.connection.status === "not-connected" && provider.status !== "missing" ? null : <p>{provider.connection.summary}</p>}{provider.status === "missing" ? <ProviderInstallationInstructions provider={provider.id} checkLabel="Check again" /> : provider.connection.status !== "connected" ? <div className="grid"><Button size="sm" disabled={loginPending !== null} onClick={() => void startLogin(`provider:${provider.id}`, provider.label, `/api/admin/providers/${provider.id}/login`).catch(reason => setError(reason instanceof Error ? reason.message : "Suplex could not open a sign-in pane."))}>Sign in</Button></div> : null}</div></CardContent></Card>)}</div></div>
     : current === "agents" ? loading && state.profiles.length === 0 ? <LoadingState /> : <InternalAgentsManager agents={state.profiles} onSaved={reload} renderCards={openNewAgent => <div className="grid gap-3 sm:grid-cols-2" aria-label="Your team">{state.profiles.filter(agent => !agent.archivedAt).map(agent => <AgentCard key={agent.id} agent={agent} />)}<AddCard label="Add agent" onClick={openNewAgent} /></div>} />
     : current === "projects" ? <ProjectsContent currentCompany={currentCompany} projects={state.projects} agents={state.profiles} loading={loading} projectsLoading={loading && state.projects.length === 0} loadError={error || loadError} canSignInToGitHub={user?.role === "admin"} reload={reload} reloadCompanies={reloadCompanies} />
     : <div className="flex flex-1 flex-col items-center justify-center gap-6 text-center">
@@ -158,9 +180,9 @@ export function OnboardingView(): ReactElement {
         <p className="font-mono text-xs tracking-widest text-muted-foreground">PLAN. BUILD. REVIEW. SHIP.</p>
       </div>
     </div>;
-  const continueDisabled = current === "company" ? !name.trim() || !code.trim() : current === "providers" ? connected.length === 0 : current === "projects" ? state.projects.length === 0 : false;
-  const heading = current === "company" ? "Set up your company" : current === "tools" ? "Check the host tools" : current === "providers" ? "Connect your accounts" : current === "agents" ? "Your team" : current === "projects" ? "Add a project" : "Onboarding complete";
-  const description = current === "company" ? "What is your startup, agency, or company called?"
+  const continueDisabled = saving || (current === "company" ? !user || !name.trim() || !code.trim() || !profile.displayName.trim() || !profile.username.trim() : current === "providers" ? connected.length === 0 : current === "projects" ? state.projects.length === 0 : false);
+  const heading = current === "company" ? "Add your details" : current === "tools" ? "Check the host tools" : current === "providers" ? "Connect your accounts" : current === "agents" ? "Your team" : current === "projects" ? "Add a project" : "Onboarding complete";
+  const description = current === "company" ? "Review your details, then add your company."
     : current === "tools" ? "Suplex uses tools on your machine to get work done for you"
     : current === "providers" ? "Connect your existing subscriptions and models to your new Suplex agents"
     : current === "agents" ? "The Coordinator plans each task. The Worker builds the changes."

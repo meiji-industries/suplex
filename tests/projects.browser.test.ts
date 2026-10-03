@@ -41,7 +41,7 @@ test("projects desktop flow creates a project and opens its configuration", { ti
     const page = fixture.page;
     await page.goto(`${fixture.base}/projects?company=${fixture.company.id}`);
     await page.getByRole("heading", { name: "Projects", exact: true, level: 2 }).waitFor();
-    await page.getByRole("button", { name: "Add project", exact: true }).click();
+    await page.getByRole("button", { name: "Add Project", exact: true }).click();
     await page.getByLabel("Repository", { exact: true }).click();
     await page.getByRole("option", { name: "suplex", exact: true }).click();
     await page.getByRole("dialog", { name: "Add project", exact: true }).getByRole("button", { name: "Add project", exact: true }).click();

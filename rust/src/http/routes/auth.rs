@@ -29,7 +29,8 @@ use crate::{
 
 use super::super::{AppState, session};
 
-#[derive(Serialize)]
+#[derive(Serialize, ts_rs::TS)]
+#[ts(export)]
 struct AuthEnvelope {
     user: AuthUser,
 }
@@ -535,6 +536,7 @@ async fn update_me(
         };
         let update = ProfileUpdate {
             display_name: parsed.display_name,
+            title: parsed.title,
             username: parsed.username,
             avatar_seed: parsed.avatar_seed,
         };

@@ -15,7 +15,7 @@ export type OnboardingStepId = "company" | "tools" | "providers" | "agents" | "p
 export const ONBOARDING_TOOL_CHECKS: readonly (HealthCheck["id"] & ToolIconId)[] = ["git", "gh-auth", "herdr-readiness"];
 
 export const ONBOARDING_STEPS: readonly { id: OnboardingStepId; label: string; description: string }[] = [
-  { id: "company", label: "Company", description: "Name the company." },
+  { id: "company", label: "Profile", description: "Add your profile and company." },
   { id: "tools", label: "Tools", description: "Check the host tools." },
   { id: "providers", label: "Providers", description: "Connect one provider." },
   { id: "agents", label: "Agents", description: "Review your team." },

@@ -85,7 +85,7 @@ export function AccountLoginView({ preview = false, previewState }: { preview?: 
   const cancel = (): void => { setWaiting(undefined); setEmailForm(false); setError(""); };
 
   return (
-    <main className="dark flex min-h-dvh flex-col items-center justify-center gap-8 bg-[#080808] pt-8 pb-[calc(var(--desktop-status-height,0px)+2rem)] text-foreground md:grid md:grid-cols-[minmax(0,1fr)_minmax(0,2fr)] md:gap-0 md:pt-0 md:pb-[var(--desktop-status-height,0px)]">
+    <main className="dark flex min-h-dvh flex-col items-center justify-center gap-8 bg-[#080808] pt-8 pb-[calc(var(--desktop-status-height,0px)+2rem)] text-foreground [-webkit-app-region:no-drag] md:grid md:grid-cols-[minmax(0,1fr)_minmax(0,2fr)] md:gap-0 md:pt-0 md:pb-[var(--desktop-status-height,0px)]">
       <div className="relative order-2 aspect-[941/1257] w-full max-w-sm justify-self-center overflow-hidden md:aspect-[1257/941] md:max-w-none">
         <img src={accountBackground} alt="" className="absolute top-1/2 left-1/2 h-auto w-[133.582%] max-w-none -translate-x-1/2 -translate-y-1/2 -rotate-90 md:w-full md:-rotate-180" />
       </div>

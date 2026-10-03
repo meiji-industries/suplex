@@ -22,7 +22,7 @@ use crate::{
 };
 
 const BODY_LIMIT: usize = 64 * 1024;
-const DONE_PAGE: &str = "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width\"><title>Suplex</title></head><body><p>You are signed in. Return to Suplex.</p><p><a href=\"suplex://auth/done\">Open Suplex</a></p><script>location.replace(\"suplex://auth/done\")</script></body></html>";
+const DONE_PAGE: &str = include_str!("done.html");
 const FAILED_PAGE: &str = "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width\"><title>Suplex</title></head><body><p>Suplex could not complete the login. Return to Suplex and retry.</p></body></html>";
 const UNVERIFIED_PAGE: &str = "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width\"><title>Suplex</title></head><body><p>The provider did not report a verified email address. Verify the address with the provider, then retry in Suplex.</p></body></html>";
 /// `{token}` is replaced only after `token_shape` accepts it. A GET never

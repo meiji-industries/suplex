@@ -22,11 +22,11 @@ function failureMessage(error: unknown): string {
 }
 
 /** Shown on open until this host links a Suplex account. */
-export function AccountLoginView({ preview = false }: { preview?: boolean }): ReactElement {
+export function AccountLoginView({ preview = false, previewState }: { preview?: boolean; previewState?: "browser" | "email" | undefined }): ReactElement {
   const [canManage, setCanManage] = useState<boolean>();
   const [emailForm, setEmailForm] = useState(false);
   const [email, setEmail] = useState("");
-  const [waiting, setWaiting] = useState<Waiting>();
+  const [waiting, setWaiting] = useState<Waiting | undefined>(() => preview && previewState ? { attemptId: "preview", ...(previewState === "email" ? { email: "you@example.com" } : { url: "https://suplex.sh/auth/done" }) } : undefined);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
@@ -39,7 +39,7 @@ export function AccountLoginView({ preview = false }: { preview?: boolean }): Re
   }, [preview]);
 
   useEffect(() => {
-    if (!waiting) return;
+    if (preview || !waiting) return;
     const started = Date.now();
     let failures = 0;
     let timer: number | undefined;
@@ -60,7 +60,7 @@ export function AccountLoginView({ preview = false }: { preview?: boolean }): Re
     };
     timer = window.setTimeout(() => void poll(), POLL_MS);
     return () => { stopped = true; window.clearTimeout(timer); };
-  }, [waiting]);
+  }, [preview, waiting]);
 
   const start = async (provider: AccountProvider, address?: string): Promise<void> => {
     if (preview) { setError("Open the login page to continue. This page is a preview."); return; }
@@ -92,11 +92,13 @@ export function AccountLoginView({ preview = false }: { preview?: boolean }): Re
       <div className="order-1 flex flex-col items-center gap-10 px-6 py-8 md:px-12">
         <img src={suplexWordmark} alt="Suplex" className="h-auto w-full max-w-sm" />
         <div className="flex w-full max-w-xs flex-col gap-4">
-          {waiting ? <h1 className="text-[13px] font-semibold">{waiting.email ? "Check your email." : "Continue in the browser."}</h1> : null}
           {canManage === false ? <p className="text-xs text-muted-foreground">Ask an administrator to log in to Suplex.</p> : waiting ? (
-            <div className="flex flex-col gap-3">
-              {waiting.email ? <p className="text-xs text-muted-foreground">Suplex sent a sign-in link to {waiting.email}. Open it to continue.</p> : <p className="text-xs text-muted-foreground">Suplex waits for the browser to finish the login.</p>}
-              <div className="flex items-center gap-2 text-xs text-muted-foreground"><Spinner />{waiting.url ? <a href={waiting.url} target="_blank" rel="noreferrer" className="underline underline-offset-4">Open the browser</a> : null}</div>
+            <div className="flex flex-col gap-5 text-center">
+              <div className="flex flex-col gap-2">
+                <h1 className="text-2xl font-normal tracking-tight">{waiting.email ? "Check your email" : "Continue in the browser"}</h1>
+                {waiting.email ? <p className="text-sm leading-relaxed text-muted-foreground">Suplex sent a login link to <span className="break-words text-foreground">{waiting.email}</span>. Open it to continue.</p> : <p className="text-sm leading-relaxed text-muted-foreground">Suplex will continue after you log in.</p>}
+              </div>
+              <div className="flex min-h-9 items-center justify-center gap-2 text-muted-foreground"><Spinner />{waiting.url ? <Button variant="link" render={<a href={waiting.url} target="_blank" rel="noreferrer" />}>Open the browser</Button> : null}</div>
               <Button variant="outline" onClick={cancel}>Cancel</Button>
             </div>
           ) : emailForm ? (

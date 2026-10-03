@@ -3,6 +3,7 @@ import { useContext, useEffect, useState, type ReactNode } from "react";
 import { useCompanyContext } from "./company-context.js";
 import { ApiError } from "../lib/api.js";
 import { clearProjectDrafts } from "../features/projects/lib/project-draft.js";
+import { logoutAccount } from "../features/account/lib/account-api.js";
 import { stopBrowserAnalytics } from "./browser-analytics.js";
 
 function UserServerState({ children }: { children: ReactNode }) {
@@ -22,17 +23,18 @@ export function ServerStateProvider({ children }: { children: ReactNode }) {
   return <UserServerState key={user?.id ?? "signed-out"}>{children}</UserServerState>;
 }
 
-export function useSignOut() {
+export function useSignOut(mode: "session" | "account" = "session") {
   const client = useContext(QueryClientContext);
   return async () => {
+    if (mode === "account") await logoutAccount();
     stopBrowserAnalytics();
-    try { await fetch("/api/auth/sign-out", { method: "POST" }); }
+    try { if (mode === "session") await fetch("/api/auth/sign-out", { method: "POST" }); }
     finally {
       try { client?.clear(); }
       finally {
         window.localStorage.removeItem("suplex.activeCompanyId");
         clearProjectDrafts();
-        window.location.assign("/auth");
+        window.location.assign(mode === "account" ? "/" : "/auth");
       }
     }
   };

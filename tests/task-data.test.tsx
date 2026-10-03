@@ -262,3 +262,31 @@ test("costs disappear after an error and return on recovery", async () => {
   await act(async () => vi.advanceTimersByTimeAsync(30_000));
   expect(container.textContent).toBe("a:1");
 });
+
+
+test("desktop account logout unlinks the account before clearing state and returning to login", async () => {
+  vi.stubGlobal("localStorage", { removeItem: vi.fn() });
+  const fetch = vi.fn(async () => new Response(null, { status: 204 }));
+  vi.stubGlobal("fetch", fetch);
+  const navigate = vi.spyOn(window.location, "assign").mockImplementation(() => undefined);
+  client.setQueryData(taskListKey("user-a", "company-a"), [task("private")]);
+  function Logout() { const logout = useSignOut("account"); return <button onClick={() => void logout()}>Log out</button>; }
+  await act(async () => root.render(<QueryClientProvider client={client}><Logout /></QueryClientProvider>));
+  await act(async () => container.querySelector("button")?.click());
+  expect(fetch).toHaveBeenCalledWith("/api/account/logout", expect.objectContaining({ method: "POST" }));
+  expect(fetch).toHaveBeenCalledTimes(1);
+  expect(client.getQueryCache().getAll()).toEqual([]);
+  expect(navigate).toHaveBeenCalledWith("/");
+});
+
+test("failed account logout preserves the current view and reports failure", async () => {
+  vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ error: "Forbidden" }), { status: 403 })));
+  const navigate = vi.spyOn(window.location, "assign").mockImplementation(() => undefined);
+  client.setQueryData(taskListKey("user-a", "company-a"), [task("private")]);
+  let logout: (() => Promise<void>) | undefined;
+  function Logout() { logout = useSignOut("account"); return null; }
+  await act(async () => root.render(<QueryClientProvider client={client}><Logout /></QueryClientProvider>));
+  await expect(logout?.()).rejects.toThrow();
+  expect(navigate).not.toHaveBeenCalled();
+  expect(client.getQueryCache().getAll()).not.toEqual([]);
+});

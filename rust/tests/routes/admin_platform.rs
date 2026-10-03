@@ -184,7 +184,30 @@ mod tests {
         // A build without a PostHog key never asks for the notice.
         let (status, _, body) = fixture.call("GET", "/api/telemetry", None, vec![]).await;
         assert_eq!(status, StatusCode::OK);
-        assert_eq!(json_body(&body), json!({"noticeRequired": false}));
+        assert_eq!(
+            json_body(&body),
+            json!({"noticeRequired": false, "enabled": false, "sessionReplayEnabled": false})
+        );
+        assert_eq!(
+            fixture
+                .call(
+                    "POST",
+                    "/api/admin/telemetry/replay",
+                    Some("application/json"),
+                    br#"{"enabled":true}"#.to_vec()
+                )
+                .await
+                .0,
+            StatusCode::NO_CONTENT
+        );
+        let (_, _, body) = fixture.call("GET", "/api/telemetry", None, vec![]).await;
+        assert_eq!(
+            json_body(&body),
+            json!({"noticeRequired": false, "enabled": false, "sessionReplayEnabled": true})
+        );
+        let pre_notice: (Option<String>, bool) = state.with_database(|database| database.connection().query_row("SELECT notice_at, session_replay_enabled FROM suplex_telemetry WHERE id = 'host'", [], |row| Ok((row.get(0)?, row.get(1)?)))).unwrap();
+        assert!(pre_notice.0.is_none());
+        assert!(pre_notice.1);
         let notice = |body: &str| {
             fixture.call(
                 "POST",
@@ -193,14 +216,56 @@ mod tests {
                 body.as_bytes().to_vec(),
             )
         };
-        for invalid in [r#"{"email":"not an email"}"#, r#"{"email":"a@b"}"#, r#"{"email":5}"#] {
-            assert_eq!(notice(invalid).await.0, StatusCode::BAD_REQUEST, "{invalid}");
+        for invalid in [
+            r#"{"email":"not an email"}"#,
+            r#"{"email":"a@b"}"#,
+            r#"{"email":5}"#,
+            r#"{"email":null,"sessionReplayEnabled":"yes"}"#,
+        ] {
+            assert_eq!(
+                notice(invalid).await.0,
+                StatusCode::BAD_REQUEST,
+                "{invalid}"
+            );
         }
-        assert_eq!(notice(r#"{"email":"Adam@Example.com"}"#).await.0, StatusCode::NO_CONTENT);
+        assert_eq!(
+            notice(r#"{"email":"Adam@Example.com","sessionReplayEnabled":true}"#)
+                .await
+                .0,
+            StatusCode::NO_CONTENT
+        );
+        assert_eq!(
+            fixture
+                .call(
+                    "POST",
+                    "/api/admin/telemetry/replay",
+                    Some("application/json"),
+                    br#"{"enabled":"yes"}"#.to_vec()
+                )
+                .await
+                .0,
+            StatusCode::BAD_REQUEST
+        );
+        assert_eq!(
+            fixture
+                .call(
+                    "POST",
+                    "/api/admin/telemetry/replay",
+                    Some("application/json"),
+                    br#"{"enabled":false}"#.to_vec()
+                )
+                .await
+                .0,
+            StatusCode::NO_CONTENT
+        );
         assert_eq!(notice(r#"{"email":null}"#).await.0, StatusCode::NO_CONTENT);
-        let stored: (Option<String>, Option<String>) = state.with_database(|database| database.connection().query_row("SELECT email, notice_at FROM suplex_telemetry WHERE id = 'host'", [], |row| Ok((row.get(0)?, row.get(1)?)))).unwrap();
+        let stored: (Option<String>, Option<String>, bool) = state.with_database(|database| database.connection().query_row("SELECT email, notice_at, session_replay_enabled FROM suplex_telemetry WHERE id = 'host'", [], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))).unwrap();
         assert_eq!(stored.0.as_deref(), Some("adam@example.com"));
         assert!(stored.1.is_some());
+        assert!(
+            !stored.2,
+            "the later explicit false acknowledgement disables replay"
+        );
         state.with_database(|database| {
             database
                 .connection()
@@ -217,7 +282,10 @@ mod tests {
         // Members read the experiments that shape their navigation.
         let (status, _, body) = fixture.call("GET", "/api/experiments", None, vec![]).await;
         assert_eq!(status, StatusCode::OK);
-        assert_eq!(json_body(&body), json!({"todayPage":true,"hostTerminal":true}));
+        assert_eq!(
+            json_body(&body),
+            json!({"todayPage":true,"hostTerminal":true})
+        );
         assert_eq!(notice(r#"{"email":null}"#).await.0, StatusCode::FORBIDDEN);
     }
 

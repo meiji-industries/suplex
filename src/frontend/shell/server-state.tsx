@@ -3,6 +3,7 @@ import { useContext, useEffect, useState, type ReactNode } from "react";
 import { useCompanyContext } from "./company-context.js";
 import { ApiError } from "../lib/api.js";
 import { clearProjectDrafts } from "../features/projects/lib/project-draft.js";
+import { stopBrowserAnalytics } from "./browser-analytics.js";
 
 function UserServerState({ children }: { children: ReactNode }) {
   const [client] = useState(() => new QueryClient({
@@ -24,6 +25,7 @@ export function ServerStateProvider({ children }: { children: ReactNode }) {
 export function useSignOut() {
   const client = useContext(QueryClientContext);
   return async () => {
+    stopBrowserAnalytics();
     try { await fetch("/api/auth/sign-out", { method: "POST" }); }
     finally {
       try { client?.clear(); }

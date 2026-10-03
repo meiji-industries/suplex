@@ -1,6 +1,7 @@
 import { useEffect, useState, type FormEvent, type ReactElement } from "react";
 
 import { Button } from "../components/ui/button.js";
+import { Checkbox } from "../components/ui/checkbox.js";
 import { Input } from "../components/ui/input.js";
 import { withCompany } from "../lib/api.js";
 import { useOptionalCompanyContext } from "./company-context.js";
@@ -14,6 +15,7 @@ export function TelemetryNotice(): ReactElement | null {
   const companyId = useOptionalCompanyContext()?.currentCompany?.id;
   const [required, setRequired] = useState(false);
   const [email, setEmail] = useState("");
+  const [sessionReplay, setSessionReplay] = useState(false);
   const [message, setMessage] = useState("");
   const [sending, setSending] = useState(false);
 
@@ -31,7 +33,7 @@ export function TelemetryNotice(): ReactElement | null {
     setSending(true);
     setMessage("");
     try {
-      await acknowledgeTelemetry(email.trim() || null);
+      await acknowledgeTelemetry(email.trim() || null, sessionReplay);
       noticeRequired = Promise.resolve(false);
       setRequired(false);
     } catch (error) {
@@ -43,11 +45,13 @@ export function TelemetryNotice(): ReactElement | null {
 
   return (
     <form data-telemetry-notice aria-label="Usage data" onSubmit={(event) => void submit(event)} className="flex min-h-9 flex-wrap items-center gap-2 border-b px-4 py-1 lg:px-6">
-      <span className="w-full text-xs sm:w-auto sm:min-w-0 sm:flex-1">Suplex sends event names and counts to PostHog. Suplex does not send code, prompts, repository names, or file paths.</span>
+      <span className="w-full text-xs sm:w-auto sm:min-w-0 sm:flex-1">Suplex sends usage events, app details, and sanitized errors to PostHog. Suplex does not send code, prompts, repository names, or file paths.</span>
       <div className="min-w-0 flex-1 sm:w-56 sm:flex-none"><Input size="sm" type="email" aria-label="Email address (optional)" placeholder="Email address (optional)" value={email} onChange={(event) => { setEmail(event.target.value); setMessage(""); }} /></div>
+      <label className="flex items-center gap-2 text-xs"><Checkbox checked={sessionReplay} onCheckedChange={(checked) => setSessionReplay(checked === true)} />Record masked session replays</label>
       <Button type="submit" size="xs" disabled={sending}>Accept</Button>
       <Button render={<a href={withCompany("/admin/environment", companyId)} />} variant="link" size="xs">Open settings</Button>
       {message ? <span role="alert" className="w-full text-xs text-destructive">{message}</span> : null}
+      {sessionReplay ? <span className="w-full text-xs text-muted-foreground">Replays mask all text and inputs. They exclude terminal, code, prompt, and image content.</span> : null}
     </form>
   );
 }

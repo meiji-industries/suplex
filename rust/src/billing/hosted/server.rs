@@ -57,6 +57,7 @@ pub struct ServiceConfig {
     pub revenuecat_stripe_public_api_key: String,
     pub revenuecat_webhook_authorization: String,
     pub revenuecat_app_id: String,
+    pub telemetry: Option<super::telemetry::Config>,
 }
 
 impl ServiceConfig {
@@ -70,6 +71,7 @@ impl ServiceConfig {
             automatic_tax: self.automatic_tax,
             revenuecat_app_id: self.revenuecat_app_id.clone(),
             revenuecat_webhook_authorization: self.revenuecat_webhook_authorization.clone(),
+            telemetry: self.telemetry.clone(),
         }
     }
 }
@@ -122,6 +124,25 @@ pub fn load_config(env: &dyn Fn(&str) -> Option<String>) -> Result<ServiceConfig
         Some("false") => false,
         Some(_) => return Err("STRIPE_AUTOMATIC_TAX must be true or false".into()),
     };
+    let telemetry = match env("BILLING_TELEMETRY").as_deref() {
+        Some("1" | "true") => {
+            let key = require("BILLING_POSTHOG_KEY")?;
+            let host = env("BILLING_POSTHOG_HOST")
+                .filter(|host| !host.is_empty())
+                .unwrap_or_else(|| "https://us.i.posthog.com".into());
+            let url = Url::parse(&host).map_err(|_| "BILLING_POSTHOG_HOST must be a valid URL")?;
+            if url.scheme() != "https"
+                && !matches!(url.host_str(), Some("localhost" | "127.0.0.1" | "[::1]"))
+            {
+                return Err(
+                    "BILLING_POSTHOG_HOST must use HTTPS except on explicit loopback hosts".into(),
+                );
+            }
+            Some(super::telemetry::Config { key, host })
+        }
+        None | Some("" | "0" | "false" | "off") => None,
+        Some(_) => return Err("BILLING_TELEMETRY must be 1, true, 0, false, or off".into()),
+    };
     Ok(ServiceConfig {
         origin: parse_origin(&require("BILLING_PUBLIC_ORIGIN")?)?,
         address: env("BILLING_BIND_ADDRESS")
@@ -139,6 +160,7 @@ pub fn load_config(env: &dyn Fn(&str) -> Option<String>) -> Result<ServiceConfig
         revenuecat_stripe_public_api_key: require("REVENUECAT_STRIPE_PUBLIC_API_KEY")?,
         revenuecat_webhook_authorization: require("REVENUECAT_WEBHOOK_AUTHORIZATION")?,
         revenuecat_app_id: require("REVENUECAT_APP_ID")?,
+        telemetry,
     })
 }
 

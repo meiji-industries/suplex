@@ -10,9 +10,15 @@ mod tests {
 
     fn environment(overrides: &[(&str, &str)]) -> HashMap<String, String> {
         let mut variables = [
-            ("BILLING_DATABASE_PATH", "/var/lib/suplex-billing/billing.sqlite"),
+            (
+                "BILLING_DATABASE_PATH",
+                "/var/lib/suplex-billing/billing.sqlite",
+            ),
             ("BILLING_ENVIRONMENT", "sandbox"),
-            ("BILLING_PUBLIC_ORIGIN", "https://billing.example.com/ignored/path"),
+            (
+                "BILLING_PUBLIC_ORIGIN",
+                "https://billing.example.com/ignored/path",
+            ),
             ("STRIPE_SECRET_KEY", "sk_test_1"),
             ("STRIPE_PRO_MONTHLY_PRICE_ID", "price_1"),
             ("STRIPE_PORTAL_CONFIGURATION_ID", "bpc_1"),
@@ -63,10 +69,15 @@ mod tests {
     async fn bodies_over_one_mebibyte_are_refused_with_413() {
         let f = Fixture::new().await;
         let oversized = json!({"padding": "x".repeat(1 << 20)});
-        let response = f.send(Method::POST, "/v1/accounts", &[], Some(&oversized)).await;
+        let response = f
+            .send(Method::POST, "/v1/accounts", &[], Some(&oversized))
+            .await;
         assert_eq!(response.status(), 413);
         assert_eq!(response.headers()["cache-control"], "no-store");
-        assert_eq!(response.json::<Value>().await.unwrap(), json!({"error": "Invalid request"}));
+        assert_eq!(
+            response.json::<Value>().await.unwrap(),
+            json!({"error": "Invalid request"})
+        );
         // Malformed JSON is a plain 400.
         let response = f.post_raw("/v1/accounts", "application/json", "{").await;
         assert_eq!(response, (400, json!({"error": "Invalid request"})));
@@ -74,7 +85,12 @@ mod tests {
         assert_eq!(response, (415, json!({"error": "Invalid request"})));
         // The RevenueCat secret is checked before the body is read.
         let response = f
-            .send(Method::POST, "/webhooks/revenuecat", &[("authorization", "wrong")], Some(&oversized))
+            .send(
+                Method::POST,
+                "/webhooks/revenuecat",
+                &[("authorization", "wrong")],
+                Some(&oversized),
+            )
             .await;
         assert_eq!(response.status(), 401);
     }
@@ -87,7 +103,20 @@ mod tests {
         assert_eq!(config.environment, BillingEnvironment::Sandbox);
         assert_eq!(config.hosted().revenuecat_webhook_authorization, "rc-auth");
         assert!(config.automatic_tax);
-        assert!(!load(&[("STRIPE_AUTOMATIC_TAX", "false")]).unwrap().automatic_tax);
+        assert!(config.telemetry.is_none());
+        let telemetry = load(&[
+            ("BILLING_TELEMETRY", "true"),
+            ("BILLING_POSTHOG_KEY", "phc_test"),
+            ("BILLING_POSTHOG_HOST", "http://127.0.0.1:9999"),
+        ])
+        .unwrap();
+        assert_eq!(telemetry.telemetry.unwrap().host, "http://127.0.0.1:9999");
+        assert!(load(&[("BILLING_TELEMETRY", "true")]).is_err());
+        assert!(
+            !load(&[("STRIPE_AUTOMATIC_TAX", "false")])
+                .unwrap()
+                .automatic_tax
+        );
         let custom = load(&[
             ("BILLING_PUBLIC_ORIGIN", "http://localhost:4211"),
             ("BILLING_BIND_ADDRESS", "0.0.0.0"),
@@ -101,7 +130,10 @@ mod tests {
         assert_eq!(custom.environment, BillingEnvironment::Production);
 
         for (overrides, message) in [
-            (vec![("STRIPE_SECRET_KEY", "")], "STRIPE_SECRET_KEY is required"),
+            (
+                vec![("STRIPE_SECRET_KEY", "")],
+                "STRIPE_SECRET_KEY is required",
+            ),
             (
                 vec![("BILLING_DATABASE_PATH", "billing.sqlite")],
                 "BILLING_DATABASE_PATH must be an absolute path separate from any Suplex installation database",
@@ -115,13 +147,28 @@ mod tests {
                 "BILLING_PUBLIC_ORIGIN must use HTTPS except on explicit loopback hosts",
             ),
             (
-                vec![("BILLING_PUBLIC_ORIGIN", "https://user:pass@billing.example.com")],
+                vec![(
+                    "BILLING_PUBLIC_ORIGIN",
+                    "https://user:pass@billing.example.com",
+                )],
                 "BILLING_PUBLIC_ORIGIN must not contain credentials",
             ),
-            (vec![("BILLING_PUBLIC_ORIGIN", "not a url")], "BILLING_PUBLIC_ORIGIN must be a valid URL"),
-            (vec![("STRIPE_AUTOMATIC_TAX", "no")], "STRIPE_AUTOMATIC_TAX must be true or false"),
-            (vec![("BILLING_PORT", "0")], "BILLING_PORT must be an integer between 1 and 65535"),
-            (vec![("BILLING_PORT", "65536")], "BILLING_PORT must be an integer between 1 and 65535"),
+            (
+                vec![("BILLING_PUBLIC_ORIGIN", "not a url")],
+                "BILLING_PUBLIC_ORIGIN must be a valid URL",
+            ),
+            (
+                vec![("STRIPE_AUTOMATIC_TAX", "no")],
+                "STRIPE_AUTOMATIC_TAX must be true or false",
+            ),
+            (
+                vec![("BILLING_PORT", "0")],
+                "BILLING_PORT must be an integer between 1 and 65535",
+            ),
+            (
+                vec![("BILLING_PORT", "65536")],
+                "BILLING_PORT must be an integer between 1 and 65535",
+            ),
         ] {
             assert_eq!(load(&overrides).unwrap_err(), message);
         }
@@ -165,11 +212,16 @@ mod tests {
         let no_key = |name: &str| (name == "NEW_BILLING_CREDENTIAL").then(|| fresh.clone());
         assert_eq!(
             rotate_credential(&args(&p.account.id), &no_key, &f.stripe.url).await,
-            Err("STRIPE_SECRET_KEY is required to verify the account's Stripe customer record".into())
+            Err(
+                "STRIPE_SECRET_KEY is required to verify the account's Stripe customer record"
+                    .into()
+            )
         );
 
         // A customer that points at another account refuses rotation.
-        let foreign = f.stripe.with(|stripe| stripe.create_customer("account_other"));
+        let foreign = f
+            .stripe
+            .with(|stripe| stripe.create_customer("account_other"));
         f.sql(|db| {
             db.execute(
                 "UPDATE billing_accounts SET stripe_customer_id = ?1 WHERE id = ?2",
@@ -178,9 +230,15 @@ mod tests {
         });
         assert_eq!(
             rotate_credential(&args(&p.account.id), &env, &f.stripe.url).await,
-            Err("The stored Stripe customer does not belong to this account; refusing rotation".into())
+            Err(
+                "The stored Stripe customer does not belong to this account; refusing rotation"
+                    .into()
+            )
         );
-        assert_eq!(f.get("/v1/billing", Some(&p.account.credential)).await.0, 200);
+        assert_eq!(
+            f.get("/v1/billing", Some(&p.account.credential)).await.0,
+            200
+        );
 
         f.sql(|db| {
             db.execute(
@@ -198,14 +256,22 @@ mod tests {
                 p.account.id
             )
         );
-        assert_eq!(f.get("/v1/billing", Some(&p.account.credential)).await.0, 401);
+        assert_eq!(
+            f.get("/v1/billing", Some(&p.account.credential)).await.0,
+            401
+        );
         assert_eq!(f.state(&fresh).await["purchasedSeats"], 2);
 
         // An account that never reached Stripe rotates without a Stripe key.
         let bare = f.register().await;
         let other = random_credential();
-        let only_credential = |name: &str| (name == "NEW_BILLING_CREDENTIAL").then(|| other.clone());
-        assert!(rotate_credential(&args(&bare.id), &only_credential, &f.stripe.url).await.is_ok());
+        let only_credential =
+            |name: &str| (name == "NEW_BILLING_CREDENTIAL").then(|| other.clone());
+        assert!(
+            rotate_credential(&args(&bare.id), &only_credential, &f.stripe.url)
+                .await
+                .is_ok()
+        );
         assert_eq!(f.get("/v1/billing", Some(&other)).await.0, 200);
     }
 }

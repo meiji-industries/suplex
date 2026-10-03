@@ -114,7 +114,10 @@ pub struct Event {
     pub event_type: String,
     /// Environment proof from the signed envelope.
     pub livemode: bool,
+    /// Provider event time in epoch seconds, when supplied.
+    pub created: Option<i64>,
     pub object: Map<String, Value>,
+    pub previous_attributes: Option<Map<String, Value>>,
 }
 
 pub struct CheckoutParams<'a> {
@@ -350,7 +353,12 @@ pub fn verify_webhook(
         id: text(&event, "id")?,
         event_type: text(&event, "type")?,
         livemode: flag(&event, "livemode"),
+        created: event.get("created").and_then(Value::as_i64),
         object: event.pointer("/data/object")?.as_object()?.clone(),
+        previous_attributes: event
+            .pointer("/data/previous_attributes")
+            .and_then(Value::as_object)
+            .cloned(),
     })
 }
 

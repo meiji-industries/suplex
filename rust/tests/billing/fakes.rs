@@ -15,7 +15,6 @@ use std::{
 use axum::{
     Json, Router,
     body::Bytes,
-
     http::{HeaderMap, Method, StatusCode, Uri},
 };
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
@@ -23,7 +22,10 @@ use indexmap::IndexMap;
 use serde_json::{Value, json};
 
 use super::{
-    Hosted, HostedConfig, revenuecat::RevenueCatClient, server::router, store,
+    Hosted, HostedConfig,
+    revenuecat::RevenueCatClient,
+    server::router,
+    store,
     stripe::{StripeClient, webhook_signature},
 };
 use crate::billing::wire::BillingEnvironment;
@@ -476,7 +478,10 @@ impl StripeState {
     /// Marks an open session paid, as a real payment would.
     pub fn complete_checkout_session(&mut self, session_id: &str) -> String {
         let session = self.sessions[session_id].clone();
-        assert_eq!(session.status, "open", "no open checkout session {session_id}");
+        assert_eq!(
+            session.status, "open",
+            "no open checkout session {session_id}"
+        );
         let quantity = session.metadata["suplex_quantity"].parse().unwrap();
         let subscription_id = self.add_subscription(&session.customer_id, quantity);
         let session = self.sessions.get_mut(session_id).unwrap();
@@ -494,7 +499,12 @@ impl StripeState {
         if session.status != "open" {
             return;
         }
-        if session.metadata.get("suplex_complete_on_expire").map(String::as_str) == Some("true") {
+        if session
+            .metadata
+            .get("suplex_complete_on_expire")
+            .map(String::as_str)
+            == Some("true")
+        {
             self.complete_checkout_session(session_id);
         } else {
             session.status = "expired".into();
@@ -595,10 +605,21 @@ impl StripeState {
 
     fn create_checkout_session(&mut self, form: &Pairs, key: String) -> (u16, Value) {
         self.create_session_keys.push(key.clone());
-        let compared = ["customer", "line_items[0][price]", "line_items[0][quantity]", "success_url", "cancel_url"]
-            .iter()
-            .map(|name| ((*name).to_owned(), field(form, name).unwrap_or_default().to_owned()))
-            .collect::<Pairs>();
+        let compared = [
+            "customer",
+            "line_items[0][price]",
+            "line_items[0][quantity]",
+            "success_url",
+            "cancel_url",
+        ]
+        .iter()
+        .map(|name| {
+            (
+                (*name).to_owned(),
+                field(form, name).unwrap_or_default().to_owned(),
+            )
+        })
+        .collect::<Pairs>();
         if let Some((params, response)) = self.session_replays.get(&key) {
             if *params != compared {
                 return (400, stripe_error("idempotency_key_in_use"));
@@ -622,22 +643,36 @@ impl StripeState {
             subscription_id: None,
             metadata,
             line_items: vec![(
-                field(form, "line_items[0][price]").unwrap_or_default().into(),
-                field(form, "line_items[0][quantity]").unwrap_or("0").parse().unwrap(),
+                field(form, "line_items[0][price]")
+                    .unwrap_or_default()
+                    .into(),
+                field(form, "line_items[0][quantity]")
+                    .unwrap_or("0")
+                    .parse()
+                    .unwrap(),
             )],
         };
         let response = Self::session_json(&session);
         self.sessions.insert(id, session);
-        self.session_replays.insert(key, (compared, response.clone()));
+        self.session_replays
+            .insert(key, (compared, response.clone()));
         (200, response)
     }
 
-    fn update_subscription(&mut self, subscription_id: &str, form: &Pairs, key: String) -> (u16, Value) {
+    fn update_subscription(
+        &mut self,
+        subscription_id: &str,
+        form: &Pairs,
+        key: String,
+    ) -> (u16, Value) {
         let call = UpdateCall {
             key: key.clone(),
             subscription_id: subscription_id.into(),
             item_id: field(form, "items[0][id]").unwrap_or_default().into(),
-            quantity: field(form, "items[0][quantity]").unwrap_or("0").parse().unwrap(),
+            quantity: field(form, "items[0][quantity]")
+                .unwrap_or("0")
+                .parse()
+                .unwrap(),
             proration_behavior: field(form, "proration_behavior").unwrap_or_default().into(),
             proration_date: field(form, "proration_date").map(|date| date.parse().unwrap()),
             payment_behavior: field(form, "payment_behavior").map(str::to_owned),
@@ -653,7 +688,12 @@ impl StripeState {
         let Some(subscription) = self.subscriptions.get(subscription_id) else {
             return missing();
         };
-        let Some(item) = subscription.items.iter().find(|item| item.id == call.item_id).cloned() else {
+        let Some(item) = subscription
+            .items
+            .iter()
+            .find(|item| item.id == call.item_id)
+            .cloned()
+        else {
             return missing();
         };
         if self.fail_next_update {
@@ -699,7 +739,10 @@ impl StripeState {
 
     fn handle(&mut self, call: &Recorded) -> (u16, Value) {
         let (query, form) = (&call.query, &call.form);
-        let key = call.header("idempotency-key").unwrap_or_default().to_owned();
+        let key = call
+            .header("idempotency-key")
+            .unwrap_or_default()
+            .to_owned();
         let get = call.method == Method::GET;
         if get && self.fail_reads {
             return (503, json!({"error": {"type": "api_error"}}));
@@ -708,7 +751,9 @@ impl StripeState {
             ["v1", "prices", _] if get => (200, self.price.clone()),
             ["v1", "customers"] => {
                 self.create_customer_keys.push(key);
-                let account_id = field(form, "metadata[account_id]").unwrap_or_default().to_owned();
+                let account_id = field(form, "metadata[account_id]")
+                    .unwrap_or_default()
+                    .to_owned();
                 let id = self.create_customer(&account_id);
                 (200, Self::customer_json(&self.customers[&id]))
             }
@@ -723,7 +768,10 @@ impl StripeState {
                     .filter(|customer| customer.account_id == account_id)
                     .map(Self::customer_json)
                     .collect();
-                (200, json!({"object": "search_result", "data": found, "has_more": false, "next_page": null}))
+                (
+                    200,
+                    json!({"object": "search_result", "data": found, "has_more": false, "next_page": null}),
+                )
             }
             ["v1", "customers", id] => self
                 .customers
@@ -742,23 +790,29 @@ impl StripeState {
             ["v1", "subscriptions", id] => self.update_subscription(id, form, key),
             ["v1", "invoices"] => {
                 let customer = field(query, "customer").unwrap_or_default();
-                let found = self
-                    .invoices
-                    .values()
-                    .filter(|invoice| {
-                        invoice.subscription_id.as_ref().is_some_and(|subscription| {
-                            self.subscriptions
-                                .get(subscription)
-                                .is_some_and(|subscription| subscription.customer_id == customer)
+                let found =
+                    self.invoices
+                        .values()
+                        .filter(|invoice| {
+                            invoice
+                                .subscription_id
+                                .as_ref()
+                                .is_some_and(|subscription| {
+                                    self.subscriptions.get(subscription).is_some_and(
+                                        |subscription| subscription.customer_id == customer,
+                                    )
+                                })
                         })
-                    })
-                    .map(Self::invoice_json)
-                    .collect();
+                        .map(Self::invoice_json)
+                        .collect();
                 (200, page(found))
             }
             ["v1", "invoices", "create_preview"] => {
                 self.preview_calls.push(form.clone());
-                (200, json!({"amount_due": self.preview_amount_due, "currency": self.preview_currency}))
+                (
+                    200,
+                    json!({"amount_due": self.preview_amount_due, "currency": self.preview_currency}),
+                )
             }
             ["v1", "invoices", id] => self
                 .invoices
@@ -792,7 +846,10 @@ impl StripeState {
                     field(form, "configuration").unwrap_or_default(),
                     field(form, "return_url").unwrap_or_default(),
                 ));
-                let url = format!("https://billing.stripe.com/p/session_{}", self.portal_requests.len());
+                let url = format!(
+                    "https://billing.stripe.com/p/session_{}",
+                    self.portal_requests.len()
+                );
                 (200, json!({"id": "bps_1", "url": url}))
             }
             _ => missing(),
@@ -819,13 +876,17 @@ pub struct RevenueCatState {
 }
 
 pub async fn fake_revenuecat() -> Fake<RevenueCatState> {
-    start(RevenueCatState::default(), |state: &mut RevenueCatState, call| {
-        match (call.method.as_str(), call.segments().as_slice()) {
+    start(
+        RevenueCatState::default(),
+        |state: &mut RevenueCatState, call| match (call.method.as_str(), call.segments().as_slice())
+        {
             ("POST", ["v1", "receipts"]) if state.fail_import => (503, json!({})),
             ("POST", ["v1", "receipts"]) => {
                 let body = call.json();
                 let text = |key: &str| body[key].as_str().unwrap_or_default().to_owned();
-                state.imports.push((text("app_user_id"), text("fetch_token")));
+                state
+                    .imports
+                    .push((text("app_user_id"), text("fetch_token")));
                 (200, json!({"subscriber": {}}))
             }
             ("GET", ["v1", "subscribers", _]) if state.fail_get => (503, json!({})),
@@ -836,8 +897,8 @@ pub async fn fake_revenuecat() -> Fake<RevenueCatState> {
                     (200, json!({"subscriber": subscriber}))
                 }),
             _ => (404, json!({})),
-        }
-    })
+        },
+    )
     .await
 }
 
@@ -896,6 +957,7 @@ pub fn hosted_config(environment: BillingEnvironment) -> HostedConfig {
         automatic_tax: true,
         revenuecat_app_id: RC_APP_ID.into(),
         revenuecat_webhook_authorization: RC_AUTHORIZATION.into(),
+        telemetry: None,
     }
 }
 
@@ -906,7 +968,8 @@ impl Fixture {
 
     pub async fn with_environment(environment: BillingEnvironment) -> Self {
         let clock = Arc::new(AtomicI64::new(start_ms()));
-        let directory = std::env::temp_dir().join(format!("suplex-billing-{}", uuid::Uuid::new_v4()));
+        let directory =
+            std::env::temp_dir().join(format!("suplex-billing-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&directory).unwrap();
         let path = directory.join("billing.sqlite");
         let stripe = fake_stripe(clock.clone()).await;
@@ -943,6 +1006,29 @@ impl Fixture {
         )
     }
 
+    pub fn hosted_with_telemetry(
+        path: &std::path::Path,
+        environment: BillingEnvironment,
+        stripe: &str,
+        revenuecat: &str,
+        clock: &TestClock,
+        posthog: &str,
+    ) -> Hosted {
+        let mut config = hosted_config(environment);
+        config.telemetry = Some(super::telemetry::Config {
+            key: "phc_billing_test".into(),
+            host: posthog.into(),
+        });
+        let clock = clock.clone();
+        Hosted::new(
+            config,
+            store::open(path).unwrap(),
+            StripeClient::new(stripe, "sk_test_fake"),
+            RevenueCatClient::new(revenuecat, "rc_secret", "rc_stripe_public"),
+            Arc::new(move || clock.load(Ordering::SeqCst)),
+        )
+    }
+
     pub fn now_ms(&self) -> i64 {
         self.clock.load(Ordering::SeqCst)
     }
@@ -966,9 +1052,7 @@ impl Fixture {
         headers: &[(&str, &str)],
         body: Option<&Value>,
     ) -> reqwest::Response {
-        let mut request = self
-            .http
-            .request(method, format!("{}{path}", self.url));
+        let mut request = self.http.request(method, format!("{}{path}", self.url));
         for (name, value) in headers {
             request = request.header(*name, *value);
         }
@@ -1054,7 +1138,10 @@ impl Fixture {
         let account = self.register().await;
         let (customer, subscription) = self.stripe.with(|stripe| {
             let customer = stripe.create_customer(&account.id);
-            (customer.clone(), stripe.add_subscription(&customer, quantity))
+            (
+                customer.clone(),
+                stripe.add_subscription(&customer, quantity),
+            )
         });
         Provisioned {
             account,
@@ -1068,7 +1155,12 @@ impl Fixture {
         let payload = event.to_string();
         let timestamp = self.now_ms() / 1000;
         let header = signature.map_or_else(
-            || format!("t={timestamp},v1={}", webhook_signature(payload.as_bytes(), WEBHOOK_SECRET, timestamp)),
+            || {
+                format!(
+                    "t={timestamp},v1={}",
+                    webhook_signature(payload.as_bytes(), WEBHOOK_SECRET, timestamp)
+                )
+            },
             str::to_owned,
         );
         self.http

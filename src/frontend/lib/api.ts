@@ -1,5 +1,6 @@
 import type { AuthUserResponse, CompanyResponse } from "../contracts/common.js";
 import { clientTabId, reportApiActivity, reportAuthenticatedResume } from "../shell/client-lifecycle.js";
+import { reportApiFailure } from "./analytics-capture.js";
 
 export type ApiUser = AuthUserResponse;
 export type ApiCompany = CompanyResponse;
@@ -67,6 +68,7 @@ export async function readJson(url: string, init?: RequestInit): Promise<unknown
     const error = errorField(body, "error");
     const findings = errorField(body, "findings");
     const code = errorField(body, "code");
+    reportApiFailure({ url, status: response.status, ...(typeof code === "string" ? { code } : {}) });
     throw new ApiError(
       typeof error === "string" ? error : "Request failed",
       response.status,

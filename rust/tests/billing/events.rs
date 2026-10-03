@@ -4,8 +4,9 @@ mod tests {
 
     use crate::billing::{
         hosted::{
-            fakes::{FakePayment, Fixture, RC_APP_ID, RC_AUTHORIZATION},
+            fakes::{FakePayment, Fixture, RC_APP_ID, RC_AUTHORIZATION, spawn, stub},
             iso,
+            server::router,
         },
         wire::BillingEnvironment,
     };
@@ -117,13 +118,21 @@ mod tests {
     async fn stripe_rejects_a_bad_signature_and_accepts_a_verified_event() {
         let f = Fixture::new().await;
         let p = f.provisioned(2).await;
-        let bad = stripe_event("evt_bad", "customer.subscription.updated", json!({"id": p.subscription}));
+        let bad = stripe_event(
+            "evt_bad",
+            "customer.subscription.updated",
+            json!({"id": p.subscription}),
+        );
         assert_eq!(f.stripe_event(&bad, Some("bogus")).await, 401);
         // A signature older than five minutes on the service clock fails.
         let stale = format!(
             "t={0},v1={1}",
             f.now_ms() / 1000 - 301,
-            crate::billing::hosted::stripe::webhook_signature(bad.to_string().as_bytes(), "whsec_fake", f.now_ms() / 1000 - 301)
+            crate::billing::hosted::stripe::webhook_signature(
+                bad.to_string().as_bytes(),
+                "whsec_fake",
+                f.now_ms() / 1000 - 301
+            )
         );
         assert_eq!(f.stripe_event(&bad, Some(&stale)).await, 401);
 
@@ -133,7 +142,10 @@ mod tests {
             json!({"id": p.subscription, "customer": p.customer}),
         );
         assert_eq!(f.stripe_event(&good, None).await, 200);
-        assert_eq!(f.count("SELECT COUNT(*) FROM billing_events WHERE provider = 'stripe'"), 1);
+        assert_eq!(
+            f.count("SELECT COUNT(*) FROM billing_events WHERE provider = 'stripe'"),
+            1
+        );
         assert_eq!(event_row(&f, "evt_1"), (None, 0, None));
 
         f.process_events().await;
@@ -152,7 +164,222 @@ mod tests {
         );
         assert_eq!(f.stripe_event(&event, None).await, 200);
         assert_eq!(f.stripe_event(&event, None).await, 200);
-        assert_eq!(f.count("SELECT COUNT(*) FROM billing_events WHERE event_id = 'evt_dup'"), 1);
+        assert_eq!(
+            f.count("SELECT COUNT(*) FROM billing_events WHERE event_id = 'evt_dup'"),
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn verified_stripe_money_events_enqueue_once_and_send_privacy_bounded_properties() {
+        let f = Fixture::new().await;
+        let p = f.provisioned(2).await;
+        // The authenticated host read binds the provider customer to this
+        // registered installation before later Stripe events arrive.
+        assert_eq!(f.state(&p.account.credential).await["active"], true);
+        let posthog = stub(|_| (200, json!({}))).await;
+        let hosted = Fixture::hosted_with_telemetry(
+            &f.path,
+            BillingEnvironment::Sandbox,
+            &f.stripe.url,
+            &f.revenuecat.url,
+            &f.clock,
+            &posthog.url,
+        );
+        let mut event = stripe_event(
+            "evt_paid_telemetry",
+            "invoice.paid",
+            json!({
+                "id": "in_private",
+                "customer": p.customer,
+                "subscription": p.subscription,
+                "customer_email": "private@example.test",
+                "amount_paid": 4200,
+                "amount_due": 9000,
+                "currency": "cad"
+            }),
+        );
+        event["created"] = json!(1_796_083_200);
+        let raw = event.to_string();
+        let timestamp = f.now_ms() / 1000;
+        let signature = format!(
+            "t={timestamp},v1={}",
+            crate::billing::hosted::stripe::webhook_signature(
+                raw.as_bytes(),
+                "whsec_fake",
+                timestamp
+            )
+        );
+        hosted
+            .ingest_stripe_webhook(raw.as_bytes(), Some(&signature))
+            .unwrap();
+        hosted
+            .ingest_stripe_webhook(raw.as_bytes(), Some(&signature))
+            .unwrap();
+        assert_eq!(f.count("SELECT COUNT(*) FROM billing_telemetry_events"), 1);
+        let properties: String = f.sql(|db| {
+            db.query_row(
+                "SELECT properties_json FROM billing_telemetry_events",
+                [],
+                |row| row.get(0),
+            )
+        });
+        let properties: Value = serde_json::from_str(&properties).unwrap();
+        assert_eq!(properties["amount_paid_minor"], 4200);
+        assert_eq!(properties["currency"], "cad");
+        assert_eq!(properties["$groups"]["host"], "install-test01");
+        let serialized = properties.to_string();
+        assert!(!serialized.contains("private") && !serialized.contains("in_private"));
+
+        hosted.run_processor_pass().await.unwrap();
+        let calls = posthog.calls();
+        assert_eq!(calls.len(), 1);
+        let batch = calls[0].json();
+        assert_eq!(batch["batch"][0]["event"], "billing_invoice_paid");
+        assert_eq!(batch["batch"][0]["distinct_id"], "install-test01");
+        assert_eq!(batch["batch"][0]["timestamp"], "2026-12-01T00:00:00.000Z");
+        let stored_insert_id: String = f.sql(|db| {
+            db.query_row(
+                "SELECT insert_id FROM billing_telemetry_events",
+                [],
+                |row| row.get(0),
+            )
+        });
+        assert_eq!(batch["batch"][0]["uuid"], stored_insert_id);
+        assert!(
+            f.sql(
+                |db| db.query_row("SELECT sent_at FROM billing_telemetry_events", [], |row| {
+                    row.get::<_, Option<String>>(0)
+                },)
+            )
+            .is_some()
+        );
+        f.advance(31 * 24 * 60 * 60 * 1000);
+        hosted.run_telemetry_pass().await;
+        assert_eq!(f.count("SELECT COUNT(*) FROM billing_telemetry_events"), 0);
+    }
+
+    #[tokio::test]
+    async fn telemetry_opt_out_and_delivery_failures_do_not_change_billing_processing() {
+        let f = Fixture::new().await;
+        let p = f.provisioned(2).await;
+        assert_eq!(f.state(&p.account.credential).await["active"], true);
+        let event = stripe_event(
+            "evt_opted_out",
+            "invoice.payment_failed",
+            json!({"id":"in_x","customer":p.customer,"subscription":p.subscription,"amount_due":4200,"currency":"usd"}),
+        );
+        assert_eq!(f.stripe_event(&event, None).await, 200);
+        assert_eq!(f.count("SELECT COUNT(*) FROM billing_telemetry_events"), 0);
+
+        let posthog = stub(|_| (500, json!({"error":"down"}))).await;
+        let hosted = Fixture::hosted_with_telemetry(
+            &f.path,
+            BillingEnvironment::Sandbox,
+            &f.stripe.url,
+            &f.revenuecat.url,
+            &f.clock,
+            &posthog.url,
+        );
+        let mut second = event;
+        second["id"] = json!("evt_delivery_failure");
+        let raw = second.to_string();
+        let timestamp = f.now_ms() / 1000;
+        let signature = format!(
+            "t={timestamp},v1={}",
+            crate::billing::hosted::stripe::webhook_signature(
+                raw.as_bytes(),
+                "whsec_fake",
+                timestamp
+            )
+        );
+        hosted
+            .ingest_stripe_webhook(raw.as_bytes(), Some(&signature))
+            .unwrap();
+        hosted.run_processor_pass().await.unwrap();
+        assert!(
+            event_row(&f, "evt_delivery_failure").0.is_some(),
+            "billing event still completes"
+        );
+        assert_eq!(
+            f.sql(|db| db.query_row(
+                "SELECT attempt_count FROM billing_telemetry_events",
+                [],
+                |row| row.get::<_, i64>(0)
+            )),
+            1
+        );
+        let first = posthog.calls()[0].json();
+        f.advance(31_000);
+        hosted.run_telemetry_pass().await;
+        let second = posthog.calls()[1].json();
+        assert_eq!(first["batch"][0]["uuid"], second["batch"][0]["uuid"]);
+        assert_eq!(
+            first["batch"][0]["timestamp"],
+            second["batch"][0]["timestamp"]
+        );
+    }
+
+    #[tokio::test]
+    async fn authenticated_revenuecat_lifecycle_events_enqueue_without_aliases_or_money() {
+        let f = Fixture::new().await;
+        let p = f.provisioned(2).await;
+        let posthog = stub(|_| (200, json!({}))).await;
+        let hosted = Fixture::hosted_with_telemetry(
+            &f.path,
+            BillingEnvironment::Sandbox,
+            &f.stripe.url,
+            &f.revenuecat.url,
+            &f.clock,
+            &posthog.url,
+        );
+        let url = spawn(router(hosted.clone())).await;
+        let event = json!({"event": {
+            "id": "rc_analytics_1",
+            "type": "RENEWAL",
+            "app_id": RC_APP_ID,
+            "app_user_id": format!("suplex_company_{}", p.account.id),
+            "environment": "SANDBOX",
+            "event_timestamp_ms": 1_796_083_200_000_i64,
+            "price": 9999,
+            "currency": "USD",
+            "subscriber_email": "private@example.test"
+        }});
+        let client = reqwest::Client::new();
+        assert_eq!(
+            client
+                .post(format!("{url}/webhooks/revenuecat"))
+                .header("authorization", "wrong")
+                .json(&event)
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            401
+        );
+        assert_eq!(f.count("SELECT COUNT(*) FROM billing_telemetry_events"), 0);
+        for _ in 0..2 {
+            assert_eq!(
+                client
+                    .post(format!("{url}/webhooks/revenuecat"))
+                    .header("authorization", RC_AUTHORIZATION)
+                    .json(&event)
+                    .send()
+                    .await
+                    .unwrap()
+                    .status(),
+                200
+            );
+        }
+        assert_eq!(f.count("SELECT COUNT(*) FROM billing_telemetry_events"), 1);
+        hosted.run_processor_pass().await.unwrap();
+        let body = posthog.calls()[0].json();
+        assert_eq!(body["batch"][0]["event"], "revenuecat_subscription_renewed");
+        assert_eq!(body["batch"][0]["properties"]["source"], "revenuecat");
+        assert_eq!(body["batch"][0]["timestamp"], "2026-12-01T00:00:00.000Z");
+        let sent = body.to_string();
+        assert!(!sent.contains("private") && !sent.contains("suplex_company"));
+        assert!(body["batch"][0]["properties"]["amount_minor"].is_null());
     }
 
     #[tokio::test]
@@ -170,11 +397,18 @@ mod tests {
             "invoice.paid",
             json!({"id": invoice, "subscription": p.subscription, "customer": p.customer}),
         );
-        let refund = stripe_event("evt_refund", "charge.refunded", json!({"id": "ch_1", "customer": p.customer}));
+        let refund = stripe_event(
+            "evt_refund",
+            "charge.refunded",
+            json!({"id": "ch_1", "customer": p.customer}),
+        );
         assert_eq!(f.stripe_event(&paid, None).await, 200);
         assert_eq!(f.stripe_event(&refund, None).await, 200);
         f.process_events().await;
-        assert_eq!(f.count("SELECT COUNT(*) FROM billing_events WHERE processed_at IS NULL"), 0);
+        assert_eq!(
+            f.count("SELECT COUNT(*) FROM billing_events WHERE processed_at IS NULL"),
+            0
+        );
         assert_eq!(f.state(&p.account.credential).await["active"], false);
     }
 
@@ -183,26 +417,55 @@ mod tests {
         let f = Fixture::new().await;
         let p = f.provisioned(2).await;
         let app_user_id = format!("suplex_company_{}", p.account.id);
-        let event = |app_id: &str, environment: &str, event_type: &str| {
-            json!({"type": event_type, "app_id": app_id, "app_user_id": app_user_id, "environment": environment})
-        };
-        assert_eq!(f.revenuecat_event("wrong", &event(RC_APP_ID, "SANDBOX", "RENEWAL")).await, 401);
-        assert_eq!(f.revenuecat_event(RC_AUTHORIZATION, &event("other_app", "SANDBOX", "RENEWAL")).await, 200);
-        assert_eq!(f.revenuecat_event(RC_AUTHORIZATION, &event(RC_APP_ID, "PRODUCTION", "RENEWAL")).await, 200);
+        let event = |app_id: &str, environment: &str, event_type: &str| json!({"type": event_type, "app_id": app_id, "app_user_id": app_user_id, "environment": environment});
+        assert_eq!(
+            f.revenuecat_event("wrong", &event(RC_APP_ID, "SANDBOX", "RENEWAL"))
+                .await,
+            401
+        );
+        assert_eq!(
+            f.revenuecat_event(RC_AUTHORIZATION, &event("other_app", "SANDBOX", "RENEWAL"))
+                .await,
+            200
+        );
+        assert_eq!(
+            f.revenuecat_event(RC_AUTHORIZATION, &event(RC_APP_ID, "PRODUCTION", "RENEWAL"))
+                .await,
+            200
+        );
         // TEST is not the sandbox transaction environment.
-        assert_eq!(f.revenuecat_event(RC_AUTHORIZATION, &event(RC_APP_ID, "TEST", "RENEWAL")).await, 200);
-        assert_eq!(f.revenuecat_event(RC_AUTHORIZATION, &event(RC_APP_ID, "SANDBOX", "MADE_UP")).await, 200);
+        assert_eq!(
+            f.revenuecat_event(RC_AUTHORIZATION, &event(RC_APP_ID, "TEST", "RENEWAL"))
+                .await,
+            200
+        );
+        assert_eq!(
+            f.revenuecat_event(RC_AUTHORIZATION, &event(RC_APP_ID, "SANDBOX", "MADE_UP"))
+                .await,
+            200
+        );
         assert_eq!(f.count("SELECT COUNT(*) FROM billing_events"), 0);
 
         // An event without an id gets a stable derived id.
-        assert_eq!(f.revenuecat_event(RC_AUTHORIZATION, &event(RC_APP_ID, "SANDBOX", "RENEWAL")).await, 200);
-        assert_eq!(f.revenuecat_event(RC_AUTHORIZATION, &event(RC_APP_ID, "SANDBOX", "RENEWAL")).await, 200);
+        assert_eq!(
+            f.revenuecat_event(RC_AUTHORIZATION, &event(RC_APP_ID, "SANDBOX", "RENEWAL"))
+                .await,
+            200
+        );
+        assert_eq!(
+            f.revenuecat_event(RC_AUTHORIZATION, &event(RC_APP_ID, "SANDBOX", "RENEWAL"))
+                .await,
+            200
+        );
         let (event_id, account_id): (String, Option<String>) = f.sql(|db| {
-            db.query_row("SELECT event_id, account_id FROM billing_events", [], |row| {
-                Ok((row.get(0)?, row.get(1)?))
-            })
+            db.query_row(
+                "SELECT event_id, account_id FROM billing_events",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
         });
-        let identity = json!({"type": "RENEWAL", "appId": RC_APP_ID, "appUserId": app_user_id, "at": null});
+        let identity =
+            json!({"type": "RENEWAL", "appId": RC_APP_ID, "appUserId": app_user_id, "at": null});
         assert_eq!(
             event_id,
             format!(
@@ -213,7 +476,10 @@ mod tests {
         assert_eq!(account_id, Some(p.account.id.clone()));
         f.process_events().await;
         assert_eq!(f.state(&p.account.credential).await["active"], true);
-        assert_eq!(f.count("SELECT COUNT(*) FROM billing_events WHERE processed_at IS NULL"), 0);
+        assert_eq!(
+            f.count("SELECT COUNT(*) FROM billing_events WHERE processed_at IS NULL"),
+            0
+        );
     }
 
     #[tokio::test]
@@ -233,7 +499,9 @@ mod tests {
         assert_eq!((processed, attempts), (None, 1));
         assert_eq!(next, Some(iso(f.now_ms() + 30_000)));
         let error: Option<String> = f.sql(|db| {
-            db.query_row("SELECT last_error FROM billing_events", [], |row| row.get(0))
+            db.query_row("SELECT last_error FROM billing_events", [], |row| {
+                row.get(0)
+            })
         });
         assert_eq!(error.as_deref(), Some("billing_unavailable"));
 

@@ -46,7 +46,23 @@ CREATE TABLE IF NOT EXISTS billing_events (
   PRIMARY KEY(provider, event_id)
 );
 
+CREATE TABLE IF NOT EXISTS billing_telemetry_events (
+  source_event_id TEXT PRIMARY KEY,
+  event_name TEXT NOT NULL,
+  distinct_id TEXT NOT NULL,
+  company_id TEXT NOT NULL,
+  insert_id TEXT NOT NULL UNIQUE,
+  timestamp TEXT NOT NULL,
+  properties_json TEXT NOT NULL,
+  attempt_count INTEGER NOT NULL DEFAULT 0 CHECK (attempt_count BETWEEN 0 AND 5),
+  next_attempt_at TEXT,
+  sent_at TEXT,
+  dropped_at TEXT,
+  last_error TEXT
+);
+
 CREATE UNIQUE INDEX IF NOT EXISTS billing_accounts_credential_hash_unique ON billing_accounts (credential_hash);
 CREATE UNIQUE INDEX IF NOT EXISTS billing_operations_pending_mutation_unique ON billing_operations (account_id) WHERE kind IN ('checkout', 'seat_change') AND state IN ('prepared', 'provider_pending');
 CREATE INDEX IF NOT EXISTS billing_operations_account_state ON billing_operations (account_id, state);
 CREATE INDEX IF NOT EXISTS billing_events_pending_due ON billing_events (next_attempt_at) WHERE processed_at IS NULL;
+CREATE INDEX IF NOT EXISTS billing_telemetry_events_pending_due ON billing_telemetry_events (next_attempt_at) WHERE sent_at IS NULL AND dropped_at IS NULL;

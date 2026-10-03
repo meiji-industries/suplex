@@ -29,6 +29,7 @@ pub mod server;
 pub mod source;
 pub mod store;
 pub mod stripe;
+pub mod telemetry;
 
 #[cfg(test)]
 pub(crate) mod fakes {
@@ -50,6 +51,9 @@ pub struct HostedConfig {
     pub automatic_tax: bool,
     pub revenuecat_app_id: String,
     pub revenuecat_webhook_authorization: String,
+    /// Hosted telemetry is a separate service-level opt-in. It is never
+    /// inferred from a registered installation or billing request.
+    pub telemetry: Option<telemetry::Config>,
 }
 
 /// A failure with a public status, optional code, and extra body fields.

@@ -20,7 +20,8 @@ use crate::{
     http::{
         AppState,
         contracts::typed::system::{
-            EnvironmentPatch, ExperimentsResponse, TelemetryNoticeBody, TelemetryResponse,
+            EnvironmentPatch, ExperimentsResponse, TelemetryNoticeBody, TelemetryReplayBody,
+            TelemetryResponse, TelemetryUserRole,
         },
         session,
         validation::Valid,
@@ -47,6 +48,7 @@ pub fn router() -> Router<AppState> {
         .route("/api/experiments", get(read_experiments))
         .route("/api/telemetry", get(read_telemetry))
         .route("/api/admin/telemetry/notice", post(acknowledge_telemetry))
+        .route("/api/admin/telemetry/replay", post(update_telemetry_replay))
         .route("/api/admin/backups", get(list_backups).post(create_backup))
         .route("/api/admin/backups/restore", post(restore_backup))
         .route("/api/admin/backups/{name}", get(download_backup))
@@ -186,26 +188,54 @@ async fn read_experiments(
     }
 }
 
-/// Whether this build and environment send telemetry at all.
-fn telemetry_configured(state: &AppState) -> bool {
-    state.installation.as_ref().is_some_and(|installation| {
-        crate::telemetry::config(&installation.installation_id).is_some()
-    })
-}
-
 /// `GET /api/telemetry`: whether this user must see the telemetry notice.
 async fn read_telemetry(
     State(state): State<AppState>,
     crate::http::access::SessionUser(user): crate::http::access::SessionUser,
 ) -> Response {
-    let configured = telemetry_configured(&state);
-    let required = user.role == "admin"
-        && state
-            .with_database(|database| crate::telemetry::notice_required(database, configured))
-            .unwrap_or(false);
+    let config = state
+        .installation
+        .as_ref()
+        .and_then(|installation| crate::telemetry::config(&installation.installation_id));
+    let status = state.with_database(|database| {
+        let settings = environment_settings::read(database)?;
+        let consent = database.connection().query_row(
+            "SELECT notice_at IS NOT NULL, session_replay_enabled FROM suplex_telemetry WHERE id = 'host'",
+            [],
+            |row| Ok((row.get::<_, bool>(0)?, row.get::<_, bool>(1)?)),
+        ).unwrap_or((false, false));
+        Ok::<_, Box<dyn std::error::Error>>((settings.telemetry_enabled, consent.0, consent.1))
+    });
+    let (setting_enabled, acknowledged, replay_enabled) = status.unwrap_or((false, false, false));
+    let required = user.role == "admin" && config.is_some() && setting_enabled && !acknowledged;
+    let enabled = config.is_some() && setting_enabled && acknowledged;
+    let (project_key, host, installation_id, app_version, app_revision, user_id, user_role) =
+        if enabled {
+            let config = config.expect("enabled telemetry has configuration");
+            (
+                Some(config.key),
+                Some(config.host),
+                Some(config.installation_id),
+                Some(env!("CARGO_PKG_VERSION").to_owned()),
+                Some(env!("SUPLEX_REVISION").to_owned()),
+                Some(user.id),
+                TelemetryUserRole::parse(&user.role),
+            )
+        } else {
+            (None, None, None, None, None, None, None)
+        };
     private(
         Json(TelemetryResponse {
             notice_required: required,
+            enabled,
+            project_key,
+            host,
+            installation_id,
+            app_version,
+            app_revision,
+            user_id,
+            user_role,
+            session_replay_enabled: replay_enabled,
         })
         .into_response(),
     )
@@ -223,7 +253,35 @@ async fn acknowledge_telemetry(
         Err(response) => return *response,
     };
     let result = state.with_database(|database| {
-        crate::telemetry::acknowledge(database, body.email.as_deref(), Utc::now())
+        crate::telemetry::acknowledge(database, body.email.as_deref(), Utc::now())?;
+        database.connection().execute(
+            "UPDATE suplex_telemetry SET session_replay_enabled = ?1 WHERE id = 'host'",
+            [body.session_replay_enabled],
+        )?;
+        Ok::<_, Box<dyn std::error::Error>>(())
+    });
+    let response = match result {
+        Ok(()) => private(StatusCode::NO_CONTENT.into_response()),
+        Err(_) => internal(),
+    };
+    finish(response, cookies)
+}
+
+async fn update_telemetry_replay(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Valid(body): Valid<TelemetryReplayBody>,
+) -> Response {
+    let (_, cookies) = match administrator(&state, &headers, &Method::POST, ADMIN_REQUIRED) {
+        Ok(value) => value,
+        Err(response) => return *response,
+    };
+    let result = state.with_database(|database| {
+        database.connection().execute(
+            "INSERT INTO suplex_telemetry (id, session_replay_enabled) VALUES ('host', ?1) ON CONFLICT(id) DO UPDATE SET session_replay_enabled = excluded.session_replay_enabled",
+            [body.enabled],
+        )?;
+        Ok::<_, Box<dyn std::error::Error>>(())
     });
     let response = match result {
         Ok(()) => private(StatusCode::NO_CONTENT.into_response()),

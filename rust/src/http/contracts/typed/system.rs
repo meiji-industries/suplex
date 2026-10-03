@@ -108,8 +108,39 @@ pub struct ExperimentsResponse {
 #[serde(rename_all = "camelCase")]
 #[ts(export)]
 pub struct TelemetryResponse {
-    /// True only for an administrator who still has to see the notice.
+    // True only for an administrator who still has to see the notice.
     pub notice_required: bool,
+    // True only while this signed-in browser may send product analytics.
+    pub enabled: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub project_key: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub host: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub installation_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub app_version: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub app_revision: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub user_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub user_role: Option<TelemetryUserRole>,
+    pub session_replay_enabled: bool,
+}
+
+crate::shared::wire_enum! {
+    pub enum TelemetryUserRole {
+        Admin = "admin",
+        Member = "member",
+    }
 }
 
 /// A plain `name@domain.tld` shape; the address is only a PostHog person key.
@@ -129,13 +160,28 @@ fn email(value: &str, _: &()) -> garde::Result {
 #[serde(rename_all = "camelCase")]
 pub struct TelemetryNoticeBody {
     pub email: Option<String>,
+    #[serde(default)]
+    pub session_replay_enabled: bool,
 }
 
 impl Contract for TelemetryNoticeBody {
     fn schema(input: Option<&Value>) -> ContractResult<Value> {
         Fields::new(input)?
             .opt("email", nullable(formatted(3, 254, email)))
+            .opt("sessionReplayEnabled", flag)
             .finish()
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TelemetryReplayBody {
+    pub enabled: bool,
+}
+
+impl Contract for TelemetryReplayBody {
+    fn schema(input: Option<&Value>) -> ContractResult<Value> {
+        Fields::new(input)?.req("enabled", flag).strict()
     }
 }
 

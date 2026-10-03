@@ -118,7 +118,7 @@ impl Hosted {
         }
         let payload = json!({"type": event.event_type, "object": minimal}).to_string();
         let now = self.now_iso();
-        self.query(|db| {
+        self.immediate(|db| {
             store::insert_event(
                 db,
                 &NewEvent {
@@ -131,6 +131,14 @@ impl Hosted {
                 },
             )
         })?;
+        // Billing durability wins over optional capture. A queue failure is
+        // logged and cannot reject an authentic webhook after its billing
+        // event was committed.
+        if let Err(error) =
+            self.immediate(|db| self.enqueue_stripe_telemetry(db, &event, account.as_ref(), &now))
+        {
+            eprintln!("billing: Stripe telemetry enqueue failed: {error}");
+        }
         Ok(())
     }
 
@@ -213,7 +221,7 @@ impl Hosted {
         }
         let payload = Value::Object(minimal).to_string();
         let now = self.now_iso();
-        self.query(|db| {
+        self.immediate(|db| {
             store::insert_event(
                 db,
                 &NewEvent {
@@ -226,6 +234,19 @@ impl Hosted {
                 },
             )
         })?;
+        let event_timestamp_ms = envelope.get("event_timestamp_ms").and_then(Value::as_i64);
+        if let Err(error) = self.immediate(|db| {
+            self.enqueue_revenuecat_telemetry(
+                db,
+                &event_id,
+                event_type,
+                account.as_ref(),
+                &now,
+                event_timestamp_ms,
+            )
+        }) {
+            eprintln!("billing: RevenueCat telemetry enqueue failed: {error}");
+        }
         Ok(())
     }
 
@@ -367,6 +388,9 @@ impl Hosted {
         }
         let cutoff = iso(self.now_ms() - EVENT_RETENTION_MS);
         self.query(|db| store::delete_processed_events_before(db, &cutoff))?;
+        // Delivery is isolated: it has its own bounded queue and cannot
+        // change the outcome of billing event processing.
+        self.run_telemetry_pass().await;
         Ok(())
     }
 }

@@ -148,7 +148,11 @@ async fn login(
         return with_cookies(failure(accounts::not_configured()), cookies);
     };
     let response = match client
-        .start_login(body.provider, body.email.as_deref())
+        .start_login(
+            body.provider,
+            body.email.as_deref(),
+            body.client.unwrap_or_default(),
+        )
         .await
     {
         Ok((attempt_id, url)) => {

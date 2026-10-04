@@ -16,7 +16,8 @@ CREATE TABLE IF NOT EXISTS account_attempts (
   provider_state TEXT UNIQUE,
   account_id TEXT REFERENCES accounts(id) ON DELETE CASCADE,
   created_at TEXT NOT NULL,
-  expires_at TEXT NOT NULL
+  expires_at TEXT NOT NULL,
+  client TEXT NOT NULL DEFAULT 'desktop' CHECK (client IN ('desktop', 'web'))
 );
 
 CREATE TABLE IF NOT EXISTS account_magic_links (

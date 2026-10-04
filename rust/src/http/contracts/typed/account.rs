@@ -10,13 +10,14 @@ fn email(value: &str, _: &()) -> garde::Result {
     rule(wire::valid_email(value), "invalid_format")
 }
 
-/// `POST /api/account/login`. The email is required by the email provider. `recovery` is a `suplex recover` token.
+/// `POST /api/account/login`. The email is required by the email provider. `recovery` is a `suplex recover` token. `client` is where the login starts; without it, the desktop app.
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AccountLoginBody {
     pub provider: wire::AuthProvider,
     pub email: Option<String>,
     pub recovery: Option<String>,
+    pub client: Option<wire::LoginClient>,
 }
 
 impl Contract for AccountLoginBody {
@@ -25,6 +26,7 @@ impl Contract for AccountLoginBody {
             .req("provider", one_of(&["google", "github", "email"]))
             .opt("email", formatted(3, 254, email))
             .opt("recovery", text(1, 256))
+            .opt("client", one_of(&["desktop", "web"]))
             .strict()
     }
 }

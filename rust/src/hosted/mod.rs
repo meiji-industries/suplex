@@ -62,9 +62,7 @@ pub async fn serve() -> Result<(), String> {
     let account_config = accounts::load_config(&env)?;
     let connection = billing::store::open(Path::new(&config.database_path))
         .map_err(|error| error.to_string())?;
-    connection
-        .execute_batch(accounts::store::SCHEMA)
-        .map_err(|error| error.to_string())?;
+    accounts::store::apply_schema(&connection).map_err(|error| error.to_string())?;
     let hosted = Hosted::new(
         config.hosted(),
         connection,

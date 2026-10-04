@@ -100,6 +100,10 @@
       </header>
       <a href="suplex://auth/done">Open Suplex</a>
     </main>
-    <script>location.replace("suplex://auth/done")</script>
+    <script>
+      // A login that started in a web browser continues there.
+      if (new URLSearchParams(location.search).get("client") === "web") document.querySelector("a").remove();
+      else location.replace("suplex://auth/done");
+    </script>
   </body>
 </html>

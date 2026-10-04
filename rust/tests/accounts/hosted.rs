@@ -374,16 +374,19 @@ mod tests {
     /// The private host's client against this service: the two halves agree.
     #[tokio::test]
     async fn the_host_client_links_through_the_real_service() {
-        use crate::accounts::{AccountClient, LoginPoll, wire::AuthProvider};
+        use crate::accounts::{AccountClient, LoginPoll, wire::{AuthProvider, LoginClient}};
 
         let f = Fixture::new().await;
         let client = AccountClient::new(f.url.parse().unwrap(), INSTALLATION.to_owned());
-        let (attempt, url) = client.start_login(AuthProvider::Google, None).await.unwrap();
+        let (attempt, url) = client.start_login(AuthProvider::Google, None, LoginClient::Web).await.unwrap();
         let url = url::Url::parse(&url.unwrap()).unwrap();
         assert_eq!(url.path(), "/auth/start");
         assert_eq!(client.poll_login(&attempt).await.unwrap(), LoginPoll::Pending);
         let state = query(&f.start(&attempt, "google").await, "state").unwrap();
-        assert_eq!(f.callback("google", &state, None).await.status(), 303);
+        // A login that started in a web browser does not open the desktop app.
+        let finished = f.callback("google", &state, None).await;
+        assert_eq!(finished.status(), 303);
+        assert_eq!(finished.headers()["location"], "/auth/done?client=web");
         let LoginPoll::Complete { token, account } = client.poll_login(&attempt).await.unwrap()
         else {
             panic!("the attempt did not complete");
@@ -392,7 +395,7 @@ mod tests {
         assert_eq!(client.poll_login(&attempt).await.unwrap(), LoginPoll::Expired);
 
         let (email_attempt, url) = client
-            .start_login(AuthProvider::Email, Some("ada@example.com"))
+            .start_login(AuthProvider::Email, Some("ada@example.com"), LoginClient::Desktop)
             .await
             .unwrap();
         assert!(url.is_none());
@@ -400,5 +403,15 @@ mod tests {
 
         client.logout(&token).await;
         assert_eq!(f.logout(Some(&token)).await, 204);
+    }
+
+    #[test]
+    fn apply_schema_adds_the_client_column_to_an_older_database() {
+        let db = rusqlite::Connection::open_in_memory().unwrap();
+        db.execute_batch("CREATE TABLE accounts (id TEXT PRIMARY KEY); CREATE TABLE account_attempts (id TEXT PRIMARY KEY, challenge TEXT NOT NULL, installation_id TEXT NOT NULL, provider TEXT, provider_state TEXT UNIQUE, account_id TEXT, created_at TEXT NOT NULL, expires_at TEXT NOT NULL)").unwrap();
+        crate::accounts::hosted::store::apply_schema(&db).unwrap();
+        crate::accounts::hosted::store::apply_schema(&db).unwrap();
+        crate::accounts::hosted::store::insert_attempt(&db, "a", "c", "i", crate::accounts::wire::LoginClient::Web, "1", "3").unwrap();
+        assert_eq!(crate::accounts::hosted::store::find_attempt(&db, "a", "2").unwrap().unwrap().client, crate::accounts::wire::LoginClient::Web);
     }
 }

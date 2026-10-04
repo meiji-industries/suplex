@@ -16,7 +16,7 @@ use super::{Accounts, visitor_cookie};
 use crate::{
     accounts::wire::{
         AuthAttemptBody, AuthAttemptResponse, AuthEmailBody, AuthPollBody, AuthProvider,
-        token_shape,
+        LoginClient, token_shape,
     },
     billing::hosted::{HostedError, HostedResult, server::JsonBody},
 };
@@ -50,8 +50,14 @@ fn page(result: HostedResult<Response>) -> Response {
     })
 }
 
-fn done() -> Response {
-    Redirect::to("/auth/done").into_response()
+/// The done page opens the desktop app unless the login started in a web
+/// browser.
+fn done(client: LoginClient) -> Response {
+    Redirect::to(match client {
+        LoginClient::Desktop => "/auth/done",
+        LoginClient::Web => "/auth/done?client=web",
+    })
+    .into_response()
 }
 
 async fn create_attempt(
@@ -129,7 +135,7 @@ async fn callback(
     let finished = accounts
         .finish_oauth(provider, &code, &state, visitor_cookie(&headers))
         .await;
-    page(finished.map(|()| done()))
+    page(finished.map(done))
 }
 
 #[derive(Deserialize)]
@@ -155,7 +161,7 @@ async fn verify(
     page(
         accounts
             .verify_magic_link(&token, visitor_cookie(&headers))
-            .map(|()| done()),
+            .map(done),
     )
 }
 

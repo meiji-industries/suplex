@@ -4,14 +4,30 @@
 use rusqlite::{Connection, OptionalExtension, params};
 use serde_json::Value;
 
-use crate::accounts::wire::{AuthProvider, HostedAccount};
+use crate::accounts::wire::{AuthProvider, HostedAccount, LoginClient};
 
-pub const SCHEMA: &str = include_str!("schema.sql");
+const SCHEMA: &str = include_str!("schema.sql");
+
+/// Creates the account tables and adds the columns an older database lacks.
+pub fn apply_schema(db: &Connection) -> rusqlite::Result<()> {
+    db.execute_batch(SCHEMA)?;
+    // ponytail: one column, no migration runner. Add one when a second change arrives.
+    let has_client = db
+        .prepare("SELECT 1 FROM pragma_table_info('account_attempts') WHERE name = 'client'")?
+        .exists([])?;
+    if !has_client {
+        db.execute_batch(
+            "ALTER TABLE account_attempts ADD COLUMN client TEXT NOT NULL DEFAULT 'desktop'",
+        )?;
+    }
+    Ok(())
+}
 
 pub struct Attempt {
     pub challenge: String,
     pub installation_id: String,
     pub account_id: Option<String>,
+    pub client: LoginClient,
 }
 
 pub fn insert_attempt(
@@ -19,12 +35,13 @@ pub fn insert_attempt(
     id: &str,
     challenge: &str,
     installation_id: &str,
+    client: LoginClient,
     now: &str,
     expires_at: &str,
 ) -> rusqlite::Result<()> {
     db.execute(
-        "INSERT INTO account_attempts (id, challenge, installation_id, created_at, expires_at) VALUES (?1, ?2, ?3, ?4, ?5)",
-        params![id, challenge, installation_id, now, expires_at],
+        "INSERT INTO account_attempts (id, challenge, installation_id, client, created_at, expires_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        params![id, challenge, installation_id, client, now, expires_at],
     )?;
     Ok(())
 }
@@ -32,13 +49,14 @@ pub fn insert_attempt(
 /// An attempt that has not expired.
 pub fn find_attempt(db: &Connection, id: &str, now: &str) -> rusqlite::Result<Option<Attempt>> {
     db.query_row(
-        "SELECT challenge, installation_id, account_id FROM account_attempts WHERE id = ?1 AND expires_at > ?2",
+        "SELECT challenge, installation_id, account_id, client FROM account_attempts WHERE id = ?1 AND expires_at > ?2",
         params![id, now],
         |row| {
             Ok(Attempt {
                 challenge: row.get(0)?,
                 installation_id: row.get(1)?,
                 account_id: row.get(2)?,
+                client: row.get(3)?,
             })
         },
     )

@@ -13,6 +13,25 @@ crate::shared::wire_enum! {
     pub enum AuthProvider { Google = "google", Github = "github", Email = "email" }
 }
 
+crate::shared::wire_enum! {
+    /// Where a login started. The hosted done page opens the desktop app
+    /// only for `Desktop`.
+    pub enum LoginClient { Desktop = "desktop", Web = "web" }
+}
+
+impl LoginClient {
+    fn is_desktop(&self) -> bool {
+        *self == Self::Desktop
+    }
+}
+
+/// A host that predates this field sends none; it keeps the desktop behavior.
+impl Default for LoginClient {
+    fn default() -> Self {
+        Self::Desktop
+    }
+}
+
 /// A hosted account as the hosted service reports it to the linked host.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -40,6 +59,8 @@ impl HostedAccount {
 pub struct AuthAttemptBody {
     pub challenge: String,
     pub installation_id: String,
+    #[serde(default, skip_serializing_if = "LoginClient::is_desktop")]
+    pub client: LoginClient,
 }
 
 impl AuthAttemptBody {

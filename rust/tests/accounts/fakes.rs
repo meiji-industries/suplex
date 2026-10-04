@@ -136,7 +136,7 @@ impl Fixture {
             std::env::temp_dir().join(format!("suplex-accounts-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&directory).unwrap();
         let connection = store::open(&directory.join("billing.sqlite")).unwrap();
-        connection.execute_batch(account_store::SCHEMA).unwrap();
+        account_store::apply_schema(&connection).unwrap();
         let mut billing = hosted_config(BillingEnvironment::Sandbox);
         billing.origin = ORIGIN.into();
         billing.telemetry = Some(telemetry::Config {

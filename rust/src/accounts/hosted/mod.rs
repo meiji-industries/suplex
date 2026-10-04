@@ -12,8 +12,8 @@ use subtle::ConstantTimeEq;
 
 use crate::{
     accounts::wire::{
-        AuthAttemptBody, AuthEmailBody, AuthPollBody, AuthPollResponse, AuthProvider, challenge,
-        random_token, token_shape, valid_attempt_id, valid_email,
+        AuthAttemptBody, AuthEmailBody, AuthPollBody, AuthPollResponse, AuthProvider, LoginClient,
+        challenge, random_token, token_shape, valid_attempt_id, valid_email,
     },
     billing::hosted::{Hosted, HostedError, HostedResult, iso},
     shared::{hash::sha256_hex, ids::random_hex_id},
@@ -196,6 +196,7 @@ impl Accounts {
                 &id,
                 &body.challenge,
                 &body.installation_id,
+                body.client,
                 &iso(now),
                 &iso(now + ATTEMPT_MS),
             )
@@ -232,7 +233,7 @@ impl Accounts {
         code: &str,
         state: &str,
         visitor: Option<&str>,
-    ) -> HostedResult<()> {
+    ) -> HostedResult<LoginClient> {
         let config = self.config()?;
         if provider == AuthProvider::Email || !token_shape(state) || code.is_empty() {
             return Err(invalid());
@@ -302,7 +303,11 @@ impl Accounts {
         Ok(())
     }
 
-    pub fn verify_magic_link(&self, token: &str, visitor: Option<&str>) -> HostedResult<()> {
+    pub fn verify_magic_link(
+        &self,
+        token: &str,
+        visitor: Option<&str>,
+    ) -> HostedResult<LoginClient> {
         self.config()?;
         if !token_shape(token) {
             return Err(expired());
@@ -317,14 +322,15 @@ impl Accounts {
     }
 
     /// Binds the account to the attempt. Signup and login differ only in
-    /// whether the account row was inserted.
+    /// whether the account row was inserted. Returns where the login
+    /// started.
     fn complete(
         &self,
         attempt_id: &str,
         provider: AuthProvider,
         profile: Profile,
         visitor: Option<&str>,
-    ) -> HostedResult<()> {
+    ) -> HostedResult<LoginClient> {
         let email = normalize_email(&profile.email).ok_or_else(providers::unverified)?;
         let name = profile
             .name
@@ -336,7 +342,7 @@ impl Accounts {
             let Some(attempt) = store::find_attempt(db, attempt_id, &now)?
                 .filter(|attempt| attempt.account_id.is_none())
             else {
-                return Ok(false);
+                return Ok(None);
             };
             let (account, created) =
                 store::upsert_account(db, &candidate, &email, name.as_deref(), &now)?;
@@ -369,9 +375,9 @@ impl Accounts {
                     }),
                 )?;
             }
-            Ok(true)
+            Ok(Some(attempt.client))
         })?;
-        if completed { Ok(()) } else { Err(expired()) }
+        completed.ok_or_else(expired)
     }
 
     /// `Complete` once: the token is minted here and only its hash is kept.

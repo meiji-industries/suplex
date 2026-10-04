@@ -19,7 +19,7 @@ use crate::{
 };
 use wire::{
     AuthAttemptBody, AuthAttemptResponse, AuthEmailBody, AuthPollBody, AuthPollResponse,
-    AuthProvider, HostedAccount,
+    AuthProvider, HostedAccount, LoginClient,
 };
 
 pub mod hosted;
@@ -199,11 +199,13 @@ impl AccountClient {
 
     /// Starts a login attempt. Only the challenge leaves this host; the
     /// verifier stays here until the poll. Returns the attempt and, for
-    /// Google and GitHub, the URL the browser opens.
+    /// Google and GitHub, the URL the browser opens. The hosted done
+    /// page opens the desktop app only for a desktop `client`.
     pub async fn start_login(
         &self,
         provider: AuthProvider,
         email: Option<&str>,
+        client: LoginClient,
     ) -> Result<(String, Option<String>), PublicFailure> {
         let verifier = wire::random_token().map_err(|_| PublicFailure::internal())?;
         let attempt: AuthAttemptResponse = self
@@ -212,6 +214,7 @@ impl AccountClient {
                 &AuthAttemptBody {
                     challenge: wire::challenge(&verifier),
                     installation_id: self.installation_id.clone(),
+                    client,
                 },
             )
             .await?;

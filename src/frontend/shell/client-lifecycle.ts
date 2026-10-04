@@ -34,7 +34,7 @@ export function reportClientLifecycle(state: "startup" | "resumed" | "api_activi
     void fetch("/api/system/client-lifecycle", {
       method: "POST",
       credentials: "same-origin",
-      keepalive: state === "pagehide",
+      keepalive: state === "pagehide" || state === "hidden",
       headers: { "Content-Type": "application/json", "X-CSRF-V1": token, "X-Suplex-Tab-Id": clientId },
       body: JSON.stringify({ state, tabId: clientId, documentId, clientTime: new Date().toISOString(), visible: document.visibilityState === "visible", online: navigator.onLine }),
     }).catch(() => undefined);

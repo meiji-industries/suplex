@@ -43,7 +43,7 @@ error() { echo "ERROR: $*" >&2; exit 1; }
 as_admin() { "$@" 2>/dev/null || sudo "$@"; }
 
 install_macos() {
-    [ "$(sw_vers -productVersion | cut -d. -f1)" -ge 13 ] || error "Suplex requires macOS 13 Ventura or later."
+    [ "$(sw_vers -productVersion | cut -d. -f1)" -ge 14 ] || error "Suplex requires macOS 14 Sonoma or later."
     # A shell under Rosetta reports x86_64 on Apple silicon.
     [ "$(sysctl -n sysctl.proc_translated 2>/dev/null || echo 0)" = "1" ] && ARCH=arm64
 

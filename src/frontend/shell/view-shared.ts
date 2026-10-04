@@ -22,8 +22,9 @@ export async function reconcileScopedNotFound(reason: unknown, reloadCompanies: 
   await reloadCompanies();
   return true;
 }
+const adminDateFormat = new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" });
 export function adminDate(timestamp: string): string {
-  return new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(new Date(timestamp));
+  return adminDateFormat.format(new Date(timestamp));
 }
 
 export function relativeTime(timestamp: string, now = Date.now()): string {

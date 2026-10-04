@@ -406,9 +406,11 @@ export function animateFlow(root: SVGGElement, edges: readonly FlowEdge[], cente
 
   let frame = 0, last = 0;
   const tick = (now: number) => {
+    frame = requestAnimationFrame(tick);
+    // 30 fps cap: each update dirties the SVG and costs a full-page rendering update.
+    if (last && now - last < 30) return;
     update(last ? Math.min(0.05, (now - last) / 1000) : 0);
     last = now;
-    frame = requestAnimationFrame(tick);
   };
   // Runs only while the illustration is on screen; the hidden wide or compact copy stays idle.
   const observer = new IntersectionObserver(([entry]) => {

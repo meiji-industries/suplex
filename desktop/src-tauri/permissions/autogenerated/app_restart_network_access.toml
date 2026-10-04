@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-app-restart-network-access"
+description = "Enables the app_restart_network_access command without any pre-configured scope."
+commands.allow = ["app_restart_network_access"]
+
+[[permission]]
+identifier = "deny-app-restart-network-access"
+description = "Denies the app_restart_network_access command without any pre-configured scope."
+commands.deny = ["app_restart_network_access"]

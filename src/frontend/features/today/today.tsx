@@ -16,8 +16,9 @@ import { TaskQuestion } from "../tasks/task-question.js";
 import { TaskStatus } from "../tasks/task-status.js";
 import { currentLocalWeek, getToday } from "./lib/today-api.js";
 
+const dateTimeFormat = new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" });
 function dateTime(value: string): string {
-  return new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(new Date(value));
+  return dateTimeFormat.format(new Date(value));
 }
 
 function TaskIdentity({ task }: { task: TodayTask }): ReactElement {

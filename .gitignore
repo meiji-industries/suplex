@@ -10,10 +10,14 @@ rust/target/
 logs/
 playwright-report/
 test-results/
-desktop/dist/
 desktop/release/
 desktop/runtime/
-desktop/.electron-dev/
+desktop/.build/
+desktop/src-tauri/target/
+desktop/src-tauri/gen/
+# Tauri migration logs, isolated profiles, and fixtures stay local; the Markdown records are committed.
+.context/tauri-migration/*
+!.context/tauri-migration/*.md
 *.sqlite
 *.sqlite-shm
 *.sqlite-wal

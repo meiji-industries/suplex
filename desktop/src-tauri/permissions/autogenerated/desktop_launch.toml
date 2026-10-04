@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-desktop-launch"
+description = "Enables the desktop_launch command without any pre-configured scope."
+commands.allow = ["desktop_launch"]
+
+[[permission]]
+identifier = "deny-desktop-launch"
+description = "Denies the desktop_launch command without any pre-configured scope."
+commands.deny = ["desktop_launch"]

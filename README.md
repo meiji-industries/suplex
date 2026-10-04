@@ -189,43 +189,55 @@ carry no identity header and see the passkey sign-in instead.
 
 ### Desktop app
 
-`desktop/` is a sandboxed Electron window that either runs Suplex on this Mac
-or connects to a Suplex host elsewhere. On first launch it offers those two
-choices. **Run locally** runs the install stages from the bundled
-runtime under `Contents/Resources/runtime`, shows each stage's progress and
-log, and then starts the bundled server on `127.0.0.1` every time the app
-opens. Quitting the app stops that server. Use **Suplex > Settings > Network
-access** or the tray menu to select **This Mac only** or **Tailscale**. The
-Tailscale option keeps the server on loopback and creates an HTTPS Serve route.
-Tailnet users permitted by Tailscale can access and manage this Suplex instance.
-The menu can copy the active Tailscale URL.
+Suplex.app is a Tauri 2 shell written in Rust (`desktop/src-tauri`, crate
+`suplex-desktop`) around the bundled `suplex` host. Its window is the system
+WKWebView, so the app needs macOS 14 or later. The window shows either the
+bundled setup pages or the web app served by the selected host; the host keeps
+serving all data, sessions, and terminals over HTTP and WebSockets. A browser
+needs no desktop app and works as before.
 
-Data, the env file, logs, the install record, and network access files live
-under `~/Library/Application Support/Suplex`; delete that directory to start
-over. If an existing host reports the same installation identity, the app can adopt
-it and leaves it running on quit. An unrelated host on the preferred port
-causes the app to choose another port. **Remote access** takes a URL, tests it, and
-installs nothing.
+On first launch the app offers two choices. **Run locally** runs the install
+stages of the bundled host under `Contents/Resources/runtime`, shows each
+stage's progress and log, and then starts that host on `127.0.0.1` each time
+the app opens. Closing the window keeps the app, its menu-bar item, and the host
+running; **Quit Suplex** stops the host that the app started. Use **Suplex >
+Settings > Network access** or the menu-bar item to select **This Mac only**,
+**Tailscale**, or **All networks**, then select **Restart** to apply it. The
+Tailscale option keeps the host on loopback and creates an HTTPS Serve route;
+the menu can copy the active Tailscale URL. **Remote access** takes the URL of a
+Suplex host elsewhere, tests it, and installs nothing.
 
-`mise run desktop:dev` opens the app from source, `mise run desktop:dist`
-bundles the runtime and packages `desktop/release/<arch>/Suplex-<version>-<arch>.dmg`
-(`SUPLEX_DESKTOP_ARCH=arm64`, the default, or `x64` for Intel),
-`mise run desktop:install` builds this checkout and replaces
-`/Applications/Suplex.app` without a release (it quits, swaps, and relaunches
-the app, keeps its data, and refuses uncommitted changes unless
-`SUPLEX_INSTALL_DIRTY=1`),
-`mise run desktop:dist:signed` builds both architectures and signs, notarizes, and staples them with the
-credentials in 1Password, and `mise run desktop:open` or `suplex desktop` opens
-the installed app at this host's `http://localhost:<port>`. The Navigate menu
-lists every Suplex the app has opened: pick one to switch, use "Add a Suplex
-URL" for a new one, and "Forget this Suplex" to drop the current one. `--url`
-and `SUPLEX_DESKTOP_URL` override the remembered choice. The sidebar shows the
-host the window is on.
+Data, the env file, logs, the install record, saved hosts, window size, and
+network access files live under `~/Library/Application Support/Suplex`, the same
+directory the earlier Electron app used; delete it to start over. Web sign-ins
+are not carried over from the Electron app, so sign in again once. If a running
+host reports this installation's identity, the app adopts it and leaves it
+running on quit. A host of another installation, or another program, on the
+preferred port is left alone, and the app starts its own host on a free port.
 
-A bundled server updates only with a new Suplex.app; its self-update is
-disabled. The Check for Desktop Update menu item runs only in the Electron
-main process. Local builds have no update feed. See
-[docs/updates.md](docs/updates.md) for feed and signing requirements.
+The host bar at the bottom of the window and **Suplex > Settings** list the
+remembered hosts (at most eight origins); select one to switch, or select
+**Manage Suplex hosts…** to add or remove one. `--url` and `SUPLEX_DESKTOP_URL`
+override the remembered choice for a launch, and a second launch with `--url`
+switches the open window. A company invitation link, `suplex://join?url=<https URL>`,
+opens that host. Other `suplex://` links only bring the app to the front.
+
+| Command | Result |
+| --- | --- |
+| `mise run desktop:dev` | Runs the shell against this checkout's dev stack. Reuses the stack when it is running, or starts `pnpm dev:watch` and stops it on exit. React edits use Vite HMR; edits under `desktop/src-tauri` or the setup pages rebuild and restart only the shell. Uses the bundle ID `dev.suplex.desktop.dev` and data under `.context/tauri-migration/desktop-dev-data`. |
+| `pnpm desktop:typecheck`, `pnpm desktop:test` | `cargo check` and the Rust behavior and IPC authorization tests of the shell. |
+| `pnpm desktop:test:native` | The macOS WKWebView smoke tests, against an app built with a test-only driver and isolated data. |
+| `mise run desktop:dist` | Builds `desktop/release/<arch>/Suplex.app`, the DMG, and the ZIP (`SUPLEX_DESKTOP_ARCH=arm64`, the default, or `x64`). Never publishes. |
+| `pnpm test:packaged` | Checks the built app, its bundled host, and its archives. |
+| `mise run desktop:install` | Builds this checkout and replaces `/Applications/Suplex.app` without a release. It quits, swaps, and relaunches the app, keeps its data, and refuses uncommitted changes unless `SUPLEX_INSTALL_DIRTY=1`. |
+| `mise run desktop:dist:signed` | Builds both architectures signed, notarized, and stapled, with both update feeds, from the credentials in 1Password. |
+| `pnpm desktop:verify:release` | Checks the built release files and runs the publisher without uploads. |
+| `mise run desktop:open`, `suplex desktop` | Opens the installed app at this host's `http://localhost:<port>`. |
+
+A bundled host updates only with a new Suplex.app; its self-update is disabled.
+**Check for updates** in the app menu and the menu-bar item uses the app's own
+update feed. Local builds have no feed. See [docs/updates.md](docs/updates.md)
+for the feeds and the signing requirements.
 
 Create a task with **Start immediately** selected to queue it. Suplex starts
 it when its prerequisites are complete. Clear the option to keep it in Backlog. Backlog tasks support title

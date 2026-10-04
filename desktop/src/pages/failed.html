@@ -10,12 +10,12 @@
   .log { margin-top: 20px; }
 </style>
 </head>
-<body>
+<body data-tauri-drag-region="deep">
 <main>
   <h1 id="title">Suplex could not finish</h1>
   <p id="reason"></p>
   <p id="remedy"></p>
-  <details class="log" open><summary>Log</summary><pre id="log"></pre></details>
+  <details class="log" open><summary>Log</summary><pre id="log" data-tauri-drag-region="false"></pre></details>
   <div class="actions">
     <button class="primary" id="retry" type="button">Retry</button>
     <button id="logs" type="button">Open logs</button>

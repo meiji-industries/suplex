@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-app-save-network-access-preference"
+description = "Enables the app_save_network_access_preference command without any pre-configured scope."
+commands.allow = ["app_save_network_access_preference"]
+
+[[permission]]
+identifier = "deny-app-save-network-access-preference"
+description = "Denies the app_save_network_access_preference command without any pre-configured scope."
+commands.deny = ["app_save_network_access_preference"]

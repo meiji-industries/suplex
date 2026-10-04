@@ -376,7 +376,7 @@ test("repair keeps its source requirement and restores the prior delivery", asyn
   expect(button(container, "Delivery target").disabled).toBe(false);
   await submitTask(container);
   expect(latestRequest("POST")).toMatchObject({ workflow: "standard", deliveryTarget: "remote_branch" });
-  const diagram = container.querySelector('[data-workflow-illustration="standard"] svg')!;
+  const diagram = container.querySelector('[data-workflow-illustration="standard"] [data-illustration-layout]')!;
   expect(diagram.querySelectorAll('[data-role-selector="root"]')).toHaveLength(2);
   expect(diagram.querySelectorAll('[data-role-selector="worker"]')).toHaveLength(1);
 });

@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { promisify } from "node:util";
-import { chromium } from "playwright";
+import { chromium, webkit } from "playwright";
 import { TaskSchema } from "../../src/frontend/contracts/tasks.js";
 
 const git = promisify(execFile);
@@ -139,12 +139,15 @@ export async function nativeBrowser(width = 1280, host = "127.0.0.1", reachableA
   const fixture = await nativeFixture(host, reachableAddress, options);
   let browser: Awaited<ReturnType<typeof chromium.launch>> | undefined;
   try {
-    browser = await chromium.launch({ headless: true });
+    // The desktop app renders in WebKit (Tauri); SUPLEX_BROWSER=webkit runs the suite in that engine.
+    browser = await (process.env.SUPLEX_BROWSER === "webkit" ? webkit : chromium).launch({ headless: true });
     const context = await browser.newContext({ viewport: { width, height: 844 } });
     await context.addCookies(fixture.headers.cookie.split("; ").map(pair => { const index = pair.indexOf("="); return { name: pair.slice(0, index), value: pair.slice(index + 1), domain: host, path: "/" }; }));
     const page = await context.newPage();
     const errors: string[] = [];
-    page.on("pageerror", error => errors.push(error.message));
+    // WebKit reports same-origin requests cancelled by a navigation as access-control errors; Chromium drops them silently.
+    const cancelled = `${new URL(fixture.base).host}/`;
+    page.on("pageerror", error => { if (!(error.message.includes(cancelled) && error.message.endsWith("due to access control checks."))) errors.push(error.message); });
     const openedBrowser = browser;
     return { ...fixture, browser, page, errors,
       async close(options: { preserveData?: boolean } = {}) { try { await openedBrowser.close(); } finally { await fixture.close(options); } },

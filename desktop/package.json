@@ -3,22 +3,18 @@
   "productName": "Suplex",
   "private": true,
   "version": "1.3.0",
-  "main": "dist/src/main.js",
   "scripts": {
-    "build": "tsc -p tsconfig.json && cp src/connect.html src/statusTemplate*.png dist/src/ && mkdir -p dist/src/pages && cp src/pages/* dist/src/pages/",
-    "typecheck": "tsc -p tsconfig.json --noEmit",
-    "dev": "sh scripts/dev.sh",
-    "dist": "sh ../scripts/bundle-runtime.sh && pnpm build && electron-builder --config electron-builder.config.cjs --mac --publish never",
-    "dist:signed": "op run --env-file signing.env -- scripts/dist-signed.sh",
-    "verify:signed": "spctl --assess --type execute -vv release/${SUPLEX_DESKTOP_ARCH:-arm64}/mac*/Suplex.app && xcrun stapler validate release/${SUPLEX_DESKTOP_ARCH:-arm64}/Suplex-*.dmg"
+    "build": "env -u RUSTUP_TOOLCHAIN cargo build --manifest-path src-tauri/Cargo.toml --release",
+    "typecheck": "env -u RUSTUP_TOOLCHAIN cargo check --manifest-path src-tauri/Cargo.toml --all-targets",
+    "test": "env -u RUSTUP_TOOLCHAIN cargo test --manifest-path src-tauri/Cargo.toml --all-targets",
+    "test:native": "sh scripts/test-native.sh",
+    "test:packaged": "sh scripts/test-packaged.sh",
+    "dev": "node scripts/dev.mjs",
+    "dist": "sh scripts/dist.sh",
+    "dist:signed": "op run --env-file signing.env -- sh scripts/dist-signed.sh",
+    "verify:release": "sh scripts/verify-release.sh"
   },
   "devDependencies": {
-    "@types/node": "^24.10.1",
-    "electron": "44.2.0",
-    "electron-builder": "26.15.3",
-    "typescript": "^5.9.3"
-  },
-  "dependencies": {
-    "electron-updater": "6.8.9"
+    "@tauri-apps/cli": "2.12.1"
   }
 }

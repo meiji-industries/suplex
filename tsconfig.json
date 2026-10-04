@@ -5,7 +5,7 @@
     "moduleResolution": "NodeNext",
     "baseUrl": ".",
     "paths": { "@/*": ["src/frontend/*"] },
-    "lib": ["ES2022", "DOM"],
+    "lib": ["ES2023", "DOM"],
     "jsx": "react-jsx",
     "strict": true,
     "noUncheckedIndexedAccess": true,

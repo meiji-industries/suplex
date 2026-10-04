@@ -33,7 +33,7 @@
   #demo-toggle a:hover { color: #a3a3a3; text-decoration: underline; }
 </style>
 </head>
-<body>
+<body data-tauri-drag-region="deep">
 <main>
   <h1><img src="wordmark.svg" alt="Suplex"></h1>
   <h2 id="stage">Setting you up…</h2>
@@ -41,7 +41,7 @@
   <div class="progress">
   <div class="bar"><div id="fill"></div></div>
   <ol id="steps"></ol>
-  <details class="log"><summary>Show log</summary><pre id="log"></pre></details>
+  <details class="log"><summary>Show log</summary><pre id="log" data-tauri-drag-region="false"></pre></details>
   </div>
   <div class="actions"><button id="cancel" type="button">Cancel</button></div>
 </main>
@@ -130,7 +130,7 @@
   } else {
     render();
   }
-  // Browser preview only: Electron always provides window.suplexDesktop, so this stays hidden in the installer.
+  // Browser preview only: the desktop app always provides window.suplexDesktop, so this stays hidden in the installer.
   if (!window.suplexDesktop) {
     const toggle = document.getElementById("demo-toggle");
     const link = toggle.querySelector("a");

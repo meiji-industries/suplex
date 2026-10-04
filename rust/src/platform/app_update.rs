@@ -18,7 +18,7 @@ use crate::platform::{config::Installation, supervisor};
 
 type UpdateResult = Result<i32, Box<dyn std::error::Error>>;
 
-/// The top-level fields of electron-builder's `latest-mac.yml`.
+/// The top-level fields of the Mac feed's `latest-mac.yml` (the electron-builder format, still published beside the Tauri feed).
 #[derive(Debug, PartialEq)]
 struct Release {
     version: String,

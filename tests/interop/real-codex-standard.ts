@@ -221,7 +221,8 @@ try {
   const response = await fixture.page.goto(`${fixture.base}/tasks?company=${fixture.company.id}`);
   equal(response?.status(), 200);
   await fixture.page.getByRole("heading", { name: "Tasks", exact: true }).waitFor();
-  await fixture.page.getByRole("button", { name: "New task", exact: true }).click();
+  // Once the empty list loads, its empty state adds a second New task button; both open the same dialog.
+  await fixture.page.getByRole("button", { name: "New task", exact: true }).first().click();
   const dialog = fixture.page.getByRole("dialog", { name: "New task", exact: true });
   await dialog.waitFor();
   await dialog.getByLabel("Task title", { exact: true }).fill("Append one verified README line");

@@ -54,7 +54,7 @@ function OnboardingSidebar({ companyId, current, state }: { companyId: string; c
   const { setOpenMobile } = useSidebar();
   return (
     <Sidebar variant="inset" collapsible="offcanvas">
-      <SidebarHeader className="titlebar-drag titlebar-top">
+      <SidebarHeader data-tauri-drag-region="deep" className="titlebar-top">
         <div className="flex items-center gap-1">
           <div className="min-w-0 flex-1"><CompanySwitcher /></div>
           <span className="md:hidden"><SidebarTrigger aria-label="Close navigation" title="Close navigation" /></span>

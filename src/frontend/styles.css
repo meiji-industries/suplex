@@ -196,15 +196,14 @@
 .suplex-desktop [data-slot="sidebar-wrapper"] { min-height: calc(100svh - 2rem); }
 
 /*
- * A desktop window with a hidden title bar draws its traffic lights over the page. Browsers define
- * none of the titlebar-area-* variables, so the inset is zero and nothing moves there. The main
- * toolbar only needs the inset when the sidebar is not sitting beside it; the sidebar header keeps
- * the whole traffic-light row above its own content.
+ * The desktop window draws its traffic lights over the page. Only the desktop app sets the
+ * suplex-desktop class, so a browser keeps a zero inset. The main toolbar only needs the inset when
+ * the sidebar is not beside it; the sidebar header keeps the whole traffic-light row above its own
+ * content. Elements with data-tauri-drag-region="deep" move the window; their controls stay clickable.
  */
-.titlebar-drag { -webkit-app-region: drag; }
-.titlebar-drag :is(a, button, input, select, textarea, [role="button"], [role="combobox"], [role="menuitem"]) { -webkit-app-region: no-drag; }
-.titlebar-top { padding-top: max(0.5rem, calc(env(titlebar-area-height, 0px) - 0.625rem)); }
-.titlebar-inset { padding-left: env(titlebar-area-x, 0px); }
+.suplex-desktop { --titlebar-height: 2.375rem; --titlebar-x: 5rem; }
+.titlebar-top { padding-top: max(0.5rem, calc(var(--titlebar-height, 0px) - 0.625rem)); }
+.titlebar-inset { padding-left: var(--titlebar-x, 0px); }
 @media (min-width: 768px) {
   [data-slot="sidebar"][data-state="expanded"] ~ main .titlebar-inset { padding-left: 0; }
 }
@@ -256,7 +255,8 @@
   background-color: var(--success);
   background-image: repeating-linear-gradient(45deg, color-mix(in oklab, var(--success), white 20%) 0 14px, var(--success) 14px 28px);
   background-size: 28px 28px;
-  animation: phase-timing-candy-stripes 1s linear infinite;
+  /* One step per pixel: background-position repaints on the main thread, so do not repaint at display rate. */
+  animation: phase-timing-candy-stripes 1s steps(28) infinite;
 }
 
 @media (prefers-reduced-motion: reduce) {

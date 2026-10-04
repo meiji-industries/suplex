@@ -43,7 +43,7 @@ function SettingsSidebar({ companyId, backHref, activeHref }: { companyId: strin
   }, [searchId]);
   return (
     <Sidebar variant="inset" collapsible="offcanvas">
-      <SidebarHeader className="titlebar-drag titlebar-top">
+      <SidebarHeader data-tauri-drag-region="deep" className="titlebar-top">
         <div className="flex items-center gap-1"><div className="min-w-0 flex-1"><SidebarMenu><SidebarMenuItem><SidebarMenuButton className="text-sm leading-none" render={<a href={backHref} onClick={close}><ArrowLeft />Back to app</a>} tooltip="Back to app" /></SidebarMenuItem></SidebarMenu></div><span className="md:hidden"><SidebarTrigger aria-label="Close navigation" title="Close navigation" /></span></div>
         <CompanySwitcher />
         <SidebarInput id={searchId} aria-label="Search settings" aria-keyshortcuts="/" placeholder="Search the settings" value={search} onChange={(event) => setSearch(event.target.value)} />

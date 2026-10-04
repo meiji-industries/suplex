@@ -4,10 +4,9 @@
 <meta charset="utf-8">
 <title>Suplex</title>
 <style>
-  body { margin: 0; -webkit-app-region: drag; min-height: 100vh; display: grid; place-items: center; background: #0a0a0a; color: #e5e5e5; font: 13px/1.4 -apple-system, system-ui, sans-serif; }
+  body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: #0a0a0a; color: #e5e5e5; font: 13px/1.4 -apple-system, system-ui, sans-serif; }
   form { display: grid; gap: 8px; width: min(420px, 90vw); }
   input, button { font: inherit; height: 28px; padding: 0 8px; border-radius: 5px; border: 1px solid #333; background: #141414; color: inherit; }
-  input, button { -webkit-app-region: no-drag; }
   button { cursor: pointer; }
   button:disabled { opacity: 0.5; cursor: default; }
   .row { display: flex; gap: 8px; }
@@ -18,7 +17,7 @@
   #back { display: none; border: 0; background: none; color: #a3a3a3; justify-self: start; padding: 0; height: 18px; }
 </style>
 </head>
-<body>
+<body data-tauri-drag-region="deep">
 <form method="get">
   <label for="url">Suplex URL</label>
   <input id="url" name="url" type="url" required autofocus value="http://localhost:4111" placeholder="https://suplex.<tailnet>.ts.net">

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-desktop-turn-on-tailscale"
+description = "Enables the desktop_turn_on_tailscale command without any pre-configured scope."
+commands.allow = ["desktop_turn_on_tailscale"]
+
+[[permission]]
+identifier = "deny-desktop-turn-on-tailscale"
+description = "Denies the desktop_turn_on_tailscale command without any pre-configured scope."
+commands.deny = ["desktop_turn_on_tailscale"]

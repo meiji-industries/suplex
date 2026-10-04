@@ -5,12 +5,12 @@ For maintainers tracing host and browser responsibilities, this page explains pr
 Sources: [task host](../../rust/src/tasks/host.rs),
 [host health](../../rust/src/platform/health.rs),
 [setup view](../../src/frontend/features/settings/setup.tsx),
-[desktop local runtime](../../desktop/src/local-runtime.ts), and
+[desktop local runtime](../../desktop/src-tauri/src/local_runtime.rs), and
 [shared task data](../../src/frontend/features/tasks/task-data.tsx).
 
 The Rust host serves the HTTP API and runs task scheduling beside SQLite. The
-React frontend reads those APIs. The Electron desktop app can run the bundled
-host locally or connect to another installation. Development uses a native host
+React frontend reads those APIs. The Tauri desktop app (a Rust shell around
+WKWebView) can run the bundled host locally or connect to another installation. Development uses a native host
 with Vite for frontend updates. See [instances, clients, and distribution](deployment.md) for the deployment
 model and the [README](../../README.md) for setup.
 
@@ -31,7 +31,7 @@ The desktop app starts a bundled local host on a loopback address after its
 install stages finish. It waits for `/health` before opening the application.
 It adopts an existing host only when that host reports the same installation
 identity; quitting the app stops only a process group that this app started.
-The [desktop boot code](../../desktop/src/boot.ts) resumes a recorded local
+The [desktop boot code](../../desktop/src-tauri/src/boot.rs) resumes a recorded local
 install and reruns install stages when the bundled runtime changes.
 
 The authenticated [health route](../../rust/src/http/routes/health.rs) checks

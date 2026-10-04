@@ -2,12 +2,19 @@ import { execFileSync } from "node:child_process";
 import { readFile, writeFile } from "node:fs/promises";
 
 const git = (...args) => execFileSync("git", args, { encoding: "utf8" });
+// desktop/package.json also sets the Tauri app version: tauri.conf.json reads it.
 const files = ["package.json", "desktop/package.json"];
-const rustFiles = ["rust/Cargo.toml", "rust/Cargo.lock"];
+const rustFiles = [
+  { file: "rust/Cargo.toml", name: "suplex" },
+  { file: "rust/Cargo.lock", name: "suplex" },
+  { file: "desktop/src-tauri/Cargo.toml", name: "suplex-desktop" },
+  { file: "desktop/src-tauri/Cargo.lock", name: "suplex-desktop" },
+];
 const packages = await Promise.all(files.map(async (file) => ({ file, value: JSON.parse(await readFile(file, "utf8")) })));
-const rustPackages = await Promise.all(rustFiles.map(async (file) => ({ file, text: await readFile(file, "utf8") })));
+const rustPackages = await Promise.all(rustFiles.map(async ({ file, name }) => ({ file, name, text: await readFile(file, "utf8") })));
 const current = packages[0].value.version;
-if (!packages.every(({ value }) => value.version === current) || !rustPackages.every(({ text }) => text.includes(`name = "suplex"\nversion = "${current}"`))) {
+const crate = (name, version) => `name = "${name}"\nversion = "${version}"`;
+if (!packages.every(({ value }) => value.version === current) || !rustPackages.every(({ name, text }) => text.includes(crate(name, current)))) {
   throw new Error("Desktop, frontend, and native versions must match before release.");
 }
 
@@ -36,6 +43,6 @@ if (mode === "check-tag") {
     : process.env.RELEASE_BUMP === "patch" ? `${major}.${minor}.${patch + 1}`
     : (() => { throw new Error("RELEASE_BUMP must be major, minor, or patch."); })();
   await Promise.all(packages.map(({ file, value }) => writeFile(file, `${JSON.stringify({ ...value, version: next }, null, 2)}\n`)));
-  await Promise.all(rustPackages.map(({ file, text }) => writeFile(file, text.replace(`name = "suplex"\nversion = "${current}"`, `name = "suplex"\nversion = "${next}"`))));
+  await Promise.all(rustPackages.map(({ file, name, text }) => writeFile(file, text.replace(crate(name, current), crate(name, next)))));
   console.log(`${current} -> ${next}`);
 }

@@ -35,7 +35,7 @@ test.each(WORKFLOWS)("$name describes the actual workflow and delivery in both l
   }
   const element = document.createElement("div");
   element.innerHTML = renderToStaticMarkup(<WorkflowIllustration workflow={definition.id} delivery="Push branch" />);
-  const diagrams = element.querySelectorAll('svg[role="img"]');
+  const diagrams = element.querySelectorAll('[data-illustration-layout][role="img"]');
   expect(diagrams).toHaveLength(2);
   for (const diagram of Array.from(diagrams)) {
     expect(diagram.querySelector("title")?.textContent).toBe(`${definition.name} workflow`);
@@ -77,7 +77,7 @@ test.each(WORKFLOWS)("$name describes the actual workflow and delivery in both l
     root: <button>root</button>, worker: <button>worker</button>, reviewer: <button>reviewer</button>,
     planner_a: <button>planner_a</button>, planner_b: <button>planner_b</button>, rater: <button>rater</button>,
   }} />);
-  const interactiveDiagrams = element.querySelectorAll('svg[role="group"]');
+  const interactiveDiagrams = element.querySelectorAll('[data-illustration-layout][role="group"]');
   expect(interactiveDiagrams).toHaveLength(2);
   for (const diagram of Array.from(interactiveDiagrams)) {
     expect(new Set(Array.from(diagram.querySelectorAll("button"), button => button.textContent))).toEqual(new Set(["root", "worker", ...definition.advisorRoles]));
@@ -95,7 +95,7 @@ test("pull request repair names the selected pull request in both layouts", () =
 test("read-only agent names replace role labels only when their profiles resolve", () => {
   const element = document.createElement("div");
   element.innerHTML = renderToStaticMarkup(<WorkflowIllustration workflow="independent_review" delivery="Push branch" agentNames={{ root: "Ada", worker: "Bea" }} />);
-  for (const diagram of Array.from(element.querySelectorAll('svg[role="group"]'))) {
+  for (const diagram of Array.from(element.querySelectorAll('[data-illustration-layout][role="group"]'))) {
     expect(diagram.querySelector('[data-illustration-control="plan"]')?.textContent).toContain("Ada");
     expect(diagram.querySelector('[data-illustration-control="build"]')?.textContent).toContain("Bea");
     expect(diagram.querySelector('[data-illustration-control="reviewer"]')).toBeNull();

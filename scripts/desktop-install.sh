@@ -44,6 +44,11 @@ if pgrep -f "$app_processes" >/dev/null 2>&1; then
     waited=$((waited + 1))
   done
 fi
+# A server started outside the app (`suplex up`) survives the quit, and the relaunched app
+# would adopt it and keep serving the old build. Stop it so the relaunch starts the new one.
+if [ -x "$destination/Contents/Resources/runtime/bin/suplex" ]; then
+  "$destination/Contents/Resources/runtime/bin/suplex" down
+fi
 
 backup=""
 if [ -e "$destination" ]; then

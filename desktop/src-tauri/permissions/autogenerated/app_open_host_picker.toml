@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-app-open-host-picker"
+description = "Enables the app_open_host_picker command without any pre-configured scope."
+commands.allow = ["app_open_host_picker"]
+
+[[permission]]
+identifier = "deny-app-open-host-picker"
+description = "Denies the app_open_host_picker command without any pre-configured scope."
+commands.deny = ["app_open_host_picker"]

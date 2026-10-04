@@ -153,23 +153,31 @@ run = "export PATH=\"$(dirname \"$(mise which node)\"):$PATH\" && pnpm run test"
 run = "export PATH=\"$(dirname \"$(mise which node)\"):$PATH\" && pnpm run test:browser"
 
 [tasks."desktop:dev"]
-description = "Build the desktop app and open it with Electron"
+description = "Run the Tauri shell against this checkout's dev stack (reused, or started and owned), rebuilding the shell on desktop/src-tauri edits"
 run = "pnpm run desktop:dev"
 [tasks."desktop:build"]
-description = "Compile the desktop app"
+description = "Build the Tauri shell binary in release mode, without packaging"
 run = "pnpm run desktop:build"
 [tasks."desktop:typecheck"]
+description = "cargo check the Tauri shell crate and its tests"
 run = "pnpm run desktop:typecheck"
 [tasks."desktop:test"]
+description = "Run the Tauri shell's Rust behavior and IPC authorization tests"
 run = "pnpm run desktop:test"
+[tasks."desktop:test:native"]
+description = "Run the macOS WKWebView smoke tests against the app built with the test-only driver"
+run = "pnpm run desktop:test:native"
 [tasks."desktop:dist"]
-description = "Bundle the server runtime, then package Suplex.app, DMG, and ZIP under desktop/release/<arch> (SUPLEX_DESKTOP_ARCH=arm64 or x64, default arm64; Developer ID signed if the cert is in the keychain, not notarized)"
+description = "Bundle the host runtime, then package Suplex.app, DMG, and ZIP under desktop/release/<arch> (SUPLEX_DESKTOP_ARCH=arm64 or x64, default arm64; ad hoc signed unless APPLE_SIGNING_IDENTITY is set; update files only with SUPLEX_DESKTOP_UPDATE_URL and an updater key pair)"
 run = "pnpm run desktop:dist"
+[tasks."desktop:verify:release"]
+description = "Check built release files locally: package structure, signatures, both update manifests, and a publisher dry run"
+run = "pnpm run desktop:verify:release"
 [tasks."desktop:install"]
 description = "Build Suplex.app from this checkout and replace /Applications/Suplex.app without a release: quit, swap, relaunch, then suplex doctor (refuses uncommitted changes unless SUPLEX_INSTALL_DIRTY=1)"
 run = "sh scripts/desktop-install.sh"
 [tasks."desktop:dist:signed"]
-description = "Bundle the server runtime, then package, sign, notarize, and staple the Apple silicon and Intel DMGs for distribution; Apple credentials come from the 1Password Suplex vault (.env.production)"
+description = "Bundle the host runtime, then package, sign, notarize, and staple the Apple silicon and Intel releases with both update feeds; Apple and updater credentials come from the 1Password Suplex vault"
 run = '''
 source scripts/onepassword.sh
 onepassword_setup_service_account
@@ -233,7 +241,7 @@ run = '''
 version="$(node -p "require('./package.json').version")"
 if [[ "$(git rev-parse -q --verify "refs/tags/v$version^{commit}")" == "$(git rev-parse HEAD)" ]]; then
   echo "Resuming release v$version (already tagged)"
-elif ! git diff --quiet -- package.json desktop/package.json rust/Cargo.toml rust/Cargo.lock; then
+elif ! git diff --quiet -- package.json desktop/package.json rust/Cargo.toml rust/Cargo.lock desktop/src-tauri/Cargo.toml desktop/src-tauri/Cargo.lock; then
   node scripts/release-version.mjs check-tag
   echo "Resuming release v$version"
 else
@@ -246,13 +254,14 @@ description = "Verify the checkout and Docker are ready for a desktop and Linux 
 run = '''
 git --no-pager diff --check
 # Version files may be dirty from an earlier failed run; _release:bump resumes that version.
-[[ -z "$(git status --porcelain -- . ':!package.json' ':!desktop/package.json' ':!rust/Cargo.toml' ':!rust/Cargo.lock')" ]] || { echo "Commit or remove working-tree changes before releasing." >&2; exit 1; }
+[[ -z "$(git status --porcelain -- . ':!package.json' ':!desktop/package.json' ':!rust/Cargo.toml' ':!rust/Cargo.lock' ':!desktop/src-tauri/Cargo.toml' ':!desktop/src-tauri/Cargo.lock')" ]] || { echo "Commit or remove working-tree changes before releasing." >&2; exit 1; }
 docker info >/dev/null 2>&1 || { echo "Start Docker before releasing; the Linux build runs in Docker." >&2; exit 1; }
 node --input-type=module <<'NODE'
 import { readFileSync } from "node:fs";
 const version = JSON.parse(readFileSync("package.json", "utf8")).version;
 const desktop = JSON.parse(readFileSync("desktop/package.json", "utf8")).version;
-const native = ["rust/Cargo.toml", "rust/Cargo.lock"].every(file => readFileSync(file, "utf8").includes(`name = "suplex"\nversion = "${version}"`));
+const native = [["rust/Cargo.toml", "suplex"], ["rust/Cargo.lock", "suplex"], ["desktop/src-tauri/Cargo.toml", "suplex-desktop"], ["desktop/src-tauri/Cargo.lock", "suplex-desktop"]]
+  .every(([file, name]) => readFileSync(file, "utf8").includes(`name = "${name}"\nversion = "${version}"`));
 if (desktop !== version || !native) throw new Error("Desktop, frontend, and native versions must match before release.");
 NODE
 '''
@@ -264,7 +273,7 @@ version="$(node -p "require('./package.json').version")"
 # A rerun after a failed publish finds the tag on HEAD already; only push again.
 if [[ "$(git rev-parse -q --verify "refs/tags/v$version^{commit}")" != "$(git rev-parse HEAD)" ]]; then
   node scripts/release-version.mjs check-tag
-  git add package.json desktop/package.json rust/Cargo.toml rust/Cargo.lock
+  git add package.json desktop/package.json rust/Cargo.toml rust/Cargo.lock desktop/src-tauri/Cargo.toml desktop/src-tauri/Cargo.lock
   git commit -m "release: v$version"
   git tag "v$version"
 fi

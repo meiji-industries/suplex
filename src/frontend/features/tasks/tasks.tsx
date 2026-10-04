@@ -28,12 +28,14 @@ import { useTaskCosts } from "../analytics/lib/analytics.js";
 import { relativeTime, type ApiProject } from "../../shell/view-shared.js";
 import { useTaskCache, useTaskData } from "./task-data.js";
 import { queueOrder } from "./lib/task-list.js";
+import { replaceEqualDeep } from "@tanstack/react-query";
 import { useShellRuns } from "../moves/lib/move-runs.js";
 import { LoadingState } from "../../components/app/loading-state.js";
 import { listProjects } from "../projects/lib/project-api.js"; import { readTaskListFilters, taskListReturnHref, useTaskListScroll, useTaskListUrl } from "./lib/task-list-url-state.js";
 
 type BoardView = "compact" | "full";
 const boardShowOptions = [["all", "Tasks and moves", ListFilter], ["tasks", "Tasks", ClipboardList], ["moves", "Moves", Zap]] as const;
+const shortDate = new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric" });
 const taskViews = [["active", "Active"], ["backlog", "Backlog"], ["queued", "Queued"], ["all", "All tasks"], ["archived", "Archived"]] as const;
 
 /** Task, project, branch, status, PR, cost, and updated columns of the wide task list. */
@@ -73,9 +75,10 @@ export function TasksView({ mode = "list" }: { mode?: "list" | "board" }): React
     ]);
     if (currentScope.current !== scope) return;
     if (task && task.companyId !== companyId) throw new Error("This task is not in the selected company");
-    if (result) setArchivedTasks(result);
-    setSelected(task);
-    setProjects(projectResult);
+    // Keep the previous references when a poll returns equal data, so an idle list does not render again.
+    if (result) setArchivedTasks(previous => replaceEqualDeep(previous, result));
+    setSelected(previous => replaceEqualDeep(previous, task));
+    setProjects(previous => replaceEqualDeep(previous, projectResult));
     setLoaded(true);
     setError("");
   }, [companyId, selectedId, archived, scope]);
@@ -141,7 +144,7 @@ export function TaskRow({ task, project, cost }: { task: Task; project: ApiProje
       <span data-task-status className="hidden lg:block"><TaskStatus status={task.status} pullRequestState={task.pullRequest?.state} /></span>
       <span className="hidden lg:block">{task.pullRequest ? null : <span className="text-muted-foreground">—</span>}</span>
       <span data-task-cost className="hidden text-right tabular-nums text-muted-foreground lg:block">{cost?.cost != null ? <CostValue value={cost.cost} subsidized={cost.subsidized} partial={cost.partial} suffix={cost.partial ? "+" : ""} /> : null}</span>
-      <time data-task-time dateTime={task.updatedAt} className="col-start-2 row-start-1 shrink-0 text-right font-mono text-xs tabular-nums text-muted-foreground lg:col-auto lg:row-auto">{new Date(task.updatedAt).toDateString() === new Date().toDateString() ? relativeTime(task.updatedAt) : new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric" }).format(new Date(task.updatedAt))}</time>
+      <time data-task-time dateTime={task.updatedAt} className="col-start-2 row-start-1 shrink-0 text-right font-mono text-xs tabular-nums text-muted-foreground lg:col-auto lg:row-auto">{new Date(task.updatedAt).toDateString() === new Date().toDateString() ? relativeTime(task.updatedAt) : shortDate.format(new Date(task.updatedAt))}</time>
       <span data-task-compact-details className="col-span-2 flex min-w-0 items-center gap-2 pl-6 text-xs text-muted-foreground lg:hidden"><span data-task-compact-project className="flex min-w-0 items-center gap-1.5"><ProjectLabel project={project} fallback="Not available" /></span><span data-task-compact-cost className="ml-auto shrink-0 text-right tabular-nums">{cost?.cost != null ? <CostValue value={cost.cost} subsidized={cost.subsidized} partial={cost.partial} suffix={cost.partial ? "+" : ""} /> : null}</span></span>
     </a>
     {task.pullRequest ? <span data-task-pr className="pointer-events-none relative z-10 col-start-5 row-start-1 hidden lg:block"><a href={task.pullRequest.url} target="_blank" rel="noreferrer" className="pointer-events-auto underline-offset-2 hover:underline focus-visible:outline-2 focus-visible:outline-ring">#{task.pullRequest.number}</a></span> : null}

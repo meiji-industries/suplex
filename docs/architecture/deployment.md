@@ -4,8 +4,8 @@ For contributors and operators choosing where Suplex runs, this page explains
 the host/client boundary and the supported distribution paths. Sources:
 [host entry point](../../rust/src/main.rs),
 [installation configuration](../../rust/src/platform/config.rs),
-[desktop boot](../../desktop/src/boot.ts),
-[desktop target policy](../../desktop/src/suplex-target.ts),
+[desktop boot](../../desktop/src-tauri/src/boot.rs),
+[desktop target policy](../../desktop/src-tauri/src/targets.rs),
 [binary embedding](../../rust/build.rs), and
 [Linux packaging](../../scripts/build-linux.sh).
 
@@ -114,13 +114,13 @@ The repository builds these forms of Suplex:
 
 | Distribution | Contents and execution | Client |
 | --- | --- | --- |
-| macOS desktop | Electron application with a native host binary and runtime manifest; Apple silicon and Intel builds | Bundled web client for local mode, or a thin client of another instance |
+| macOS desktop | Tauri 2 application (`desktop/src-tauri`, a Rust shell around the system WKWebView) with the native host binary and runtime manifest; Apple silicon and Intel builds; macOS 14 or later | The web client served by the selected host: its own bundled host in local mode, or another instance |
 | Linux binary | Architecture-specific `suplex` executable in a versioned tarball, with checksum and download manifest; arm64 and x64 builds | Browser, or a remote desktop client on another machine |
 | Source checkout | Frontend build plus native Rust host, with development and supervised installation commands | Browser or desktop URL connection |
 
 The release binary embeds the built frontend assets and SQL migrations. A
-standalone host does not need a separate frontend server or Electron to serve
-the application. Node, pnpm, and Rust participate in building from source; they
+standalone host does not need a separate frontend server or a desktop shell to
+serve the application. Node, pnpm, and Rust participate in building from source; they
 are not a separate JavaScript application server shipped alongside the native
 binary. Native providers, Git, and display tools remain host dependencies.
 A packaged binary does not bundle or authenticate every agent tool.
@@ -133,8 +133,13 @@ that a particular version has been published or installed successfully.
 
 ## Process ownership and updates
 
-In local desktop mode, the app starts its bundled host and stops the process
-group it owns on quit. A network mode selection saves the preferred mode but
+In local desktop mode, the app starts its bundled host in its own process group
+and, on quit, sends TERM to that group, waits up to five seconds, and sends KILL
+only if the host is still alive. Closing the window keeps the app and the host
+running; selecting another host does not stop the owned host. The app never
+signals an adopted or remote host, another checkout, Herdr, or native agent
+sessions. After a crash, a surviving host of this installation is adopted on
+the next launch; a stale process id grants no authority to signal. A network mode selection saves the preferred mode but
 does not change the running host. The Access page and the native menu show an
 explicit **Restart** action when the saved mode differs from the active owned
 mode. Restart resolves current Tailscale state, stops the owned host, and starts
@@ -147,7 +152,23 @@ managed start.
 An unrelated server occupying the preferred port causes another local port to
 be selected; answering a health check is not enough to claim ownership.
 
-The remote web page is sandboxed in Electron, with Node integration disabled.
+The desktop shell grants native commands per webview. Each selected host gets
+a new webview label and a capability bound at runtime to that label and that
+exact origin (scheme, host, and port). It can call only the narrow
+`window.suplexApp` bridge: open the host picker, report a cleared account, and
+the network-access methods, which act only for the shell's own local host and
+only after the shell reads that webview's own cookies and the host's
+`/api/auth/me` answers with an admin session. The bundled setup pages, in their
+own webview, drive installation and host selection through
+`window.suplexDesktop`; the bundled failure page can only retry and open the
+host picker. Other origins, cross-origin frames, retired webviews, and local
+files receive no command, and the shell checks the calling webview natively, so
+a raw IPC call cannot borrow another page's grant. No page receives updater,
+filesystem, process, or general window-management commands. Sources:
+[bridge](../../desktop/src-tauri/src/bridge.rs),
+[capabilities](../../desktop/src-tauri/capabilities), and
+[shell](../../desktop/src-tauri/src/shell.rs).
+
 Desktop connection, installation, and updater controls belong to the desktop
 shell. The remote application does not receive authority to update the client
 or run arbitrary client-side tools. A server worktree path also does not imply
@@ -156,7 +177,7 @@ before changing local-tool launch assumptions.
 
 Desktop updates replace the app and its bundled host together. Checkout hosts
 have a separate Git-based update mechanism. Linux archives have their own
-publication manifest; that manifest is not an Electron update feed or proof of
+publication manifest; that manifest is not a desktop update feed or proof of
 an automatic binary updater. See [updates and release publication](../updates.md)
 for the existing distribution procedures. Native sessions retain their own
 execution state across host recovery; stopping a host is not proof that every

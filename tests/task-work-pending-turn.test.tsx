@@ -74,8 +74,9 @@ test("the conversation shows a busy row while the Coordinator turn is queued or 
   expect(view.container.textContent).toContain("Turn took 7s");
 });
 
-test("a delivered task with no messages explains resuming once", async () => {
+test("a delivered task with no messages shows the default hint", async () => {
   const view = mount({ ...task, status: "delivered" });
   await view.render({ sessions: [], turns: [], shellPaneId: null });
-  expect(view.container.textContent?.match(/Send a message to resume this task\./g)).toHaveLength(1);
+  expect(view.container.textContent).not.toContain("resume this task");
+  expect(view.container.textContent).toContain("Coordinator replies will appear here.");
 });

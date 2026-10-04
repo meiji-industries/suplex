@@ -1,0 +1,133 @@
+#!/usr/bin/python3
+"""Test-only native CLI double for desktop install, process supervision, and the native smoke suite."""
+
+import json
+import os
+import signal
+import subprocess
+import sys
+import time
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+
+STAGES = [
+    {"name": "prerequisites", "title": "Check this Mac"},
+    {"name": "developer-tools", "title": "Set up Git"},
+    {"name": "herdr", "title": "Install Herdr terminals"},
+    {"name": "data", "title": "Prepare Suplex data"},
+    {"name": "complete", "title": "Finish"},
+]
+data = Path(os.environ.get("SUPLEX_DATA_ROOT", "."))
+installation = data.parent / "installation-id"
+
+
+def read(name, default):
+    try:
+        return json.loads((data / name).read_text())
+    except (OSError, ValueError):
+        return default
+
+
+def frame(value):
+    print(json.dumps(value), flush=True)
+    sys.exit(0 if value.get("ok") else 1)
+
+
+args = sys.argv[1:]
+if args == ["install", "--manifest"]:
+    print(json.dumps({"protocolVersion": 1, "stages": STAGES}), flush=True)
+elif len(args) == 4 and args[:2] == ["install", "--stage"] and args[3] == "--json":
+    stage = args[2]
+    known = next((entry for entry in STAGES if entry["name"] == stage), None)
+    if known is None:
+        sys.exit(f"unknown stage: {stage}")
+    settings = read("fixture.json", {})
+    done = read("fixture-stages.json", [])
+    data.mkdir(parents=True, exist_ok=True)
+    print(known["title"], file=sys.stderr, flush=True)
+    if stage in done:
+        frame({"ok": True, "stage": stage, "skipped": True, "reason": "already done"})
+    if stage == settings.get("failStage"):
+        print(f"{stage} could not finish", file=sys.stderr, flush=True)
+        frame({"ok": False, "stage": stage, "reason": settings.get("reason", f"The {stage} step failed."), "remedy": settings.get("remedy", "Fix it and retry.")})
+    for word in ("checking", "working", "finished"):
+        print(f"{stage}: {word}", file=sys.stderr, flush=True)
+    time.sleep(settings.get("delayMs", 0) / 1000)
+    (data / "fixture-stages.json").write_text(json.dumps([*done, stage]))
+    frame({"ok": True, "stage": stage, "skipped": False})
+elif args == ["start", "--foreground"]:
+    settings = read("fixture.json", {})
+    data.mkdir(parents=True, exist_ok=True)
+    (data / "fixture-start.json").write_text(json.dumps({"args": args, "cwd": os.getcwd(), "env": dict(os.environ), "pid": os.getpid(), "pgid": os.getpgid(0)}))
+    if settings.get("spawnChild"):
+        child = subprocess.Popen(["/bin/sleep", "120"])
+        (data / "fixture-child.pid").write_text(str(child.pid))
+    if "exitCode" in settings:
+        sys.exit(settings["exitCode"])
+    if settings.get("ignoreTerm"):
+        signal.signal(signal.SIGTERM, lambda *_args: print("fixture ignored SIGTERM", flush=True))
+    else:
+        def stop(*_args):
+            print("fixture received SIGTERM", flush=True)
+            sys.exit(0)
+        signal.signal(signal.SIGTERM, stop)
+    signal.signal(signal.SIGINT, lambda *_args: sys.exit(0))
+    time.sleep(settings.get("startDelayMs", 0) / 1000)
+    port = int(os.environ.get("SUPLEX_PORT", "4111"))
+    pages = data / "fixture-pages"
+
+    class Handler(BaseHTTPRequestHandler):
+        def send(self, status, body, content_type="text/html; charset=utf-8", headers=()):
+            self.send_response(status)
+            self.send_header("content-type", content_type)
+            for name, value in headers:
+                self.send_header(name, value)
+            self.end_headers()
+            self.wfile.write(body)
+
+        def do_GET(self):
+            with open(data / "fixture-requests.log", "a") as log:
+                log.write(self.path + "\n")
+            path = self.path.split("?")[0]
+            if path == "/" and (pages / "index.html").is_file():
+                path = "/index.html"
+            if path == "/health":
+                identity = installation.read_text().strip() if installation.exists() else ""
+                self.send(200, b"ok", "text/plain", [("x-suplex-installation-id", identity)] if identity else [])
+            elif path == "/api/auth/me":
+                cookies = self.headers.get("cookie", "")
+                role = "admin" if "sid_v1=admin" in cookies else "member" if "sid_v1=member" in cookies else settings.get("authDefaultRole")
+                with open(data / "fixture-auth.log", "a") as log:
+                    log.write(json.dumps({"cookie": cookies, "role": role}) + "\n")
+                time.sleep(settings.get("authDelayMs", 0) / 1000)
+                self.send(200, json.dumps({"user": {"id": "u1", "role": role} if role else None}).encode(), "application/json")
+            elif path == "/__login":
+                role = "admin" if "role=admin" in self.path else "member"
+                self.send(200, b"signed in", "text/plain", [("set-cookie", f"sid_v1={role}; Path=/; HttpOnly; SameSite=Lax")])
+            elif path.startswith("/__download/"):
+                from urllib.parse import parse_qs, urlsplit
+                name = parse_qs(urlsplit(self.path).query).get("name", [path.rsplit("/", 1)[1]])[0]
+                self.send(200, f"attachment {name}".encode(), "application/octet-stream", [("content-disposition", f'attachment; filename="{name}"')])
+            elif (pages / path.lstrip("/")).is_file():
+                kind = {"js": "text/javascript", "css": "text/css"}.get(path.rsplit(".", 1)[-1], "text/html; charset=utf-8")
+                self.send(200, (pages / path.lstrip("/")).read_bytes(), kind)
+            else:
+                self.send(200, b"<!doctype html><html lang=\"en\"><p>Suplex fixture</p></html>")
+
+        def do_POST(self):
+            body = self.rfile.read(int(self.headers.get("content-length", "0")))
+            with open(data / "fixture-reports.log", "a") as log:
+                log.write(body.decode() + "\n")
+            self.send(204, b"", "text/plain")
+
+        def log_message(self, *_args):
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", port), Handler)
+    print(f"fixture native runtime listening on {port} (data {data})", flush=True)
+    try:
+        server.serve_forever()
+    finally:
+        server.server_close()
+else:
+    sys.exit(f"unknown command: {' '.join(args)}")

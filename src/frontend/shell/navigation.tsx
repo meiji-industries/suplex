@@ -134,7 +134,7 @@ export function AppSidebar(): ReactElement {
   }, [context?.currentCompany?.id, context?.currentCompany?.status, todayPage]);
   return (
     <Sidebar variant="inset" collapsible="offcanvas">
-      <SidebarHeader className="titlebar-drag titlebar-top"><div className="flex h-8 items-center gap-1 pl-2 -mr-2"><img src={wordmark} alt="Suplex" className="w-auto invert dark:invert-0 h-5" />{context?.user ? <span className="ml-auto flex"><Button variant="ghost" size="icon-sm" nativeButton={false} render={<a href={settingsHref} onClick={close} aria-label="Settings" title="Settings" />}><Settings /></Button></span> : null}<span className="md:hidden"><SidebarTrigger aria-label="Close navigation" title="Close navigation" /></span></div><CompanySwitcher /></SidebarHeader>
+      <SidebarHeader data-tauri-drag-region="deep" className="titlebar-top"><div className="flex h-8 items-center gap-1 pl-2 -mr-2"><img src={wordmark} alt="Suplex" className="w-auto invert dark:invert-0 h-5" />{context?.user ? <span className="ml-auto flex"><Button variant="ghost" size="icon-sm" nativeButton={false} render={<a href={settingsHref} onClick={close} aria-label="Settings" title="Settings" />}><Settings /></Button></span> : null}<span className="md:hidden"><SidebarTrigger aria-label="Close navigation" title="Close navigation" /></span></div><CompanySwitcher /></SidebarHeader>
       <SidebarContent><MainNavigation close={close} /><RecentTasks close={close} /><SecondaryNavigation /></SidebarContent>
       <NavigationSearch close={close} />
       <SidebarFooter><UserMenu /></SidebarFooter>

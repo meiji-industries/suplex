@@ -1,0 +1,25 @@
+{
+  "unmanaged": { "managed": false },
+  "managed": { "managed": true, "preference": "tailscale", "active": "local", "pending": true, "busy": false, "httpsUrl": null },
+  "snapshot": {
+    "state": "connecting-remote",
+    "stages": [{ "name": "herdr", "title": "Install Herdr terminals" }],
+    "finished": [{ "stage": "herdr", "skipped": true, "elapsedMs": 12 }],
+    "current": null,
+    "log": ["herdr: working"],
+    "failure": { "from": "installing", "title": "Install Herdr terminals", "reason": "curl exited 22", "remedy": null, "stage": "herdr", "log": [] },
+    "hosts": ["https://suplex.example"],
+    "currentHost": "https://suplex.example",
+    "localHost": null
+  },
+  "events": [
+    { "name": "stages", "stages": [{ "name": "data", "title": "Prepare Suplex data" }], "from": 0 },
+    { "name": "stage-started", "stage": "data" },
+    { "name": "log", "line": "data: working" },
+    { "name": "stage-finished", "stage": "data", "skipped": false, "elapsedMs": 5 },
+    { "name": "failed", "stage": "data", "title": "Prepare Suplex data", "reason": "disk full", "remedy": "Free space and retry." },
+    { "name": "done" }
+  ],
+  "tailscale": { "state": "not-running", "tailnet": null, "machines": [{ "name": "devbox", "host": "devbox.tail1.ts.net", "online": true }] },
+  "connection": { "ok": false, "reason": "No Suplex answered at https://x/health." }
+}

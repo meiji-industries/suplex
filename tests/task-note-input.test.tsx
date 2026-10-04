@@ -165,11 +165,11 @@ test("an unmounted composer does not apply a late accepted response", async () =
   expect(view.onChange).not.toHaveBeenCalled();
 });
 
- test("a delivered task accepts a follow-up message and explains that it resumes work", async () => {
+ test("a delivered task accepts a follow-up message", async () => {
   api.readJsonUnchecked.mockResolvedValueOnce(task);
   const view = mount({ task: { ...task, status: "delivered" } });
   await render(view.render);
-  expect(view.container.textContent).toContain("Send a message to resume this task.");
+  expect(view.container.textContent).not.toContain("resume this task");
   const field = textarea(view.container);
   await act(async () => { setText(field, "Fix the failing checks"); submit(field); });
   expect(api.readJsonUnchecked).toHaveBeenCalledWith("/api/tasks/task-1/note", expect.objectContaining({ method: "POST", body: JSON.stringify({ note: "Fix the failing checks" }) }));

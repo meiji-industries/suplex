@@ -6,7 +6,7 @@ finds an installation and what each command owns. Sources:
 [commands](../../rust/src/cli.rs),
 [installation configuration](../../rust/src/platform/config.rs),
 [process supervisor](../../rust/src/platform/supervisor.rs), and
-[desktop updater](../../desktop/src/desktop-updater.ts).
+[desktop updater](../../desktop/src-tauri/src/updater.rs).
 
 ## One binary, many roles
 

@@ -3,8 +3,10 @@ name: CI
 on:
   push:
     branches: [main]
+    paths-ignore: ['docs/**', '**/*.md']
   pull_request:
     branches: [main]
+    paths-ignore: ['docs/**', '**/*.md']
   workflow_dispatch:
     inputs:
       runner:
@@ -175,7 +177,7 @@ jobs:
           pnpm exec vite build
           cargo build --manifest-path rust/Cargo.toml --bin suplex --features github-test-endpoint
 
-      - name: Frontend, desktop, and protocol tests
+      - name: Frontend and protocol tests
         run: pnpm exec vitest run --project unit --maxWorkers "$TEST_WORKERS" --reporter=default --reporter=junit --outputFile=test-results/unit-integration.xml
 
       - name: Browser tests
@@ -203,3 +205,71 @@ jobs:
             cargo install cargo-sweep --version 0.8.0 --locked
             cargo sweep --maxsize "${TARGET_CACHE_MAX_SIZE}" rust
           fi
+
+  desktop:
+    name: Desktop shell (macOS)
+    # The Tauri shell, its WKWebView smoke tests, and its packaging run only on macOS. A Linux job is not evidence for them.
+    runs-on: blacksmith-6vcpu-macos-latest
+    # A cold cache builds the host and shell in release twice (arm64, then x64), about 20 minutes each on this runner.
+    timeout-minutes: 90
+    env:
+      CARGO_TERM_COLOR: always
+    steps:
+      - uses: actions/checkout@v5
+      - name: Record the runner
+        run: sw_vers && uname -m && sysctl -n machdep.cpu.brand_string
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.93.1
+          components: rustfmt, clippy
+          targets: aarch64-apple-darwin, x86_64-apple-darwin
+      # actions/cache saves only after a successful job, so a failing job rebuilt cold every run.
+      - name: Cache Cargo registry and dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            desktop/src-tauri -> target
+            rust -> target
+          cache-on-failure: true
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      - run: cargo fmt --manifest-path desktop/src-tauri/Cargo.toml --check
+      - run: cargo clippy --manifest-path desktop/src-tauri/Cargo.toml --all-targets -- -D warnings
+      - run: cargo clippy --manifest-path desktop/src-tauri/Cargo.toml --all-targets --features native-test -- -D warnings
+      - name: Shell behavior and IPC authorization tests
+        run: pnpm desktop:test
+      - name: Build the web client and debug host for the native smoke tests
+        run: |
+          pnpm exec vite build
+          cargo build --manifest-path rust/Cargo.toml --bin suplex
+      # Locally the smoke build keeps its own target directory; in CI, sharing the shell's reuses its compiled dependencies.
+      - name: Native WKWebView smoke tests
+        env:
+          SUPLEX_NATIVE_TARGET_DIR: ${{ github.workspace }}/desktop/src-tauri/target
+        run: pnpm desktop:test:native
+      # Packaging is four release builds (about 40 minutes), so it runs on main and manual runs, not on every PR.
+      # A temporary updater key and a test feed exercise both update manifests; production keys stay in the release path.
+      - name: Package Apple silicon with test update feeds
+        if: github.event_name != 'pull_request'
+        run: |
+          key="$RUNNER_TEMP/updater-test"
+          pnpm --filter suplex-desktop exec tauri signer generate -w "$key" -p "" --ci
+          SUPLEX_DESKTOP_ARCH=arm64 \
+          SUPLEX_DESKTOP_UPDATE_URL=https://downloads.example.invalid/stable/mac/arm64/ \
+          SUPLEX_DESKTOP_UPDATER_PUBKEY="$(cat "$key.pub")" \
+          TAURI_SIGNING_PRIVATE_KEY="$(cat "$key")" TAURI_SIGNING_PRIVATE_KEY_PASSWORD="" \
+          pnpm desktop:dist
+          rm -f "$key" "$key.pub"
+      - if: github.event_name != 'pull_request'
+        run: SUPLEX_DESKTOP_ARCH=arm64 pnpm desktop:verify:release
+      - name: Package Intel
+        if: github.event_name != 'pull_request'
+        run: SUPLEX_DESKTOP_ARCH=x64 pnpm desktop:dist
+      # Inspects the x64 bundle; it does not run Intel code on this runner.
+      - if: github.event_name != 'pull_request'
+        run: SUPLEX_DESKTOP_ARCH=x64 pnpm test:packaged

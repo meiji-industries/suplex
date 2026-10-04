@@ -1,0 +1,25 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "setup",
+  "description": "The bundled setup pages in a setup webview drive the boot sequence through window.suplexDesktop.",
+  "local": true,
+  "webviews": ["setup-*"],
+  "permissions": [
+    "allow-desktop-snapshot",
+    "allow-desktop-choose",
+    "allow-desktop-cancel",
+    "allow-desktop-retry",
+    "allow-desktop-launch",
+    "allow-desktop-back",
+    "allow-desktop-open-logs",
+    "allow-desktop-copy-output",
+    "allow-desktop-test-connection",
+    "allow-desktop-tailscale-status",
+    "allow-desktop-turn-on-tailscale",
+    "allow-desktop-open-tailscale",
+    "allow-desktop-remove-host",
+    "allow-desktop-select-host",
+    "core:window:allow-start-dragging",
+    "core:window:allow-internal-toggle-maximize"
+  ]
+}

@@ -373,6 +373,7 @@ mod tests {
         let admin = crate::http::routes::auth::tests::verified_sign_in(&mut database, now).unwrap();
         let company =
             companies::create_company(&mut database, &admin.user.id, "Create", now).unwrap();
+        crate::billing::tests::grant_pro(&database);
         let state = AppState::new(
             database,
             session::SessionConfig {

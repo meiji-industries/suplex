@@ -1,37 +1,70 @@
 # Billing
 
-Suplex Free allows two projects per company (`FREE_PROJECT_LIMIT` in
-`rust/src/billing/mod.rs`) and any number of members. Suplex Pro costs $20 per
-purchased seat each month before tax and permits unlimited projects.
+Suplex Free and Pro match the plans on <https://getsuplex.ai/>. Each
+installation has one plan: the plan of the Suplex account linked to it
+([accounts](accounts.md)). A host without a linked account is Free.
 
-Seats work as on GitHub: an administrator buys a seat, then adds a member into
-it. Each member of the company that is not revoked holds one seat. An
-administrator holds a seat only in companies where it is a member.
-Invitations, machine identities, and agents do not hold seats. The shared
-`user_development` Operator is one account even when several people use it
-through trusted-network authentication.
+| Limit | Free | Pro |
+| --- | --- | --- |
+| Companies that are not archived | 1 | 3 |
+| Projects in all companies | 1 | 10 |
+| Tasks running at once (`active` or `waiting_human`) | 3 | Unlimited |
+| Tasks created each UTC calendar month, archived ones too | 50 | Unlimited |
 
-When a Pro company has no free seat, adding a member returns 402
-`seat_required`. The admin interface then quotes one more seat, buys it with
-the administrator's confirmation, and adds the member. If the billing service
-cannot be read, Suplex adds the member. A company whose members outnumber its
-seats keeps its projects, but new projects stop at the Free limit
-(`seat_limit_exceeded`) until it adds seats. A company that downgrades keeps
-all of its projects and stops creating projects above the Free limit. Suplex
-has no way to archive or delete a project, so such a company creates new
-projects again only on Pro.
+Pro costs USD 20 each month before tax for one seat. Each Suplex account gets
+one 30-day Pro trial with no payment method. Without a payment method at the
+trial end, Stripe cancels the subscription and the host returns to Free. The
+Team plan (seats, centralized billing) is not implemented.
 
-The company switcher shows each company's plan from local data. Every live
-read of the hosted service (the Billing page, the project-creation check) saves
-a snapshot (plan, purchased seats, paid access) in `suplex_company_billing`. A company without a billing
-account is Free. A snapshot older than an hour is read again in the background
-after `/api/companies` answers. A snapshot older than a day, or a Pro snapshot
-past its paid access, shows no label. Project creation and money commands
-always read the hosted service first; only project creation falls back to the
-snapshot, and only when the hosted service cannot answer (see Availability).
+`FREE` and `PRO` in `rust/src/billing/mod.rs` hold the limits.
+`billing::require` decides each limit inside the transaction that writes:
+company creation and restore, project creation, task creation (every path:
+browser, agent API, MCP, GitHub triggers, moves), and Start anyway. Queue
+admission applies the running-task limit in the same SQL statement as the
+project task concurrency, so a fourth Free task waits in the queue with
+`queue.planConcurrencyLimited` and starts when a running task stops. A host
+over a limit after a downgrade keeps everything it has; only new work stops.
+
+`suplex_plan` remembers the last plan suplex.sh confirmed for the linked
+account: its account ID and the end of its paid access. Pro applies while that
+access has not ended and the same account is linked. Suplex reads the plan
+again:
+
+- before a Free limit refuses an action (`billing::observe`), so a purchase
+  made on another device applies at once;
+- on every visit to Settings > Billing, after a login, and every 15 minutes.
+
+A hosted outage keeps confirmed Pro until its paid access ends. It never
+grants or extends Pro. A confirmed lapse replaces the snapshot with Free.
 
 Members and administrators read the plan in Settings > Billing. Only active
-administrators can purchase, change seats, or open the billing portal.
+administrators can start the trial, select Pro, or open the billing portal,
+and only when a Suplex account is linked.
+
+## Start free and Start 30-day trial
+
+The website buttons link to `https://suplex.sh/start` (Start free) and
+`https://suplex.sh/start?plan=pro` (Start 30-day trial), implemented in
+`rust/src/accounts/hosted/start.rs`.
+
+- `/start` shows the Free limits and the downloads.
+- `/start?plan=pro` creates a login attempt for the installation `suplex.sh`
+  and offers Google, GitHub, and an emailed link. The callback goes to
+  `/start/done?attempt=…`, which starts that account's trial and shows the
+  downloads with "log in with <email>". The attempt's verifier is discarded,
+  so no account token is minted. A repeated visit shows the same trial; an
+  account that used its trial sees that, and a Stripe failure still shows the
+  downloads and points to Settings > Billing.
+- After the person installs Suplex and logs in with the same account, the host
+  reads the plan and Pro applies.
+
+The Framer snippet tracks these links as `start-free` and `start-trial`
+website CTAs and adds the consented `?visitor=` to them, as for downloads.
+
+Installations from v1.3.0 bought Pro per company with seats
+(`suplex_company_billing`). Current hosts no longer read those bindings; the
+table and the hosted credential API remain so those subscriptions stay
+manageable in Stripe.
 
 ## Architecture
 
@@ -58,7 +91,8 @@ local row, or a return-page visit as proof of payment; it reads the source.
 Paid access derives from settled service-period invoice evidence on the
 configured seat item — not from the subscription status string. An `active`
 subscription whose current invoice is unpaid does not grant Pro; a verified
-zero-amount invoice settled by credit does. A full refund of the current paid
+zero-amount invoice settled by credit does. A `trialing` subscription is covered
+by Stripe's settled $0 invoice for the trial period. A full refund of the current paid
 period revokes it; a partial refund or a refund of an older period does not.
 An unpaid renewal preserves the previous paid deadline without extending it.
 RevenueCat grace may extend access only for renewal-failure states on the same
@@ -204,12 +238,18 @@ Production uses a separate Stripe configuration and RevenueCat project with
 
 ## Hosted API
 
-The hosted service authenticates each company with a bearer credential created
-at registration. Only the SHA-256 hash is stored.
+`/v1/plan*` authenticates the Suplex account token the host received at login.
+Each Suplex account has one billing account whose registration ID is the
+account ID. The older routes authenticate each v1.3.0 company with a bearer
+credential created at registration. Only SHA-256 hashes are stored.
 
 | Endpoint | Behavior |
 | --- | --- |
-| `POST /v1/accounts` | Register or recover the credential-bound empty account. |
+| `GET /v1/plan` | Bearer Suplex account token. The account's `{state, trialAvailable}`. |
+| `POST /v1/plan/trial` | Bearer Suplex account token. Start the account's one 30-day trial, or return the current plan. 409 `trial_used` after a trial. |
+| `POST /v1/plan/checkout` | Bearer Suplex account token plus `Idempotency-Key`. Checkout for one Pro seat. |
+| `POST /v1/plan/portal` | Bearer Suplex account token. A portal session for the account's customer. |
+| `POST /v1/accounts` | Register or recover the credential-bound empty account (v1.3.0 per-company billing). |
 | `GET /v1/billing` | Read the current provider state for the caller's account. |
 | `POST /v1/checkout` | Body `{quantity}` plus `Idempotency-Key`; create or reuse a Checkout session, or return the existing subscription's recovery action. |
 | `POST /v1/seats/preview` | Body `{quantity}`; return the exact Stripe invoice preview for an increase, including the proration timestamp the charge must reuse. |

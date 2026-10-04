@@ -30,13 +30,12 @@ struct CompanyList {
     companies: Vec<CompanyItem>,
 }
 
-/// A company with its plan label for the switcher. The label comes from local
-/// data only; `None` means Suplex has no recent plan for the company.
+/// A company with the installation's plan for the switcher, from local data.
 #[derive(Serialize)]
 struct CompanyItem {
     #[serde(flatten)]
     company: companies::Company,
-    plan: Option<&'static str>,
+    plan: crate::billing::Plan,
 }
 
 pub fn router() -> Router<AppState> {
@@ -99,23 +98,14 @@ fn respond<T: Serialize>(
 }
 
 async fn list(State(state): State<AppState>, headers: HeaderMap) -> Response {
-    let mut stale = Vec::new();
-    let response = respond(&state, &headers, None, StatusCode::OK, |database, user| {
-        let now = Utc::now();
+    respond(&state, &headers, None, StatusCode::OK, |database, user| {
+        let plan = crate::billing::plan(database)?;
         let companies = companies::list_visible_companies(database, &user.id)?
             .into_iter()
-            .map(|company| {
-                let (plan, refresh) = crate::billing::plan_label(database, &company.id, now)?;
-                if refresh {
-                    stale.push(company.id.clone());
-                }
-                Ok(CompanyItem { company, plan })
-            })
-            .collect::<Result<Vec<_>, Box<dyn std::error::Error>>>()?;
+            .map(|company| CompanyItem { company, plan })
+            .collect();
         Ok(CompanyList { companies })
-    });
-    crate::billing::refresh_plans(&state, stale);
-    response
+    })
 }
 
 async fn get_company(
@@ -133,6 +123,7 @@ async fn create(
     headers: HeaderMap,
     Valid(parsed): Valid<CompanyNameBody>,
 ) -> Response {
+    crate::billing::observe(&state, crate::billing::Limit::Companies).await;
     respond(
         &state,
         &headers,
@@ -211,18 +202,6 @@ async fn add_membership(
         Ok(value) => value,
         Err(error) => return *error,
     };
-    // Authorize before the billing read, so only an administrator causes one.
-    if let Err(error) = state.with_database(|database| {
-        companies::require_admin_company(database, &user.id, &company_id).map(drop)
-    }) {
-        return respond_with_cookies(ApiError::response(error), cookies);
-    }
-    if let Err(failure) = crate::billing::admit_member(&state, &company_id)
-        .await
-        .map_err(crate::shared::public_failure)
-    {
-        return respond_with_cookies(failure.into_response(), cookies);
-    }
     let response = match state.with_database(|database| {
         companies::add_membership(database, &user.id, &parsed.user_id, &company_id, Utc::now())
     }) {

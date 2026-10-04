@@ -2,25 +2,26 @@ import type { ReactElement } from "react";
 
 import { RadioGroup, RadioGroupItem } from "../../components/ui/radio-group.js";
 import { Table, TableBody, TableCell, TableRow } from "../../components/ui/table.js";
-import { BILLING_SEAT_UNIT_AMOUNT } from "../../contracts/billing.js";
+import { PRO_MONTHLY_AMOUNT } from "../../contracts/billing.js";
 
 export type OnboardingPlan = "free" | "pro";
 
-export function OnboardingPlanPicker({ value, onChange, projectCount, disabled = false }: {
+export function OnboardingPlanPicker({ value, onChange, projectCount, trialAvailable = false, disabled = false }: {
   value: OnboardingPlan;
   onChange: (plan: OnboardingPlan) => void;
   projectCount: number;
+  trialAvailable?: boolean;
   disabled?: boolean;
 }): ReactElement {
   const plans = [
-    { id: "free", label: "Free", detail: "2 projects", price: "$0", interval: "/month", disabled: projectCount >= 3 },
-    { id: "pro", label: "Pro", detail: "Unlimited projects", price: `$${BILLING_SEAT_UNIT_AMOUNT / 100}`, interval: "/seat/month", disabled: false },
+    { id: "free", label: "Free", detail: "1 company, 1 project, 3 tasks at a time, 50 tasks each month", price: "$0", interval: "/month", disabled: projectCount >= 2 },
+    { id: "pro", label: "Pro", detail: "3 companies, 10 projects, unlimited tasks", price: `$${PRO_MONTHLY_AMOUNT / 100}`, interval: "/month", disabled: false },
     { id: "enterprise", label: "Enterprise", detail: "", price: "", interval: "", disabled: true },
   ];
 
   return <div className="space-y-3">
     <RadioGroup aria-label="Plan" value={value} disabled={disabled} onValueChange={next => {
-      if (next === "pro" || (next === "free" && projectCount < 3)) onChange(next);
+      if (next === "pro" || (next === "free" && projectCount < 2)) onChange(next);
     }}>
       <div className="overflow-hidden rounded-md border">
         <Table>
@@ -44,7 +45,7 @@ export function OnboardingPlanPicker({ value, onChange, projectCount, disabled =
       </div>
     </RadioGroup>
     <p className="text-xs text-muted-foreground">
-      {projectCount >= 3 ? "Pro is necessary for 3 or more projects." : value === "free" ? "No credit card necessary." : "Taxes are additional."}
+      {value === "free" ? "No credit card is necessary." : trialAvailable ? "Pro is free for 30 days. No credit card is necessary." : projectCount >= 2 ? "Pro is necessary for 2 or more projects." : "Taxes are additional."}
     </p>
   </div>;
 }

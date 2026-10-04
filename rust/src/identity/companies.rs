@@ -171,6 +171,7 @@ pub fn create_company(
     let name = company_name(raw_name)?;
     database.transaction(false, |database| {
         require_admin(database, actor_user_id)?;
+        crate::billing::require(database, crate::billing::Limit::Companies, now)?;
         let company_id = random_hex_id("company")?;
         let created_at = rfc3339_millis(now);
         if database.connection().execute(
@@ -321,7 +322,11 @@ pub fn set_company_status(
     }
     database.transaction(false, |database| {
         require_admin(database, actor_user_id)?;
-        require_company_access(database, actor_user_id, company_id)?;
+        let previous = require_company_access(database, actor_user_id, company_id)?;
+        // Restoring an archived company counts toward the plan again.
+        if previous.status == "archived" && status != "archived" {
+            crate::billing::require(database, crate::billing::Limit::Companies, now)?;
+        }
         database.connection().execute(
             "UPDATE suplex_companies SET status = ?2 WHERE id = ?1",
             params![company_id, status],
@@ -461,6 +466,7 @@ mod tests {
             random_hex_id("suplex_company_mutations").unwrap()
         ));
         let mut database = SuplexDatabase::open(&filename, OpenMode::Migrate).unwrap();
+        crate::billing::tests::grant_pro(&database);
         let now = DateTime::parse_from_rfc3339("2026-09-24T12:00:00Z")
             .unwrap()
             .with_timezone(&Utc);

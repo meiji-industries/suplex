@@ -1,40 +1,202 @@
-//! Suplex Free and Pro. The hosted billing service owns subscription
-//! evidence; this module reads it, forwards money commands to it, and gates
-//! project creation above the Free limit.
+//! Suplex Free and Pro. Pro belongs to the Suplex account linked to this
+//! installation. The hosted service at suplex.sh owns subscription evidence;
+//! this module reads it, keeps the last confirmed Pro access in `suplex_plan`,
+//! forwards money commands, and enforces each plan's limits.
+//!
+//! Limits are decided from `suplex_plan` inside the writing transaction.
+//! Before a Free limit refuses an action, `observe` reads suplex.sh again, so
+//! a purchase made anywhere applies at once. A hosted outage keeps confirmed
+//! Pro until its paid access ends; it never grants Pro.
 
-use std::{
-    error::Error,
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-    },
-    time::Duration,
-};
+use std::{error::Error, time::Duration};
 
-use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Datelike, Utc};
 use reqwest::Method;
-use rusqlite::{OptionalExtension, params};
+use rusqlite::params;
 use serde::{Serialize, de::DeserializeOwned};
 use ts_rs::TS;
 use url::Url;
 
 use crate::{
+    accounts,
     http::AppState,
     identity::companies,
     platform::database::{DatabaseResult, SuplexDatabase},
     shared::{PublicFailure, time::rfc3339_millis},
 };
-use wire::{
-    HostedBillingState, HostedCheckoutResult, HostedErrorBody, HostedPortalResult,
-    HostedSeatChangeBody, HostedSeatChangeResult, HostedSeatPreview, QuantityBody,
-    RegistrationBody, RegistrationResponse,
-};
+use wire::{HostedCheckoutResult, HostedErrorBody, HostedPlan, HostedPortalResult};
 
 pub mod hosted;
 pub mod wire;
 
-pub const FREE_PROJECT_LIMIT: i64 = 2;
+crate::shared::wire_enum! {
+    pub enum Plan { Free = "free", Pro = "pro" }
+}
+
+/// A `None` limit is unlimited.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct PlanLimits {
+    pub companies: Option<i64>,
+    pub projects: Option<i64>,
+    pub running_tasks: Option<i64>,
+    pub monthly_tasks: Option<i64>,
+}
+
+pub const FREE: PlanLimits = PlanLimits {
+    companies: Some(1),
+    projects: Some(1),
+    running_tasks: Some(FREE_RUNNING_TASKS),
+    monthly_tasks: Some(50),
+};
+
+pub const PRO: PlanLimits = PlanLimits {
+    companies: Some(3),
+    projects: Some(10),
+    running_tasks: None,
+    monthly_tasks: None,
+};
+
+/// The number in `running_limited_sql!`.
+const FREE_RUNNING_TASKS: i64 = 3;
+
+pub fn limits(plan: Plan) -> PlanLimits {
+    match plan {
+        Plan::Free => FREE,
+        Plan::Pro => PRO,
+    }
+}
+
+/// SQL: confirmed Pro access for the linked account has not ended.
+#[macro_export]
+macro_rules! pro_sql {
+    () => {
+        "EXISTS(SELECT 1 FROM suplex_plan p JOIN suplex_account a ON a.account_id = p.account_id WHERE p.id = 'host' AND p.access_until > strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))"
+    };
+}
+
+/// SQL: running tasks in every company. A task waiting on you holds its slot.
+#[macro_export]
+macro_rules! running_tasks_sql {
+    () => {
+        "(SELECT COUNT(*) FROM suplex_tasks s JOIN suplex_task_controls sc ON sc.task_id = s.id WHERE s.archived_at IS NULL AND sc.status IN ('active', 'waiting_human'))"
+    };
+}
+
+/// SQL: Free's running-task limit holds a queued task back.
+#[macro_export]
+macro_rules! running_limited_sql {
+    () => {
+        concat!(
+            "(NOT ",
+            $crate::pro_sql!(),
+            " AND ",
+            $crate::running_tasks_sql!(),
+            " >= 3)"
+        )
+    };
+}
+
+pub fn plan(database: &SuplexDatabase) -> DatabaseResult<Plan> {
+    let pro: bool = database
+        .connection()
+        .query_row(concat!("SELECT ", pro_sql!()), [], |row| row.get(0))?;
+    Ok(if pro { Plan::Pro } else { Plan::Free })
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Limit {
+    Companies,
+    Projects,
+    RunningTasks,
+    MonthlyTasks,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct PlanUsage {
+    pub companies: i64,
+    pub projects: i64,
+    pub running_tasks: i64,
+    pub monthly_tasks: i64,
+}
+
+/// The first instant of the UTC calendar month.
+fn month_start(now: DateTime<Utc>) -> String {
+    format!("{:04}-{:02}-01T00:00:00.000Z", now.year(), now.month())
+}
+
+/// Archived companies do not count. Projects cannot be removed, so every
+/// project counts. Every task created this month counts, also an archived one.
+pub fn usage(database: &SuplexDatabase, now: DateTime<Utc>) -> DatabaseResult<PlanUsage> {
+    Ok(database.connection().query_row(
+        concat!(
+            "SELECT (SELECT COUNT(*) FROM suplex_companies WHERE status != 'archived'), (SELECT COUNT(*) FROM suplex_projects), ",
+            running_tasks_sql!(),
+            ", (SELECT COUNT(*) FROM suplex_tasks WHERE created_at >= ?1)"
+        ),
+        [month_start(now)],
+        |row| {
+            Ok(PlanUsage {
+                companies: row.get(0)?,
+                projects: row.get(1)?,
+                running_tasks: row.get(2)?,
+                monthly_tasks: row.get(3)?,
+            })
+        },
+    )?)
+}
+
+fn reached(plan: Plan, usage: &PlanUsage, limit: Limit) -> Option<i64> {
+    let limits = limits(plan);
+    let (used, allowed) = match limit {
+        Limit::Companies => (usage.companies, limits.companies),
+        Limit::Projects => (usage.projects, limits.projects),
+        Limit::RunningTasks => (usage.running_tasks, limits.running_tasks),
+        Limit::MonthlyTasks => (usage.monthly_tasks, limits.monthly_tasks),
+    };
+    allowed.filter(|allowed| used >= *allowed)
+}
+
+pub fn limit_failure(plan: Plan, limit: Limit, allowed: i64) -> PublicFailure {
+    let (code, what) = match (limit, allowed) {
+        (Limit::Companies, 1) => ("company_limit_reached", "1 company".to_owned()),
+        (Limit::Companies, n) => ("company_limit_reached", format!("{n} companies")),
+        (Limit::Projects, 1) => ("project_limit_reached", "1 project".to_owned()),
+        (Limit::Projects, n) => ("project_limit_reached", format!("{n} projects")),
+        (Limit::RunningTasks, n) => ("running_task_limit_reached", format!("{n} tasks at a time")),
+        (Limit::MonthlyTasks, n) => ("task_limit_reached", format!("{n} tasks each month")),
+    };
+    let message = match plan {
+        Plan::Free => format!("Free includes {what}. Select Pro in Settings > Billing."),
+        Plan::Pro => format!("Pro includes {what}."),
+    };
+    PublicFailure::new(402, message).with_code(code)
+}
+
+/// Refuses the action when the plan's limit is reached. Call it inside the
+/// transaction that writes, so concurrent writers cannot pass it together.
+pub fn require(database: &SuplexDatabase, limit: Limit, now: DateTime<Utc>) -> DatabaseResult<()> {
+    let plan = plan(database)?;
+    match reached(plan, &usage(database, now)?, limit) {
+        Some(allowed) => Err(limit_failure(plan, limit, allowed).into()),
+        None => Ok(()),
+    }
+}
+
+/// Reads suplex.sh again when a Free limit would refuse `limit`. It never
+/// fails: the decision that follows uses whatever plan is then confirmed.
+pub async fn observe(state: &AppState, limit: Limit) {
+    let refused = state.with_database(|database| {
+        Ok::<_, Box<dyn Error>>(
+            plan(database)? == Plan::Free
+                && reached(Plan::Free, &usage(database, Utc::now())?, limit).is_some(),
+        )
+    });
+    if refused.unwrap_or(false) {
+        let _ = refresh(state).await;
+    }
+}
 
 pub fn unavailable() -> PublicFailure {
     PublicFailure::new(503, "Suplex cannot check the subscription").with_code("billing_unavailable")
@@ -44,145 +206,50 @@ fn not_configured() -> PublicFailure {
     PublicFailure::new(503, "Billing is not configured").with_code("billing_not_configured")
 }
 
-/// Members of the company that hold a seat: every member account that is not
-/// revoked. Administrators hold a seat only in companies where they are members.
-fn seat_holders(database: &SuplexDatabase, company_id: &str) -> DatabaseResult<i64> {
-    Ok(database.connection().query_row(
-        "SELECT COUNT(*) FROM suplex_memberships m JOIN suplex_users u ON u.id = m.user_id WHERE m.company_id = ?1 AND u.status != 'revoked'",
-        [company_id],
-        |row| row.get(0),
-    )?)
-}
-
-/// The seats a Pro company needs: one for each seat holder, minimum one.
-pub fn required_seats(database: &SuplexDatabase, company_id: &str) -> DatabaseResult<i64> {
-    Ok(seat_holders(database, company_id)?.max(1))
-}
-
-pub fn project_count(database: &SuplexDatabase, company_id: &str) -> DatabaseResult<i64> {
-    Ok(database.connection().query_row(
-        "SELECT COUNT(*) FROM suplex_projects WHERE company_id = ?1",
-        [company_id],
-        |row| row.get(0),
-    )?)
-}
-
-/// Billing evidence carried from the early check into the commit
-/// transaction. `NotChecked` only means a Free slot existed when validation
-/// started; it cannot approve a creation above the limit.
-#[derive(Clone, Debug, PartialEq)]
-pub enum BillingEvidence {
-    NotChecked,
-    Free,
-    Unknown,
-    Paid {
-        purchased_seats: i64,
-        access_until: Option<String>,
-    },
-}
-
-/// Why a creation above the Free limit is refused.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
-#[error("Billing evidence requires a refresh outside the transaction")]
-pub enum Denial {
-    ProjectLimitReached,
-    SeatLimitExceeded,
-    BillingUnavailable,
-    /// The evidence must be read again outside the transaction.
-    RefreshRequired,
-}
-
-/// The entitlement decision for one project creation. Elapsed paid evidence
-/// asks for a refresh instead of approving stale evidence.
-pub fn decide_project_entitlement(
-    project_count: i64,
-    required_seats: i64,
-    now: DateTime<Utc>,
-    billing: &BillingEvidence,
-) -> Result<(), Denial> {
-    if project_count < FREE_PROJECT_LIMIT {
-        return Ok(());
-    }
-    match billing {
-        BillingEvidence::NotChecked => Err(Denial::RefreshRequired),
-        BillingEvidence::Free => Err(Denial::ProjectLimitReached),
-        BillingEvidence::Unknown => Err(Denial::BillingUnavailable),
-        BillingEvidence::Paid { access_until, .. }
-            if access_until.as_deref().is_some_and(|until| {
-                DateTime::parse_from_rfc3339(until).is_ok_and(|until| until <= now)
-            }) =>
-        {
-            Err(Denial::RefreshRequired)
-        }
-        BillingEvidence::Paid {
-            purchased_seats, ..
-        } if *purchased_seats >= required_seats => Ok(()),
-        BillingEvidence::Paid { .. } => Err(Denial::SeatLimitExceeded),
-    }
-}
-
-/// `RefreshRequired` here means refresh attempts ran out.
-pub fn denial_failure(denial: Denial) -> PublicFailure {
-    match denial {
-        Denial::SeatLimitExceeded => {
-            PublicFailure::new(402, "Purchased seats do not cover active accounts")
-                .with_code("seat_limit_exceeded")
-        }
-        Denial::ProjectLimitReached => {
-            PublicFailure::new(402, "Project limit reached").with_code("project_limit_reached")
-        }
-        Denial::BillingUnavailable | Denial::RefreshRequired => unavailable(),
-    }
+fn account_required() -> PublicFailure {
+    PublicFailure::new(409, "Log in to your Suplex account to change the plan")
+        .with_code("account_required")
 }
 
 /// The hosted billing API. It never follows a redirect: that would resend the
-/// account credential to another origin.
+/// account token to another origin.
 #[derive(Clone)]
 pub struct BillingClient {
     base: Url,
-    installation_id: String,
     http: reqwest::Client,
-    // ponytail: global registration lock; per-company map if registration contention matters
-    registration: Arc<tokio::sync::Mutex<()>>,
-    /// One background plan refresh runs at a time.
-    refreshing: Arc<AtomicBool>,
 }
 
 /// Hosted 4xx codes that keep their meaning for the caller. Any other
 /// failure is a sanitized `billing_unavailable`.
-const KNOWN_HOSTED_FAILURES: [(&str, u16, &str); 6] = [
+const KNOWN_HOSTED_FAILURES: [(&str, u16, &str); 5] = [
     (
         "idempotency_conflict",
         409,
         "This idempotency key belongs to a different request",
     ),
-    ("billing_quote_changed", 409, "The billing quote changed"),
     (
         "billing_operation_not_applied",
         409,
-        "The change was not applied. Review a new quote and try again.",
+        "The change was not applied. Try again.",
     ),
-    ("invalid_seat_quantity", 422, "Seat quantity is invalid"),
     ("no_subscription", 409, "No subscription exists"),
     (
         "billing_payment_pending",
         409,
         "A billing payment is still pending",
     ),
+    ("trial_used", 409, "This Suplex account used its trial"),
 ];
 
 impl BillingClient {
-    pub fn new(base: Url, installation_id: String) -> Self {
+    pub fn new(base: Url) -> Self {
         Self {
             base,
-            installation_id,
             http: reqwest::Client::builder()
                 .timeout(Duration::from_secs(10))
                 .redirect(reqwest::redirect::Policy::none())
                 .build()
                 .expect("billing HTTP client builds"),
-            registration: Arc::default(),
-            refreshing: Arc::default(),
         }
     }
 
@@ -190,20 +257,13 @@ impl BillingClient {
         &self,
         method: Method,
         path: &str,
-        credential: Option<&str>,
+        token: &str,
         idempotency_key: Option<&str>,
-        body: Option<&impl Serialize>,
     ) -> Result<T, PublicFailure> {
         let url = self.base.join(path).map_err(|_| unavailable())?;
-        let mut request = self.http.request(method, url);
-        if let Some(credential) = credential {
-            request = request.bearer_auth(credential);
-        }
+        let mut request = self.http.request(method, url).bearer_auth(token);
         if let Some(key) = idempotency_key {
             request = request.header("idempotency-key", key);
-        }
-        if let Some(body) = body {
-            request = request.json(body);
         }
         let response = request.send().await.map_err(|_| unavailable())?;
         let status = response.status().as_u16();
@@ -223,19 +283,6 @@ impl BillingClient {
                 }));
         }
         response.json().await.map_err(|_| unavailable())
-    }
-
-    async fn read(&self, credential: &str) -> Result<HostedBillingState, PublicFailure> {
-        let state: HostedBillingState = self
-            .call(
-                Method::GET,
-                "/v1/billing",
-                Some(credential),
-                None,
-                None::<&()>,
-            )
-            .await?;
-        state.valid().then_some(state).ok_or_else(unavailable)
     }
 
     /// Checkout, portal, and payment URLs forwarded to the browser must land
@@ -275,191 +322,114 @@ pub fn parse_service_url(value: &str, name: &str) -> Result<Url, String> {
     Ok(url)
 }
 
-struct Binding {
-    registration_id: String,
-    credential: String,
-    account_id: Option<String>,
-}
-
-fn binding(database: &SuplexDatabase, company_id: &str) -> DatabaseResult<Option<Binding>> {
-    Ok(database
-        .connection()
-        .query_row(
-            "SELECT registration_id, credential, account_id FROM suplex_company_billing WHERE company_id = ?1",
-            [company_id],
-            |row| {
-                Ok(Binding {
-                    registration_id: row.get(0)?,
-                    credential: row.get(1)?,
-                    account_id: row.get(2)?,
-                })
-            },
-        )
-        .optional()?)
-}
-
-/// Insert-or-read in one transaction: one registration identity per company.
-fn ensure_binding(database: &mut SuplexDatabase, company_id: &str) -> DatabaseResult<Binding> {
-    database.transaction(true, |database| {
-        if let Some(existing) = binding(database, company_id)? {
-            return Ok(existing);
-        }
-        let mut secret = [0_u8; 32];
-        getrandom::fill(&mut secret)?;
-        let created = Binding {
-            registration_id: uuid::Uuid::new_v4().to_string(),
-            credential: URL_SAFE_NO_PAD.encode(secret),
-            account_id: None,
-        };
-        let now = rfc3339_millis(Utc::now());
+fn remember(state: &AppState, account_id: &str, plan: &HostedPlan) -> DatabaseResult<()> {
+    let access_until = plan
+        .state
+        .active
+        .then(|| plan.state.access_until.clone())
+        .flatten();
+    state.with_database(|database| {
         database.connection().execute(
-            "INSERT INTO suplex_company_billing (company_id, registration_id, credential, account_id, created_at, updated_at) VALUES (?1, ?2, ?3, NULL, ?4, ?4)",
-            params![company_id, created.registration_id, created.credential, now],
+            "INSERT OR REPLACE INTO suplex_plan (id, account_id, access_until, checked_at) VALUES ('host', ?1, ?2, ?3)",
+            params![account_id, access_until, rfc3339_millis(Utc::now())],
         )?;
-        Ok(created)
+        Ok(())
     })
 }
 
-/// The account credential. A missing account ID means the registration
-/// response was lost; registering again with the stored registration ID and
-/// credential recovers the same hosted account.
-async fn ensure_account(
-    state: &AppState,
-    client: &BillingClient,
-    company_id: &str,
-) -> Result<String, Box<dyn Error>> {
-    let first = state.with_database(|database| ensure_binding(database, company_id))?;
-    if first.account_id.is_some() {
-        return Ok(first.credential);
-    }
-    let _registration = client.registration.lock().await;
-    let current = state
-        .with_database(|database| binding(database, company_id))?
-        .unwrap_or(first);
-    if current.account_id.is_some() {
-        return Ok(current.credential);
-    }
-    let registered: RegistrationResponse = client
-        .call(
-            Method::POST,
-            "/v1/accounts",
-            None,
-            None,
-            Some(&RegistrationBody {
-                registration_id: current.registration_id,
-                credential: current.credential.clone(),
-                installation_id: client.installation_id.clone(),
-                company_id: company_id.to_owned(),
-            }),
-        )
-        .await?;
-    if registered.account_id.is_empty() || registered.account_id.len() > 128 {
-        return Err(unavailable().into());
-    }
-    state.with_database(|database| {
-        database.connection().execute(
-            "UPDATE suplex_company_billing SET account_id = ?1, updated_at = ?2 WHERE company_id = ?3",
-            params![registered.account_id, rfc3339_millis(Utc::now()), company_id],
-        )
-    })?;
-    Ok(current.credential)
+fn valid(plan: HostedPlan) -> Result<HostedPlan, PublicFailure> {
+    plan.state.valid().then_some(plan).ok_or_else(unavailable)
+}
+
+/// Reads the linked account's plan from suplex.sh and remembers it. `None`
+/// means no Suplex account is linked, which is Free.
+pub async fn refresh(state: &AppState) -> Result<Option<HostedPlan>, Box<dyn Error>> {
+    let client = state.billing.as_ref().ok_or_else(not_configured)?;
+    let Some(account) = state.with_database(|database| accounts::linked(database))? else {
+        return Ok(None);
+    };
+    let plan = valid(
+        client
+            .call(Method::GET, "/v1/plan", &account.token, None)
+            .await?,
+    )?;
+    remember(state, &account.account_id, &plan)?;
+    Ok(Some(plan))
 }
 
 #[derive(Clone, Debug, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
-pub struct BillingSummaryBase {
-    pub company_id: String,
-    pub project_count: i64,
-    pub required_seats: i64,
+#[ts(export)]
+pub struct BillingSummary {
+    /// The plan that applies now.
+    pub plan: Plan,
+    pub limits: PlanLimits,
+    pub usage: PlanUsage,
+    /// False when suplex.sh did not answer: the plan is the last confirmed one.
+    pub checked: bool,
+    pub account_linked: bool,
     pub can_manage_billing: bool,
     pub purchase_configured: bool,
-}
-
-/// Verified absence of paid access. Lifecycle fields are present when a
-/// subscription exists, so an expired or unpaid one stays manageable.
-#[derive(Clone, Debug, Serialize, TS)]
-#[serde(rename_all = "camelCase")]
-pub struct BillingFreeSummary {
-    #[serde(flatten)]
-    pub base: BillingSummaryBase,
-    pub project_limit: i64,
-    pub purchased_seats: i64,
-    pub can_create_project: bool,
-    pub checked_at: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
+    pub trial_available: bool,
+    /// The Stripe status, such as `trialing` or `active`. `none` without a
+    /// subscription.
     pub subscription_status: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub renewal_at: Option<Option<String>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub access_until: Option<Option<String>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub cancel_at_period_end: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub payment_action_required: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub payment_action_url: Option<Option<String>>,
-}
-
-/// Verified paid access. A seat shortage is still Pro, limited to the Free
-/// project count.
-#[derive(Clone, Debug, Serialize, TS)]
-#[serde(rename_all = "camelCase")]
-pub struct BillingProSummary {
-    #[serde(flatten)]
-    pub base: BillingSummaryBase,
-    /// Null means unlimited.
-    pub project_limit: Option<i64>,
-    pub purchased_seats: i64,
-    pub can_create_project: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[ts(optional, type = "\"seat_limit_exceeded\"")]
-    pub restriction: Option<&'static str>,
-    pub checked_at: String,
-    pub subscription_status: String,
     pub renewal_at: Option<String>,
     pub access_until: Option<String>,
     pub cancel_at_period_end: bool,
     pub payment_action_required: bool,
+    /// Only administrators receive a billing URL.
     pub payment_action_url: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub unit_amount: Option<i64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub currency: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub monthly_subtotal: Option<i64>,
 }
 
-/// Provider evidence could not be obtained; capacity is omitted.
-#[derive(Clone, Debug, Serialize, TS)]
-#[serde(rename_all = "camelCase")]
-pub struct BillingUnknownSummary {
-    #[serde(flatten)]
-    pub base: BillingSummaryBase,
-    /// True below the Free limit, else unknown.
-    #[ts(type = "true | null")]
-    pub can_create_project: Option<bool>,
-    #[ts(type = "null")]
-    pub checked_at: Option<String>,
-    #[ts(type = "\"billing_unavailable\"")]
-    pub reason: &'static str,
-}
-
-#[derive(Clone, Debug, Serialize, TS)]
-#[serde(tag = "plan", rename_all = "lowercase")]
-#[ts(export)]
-pub enum BillingSummary {
-    Free(BillingFreeSummary),
-    Pro(BillingProSummary),
-    Unknown(BillingUnknownSummary),
+pub async fn summary(state: &AppState, user_id: &str) -> Result<BillingSummary, Box<dyn Error>> {
+    let (can_manage_billing, account_linked) = state.with_database(|database| {
+        let admin = companies::require_admin(database, user_id).is_ok();
+        Ok::<_, Box<dyn Error>>((admin, accounts::linked(database)?.is_some()))
+    })?;
+    let remote = if account_linked && state.billing.is_some() {
+        refresh(state).await.ok().flatten()
+    } else {
+        None
+    };
+    let (plan, usage) = state.with_database(|database| {
+        Ok::<_, Box<dyn Error>>((plan(database)?, usage(database, Utc::now())?))
+    })?;
+    let payment_action_url = match (&remote, &state.billing) {
+        (Some(remote), Some(client)) if can_manage_billing => remote
+            .state
+            .payment_action_url
+            .as_deref()
+            .map(|url| client.forwarded_url(url))
+            .transpose()?,
+        _ => None,
+    };
+    Ok(BillingSummary {
+        plan,
+        limits: limits(plan),
+        usage,
+        checked: remote.is_some() || !account_linked,
+        account_linked,
+        can_manage_billing,
+        purchase_configured: state.billing.is_some(),
+        trial_available: remote.as_ref().is_some_and(|remote| remote.trial_available),
+        subscription_status: remote
+            .as_ref()
+            .map(|remote| remote.state.subscription_status.clone()),
+        renewal_at: remote
+            .as_ref()
+            .and_then(|remote| remote.state.renewal_at.clone()),
+        access_until: remote
+            .as_ref()
+            .and_then(|remote| remote.state.access_until.clone()),
+        cancel_at_period_end: remote
+            .as_ref()
+            .is_some_and(|remote| remote.state.cancel_at_period_end),
+        payment_action_required: remote
+            .as_ref()
+            .is_some_and(|remote| remote.state.payment_action_required),
+        payment_action_url,
+    })
 }
 
 #[derive(Clone, Debug, Serialize, TS)]
@@ -479,350 +449,50 @@ pub enum BillingCheckoutResponse {
 }
 
 #[derive(Clone, Debug, Serialize, TS)]
-#[serde(tag = "status", rename_all = "snake_case")]
-#[ts(export)]
-pub enum BillingSeatChangeResponse {
-    Applied {
-        summary: BillingSummary,
-    },
-    PaymentRequired {
-        url: Option<String>,
-        summary: BillingSummary,
-    },
-}
-
-#[derive(Clone, Debug, Serialize, TS)]
 #[ts(export)]
 pub struct BillingPortalResponse {
     pub url: String,
 }
 
-pub async fn summary(
-    state: &AppState,
-    user_id: &str,
-    company_id: &str,
-) -> Result<BillingSummary, Box<dyn Error>> {
-    let (base, binding) = state.with_database(|database| {
-        companies::require_company_access(database, user_id, company_id)?;
-        let base = BillingSummaryBase {
-            company_id: company_id.to_owned(),
-            project_count: project_count(database, company_id)?,
-            required_seats: required_seats(database, company_id)?,
-            can_manage_billing: companies::require_admin(database, user_id).is_ok(),
-            purchase_configured: state.billing.is_some(),
-        };
-        Ok::<_, Box<dyn Error>>((base, binding(database, company_id)?))
-    })?;
-    let below_limit = base.project_count < FREE_PROJECT_LIMIT;
-    let checked_at = rfc3339_millis(Utc::now());
-    let free = |base| BillingFreeSummary {
-        base,
-        project_limit: FREE_PROJECT_LIMIT,
-        purchased_seats: 0,
-        can_create_project: below_limit,
-        checked_at: checked_at.clone(),
-        subscription_status: None,
-        renewal_at: None,
-        access_until: None,
-        cancel_at_period_end: None,
-        payment_action_required: None,
-        payment_action_url: None,
-    };
-    // No binding is a locally known Free: reading status never registers.
-    let Some(binding) = binding else {
-        return Ok(BillingSummary::Free(free(base)));
-    };
-    let remote = match &state.billing {
-        Some(client) => read_and_remember(state, client, company_id, &binding.credential)
-            .await
-            .and_then(|remote| {
-                // Members see the status but never a billing URL they could open.
-                let url = match &remote.payment_action_url {
-                    Some(url) if base.can_manage_billing => Some(client.forwarded_url(url)?),
-                    _ => None,
-                };
-                Ok((remote, url))
-            }),
-        None => Err(unavailable()),
-    };
-    let Ok((remote, payment_action_url)) = remote else {
-        let covered = state
-            .with_database(|database| remembered_pro(database, company_id, Utc::now()))?
-            .is_some_and(|evidence| {
-                matches!(evidence, BillingEvidence::Paid { purchased_seats, .. } if purchased_seats >= base.required_seats)
-            });
-        return Ok(BillingSummary::Unknown(BillingUnknownSummary {
-            can_create_project: (below_limit || covered).then_some(true),
-            base,
-            checked_at: None,
-            reason: "billing_unavailable",
-        }));
-    };
-    if !remote.active {
-        return Ok(BillingSummary::Free(BillingFreeSummary {
-            subscription_status: Some(remote.subscription_status),
-            renewal_at: Some(remote.renewal_at),
-            access_until: Some(remote.access_until),
-            cancel_at_period_end: Some(remote.cancel_at_period_end),
-            payment_action_required: Some(remote.payment_action_required),
-            payment_action_url: Some(payment_action_url),
-            ..free(base)
-        }));
-    }
-    let sufficient = remote.purchased_seats >= base.required_seats;
-    let manage = base.can_manage_billing;
-    Ok(BillingSummary::Pro(BillingProSummary {
-        base,
-        project_limit: (!sufficient).then_some(FREE_PROJECT_LIMIT),
-        purchased_seats: remote.purchased_seats,
-        can_create_project: sufficient || below_limit,
-        restriction: (!sufficient).then_some("seat_limit_exceeded"),
-        checked_at,
-        subscription_status: remote.subscription_status,
-        renewal_at: remote.renewal_at,
-        access_until: remote.access_until,
-        cancel_at_period_end: remote.cancel_at_period_end,
-        payment_action_required: remote.payment_action_required,
-        payment_action_url,
-        unit_amount: manage.then_some(wire::SEAT_UNIT_AMOUNT),
-        currency: manage.then(|| wire::SEAT_CURRENCY.to_owned()),
-        monthly_subtotal: manage.then_some(remote.purchased_seats * wire::SEAT_UNIT_AMOUNT),
-    }))
-}
-
-/// How long a remembered plan labels a company, and when it is read again.
-const PLAN_LABEL_LIFETIME: chrono::TimeDelta = chrono::TimeDelta::hours(24);
-const PLAN_REFRESH_AFTER: chrono::TimeDelta = chrono::TimeDelta::hours(1);
-
-/// Reads the hosted state and keeps a snapshot of it. The snapshot labels the
-/// company in the interface. Only `remembered_pro` reads it for a decision,
-/// and only when the hosted service cannot answer.
-async fn read_and_remember(
-    state: &AppState,
-    client: &BillingClient,
-    company_id: &str,
-    credential: &str,
-) -> Result<HostedBillingState, PublicFailure> {
-    let remote = client.read(credential).await?;
-    let _ = state.with_database(|database| {
-        database.connection().execute(
-            "UPDATE suplex_company_billing SET plan = ?1, access_until = ?2, checked_at = ?3, purchased_seats = ?4 WHERE company_id = ?5",
-            params![
-                if remote.active { "pro" } else { "free" },
-                remote.access_until,
-                rfc3339_millis(Utc::now()),
-                remote.purchased_seats,
-                company_id
-            ],
-        )
-    });
-    Ok(remote)
-}
-
-/// The plan label for a company from local data, and whether its snapshot is
-/// due for a refresh. No billing account is a known Free. A Pro snapshot past
-/// its paid access, or any snapshot older than a day, has no label.
-pub fn plan_label(
-    database: &SuplexDatabase,
-    company_id: &str,
-    now: DateTime<Utc>,
-) -> DatabaseResult<(Option<&'static str>, bool)> {
-    let snapshot: Option<(Option<String>, Option<String>, Option<String>)> = database
-        .connection()
-        .query_row(
-            "SELECT plan, access_until, checked_at FROM suplex_company_billing WHERE company_id = ?1",
-            [company_id],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-        )
-        .optional()?;
-    let Some((plan, access_until, checked_at)) = snapshot else {
-        return Ok((Some("free"), false));
-    };
-    let time = |text: Option<String>| {
-        text.and_then(|text| DateTime::parse_from_rfc3339(&text).ok())
-            .map(|time| time.with_timezone(&Utc))
-    };
-    let checked_at = time(checked_at);
-    let fresh = checked_at.is_some_and(|checked| now - checked < PLAN_LABEL_LIFETIME);
-    let label = match plan.as_deref() {
-        Some("pro") if fresh && time(access_until).is_some_and(|until| until > now) => Some("pro"),
-        Some("free") if fresh => Some("free"),
-        _ => None,
-    };
-    let stale = checked_at.is_none_or(|checked| now - checked >= PLAN_REFRESH_AFTER);
-    Ok((label, stale))
-}
-
-/// Reads the hosted state again for companies with an old snapshot, one at a
-/// time, after the response that found them. It never blocks a request.
-pub fn refresh_plans(state: &AppState, company_ids: Vec<String>) {
-    let Some(client) = state.billing.clone() else {
-        return;
-    };
-    if company_ids.is_empty() || client.refreshing.swap(true, Ordering::AcqRel) {
-        return;
-    }
-    let state = state.clone();
-    tokio::spawn(async move {
-        for company_id in company_ids {
-            let credential = state
-                .with_database(|database| binding(database, &company_id))
-                .ok()
-                .flatten()
-                .map(|binding| binding.credential);
-            if let Some(credential) = credential {
-                let _ = read_and_remember(&state, &client, &company_id, &credential).await;
-            }
-        }
-        client.refreshing.store(false, Ordering::Release);
-    });
-}
-
-/// A new member of a Pro company takes a free seat, as on GitHub: the
-/// administrator adds a seat first. A Free company, or a company whose billing
-/// cannot be read, admits the member. The project limit still applies to a
-/// seat shortage.
-// ponytail: two concurrent adds can share the last free seat; the project limit catches the overage
-pub async fn admit_member(state: &AppState, company_id: &str) -> DatabaseResult<()> {
-    let Some(binding) = state.with_database(|database| binding(database, company_id))? else {
-        return Ok(());
-    };
-    let Some(client) = &state.billing else {
-        return Ok(());
-    };
-    let Ok(remote) = read_and_remember(state, client, company_id, &binding.credential).await else {
-        return Ok(());
-    };
-    let holders = state.with_database(|database| seat_holders(database, company_id))?;
-    if !remote.active || remote.purchased_seats > holders {
-        return Ok(());
-    }
-    Err(
-        PublicFailure::new(402, "Add a seat before you add a member")
-            .with_code("seat_required")
-            .into(),
-    )
-}
-
-/// The billing read project creation uses. It never registers an account.
-pub async fn create_decision(
-    state: &AppState,
-    company_id: &str,
-) -> DatabaseResult<BillingEvidence> {
-    let Some(binding) = state.with_database(|database| binding(database, company_id))? else {
-        return Ok(BillingEvidence::Free);
-    };
-    let remote = match &state.billing {
-        Some(client) => read_and_remember(state, client, company_id, &binding.credential)
-            .await
-            .ok(),
-        None => None,
-    };
-    Ok(match remote {
-        Some(remote) if remote.active => BillingEvidence::Paid {
-            purchased_seats: remote.purchased_seats,
-            access_until: remote.access_until,
-        },
-        Some(_) => BillingEvidence::Free,
-        None => state
-            .with_database(|database| remembered_pro(database, company_id, Utc::now()))?
-            .unwrap_or(BillingEvidence::Unknown),
-    })
-}
-
-/// Pro the hosted service confirmed earlier, while its paid period lasts. A
-/// hosted outage keeps Pro usable; it never extends or grants Pro. A
-/// confirmed lapse replaces the snapshot with Free.
-fn remembered_pro(
-    database: &SuplexDatabase,
-    company_id: &str,
-    now: DateTime<Utc>,
-) -> DatabaseResult<Option<BillingEvidence>> {
-    let row: Option<(Option<String>, Option<i64>, Option<String>)> = database
-        .connection()
-        .query_row(
-            "SELECT plan, purchased_seats, access_until FROM suplex_company_billing WHERE company_id = ?1",
-            [company_id],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-        )
-        .optional()?;
-    Ok(match row {
-        Some((Some(plan), Some(purchased_seats), Some(until)))
-            if plan == "pro"
-                && DateTime::parse_from_rfc3339(&until).is_ok_and(|until| until > now) =>
-        {
-            Some(BillingEvidence::Paid {
-                purchased_seats,
-                access_until: Some(until),
-            })
-        }
-        _ => None,
-    })
-}
-
-/// The early quota check before a clone or provisioning. Below the Free
-/// limit no billing read happens; the commit transaction decides again.
-pub async fn admit_creation(state: &AppState, company_id: &str) -> DatabaseResult<()> {
-    let decide = |evidence: &BillingEvidence| {
-        state.with_database(|database| {
-            Ok::<_, Box<dyn Error>>(decide_project_entitlement(
-                project_count(database, company_id)?,
-                required_seats(database, company_id)?,
-                Utc::now(),
-                evidence,
-            ))
-        })
-    };
-    let mut decision = decide(&BillingEvidence::NotChecked)?;
-    for _ in 0..2 {
-        if decision != Err(Denial::RefreshRequired) {
-            break;
-        }
-        decision = decide(&create_decision(state, company_id).await?)?;
-    }
-    Ok(decision.map_err(denial_failure)?)
-}
-
-/// Money commands need an active administrator with company access.
+/// Money commands need an active administrator and a linked Suplex account.
 fn administered<'a>(
     state: &'a AppState,
     user_id: &str,
-    company_id: &str,
-    quantity: Option<i64>,
-) -> Result<&'a BillingClient, Box<dyn Error>> {
+) -> Result<(&'a BillingClient, accounts::LinkedAccount), Box<dyn Error>> {
     state.with_database(|database| {
-        companies::require_company_access(database, user_id, company_id)?;
         companies::require_admin(database, user_id)?;
         let client = state.billing.as_ref().ok_or_else(not_configured)?;
-        if let Some(quantity) = quantity
-            && quantity < required_seats(database, company_id)?
-        {
-            return Err(
-                PublicFailure::new(422, "Seat quantity is below active accounts")
-                    .with_code("invalid_seat_quantity")
-                    .into(),
-            );
-        }
-        Ok(client)
+        let account = accounts::linked(database)?.ok_or_else(account_required)?;
+        Ok((client, account))
     })
+}
+
+pub async fn start_trial(
+    state: &AppState,
+    user_id: &str,
+) -> Result<BillingSummary, Box<dyn Error>> {
+    let (client, account) = administered(state, user_id)?;
+    let plan = valid(
+        client
+            .call(Method::POST, "/v1/plan/trial", &account.token, None)
+            .await?,
+    )?;
+    remember(state, &account.account_id, &plan)?;
+    summary(state, user_id).await
 }
 
 pub async fn checkout(
     state: &AppState,
     user_id: &str,
-    company_id: &str,
-    quantity: i64,
     idempotency_key: &str,
 ) -> Result<BillingCheckoutResponse, Box<dyn Error>> {
-    let client = administered(state, user_id, company_id, Some(quantity))?;
-    let credential = ensure_account(state, client, company_id).await?;
+    let (client, account) = administered(state, user_id)?;
     let result: HostedCheckoutResult = client
         .call(
             Method::POST,
-            "/v1/checkout",
-            Some(&credential),
+            "/v1/plan/checkout",
+            &account.token,
             Some(idempotency_key),
-            Some(&QuantityBody { quantity }),
         )
         .await?;
     if !result.valid() {
@@ -833,66 +503,12 @@ pub async fn checkout(
             url: client.forwarded_url(&url)?,
         },
         HostedCheckoutResult::Subscribed { .. } => BillingCheckoutResponse::Subscribed {
-            summary: summary(state, user_id, company_id).await?,
+            summary: summary(state, user_id).await?,
         },
         HostedCheckoutResult::PaymentRequired { url, .. } => {
             BillingCheckoutResponse::PaymentRequired {
                 url: url.map(|url| client.forwarded_url(&url)).transpose()?,
-                summary: summary(state, user_id, company_id).await?,
-            }
-        }
-    })
-}
-
-pub async fn preview_seats(
-    state: &AppState,
-    user_id: &str,
-    company_id: &str,
-    quantity: i64,
-) -> Result<HostedSeatPreview, Box<dyn Error>> {
-    let client = administered(state, user_id, company_id, Some(quantity))?;
-    let credential = ensure_account(state, client, company_id).await?;
-    let preview: HostedSeatPreview = client
-        .call(
-            Method::POST,
-            "/v1/seats/preview",
-            Some(&credential),
-            None,
-            Some(&QuantityBody { quantity }),
-        )
-        .await?;
-    Ok(preview.valid().then_some(preview).ok_or_else(unavailable)?)
-}
-
-pub async fn change_seats(
-    state: &AppState,
-    user_id: &str,
-    company_id: &str,
-    body: &HostedSeatChangeBody,
-    idempotency_key: &str,
-) -> Result<BillingSeatChangeResponse, Box<dyn Error>> {
-    let client = administered(state, user_id, company_id, Some(body.quantity()))?;
-    let credential = ensure_account(state, client, company_id).await?;
-    let result: HostedSeatChangeResult = client
-        .call(
-            Method::POST,
-            "/v1/seats",
-            Some(&credential),
-            Some(idempotency_key),
-            Some(body),
-        )
-        .await?;
-    if !result.valid() {
-        return Err(unavailable().into());
-    }
-    Ok(match result {
-        HostedSeatChangeResult::Applied { .. } => BillingSeatChangeResponse::Applied {
-            summary: summary(state, user_id, company_id).await?,
-        },
-        HostedSeatChangeResult::PaymentRequired { url, .. } => {
-            BillingSeatChangeResponse::PaymentRequired {
-                url: url.map(|url| client.forwarded_url(&url)).transpose()?,
-                summary: summary(state, user_id, company_id).await?,
+                summary: summary(state, user_id).await?,
             }
         }
     })
@@ -901,22 +517,29 @@ pub async fn change_seats(
 pub async fn portal(
     state: &AppState,
     user_id: &str,
-    company_id: &str,
 ) -> Result<BillingPortalResponse, Box<dyn Error>> {
-    let client = administered(state, user_id, company_id, None)?;
-    let credential = ensure_account(state, client, company_id).await?;
+    let (client, account) = administered(state, user_id)?;
     let result: HostedPortalResult = client
-        .call(
-            Method::POST,
-            "/v1/portal",
-            Some(&credential),
-            None,
-            Some(&serde_json::json!({})),
-        )
+        .call(Method::POST, "/v1/plan/portal", &account.token, None)
         .await?;
     Ok(BillingPortalResponse {
         url: client.forwarded_url(&result.url)?,
     })
+}
+
+/// Reads the plan every 15 minutes, so a renewal, cancellation, or trial end
+/// applies to queued tasks without a visit to Settings > Billing.
+pub fn spawn_refresh(state: AppState) {
+    if state.billing.is_none() {
+        return;
+    }
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(Duration::from_secs(15 * 60));
+        loop {
+            interval.tick().await;
+            let _ = refresh(&state).await;
+        }
+    });
 }
 
 #[cfg(test)]

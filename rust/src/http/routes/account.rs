@@ -252,6 +252,9 @@ async fn login_status(
             ) {
                 return ApiError::response(error);
             }
+            // A newly linked account brings its plan, such as a trial
+            // started on suplex.sh.
+            let _ = crate::billing::refresh(&state).await;
             AccountLoginState::Complete
         }
         Err(error) => return failure(error),

@@ -570,6 +570,7 @@ mod tests {
             .unwrap()
             .with_timezone(&Utc);
         let mut database = SuplexDatabase::open(&filename, OpenMode::Migrate).unwrap();
+        crate::billing::tests::grant_pro(&database);
         let user = auth::development_sign_in(&mut database, now).unwrap().user;
         database.connection().execute("INSERT INTO suplex_companies (id,name,status,created_at) VALUES ('merge_company','Merge','active',?1)", [rfc3339_millis(now)]).unwrap();
         database.connection().execute("INSERT INTO suplex_projects (id,company_id,name,repository_path,worktree_root,repository_identity,base_branch,setup_command,verification_command,root_profile_id,worker_profile_id,agent_task_policy_json,created_at,updated_at) VALUES ('merge_project','merge_company','Merge','/tmp/merge-repo','/tmp/merge-worktrees',NULL,'main','','','root','worker','{}',?1,?1)", [rfc3339_millis(now)]).unwrap();

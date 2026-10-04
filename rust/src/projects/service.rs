@@ -547,7 +547,6 @@ pub fn create_local_default(
             worker_profile_id,
             configuration: None,
             now,
-            billing: crate::billing::BillingEvidence::NotChecked,
         },
     )
 }
@@ -557,8 +556,6 @@ pub struct CreateLocalOptions<'a> {
     pub worker_profile_id: &'a str,
     pub configuration: Option<&'a ProjectCreateBody>,
     pub now: DateTime<Utc>,
-    /// Evidence for a creation above the Free limit.
-    pub billing: crate::billing::BillingEvidence,
 }
 
 pub fn create_local(
@@ -631,16 +628,7 @@ pub fn create_local(
         if company.status != "active" {
             return Err(failure("Company is not active", 409, vec![]));
         }
-        crate::billing::decide_project_entitlement(
-            crate::billing::project_count(database, company_id)?,
-            crate::billing::required_seats(database, company_id)?,
-            options.now,
-            &options.billing,
-        )
-        .map_err(|denial| match denial {
-            crate::billing::Denial::RefreshRequired => Box::new(denial) as Box<dyn Error>,
-            denial => crate::billing::denial_failure(denial).into(),
-        })?;
+        crate::billing::require(database, crate::billing::Limit::Projects, options.now)?;
         for (role, profile_id) in [("root", root_profile_id), ("worker", worker_profile_id)] {
             let exists: bool = database.connection().query_row(
                 "SELECT EXISTS(SELECT 1 FROM suplex_profiles WHERE id = ?1 AND role = ?2 AND archived_at IS NULL)",
@@ -1505,8 +1493,7 @@ async fn finish_local_project(
     .await
 }
 
-/// Billing reads never run inside the SQLite transaction: a creation above
-/// the Free limit exits through `RefreshRequired`, reads evidence, retries.
+/// The plan's project limit is decided again inside the commit transaction.
 async fn commit_local(
     state: &AppState,
     user_id: &str,
@@ -1515,34 +1502,21 @@ async fn commit_local(
     configuration: Option<&ProjectCreateBody>,
     (root_profile_id, worker_profile_id): (&str, &str),
 ) -> DatabaseResult<Project> {
-    let mut evidence = crate::billing::BillingEvidence::NotChecked;
-    for attempt in 0..=MAX_BILLING_REFRESHES {
-        match state.with_database(|database| {
-            create_local(
-                database,
-                user_id,
-                company_id,
-                prepared,
-                CreateLocalOptions {
-                    root_profile_id,
-                    worker_profile_id,
-                    configuration,
-                    now: Utc::now(),
-                    billing: evidence.clone(),
-                },
-            )
-        }) {
-            Err(error) if error.is::<crate::billing::Denial>() => {}
-            created => return created,
-        }
-        if attempt < MAX_BILLING_REFRESHES {
-            evidence = crate::billing::create_decision(state, company_id).await?;
-        }
-    }
-    Err(crate::billing::unavailable().into())
+    state.with_database(|database| {
+        create_local(
+            database,
+            user_id,
+            company_id,
+            prepared,
+            CreateLocalOptions {
+                root_profile_id,
+                worker_profile_id,
+                configuration,
+                now: Utc::now(),
+            },
+        )
+    })
 }
-
-const MAX_BILLING_REFRESHES: usize = 3;
 
 async fn create_from_repository(
     state: &AppState,
@@ -1892,6 +1866,7 @@ mod tests {
             random_hex_id("suplex_project").unwrap()
         ));
         let mut database = SuplexDatabase::open(&filename, OpenMode::Migrate).unwrap();
+        crate::billing::tests::grant_pro(&database);
         let now = DateTime::parse_from_rfc3339("2026-09-24T12:00:00Z")
             .unwrap()
             .with_timezone(&Utc);
@@ -1924,7 +1899,6 @@ mod tests {
                 worker_profile_id: " profile_native_worker ",
                 configuration: Some(&configured),
                 now,
-                billing: crate::billing::BillingEvidence::NotChecked,
             },
         )
         .unwrap();
@@ -1977,7 +1951,6 @@ mod tests {
                 worker_profile_id: "profile_native_worker",
                 configuration: Some(&missing_instance),
                 now,
-                billing: crate::billing::BillingEvidence::NotChecked,
             },
         )
         .unwrap_err();
@@ -1997,7 +1970,6 @@ mod tests {
                 worker_profile_id: "profile_native_worker",
                 configuration: Some(&missing_workflow),
                 now,
-                billing: crate::billing::BillingEvidence::NotChecked,
             },
         )
         .unwrap_err();
@@ -2209,22 +2181,21 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn creation_above_the_free_limit_rechecks_billing_at_commit() {
-        use crate::billing::tests::{active_state, fixture};
+    async fn the_project_limit_follows_the_plan_confirmed_at_commit() {
+        use crate::billing::tests::{fixture, pro_plan};
         let f = fixture().await;
-        let prepared = |slug: &str| PreparedLocalProject {
-            name: format!("Project {slug}"),
-            repository_path: PathBuf::from(format!("/tmp/suplex-quota-{slug}")),
-            worktree_root: PathBuf::from(format!("/tmp/suplex-quota-{slug}-worktrees")),
-            repository: format!("acme/{slug}"),
-            base_branch: "main".to_owned(),
-            setup_command: String::new(),
-            verification_command: String::new(),
-        };
-        let commit = |slug: &'static str| {
-            let prepared = prepared(slug);
+        let commit = |slug: String| {
             let f = &f;
             async move {
+                let prepared = PreparedLocalProject {
+                    name: format!("Project {slug}"),
+                    repository_path: PathBuf::from(format!("/tmp/suplex-quota-{slug}")),
+                    worktree_root: PathBuf::from(format!("/tmp/suplex-quota-{slug}-worktrees")),
+                    repository: format!("acme/{slug}"),
+                    base_branch: "main".to_owned(),
+                    setup_command: String::new(),
+                    verification_command: String::new(),
+                };
                 commit_local(
                     &f.state,
                     &f.admin_id,
@@ -2236,56 +2207,21 @@ mod tests {
                 .await
             }
         };
-        let failure = |error: Box<dyn Error>| {
-            let failure = crate::shared::public_failure(error);
-            (failure.status.as_u16(), failure.code)
-        };
-        let reads = || f.fake.with(|hosted| hosted.count("/v1/billing"));
-        commit("one").await.unwrap();
-        commit("two").await.unwrap();
-        // No binding is a locally known Free: the third project needs no hosted read.
-        let refused = commit("three").await.unwrap_err();
-        assert_eq!(failure(refused), (402, Some("project_limit_reached")));
-        assert_eq!(reads(), 0);
-        f.bind(Some("acct_1"));
+        let code = |error: Box<dyn Error>| crate::shared::public_failure(error).code;
+        commit("1".into()).await.unwrap();
+        assert_eq!(
+            code(commit("2".into()).await.unwrap_err()),
+            Some("project_limit_reached")
+        );
         f.fake
-            .with(|hosted| hosted.respond("/v1/billing", 200, active_state(5)));
-        commit("three").await.unwrap();
-        assert_eq!(reads(), 1);
-        let mut expired = active_state(5);
-        expired["accessUntil"] = serde_json::json!("2000-01-01T00:00:00.000Z");
-        f.fake
-            .with(|hosted| hosted.respond("/v1/billing", 200, expired));
-        let stale = commit("four").await.unwrap_err();
-        assert_eq!(failure(stale), (503, Some("billing_unavailable")));
-        assert_eq!(reads(), 4);
-        f.user("member-1", "member", "active");
-        f.member("member-1", &f.company_id);
-        f.fake
-            .with(|hosted| hosted.respond("/v1/billing", 200, active_state(1)));
-        let short = commit("four").await.unwrap_err();
-        assert_eq!(failure(short), (402, Some("seat_limit_exceeded")));
-        // Unchecked evidence at the limit never commits.
-        let unchecked = f.state.with_database(|database| {
-            create_local_default(
-                database,
-                &f.admin_id,
-                &f.company_id,
-                &prepared("five"),
-                "profile_native_root",
-                "profile_native_worker",
-                Utc::now(),
-            )
-            .unwrap_err()
-        });
-        assert!(unchecked.is::<crate::billing::Denial>());
-        let names = f.state.with_database(|database| {
-            list(database, &f.admin_id, Some(&f.company_id))
-                .unwrap()
-                .into_iter()
-                .map(|project| project.name)
-                .collect::<Vec<_>>()
-        });
-        assert_eq!(names.len(), 3);
+            .with(|hosted| hosted.respond("/v1/plan", 200, pro_plan()));
+        crate::billing::observe(&f.state, crate::billing::Limit::Projects).await;
+        for slug in 2..=10 {
+            commit(slug.to_string()).await.unwrap();
+        }
+        assert_eq!(
+            code(commit("11".into()).await.unwrap_err()),
+            Some("project_limit_reached")
+        );
     }
 }

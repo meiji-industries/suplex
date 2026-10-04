@@ -1342,6 +1342,9 @@
                             "projectConcurrencyLimited": {
                               "type": "boolean"
                             },
+                            "planConcurrencyLimited": {
+                              "type": "boolean"
+                            },
                             "waitingOn": {
                               "type": "array",
                               "items": {
@@ -1431,6 +1434,7 @@
                           },
                           "required": [
                             "projectConcurrencyLimited",
+                            "planConcurrencyLimited",
                             "waitingOn"
                           ],
                           "additionalProperties": false,
@@ -2309,6 +2313,9 @@
                         "projectConcurrencyLimited": {
                           "type": "boolean"
                         },
+                        "planConcurrencyLimited": {
+                          "type": "boolean"
+                        },
                         "waitingOn": {
                           "type": "array",
                           "items": {
@@ -2398,6 +2405,7 @@
                       },
                       "required": [
                         "projectConcurrencyLimited",
+                        "planConcurrencyLimited",
                         "waitingOn"
                       ],
                       "additionalProperties": false,
@@ -4306,6 +4314,9 @@
                         "projectConcurrencyLimited": {
                           "type": "boolean"
                         },
+                        "planConcurrencyLimited": {
+                          "type": "boolean"
+                        },
                         "waitingOn": {
                           "type": "array",
                           "items": {
@@ -4395,6 +4406,7 @@
                       },
                       "required": [
                         "projectConcurrencyLimited",
+                        "planConcurrencyLimited",
                         "waitingOn"
                       ],
                       "additionalProperties": false,
@@ -5542,6 +5554,9 @@
                         "projectConcurrencyLimited": {
                           "type": "boolean"
                         },
+                        "planConcurrencyLimited": {
+                          "type": "boolean"
+                        },
                         "waitingOn": {
                           "type": "array",
                           "items": {
@@ -5631,6 +5646,7 @@
                       },
                       "required": [
                         "projectConcurrencyLimited",
+                        "planConcurrencyLimited",
                         "waitingOn"
                       ],
                       "additionalProperties": false,
@@ -7056,6 +7072,9 @@
                             "projectConcurrencyLimited": {
                               "type": "boolean"
                             },
+                            "planConcurrencyLimited": {
+                              "type": "boolean"
+                            },
                             "waitingOn": {
                               "type": "array",
                               "items": {
@@ -7145,6 +7164,7 @@
                           },
                           "required": [
                             "projectConcurrencyLimited",
+                            "planConcurrencyLimited",
                             "waitingOn"
                           ],
                           "additionalProperties": false,
@@ -8176,6 +8196,9 @@
                         "projectConcurrencyLimited": {
                           "type": "boolean"
                         },
+                        "planConcurrencyLimited": {
+                          "type": "boolean"
+                        },
                         "waitingOn": {
                           "type": "array",
                           "items": {
@@ -8265,6 +8288,7 @@
                       },
                       "required": [
                         "projectConcurrencyLimited",
+                        "planConcurrencyLimited",
                         "waitingOn"
                       ],
                       "additionalProperties": false,

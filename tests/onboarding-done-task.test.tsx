@@ -2,14 +2,14 @@
 import { act, StrictMode, useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 import type { ReactNode } from "react";
-import { afterEach, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import type * as NavigationState from "../src/frontend/shell/navigation-state.js";
 
 const company = { id: "company-1", name: "Acme", issueCode: "ACME", status: "active" };
 const fixture = vi.hoisted(() => ({ currentCompany: undefined as (Omit<typeof company, "issueCode"> & { issueCode: string | undefined }) | undefined, loading: false, projects: [{ id: "project-1" }], reload: vi.fn(), updateProfile: vi.fn(), renameCompany: vi.fn(), setCompanyIssueCode: vi.fn() }));
 vi.mock("../src/frontend/shell/company-context.js", () => ({ useCompanyContext: () => ({ currentCompany: fixture.currentCompany, user: { id: "user_development", role: "admin", displayName: "Operator", username: "operator@suplex.local", avatarSeed: "operator@suplex.local", title: "" }, updateProfile: fixture.updateProfile, reloadCompanies: vi.fn(), renameCompany: fixture.renameCompany, setCompanyIssueCode: fixture.setCompanyIssueCode }), useOptionalCompanyContext: () => fixture.currentCompany ? { currentCompany: fixture.currentCompany } : undefined }));
 vi.mock("../src/frontend/features/account/lib/account-api.js", () => ({ getAccount: vi.fn(async () => ({ configured: true, canManage: true, account: { email: "adam@example.com" } })) }));
-vi.mock("../src/frontend/features/settings/lib/billing-api.js", () => ({ getBillingSummary: vi.fn(), startCheckout: vi.fn() }));
+vi.mock("../src/frontend/features/settings/lib/billing-api.js", () => ({ getBillingSummary: vi.fn(), startCheckout: vi.fn(), startTrial: vi.fn() }));
 vi.mock("../src/frontend/features/onboarding/onboarding.js", async importOriginal => ({ ...(await importOriginal()), useOnboardingData: () => ({ state: { company: fixture.currentCompany, checks: [], providers: [], profiles: [], projects: fixture.projects }, loading: fixture.loading, error: "", reload: fixture.reload }) }));
 vi.mock("../src/frontend/components/app/system-health.js", () => ({ useSystemHealth: () => ({ refresh: vi.fn(), freshness: "fresh", refreshing: false }), CheckStatusIndicator: () => null, SystemHealthAlert: () => null, healthCheckPurpose: () => "" }));
 vi.mock("../src/frontend/shell/company-switcher.js", () => ({ CompanySwitcher: () => null }));
@@ -32,7 +32,7 @@ vi.mock("../src/frontend/features/tasks/new-task-dialog.js", () => ({ NewTaskDia
 import { OnboardingView } from "../src/frontend/features/onboarding/onboarding-wizard.js";
 import { navigate } from "../src/frontend/shell/navigation-state.js";
 import { useExperiments } from "../src/frontend/shell/experiments-api.js";
-import { getBillingSummary, startCheckout } from "../src/frontend/features/settings/lib/billing-api.js";
+import { getBillingSummary, startCheckout, startTrial } from "../src/frontend/features/settings/lib/billing-api.js";
 
 function RoutedOnboarding(): ReactNode {
   const [route, setRoute] = useState(() => `${window.location.pathname}${window.location.search}${window.location.hash}`);
@@ -59,6 +59,7 @@ function setInput(input: HTMLInputElement, value: string): void {
   input.dispatchEvent(new Event("input", { bubbles: true }));
 }
 
+beforeEach(() => { vi.mocked(getBillingSummary).mockResolvedValue(freeSummary); });
 afterEach(() => {
   fixture.currentCompany = undefined;
   fixture.loading = false;
@@ -73,6 +74,7 @@ afterEach(() => {
   vi.mocked(useExperiments).mockReset();
   vi.mocked(getBillingSummary).mockReset();
   vi.mocked(startCheckout).mockReset();
+  vi.mocked(startTrial).mockReset();
   vi.restoreAllMocks();
 });
 
@@ -120,16 +122,16 @@ test.each([0, 1, 2, 3, 4])("Plan selects the eligible default with %i projects",
   const root = createRoot(container);
   await act(async () => root.render(<OnboardingView />));
   const radio = (label: string): HTMLElement => container.querySelector(`[role="radio"][aria-label="${label}"]`)!;
-  expect(radio("Free").getAttribute("aria-checked")).toBe(String(count < 3));
-  expect(radio("Pro").getAttribute("aria-checked")).toBe(String(count >= 3));
-  expect(radio("Free").hasAttribute("data-disabled")).toBe(count >= 3);
+  expect(radio("Free").getAttribute("aria-checked")).toBe(String(count < 2));
+  expect(radio("Pro").getAttribute("aria-checked")).toBe(String(count >= 2));
+  expect(radio("Free").hasAttribute("data-disabled")).toBe(count >= 2);
   expect(radio("Enterprise").hasAttribute("data-disabled")).toBe(true);
   await act(async () => radio("Enterprise").click());
   expect(radio("Enterprise").getAttribute("aria-checked")).toBe("false");
   await act(async () => radio("Pro").closest("label")!.click());
   expect(radio("Pro").getAttribute("aria-checked")).toBe("true");
   await act(async () => radio("Free").closest("label")!.click());
-  expect(radio("Free").getAttribute("aria-checked")).toBe(String(count < 3));
+  expect(radio("Free").getAttribute("aria-checked")).toBe(String(count < 2));
   expect(container.textContent).not.toContain("Startup");
   expect(container.querySelector("footer")?.textContent).toBe("Continue");
   await act(async () => root.unmount());
@@ -156,9 +158,9 @@ test("Plan updates its default when projects load and when the company changes",
   await act(async () => root.unmount());
 });
 
-const freeSummary = { plan: "free", companyId: "company-1", projectCount: 3, projectLimit: 2, requiredSeats: 2, purchasedSeats: 0, canCreateProject: false, checkedAt: "2026-10-03T00:00:00Z", canManageBilling: true, purchaseConfigured: true } as const;
+const freeSummary = { plan: "free", limits: { companies: 1, projects: 1, runningTasks: 3, monthlyTasks: 50 }, usage: { companies: 1, projects: 3, runningTasks: 0, monthlyTasks: 0 }, checked: true, accountLinked: true, canManageBilling: true, purchaseConfigured: true, trialAvailable: false, subscriptionStatus: "none", renewalAt: null, accessUntil: null, cancelAtPeriodEnd: false, paymentActionRequired: false, paymentActionUrl: null } as const;
 
-test("Pro opens checkout with the current member count and reuses the intent after a failed request", async () => {
+test("Pro opens checkout and reuses the intent after a failed request", async () => {
   fixture.currentCompany = company;
   fixture.projects = [{ id: "one" }, { id: "two" }, { id: "three" }];
   const tab = { opener: null, location: { href: "" }, close: vi.fn() };
@@ -173,11 +175,31 @@ test("Pro opens checkout with the current member count and reuses the intent aft
   await act(async () => button(container, "Continue").click());
   expect(window.location.search).toContain("step=plan");
   expect(container.textContent).toContain("Connection lost");
-  const key = vi.mocked(startCheckout).mock.calls[0]![2];
+  const key = vi.mocked(startCheckout).mock.calls[0]![0];
   await act(async () => button(container, "Continue").click());
-  expect(startCheckout).toHaveBeenNthCalledWith(2, "company-1", 2, key);
-  expect(getBillingSummary).toHaveBeenCalledTimes(2);
+  expect(startCheckout).toHaveBeenNthCalledWith(2, key);
+  expect(startTrial).not.toHaveBeenCalled();
   expect(tab.location.href).toBe("https://checkout.example/session");
+  expect(window.location.search).toContain("step=done");
+  await act(async () => root.unmount());
+});
+
+test("Pro starts the trial without a checkout tab when the account has one", async () => {
+  fixture.currentCompany = company;
+  fixture.projects = [{ id: "one" }, { id: "two" }];
+  const open = vi.spyOn(window, "open");
+  vi.mocked(getBillingSummary).mockResolvedValue({ ...freeSummary, trialAvailable: true });
+  vi.mocked(startTrial).mockResolvedValue({ ...freeSummary, plan: "pro", subscriptionStatus: "trialing" });
+  window.history.replaceState({}, "", "/onboarding?step=plan");
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  await act(async () => root.render(<OnboardingView />));
+  expect(container.textContent).toContain("Pro is free for 30 days.");
+  await act(async () => button(container, "Continue").click());
+  expect(startTrial).toHaveBeenCalledOnce();
+  expect(startCheckout).not.toHaveBeenCalled();
+  expect(open).not.toHaveBeenCalled();
   expect(window.location.search).toContain("step=done");
   await act(async () => root.unmount());
 });
@@ -185,9 +207,8 @@ test("Pro opens checkout with the current member count and reuses the intent aft
 test("an existing Pro subscription continues without another checkout", async () => {
   fixture.currentCompany = company;
   fixture.projects = [{ id: "one" }, { id: "two" }, { id: "three" }];
-  const close = vi.fn();
-  vi.spyOn(window, "open").mockReturnValue({ opener: null, close } as unknown as Window);
-  vi.mocked(getBillingSummary).mockResolvedValue({ ...freeSummary, plan: "pro", purchasedSeats: 2, projectLimit: null, canCreateProject: true, subscriptionStatus: "active", renewalAt: null, accessUntil: null, cancelAtPeriodEnd: false, paymentActionRequired: false, paymentActionUrl: null });
+  const open = vi.spyOn(window, "open");
+  vi.mocked(getBillingSummary).mockResolvedValue({ ...freeSummary, plan: "pro", subscriptionStatus: "active" });
   window.history.replaceState({}, "", "/onboarding?step=plan");
   const container = document.createElement("div");
   document.body.append(container);
@@ -195,7 +216,7 @@ test("an existing Pro subscription continues without another checkout", async ()
   await act(async () => root.render(<OnboardingView />));
   await act(async () => button(container, "Continue").click());
   expect(startCheckout).not.toHaveBeenCalled();
-  expect(close).toHaveBeenCalledOnce();
+  expect(open).not.toHaveBeenCalled();
   expect(window.location.search).toContain("step=done");
   await act(async () => root.unmount());
 });

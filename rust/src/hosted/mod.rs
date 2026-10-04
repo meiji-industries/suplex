@@ -21,6 +21,7 @@ const PROCESSOR_INTERVAL: Duration = Duration::from_secs(30);
 pub fn router(accounts: &Accounts) -> Router {
     billing::server::router(accounts.hosted.clone())
         .merge(accounts::server::router(accounts.clone()))
+        .merge(accounts::start::router(accounts.clone()))
         .merge(site::router(accounts.clone()))
         .layer(middleware::from_fn_with_state(
             accounts.hosted.config.origin.clone(),

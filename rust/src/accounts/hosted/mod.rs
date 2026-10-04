@@ -23,6 +23,7 @@ use providers::{Endpoints, Profile};
 pub mod invitations;
 pub mod providers;
 pub mod server;
+pub mod start;
 pub mod store;
 
 #[cfg(test)]
@@ -233,7 +234,7 @@ impl Accounts {
         code: &str,
         state: &str,
         visitor: Option<&str>,
-    ) -> HostedResult<LoginClient> {
+    ) -> HostedResult<String> {
         let config = self.config()?;
         if provider == AuthProvider::Email || !token_shape(state) || code.is_empty() {
             return Err(invalid());
@@ -303,11 +304,7 @@ impl Accounts {
         Ok(())
     }
 
-    pub fn verify_magic_link(
-        &self,
-        token: &str,
-        visitor: Option<&str>,
-    ) -> HostedResult<LoginClient> {
+    pub fn verify_magic_link(&self, token: &str, visitor: Option<&str>) -> HostedResult<String> {
         self.config()?;
         if !token_shape(token) {
             return Err(expired());
@@ -322,15 +319,15 @@ impl Accounts {
     }
 
     /// Binds the account to the attempt. Signup and login differ only in
-    /// whether the account row was inserted. Returns where the login
-    /// started.
+    /// whether the account row was inserted. Returns the page the browser
+    /// opens next, which depends on where the login started.
     fn complete(
         &self,
         attempt_id: &str,
         provider: AuthProvider,
         profile: Profile,
         visitor: Option<&str>,
-    ) -> HostedResult<LoginClient> {
+    ) -> HostedResult<String> {
         let email = normalize_email(&profile.email).ok_or_else(providers::unverified)?;
         let name = profile
             .name
@@ -375,7 +372,15 @@ impl Accounts {
                     }),
                 )?;
             }
-            Ok(Some(attempt.client))
+            Ok(Some(
+                if attempt.installation_id == start::SITE_INSTALLATION {
+                    format!("/start/done?attempt={attempt_id}")
+                } else if attempt.client == LoginClient::Web {
+                    "/auth/done?client=web".to_owned()
+                } else {
+                    "/auth/done".to_owned()
+                },
+            ))
         })?;
         completed.ok_or_else(expired)
     }

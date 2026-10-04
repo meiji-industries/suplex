@@ -8,7 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { notifyManager } from "@tanstack/react-query";
 import type * as taskListModule from "../src/frontend/features/tasks/lib/task-list.js";
 
-type TaskRow = { id: string; title: string; status: "backlog"; queue: { projectConcurrencyLimited: boolean; waitingOn: [] }; statusChangedAt: string; pullRequest: null; archivedAt: null; blockedBy: [] };
+type TaskRow = { id: string; title: string; status: "backlog"; queue: { projectConcurrencyLimited: boolean; planConcurrencyLimited: boolean; waitingOn: [] }; statusChangedAt: string; pullRequest: null; archivedAt: null; blockedBy: [] };
 
 const state = vi.hoisted(() => ({
   companyId: "company-a",
@@ -111,7 +111,7 @@ import { AppRouter } from "../src/frontend/shell/app-router.js";
 import { ApplicationFrame } from "../src/frontend/shell/application-frame.js";
 
 function task(id: string, title: string): TaskRow {
-  return { id, title, status: "backlog", queue: { projectConcurrencyLimited: false, waitingOn: [] }, statusChangedAt: "2026-09-09T00:00:00.000Z", pullRequest: null, archivedAt: null, blockedBy: [] };
+  return { id, title, status: "backlog", queue: { projectConcurrencyLimited: false, planConcurrencyLimited: false, waitingOn: [] }, statusChangedAt: "2026-09-09T00:00:00.000Z", pullRequest: null, archivedAt: null, blockedBy: [] };
 }
 
 function navigate(path: string, event = "suplex:navigate"): void {

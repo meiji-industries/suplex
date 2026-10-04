@@ -339,7 +339,7 @@ mod tests {
         .await;
         assert_eq!(
             delivery["result"]["structuredContent"]["body"],
-            json!({"taskId": task_id, "taskStatus": "backlog", "revision": revision, "queue": {"projectConcurrencyLimited": false, "waitingOn": []}, "blocker": null, "delivery": null})
+            json!({"taskId": task_id, "taskStatus": "backlog", "revision": revision, "queue": {"projectConcurrencyLimited": false, "planConcurrencyLimited": false, "waitingOn": []}, "blocker": null, "delivery": null})
         );
         let summary = rpc(
             "tools/call",

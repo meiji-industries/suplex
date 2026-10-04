@@ -244,7 +244,7 @@ fn require_account(hosted: &Hosted, headers: &HeaderMap) -> HostedResult<Account
         .ok_or_else(|| HostedError::new(401, None, "Unauthorized"))
 }
 
-fn idempotency_key(headers: &HeaderMap) -> HostedResult<String> {
+pub(super) fn idempotency_key(headers: &HeaderMap) -> HostedResult<String> {
     header_text(headers, "idempotency-key")
         .filter(|key| valid_idempotency_key(key))
         .map(str::to_owned)
@@ -410,6 +410,7 @@ pub fn router(hosted: Hosted) -> Router {
             }),
         )
         .route("/health", get(health))
+        .merge(super::plan::router())
         .layer(DefaultBodyLimit::max(BODY_LIMIT))
         .layer(middleware::map_response(no_store))
         .with_state(hosted)

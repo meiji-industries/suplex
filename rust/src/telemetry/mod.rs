@@ -554,10 +554,12 @@ fn collect_daily(
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     for (company_id, projects) in companies {
-        // The seat count and plan label billing uses, so usage and revenue
-        // reports agree.
-        let seats = crate::billing::required_seats(database, &company_id)?;
-        let (plan, _) = crate::billing::plan_label(database, &company_id, Utc::now())?;
+        let seats: i64 = database.connection().query_row(
+            "SELECT COUNT(*) FROM suplex_memberships m JOIN suplex_users u ON u.id = m.user_id WHERE m.company_id = ?1 AND u.status != 'revoked'",
+            [&company_id],
+            |row| row.get(0),
+        )?;
+        let plan = crate::billing::plan(database)?;
         collected.events.push(json!({
             "event": "$groupidentify",
             "distinct_id": config.distinct_id,
@@ -569,7 +571,7 @@ fn collect_daily(
                 "$group_set": {
                     "seats": seats,
                     "projects": projects,
-                    "plan": plan.unwrap_or("unknown"),
+                    "plan": plan,
                 },
             },
         }));
@@ -869,7 +871,7 @@ mod tests {
         );
         assert_eq!(
             collected.events[2]["properties"]["$group_set"],
-            json!({"seats": 1, "projects": 0, "plan": "free"})
+            json!({"seats": 0, "projects": 0, "plan": "free"})
         );
         assert_eq!(collected.events[0]["distinct_id"], "install-1");
         commit(&mut database, &collected, &rfc3339_millis(now)).unwrap();

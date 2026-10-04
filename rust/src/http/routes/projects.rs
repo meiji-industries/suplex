@@ -255,9 +255,16 @@ async fn create(
         return with_cookies(ApiError::response(error), cookies);
     }
     let operation = tokio::spawn(async move {
-        // The quota check runs before a clone, so a company over its limit
-        // never provisions a repository it cannot keep.
-        if let Err(error) = crate::billing::admit_creation(&state, &company_id).await {
+        // The plan check runs before a clone, so an installation at its
+        // limit never provisions a repository it cannot keep.
+        crate::billing::observe(&state, crate::billing::Limit::Projects).await;
+        if let Err(error) = state.with_database(|database| {
+            crate::billing::require(
+                database,
+                crate::billing::Limit::Projects,
+                chrono::Utc::now(),
+            )
+        }) {
             return with_cookies(ApiError::response(error), cookies);
         }
         let response =

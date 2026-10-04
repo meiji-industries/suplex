@@ -71,6 +71,8 @@ pub(super) struct PublicWorkflowState {
 #[serde(rename_all = "camelCase")]
 pub(super) struct TaskQueue {
     project_concurrency_limited: bool,
+    /// Free's running-task limit holds the task back.
+    plan_concurrency_limited: bool,
     waiting_on: Vec<TaskQueueWait>,
 }
 
@@ -392,6 +394,8 @@ fn dependencies_from_row(
             waiting_on,
             project_concurrency_limited: status == TaskStatus::Queued
                 && row.get("project_concurrency_limited")?,
+            plan_concurrency_limited: status == TaskStatus::Queued
+                && row.get("plan_concurrency_limited")?,
         },
     ))
 }
@@ -797,6 +801,7 @@ mod fixture_tests {
             }],
             queue: TaskQueue {
                 project_concurrency_limited: false,
+                plan_concurrency_limited: false,
                 waiting_on: vec![TaskQueueWait {
                     kind: DependencyKind::Task,
                     id: "task_00".into(),

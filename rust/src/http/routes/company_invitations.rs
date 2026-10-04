@@ -16,7 +16,7 @@ use axum::{
     routing::get,
 };
 use chrono::Utc;
-use rusqlite::{OptionalExtension, params};
+use rusqlite::params;
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, ts_rs::TS)]
@@ -91,18 +91,21 @@ async fn send(
         .accounts
         .as_ref()
         .ok_or_else(accounts::not_configured)?;
-    let (owner, origin, existing) = state.with_database(|db| -> crate::platform::database::DatabaseResult<_> {
-        companies::require_admin_company(db, actor, company_id)?;
-        let owner = accounts::linked(db)?.ok_or_else(|| PublicFailure::new(409, "Log in to Suplex before adding users"))?;
-        let policy = remote_access_repository::read(db)?;
-        let origin = remote_access_repository::effective_https_origin(&policy, &state.session_config.reachable_address).ok_or_else(|| PublicFailure::new(409, "Configure Remote Access before adding users"))?;
-        let email = body.email.trim().to_ascii_lowercase();
-        let existing = db.connection().query_row("SELECT 1 FROM suplex_memberships m JOIN suplex_account_users a ON a.user_id = m.user_id WHERE m.company_id = ?1 AND a.email = ?2 COLLATE NOCASE", params![company_id, email], |_| Ok(())).optional()?.is_some();
-        Ok((owner, origin, existing))
-    })?;
-    if !existing {
-        crate::billing::admit_member(state, company_id).await?;
-    }
+    let (owner, origin) =
+        state.with_database(|db| -> crate::platform::database::DatabaseResult<_> {
+            companies::require_admin_company(db, actor, company_id)?;
+            let owner = accounts::linked(db)?
+                .ok_or_else(|| PublicFailure::new(409, "Log in to Suplex before adding users"))?;
+            let policy = remote_access_repository::read(db)?;
+            let origin = remote_access_repository::effective_https_origin(
+                &policy,
+                &state.session_config.reachable_address,
+            )
+            .ok_or_else(|| {
+                PublicFailure::new(409, "Configure Remote Access before adding users")
+            })?;
+            Ok((owner, origin))
+        })?;
     let invitation = state.with_database(|db| {
         members::prepare(
             db,

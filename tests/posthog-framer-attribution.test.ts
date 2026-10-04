@@ -209,5 +209,12 @@ test("emits consented download conversion without leaking the destination query"
   unapproved.click();
   expect(capture).not.toHaveBeenCalled();
   expect(unapproved.href).not.toContain("visitor");
+
+  const trial = window.document.createElement("a");
+  trial.href = "https://suplex.sh/start?plan=pro";
+  window.document.body.appendChild(trial);
+  trial.click();
+  expect(capture).toHaveBeenCalledWith("website_cta_clicked", expect.objectContaining({ cta: "start-trial", destination_domain: "suplex.sh" }));
+  expect(new URL(trial.href).searchParams.get("visitor")).toBe("0190a1b2-c3d4-7e5f");
   window.close();
 });

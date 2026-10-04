@@ -1,4 +1,4 @@
-//! Company billing: the summary and the money commands.
+//! Installation billing: the plan summary and the money commands.
 
 use std::error::Error;
 
@@ -17,31 +17,18 @@ use crate::{
     http::{
         AppState,
         access::{authorize, authorize_method, with_cookies},
-        contracts::typed::{
-            auth::CompanyIdParams,
-            billing::{IdempotencyHeader, SeatChangeBody, SeatQuantityBody},
-        },
+        contracts::typed::billing::IdempotencyHeader,
         error::ApiError,
-        validation::{Valid, ValidPath, valid},
+        validation::valid,
     },
 };
 
 pub fn router() -> Router<AppState> {
     Router::new()
-        .route("/api/companies/{company_id}/billing", get(summary))
-        .route(
-            "/api/companies/{company_id}/billing/checkout",
-            post(checkout),
-        )
-        .route(
-            "/api/companies/{company_id}/billing/seats/preview",
-            post(preview_seats),
-        )
-        .route(
-            "/api/companies/{company_id}/billing/seats",
-            post(change_seats),
-        )
-        .route("/api/companies/{company_id}/billing/portal", post(portal))
+        .route("/api/billing", get(summary))
+        .route("/api/billing/trial", post(trial))
+        .route("/api/billing/checkout", post(checkout))
+        .route("/api/billing/portal", post(portal))
 }
 
 fn respond<T: Serialize>(result: Result<T, Box<dyn Error>>, cookies: Vec<String>) -> Response {
@@ -62,27 +49,23 @@ fn idempotency_key(headers: &HeaderMap) -> Result<String, Box<Response>> {
     valid::<IdempotencyHeader>(json!({ "idempotency-key": key })).map(|header| header.key)
 }
 
-async fn summary(
-    State(state): State<AppState>,
-    ValidPath(CompanyIdParams { company_id }): ValidPath<CompanyIdParams>,
-    headers: HeaderMap,
-) -> Response {
+async fn summary(State(state): State<AppState>, headers: HeaderMap) -> Response {
     let (user_id, cookies) = match authorize(&state, &headers) {
         Ok(value) => value,
         Err(response) => return *response,
     };
-    respond(
-        billing::summary(&state, &user_id, &company_id).await,
-        cookies,
-    )
+    respond(billing::summary(&state, &user_id).await, cookies)
 }
 
-async fn checkout(
-    State(state): State<AppState>,
-    ValidPath(CompanyIdParams { company_id }): ValidPath<CompanyIdParams>,
-    headers: HeaderMap,
-    Valid(body): Valid<SeatQuantityBody>,
-) -> Response {
+async fn trial(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    let (user_id, cookies) = match authorize_method(&state, &headers, "POST") {
+        Ok(value) => value,
+        Err(response) => return *response,
+    };
+    respond(billing::start_trial(&state, &user_id).await, cookies)
+}
+
+async fn checkout(State(state): State<AppState>, headers: HeaderMap) -> Response {
     let key = match idempotency_key(&headers) {
         Ok(key) => key,
         Err(response) => return *response,
@@ -91,61 +74,15 @@ async fn checkout(
         Ok(value) => value,
         Err(response) => return *response,
     };
-    respond(
-        billing::checkout(&state, &user_id, &company_id, body.quantity, &key).await,
-        cookies,
-    )
+    respond(billing::checkout(&state, &user_id, &key).await, cookies)
 }
 
-async fn preview_seats(
-    State(state): State<AppState>,
-    ValidPath(CompanyIdParams { company_id }): ValidPath<CompanyIdParams>,
-    headers: HeaderMap,
-    Valid(body): Valid<SeatQuantityBody>,
-) -> Response {
+async fn portal(State(state): State<AppState>, headers: HeaderMap) -> Response {
     let (user_id, cookies) = match authorize_method(&state, &headers, "POST") {
         Ok(value) => value,
         Err(response) => return *response,
     };
-    respond(
-        billing::preview_seats(&state, &user_id, &company_id, body.quantity).await,
-        cookies,
-    )
-}
-
-async fn change_seats(
-    State(state): State<AppState>,
-    ValidPath(CompanyIdParams { company_id }): ValidPath<CompanyIdParams>,
-    headers: HeaderMap,
-    Valid(SeatChangeBody(body)): Valid<SeatChangeBody>,
-) -> Response {
-    let key = match idempotency_key(&headers) {
-        Ok(key) => key,
-        Err(response) => return *response,
-    };
-    let (user_id, cookies) = match authorize_method(&state, &headers, "POST") {
-        Ok(value) => value,
-        Err(response) => return *response,
-    };
-    respond(
-        billing::change_seats(&state, &user_id, &company_id, &body, &key).await,
-        cookies,
-    )
-}
-
-async fn portal(
-    State(state): State<AppState>,
-    ValidPath(CompanyIdParams { company_id }): ValidPath<CompanyIdParams>,
-    headers: HeaderMap,
-) -> Response {
-    let (user_id, cookies) = match authorize_method(&state, &headers, "POST") {
-        Ok(value) => value,
-        Err(response) => return *response,
-    };
-    respond(
-        billing::portal(&state, &user_id, &company_id).await,
-        cookies,
-    )
+    respond(billing::portal(&state, &user_id).await, cookies)
 }
 
 #[cfg(test)]

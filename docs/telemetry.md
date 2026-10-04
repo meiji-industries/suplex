@@ -71,7 +71,7 @@ Native usage events have these properties: `app_version` (the semantic version),
 | `pr_opened` | a task records a pull request | `git_host` |
 | `pr_merged` | the task's pull request is merged | `git_host` |
 | `host_daily` | once a day | `users`, `companies`, `projects`, `tasks_running`, `tasks_created_7d`, `tasks_delivered_7d`, `move_runs_7d`, `task_templates`, `github_triggers_enabled`, provider profile counts |
-| `$groupidentify` | once a day per active company | `seats` (the billing seat count), `projects`, `plan` (`free`, `pro`, or `unknown` when the billing snapshot is stale) |
+| `$groupidentify` | once a day per active company | `seats` (members that are not revoked), `projects`, `plan` (the installation plan, `free` or `pro`) |
 
 Task context contains the built-in `workflow`, `delivery_target`,
 `coordinator_provider`, `worker_provider`, and `advisor_count`. Unavailable task

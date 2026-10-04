@@ -189,7 +189,7 @@ the app never asks for a login.
   revocation. Remote logout revokes only that browser's session.
 - **Invitations.** Company > Users contains Add User (full name and email),
   pending invitations, and company membership removal. The host checks the
-  company's existing seat admission rule and reserves membership. The hosted
+  company and reserves membership. The hosted
   service sends the Resend email with a stable idempotency key. Failed delivery
   remains retryable. The seven-day invitation page offers download, app, and
   browser links; opening it does not grant access. Recipients must log in with

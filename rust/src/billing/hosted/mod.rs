@@ -24,6 +24,7 @@ use stripe::StripeClient;
 
 pub mod commands;
 pub mod events;
+pub mod plan;
 pub mod revenuecat;
 pub mod server;
 pub mod source;

@@ -21,8 +21,8 @@ export type CompanyContextValue = {
   renameCompany: (companyId: string, name: string) => Promise<ApiCompany>;
   setCompanyIssueCode: (companyId: string, issueCode: string | null) => Promise<ApiCompany>;
   setCompanyStatus: (companyId: string, status: CompanyStatus) => Promise<ApiCompany>;
-  /** Updates the plan label after a live billing read, without reloading companies. */
-  setCompanyPlan: (companyId: string, plan: "free" | "pro") => void;
+  /** Updates the plan label after a live billing read, without reloading companies. The plan belongs to the installation. */
+  setPlan: (plan: "free" | "pro") => void;
   updateProfile: (profile: { displayName: string; username: string; avatarSeed: string; title: string }) => Promise<ApiUser>;
   avatars: Record<string, AvatarRecord>;
   saveAvatar: (ownerId: string, patch: AvatarUpdateBody) => Promise<AvatarRecord>;
@@ -167,8 +167,8 @@ export function CompanyProvider({ children }: { children: ReactNode }): ReactEle
     return updated;
   }, [reloadCompanies]);
 
-  const setCompanyPlan = useCallback((companyId: string, plan: "free" | "pro"): void => {
-    const label = (company: ApiCompany): ApiCompany => company.id === companyId ? { ...company, plan } : company;
+  const setPlan = useCallback((plan: "free" | "pro"): void => {
+    const label = (company: ApiCompany): ApiCompany => ({ ...company, plan });
     setCompanies((current) => current.map(label));
     setCurrentCompany((current) => current && label(current));
   }, []);
@@ -200,12 +200,12 @@ export function CompanyProvider({ children }: { children: ReactNode }): ReactEle
     renameCompany,
     setCompanyIssueCode,
     setCompanyStatus,
-    setCompanyPlan,
+    setPlan,
     updateProfile,
     avatars,
     saveAvatar,
     reloadCompanies,
-  }), [avatars, companies, createCompany, currentCompany, error, loading, reloadCompanies, renameCompany, saveAvatar, selectCompany, setCompanyIssueCode, setCompanyPlan, setCompanyStatus, updateProfile, user]);
+  }), [avatars, companies, createCompany, currentCompany, error, loading, reloadCompanies, renameCompany, saveAvatar, selectCompany, setCompanyIssueCode, setPlan, setCompanyStatus, updateProfile, user]);
   return <CompanyContext.Provider value={value}>{children}</CompanyContext.Provider>;
 }
 

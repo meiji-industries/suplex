@@ -85,19 +85,7 @@ async fn download(
     if headers.get("dnt").is_some_and(|value| value == "1") {
         return response;
     }
-    if let Some(visitor) = query.visitor.filter(|visitor| valid_visitor(visitor)) {
-        let secure = if accounts.hosted.config.origin.starts_with("https:") {
-            "; Secure"
-        } else {
-            ""
-        };
-        let cookie = format!(
-            "{VISITOR_COOKIE}={visitor}; Max-Age=31536000; Path=/; HttpOnly; SameSite=Lax{secure}"
-        );
-        if let Ok(cookie) = cookie.parse() {
-            response.headers_mut().insert(header::SET_COOKIE, cookie);
-        }
-    }
+    remember_visitor(&accounts, &headers, query.visitor.as_deref(), &mut response);
     // Anonymous: a fresh id and no person profile (docs/telemetry.md).
     let source = headers
         .get(header::USER_AGENT)
@@ -121,6 +109,33 @@ async fn download(
         eprintln!("site: download_started enqueue failed");
     }
     response
+}
+
+/// Keeps a valid website visitor id in a first-party cookie for a year, so a
+/// later login joins the visitor to the account. `DNT: 1` keeps nothing.
+pub fn remember_visitor(
+    accounts: &Accounts,
+    headers: &HeaderMap,
+    visitor: Option<&str>,
+    response: &mut Response,
+) {
+    if headers.get("dnt").is_some_and(|value| value == "1") {
+        return;
+    }
+    let Some(visitor) = visitor.filter(|visitor| valid_visitor(visitor)) else {
+        return;
+    };
+    let secure = if accounts.hosted.config.origin.starts_with("https:") {
+        "; Secure"
+    } else {
+        ""
+    };
+    let cookie = format!(
+        "{VISITOR_COOKIE}={visitor}; Max-Age=31536000; Path=/; HttpOnly; SameSite=Lax{secure}"
+    );
+    if let Ok(cookie) = cookie.parse() {
+        response.headers_mut().insert(header::SET_COOKIE, cookie);
+    }
 }
 
 async fn install_script() -> Response {

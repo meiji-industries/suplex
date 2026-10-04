@@ -320,6 +320,7 @@ async fn create(
     ));
     // Admission keeps running when the HTTP waiter disconnects, as board creation does.
     let task = tokio::spawn(async move {
+        crate::billing::observe(&state, crate::billing::Limit::MonthlyTasks).await;
         let creation = match agent_api::create(&state, &principal, &request, None).await {
             Ok(creation) => creation,
             Err(error) => return agent_api_runtime::failure(error, true),

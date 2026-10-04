@@ -1483,6 +1483,18 @@ pub(crate) mod tests {
         for index in 0..100 {
             let title = format!("Compact task {index}");
             let key = format!("compact-task-{index:03}");
+            if index == 50 {
+                // Free includes 50 tasks each month.
+                let (status, refused) = agent
+                    .call(
+                        reqwest::Method::POST,
+                        "/api/agent/tasks",
+                        Some(json!({"projectId": "project_api", "title": title, "idempotencyKey": key})),
+                    )
+                    .await;
+                assert_eq!((status, refused["code"].clone()), (402, json!("task_limit_reached")));
+                agent.server.state.with_database(|database| crate::billing::tests::grant_pro(database));
+            }
             agent.create(&title, &key).await;
         }
         let bearer = format!("Bearer {}", agent.credential);

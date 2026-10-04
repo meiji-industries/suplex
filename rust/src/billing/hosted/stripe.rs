@@ -763,6 +763,39 @@ impl StripeClient {
         ))
     }
 
+    /// A one-seat subscription that starts with a trial and no payment
+    /// method. Without a payment method at the trial end, Stripe cancels it.
+    /// The response is not returned: the caller reads the source again.
+    pub async fn create_trial_subscription(
+        &self,
+        customer_id: &str,
+        price_id: &str,
+        trial_days: i64,
+        metadata: &[(&str, String)],
+        idempotency_key: &str,
+    ) -> Result<(), ProviderError> {
+        let mut form = pairs([
+            ("customer", customer_id.to_owned()),
+            ("items[0][price]", price_id.to_owned()),
+            ("items[0][quantity]", "1".into()),
+            ("trial_period_days", trial_days.to_string()),
+            (
+                "trial_settings[end_behavior][missing_payment_method]",
+                "cancel".into(),
+            ),
+            (
+                "payment_settings[save_default_payment_method]",
+                "on_subscription".into(),
+            ),
+        ]);
+        for (key, value) in metadata {
+            form.push((format!("metadata[{key}]"), value.clone()));
+        }
+        self.post("/v1/subscriptions", &form, Some(idempotency_key))
+            .await?;
+        Ok(())
+    }
+
     /// Expiring a session that no longer exists is a no-op.
     pub async fn expire_checkout_session(&self, session_id: &str) -> Result<(), ProviderError> {
         match self

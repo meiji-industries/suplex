@@ -272,6 +272,8 @@ pub struct StripeState {
     pub create_customer_keys: Vec<String>,
     pub create_session_keys: Vec<String>,
     pub expire_calls: Vec<String>,
+    /// Trial subscriptions by idempotency key.
+    pub trial_keys: HashMap<String, String>,
     pub update_calls: Vec<UpdateCall>,
     pub preview_calls: Vec<Pairs>,
     pub preview_amount_due: i64,
@@ -333,6 +335,7 @@ impl StripeState {
             fail_next_update: false,
             drop_next_update_result: false,
             sequences: HashMap::new(),
+            trial_keys: HashMap::new(),
             session_replays: HashMap::new(),
             update_replays: HashMap::new(),
         }
@@ -438,6 +441,33 @@ impl StripeState {
             },
         );
         id
+    }
+
+    /// `POST /v1/subscriptions` with a trial: trialing, with Stripe's settled
+    /// $0 invoice for the trial period. A repeated key replays.
+    fn create_trial_subscription(&mut self, form: &Pairs, key: String) -> (u16, Value) {
+        if let Some(id) = self.trial_keys.get(&key) {
+            return (200, Self::subscription_json(&self.subscriptions[id]));
+        }
+        let customer = field(form, "customer").unwrap_or_default().to_owned();
+        let days: i64 = field(form, "trial_period_days").unwrap_or("0").parse().unwrap();
+        let id = self.add_unsettled_subscription(&customer, 1);
+        let now = self.now_seconds();
+        let subscription = self.subscription(&id);
+        subscription.status = "trialing".into();
+        subscription.items[0].period_start = now;
+        subscription.items[0].period_end = now + days * 86_400;
+        let mut invoice = self.new_invoice(Some(&id));
+        invoice.amount_due = 0;
+        invoice.amount_paid = 0;
+        invoice.lines = vec![FakeLine {
+            amount: 0,
+            ..self.cover_line(&id)
+        }];
+        let invoice_id = self.insert_invoice(invoice);
+        self.subscription(&id).latest_invoice_id = Some(invoice_id);
+        self.trial_keys.insert(key, id.clone());
+        (200, Self::subscription_json(&self.subscriptions[&id]))
     }
 
     /// A recurring service-period line for the subscription's item.
@@ -777,6 +807,7 @@ impl StripeState {
                 .customers
                 .get(*id)
                 .map_or_else(missing, |customer| (200, Self::customer_json(customer))),
+            ["v1", "subscriptions"] if !get => self.create_trial_subscription(form, key),
             ["v1", "subscriptions"] => {
                 let customer = field(query, "customer").unwrap_or_default();
                 let found = self
@@ -972,6 +1003,7 @@ impl Fixture {
             std::env::temp_dir().join(format!("suplex-billing-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&directory).unwrap();
         let path = directory.join("billing.sqlite");
+        crate::accounts::hosted::store::apply_schema(&store::open(&path).unwrap()).unwrap();
         let stripe = fake_stripe(clock.clone()).await;
         let revenuecat = fake_revenuecat().await;
         let hosted = Self::hosted(&path, environment, &stripe.url, &revenuecat.url, &clock);

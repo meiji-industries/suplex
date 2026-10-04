@@ -8,5 +8,5 @@ import { SettingsContent, SettingsLayout } from "./settings-layout.js";
 export function BillingSettingsView(): ReactElement {
   const { currentCompany } = useCompanyContext();
   const companyId = currentCompany?.id ?? "";
-  return <SettingsLayout title="Billing" companyId={companyId} backHref={withCompany("/", companyId)} activeHref={billingSettingsPath(companyId)}><SettingsContent title="Billing">{companyId ? <BillingSection key={companyId} companyId={companyId} /> : null}</SettingsContent></SettingsLayout>;
+  return <SettingsLayout title="Billing" companyId={companyId} backHref={withCompany("/", companyId)} activeHref={billingSettingsPath(companyId)}><SettingsContent title="Billing"><BillingSection /></SettingsContent></SettingsLayout>;
 }

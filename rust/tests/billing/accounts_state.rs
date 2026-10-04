@@ -266,13 +266,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_trialing_subscription_does_not_grant_this_paid_product() {
+    async fn a_trialing_subscription_grants_its_settled_trial_period() {
         let f = Fixture::new().await;
         let p = f.provisioned(2).await;
         f.stripe.with(|stripe| stripe.subscription(&p.subscription).status = "trialing".into());
         let state = f.state(&p.account.credential).await;
-        assert_eq!(state["active"], false);
+        assert_eq!(state["active"], true);
         assert_eq!(state["subscriptionStatus"], "trialing");
+        // A trial does not renew by itself: it has no renewal date.
+        assert_eq!(state["renewalAt"], serde_json::Value::Null);
     }
 
     #[tokio::test]

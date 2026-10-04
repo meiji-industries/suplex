@@ -127,13 +127,10 @@ const billingLink = (container: HTMLElement) => Array.from(container.querySelect
 
 test("quota refusals explain the limit and offer billing settings only to an administrator", async () => {
   const limit = await refuse("project_limit_reached");
-  expect(limit.container.textContent).toContain("This company reached the Free project allowance.");
+  expect(limit.container.textContent).toContain("The plan includes no more projects. Free includes 1 project and Pro includes 10.");
   expect(billingLink(limit.container)?.getAttribute("href")).toBe("/billing?company=company-1");
   expect(limit.container.querySelector<HTMLInputElement>("#project-repository")!.value).toBe("https://github.com/octocat/Third");
   expect(limit.onOpenChange).not.toHaveBeenCalledWith(false);
-  const seats = await refuse("seat_limit_exceeded");
-  expect(seats.container.textContent).toContain("Add seats in the billing settings.");
-  expect(billingLink(seats.container)).toBeDefined();
   const unavailable = await refuse("billing_unavailable");
   expect(unavailable.container.textContent).toContain("Suplex cannot check the subscription. Retry the request.");
   expect(billingLink(unavailable.container)).toBeUndefined();

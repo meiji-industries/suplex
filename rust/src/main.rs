@@ -143,12 +143,10 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
     .with_task_host(task_host.clone())
     .with_host_terminals(host_terminals.clone());
     let state = match installation.billing_service_url.clone() {
-        Some(url) => state.with_billing(suplex::billing::BillingClient::new(
-            url,
-            installation.installation_id.clone(),
-        )),
+        Some(url) => state.with_billing(suplex::billing::BillingClient::new(url)),
         None => state,
     };
+    suplex::billing::spawn_refresh(state.clone());
     let state = match installation.account_service_url.clone() {
         Some(url) => state.with_accounts(suplex::accounts::AccountClient::new(
             url,

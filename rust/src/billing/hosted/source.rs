@@ -508,7 +508,8 @@ impl Hosted {
         // settlement.
         let (paid_until, current_fully_refunded) =
             self.paid_coverage(&subscription, &item, &subscription_invoices);
-        let coverage_status = subscription.status == "active"
+        // A trial covers its period through its settled $0 invoice.
+        let coverage_status = matches!(subscription.status.as_str(), "active" | "trialing")
             || GRACE_ELIGIBLE_STATUSES.contains(&subscription.status.as_str());
         let stripe_paid_until = paid_until.filter(|_| coverage_status);
 

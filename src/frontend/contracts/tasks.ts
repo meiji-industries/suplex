@@ -109,6 +109,7 @@ export const TaskQueueWaitSchema = z.object({ kind: z.enum(["task", "pull_reques
 
 export const TaskQueueSchema = z.object({
   projectConcurrencyLimited: z.boolean(),
+  planConcurrencyLimited: z.boolean(),
   waitingOn: z.array(TaskQueueWaitSchema),
 }).strict();
 

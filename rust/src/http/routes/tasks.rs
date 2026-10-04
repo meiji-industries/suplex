@@ -311,6 +311,7 @@ async fn create(
         Ok(value) => value,
         Err(response) => return *response,
     };
+    crate::billing::observe(&state, crate::billing::Limit::MonthlyTasks).await;
     let result = crate::tasks::creation::create_browser(state, company_id, user_id, request).await;
     let response = match result {
         Ok((created, snapshot)) => (
@@ -418,6 +419,7 @@ async fn start_pending(
     ValidPath(TaskIdParams { task_id: id }): TaskPath,
     headers: HeaderMap,
 ) -> Response {
+    crate::billing::observe(&state, crate::billing::Limit::RunningTasks).await;
     task_command(&state, &headers, "POST", &id, |database, user_id| {
         crate::tasks::authorize_task(database, user_id, &id)?;
         commands::start_user_task(database, user_id, &id, Utc::now(), waker(&state))
@@ -429,6 +431,7 @@ async fn force_start_pending(
     ValidPath(TaskIdParams { task_id: id }): TaskPath,
     headers: HeaderMap,
 ) -> Response {
+    crate::billing::observe(&state, crate::billing::Limit::RunningTasks).await;
     task_command(&state, &headers, "POST", &id, |database, user_id| {
         crate::tasks::authorize_task(database, user_id, &id)?;
         commands::force_start_user_task(database, user_id, &id, Utc::now(), waker(&state))

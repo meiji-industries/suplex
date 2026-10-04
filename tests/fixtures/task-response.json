@@ -80,6 +80,7 @@
   ],
   "queue": {
     "projectConcurrencyLimited": false,
+    "planConcurrencyLimited": false,
     "waitingOn": [
       {
         "kind": "task",

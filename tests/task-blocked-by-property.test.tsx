@@ -38,7 +38,7 @@ import { TaskBlockedByProperty } from "../src/frontend/features/tasks/task-detai
 const self = { id: "task-self", projectId: "project-1", title: "This task", status: "active", archivedAt: null, queue: { state: "running" } };
 const active = { id: "task-active", projectId: "project-1", title: "Active prerequisite", status: "active", archivedAt: null, queue: { state: "running" } };
 const backlog = { id: "task-backlog", projectId: "project-1", title: "Backlog task", status: "backlog", archivedAt: null, queue: { state: "backlog" } };
-const queued = { id: "task-queued", projectId: "project-1", title: "Queued task", status: "queued", archivedAt: null, queue: { projectConcurrencyLimited: false, waitingOn: [] } };
+const queued = { id: "task-queued", projectId: "project-1", title: "Queued task", status: "queued", archivedAt: null, queue: { projectConcurrencyLimited: false, planConcurrencyLimited: false, waitingOn: [] } };
 const delivered = { id: "task-delivered", projectId: "project-1", title: "Delivered task", status: "delivered", archivedAt: null, queue: { state: "delivered" } };
 const otherProject = { id: "task-other-project", projectId: "project-2", title: "Other project", status: "active", archivedAt: null, queue: { state: "running" } };
 

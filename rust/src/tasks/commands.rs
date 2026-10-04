@@ -1774,6 +1774,47 @@ mod tests {
     }
 
     #[test]
+    fn free_runs_three_tasks_at_a_time_and_pro_runs_more() {
+        let (filename, mut database, user, prepared) = command_fixture();
+        let now = Utc::now();
+        let start = |database: &mut SuplexDatabase, key: &str| {
+            let task = repository::create(database, &another(&prepared, key), now)
+                .unwrap()
+                .task;
+            start_user_task(database, &user, &task.id, now, |_| {}).unwrap()
+        };
+        for key in ["run-1", "run-2", "run-3"] {
+            assert_eq!(start(&mut database, key).status, TaskStatus::Active);
+        }
+        // The fourth task waits in the queue, and the response says why.
+        let fourth = start(&mut database, "run-4");
+        assert_eq!(fourth.status, TaskStatus::Queued);
+        let queue = serde_json::to_value(
+            repository::task_response(&database, &fourth.id)
+                .unwrap()
+                .unwrap(),
+        )
+        .unwrap()["queue"]
+            .clone();
+        assert_eq!(queue["planConcurrencyLimited"], true);
+        // Start anyway does not pass the plan.
+        let refused =
+            force_start_user_task(&mut database, &user, &fourth.id, now, |_| {}).unwrap_err();
+        assert_eq!(
+            crate::shared::public_failure(refused).code,
+            Some("running_task_limit_reached")
+        );
+        // Pro admits it on the next sweep.
+        crate::billing::tests::grant_pro(&database);
+        assert_eq!(
+            crate::coordination::root_session_store::admit_queued(&mut database, now).unwrap(),
+            vec![fourth.id.clone()]
+        );
+        drop(database);
+        let _ = std::fs::remove_file(&filename);
+    }
+
+    #[test]
     fn force_start_admits_a_queued_task_past_prerequisites_and_concurrency() {
         let (filename, mut database, user, prepared) = command_fixture();
         let now = Utc::now();

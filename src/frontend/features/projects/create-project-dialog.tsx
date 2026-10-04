@@ -19,12 +19,11 @@ import { ProjectIntegrationSchema, type ProjectIntegration } from "../../contrac
 import { createProject } from "./lib/project-api.js";
 import { clearProjectDraft, readProjectDraft, writeProjectDraft } from "./lib/project-draft.js";
 
-const QUOTA_CODES = new Set(["project_limit_reached", "seat_limit_exceeded", "billing_unavailable"]);
+const QUOTA_CODES = new Set(["project_limit_reached", "billing_unavailable"]);
 
 function quotaMessage(code: string, admin: boolean): string {
   if (code === "billing_unavailable") return "Suplex cannot check the subscription. Retry the request.";
-  if (code === "seat_limit_exceeded") return admin ? "The company has more members than seats. Add seats in the billing settings." : "The company has more members than seats. Request more seats from an administrator.";
-  return admin ? "This company reached the Free project allowance." : "This company reached the Free project allowance. Request Pro from an administrator.";
+  return admin ? "The plan includes no more projects. Free includes 1 project and Pro includes 10." : "The plan includes no more projects. Request Pro from an administrator.";
 }
 
 type RepositoryOwnersState =

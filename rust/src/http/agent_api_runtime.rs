@@ -191,6 +191,15 @@ pub(crate) fn failure(error: Box<dyn Error>, runtime: bool) -> Response {
             json!({"error": message, "code": code}),
         );
     }
+    // A plan limit keeps its status and code, so an agent can report it.
+    if let Some(failure) = error.downcast_ref::<crate::shared::PublicFailure>()
+        && failure.status == StatusCode::PAYMENT_REQUIRED
+    {
+        return json_response(
+            failure.status,
+            json!({"error": failure.message, "code": failure.code}),
+        );
+    }
     internal(runtime)
 }
 

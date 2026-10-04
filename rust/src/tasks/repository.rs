@@ -242,10 +242,11 @@ pub(crate) fn admit_queued(
         return Ok(false);
     }
     assert_task_pull_requests_available(database, task_id)?;
-    // The project's task concurrency is checked in this statement, so admits
-    // in one transaction cannot exceed it. A task waiting on a human holds its slot.
+    // The project's task concurrency and the plan's running-task limit are
+    // checked in this statement, so admits in one transaction cannot exceed
+    // them. A task waiting on a human holds its slot.
     Ok(database.connection().execute(
-        "UPDATE suplex_task_controls SET status = 'active', wake_at = ?1, updated_at = ?1 WHERE task_id = ?2 AND status = 'queued' AND EXISTS(SELECT 1 FROM suplex_tasks t LEFT JOIN suplex_projects p ON p.id = t.project_id WHERE t.id = ?2 AND t.archived_at IS NULL AND (p.task_concurrency IS NULL OR p.task_concurrency > (SELECT COUNT(*) FROM suplex_tasks s JOIN suplex_task_controls sc ON sc.task_id = s.id WHERE s.project_id = t.project_id AND s.archived_at IS NULL AND sc.status IN ('active', 'waiting_human'))))",
+        concat!("UPDATE suplex_task_controls SET status = 'active', wake_at = ?1, updated_at = ?1 WHERE task_id = ?2 AND status = 'queued' AND NOT ", crate::running_limited_sql!(), " AND EXISTS(SELECT 1 FROM suplex_tasks t LEFT JOIN suplex_projects p ON p.id = t.project_id WHERE t.id = ?2 AND t.archived_at IS NULL AND (p.task_concurrency IS NULL OR p.task_concurrency > (SELECT COUNT(*) FROM suplex_tasks s JOIN suplex_task_controls sc ON sc.task_id = s.id WHERE s.project_id = t.project_id AND s.archived_at IS NULL AND sc.status IN ('active', 'waiting_human'))))"),
         params![rfc3339_millis(now), task_id],
     )? == 1)
 }
@@ -282,6 +283,7 @@ fn create_inner(
     let first_written = written.len();
     let result = database.transaction(true, |database| {
         if let Some(task) = existing(database, input)? { return Ok(TaskWrite { task, created: false }); }
+        crate::billing::require(database, crate::billing::Limit::MonthlyTasks, now)?;
         let id = &input.id;
         let time = rfc3339_millis(now);
         let (creator_user_id, creator_agent_id) = match &input.creator {
@@ -523,7 +525,8 @@ pub fn disarm(
 }
 
 /// Admit a queued task now. The user overrides incomplete prerequisites and the
-/// project task concurrency; another task that owns the same pull request still rejects.
+/// project task concurrency; the plan's running-task limit and another task
+/// that owns the same pull request still reject.
 pub fn force_start(
     database: &mut SuplexDatabase,
     task_id: &str,
@@ -531,6 +534,7 @@ pub fn force_start(
 ) -> DatabaseResult<Option<TaskRecord>> {
     database.transaction(true, |database| {
         assert_task_pull_requests_available(database, task_id)?;
+        crate::billing::require(database, crate::billing::Limit::RunningTasks, now)?;
         let admitted = database.connection().execute(
             "UPDATE suplex_task_controls SET status = 'active', wake_at = ?1, updated_at = ?1 WHERE task_id = ?2 AND status = 'queued' AND EXISTS(SELECT 1 FROM suplex_tasks WHERE id = ?2 AND archived_at IS NULL)",
             params![rfc3339_millis(now), task_id],
@@ -580,8 +584,12 @@ pub fn start(
     })
 }
 
-const TASK_RESPONSE_SELECT: &str = r#"SELECT t.id AS id, t.company_id AS company_id, t.project_id AS project_id, t.issue_json, t.issue_number, cpy.issue_code, t.title, t.description, c.status AS status, c.delivery_target AS delivery_target, c.root_profile_json, c.worker_profile_json, c.workflow, c.advisor_profiles_json, c.workflow_state_json, t.configuration_json, c.worktree_json, c.pull_request_json, c.human_question, c.human_question_id, c.limit_pause_json, c.human_question_options_json, c.recovery_turn_id, c.wake_at, t.created_at, CASE WHEN julianday(t.updated_at) >= julianday(COALESCE(c.updated_at, t.updated_at)) THEN t.updated_at ELSE c.updated_at END AS updated_at, c.status_changed_at, t.archived_at, c.budget_usd, c.max_turns,
+const TASK_RESPONSE_SELECT: &str = concat!(
+    r#"SELECT t.id AS id, t.company_id AS company_id, t.project_id AS project_id, t.issue_json, t.issue_number, cpy.issue_code, t.title, t.description, c.status AS status, c.delivery_target AS delivery_target, c.root_profile_json, c.worker_profile_json, c.workflow, c.advisor_profiles_json, c.workflow_state_json, t.configuration_json, c.worktree_json, c.pull_request_json, c.human_question, c.human_question_id, c.limit_pause_json, c.human_question_options_json, c.recovery_turn_id, c.wake_at, t.created_at, CASE WHEN julianday(t.updated_at) >= julianday(COALESCE(c.updated_at, t.updated_at)) THEN t.updated_at ELSE c.updated_at END AS updated_at, c.status_changed_at, t.archived_at, c.budget_usd, c.max_turns,
     EXISTS(SELECT 1 FROM suplex_projects p WHERE p.id = t.project_id AND p.task_concurrency IS NOT NULL AND p.task_concurrency <= (SELECT COUNT(*) FROM suplex_tasks s JOIN suplex_task_controls sc ON sc.task_id = s.id WHERE s.project_id = t.project_id AND s.archived_at IS NULL AND sc.status IN ('active', 'waiting_human'))) AS project_concurrency_limited,
+    "#,
+    crate::running_limited_sql!(),
+    r#" AS plan_concurrency_limited,
     COALESCE((SELECT default_budget_usd FROM suplex_environment_settings WHERE id = 'host'), 15.0) AS default_budget,
     COALESCE((SELECT default_max_turns FROM suplex_environment_settings WHERE id = 'host'), 40) AS default_turns,
     (SELECT COUNT(*) FROM suplex_task_turns WHERE task_id = t.id AND prompted_at IS NOT NULL) AS admitted_turns,
@@ -598,7 +606,8 @@ const TASK_RESPONSE_SELECT: &str = r#"SELECT t.id AS id, t.company_id AS company
     (SELECT json_group_array(json_object('artifactId', id, 'filename', filename, 'mimeType', mime_type, 'byteSize', byte_size)) FROM (
         SELECT id, filename, mime_type, byte_size FROM suplex_artifacts WHERE task_id = t.id AND company_id = t.company_id AND kind LIKE 'delivery-%' ORDER BY created_at, id
     )) AS artifacts
- FROM suplex_tasks t JOIN suplex_companies cpy ON cpy.id = t.company_id JOIN suplex_task_controls c ON c.task_id = t.id"#;
+ FROM suplex_tasks t JOIN suplex_companies cpy ON cpy.id = t.company_id JOIN suplex_task_controls c ON c.task_id = t.id"#
+);
 
 pub fn task_response(
     database: &SuplexDatabase,

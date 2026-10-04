@@ -3,7 +3,6 @@
 //! them is `billing_unavailable`: the client fails closed.
 
 use serde::{Deserialize, Deserializer, Serialize, de::Error as _};
-use ts_rs::TS;
 
 pub const SEAT_UNIT_AMOUNT: i64 = 2000;
 pub const SEAT_CURRENCY: &str = "usd";
@@ -130,6 +129,15 @@ impl HostedBillingState {
     }
 }
 
+/// GET /v1/plan and POST /v1/plan/trial: the plan of the Suplex account that
+/// owns the bearer token. Each Suplex account gets one trial.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct HostedPlan {
+    pub state: HostedBillingState,
+    pub trial_available: bool,
+}
+
 /// POST /v1/checkout and POST /v1/seats/preview.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -179,10 +187,9 @@ impl HostedCheckoutResult {
     }
 }
 
-/// The seat-change quote. The private API returns it to the browser as is.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, TS)]
+/// The seat-change quote.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-#[ts(export)]
 pub struct HostedSeatPreview {
     pub preview_id: String,
     pub expires_at: String,

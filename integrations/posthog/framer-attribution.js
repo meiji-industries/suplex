@@ -19,7 +19,7 @@
   var allowedUtm = ["utm_source", "utm_medium", "utm_campaign", "utm_content", "utm_term"];
   var allowedClickIds = ["gclid", "gbraid", "wbraid", "msclkid", "fbclid"];
   var maxValueLength = 120;
-  var allowedCtas = ["pricing", "get", "product", "download", "hero-download"];
+  var allowedCtas = ["pricing", "get", "product", "download", "hero-download", "start-free", "start-trial"];
   var allowedPlatforms = ["macos-arm64", "macos-x64", "linux-x64", "linux-arm64"];
   var posthog;
   var started = false;
@@ -170,6 +170,7 @@
       isDownload = Boolean(platform);
       cta = cta || "download";
     }
+    if (!cta && href.origin === "https://suplex.sh" && href.pathname === "/start") cta = href.searchParams.get("plan") === "pro" ? "start-trial" : "start-free";
     if (!cta && href.origin === window.location.origin && href.pathname === "/" && href.hash === "#pricing") cta = "pricing";
     if (!cta && href.origin === window.location.origin && href.pathname === "/" && href.hash === "#get") cta = "get";
     if (!cta && href.origin === window.location.origin && href.pathname === "/product") cta = "product";
@@ -194,7 +195,7 @@
     }
     posthog.capture(eventName, properties);
     signalConversion(eventName, properties);
-    if (link.isDownload) addVisitor(element);
+    if (link.isDownload || link.cta === "start-free" || link.cta === "start-trial") addVisitor(element);
   }
 
   // Carries the consented visitor ID to suplex.sh, which keeps it in a first-party cookie so a
@@ -204,7 +205,7 @@
     if (typeof visitor !== "string" || !/^[A-Za-z0-9._:-]{8,64}$/.test(visitor)) return;
     try {
       var href = new URL(element.href || "", window.location.href);
-      if (href.origin !== "https://suplex.sh" || href.pathname !== "/download") return;
+      if (href.origin !== "https://suplex.sh" || (href.pathname !== "/download" && href.pathname !== "/start")) return;
       href.searchParams.set("visitor", visitor);
       element.href = href.toString();
     } catch (_) { /* leave the link unchanged */ }

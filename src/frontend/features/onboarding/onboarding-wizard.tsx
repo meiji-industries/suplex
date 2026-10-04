@@ -38,7 +38,8 @@ import { ONBOARDING_TOOL_CHECKS, ONBOARDING_STEPS, connectedProviders, stepCompl
 import { LoadingState } from "../../components/app/loading-state.js";
 import { ProviderInstallationInstructions } from "../../components/app/provider-installation.js";
 import { newTaskRequestPath } from "../../shell/global-new-task-dialog.js";
-import { getBillingSummary, startCheckout } from "../settings/lib/billing-api.js";
+import { getBillingSummary, startCheckout, startTrial } from "../settings/lib/billing-api.js";
+import type { BillingSummary } from "../../contracts/billing.js";
 import { OnboardingPlanPicker, type OnboardingPlan } from "./onboarding-plan.js";
 
 
@@ -103,8 +104,12 @@ export function OnboardingView(): ReactElement {
   const [email, setEmail] = useState<string>();
   const [saving, setSaving] = useState(false);
   const [planChoice, setPlanChoice] = useState<{ companyId: string; plan: OnboardingPlan }>();
-  const plan = state.projects.length >= 3 ? "pro" : planChoice?.companyId === companyId ? planChoice.plan : "free";
-  const checkoutIntent = useRef<{ companyId: string; quantity: number; key: string } | undefined>(undefined);
+  const plan = state.projects.length >= 2 ? "pro" : planChoice?.companyId === companyId ? planChoice.plan : "free";
+  const checkoutKey = useRef<string | undefined>(undefined);
+  const [billing, setBilling] = useState<BillingSummary>();
+  useEffect(() => { if (current === "plan") void getBillingSummary().then(setBilling).catch(() => setBilling(undefined)); }, [current]);
+  // Pro starts with the trial when the Suplex account has one; otherwise Stripe Checkout opens.
+  const needsCheckout = current === "plan" && plan === "pro" && billing?.plan !== "pro" && billing?.trialAvailable !== true;
   useEffect(() => { if (user?.id === "user_development") void getAccount().then(result => setEmail(result.account?.email)).catch(() => undefined); }, [user?.id]);
   const { profile, changeProfile } = useProfileDraft(user, email);
   useEffect(() => { setName(defaultCompanyName); setCode(currentCompany?.issueCode ?? "SUPLEX"); }, [currentCompany?.id]);
@@ -114,7 +119,7 @@ export function OnboardingView(): ReactElement {
     if (saving) return;
     setError("");
     setSaving(true);
-    const checkoutTab = current === "plan" && plan === "pro" ? window.open("", "_blank") : null;
+    const checkoutTab = needsCheckout ? window.open("", "_blank") : null;
     if (checkoutTab) checkoutTab.opener = null;
     try {
       if (current === "company" && currentCompany) {
@@ -124,14 +129,12 @@ export function OnboardingView(): ReactElement {
         if (code !== currentCompany.issueCode) await setCompanyIssueCode(currentCompany.id, code);
         await reloadCompanies();
       }
-      if (current === "plan" && plan === "pro") {
-        const summary = await getBillingSummary(companyId);
-        if (summary.plan !== "pro") {
-          const quantity = Math.max(1, summary.requiredSeats);
-          if (checkoutIntent.current?.companyId !== companyId || checkoutIntent.current.quantity !== quantity) {
-            checkoutIntent.current = { companyId, quantity, key: crypto.randomUUID() };
-          }
-          const result = await startCheckout(companyId, quantity, checkoutIntent.current.key);
+      if (current === "plan" && plan === "pro" && billing?.plan !== "pro") {
+        if (!needsCheckout) {
+          await startTrial();
+        } else {
+          checkoutKey.current ??= crypto.randomUUID();
+          const result = await startCheckout(checkoutKey.current);
           if (result.status === "redirect" || (result.status === "payment_required" && result.url)) {
             const url = result.url!;
             if (checkoutTab) checkoutTab.location.href = url;
@@ -141,14 +144,12 @@ export function OnboardingView(): ReactElement {
           } else {
             checkoutTab?.close();
           }
-        } else {
-          checkoutTab?.close();
         }
       }
       if (currentIndex < ONBOARDING_STEPS.length - 1) go(ONBOARDING_STEPS[currentIndex + 1]!.id);
     } catch (reason) {
       checkoutTab?.close();
-      if (isApiError(reason) && reason.code === "billing_operation_not_applied") checkoutIntent.current = undefined;
+      if (isApiError(reason) && reason.code === "billing_operation_not_applied") checkoutKey.current = undefined;
       setError(reason instanceof Error ? reason.message : "Suplex could not save the onboarding step.");
     }
     finally { setSaving(false); }
@@ -202,7 +203,7 @@ export function OnboardingView(): ReactElement {
     : current === "providers" ? <div className="space-y-3"><div className="grid gap-3 sm:grid-cols-2" aria-busy={loading} aria-label="Providers">{loading && state.providers.length === 0 ? [0, 1, 2, 3].map(index => <Card key={index} size="sm" aria-label="Provider check in progress"><CardHeader><CardTitle><Skeleton className="h-5 w-20" /></CardTitle><CardAction><Skeleton className="h-5 w-20" /></CardAction></CardHeader><CardContent><Skeleton className="h-4 w-16" /><div className="space-y-1"><Skeleton className="h-4 w-full" /><Skeleton className="h-4 w-3/4" /></div><Skeleton className="h-8 w-full" /></CardContent></Card>) : state.providers.map(provider => <Card highlighted key={provider.id} size="sm"><CardHeader><CardTitle><span className="flex items-center gap-2.5 text-base"><ProviderIcon provider={provider.id} size="md" />{provider.label}</span></CardTitle><CardAction>{provider.status === "missing" ? <><StatusLight level="red" label="Not installed" /><Badge variant="outline">Not installed</Badge></> : provider.connection.status === "connected" ? <><StatusLight level="green" label="Connected" /><Badge variant="secondary">Connected</Badge></> : <><StatusLight level="amber" label="Needs auth" /><Badge variant="outline">Needs auth</Badge></>}</CardAction></CardHeader><CardContent><div className="flex flex-col text-xs text-muted-foreground [&>*]:border-t [&>*]:border-border/50 [&>*]:py-4 [&>*:last-child]:pb-0">{provider.connection.status === "connected" ? <div><Tooltip><TooltipTrigger><span className="cursor-help underline decoration-dashed underline-offset-4">{provider.modelCount} models available</span></TooltipTrigger><TooltipContent side="bottom" align="start"><ul className="max-h-60 overflow-y-auto font-mono text-xs">{provider.models.length ? provider.models.map(model => <li key={model.id} className="break-all">{model.id}</li>) : <li>No models available</li>}</ul></TooltipContent></Tooltip></div> : null}{provider.connection.status === "connected" ? <p className="flex items-start gap-1"><Check aria-hidden="true" className="mt-0.5 size-3 shrink-0" /><span className="min-w-0 break-words">{provider.connection.account ? `Signed in as ${provider.connection.account}` : "Signed in"}</span></p> : provider.id === "opencode" && provider.connection.status === "not-connected" && provider.status !== "missing" ? null : <p>{provider.connection.summary}</p>}{provider.status === "missing" ? <ProviderInstallationInstructions provider={provider.id} checkLabel="Check again" /> : provider.connection.status !== "connected" ? <div className="grid"><Button size="sm" disabled={loginPending !== null} onClick={() => void startLogin(`provider:${provider.id}`, provider.label, `/api/admin/providers/${provider.id}/login`).catch(reason => setError(reason instanceof Error ? reason.message : "Suplex could not open a sign-in pane."))}>Sign in</Button></div> : null}</div></CardContent></Card>)}</div></div>
     : current === "agents" ? loading && state.profiles.length === 0 ? <LoadingState /> : <InternalAgentsManager agents={state.profiles} onSaved={reload} renderCards={openNewAgent => <div className="grid gap-3 sm:grid-cols-2" aria-label="Your team">{state.profiles.filter(agent => !agent.archivedAt).map(agent => <AgentCard key={agent.id} agent={agent} />)}<AddCard label="Add agent" onClick={openNewAgent} /></div>} />
     : current === "projects" ? <ProjectsContent currentCompany={currentCompany} projects={state.projects} agents={state.profiles} loading={loading} projectsLoading={loading && state.projects.length === 0} loadError={error || loadError} canSignInToGitHub={user?.role === "admin"} reload={reload} reloadCompanies={reloadCompanies} />
-    : current === "plan" ? loading ? <LoadingState /> : <OnboardingPlanPicker value={plan} onChange={plan => setPlanChoice({ companyId, plan })} projectCount={state.projects.length} disabled={saving} />
+    : current === "plan" ? loading ? <LoadingState /> : <OnboardingPlanPicker value={plan} onChange={plan => setPlanChoice({ companyId, plan })} projectCount={state.projects.length} trialAvailable={billing?.trialAvailable === true} disabled={saving} />
     : <div className="flex flex-1 flex-col items-center justify-center gap-6 text-center">
       <MovesIllustration />
       <div className="space-y-4" aria-live="polite">

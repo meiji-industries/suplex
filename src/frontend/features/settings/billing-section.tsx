@@ -57,7 +57,7 @@ function planDetail(summary: BillingSummary): string {
     if (summary.cancelAtPeriodEnd && summary.accessUntil) return `${price}. Pro ends on ${formatDate(summary.accessUntil)}.`;
     return summary.renewalAt ? `${price}. Renews on ${formatDate(summary.renewalAt)}.` : `${price}.`;
   }
-  return "Free includes 1 company, 1 project, 3 tasks at a time, and 50 tasks each month.";
+  return "Free includes 1 company, 2 projects, 3 tasks at a time, and 50 tasks each month.";
 }
 
 // Copy that tells why the plan cannot change from here.

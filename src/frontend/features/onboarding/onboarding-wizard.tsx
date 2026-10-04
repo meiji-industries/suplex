@@ -104,7 +104,7 @@ export function OnboardingView(): ReactElement {
   const [email, setEmail] = useState<string>();
   const [saving, setSaving] = useState(false);
   const [planChoice, setPlanChoice] = useState<{ companyId: string; plan: OnboardingPlan }>();
-  const plan = state.projects.length >= 2 ? "pro" : planChoice?.companyId === companyId ? planChoice.plan : "free";
+  const plan = state.projects.length >= 3 ? "pro" : planChoice?.companyId === companyId ? planChoice.plan : "free";
   const checkoutKey = useRef<string | undefined>(undefined);
   const [billing, setBilling] = useState<BillingSummary>();
   useEffect(() => { if (current === "plan") void getBillingSummary().then(setBilling).catch(() => setBilling(undefined)); }, [current]);

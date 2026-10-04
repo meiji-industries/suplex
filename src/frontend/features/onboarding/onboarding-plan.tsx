@@ -14,14 +14,14 @@ export function OnboardingPlanPicker({ value, onChange, projectCount, trialAvail
   disabled?: boolean;
 }): ReactElement {
   const plans = [
-    { id: "free", label: "Free", detail: "1 company, 1 project, 3 tasks at a time, 50 tasks each month", price: "$0", interval: "/month", disabled: projectCount >= 2 },
+    { id: "free", label: "Free", detail: "1 company, 2 projects, 3 tasks at a time, 50 tasks each month", price: "$0", interval: "/month", disabled: projectCount >= 3 },
     { id: "pro", label: "Pro", detail: "3 companies, 10 projects, unlimited tasks", price: `$${PRO_MONTHLY_AMOUNT / 100}`, interval: "/month", disabled: false },
     { id: "enterprise", label: "Enterprise", detail: "", price: "", interval: "", disabled: true },
   ];
 
   return <div className="space-y-3">
     <RadioGroup aria-label="Plan" value={value} disabled={disabled} onValueChange={next => {
-      if (next === "pro" || (next === "free" && projectCount < 2)) onChange(next);
+      if (next === "pro" || (next === "free" && projectCount < 3)) onChange(next);
     }}>
       <div className="overflow-hidden rounded-md border">
         <Table>
@@ -45,7 +45,7 @@ export function OnboardingPlanPicker({ value, onChange, projectCount, trialAvail
       </div>
     </RadioGroup>
     <p className="text-xs text-muted-foreground">
-      {value === "free" ? "No credit card is necessary." : trialAvailable ? "Pro is free for 30 days. No credit card is necessary." : projectCount >= 2 ? "Pro is necessary for 2 or more projects." : "Taxes are additional."}
+      {value === "free" ? "No credit card is necessary." : trialAvailable ? "Pro is free for 30 days. No credit card is necessary." : projectCount >= 3 ? "Pro is necessary for 3 or more projects." : "Taxes are additional."}
     </p>
   </div>;
 }

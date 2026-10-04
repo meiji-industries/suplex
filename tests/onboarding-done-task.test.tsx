@@ -122,16 +122,16 @@ test.each([0, 1, 2, 3, 4])("Plan selects the eligible default with %i projects",
   const root = createRoot(container);
   await act(async () => root.render(<OnboardingView />));
   const radio = (label: string): HTMLElement => container.querySelector(`[role="radio"][aria-label="${label}"]`)!;
-  expect(radio("Free").getAttribute("aria-checked")).toBe(String(count < 2));
-  expect(radio("Pro").getAttribute("aria-checked")).toBe(String(count >= 2));
-  expect(radio("Free").hasAttribute("data-disabled")).toBe(count >= 2);
+  expect(radio("Free").getAttribute("aria-checked")).toBe(String(count < 3));
+  expect(radio("Pro").getAttribute("aria-checked")).toBe(String(count >= 3));
+  expect(radio("Free").hasAttribute("data-disabled")).toBe(count >= 3);
   expect(radio("Enterprise").hasAttribute("data-disabled")).toBe(true);
   await act(async () => radio("Enterprise").click());
   expect(radio("Enterprise").getAttribute("aria-checked")).toBe("false");
   await act(async () => radio("Pro").closest("label")!.click());
   expect(radio("Pro").getAttribute("aria-checked")).toBe("true");
   await act(async () => radio("Free").closest("label")!.click());
-  expect(radio("Free").getAttribute("aria-checked")).toBe(String(count < 2));
+  expect(radio("Free").getAttribute("aria-checked")).toBe(String(count < 3));
   expect(container.textContent).not.toContain("Startup");
   expect(container.querySelector("footer")?.textContent).toBe("Continue");
   await act(async () => root.unmount());
@@ -158,7 +158,7 @@ test("Plan updates its default when projects load and when the company changes",
   await act(async () => root.unmount());
 });
 
-const freeSummary = { plan: "free", limits: { companies: 1, projects: 1, runningTasks: 3, monthlyTasks: 50 }, usage: { companies: 1, projects: 3, runningTasks: 0, monthlyTasks: 0 }, checked: true, accountLinked: true, canManageBilling: true, purchaseConfigured: true, trialAvailable: false, subscriptionStatus: "none", renewalAt: null, accessUntil: null, cancelAtPeriodEnd: false, paymentActionRequired: false, paymentActionUrl: null } as const;
+const freeSummary = { plan: "free", limits: { companies: 1, projects: 2, runningTasks: 3, monthlyTasks: 50 }, usage: { companies: 1, projects: 3, runningTasks: 0, monthlyTasks: 0 }, checked: true, accountLinked: true, canManageBilling: true, purchaseConfigured: true, trialAvailable: false, subscriptionStatus: "none", renewalAt: null, accessUntil: null, cancelAtPeriodEnd: false, paymentActionRequired: false, paymentActionUrl: null } as const;
 
 test("Pro opens checkout and reuses the intent after a failed request", async () => {
   fixture.currentCompany = company;
@@ -186,7 +186,7 @@ test("Pro opens checkout and reuses the intent after a failed request", async ()
 
 test("Pro starts the trial without a checkout tab when the account has one", async () => {
   fixture.currentCompany = company;
-  fixture.projects = [{ id: "one" }, { id: "two" }];
+  fixture.projects = [{ id: "one" }, { id: "two" }, { id: "three" }];
   const open = vi.spyOn(window, "open");
   vi.mocked(getBillingSummary).mockResolvedValue({ ...freeSummary, trialAvailable: true });
   vi.mocked(startTrial).mockResolvedValue({ ...freeSummary, plan: "pro", subscriptionStatus: "trialing" });

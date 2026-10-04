@@ -45,7 +45,7 @@ pub struct PlanLimits {
 
 pub const FREE: PlanLimits = PlanLimits {
     companies: Some(1),
-    projects: Some(1),
+    projects: Some(2),
     running_tasks: Some(FREE_RUNNING_TASKS),
     monthly_tasks: Some(50),
 };

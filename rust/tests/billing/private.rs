@@ -197,7 +197,7 @@ pub(crate) mod tests {
     fn each_plan_has_the_limits_on_getsuplex_ai() {
         assert_eq!(
             (FREE.companies, FREE.projects, FREE.running_tasks, FREE.monthly_tasks),
-            (Some(1), Some(1), Some(3), Some(50))
+            (Some(1), Some(2), Some(3), Some(50))
         );
         assert_eq!(
             (PRO.companies, PRO.projects, PRO.running_tasks, PRO.monthly_tasks),
@@ -316,7 +316,7 @@ pub(crate) mod tests {
         assert_eq!(summary["plan"], json!("free"));
         assert_eq!(summary["checked"], json!(true));
         assert_eq!(summary["trialAvailable"], json!(true));
-        assert_eq!(summary["limits"], json!({"companies": 1, "projects": 1, "runningTasks": 3, "monthlyTasks": 50}));
+        assert_eq!(summary["limits"], json!({"companies": 1, "projects": 2, "runningTasks": 3, "monthlyTasks": 50}));
         assert_eq!(summary["usage"], json!({"companies": 1, "projects": 0, "runningTasks": 0, "monthlyTasks": 0}));
         assert_eq!(
             f.fake.with(|hosted| hosted.calls[0].authorization.clone()),

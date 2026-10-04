@@ -127,7 +127,7 @@ const billingLink = (container: HTMLElement) => Array.from(container.querySelect
 
 test("quota refusals explain the limit and offer billing settings only to an administrator", async () => {
   const limit = await refuse("project_limit_reached");
-  expect(limit.container.textContent).toContain("The plan includes no more projects. Free includes 1 project and Pro includes 10.");
+  expect(limit.container.textContent).toContain("The plan includes no more projects. Free includes 2 projects and Pro includes 10.");
   expect(billingLink(limit.container)?.getAttribute("href")).toBe("/billing?company=company-1");
   expect(limit.container.querySelector<HTMLInputElement>("#project-repository")!.value).toBe("https://github.com/octocat/Third");
   expect(limit.onOpenChange).not.toHaveBeenCalledWith(false);

@@ -20,7 +20,7 @@ import type { BillingSummary } from "../src/frontend/contracts/billing.js";
 import { BillingSection, formatUsd } from "../src/frontend/features/settings/billing-section.js";
 
 const free: BillingSummary = {
-  plan: "free", limits: { companies: 1, projects: 1, runningTasks: 3, monthlyTasks: 50 }, usage: { companies: 1, projects: 1, runningTasks: 2, monthlyTasks: 12 },
+  plan: "free", limits: { companies: 1, projects: 2, runningTasks: 3, monthlyTasks: 50 }, usage: { companies: 1, projects: 1, runningTasks: 2, monthlyTasks: 12 },
   checked: true, accountLinked: true, canManageBilling: true, purchaseConfigured: true, trialAvailable: true,
   subscriptionStatus: "none", renewalAt: null, accessUntil: null, cancelAtPeriodEnd: false, paymentActionRequired: false, paymentActionUrl: null,
 };

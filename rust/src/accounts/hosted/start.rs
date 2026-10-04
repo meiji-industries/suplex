@@ -57,7 +57,7 @@ async fn start(
             StatusCode::OK,
             "Start Suplex for free",
             &format!(
-                "<p>Free includes 1 company, 1 project, 3 tasks at a time, and 50 tasks each month. No credit card is necessary.</p><p>Download Suplex, then log in with your Suplex account.</p>{DOWNLOADS}<p><a href=\"/start?plan=pro\">Start a 30-day Pro trial</a></p>"
+                "<p>Free includes 1 company, 2 projects, 3 tasks at a time, and 50 tasks each month. No credit card is necessary.</p><p>Download Suplex, then log in with your Suplex account.</p>{DOWNLOADS}<p><a href=\"/start?plan=pro\">Start a 30-day Pro trial</a></p>"
             ),
         )
     };

@@ -23,7 +23,7 @@ const QUOTA_CODES = new Set(["project_limit_reached", "billing_unavailable"]);
 
 function quotaMessage(code: string, admin: boolean): string {
   if (code === "billing_unavailable") return "Suplex cannot check the subscription. Retry the request.";
-  return admin ? "The plan includes no more projects. Free includes 1 project and Pro includes 10." : "The plan includes no more projects. Request Pro from an administrator.";
+  return admin ? "The plan includes no more projects. Free includes 2 projects and Pro includes 10." : "The plan includes no more projects. Request Pro from an administrator.";
 }
 
 type RepositoryOwnersState =

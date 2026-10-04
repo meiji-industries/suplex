@@ -2209,14 +2209,17 @@ mod tests {
         };
         let code = |error: Box<dyn Error>| crate::shared::public_failure(error).code;
         commit("1".into()).await.unwrap();
+        commit("2".into()).await.unwrap();
+        let refused = crate::shared::public_failure(commit("3".into()).await.unwrap_err());
+        assert_eq!(refused.code, Some("project_limit_reached"));
         assert_eq!(
-            code(commit("2".into()).await.unwrap_err()),
-            Some("project_limit_reached")
+            refused.message,
+            "Free includes 2 projects. Select Pro in Settings > Billing."
         );
         f.fake
             .with(|hosted| hosted.respond("/v1/plan", 200, pro_plan()));
         crate::billing::observe(&f.state, crate::billing::Limit::Projects).await;
-        for slug in 2..=10 {
+        for slug in 3..=10 {
             commit(slug.to_string()).await.unwrap();
         }
         assert_eq!(

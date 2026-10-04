@@ -7,7 +7,7 @@ installation has one plan: the plan of the Suplex account linked to it
 | Limit | Free | Pro |
 | --- | --- | --- |
 | Companies that are not archived | 1 | 3 |
-| Projects in all companies | 1 | 10 |
+| Projects in all companies | 2 | 10 |
 | Tasks running at once (`active` or `waiting_human`) | 3 | Unlimited |
 | Tasks created each UTC calendar month, archived ones too | 50 | Unlimited |
 

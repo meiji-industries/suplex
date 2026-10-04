@@ -147,12 +147,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn the_second_free_project_is_refused_before_any_repository_work() {
+    async fn the_third_free_project_is_refused_before_any_repository_work() {
         let f = fixture().await;
-        f.sql(
-            "INSERT INTO suplex_projects (id, company_id, name, repository_path, worktree_root, repository_identity, base_branch, setup_command, verification_command, root_profile_id, worker_profile_id, agent_task_policy_json, created_at, updated_at) VALUES ('one', ?1, 'one', '/tmp/one', '/tmp/one-worktrees', 'acme/one', 'main', '', '', 'profile_native_root', 'profile_native_worker', '{}', '2026-09-14T00:00:00.000Z', '2026-09-14T00:00:00.000Z')",
-            &[&f.company_id],
-        );
+        for slug in ["one", "two"] {
+            f.sql(
+                &format!("INSERT INTO suplex_projects (id, company_id, name, repository_path, worktree_root, repository_identity, base_branch, setup_command, verification_command, root_profile_id, worker_profile_id, agent_task_policy_json, created_at, updated_at) VALUES ('{slug}', ?1, '{slug}', '/tmp/{slug}', '/tmp/{slug}-worktrees', 'acme/{slug}', 'main', '', '', 'profile_native_root', 'profile_native_worker', '{{}}', '2026-09-14T00:00:00.000Z', '2026-09-14T00:00:00.000Z')"),
+                &[&f.company_id],
+            );
+        }
         let root = std::env::temp_dir().join(format!("suplex-billing-roots-{}", uuid::Uuid::new_v4()));
         let base = serve(
             f.state
@@ -165,13 +167,16 @@ mod tests {
             &base,
             &format!("/api/companies/{}/projects", f.company_id),
             &[("cookie", &admin), ("origin", ORIGIN)],
-            Some(json!({"repositoryUrl": "https://github.com/acme/two.git"})),
+            Some(json!({"repositoryUrl": "https://github.com/acme/three.git"})),
         )
         .send()
         .await
         .unwrap();
         assert_eq!(refused.status(), 402);
-        assert_eq!(refused.json::<Value>().await.unwrap()["code"], "project_limit_reached");
+        assert_eq!(
+            refused.json::<Value>().await.unwrap(),
+            json!({"error": "Free includes 2 projects. Select Pro in Settings > Billing.", "code": "project_limit_reached"})
+        );
         assert!(!root.exists(), "no repository was provisioned");
         // suplex.sh was read before the refusal.
         assert_eq!(f.reads(), 1);

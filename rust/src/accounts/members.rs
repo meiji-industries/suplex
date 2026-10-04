@@ -146,6 +146,46 @@ pub fn accept(
     })
 }
 
+/// The unused `suplex recover` invitation that `token` names, if any. Only shell access to the host can issue one.
+pub fn recovery_invitation(
+    database: &SuplexDatabase,
+    token: &str,
+    now: DateTime<Utc>,
+) -> DatabaseResult<Option<String>> {
+    Ok(database.connection().query_row(
+        "SELECT id FROM suplex_invitations WHERE token_hash = ?1 AND kind = 'recovery' AND consumed_at IS NULL AND replaced_at IS NULL AND expires_at > ?2",
+        params![sha256_hex(token), rfc3339_millis(now)],
+        |row| row.get(0),
+    ).optional()?)
+}
+
+/// Uses the recovery invitation once, links `account` as this host's owner, and signs it in as the owner.
+pub fn recover(
+    database: &mut SuplexDatabase,
+    invitation_id: &str,
+    account: &HostedAccount,
+    token: &str,
+    now: DateTime<Utc>,
+) -> DatabaseResult<String> {
+    database.transaction(true, |database| {
+        let timestamp = rfc3339_millis(now);
+        let used = database.connection().execute(
+            "UPDATE suplex_invitations SET consumed_at = ?2 WHERE id = ?1 AND kind = 'recovery' AND consumed_at IS NULL AND replaced_at IS NULL AND expires_at > ?2",
+            params![invitation_id, timestamp],
+        )?;
+        if used == 0 {
+            return Err(PublicFailure::new(403, "This recovery link expired or was used. Run suplex recover again.").into());
+        }
+        super::link(database, account, token)?;
+        crate::identity::audit::record(database, &crate::identity::audit::AuditEvent {
+            id: &random_hex_id("audit")?, actor_user_id: Some("user_development"), actor_agent_id: None,
+            action: "account_linked", target_user_id: None, company_id: None,
+            metadata_json: r#"{"method":"recovery"}"#, created_at: &timestamp,
+        })?;
+        accept(database, account, now)
+    })
+}
+
 pub fn session_verified(
     database: &SuplexDatabase,
     token: &str,

@@ -21,6 +21,12 @@ function failureMessage(error: unknown): string {
   return "Suplex could not start the login.";
 }
 
+/** The token of a `suplex recover` link (`/auth?mode=recovery&invite=…`). */
+function recoveryToken(): string | undefined {
+  const query = new URLSearchParams(window.location.search);
+  return query.get("mode") === "recovery" ? query.get("invite") ?? undefined : undefined;
+}
+
 /** Shown on open until this host links a Suplex account. */
 function completedLoginPath(): string {
   const query = new URLSearchParams(window.location.search);
@@ -37,15 +43,17 @@ export function AccountLoginView({ preview = false, previewState }: { preview?: 
   const [waiting, setWaiting] = useState<Waiting | undefined>(() => preview && previewState ? { attemptId: "preview", ...(previewState === "email" ? { email: "you@example.com" } : { url: "https://suplex.sh/auth/done" }) } : undefined);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [recovery] = useState(recoveryToken);
 
   useEffect(() => {
     if (preview) { setCanManage(true); return; }
+    if (recovery) { setCanManage(true); return; }
     void getAccount().then((account) => {
       if (account.account) window.location.assign(completedLoginPath());
       else if (!account.configured) { setCanManage(false); setError("Suplex login is not configured on this host."); }
       else setCanManage(account.canManage);
     }).catch(() => setCanManage(true));
-  }, [preview]);
+  }, [preview, recovery]);
 
   useEffect(() => {
     if (preview || !waiting) return;
@@ -59,7 +67,7 @@ export function AccountLoginView({ preview = false, previewState }: { preview?: 
       try {
         const { status } = await pollAccountLogin(waiting.attemptId);
         failures = 0;
-        if (status === "complete") { window.location.assign(completedLoginPath()); return; }
+        if (status === "complete") { window.location.assign(recovery ? "/" : completedLoginPath()); return; }
         if (status === "expired") { setWaiting(undefined); setError("The login expired. Retry."); return; }
       } catch (failure) {
         if (failure instanceof ApiError && failure.statusCode === 403) { setWaiting(undefined); setError(failure.message); return; }
@@ -77,11 +85,11 @@ export function AccountLoginView({ preview = false, previewState }: { preview?: 
     setBusy(true);
     setError("");
     try {
-      const attempt = await startAccountLogin(provider, address);
+      const attempt = await startAccountLogin(provider, address, recovery);
       if (attempt.url) window.open(attempt.url, "_blank", "noopener");
       setWaiting({ attemptId: attempt.attemptId, url: attempt.url, email: address });
     } catch (failure) {
-      setError(failureMessage(failure));
+      setError(failure instanceof ApiError && failure.statusCode === 403 ? failure.message : failureMessage(failure));
     } finally {
       setBusy(false);
     }
@@ -119,6 +127,7 @@ export function AccountLoginView({ preview = false, previewState }: { preview?: 
             </form>
           ) : (
             <div className="flex flex-col gap-2">
+              {recovery ? <p className="pb-2 text-sm text-muted-foreground">Log in to recover this host. Your account becomes its owner.</p> : null}
               <Button disabled={busy || canManage === undefined} onClick={() => void start("google")}>Continue with Google</Button>
               <Button variant="outline" disabled={busy || canManage === undefined} onClick={() => void start("github")}>Continue with GitHub</Button>
               <Button variant="outline" disabled={busy || canManage === undefined} onClick={() => { setEmailForm(true); setError(""); }}>Continue with email</Button>

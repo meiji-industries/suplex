@@ -434,4 +434,36 @@ mod tests {
         assert_eq!(remote(&app, "GET", "/api/auth/me", Some(session), None).await.0, StatusCode::UNAUTHORIZED);
     }
 
+    #[tokio::test]
+    async fn a_recovery_link_links_the_owner_from_a_remote_login_once() {
+        use crate::http::routes::avatars::tests::call as remote;
+        let f = fixture().await;
+        let previous = wire::HostedAccount { id: "user_67e55044-10b1-426f-9247-bb680e5fe0c9".into(), email: "previous@example.com".into(), name: None };
+        let token = f.state.with_database(|db| {
+            crate::accounts::link(db, &previous, &"o".repeat(43)).unwrap();
+            crate::identity::auth::issue_administrator_invitation(db, "recovery", "{}", Utc::now()).unwrap().unwrap()
+        });
+        let app = crate::http::router(f.state.clone());
+
+        let (status, _, refused) = remote(&app, "POST", "/api/account/login", None, Some(json!({"provider": "google", "recovery": "invite_v1_recovery_wrong"}))).await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
+        assert_eq!(body(&refused)["error"], "This recovery link expired or was used. Run suplex recover again.");
+        assert!(f.fake.with(|hosted| hosted.challenge.is_none()), "a bad link never reaches the account service");
+
+        let (status, headers, _) = remote(&app, "POST", "/api/account/login", None, Some(json!({"provider": "google", "recovery": token}))).await;
+        assert_eq!(status, StatusCode::OK);
+        let cookie = login_cookie(&headers);
+        f.fake.with(|hosted| hosted.poll = Some(Poll::Complete));
+        let (status, headers, _) = remote(&app, "GET", &format!("/api/account/login/{ATTEMPT_ID}"), Some(&cookie), None).await;
+        assert_eq!(status, StatusCode::OK);
+        let session = headers.get_all("set-cookie").iter().map(|h| h.to_str().unwrap()).find(|h| h.starts_with("sid_v1=")).unwrap().split(';').next().unwrap();
+        let (_, _, profile) = remote(&app, "GET", "/api/auth/me", Some(session), None).await;
+        assert_eq!(body(&profile)["user"]["id"], "user_development", "the recovered account signs in as the owner");
+        assert_eq!(f.state.with_database(|db| linked(db).unwrap().unwrap().account_id), ACCOUNT_ID);
+        assert!(f.fake.with(|hosted| hosted.logouts.is_empty()), "the owner link keeps its hosted token");
+
+        let (status, _, _) = remote(&app, "POST", "/api/account/login", None, Some(json!({"provider": "google", "recovery": token}))).await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "a recovery link works once");
+    }
+
 }

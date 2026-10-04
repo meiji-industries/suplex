@@ -128,6 +128,22 @@ async fn login(
         }
         Vec::new()
     };
+    // A loopback login already links the owner; a remote one does when it carries a recovery link.
+    let recovery = match body.recovery.as_deref().filter(|_| !local) {
+        Some(token) => match state.with_database(|database| {
+            accounts::members::recovery_invitation(database, token, Utc::now())
+        }) {
+            Ok(Some(id)) => Some(id),
+            Ok(None) => {
+                return failure(PublicFailure::new(
+                    403,
+                    "This recovery link expired or was used. Run suplex recover again.",
+                ));
+            }
+            Err(error) => return ApiError::response(error),
+        },
+        None => None,
+    };
     let Some(client) = state.accounts.clone() else {
         return with_cookies(failure(accounts::not_configured()), cookies);
     };
@@ -141,7 +157,7 @@ async fn login(
             };
             if let Err(error) = state.with_database(|database| {
                 database.connection().execute("DELETE FROM suplex_account_login_attempts WHERE expires_at <= ?1", [rfc3339_millis(Utc::now())])?;
-                database.connection().execute("INSERT INTO suplex_account_login_attempts (id, browser_hash, local_owner, expires_at) VALUES (?1, ?2, ?3, ?4)", params![attempt_id, sha256_hex(&browser), local, rfc3339_millis(Utc::now() + Duration::minutes(15))])?;
+                database.connection().execute("INSERT INTO suplex_account_login_attempts (id, browser_hash, local_owner, expires_at, recovery_invitation_id) VALUES (?1, ?2, ?3, ?4, ?5)", params![attempt_id, sha256_hex(&browser), local, rfc3339_millis(Utc::now() + Duration::minutes(15)), recovery])?;
                 Ok(())
             }) { return ApiError::response(error); }
             let security = if local { "" } else { "; Secure" };
@@ -164,15 +180,15 @@ async fn login_status(
 ) -> Response {
     let local = session::is_local_recovery(&headers);
     let browser = session::cookie(&headers, "suplex_login").unwrap_or_default();
-    let bound = state.with_database(|database| -> crate::platform::database::DatabaseResult<bool> {
-        Ok(database.connection().query_row("SELECT 1 FROM suplex_account_login_attempts WHERE id = ?1 AND browser_hash = ?2 AND local_owner = ?3 AND expires_at > ?4", params![attempt_id, sha256_hex(&browser), local, rfc3339_millis(Utc::now())], |_| Ok(())).optional()?.is_some())
-    }).unwrap_or(false);
-    if !bound {
+    let bound = state.with_database(|database| -> crate::platform::database::DatabaseResult<Option<Option<String>>> {
+        Ok(database.connection().query_row("SELECT recovery_invitation_id FROM suplex_account_login_attempts WHERE id = ?1 AND browser_hash = ?2 AND local_owner = ?3 AND expires_at > ?4", params![attempt_id, sha256_hex(&browser), local, rfc3339_millis(Utc::now())], |row| row.get(0)).optional()?)
+    }).unwrap_or(None);
+    let Some(recovery) = bound else {
         return failure(PublicFailure::new(
             403,
             "This login belongs to another browser or expired",
         ));
-    }
+    };
     let mut cookies = Vec::new();
     let Some(client) = state.accounts.clone() else {
         return failure(accounts::not_configured());
@@ -192,12 +208,22 @@ async fn login_status(
                             json!({}),
                         )?;
                         Ok(None)
+                    } else if let Some(invitation) = recovery.as_deref() {
+                        accounts::members::recover(
+                            database,
+                            invitation,
+                            &account,
+                            &token,
+                            Utc::now(),
+                        )
+                        .map(Some)
                     } else {
                         accounts::members::accept(database, &account, Utc::now()).map(Some)
                     }
                 })
                 .map_err(ApiError::response);
-            if !local {
+            // The owner link keeps its hosted token; a member login does not need one.
+            if !local && (recovery.is_none() || accepted.is_err()) {
                 client.logout(&token).await;
             }
             let session_token = match accepted {

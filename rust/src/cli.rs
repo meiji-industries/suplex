@@ -124,7 +124,7 @@ fn recover(arguments: &[String]) -> CliResult {
     )?
     .ok_or("Recovery invitation was not created")?;
     println!(
-        "Recovery enrollment (showing once): {}/auth?mode=recovery&invite={token}",
+        "Recovery link (shown once, works once, expires in 72 hours):\n{}/auth?mode=recovery&invite={token}\nOpen it from any browser that reaches this host and log in. That account becomes this host's owner.",
         installation.reachable_address
     );
     Ok(0)

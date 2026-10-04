@@ -9,8 +9,9 @@ export function getAccount(): Promise<AccountResponse> {
   return readJsonUnchecked<AccountResponse>("/api/account");
 }
 
-export function startAccountLogin(provider: AccountProvider, email?: string): Promise<AccountLoginResponse> {
-  return readJsonUnchecked<AccountLoginResponse>("/api/account/login", { method: "POST", body: JSON.stringify(email ? { provider, email } : { provider }) });
+/** `recovery` is a `suplex recover` token: a remote login with it links the account as this host's owner. */
+export function startAccountLogin(provider: AccountProvider, email?: string, recovery?: string): Promise<AccountLoginResponse> {
+  return readJsonUnchecked<AccountLoginResponse>("/api/account/login", { method: "POST", body: JSON.stringify({ provider, ...(email ? { email } : {}), ...(recovery ? { recovery } : {}) }) });
 }
 
 export function pollAccountLogin(attemptId: string): Promise<AccountLoginStatusResponse> {

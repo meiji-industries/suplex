@@ -1,0 +1,9 @@
+{
+  "contract": "tasks.WorktreeAppSchema",
+  "case": "new_app",
+  "input": "conductor",
+  "expected": {
+    "accepted": true,
+    "value": "conductor"
+  }
+}

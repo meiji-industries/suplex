@@ -2,13 +2,15 @@ import { readJsonUnchecked } from "../../../lib/api.js";
 import type { Task, TaskInput } from "../../../contracts/tasks.js";
 import type { TaskAgentSelectionRequest } from "../../../contracts/agent-selection.js";
 import type { IssueAssociation } from "../../../contracts/issues.js";
-import { TaskActivityResponseSchema, TaskDiffResponseSchema, TaskDiffSummaryResponseSchema } from "../../../contracts/task-responses.js";
+import { TaskActivityResponseSchema, TaskDiffResponseSchema, TaskDiffSummaryResponseSchema, WorktreeAppsResponseSchema } from "../../../contracts/task-responses.js";
 import { TaskExecutionResponseSchema } from "../../../contracts/task-execution.js";
 import { TaskTimelineResponseSchema } from "../../../contracts/timeline.js";
 import type { TaskActivityResponse } from "../../../contracts/generated/TaskActivityResponse.js";
 import type { TaskExecutionResponse } from "../../../contracts/generated/TaskExecutionResponse.js";
 import type { TaskDiffResponse } from "../../../contracts/generated/TaskDiffResponse.js";
 import type { TaskDiffSummaryResponse } from "../../../contracts/generated/TaskDiffSummaryResponse.js";
+import type { WorktreeApp } from "../../../contracts/generated/WorktreeApp.js";
+import type { WorktreeAppsResponse } from "../../../contracts/generated/WorktreeAppsResponse.js";
 import type { TimelineResponse } from "../../../contracts/generated/TimelineResponse.js";
 import type { ArchiveConfirmation } from "../../../contracts/generated/ArchiveConfirmation.js";
 import type { ProfileResponse } from "../../../contracts/projects.js";
@@ -137,6 +139,16 @@ export async function readTaskTimeline(taskId: string, signal: AbortSignal): Pro
   const result = await readJsonUnchecked<TimelineResponse>(taskPath(taskId, "/timeline"), { signal });
   TaskTimelineResponseSchema.parse(result);
   return result;
+}
+
+export async function listWorktreeApps(taskId: string): Promise<WorktreeAppsResponse> {
+  const result = await readJsonUnchecked<WorktreeAppsResponse>(taskPath(taskId, "/worktree/apps"));
+  WorktreeAppsResponseSchema.parse(result);
+  return result;
+}
+
+export function openWorktree(taskId: string, app: WorktreeApp): Promise<{ ok: boolean; error?: string }> {
+  return readJsonUnchecked<{ ok: boolean; error?: string }>(taskPath(taskId, "/worktree/open"), { method: "POST", body: JSON.stringify({ app }) });
 }
 
 export async function readTaskDiffSummary(taskId: string, signal: AbortSignal): Promise<TaskDiffSummaryResponse> {

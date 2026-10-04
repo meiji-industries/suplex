@@ -19,7 +19,10 @@ use serde_json::json;
 use crate::{
     http::{
         AppState,
-        contracts::typed::tasks::{TaskIdParams, WorktreeOpenBody},
+        contracts::{
+            task_reads::{WorktreeApp, WorktreeAppOption, WorktreeAppsResponse},
+            typed::tasks::{TaskIdParams, WorktreeOpenBody},
+        },
         session,
         validation::{ValidPath, body_contract, valid},
     },
@@ -79,14 +82,24 @@ async fn apps(
         Err(response) => response,
         Ok((_, None)) => auth::error(StatusCode::NOT_FOUND, "Worktree not found"),
         Ok(_) if !direct_loopback_request(&state, &headers, &extensions) => {
-            Json(json!({"apps": []})).into_response()
+            Json(WorktreeAppsResponse { apps: Vec::new() }).into_response()
         }
         Ok(_) => {
-            let apps = tokio::task::spawn_blocking(worktree_open::worktree_launchers)
-                .await
-                .unwrap_or_default();
-            Json(json!({"apps": apps.iter().map(|app| json!({"id": app.id, "label": app.label})).collect::<Vec<_>>()}))
-                .into_response()
+            let apps = tokio::task::spawn_blocking(|| {
+                worktree_open::worktree_launchers()
+                    .into_iter()
+                    .filter_map(|app| {
+                        Some(WorktreeAppOption {
+                            id: WorktreeApp::parse(app.id)?,
+                            label: app.label.into(),
+                            icon: app.bundle.as_deref().and_then(worktree_open::app_icon),
+                        })
+                    })
+                    .collect()
+            })
+            .await
+            .unwrap_or_default();
+            Json(WorktreeAppsResponse { apps }).into_response()
         }
     };
     with_cookies(response, cookies)

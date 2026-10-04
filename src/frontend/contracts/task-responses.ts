@@ -42,6 +42,6 @@ export const TaskChecksResponseSchema = z.object({
   runs: z.array(z.object({ name: z.string(), status: z.enum(["pending", "failing", "successful"]), url: z.string().nullable(), conclusion: z.string().optional(), workflow: z.string().nullable().optional(), startedAt: z.string().datetime().nullable().optional(), completedAt: z.string().datetime().nullable().optional() })),
 });
 
-export const WorktreeAppSchema = z.enum(["finder", "cursor", "vscode", "ghostty", "terminal"]);
+export const WorktreeAppSchema = z.enum(["finder", "cursor", "vscode", "devin", "xcode", "ghostty", "iterm", "terminal", "antigravity", "conductor"]);
 
-export const WorktreeAppsResponseSchema = z.object({ apps: z.array(z.object({ id: WorktreeAppSchema, label: z.string() })) });
+export const WorktreeAppsResponseSchema = z.object({ apps: z.array(z.object({ id: WorktreeAppSchema, label: z.string(), icon: z.string().startsWith("data:image/png;base64,").nullable() })) });

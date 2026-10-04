@@ -102,6 +102,35 @@ pub struct TaskDiffResponse {
     pub truncated: bool,
 }
 
+crate::shared::wire_enum! {
+    pub enum WorktreeApp {
+        Finder = "finder",
+        Cursor = "cursor",
+        Vscode = "vscode",
+        Devin = "devin",
+        Xcode = "xcode",
+        Ghostty = "ghostty",
+        Iterm = "iterm",
+        Terminal = "terminal",
+        Antigravity = "antigravity",
+        Conductor = "conductor",
+    }
+}
+
+#[derive(Serialize, TS)]
+pub struct WorktreeAppOption {
+    pub id: WorktreeApp,
+    pub label: String,
+    /// A PNG data URL of the installed application icon.
+    pub icon: Option<String>,
+}
+
+#[derive(Serialize, TS)]
+#[ts(export)]
+pub struct WorktreeAppsResponse {
+    pub apps: Vec<WorktreeAppOption>,
+}
+
 #[derive(Serialize, TS)]
 #[ts(export)]
 pub struct TaskDiffSummaryResponse {

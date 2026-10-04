@@ -19,6 +19,7 @@ mod tests {
                 ]
             }),
             cwd_is_path,
+            bundle: None,
         };
         (
             vec![

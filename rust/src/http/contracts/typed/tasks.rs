@@ -19,7 +19,18 @@ const MAX_TASK_DEPENDENCIES: usize = 50;
 pub(crate) const MAX_SAFE: f64 = 9_007_199_254_740_991.0;
 pub(crate) const VISUAL_EVIDENCE: &[&str] = &["off", "capture", "required"];
 const IMAGE_TYPES: &[&str] = &["image/png", "image/jpeg", "image/webp", "image/gif"];
-pub const WORKTREE_APPS: &[&str] = &["finder", "cursor", "vscode", "ghostty", "terminal"];
+pub const WORKTREE_APPS: &[&str] = &[
+    "finder",
+    "cursor",
+    "vscode",
+    "devin",
+    "xcode",
+    "ghostty",
+    "iterm",
+    "terminal",
+    "antigravity",
+    "conductor",
+];
 
 #[derive(Debug, Clone, Serialize, Deserialize, Validate)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]

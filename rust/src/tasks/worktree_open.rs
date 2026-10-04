@@ -1,11 +1,13 @@
 //! Desktop applications that can open a task worktree on the Suplex host.
 //! Every launcher is a resolved executable with a fixed argument array.
 
-use std::{path::Path, sync::Arc};
+use std::{
+    collections::HashMap,
+    path::Path,
+    sync::{Arc, LazyLock, Mutex},
+};
 
 use crate::profiles::agent_profiles::executable;
-
-pub const WORKTREE_APP_IDS: [&str; 5] = ["finder", "cursor", "vscode", "ghostty", "terminal"];
 
 /// Builds the fixed argument array for a worktree path.
 pub type LauncherArgs = Arc<dyn Fn(&str) -> Vec<String> + Send + Sync>;
@@ -18,6 +20,8 @@ pub struct Launcher {
     pub args: LauncherArgs,
     /// The worktree path is the working directory instead of an argument.
     pub cwd_is_path: bool,
+    /// The installed application bundle that supplies the icon.
+    pub bundle: Option<String>,
 }
 
 impl Launcher {
@@ -33,7 +37,12 @@ impl Launcher {
             command,
             args: Arc::new(args),
             cwd_is_path: false,
+            bundle: None,
         }
+    }
+
+    fn with_bundle(self, bundle: Option<String>) -> Self {
+        Self { bundle, ..self }
     }
 }
 
@@ -86,59 +95,76 @@ pub fn discover_launchers(discovery: &Discovery<'_>) -> Vec<Launcher> {
             return launchers;
         }
         let home = format!("{}/Applications", discovery.home);
-        let bundles = ["/Applications", "/System/Applications", home.as_str()];
+        let directories = [
+            "/Applications",
+            "/System/Applications",
+            "/System/Applications/Utilities",
+            home.as_str(),
+        ];
+        let bundle = |name: &str| {
+            directories
+                .iter()
+                .map(|directory| format!("{directory}/{name}"))
+                .find(|path| (discovery.exists)(path))
+        };
         let bundled = |name: &str, relative: &str| {
-            bundles
+            directories
                 .iter()
                 .map(|directory| format!("{directory}/{name}/{relative}"))
                 .find(|path| (discovery.executable)(path))
         };
-        if (discovery.exists)("/System/Library/CoreServices/Finder.app") {
-            launchers.push(Launcher::new(
-                "finder",
-                "Finder",
-                open.into(),
-                path_argument,
-            ));
+        let open_app = |id, label, name: &str| {
+            bundle(name).map(|app| {
+                let argument = app.clone();
+                Launcher::new(id, label, open.into(), move |path| {
+                    vec!["-a".into(), argument.clone(), path.into()]
+                })
+                .with_bundle(Some(app))
+            })
+        };
+        let finder = "/System/Library/CoreServices/Finder.app";
+        if (discovery.exists)(finder) {
+            launchers.push(
+                Launcher::new("finder", "Finder", open.into(), path_argument)
+                    .with_bundle(Some(finder.into())),
+            );
         }
         if let Some(cursor) =
             resolve("cursor").or_else(|| bundled("Cursor.app", "Contents/Resources/app/bin/cursor"))
         {
-            launchers.push(Launcher::new("cursor", "Cursor", cursor, path_argument));
+            launchers.push(
+                Launcher::new("cursor", "Cursor", cursor, path_argument)
+                    .with_bundle(bundle("Cursor.app")),
+            );
         }
         if let Some(code) = resolve("code")
             .or_else(|| bundled("Visual Studio Code.app", "Contents/Resources/app/bin/code"))
         {
-            launchers.push(Launcher::new("vscode", "VS Code", code, path_argument));
+            launchers.push(
+                Launcher::new("vscode", "VS Code", code, path_argument)
+                    .with_bundle(bundle("Visual Studio Code.app")),
+            );
         }
-        if let Some(ghostty) = bundles
-            .iter()
-            .map(|directory| format!("{directory}/Ghostty.app"))
-            .find(|path| (discovery.exists)(path))
-        {
-            launchers.push(Launcher::new(
-                "ghostty",
-                "Ghostty",
-                open.into(),
-                move |path| {
+        launchers.extend(open_app("devin", "Devin Desktop", "Devin.app"));
+        launchers.extend(open_app("xcode", "Xcode", "Xcode.app"));
+        if let Some(ghostty) = bundle("Ghostty.app") {
+            let argument = ghostty.clone();
+            launchers.push(
+                Launcher::new("ghostty", "Ghostty", open.into(), move |path| {
                     vec![
                         "-na".into(),
-                        ghostty.clone(),
+                        argument.clone(),
                         "--args".into(),
                         format!("--working-directory={path}"),
                     ]
-                },
-            ));
+                })
+                .with_bundle(Some(ghostty)),
+            );
         }
-        let terminal = "/System/Applications/Utilities/Terminal.app";
-        if (discovery.exists)(terminal) {
-            launchers.push(Launcher::new(
-                "terminal",
-                "Terminal",
-                open.into(),
-                move |path| vec!["-a".into(), terminal.into(), path.into()],
-            ));
-        }
+        launchers.extend(open_app("iterm", "iTerm", "iTerm.app"));
+        launchers.extend(open_app("terminal", "Terminal", "Terminal.app"));
+        launchers.extend(open_app("antigravity", "Antigravity", "Antigravity.app"));
+        launchers.extend(open_app("conductor", "Conductor", "Conductor.app"));
     } else if discovery.platform == "linux" {
         if let Some(cursor) = resolve("cursor") {
             launchers.push(Launcher::new("cursor", "Cursor", cursor, path_argument));
@@ -178,6 +204,40 @@ pub fn worktree_launchers() -> Vec<Launcher> {
     })
 }
 
+/// Draws the bundle icon at 64 px through NSWorkspace, which also reads Assets.car icons.
+const ICON_SCRIPT: &str = r#"ObjC.import("AppKit");
+function run(argv) {
+  const size = 64;
+  const image = $.NSWorkspace.sharedWorkspace.iconForFile(argv[0]);
+  const rep = $.NSBitmapImageRep.alloc.initWithBitmapDataPlanesPixelsWidePixelsHighBitsPerSampleSamplesPerPixelHasAlphaIsPlanarColorSpaceNameBytesPerRowBitsPerPixel(null, size, size, 8, 4, true, false, $.NSDeviceRGBColorSpace, 0, 0);
+  $.NSGraphicsContext.saveGraphicsState;
+  $.NSGraphicsContext.setCurrentContext($.NSGraphicsContext.graphicsContextWithBitmapImageRep(rep));
+  image.drawInRectFromRectOperationFraction($.NSMakeRect(0, 0, size, size), $.NSZeroRect, $.NSCompositingOperationSourceOver, 1);
+  $.NSGraphicsContext.restoreGraphicsState;
+  return rep.representationUsingTypeProperties($.NSBitmapImageFileTypePNG, $()).base64EncodedStringWithOptions(0).js;
+}"#;
+
+/// A PNG data URL of the bundle icon, or `None` when extraction fails.
+// ponytail: cached for the process lifetime; an updated app icon shows after a restart.
+pub fn app_icon(bundle: &str) -> Option<String> {
+    static ICONS: LazyLock<Mutex<HashMap<String, Option<String>>>> =
+        LazyLock::new(Default::default);
+    if let Some(icon) = ICONS.lock().ok()?.get(bundle).cloned() {
+        return icon;
+    }
+    let icon = std::process::Command::new("/usr/bin/osascript")
+        .args(["-l", "JavaScript", "-e", ICON_SCRIPT, bundle])
+        .stdin(std::process::Stdio::null())
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_owned())
+        .filter(|png| png.starts_with("iVBOR"))
+        .map(|png| format!("data:image/png;base64,{png}"));
+    ICONS.lock().ok()?.insert(bundle.to_owned(), icon.clone());
+    icon
+}
+
 pub fn worktree_launcher(
     app: &str,
     launchers: Vec<Launcher>,
@@ -205,6 +265,7 @@ mod tests {
                     "/System/Library/CoreServices/Finder.app",
                     "/System/Applications/Utilities/Terminal.app",
                     "/Applications/Ghostty.app",
+                    "/Applications/Visual Studio Code.app",
                 ]
                 .contains(&path)
             },
@@ -220,6 +281,10 @@ mod tests {
         assert_eq!(
             apps.iter().map(|app| app.id).collect::<Vec<_>>(),
             ["finder", "vscode", "ghostty", "terminal"]
+        );
+        assert_eq!(
+            apps[1].bundle.as_deref(),
+            Some("/Applications/Visual Studio Code.app")
         );
         assert_eq!(
             (apps[3].args)("/worktrees/a; rm -rf /"),
@@ -238,6 +303,84 @@ mod tests {
                 "--working-directory=/worktrees/task"
             ]
         );
+    }
+
+    #[test]
+    fn lists_every_installed_macos_application_in_menu_order() {
+        let installed = [
+            "/System/Library/CoreServices/Finder.app",
+            "/Applications/Cursor.app",
+            "/Applications/Visual Studio Code.app",
+            "/Applications/Devin.app",
+            "/Applications/Xcode.app",
+            "/Applications/Ghostty.app",
+            "/Users/test/Applications/iTerm.app",
+            "/System/Applications/Utilities/Terminal.app",
+            "/Applications/Antigravity.app",
+            "/Applications/Conductor.app",
+        ];
+        let apps = discover_launchers(&Discovery {
+            platform: "macos",
+            home: "/Users/test",
+            exists: &|path| installed.contains(&path),
+            executable: &|path| path == "/usr/bin/open",
+            resolve: &|command| Some(format!("/usr/local/bin/{command}")),
+        });
+        assert_eq!(
+            apps.iter()
+                .map(|app| (app.id, app.label))
+                .collect::<Vec<_>>(),
+            [
+                ("finder", "Finder"),
+                ("cursor", "Cursor"),
+                ("vscode", "VS Code"),
+                ("devin", "Devin Desktop"),
+                ("xcode", "Xcode"),
+                ("ghostty", "Ghostty"),
+                ("iterm", "iTerm"),
+                ("terminal", "Terminal"),
+                ("antigravity", "Antigravity"),
+                ("conductor", "Conductor"),
+            ]
+        );
+        assert_eq!(
+            apps.iter()
+                .map(|app| app.bundle.as_deref().unwrap())
+                .collect::<Vec<_>>(),
+            installed
+        );
+        assert_eq!(
+            apps.iter().map(|app| app.id).collect::<Vec<_>>(),
+            crate::http::contracts::typed::tasks::WORKTREE_APPS
+        );
+        assert!(apps.iter().all(|app| {
+            crate::http::contracts::task_reads::WorktreeApp::parse(app.id).is_some()
+        }));
+        assert_eq!(apps[1].command, "/usr/local/bin/cursor");
+        for index in [3, 4, 6, 8, 9] {
+            assert_eq!(apps[index].command, "/usr/bin/open");
+            assert_eq!(
+                (apps[index].args)("/worktrees/a; rm -rf /"),
+                ["-a", installed[index], "/worktrees/a; rm -rf /"]
+            );
+        }
+        let none = discover_launchers(&Discovery {
+            platform: "macos",
+            home: "/Users/test",
+            exists: &|_| false,
+            executable: &|path| path == "/usr/bin/open",
+            resolve: &|_| None,
+        });
+        assert!(none.is_empty());
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn renders_a_cached_png_icon_from_the_installed_bundle() {
+        let finder = "/System/Library/CoreServices/Finder.app";
+        let icon = app_icon(finder).unwrap();
+        assert!(icon.starts_with("data:image/png;base64,iVBOR"));
+        assert_eq!(app_icon(finder), Some(icon));
     }
 
     #[test]

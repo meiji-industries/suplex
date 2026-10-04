@@ -1,23 +1,34 @@
 import { useEffect, useRef, useState, type ReactElement } from "react";
-import { ChevronDown, Copy, FolderOpen } from "lucide-react";
-import { WorktreeAppsResponseSchema, type WorktreeAppSchema } from "../../contracts/task-responses.js";
-import { readJsonUnchecked } from "../../lib/api.js";
+import { AppWindow, ChevronDown, Copy } from "lucide-react";
+import type { WorktreeApp } from "../../contracts/generated/WorktreeApp.js";
+import type { WorktreeAppOption } from "../../contracts/generated/WorktreeAppOption.js";
+import { listWorktreeApps, openWorktree } from "./lib/task-api.js";
 import { Button } from "../../components/ui/button.js";
+import { ButtonGroup } from "../../components/ui/button-group.js";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "../../components/ui/dropdown-menu.js";
 
-type WorktreeApp = { id: typeof WorktreeAppSchema._output; label: string };
+const lastAppKey = "suplex.worktreeApp";
 
 function localOrigin(): boolean {
   return ["localhost", "127.0.0.1", "[::1]"].includes(window.location.hostname);
 }
 
-// Worktree paths only mean something on the host's own machine or in the desktop app.
+// Worktree paths only mean something on the host's own machine.
 export function showWorktreeMenu(): boolean {
-  return !!window.suplexApp || localOrigin();
+  return localOrigin();
+}
+
+function readLastApp(): string | null {
+  try { return localStorage.getItem(lastAppKey); } catch { return null; }
+}
+
+function AppIcon({ app }: { app: WorktreeAppOption }): ReactElement {
+  return app.icon ? <img src={app.icon} alt="" className="size-4" /> : <AppWindow />;
 }
 
 export function TaskWorktreeMenu({ taskId, path, onError }: { taskId: string; path: string; onError: (message: string) => void }): ReactElement {
-  const [apps, setApps] = useState<WorktreeApp[] | null>(null);
+  const [apps, setApps] = useState<WorktreeAppOption[] | null>(null);
+  const [lastApp, setLastApp] = useState(readLastApp);
   const [copyState, setCopyState] = useState<"" | "copied" | "failed">("");
   const copyGeneration = useRef(0);
   useEffect(() => {
@@ -26,8 +37,7 @@ export function TaskWorktreeMenu({ taskId, path, onError }: { taskId: string; pa
     setApps(null);
     setCopyState("");
     if (!localOrigin()) return;
-    void readJsonUnchecked(`/api/tasks/${taskId}/worktree/apps`).then(value => {
-      const result = WorktreeAppsResponseSchema.parse(value);
+    void listWorktreeApps(taskId).then(result => {
       if (current) setApps(result.apps);
     }).catch(() => { if (current) setApps([]); });
     return () => { current = false; copyGeneration.current += 1; };
@@ -43,12 +53,28 @@ export function TaskWorktreeMenu({ taskId, path, onError }: { taskId: string; pa
       if (generation === copyGeneration.current) setCopyState("failed");
     }
   };
-  const open = async (app: WorktreeApp["id"]) => {
+  const open = async (app: WorktreeApp) => {
+    setLastApp(app);
+    try { localStorage.setItem(lastAppKey, app); } catch { /* The choice applies to this page only. */ }
     try {
-      const result = await readJsonUnchecked<{ ok: boolean; error?: string }>(`/api/tasks/${taskId}/worktree/open`, { method: "POST", body: JSON.stringify({ app }) });
+      const result = await openWorktree(taskId, app);
       if (!result.ok) onError(result.error ?? "The worktree could not be opened");
     } catch (error) { onError(error instanceof Error ? error.message : "The worktree could not be opened"); }
   };
+  const primary = apps?.find(app => app.id === lastApp) ?? apps?.[0];
   const feedback = copyState === "copied" ? "Path copied" : copyState === "failed" ? "Path copy failed" : "";
-  return <div className="flex shrink-0 items-center gap-2"><DropdownMenu><DropdownMenuTrigger render={<Button type="button" variant="outline" size="sm" aria-label="Open in" />}><FolderOpen />Open in<ChevronDown /></DropdownMenuTrigger><DropdownMenuContent align="end">{apps?.map(app => <DropdownMenuItem key={app.id} onClick={() => void open(app.id)}>{app.label}</DropdownMenuItem>)}{apps?.length ? <DropdownMenuSeparator /> : null}<DropdownMenuItem onClick={() => void copy()}><Copy />Copy path</DropdownMenuItem></DropdownMenuContent></DropdownMenu><span aria-live="polite" className="text-xs text-muted-foreground">{feedback}</span></div>;
+  return <div className="flex shrink-0 items-center gap-2">
+    <ButtonGroup>
+      {primary ? <Button type="button" variant="outline" size="icon-sm" aria-label={`Open in ${primary.label}`} title={`Open in ${primary.label}`} onClick={() => void open(primary.id)}><AppIcon app={primary} /></Button> : null}
+      <DropdownMenu>
+        <DropdownMenuTrigger render={<Button type="button" variant="outline" size="icon-sm" aria-label="Select an app or copy the path" title="Select an app or copy the path" />}><ChevronDown /></DropdownMenuTrigger>
+        <DropdownMenuContent align="end">
+          {apps?.map(app => <DropdownMenuItem key={app.id} onClick={() => void open(app.id)}><AppIcon app={app} />{app.label}</DropdownMenuItem>)}
+          {apps?.length ? <DropdownMenuSeparator /> : null}
+          <DropdownMenuItem onClick={() => void copy()}><Copy />Copy path</DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
+    </ButtonGroup>
+    <span aria-live="polite" className="text-xs text-muted-foreground">{feedback}</span>
+  </div>;
 }

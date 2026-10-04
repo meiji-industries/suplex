@@ -37,7 +37,6 @@ const legacyUncheckedReads = [
   "src/frontend/features/tasks/task-chat/session-history.tsx",
   "src/frontend/features/tasks/task-data.tsx",
   "src/frontend/features/tasks/task-source-picker.tsx",
-  "src/frontend/features/tasks/task-worktree-menu.tsx",
   "src/frontend/features/timeline/timeline.tsx",
   "src/frontend/shell/company-context.tsx",
 ];

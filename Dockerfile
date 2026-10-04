@@ -9,6 +9,9 @@ COPY scripts/shared-resource-command.py scripts/
 COPY src/web/public/install.sh src/web/public/
 # The hosted service serves no app UI. A release build only checks that these entry files exist.
 RUN mkdir -p dist/web && touch dist/web/suplex-ui.js dist/web/suplex-ui.css
+# Use the image's toolchain instead of letting rust-toolchain.toml install clippy and rustfmt on every build.
+# Depot keeps the target cache mount, so incremental builds recompile only the changed parts of the suplex crate.
+ENV RUSTUP_TOOLCHAIN=1.93.1 CARGO_INCREMENTAL=1
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/suplex/rust/target \
     cd rust && cargo build --release --locked --bin suplex && cp target/release/suplex /usr/local/bin/suplex

@@ -26,11 +26,10 @@ use crate::{
         BillingEnvironment, HostedSeatChangeBody, QuantityBody, RegistrationResponse,
         seat_quantity, valid_idempotency_key,
     },
-    shared::{hash::sha256_hex, time::now_millis_rfc3339},
+    shared::{hash::sha256_hex, page, time::now_millis_rfc3339},
 };
 
 const BODY_LIMIT: usize = 1 << 20;
-const RETURN_PAGE: &str = "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><title>Suplex billing</title></head><body><p>You can return to Suplex and check the subscription.</p></body></html>";
 const ROTATE_USAGE: &str =
     "Usage: suplex billing rotate-credential --db <path> --account <accountId>";
 
@@ -357,8 +356,8 @@ async fn revenuecat_webhook(
     Ok(Json(json!({"received": true})).into_response())
 }
 
-async fn return_page() -> Html<&'static str> {
-    Html(RETURN_PAGE)
+fn return_page(heading: &str, message: &str) -> Html<String> {
+    Html(page::render(heading, &format!("<p>{message}</p>")))
 }
 
 async fn health(State(hosted): State<Hosted>) -> Reply {
@@ -383,9 +382,33 @@ pub fn router(hosted: Hosted) -> Router {
         .route("/v1/portal", post(portal))
         .route("/webhooks/stripe", post(stripe_webhook))
         .route("/webhooks/revenuecat", post(revenuecat_webhook))
-        .route("/checkout/return", get(return_page))
-        .route("/checkout/cancel", get(return_page))
-        .route("/portal/return", get(return_page))
+        .route(
+            "/checkout/return",
+            get(|| async {
+                return_page(
+                    "Checkout is complete",
+                    "Return to Suplex. The subscription can take a few seconds to show. You can close this tab.",
+                )
+            }),
+        )
+        .route(
+            "/checkout/cancel",
+            get(|| async {
+                return_page(
+                    "Checkout is cancelled",
+                    "Stripe did not charge you. Return to Suplex to continue. You can close this tab.",
+                )
+            }),
+        )
+        .route(
+            "/portal/return",
+            get(|| async {
+                return_page(
+                    "Billing is up to date",
+                    "Return to Suplex to see the subscription. You can close this tab.",
+                )
+            }),
+        )
         .route("/health", get(health))
         .layer(DefaultBodyLimit::max(BODY_LIMIT))
         .layer(middleware::map_response(no_store))

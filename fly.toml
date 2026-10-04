@@ -4,9 +4,6 @@
 app = "suplex-production"
 primary_region = "yyz"
 
-[build]
-  dockerfile = "Dockerfile.billing"
-
 [env]
   BILLING_PUBLIC_ORIGIN = "https://suplex.sh"
   BILLING_ENVIRONMENT = "production"

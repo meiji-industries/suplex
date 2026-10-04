@@ -43,12 +43,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn return_pages_render_plain_text_and_health_reports_ok() {
+    async fn return_pages_render_and_health_reports_ok() {
         let f = Fixture::new().await;
         for path in ["/checkout/return", "/checkout/cancel", "/portal/return"] {
             let response = f.send(Method::GET, path, &[], None).await;
             assert_eq!(response.status(), 200);
-            assert!(response.text().await.unwrap().contains("return to Suplex"));
+            assert!(response.text().await.unwrap().contains("Return to Suplex"));
         }
         assert_eq!(
             f.get("/health", None).await,

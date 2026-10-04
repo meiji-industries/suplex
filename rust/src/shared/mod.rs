@@ -4,6 +4,7 @@ pub mod fs;
 pub mod hash;
 pub mod ids;
 pub mod js_json;
+pub mod page;
 pub mod time;
 
 pub use failure::{PublicFailure, public_failure};

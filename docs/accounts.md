@@ -116,7 +116,7 @@ startup.
 
 ### Deploy
 
-`mise run deploy_production` builds `Dockerfile.billing` on Fly's remote builder
+`mise run deploy_production` builds `Dockerfile` on Fly's remote builder
 and deploys this checkout to `suplex-production`, including `/terms` and
 `/privacy`. It waits for Fly's deployment checks. `fly.toml` sets
 `BILLING_PUBLIC_ORIGIN=https://suplex.sh`. Set the account secrets once:

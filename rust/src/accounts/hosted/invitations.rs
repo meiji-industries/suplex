@@ -2,13 +2,13 @@ use super::Accounts;
 use crate::{
     accounts::wire::{CompanyInvitationBody, token_shape},
     billing::hosted::{HostedError, HostedResult, iso},
-    shared::hash::sha256_hex,
+    shared::{hash::sha256_hex, page},
 };
 use axum::{
     Json, Router,
     extract::{Path, State},
-    http::{HeaderMap, header},
-    response::Html,
+    http::{HeaderMap, StatusCode, header},
+    response::{Html, IntoResponse, Response},
     routing::{get, post},
 };
 use rusqlite::{OptionalExtension, params};
@@ -17,7 +17,7 @@ use serde_json::json;
 pub fn router() -> Router<Accounts> {
     Router::new()
         .route("/v1/company-invitations", post(send))
-        .route("/invite/{id}", get(page))
+        .route("/invite/{id}", get(invitation_page))
 }
 
 async fn send(
@@ -87,11 +87,27 @@ fn escape(value: &str) -> String {
         .replace('\'', "&#39;")
 }
 
-async fn page(
-    State(accounts): State<Accounts>,
-    Path(id): Path<String>,
-) -> HostedResult<Html<String>> {
-    if !token_shape(&id) {
+async fn invitation_page(State(accounts): State<Accounts>, Path(id): Path<String>) -> Response {
+    match invitation(&accounts, &id) {
+        Ok(html) => Html(html).into_response(),
+        Err(error) => {
+            let status = StatusCode::from_u16(error.status).unwrap_or(StatusCode::NOT_FOUND);
+            let message = if status.is_server_error() {
+                "<p>Suplex cannot open the invitation now. Retry later.</p>"
+            } else {
+                "<p>The invitation expired or does not exist. Ask the company owner to send a new invitation.</p>"
+            };
+            (
+                status,
+                Html(page::render("Invitation is not available", message)),
+            )
+                .into_response()
+        }
+    }
+}
+
+fn invitation(accounts: &Accounts, id: &str) -> HostedResult<String> {
+    if !token_shape(id) {
         return Err(HostedError::new(404, None, "Invitation not found"));
     }
     let row = accounts.hosted.query(|db| db.query_row("SELECT company_name, host_origin, company_id FROM company_invitations WHERE id = ?1 AND expires_at > ?2 AND sent_at IS NOT NULL", params![sha256_hex(id), accounts.hosted.now_iso()], |row| Ok((row.get::<_,String>(0)?,row.get::<_,String>(1)?,row.get::<_,String>(2)?))).optional())?.ok_or_else(|| HostedError::new(404, None, "The invitation expired"))?;
@@ -99,13 +115,15 @@ async fn page(
     target.query_pairs_mut().append_pair("company", &row.2);
     let mut deep = url::Url::parse("suplex://join").map_err(|_| HostedError::internal())?;
     deep.query_pairs_mut().append_pair("url", target.as_str());
-    Ok(Html(format!(
-        "<!doctype html><html lang=\"en\"><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width\"><meta name=\"referrer\" content=\"no-referrer\"><title>Join {} · Suplex</title><style>html{{color-scheme:dark;background:#0f0f0f;color:#f5f5f5;font:16px system-ui}}body{{min-height:90vh;display:grid;place-items:center}}main{{max-width:32rem;padding:2rem}}h1{{font-size:24px}}p{{color:#aaa;line-height:1.6}}a{{color:#d9ff70}}nav{{display:flex;gap:1.5rem;flex-wrap:wrap}}</style><main><h1>Join {}</h1><p>Connect over Tailscale or the same local network as the company’s host. The host must be online.</p><p>Download Suplex, then open the company and log in with the email address that received this invitation.</p><nav><a href=\"/download\">Download Suplex</a><a href=\"{}\">Open Suplex</a><a href=\"{}\">Continue in browser</a></nav></main></html>",
-        escape(&row.0),
-        escape(&row.0),
-        escape(deep.as_str()),
-        escape(target.as_str())
-    )))
+    let company = escape(&row.0);
+    Ok(page::render(
+        &format!("Join {company}"),
+        &format!(
+            "<p>Connect over Tailscale or the same local network as the company host. The host must be online.</p><p>Download Suplex, then open the company and log in with the email address that received this invitation.</p><div class=\"actions\"><a class=\"primary\" href=\"{}\">Open Suplex</a><a href=\"{}\">Continue in browser</a><a href=\"/download\">Download Suplex</a></div>",
+            escape(deep.as_str()),
+            escape(target.as_str())
+        ),
+    ))
 }
 
 #[cfg(test)]

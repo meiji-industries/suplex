@@ -19,15 +19,11 @@ use crate::{
         LoginClient, token_shape,
     },
     billing::hosted::{HostedError, HostedResult, server::JsonBody},
+    shared::page,
 };
 
 const BODY_LIMIT: usize = 64 * 1024;
 const DONE_PAGE: &str = include_str!("done.html");
-const FAILED_PAGE: &str = "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width\"><title>Suplex</title></head><body><p>Suplex could not complete the login. Return to Suplex and retry.</p></body></html>";
-const UNVERIFIED_PAGE: &str = "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width\"><title>Suplex</title></head><body><p>The provider did not report a verified email address. Verify the address with the provider, then retry in Suplex.</p></body></html>";
-/// `{token}` is replaced only after `token_shape` accepts it. A GET never
-/// consumes the link: mail scanners fetch links before people open them.
-const VERIFY_PAGE: &str = "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width\"><title>Suplex</title></head><body><form method=\"post\" action=\"/auth/email/verify\"><input type=\"hidden\" name=\"token\" value=\"{token}\"><p>Continue to log in to Suplex.</p><button type=\"submit\">Continue</button></form></body></html>";
 
 fn to_json<T: serde::Serialize>(value: &T) -> Json<Value> {
     Json(serde_json::to_value(value).unwrap_or(Value::Null))
@@ -42,9 +38,15 @@ fn page(result: HostedResult<Response>) -> Response {
     result.unwrap_or_else(|error| {
         let status = StatusCode::from_u16(error.status).unwrap_or(StatusCode::BAD_REQUEST);
         let body = if error.has_code("email_unverified") {
-            UNVERIFIED_PAGE
+            page::render(
+                "Email address is not verified",
+                "<p>The provider did not report a verified email address. Verify the address with the provider, then retry in Suplex.</p>",
+            )
         } else {
-            FAILED_PAGE
+            page::render(
+                "Login is not complete",
+                "<p>Suplex could not complete the login. Return to Suplex and retry.</p>",
+            )
         };
         (status, Html(body)).into_response()
     })
@@ -145,9 +147,13 @@ struct TokenForm {
 
 async fn verify_form(Query(query): Query<TokenForm>) -> Response {
     match query.token {
-        Some(token) if token_shape(&token) => {
-            Html(VERIFY_PAGE.replace("{token}", &token)).into_response()
-        }
+        // The token is inserted only after `token_shape` accepts it. A GET never
+        // consumes the link: mail scanners fetch links before people open them.
+        Some(token) if token_shape(&token) => Html(page::render(
+            "Log in to Suplex",
+            &format!("<p>Select Continue to log in.</p><form class=\"actions\" method=\"post\" action=\"/auth/email/verify\"><input type=\"hidden\" name=\"token\" value=\"{token}\"><button class=\"primary\" type=\"submit\">Continue</button></form>"),
+        ))
+        .into_response(),
         _ => page(Err(super::expired())),
     }
 }

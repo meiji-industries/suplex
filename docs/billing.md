@@ -91,7 +91,7 @@ sandbox has no head office address, so `billing:dev` sets
 `4242 4242 4242 4242`.
 
 Production targets the Fly app `suplex-production` (`fly.toml` and
-`Dockerfile.billing` at the repository root). The configuration uses one machine
+`Dockerfile` at the repository root). The configuration uses one machine
 in `yyz` and a `billing_data` volume mounted at `/data`. The public origin is
 `suplex.sh`; `www.suplex.sh` redirects to the origin. There is no legacy billing
 hostname. `mise run billing:dns` points both hostnames at Fly. `fly.toml` sets

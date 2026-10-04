@@ -645,6 +645,48 @@ fn an_https_origin_gets_only_its_exact_grant() {
     assert!(app.quit().success());
 }
 
+/// V08 in real WKWebView: a frame from another origin inside the host page reaches no bridge command.
+#[test]
+fn a_cross_origin_frame_cannot_reach_the_bridge() {
+    let frame = Host::start(&[(
+        "frame.html",
+        r#"<!doctype html><html lang="en"><script>
+(async () => {
+  if (!window.__TAURI_INTERNALS__) { parent.postMessage({ missing: true }, '*'); return; }
+  const raw = async (command, args) => { try { await window.__TAURI_INTERNALS__.invoke(command, args ?? {}); return 'allowed'; } catch (error) { return String(error); } };
+  parent.postMessage({
+    network: await raw('app_network_access'),
+    picker: await raw('app_open_host_picker'),
+    save: await raw('app_save_network_access_preference', { mode: 'all' }),
+    choose: await raw('desktop_choose', { mode: 'local' }),
+  }, '*');
+})();
+</script></html>"#,
+    )]);
+    let page = format!(
+        "<!doctype html><html lang=\"en\"><script>addEventListener('message', (event) => {{ window.__frame = event.data; }});</script><iframe src=\"{}/frame.html\"></iframe></html>",
+        frame.origin
+    );
+    let host = Host::start(&[("index.html", &page)]);
+    let data = tempfile::tempdir().unwrap();
+    let mut app = App::launch(data.path(), &["--url", &format!("{}/", host.origin)]);
+    app.wait_for("the host view", |state| view(state).0 == "host");
+    let seen = app.eval("for (let tries = 0; tries < 30 && !window.__frame; tries++) await new Promise((resolve) => setTimeout(resolve, 100)); return window.__frame ?? null;");
+    eprintln!("cross-origin frame: {seen}");
+    if let Some(results) = seen
+        .as_object()
+        .filter(|results| !results.contains_key("missing"))
+    {
+        for (command, result) in results {
+            assert_ne!(result, "allowed", "{command}: {seen}");
+        }
+    }
+    let state = app.state();
+    assert_eq!(state["view"]["origin"], host.origin.as_str());
+    assert!(!data.path().join("network-access.json").exists());
+    assert!(app.quit().success());
+}
+
 /// Gate and V14 (native part): the real React application from the Rust host renders in WKWebView with the
 /// desktop bridge, host bar, titlebar inset, and drag regions. Needs `pnpm test` or `pnpm exec vite build`
 /// plus the debug host binary.

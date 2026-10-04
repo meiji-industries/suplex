@@ -342,7 +342,23 @@ async fn asset(
     (headers, body).into_response()
 }
 
-async fn not_found(State(_state): State<AppState>, uri: axum::http::Uri) -> Response {
+async fn not_found(
+    State(_state): State<AppState>,
+    headers: axum::http::HeaderMap,
+    uri: axum::http::Uri,
+) -> Response {
+    let host = headers
+        .get(axum::http::header::HOST)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default();
+    if let Some(location) = ui::development_source(
+        std::env::var("SUPLEX_FRONTEND_DEV_URL").ok().as_deref(),
+        host,
+        uri.path_and_query()
+            .map_or(uri.path(), |value| value.as_str()),
+    ) {
+        return axum::response::Redirect::temporary(&location).into_response();
+    }
     if uri.path().starts_with("/api/") {
         (
             StatusCode::NOT_FOUND,

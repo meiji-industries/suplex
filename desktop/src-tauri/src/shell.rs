@@ -123,6 +123,8 @@ pub struct Shell<R: Runtime> {
     /// Launch arguments choose the first host only; a reopened window shows the current selection.
     launched: AtomicBool,
     bounds_generation: AtomicU64,
+    zoom: Mutex<f64>,
+    fullscreen: AtomicBool,
     weak: Weak<Shell<R>>,
 }
 
@@ -211,6 +213,27 @@ impl Ports for HostPorts {
         )
         .await
     }
+
+    async fn recover_serve_route(&self, port: Option<u16>) -> Result<(), String> {
+        let port = port.unwrap_or_else(|| {
+            read_install_record(&self.paths.install_record())
+                .map_or(self.default_port, |record| record.port)
+        });
+        match tailscale::serve_cli(&tailscale::COMMANDS, &tailscale::SystemRunner).await? {
+            None => Ok(()),
+            Some(command) => {
+                tailscale::remove_serve_route(
+                    &tailscale::TailscaleAccess {
+                        hostname: String::new(),
+                        command,
+                    },
+                    port,
+                    &tailscale::SystemRunner,
+                )
+                .await
+            }
+        }
+    }
 }
 
 /// The bundled page that shows a setup step, or `None` once a host is selected.
@@ -290,6 +313,14 @@ pub fn is_admin(body: &serde_json::Value) -> bool {
         == Some("admin")
 }
 
+/// The next page zoom: `None` resets to 1.0; a step moves by that amount within 0.5 to 2.0.
+pub fn next_zoom(current: f64, step: Option<f64>) -> f64 {
+    match step {
+        None => 1.0,
+        Some(step) => ((current + step) * 10.0).round().clamp(5.0, 20.0) / 10.0,
+    }
+}
+
 impl<R: Runtime> Shell<R> {
     pub fn new(
         app: AppHandle<R>,
@@ -321,7 +352,9 @@ impl<R: Runtime> Shell<R> {
                 paths.network_access_cleanup(),
                 move |_state| {
                     if let Some(shell) = listener.upgrade() {
-                        shell.network_changed();
+                        // Off the caller's thread: the controller publishes while it holds its operation lock,
+                        // and a menu rebuild waits for the main thread.
+                        tauri::async_runtime::spawn(async move { shell.network_changed() });
                     }
                 },
             );
@@ -350,6 +383,8 @@ impl<R: Runtime> Shell<R> {
                 shut_down: AtomicBool::new(false),
                 launched: AtomicBool::new(false),
                 bounds_generation: AtomicU64::new(0),
+                zoom: Mutex::new(1.0),
+                fullscreen: AtomicBool::new(false),
                 weak: weak.clone(),
             }
         })
@@ -515,7 +550,11 @@ impl<R: Runtime> Shell<R> {
             data_store: window::data_store_for(&self.paths.user_data),
         };
         match build_view(&self.app, self.weak.clone(), spec, bounds, focused) {
-            Ok(_) => {
+            Ok(window) => {
+                let zoom = *self.zoom.lock().unwrap();
+                if zoom != 1.0 {
+                    let _ = window.set_zoom(zoom);
+                }
                 let view = match kind {
                     ViewKind::Setup => View::Setup {
                         label: label.clone(),
@@ -556,6 +595,9 @@ impl<R: Runtime> Shell<R> {
 
     /// Loads a host in a host view for its exact origin. An unreachable remote shows the bundled failure page.
     pub async fn load(&self, target: &SuplexTarget) {
+        if !self.answers(target).await {
+            return;
+        }
         if let View::Host { origin, .. } = self.view() {
             if origin == target.origin {
                 if let Some(window) = self.window() {
@@ -564,13 +606,23 @@ impl<R: Runtime> Shell<R> {
                 }
             }
         }
+        self.replace_view(
+            ViewKind::Host,
+            target.url.clone(),
+            target.origin.clone(),
+            None,
+        );
+    }
+
+    /// True when `target` answers. Otherwise shows the failure page (remote) or the failed-start page (local).
+    async fn answers(&self, target: &SuplexTarget) -> bool {
         let local = self
             .local_origin()
             .is_some_and(|local| local == target.origin);
         if !local && !crate::local_runtime::reachable(&target.origin, Duration::from_secs(4)).await
         {
             self.show_unavailable(target);
-            return;
+            return false;
         }
         if local && !crate::local_runtime::healthy(&target.origin, Duration::from_secs(4)).await {
             let log = tail(&self.paths.server_log(), 200);
@@ -582,14 +634,36 @@ impl<R: Runtime> Shell<R> {
                 stage: None,
                 log,
             }));
-            return;
+            return false;
         }
-        self.replace_view(
-            ViewKind::Host,
-            target.url.clone(),
-            target.origin.clone(),
-            None,
-        );
+        true
+    }
+
+    /// View > Reload: a host that stopped answering gets its failure page instead of a dead page.
+    pub async fn reload(&self) {
+        if let View::Host { origin, .. } = self.view() {
+            let Ok(target) = parse_target(&format!("{origin}/")) else {
+                return;
+            };
+            if !self.answers(&target).await {
+                return;
+            }
+        }
+        if let Some(window) = self.window() {
+            let _ = window.reload();
+        }
+    }
+
+    // ponytail: zoom lasts for this run only; persist it in window-state.json if users ask.
+    pub fn zoom_by(&self, step: Option<f64>) {
+        let zoom = {
+            let mut zoom = self.zoom.lock().unwrap();
+            *zoom = next_zoom(*zoom, step);
+            *zoom
+        };
+        if let Some(window) = self.window() {
+            let _ = window.set_zoom(zoom);
+        }
     }
 
     fn show_unavailable(&self, target: &SuplexTarget) {
@@ -1036,6 +1110,9 @@ impl<R: Runtime> Shell<R> {
                 }
             }
         }
+        if !started {
+            self.mark_fullscreen(true);
+        }
         #[cfg(feature = "native-test")]
         crate::native_test::page_loaded(self, label, url, started);
         #[cfg(not(feature = "native-test"))]
@@ -1067,7 +1144,24 @@ impl<R: Runtime> Shell<R> {
         self.effects.download_directory()
     }
 
+    /// Full screen hides the traffic lights, so the host page drops its titlebar inset.
+    fn mark_fullscreen(&self, loaded: bool) {
+        if let (View::Host { .. }, Some(window)) = (self.view(), self.window()) {
+            let fullscreen = window.is_fullscreen().unwrap_or(false);
+            // A resize only matters when it enters or leaves full screen; a new page always needs its class.
+            if self.fullscreen.swap(fullscreen, Ordering::SeqCst) == fullscreen && !loaded {
+                return;
+            }
+            let _ = window.eval(format!(
+                "document.documentElement.classList.toggle('suplex-fullscreen', {fullscreen});"
+            ));
+        }
+    }
+
     pub fn window_event(&self, event: &WindowEvent) {
+        if matches!(event, WindowEvent::Resized(_)) {
+            self.mark_fullscreen(false);
+        }
         match event {
             WindowEvent::Moved(_) | WindowEvent::Resized(_) => {
                 if let Some(bounds) = self.window().as_ref().and_then(current_bounds) {
@@ -1207,6 +1301,9 @@ impl<R: Runtime> Shell<R> {
     // ----- network access -----
 
     fn network_changed(&self) {
+        if self.shut_down.load(Ordering::SeqCst) {
+            return;
+        }
         self.rebuild_menu();
         let admin_page = self.state.lock().unwrap().admin_page.clone();
         if let Some((label, generation)) = admin_page {
@@ -1419,6 +1516,14 @@ mod tests {
 
     fn cookie(text: &str) -> Cookie<'static> {
         Cookie::parse(text.to_owned()).unwrap()
+    }
+
+    #[test]
+    fn zoom_steps_stay_between_half_and_double() {
+        assert_eq!(next_zoom(1.0, Some(0.1)), 1.1);
+        assert_eq!(next_zoom(2.0, Some(0.1)), 2.0);
+        assert_eq!(next_zoom(0.5, Some(-0.1)), 0.5);
+        assert_eq!(next_zoom(1.7, None), 1.0);
     }
 
     #[test]

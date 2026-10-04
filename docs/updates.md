@@ -27,7 +27,7 @@ describe the same signed app:
 | File | Readers | Contents |
 | --- | --- | --- |
 | `latest-tauri.json` | The app's updater | A Tauri static manifest: `version`, `notes`, `pub_date`, and one `platforms` entry (`darwin-aarch64` or `darwin-x86_64`) with the immutable HTTPS URL of `Suplex-<version>-<arch>.app.tar.gz` and its updater signature |
-| `latest-mac.yml` | `suplex update` (`rust/src/platform/app_update.rs`), `install.sh`, and the download handlers in `rust/src/hosted/site.rs` and `src/web/worker.js` | `version`, `path`, and `sha512` of the ZIP, and a `files` list with the ZIP and the DMG. The name and format are the ones the Electron app published; only the fields these readers use are written. |
+| `latest-mac.yml` | `suplex update` (`rust/src/platform/app_update.rs`) and the download handlers in `rust/src/hosted/site.rs` and `src/web/worker.js`; `install.sh` downloads through `/download` and does not read it | `version`, `path`, and `sha512` of the ZIP, and a `files` list with the ZIP and the DMG. The name and format are the ones the Electron app published; only the fields these readers use are written. |
 
 The release files are `Suplex-<version>-<arch>-mac.zip`,
 `Suplex-<version>-<arch>.dmg`, `Suplex-<version>-<arch>.app.tar.gz`, and its
@@ -57,7 +57,7 @@ signature.
 | `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD`, `APPLE_TEAM_ID` | Notarization | 1Password, `desktop/signing.env` |
 | Developer ID Application certificate | `codesign` (`APPLE_SIGNING_IDENTITY`, default `Developer ID Application`) | The login keychain |
 | `SUPLEX_DESKTOP_UPDATE_URL` | Both feeds | 1Password, `desktop/signing.env` |
-| `TAURI_SIGNING_PRIVATE_KEY`, `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`, `SUPLEX_DESKTOP_UPDATER_PUBKEY` | The updater archive signature and the app's public key | Not yet in 1Password. Generate the pair once with `pnpm --filter suplex-desktop exec tauri signer generate -w <file>`, store both parts in the Suplex vault, and add `op://` references for the three names to `desktop/signing.env`. Losing the private key strands every installed app on its version. |
+| `TAURI_SIGNING_PRIVATE_KEY`, `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`, `SUPLEX_DESKTOP_UPDATER_PUBKEY` | The updater archive signature and the app's public key | 1Password, `desktop/signing.env`. The public key is also tracked in `desktop/updater-production.pub`; a signed release stops when the two differ. Losing the private key strands every installed app on its version. |
 
 `mise run desktop:dist:signed` runs `desktop/scripts/dist-signed.sh` for each
 architecture. It stops with the list of missing inputs when any of these is

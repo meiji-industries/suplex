@@ -37,11 +37,16 @@ libc = "0.2"
 time = { version = "0.3", features = ["formatting"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
-mac-notification-sys = "0.6"
+objc2 = "0.6.4"
+block2 = "0.6.2"
 objc2-service-management = { version = "0.3.2", features = ["SMAppService"] }
 objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "objc2-core-foundation", "NSButton", "NSControl", "NSResponder", "NSView", "NSWindow"] }
 objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSGeometry"] }
+objc2-user-notifications = { version = "0.3.2", default-features = false, features = ["std", "block2", "UNUserNotificationCenter", "UNNotificationContent", "UNNotificationRequest", "UNNotificationResponse", "UNNotification", "UNNotificationTrigger"] }
 
 [dev-dependencies]
 tauri = { version = "=2.12.1", features = ["tray-icon", "image-png", "test"] }
 tempfile = "3"
+# The versions tauri-plugin-updater uses: tests/updater_signature.rs verifies as the updater does.
+minisign-verify = "0.2.5"
+base64 = "0.22.1"

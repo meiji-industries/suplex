@@ -202,6 +202,7 @@
  * content. Elements with data-tauri-drag-region="deep" move the window; their controls stay clickable.
  */
 .suplex-desktop { --titlebar-height: 2.375rem; --titlebar-x: 5rem; }
+.suplex-desktop.suplex-fullscreen { --titlebar-height: 0px; --titlebar-x: 0px; }
 .titlebar-top { padding-top: max(0.5rem, calc(var(--titlebar-height, 0px) - 0.625rem)); }
 .titlebar-inset { padding-left: var(--titlebar-x, 0px); }
 @media (min-width: 768px) {

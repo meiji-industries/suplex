@@ -237,7 +237,10 @@ impl LocalHost {
             if healthy(&target, self.timing.probe_timeout).await {
                 let own = read_installation_id(&self.user_data);
                 let served = served_installation(&target, self.timing.probe_timeout).await;
-                if own.is_empty() || served.as_deref() == Some(own.as_str()) {
+                // Without an installation id only a live child can vouch for the listener.
+                if (own.is_empty() && child.exit_code().is_none())
+                    || served.as_deref() == Some(own.as_str())
+                {
                     break Ok(());
                 }
                 if child.exit_code().is_some() {
@@ -248,6 +251,19 @@ impl LocalHost {
                 }
             }
             if let Some(code) = child.exit_code() {
+                // Something that is not Suplex holds the port: the child lost a race for it.
+                let taken = tokio::time::timeout(
+                    self.timing.probe_timeout,
+                    tokio::net::TcpStream::connect(("127.0.0.1", port)),
+                )
+                .await
+                .is_ok_and(|connection| connection.is_ok());
+                if taken {
+                    break Err((
+                        format!("Another server took {target} while Suplex started."),
+                        true,
+                    ));
+                }
                 break Err((format!("The Suplex server stopped while starting (exit {code}). The log is in logs/server.log."), false));
             }
         };
@@ -571,6 +587,27 @@ mod tests {
         }
         assert!(!alive(grandchild), "the group member was killed");
         assert!(!local.owns_child().await);
+    }
+
+    #[tokio::test]
+    async fn a_child_that_loses_the_port_to_another_program_is_retried_on_a_free_port() {
+        let directory = user_data(None, Some(serde_json::json!({ "takePortOnce": true })));
+        let preferred = free_port(0).unwrap();
+        let local = host(&directory, quick());
+        let started = local
+            .start(preferred, &ResolvedNetworkAccess::Local)
+            .await
+            .unwrap();
+        let taker: i32 = std::fs::read_to_string(directory.path().join("data/fixture-taker.pid"))
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        // SAFETY: the pid is the fixture's own listener process.
+        unsafe { libc::kill(taker, libc::SIGKILL) };
+        assert_ne!(started.port, preferred, "the taken port is not reused");
+        assert!(!started.adopted && local.owns_child().await);
+        local.stop().await;
     }
 
     #[tokio::test]

@@ -101,10 +101,12 @@ if [[ "$phase" != manifest ]]; then
 fi
 
 if [[ "$phase" != files ]]; then
-  # Point the feeds only at files that are present in the object store now.
+  # Point the feeds only at published files whose bytes are this build's: the manifests carry its hash and signature.
   if [[ -z "$dry_run" ]]; then
-    for name in "$(basename "$zip")" "$(basename "$dmg")" "$(basename "$tarball")"; do
-      curl --fail --silent --show-error --head "$base_url/$name" >/dev/null || { echo "$base_url/$name is not published; run the files phase first." >&2; exit 1; }
+    for artifact in "$zip" "$dmg" "$tarball"; do
+      name="$(basename "$artifact")"
+      curl --fail --silent --show-error --output "$zip_check/live" "$base_url/$name" || { echo "$base_url/$name is not published; run the files phase first." >&2; exit 1; }
+      cmp -s "$artifact" "$zip_check/live" || { echo "$base_url/$name differs from the local build; choose a new release version." >&2; exit 1; }
     done
   fi
   publish_manifest "$mac_manifest" text/yaml

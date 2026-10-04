@@ -160,22 +160,6 @@ impl<R: Runtime> Effects<R> {
             drop(clicked);
         }
         #[cfg(all(not(feature = "native-test"), target_os = "macos"))]
-        {
-            let identifier = self.app.config().identifier.clone();
-            std::thread::spawn(move || {
-                let _ = mac_notification_sys::set_application(&identifier);
-                let response = mac_notification_sys::Notification::new()
-                    .title(crate::updater::TITLE)
-                    .message(&message)
-                    .wait_for_click(true)
-                    .send();
-                if matches!(
-                    response,
-                    Ok(mac_notification_sys::NotificationResponse::Click)
-                ) {
-                    clicked();
-                }
-            });
-        }
+        crate::notifications::post(crate::updater::TITLE, &message, clicked);
     }
 }

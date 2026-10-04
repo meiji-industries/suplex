@@ -113,7 +113,13 @@ impl Installer {
                 }
             }
         };
-        *self.cancel.active.lock().unwrap() = child.id().map(|pid| pid as i32);
+        let pid = child.id().map(|pid| pid as i32);
+        *self.cancel.active.lock().unwrap() = pid;
+        // A cancel that arrived while this child was spawning saw no pid to signal.
+        if let (true, Some(pid)) = (self.cancel.is_cancelled(), pid) {
+            // SAFETY: kill(2) with a negative pid signals the group led by our own child.
+            unsafe { libc::kill(-pid, libc::SIGTERM) };
+        }
         let mut stdout = child.stdout.take().expect("piped stdout");
         let stdout_task = tokio::spawn(async move {
             let mut text = String::new();
@@ -224,6 +230,9 @@ impl Installer {
             from: start,
         });
         for stage in &stages[start..] {
+            if self.cancel.is_cancelled() {
+                return InstallOutcome::Cancelled;
+            }
             emit(InstallEvent::StageStarted {
                 stage: stage.name.clone(),
             });
@@ -473,6 +482,16 @@ mod tests {
             })
             .collect();
         assert_eq!(skipped, [true; 5]);
+    }
+
+    #[tokio::test]
+    async fn a_cancel_before_a_stage_starts_runs_no_further_stage() {
+        let user_data = workspace(None);
+        let (events, emit) = collect();
+        let driver = installer(user_data.path(), fixture_runtime());
+        driver.cancel.cancel();
+        assert_eq!(driver.run(None, emit).await, InstallOutcome::Cancelled);
+        assert!(stage_names(&events.lock().unwrap(), true).is_empty());
     }
 
     #[tokio::test]

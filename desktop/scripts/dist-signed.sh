@@ -11,13 +11,21 @@ for name in APPLE_ID APPLE_APP_SPECIFIC_PASSWORD APPLE_TEAM_ID SUPLEX_DESKTOP_UP
 done
 # A release without a feed or updater key could never update itself, and one with a placeholder key must never ship.
 [ -z "$missing" ] || { echo "A signed release needs:$missing (see docs/updates.md)." >&2; exit 1; }
+# The embedded updater key must be the production key: installed apps accept updates signed by that key only.
+[ -f updater-production.pub ] || { echo "desktop/updater-production.pub is missing. Commit the production updater public key before a signed release." >&2; exit 1; }
+[ "$SUPLEX_DESKTOP_UPDATER_PUBKEY" = "$(tr -d '[:space:]' < updater-production.pub)" ] || { echo "SUPLEX_DESKTOP_UPDATER_PUBKEY is not the production updater key in desktop/updater-production.pub." >&2; exit 1; }
 export APPLE_PASSWORD="$APPLE_APP_SPECIFIC_PASSWORD"
 export APPLE_SIGNING_IDENTITY="${APPLE_SIGNING_IDENTITY:-Developer ID Application}"
 version="$(node -p "require('./package.json').version")"
 release="release/$arch"
 dmg="$release/Suplex-$version-$arch.dmg"
-# A rerun after a later failure keeps a release that is already notarized and stapled.
-if xcrun stapler validate -q "$dmg" 2>/dev/null; then echo "$dmg is already stapled; skipping"; exit 0; fi
+# A rerun after a later failure keeps a release that is already notarized and stapled, when it was built from this commit.
+commit="$(git rev-parse HEAD)$([ -z "$(git status --porcelain)" ] || echo -dirty)"
+if xcrun stapler validate -q "$dmg" 2>/dev/null && [ "$(cat "$release/.commit" 2>/dev/null)" = "$commit" ]; then
+  echo "$dmg is already stapled; skipping"
+  SUPLEX_REQUIRE_UPDATER=1 SUPLEX_DESKTOP_ARCH="$arch" sh scripts/verify-release.sh
+  exit 0
+fi
 
 # The bundled host is a separate executable; sign it with the hardened runtime before the app bundle is sealed.
 sh ../scripts/bundle-runtime.sh

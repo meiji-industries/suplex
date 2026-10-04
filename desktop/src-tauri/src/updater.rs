@@ -48,7 +48,6 @@ pub struct Dialog {
 pub enum Followup {
     OfferDownload(UpdateInfo),
     OfferRestart(UpdateInfo),
-    ShowError(Failure, String),
 }
 
 pub trait Ports: Send + Sync {
@@ -120,7 +119,7 @@ impl<P: Ports> DesktopUpdater<P> {
         self.state.lock().unwrap().checking = false;
         match result {
             Err(error) if manual => self.show_error(Failure::Check, error).await,
-            Err(_) => {}
+            Err(error) => eprintln!("Suplex could not check the desktop app update: {error}"),
             Ok(None) if manual => {
                 self.ports
                     .dialog(Dialog {
@@ -155,7 +154,6 @@ impl<P: Ports> DesktopUpdater<P> {
         match followup {
             Followup::OfferDownload(info) => self.offer_download(info).await,
             Followup::OfferRestart(info) => self.offer_restart(info).await,
-            Followup::ShowError(failure, detail) => self.show_error(failure, detail).await,
         }
     }
 
@@ -179,25 +177,22 @@ impl<P: Ports> DesktopUpdater<P> {
         if answer == 0 {
             self.state.lock().unwrap().downloading = true;
             let result = self.ports.download().await;
-            let mut state = self.state.lock().unwrap();
-            state.downloading = false;
-            match result {
-                Ok(()) => {
+            {
+                let mut state = self.state.lock().unwrap();
+                state.downloading = false;
+                state.offering = false;
+                if result.is_ok() {
                     state.downloaded = Some(info.clone());
-                    drop(state);
-                    self.ports.notify(
-                        format!("Suplex desktop app {} was downloaded.", info.version),
-                        Followup::OfferRestart(info),
-                    );
-                }
-                Err(error) => {
-                    drop(state);
-                    self.ports.notify(
-                        Failure::Download.message().into(),
-                        Followup::ShowError(Failure::Download, error),
-                    );
                 }
             }
+            return match result {
+                Ok(()) => self.ports.notify(
+                    format!("Suplex desktop app {} was downloaded.", info.version),
+                    Followup::OfferRestart(info),
+                ),
+                // The user started this download, so its failure answers them in a dialog.
+                Err(error) => self.show_error(Failure::Download, error).await,
+            };
         }
         self.state.lock().unwrap().offering = false;
     }
@@ -579,11 +574,10 @@ mod tests {
             .unwrap()
             .push(Err("signature rejected".into()));
         updater.check(true).await;
-        assert_eq!(
-            messages(&fake),
-            ["Suplex could not download the desktop app update."]
+        assert!(
+            messages(&fake).is_empty(),
+            "a failed download is not a notification"
         );
-        updater.follow(last_followup(&fake)).await;
         let shown = fake.dialogs.lock().unwrap().last().unwrap().clone();
         assert_eq!(
             (shown.message.as_str(), shown.detail.as_deref()),

@@ -26,8 +26,9 @@ pub fn auth_page() -> String {
     )
 }
 
-fn development_html(html: &str, dev_url: Option<&str>) -> String {
-    let Some(url) = dev_url
+/// The port of a valid loopback Vite development URL.
+fn development_port(dev_url: Option<&str>) -> Option<u16> {
+    dev_url
         .and_then(|value| url::Url::parse(value).ok())
         .filter(|url| {
             url.scheme() == "http"
@@ -38,11 +39,32 @@ fn development_html(html: &str, dev_url: Option<&str>) -> String {
                 && url.query().is_none()
                 && url.fragment().is_none()
         })
-    else {
+        .map(|url| url.port_or_known_default().unwrap_or(80))
+}
+
+/// Vite's development stylesheet names its fonts as `/src/...` paths, which the browser resolves on this
+/// host. Send them to Vite on the host the browser used; the scheme stays the page's.
+pub fn development_source(
+    dev_url: Option<&str>,
+    host: &str,
+    path_and_query: &str,
+) -> Option<String> {
+    let port = development_port(dev_url)?;
+    if !path_and_query.starts_with("/src/") {
+        return None;
+    }
+    let hostname = match host.rsplit_once(':') {
+        Some((name, port)) if port.bytes().all(|byte| byte.is_ascii_digit()) => name,
+        _ => host,
+    };
+    (!hostname.is_empty()).then(|| format!("//{hostname}:{port}{path_and_query}"))
+}
+
+fn development_html(html: &str, dev_url: Option<&str>) -> String {
+    // Resolve Vite on the host the browser used, so remote access (such as Tailscale) reaches it.
+    let Some(port) = development_port(dev_url) else {
         return html.to_owned();
     };
-    // Resolve Vite on the host the browser used, so remote access (such as Tailscale) reaches it.
-    let port = url.port_or_known_default().unwrap_or(80);
     html.replace(
         "    <link rel=\"stylesheet\" href=\"/assets/suplex-ui.css\">\n",
         "",
@@ -118,6 +140,31 @@ mod tests {
             assert_eq!(html.matches("root.classList.toggle").count(), 1);
             assert!(html.contains("<div id=\"suplex-app\"><div class=\"suplex-boot\" role=\"status\" aria-label=\"Suplex loads the app\"><span></span></div></div>"));
         }
+    }
+
+    #[test]
+    fn development_source_files_are_sent_to_vite_on_the_page_host() {
+        let dev = Some("http://127.0.0.1:55013");
+        assert_eq!(
+            development_source(
+                dev,
+                "mac.tail1.ts.net:55012",
+                "/src/frontend/fonts/Geist.woff2?v=1"
+            ),
+            Some("//mac.tail1.ts.net:55013/src/frontend/fonts/Geist.woff2?v=1".into())
+        );
+        assert_eq!(
+            development_source(dev, "[::1]:55012", "/src/a.woff2"),
+            Some("//[::1]:55013/src/a.woff2".into())
+        );
+        assert_eq!(
+            development_source(dev, "127.0.0.1:55012", "/api/src/x"),
+            None
+        );
+        assert_eq!(
+            development_source(None, "127.0.0.1:55012", "/src/a.woff2"),
+            None
+        );
     }
 
     #[test]

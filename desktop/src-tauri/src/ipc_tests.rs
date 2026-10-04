@@ -553,3 +553,21 @@ fn tray_stop_stops_only_the_owned_host_and_start_brings_it_back() {
     assert!(shell.local_origin().is_some(), "Start brings the host back");
     tauri::async_runtime::block_on(shell.shutdown());
 }
+
+#[test]
+fn reloading_a_host_that_stopped_shows_the_failure_page() {
+    let harness = harness(&[]);
+    let port = std::net::TcpListener::bind(("127.0.0.1", 0))
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port();
+    let target = parse_target(&format!("http://127.0.0.1:{port}/")).unwrap();
+    harness.shell.show_host_for_test(&target).unwrap();
+    tauri::async_runtime::block_on(harness.shell.reload());
+    assert!(
+        matches!(harness.shell.view(), crate::shell::View::Unavailable { target: shown, .. } if shown.origin == target.origin),
+        "{:?}",
+        harness.shell.view()
+    );
+}

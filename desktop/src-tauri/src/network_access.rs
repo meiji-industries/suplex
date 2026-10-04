@@ -88,6 +88,12 @@ pub trait Ports: Send + Sync {
         command: &str,
         port: u16,
     ) -> impl Future<Output = Result<(), String>> + Send;
+    /// Removes this host's Serve route from live Tailscale state. Works when Tailscale is not connected.
+    /// `port` is the recorded port; `None` means the record was unreadable, so use the port the host starts on.
+    fn recover_serve_route(
+        &self,
+        port: Option<u16>,
+    ) -> impl Future<Output = Result<(), String>> + Send;
 }
 
 pub fn read_preference(file: &std::path::Path) -> NetworkMode {
@@ -101,19 +107,26 @@ pub fn write_preference(file: &std::path::Path, mode: NetworkMode) -> std::io::R
     write_atomic(file, serde_json::to_string(&mode)?.as_bytes())
 }
 
-/// The recorded recovery intent: a port whose route may still exist. Malformed intent is an error, not absence.
-fn read_cleanup(file: &std::path::Path) -> Result<Option<u16>, String> {
+/// The recorded recovery intent: a port whose route may still exist.
+#[derive(Debug, PartialEq)]
+enum Recorded {
+    None,
+    Port(u16),
+    /// Malformed intent is resolved from live Serve state for the port the host starts on.
+    Unreadable,
+}
+
+fn read_cleanup(file: &std::path::Path) -> Result<Recorded, String> {
     let raw = match std::fs::read_to_string(file) {
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Recorded::None),
         Err(error) => return Err(error.to_string()),
         Ok(raw) => raw,
     };
-    serde_json::from_str::<Value>(&raw)
+    Ok(serde_json::from_str::<Value>(&raw)
         .ok()
         .and_then(|value| value.get("port")?.as_u64())
         .filter(|port| (1..=65_535).contains(port))
-        .map(|port| Some(port as u16))
-        .ok_or_else(|| "The saved network cleanup intent is invalid.".to_owned())
+        .map_or(Recorded::Unreadable, |port| Recorded::Port(port as u16)))
 }
 
 fn write_cleanup(file: &std::path::Path, port: u16) -> std::io::Result<()> {
@@ -246,20 +259,17 @@ impl<P: Ports> Controller<P> {
     }
 
     /// A recorded cleanup is retried against live Tailscale state before any host starts.
+    /// It needs a Tailscale CLI only, not a connected tailnet or a readable record.
     async fn recover_cleanup(&self, inner: &mut Inner) -> Result<(), String> {
-        let pending = match inner.cleanup_required {
+        let port = match inner.cleanup_required {
             Some(port) => Some(port),
-            None => read_cleanup(&self.cleanup_file)?,
+            None => match read_cleanup(&self.cleanup_file)? {
+                Recorded::None => return Ok(()),
+                Recorded::Port(port) => Some(port),
+                Recorded::Unreadable => None,
+            },
         };
-        let Some(port) = pending else { return Ok(()) };
-        let ResolvedNetworkAccess::Tailscale { hostname, command } =
-            self.ports.resolve(NetworkMode::Tailscale).await?
-        else {
-            return Err("Tailscale cleanup did not resolve Tailscale access.".into());
-        };
-        self.ports
-            .remove_serve_route(&hostname, &command, port)
-            .await?;
+        self.ports.recover_serve_route(port).await?;
         let _ = std::fs::remove_file(&self.cleanup_file);
         inner.cleanup_required = None;
         Ok(())
@@ -437,6 +447,13 @@ mod tests {
                 .lock()
                 .unwrap()
                 .push(format!("cleanup:{hostname}:{port}"));
+            (self.cleanup)()
+        }
+        async fn recover_serve_route(&self, port: Option<u16>) -> Result<(), String> {
+            self.log.lock().unwrap().push(format!(
+                "recover:{}",
+                port.map_or("unreadable".to_owned(), |port| port.to_string())
+            ));
             (self.cleanup)()
         }
     }
@@ -745,7 +762,7 @@ mod tests {
                 "start:local",
                 "stop",
                 "start:tailscale",
-                "cleanup:mac.one.ts.net:4222",
+                "recover:4222",
                 "start:tailscale"
             ]
         );
@@ -774,9 +791,7 @@ mod tests {
             .any(|entry| entry.starts_with("cleanup")));
         assert_eq!(read_preference(&setup.file), NetworkMode::Local);
         controller.start_preferred().await.unwrap();
-        assert!(setup
-            .operations()
-            .contains(&"cleanup:mac.one.ts.net:4222".to_owned()));
+        assert!(setup.operations().contains(&"recover:4222".to_owned()));
     }
 
     #[tokio::test]
@@ -836,10 +851,7 @@ mod tests {
             controller.start_preferred().await.unwrap(),
             owned(ResolvedNetworkAccess::Local).unwrap()
         );
-        assert_eq!(
-            setup.operations(),
-            ["cleanup:new-name.ts.net:4333", "start:local"]
-        );
+        assert_eq!(setup.operations(), ["recover:4333", "start:local"]);
     }
 
     #[tokio::test]
@@ -864,16 +876,43 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn malformed_cleanup_intent_is_reported_instead_of_starting_behind_an_unverified_route() {
+    async fn malformed_cleanup_intent_is_resolved_from_live_serve_state() {
         let setup = setup();
         std::fs::write(&setup.cleanup_file, "{\"port\":\"x\"}").unwrap();
         let controller = setup.controller(Fake::new(&setup.log));
-        assert!(controller
-            .start_preferred()
-            .await
-            .unwrap_err()
-            .contains("cleanup intent is invalid"));
-        assert!(setup.operations().is_empty());
+        controller.start_preferred().await.unwrap();
+        assert_eq!(setup.operations(), ["recover:unreadable", "start:local"]);
+        assert!(!setup.cleanup_file.exists());
+    }
+
+    #[tokio::test]
+    async fn recorded_cleanup_does_not_need_tailscale_to_be_connected() {
+        let setup = setup();
+        std::fs::write(&setup.cleanup_file, r#"{"port":4222}"#).unwrap();
+        let mut fake = Fake::new(&setup.log);
+        fake.resolve = Box::new(|mode| match mode {
+            NetworkMode::Tailscale => Err("Tailscale is not connected.".into()),
+            _ => Ok(ResolvedNetworkAccess::Local),
+        });
+        let controller = setup.controller(fake);
+        controller.start_preferred().await.unwrap();
+        assert_eq!(setup.operations(), ["recover:4222", "start:local"]);
+        assert!(!setup.cleanup_file.exists());
+    }
+
+    #[tokio::test]
+    async fn a_route_that_cannot_be_observed_keeps_the_host_stopped_and_the_intent() {
+        let setup = setup();
+        std::fs::write(&setup.cleanup_file, r#"{"port":4222}"#).unwrap();
+        let mut fake = Fake::new(&setup.log);
+        fake.cleanup = Box::new(|| Err("status unavailable".into()));
+        let controller = setup.controller(fake);
+        assert_eq!(
+            controller.start_preferred().await.unwrap_err(),
+            "status unavailable"
+        );
+        assert_eq!(setup.operations(), ["recover:4222"]);
+        assert!(setup.cleanup_file.exists());
     }
 
     #[tokio::test]
@@ -905,7 +944,7 @@ mod tests {
                 "start:tailscale",
                 "stop",
                 "cleanup:mac.one.ts.net:4111",
-                "cleanup:mac.one.ts.net:4111"
+                "recover:4111"
             ]
         );
         assert!(!setup.cleanup_file.exists());

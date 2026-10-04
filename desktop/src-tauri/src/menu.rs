@@ -212,9 +212,18 @@ pub fn rebuild<R: Runtime>(shell: &Shell<R>) {
         Box::new(PredefinedMenuItem::paste(app, None).expect("paste")),
         Box::new(PredefinedMenuItem::select_all(app, None).expect("select all")),
     ];
-    let view: Items<R> = vec![Box::new(
-        PredefinedMenuItem::fullscreen(app, None).expect("fullscreen"),
-    )];
+    let shortcut = |id: &str, label: &str, keys: &str| -> Box<dyn IsMenuItem<R>> {
+        Box::new(MenuItem::with_id(app, id, label, true, Some(keys)).expect("menu item"))
+    };
+    let view: Items<R> = vec![
+        shortcut("reload", "Reload", "CmdOrCtrl+R"),
+        separator(app),
+        shortcut("zoom-reset", "Actual Size", "CmdOrCtrl+0"),
+        shortcut("zoom-in", "Zoom In", "CmdOrCtrl+="),
+        shortcut("zoom-out", "Zoom Out", "CmdOrCtrl+-"),
+        separator(app),
+        Box::new(PredefinedMenuItem::fullscreen(app, None).expect("fullscreen")),
+    ];
     let window: Items<R> = vec![
         Box::new(PredefinedMenuItem::minimize(app, None).expect("minimize")),
         Box::new(PredefinedMenuItem::maximize(app, None).expect("zoom")),
@@ -323,6 +332,10 @@ pub fn handle<R: Runtime>(shell: &Arc<Shell<R>>, event: &MenuEvent) {
         match id.as_str() {
             "open" => shell.open().await,
             "quit" => shell.quit().await,
+            "reload" => shell.reload().await,
+            "zoom-reset" => shell.zoom_by(None),
+            "zoom-in" => shell.zoom_by(Some(0.1)),
+            "zoom-out" => shell.zoom_by(Some(-0.1)),
             "manage-hosts" => shell.open_manager().await,
             "host-local" => shell.select_local().await,
             "start" => shell.select_local().await,

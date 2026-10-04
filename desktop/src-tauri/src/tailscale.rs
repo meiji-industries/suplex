@@ -113,6 +113,28 @@ pub async fn resolve_access(
     })
 }
 
+/// The first CLI that can report live Serve status, whether or not this Mac is connected.
+/// `Ok(None)`: no Tailscale CLI exists, so no Serve route can exist.
+/// `Err`: a CLI exists but its Serve status cannot be read, so exposure is unknown.
+pub async fn serve_cli(commands: &[&str], runner: &impl Runner) -> Result<Option<String>, String> {
+    let mut failure = None;
+    for command in commands {
+        match runner
+            .run(
+                command,
+                &["serve", "status", "--json"],
+                Duration::from_secs(5),
+            )
+            .await
+        {
+            Ok(_) => return Ok(Some((*command).to_owned())),
+            Err(RunError::NotFound) => {}
+            Err(RunError::Failed(reason)) => failure = Some(reason.trim().to_owned()),
+        }
+    }
+    failure.map_or(Ok(None), Err)
+}
+
 const INVALID_SERVE: &str = "Tailscale returned invalid Serve status.";
 
 /// The `host:port` whose root handler proxies to `proxy`, or `None`. Malformed status is an error, never safe absence.
@@ -544,6 +566,20 @@ mod tests {
             find_serve_route(&after, 443, "http://127.0.0.1:3100"),
             Ok(Some("renamed.tail1.ts.net:443".into()))
         );
+    }
+
+    #[tokio::test]
+    async fn the_serve_cli_is_found_without_a_connected_tailnet() {
+        let missing = || Err(RunError::NotFound);
+        let none = Scripted::new(vec![missing(), missing()]);
+        assert_eq!(serve_cli(&["/a", "/b"], &none).await, Ok(None));
+        let second = Scripted::new(vec![missing(), Ok("{}".into())]);
+        assert_eq!(
+            serve_cli(&["/a", "/b"], &second).await,
+            Ok(Some("/b".into()))
+        );
+        let unreadable = Scripted::new(vec![Err(RunError::Failed(" x \n".into())), missing()]);
+        assert_eq!(serve_cli(&["/a", "/b"], &unreadable).await, Err("x".into()));
     }
 
     #[tokio::test]

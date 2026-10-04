@@ -11,6 +11,8 @@ mod menu;
 #[cfg(feature = "native-test")]
 mod native_test;
 mod network_access;
+#[cfg(all(not(feature = "native-test"), target_os = "macos"))]
+mod notifications;
 mod paths;
 mod shell;
 mod tailscale;
@@ -56,6 +58,9 @@ pub fn configure<R: Runtime>(builder: tauri::Builder<R>) -> tauri::Builder<R> {
     ])
 }
 
+// Recompiles the shell when the configuration that `generate_context!` reads changes; see build.rs.
+const _: &str = include_str!(concat!(env!("OUT_DIR"), "/compiled-configuration"));
+
 pub fn context<R: Runtime>() -> tauri::Context<R> {
     tauri::generate_context!()
 }
@@ -94,6 +99,9 @@ pub fn run() {
                 updater::packaged_feed(&resources),
             );
             let configured = ports.configured();
+            if !configured {
+                eprintln!("Suplex desktop updates are not configured in this build.");
+            }
             app.manage(Arc::new(DesktopUpdater::new(ports, configured)));
             menu::create_tray(app.handle())?;
             let menu_shell = shell.clone();

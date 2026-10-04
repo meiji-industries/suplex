@@ -70,6 +70,8 @@ pnpm exec tauri build --ci --target "$target" --bundles app,dmg --config "$work/
 bundle="$CARGO_TARGET_DIR/$target/release/bundle"
 app="$bundle/macos/Suplex.app"
 [ -d "$app" ] || { echo "tauri build produced no $app" >&2; exit 1; }
+# The shell must hold this build's updater key, not one compiled into an earlier build.
+[ -z "${SUPLEX_DESKTOP_UPDATER_PUBKEY:-}" ] || grep -aqF "$SUPLEX_DESKTOP_UPDATER_PUBKEY" "$app/Contents/MacOS/Suplex" || { echo "The built app does not hold SUPLEX_DESKTOP_UPDATER_PUBKEY." >&2; exit 1; }
 ditto "$app" "$release/Suplex.app"
 dmg="$(ls "$bundle"/dmg/*.dmg | head -1)"
 cp "$dmg" "$release/Suplex-$version-$arch.dmg"
@@ -79,19 +81,17 @@ ditto -c -k --sequesterRsrc --keepParent "$release/Suplex.app" "$release/Suplex-
 if [ -n "$feed" ]; then
   node --input-type=module - "$release" "$version" "$arch" <<'NODE'
 import { createHash } from "node:crypto";
-import { readFileSync, statSync, writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 const [release, version, arch] = process.argv.slice(2);
-const file = (name) => ({ name, sha512: createHash("sha512").update(readFileSync(`${release}/${name}`)).digest("base64"), size: statSync(`${release}/${name}`).size });
-const zip = file(`Suplex-${version}-${arch}-mac.zip`);
-const dmg = file(`Suplex-${version}-${arch}.dmg`);
+const zip = `Suplex-${version}-${arch}-mac.zip`;
 // Only the fields its readers use: rust/src/platform/app_update.rs (version, path, sha512) and the download handlers (files[].url).
 writeFileSync(`${release}/latest-mac.yml`, [
   `version: ${version}`,
   "files:",
-  ...[zip, dmg].flatMap((entry) => [`  - url: ${entry.name}`, `    sha512: ${entry.sha512}`, `    size: ${entry.size}`]),
-  `path: ${zip.name}`,
-  `sha512: ${zip.sha512}`,
-  `releaseDate: '${new Date().toISOString()}'`,
+  `  - url: ${zip}`,
+  `  - url: Suplex-${version}-${arch}.dmg`,
+  `path: ${zip}`,
+  `sha512: ${createHash("sha512").update(readFileSync(`${release}/${zip}`)).digest("base64")}`,
   "",
 ].join("\n"));
 NODE
@@ -103,6 +103,9 @@ if [ -n "$updater" ]; then
   # Copied byte for byte: the signature covers these exact bytes.
   cp "$archive" "$release/Suplex-$version-$arch.app.tar.gz"
   cp "$archive.sig" "$release/Suplex-$version-$arch.app.tar.gz.sig"
+  # A key pair that does not match, or a leftover test key, would make installed apps reject every later update.
+  SUPLEX_UPDATER_ARCHIVE="$PWD/$release/Suplex-$version-$arch.app.tar.gz" SUPLEX_UPDATER_SIGNATURE="$PWD/$release/Suplex-$version-$arch.app.tar.gz.sig" \
+    env -u RUSTUP_TOOLCHAIN cargo test --manifest-path src-tauri/Cargo.toml --test updater_signature -- --ignored
   node --input-type=module - "$release" "$version" "$arch" "$platform" "$feed" <<'NODE'
 import { readFileSync, writeFileSync } from "node:fs";
 const [release, version, arch, platform, feed] = process.argv.slice(2);
@@ -115,6 +118,9 @@ writeFileSync(`${release}/latest-tauri.json`, `${JSON.stringify({
 }, null, 2)}\n`);
 NODE
 fi
+
+# The commit this release was built from; dist-signed.sh reuses a stapled release only from the same commit.
+printf '%s%s\n' "$(git rev-parse HEAD)" "$([ -z "$(git status --porcelain)" ] || echo -dirty)" > "$release/.commit"
 
 echo "Built $release:"
 ls -1 "$release"

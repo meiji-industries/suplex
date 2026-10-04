@@ -138,13 +138,14 @@ async function close(code) {
 const watchers = [];
 process.once("SIGINT", () => { void close(0); });
 process.once("SIGTERM", () => { void close(0); });
+process.once("SIGHUP", () => { void close(0); });
 
 const found = await listener();
 if (found === "other") {
   log(`${origin} answers for another checkout or program. Stop it, or set SUPLEX_PORT to this checkout's dev port.`);
   process.exit(1);
 }
-if (found === "free") await startStack();
+if (found === "free") await startStack().catch(async (error) => { log(error.message); await close(1); });
 else log(`reusing this checkout's dev stack on ${origin}`);
 if (!build()) await close(1);
 startShell();

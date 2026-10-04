@@ -54,35 +54,40 @@ export function Glow({ id }: { id: string }): ReactElement {
 function reducedMotion(): boolean {
   return typeof window === "undefined" || window.matchMedia?.("(prefers-reduced-motion: reduce)").matches === true;
 }
-/** Animated carousel of scenes around one centre node. Arrow keys, swipe, and the dots change the scene. */
+/**
+ * Animated carousel of scenes around one centre node. Arrow keys, swipe, and the dots change the scene.
+ * It auto-advances through the scenes once and then holds, because running SMIL lays out the SVG on every frame.
+ */
 export function SceneIllustration({ scenes, icon: Icon, label }: { scenes: readonly Scene[]; icon: LucideIcon; label: string }): ReactElement {
   const id = useId();
   const [still] = useState(reducedMotion);
   const [stage, setStage] = useState({ index: 0, runs: scenes.map((_, index) => index) });
+  const [auto, setAuto] = useState(true);
   const swipe = useRef<number | null>(null);
   const show = (next: number): void => setStage(current => {
     const index = (next + scenes.length) % scenes.length;
     if (index === current.index) return current;
     return { index, runs: current.runs.map((run, scene) => scene === index ? Math.max(...current.runs) + 1 : run) };
   });
+  const choose = (next: number): void => { setAuto(false); show(next); };
   useEffect(() => {
-    if (still) return;
+    if (still || !auto || stage.index === scenes.length - 1) return;
     const timer = window.setTimeout(() => show(stage.index + 1), scenes[stage.index]!.loop * 1000);
     return () => window.clearTimeout(timer);
-  }, [stage, still]);
+  }, [stage, still, auto]);
   return <div
     role="group"
     aria-roledescription="carousel"
     aria-label={label}
     tabIndex={0}
     className="flex w-full max-w-sm touch-pan-y select-none flex-col items-center gap-3 outline-none"
-    onKeyDown={event => { if (event.key === "ArrowRight") show(stage.index + 1); if (event.key === "ArrowLeft") show(stage.index - 1); }}
+    onKeyDown={event => { if (event.key === "ArrowRight") choose(stage.index + 1); if (event.key === "ArrowLeft") choose(stage.index - 1); }}
     onPointerDown={event => { swipe.current = event.clientX; }}
     onPointerUp={event => {
       const start = swipe.current;
       swipe.current = null;
       if (start === null || Math.abs(event.clientX - start) < 40) return;
-      show(stage.index + (event.clientX < start ? 1 : -1));
+      choose(stage.index + (event.clientX < start ? 1 : -1));
     }}
   >
     <div className="grid w-full">
@@ -97,7 +102,7 @@ export function SceneIllustration({ scenes, icon: Icon, label }: { scenes: reado
           style={{ transitionDuration: `${TRANSITION_MS}ms` }}
           className={cn("col-start-1 row-start-1 w-full transition-[opacity,translate] ease-out motion-reduce:transition-none", offset === 0 ? "translate-x-0 opacity-100" : offset === 1 ? "translate-x-6 opacity-0" : "-translate-x-6 opacity-0")}
         >
-          <Scene id={`${id}-${index}`} still={still} />
+          <Scene id={`${id}-${index}`} still={still || offset !== 0} />
         </svg>;
       })}
       <svg viewBox="0 0 360 164" aria-hidden="true" className="pointer-events-none col-start-1 row-start-1 w-full">
@@ -114,7 +119,7 @@ export function SceneIllustration({ scenes, icon: Icon, label }: { scenes: reado
         type="button"
         aria-label={label}
         aria-current={index === stage.index}
-        onClick={() => show(index)}
+        onClick={() => choose(index)}
         className={cn("h-1.5 rounded-full transition-all duration-300 motion-reduce:transition-none", index === stage.index ? "w-4 bg-primary" : "w-1.5 bg-muted-foreground/30 hover:bg-muted-foreground/60")}
       />)}
     </div>

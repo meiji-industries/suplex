@@ -743,6 +743,7 @@ impl StripeClient {
             ("line_items[0][price]", params.price_id.to_owned()),
             ("line_items[0][quantity]", params.quantity.to_string()),
             ("automatic_tax[enabled]", params.automatic_tax.to_string()),
+            ("allow_promotion_codes", "true".into()),
             ("billing_address_collection", "auto".into()),
             ("customer_update[address]", "auto".into()),
             ("customer_update[name]", "auto".into()),

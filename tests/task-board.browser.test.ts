@@ -44,7 +44,7 @@ test.each([1280, 390])("tasks can be created, started and viewed on the board at
       expect(created.status(), await created.text()).toBe(201);
       const task = TaskSchema.parse(await created.json());
       expect(created.request().postDataJSON()).toMatchObject({ startImmediately: immediate, ...(immediate ? { rootProfileId: alternate.id } : { advisorProfileIds: { planner_a: alternate.id } }) });
-      expect(task.deliveryTarget).toBe(immediate ? "merged" : "remote_branch");
+      expect(task.deliveryTarget).toBe(immediate ? "pull_request_ready" : "remote_branch");
       createdIds.push(task.id);
       expect(task.workflow).toBe(immediate ? "standard" : "competing_plans");
       expect(task.status).toBe(immediate ? "active" : "backlog");

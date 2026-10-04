@@ -7,14 +7,12 @@ function stubStorage(stored?: object) {
 
 afterEach(() => { vi.unstubAllGlobals(); });
 
-test("empty memory invents no start mode or delivery target", () => {
+test("empty memory invents no settings", () => {
   stubStorage();
-  const memory = readNewTaskMemory();
-  expect(memory.startImmediately).toBeUndefined();
-  expect(memory.deliveryTarget).toBeUndefined();
+  expect(readNewTaskMemory()).toEqual({});
 });
 
-test("stored choices are restored as remembered", () => {
+test("stored choices are restored, and older start mode and delivery target are dropped", () => {
   stubStorage({ projectId: "project", startImmediately: false, deliveryTarget: "pull_request_draft", runProjectTests: false, visualEvidence: "capture" });
-  expect(readNewTaskMemory()).toEqual({ projectId: "project", startImmediately: false, deliveryTarget: "pull_request_draft", runProjectTests: false, visualEvidence: "capture" });
+  expect(readNewTaskMemory()).toEqual({ projectId: "project", runProjectTests: false, visualEvidence: "capture" });
 });

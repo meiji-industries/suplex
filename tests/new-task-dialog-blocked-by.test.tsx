@@ -442,6 +442,27 @@ test("Plan and build remains visible and usable when the workflow catalog is emp
   expect(latestRequest("POST")).toMatchObject({ workflow: "standard" });
 });
 
+test("a fresh task opens with Run and open a PR even when older memory stored Backlog and a draft PR", async () => {
+  storage.getItem.mockReturnValue(JSON.stringify({ projectId: "project-1", startImmediately: false, deliveryTarget: "pull_request_draft" }));
+  const fallback = api.readJsonUnchecked.getMockImplementation()!;
+  api.readJsonUnchecked.mockImplementation(async (url: string, init?: RequestInit) => url === "/api/workflows?includeArchived=true" ? { workflows: [{ ...workflow, deliveryTarget: undefined }] } : fallback(url, init));
+  const { container } = mount();
+  await flush();
+  await submitTask(container);
+  expect(latestRequest("POST")).toMatchObject({ startImmediately: true, deliveryTarget: "pull_request_ready" });
+  expect(storage.setItem.mock.calls.every(([, value]) => !String(value).includes("startImmediately") && !String(value).includes("deliveryTarget"))).toBe(true);
+});
+
+test("a remembered project that no longer exists falls back without a templates error", async () => {
+  storage.getItem.mockReturnValue(JSON.stringify({ projectId: "project-deleted" }));
+  const { container } = mount();
+  await flush();
+  expect(api.readJsonUnchecked.mock.calls.some(([url]) => url === "/api/projects/project-deleted/task-templates")).toBe(false);
+  expect(api.readJsonUnchecked.mock.calls.some(([url]) => url === "/api/projects/project-1/task-templates")).toBe(true);
+  expect(container.textContent).not.toContain("Unexpected request");
+  expect(container.textContent).not.toContain("Not found");
+});
+
 test("templates replace the selected workflow, illustration, and admitted Advisors", async () => {
   const combined = { ...workflow, id: "combined", name: "Double plans", engine: "competing_plans", advisorProfileIds: { planner_a: "root", planner_b: "root" } };
   const template = { id: "template", name: "Plan the feature", description: "Compare approaches.", workflow: "competing_plans", advisorProfileIds: combined.advisorProfileIds, deliveryTarget: "remote_branch", runProjectTests: false, visualEvidence: "capture" };

@@ -1,7 +1,7 @@
 import { updateTask, createTask } from "./lib/task-api.js";
 import { useEffect, useRef, useState, type ReactElement } from "react";
 import { isProfileAllowed } from "../projects/lib/provider-policy.js";
-import { TriangleAlert, ChevronDown, CircleOff, CirclePlus, Combine, FileText, FolderGit2, FolderKanban, GitBranch, GitMerge, GitPullRequest, GitPullRequestDraft, Inbox, ListChecks, Play, ScanEye, Send, TestTube2, Wrench, X } from "lucide-react";
+import { TriangleAlert, ChevronDown, CircleOff, CirclePlus, Combine, FileText, FolderGit2, FolderKanban, GitBranch, GitMerge, GitPullRequest, GitPullRequestDraft, Inbox, ListChecks, Mic, Square, Play, ScanEye, Send, TestTube2, Wrench, X } from "lucide-react";
 import { TaskImageInputSchema, DeliveryTargetSchema, type Task, type TaskInput } from "../../contracts/tasks.js";
 import { ADVISOR_DEFAULT_LABELS, ADVISOR_LABELS, workflowDefinition } from "./workflow-presentation.js";
 import type { AdvisorProfileIds, WorkflowId } from "../../contracts/workflows.js";
@@ -32,6 +32,9 @@ import { TaskRoleSelector } from "./task-role-selectors.js";
 import { supportsDeliveryTarget } from "./lib/delivery-target-capabilities.js";
 import type { NewTaskDraft } from "./lib/duplicate-task-prefill.js";
 import { listProjects } from "../projects/lib/project-api.js";
+import { useDictation } from "./use-dictation.js";
+import { cn } from "../../lib/utils.js";
+import { PhosphorIcon, recordingCaret } from "../../components/app/phosphor-icon.js";
 
 type Delivery = { deliveryTarget: NonNullable<TaskInput["deliveryTarget"]>; runProjectTests: boolean };
 type RecordFallback = { rootProfileId?: string | undefined; workerProfileId?: string | undefined; advisorProfileIds?: AdvisorProfileIds | undefined; deliveryTarget?: Delivery["deliveryTarget"] | undefined; runProjectTests?: boolean | undefined; visualEvidence?: NonNullable<TaskInput["visualEvidence"]> | undefined };
@@ -50,6 +53,8 @@ const deliveryIcons: Record<Delivery["deliveryTarget"], ReactElement> = {
   merged: <GitMerge aria-hidden="true" className="size-[11px]" />,
 };
 const REPAIR: WorkflowId = "refine_pull_request";
+/** Every fresh task opens with Run and open a PR; start mode and delivery target are not remembered. */
+const DEFAULT_DELIVERY: Delivery["deliveryTarget"] = "pull_request_ready";
 const repairNote = "Suplex repairs this pull request, then pushes and merges it after the checks pass.";
 
 /** Keeps only the Advisor selections the selected workflow admits, so hidden or old choices never reach the request. */
@@ -82,8 +87,8 @@ export function NewTaskDialog({ open, onOpenChange, companyId, onCreated, initia
   const [description, setDescription] = useState(initialDraft?.description ?? "");
   const [rootProfileId, setRootProfileId] = useState(initialDraft?.rootProfileId ?? remembered.rootProfileId ?? "");
   const [workerProfileId, setWorkerProfileId] = useState(initialDraft?.workerProfileId ?? remembered.workerProfileId ?? "");
-  const [startImmediately, setStartImmediately] = useState(initialDraft?.startImmediately ?? remembered.startImmediately ?? true);
-  const [deliveryTarget, setDeliveryTarget] = useState<Delivery["deliveryTarget"]>(initialDraft?.deliveryTarget ?? remembered.deliveryTarget ?? "merged");
+  const [startImmediately, setStartImmediately] = useState(initialDraft?.startImmediately ?? true);
+  const [deliveryTarget, setDeliveryTarget] = useState<Delivery["deliveryTarget"]>(initialDraft?.deliveryTarget ?? DEFAULT_DELIVERY);
   const [runProjectTests, setRunProjectTests] = useState(initialDraft?.runProjectTests ?? remembered.runProjectTests ?? true);
   const [visualEvidence, setVisualEvidence] = useState<NonNullable<TaskInput["visualEvidence"]>>(initialDraft?.visualEvidence ?? remembered.visualEvidence ?? "off");
   const [workflow, setWorkflow] = useState<WorkflowId>(initialDraft?.workflow ?? "standard");
@@ -103,6 +108,10 @@ export function NewTaskDialog({ open, onOpenChange, companyId, onCreated, initia
   const [readingImages, setReadingImages] = useState(false);
   const imageRead = useRef({ generation: 0, pending: false });
   const [error, setError] = useState("");
+  const descriptionField = useRef<HTMLTextAreaElement>(null);
+  const dictation = useDictation(descriptionField, setDescription, setError);
+  const stopDictation = dictation.stop;
+  useEffect(() => { if (!open) stopDictation(); }, [open, stopDictation]);
   // Project settings problems that stop task creation; the alert links to the settings that fix them.
   const [projectFindings, setProjectFindings] = useState<string[]>([]);
   const request = useRef<{ body: string; key: string } | null>(null);
@@ -113,7 +122,7 @@ export function NewTaskDialog({ open, onOpenChange, companyId, onCreated, initia
     setWorkerProfileId(explicit.workerProfileId ?? record.workerProfileId ?? fallback.workerProfileId ?? "");
     setAdvisorProfileIds(admittedAdvisors(record.engine, explicit.advisorProfileIds ?? { ...fallback.advisorProfileIds, ...record.advisorProfileIds }));
     setVisualEvidence(explicit.visualEvidence ?? record.visualEvidence ?? fallback.visualEvidence ?? "off");
-    setDeliveryTarget(record.engine === REPAIR ? "merged" : explicit.deliveryTarget ?? record.deliveryTarget ?? fallback.deliveryTarget ?? "merged");
+    setDeliveryTarget(record.engine === REPAIR ? "merged" : explicit.deliveryTarget ?? record.deliveryTarget ?? fallback.deliveryTarget ?? DEFAULT_DELIVERY);
     setRunProjectTests(explicit.runProjectTests ?? record.runProjectTests ?? fallback.runProjectTests ?? true);
   };
   useEffect(() => {
@@ -139,11 +148,11 @@ export function NewTaskDialog({ open, onOpenChange, companyId, onCreated, initia
     previousDelivery.current = null;
     setRunProjectTests(saved.runProjectTests ?? true);
     if (nextWorkflow === REPAIR) {
-      previousDelivery.current = memory().deliveryTarget ?? "merged";
+      previousDelivery.current = DEFAULT_DELIVERY;
       setDeliveryTarget("merged");
       if (initialDraft?.source?.kind !== "pull_request") { setSource(undefined); setSourceSummary(undefined); }
     } else {
-      setDeliveryTarget(saved.deliveryTarget ?? "merged");
+      setDeliveryTarget(saved.deliveryTarget ?? DEFAULT_DELIVERY);
     }
     let cancelled = false;
     void Promise.all([listProjects(companyId), readJsonUnchecked<{ profiles: ApiProfile[] }>("/api/profiles"), readJsonUnchecked<{ workflows: ApiWorkflow[] }>("/api/workflows?includeArchived=true")]).then(([projectResult, profileResult, workflowResult]) => {
@@ -162,22 +171,21 @@ export function NewTaskDialog({ open, onOpenChange, companyId, onCreated, initia
   }, [companyId, open, initialDraft]);
   useEffect(() => {
     setTemplates([]);
-    if (!projectId || !open) return;
+    // The remembered project can be gone; read templates only for a project in the current list.
+    if (!open || !settingsLoaded || !projects.some(project => project.id === projectId)) return;
     let cancelled = false;
-    void readJsonUnchecked<{ templates: ApiTaskTemplate[] }>(`/api/projects/${projectId}/task-templates`).then(result => { if (!cancelled) setTemplates(result.templates); }).catch(error => { if (!cancelled) setError(String(error)); });
+    void readJsonUnchecked<{ templates: ApiTaskTemplate[] }>(`/api/projects/${projectId}/task-templates`).then(result => { if (!cancelled) setTemplates(result.templates); }).catch(error => { if (!cancelled) setError(error instanceof Error ? error.message : "Templates are not available"); });
     return () => { cancelled = true; };
-  }, [projectId, open]);
+  }, [projectId, open, settingsLoaded, projects]);
   useEffect(() => {
     if (editing || !open || !settingsLoaded || !projects.some(project => project.id === projectId)) return;
-    // Repair forces the target; remember the draft's own target instead of the forced value.
-    const general = repair && previousDelivery.current ? previousDelivery.current : deliveryTarget;
     // A workflow's default agent is not a general preference: keep the earlier remembered profile instead.
     const defaults: { rootProfileId?: string | undefined; workerProfileId?: string | undefined } = workflows.find(record => record.id === workflowId) ?? {};
     const remembered = memory();
     const rootProfile = rootProfileId && rootProfileId === defaults.rootProfileId ? remembered.rootProfileId : rootProfileId || undefined;
     const workerProfile = workerProfileId && workerProfileId === defaults.workerProfileId ? remembered.workerProfileId : workerProfileId || undefined;
-    writeNewTaskMemory({ projectId, rootProfileId: rootProfile, workerProfileId: workerProfile, startImmediately, deliveryTarget: general, runProjectTests, visualEvidence });
-  }, [open, settingsLoaded, projects, projectId, rootProfileId, workerProfileId, startImmediately, deliveryTarget, runProjectTests, visualEvidence, repair, workflows, workflowId, editing]);
+    writeNewTaskMemory({ projectId, rootProfileId: rootProfile, workerProfileId: workerProfile, runProjectTests, visualEvidence });
+  }, [open, settingsLoaded, projects, projectId, rootProfileId, workerProfileId, runProjectTests, visualEvidence, workflows, workflowId, editing]);
   const selectRecord = (record: ApiWorkflow) => {
     if (record.id === workflowId) return;
     const next = record.engine;
@@ -204,6 +212,7 @@ export function NewTaskDialog({ open, onOpenChange, companyId, onCreated, initia
   const missingSource = repair && source?.kind !== "pull_request";
   const submit = async () => {
     if (busy || imageRead.current.pending || !projectId || !title.trim() || missingSource) return;
+    dictation.stop();
     setBusy(true); setError(""); setProjectFindings([]);
     try {
       if (editTask) {
@@ -282,11 +291,12 @@ export function NewTaskDialog({ open, onOpenChange, companyId, onCreated, initia
       </DialogHeader>
         <div className="flex-1 px-5 pt-1">
           <Input aria-label="Task title" autoFocus placeholder="Task title" value={title} onChange={event => setTitle(event.target.value)} className="h-10 border-0 bg-transparent px-0 font-medium placeholder:text-muted-foreground/70 shadow-none focus-visible:ring-0 data-[size=default]:text-xl data-[size=default]:md:text-xl dark:bg-transparent" />
-          <Textarea aria-label="Task description" placeholder="Write a description" value={description} onChange={event => setDescription(event.target.value)} className="min-h-20 resize-none border-0 bg-transparent px-0 py-1 text-sm font-normal placeholder:text-muted-foreground/70 shadow-none focus-visible:ring-0 md:text-sm dark:bg-transparent" />
+          <Textarea ref={descriptionField} aria-label="Task description" placeholder="Write a description" value={description} onChange={event => setDescription(event.target.value)} className={cn("min-h-20 resize-none border-0 bg-transparent px-0 py-1 text-sm font-normal placeholder:text-muted-foreground/70 shadow-none focus-visible:ring-0 md:text-sm dark:bg-transparent", dictation.listening && recordingCaret)} />
         </div>
         {error ? <div className="px-5 pb-3"><Alert variant="destructive"><AlertDescription>{error}{projectFindings.length && projectId ? <>. {projectFindings.join(". ")}. <a className="underline" href={withCompany(`/projects/${encodeURIComponent(projectId)}`, companyId)}>Open the project settings</a></> : null}</AlertDescription></Alert></div> : null}
         {!editing && images.length ? <div className="px-5 pb-3"><InlineAttachmentList attachments={images.map((image, index) => ({ id: String(index), filename: image.filename, previewUrl: `data:${image.mimeType};base64,${image.base64}` }))} onRemove={index => setImages(current => current.filter((_, item) => item !== index))} disabled={busy || readingImages} /></div> : null}
         <div className="flex flex-wrap items-center gap-2 p-6">
+          {dictation.supported ? <Button type="button" variant="outline" size="icon-sm" aria-label={dictation.listening ? "Stop dictation" : "Start dictation"} title={dictation.listening ? "Stop dictation" : "Start dictation"} aria-pressed={dictation.listening} disabled={busy} onClick={dictation.toggle}>{dictation.listening ? <PhosphorIcon icon={Square} color="red" filled /> : <Mic />}</Button> : null}
           {editing ? null : <InlineAttachmentPicker compact attachments={images.map((image, index) => ({ id: String(index), filename: image.filename, previewUrl: `data:${image.mimeType};base64,${image.base64}` }))} onSelect={addImages} disabled={busy || readingImages} />}
           <div className="max-w-full overflow-x-auto p-1 -m-1">
           <ButtonGroup aria-label="Task options">

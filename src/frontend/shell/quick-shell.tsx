@@ -3,6 +3,7 @@ import { lazy, Suspense, useEffect, useRef, useState, type PointerEvent, type Re
 import { SquareTerminal } from "lucide-react";
 import suplexMark from "../assets/suplex-mark.svg?inline";
 import { useOptionalCompanyContext } from "./company-context.js";
+import { PhosphorIcon, phosphorGlow } from "../components/app/phosphor-icon.js";
 
 const PaneTerminal = lazy(() => import("../features/tasks/task-chat/live-pane-terminal.js").then(module => ({ default: module.PaneTerminal })));
 
@@ -14,11 +15,11 @@ const OPEN = "transform 140ms cubic-bezier(0.2, 0.9, 0.3, 1)";
 const SETTLE = "transform 220ms cubic-bezier(0.3, 1.5, 0.5, 1)";
 const CLOSE = "transform 110ms cubic-bezier(0.55, 0, 0.9, 0.4)";
 /** P1 green phosphor, as a VT100 drew it, on the console chrome only. */
-const GLOW = "0 0 6px rgb(65 255 122 / 0.75)";
+const GLOW = phosphorGlow("green");
 
 /** The quick shell icon, lit like the console chrome. */
 export function PhosphorTerminalIcon(): ReactElement {
-  return <SquareTerminal className="text-[#1fbf55] dark:text-[#41ff7a]" style={{ filter: "drop-shadow(0 0 3px rgb(65 255 122 / 0.85))" }} />;
+  return <PhosphorIcon icon={SquareTerminal} color="green" />;
 }
 
 export function toggleQuickShell(): void {

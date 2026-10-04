@@ -17,7 +17,7 @@ import { CompanySwitcher } from "./company-switcher.js";
 import { EntityAvatar } from "../components/app/entity-avatar.js";
 import { RecentTasks } from "../features/tasks/recent-tasks.js";
 import { SystemHealthIndicator } from "../components/app/system-health.js";
-import { requestNewTask } from "./global-new-task-dialog.js";
+import { requestNewTask, useHasProjects } from "./global-new-task-dialog.js";
 import { opensCommandMenu } from "./shortcuts.js";
 import { useSignOut } from "./server-state.js";
 import wordmark from "../assets/suplex-wordmark.svg?inline";
@@ -52,8 +52,9 @@ function MainNavigation({ close }: { close?: () => void }): ReactElement {
 function CreateActions({ close }: { close?: () => void }): ReactElement {
   const context = useOptionalCompanyContext();
   const company = context?.currentCompany;
+  const hasProjects = useHasProjects(company?.id);
   return (
-    <div className="flex gap-2 p-2"><NewButton className="flex-1 text-base p-5" disabled={company?.status !== "active"} onClick={() => { close?.(); requestNewTask(); }}>New task</NewButton>{context?.user?.role === "admin" ? <Button variant="outline" size="icon-lg" aria-label="Quick shell" title="Quick shell (Ctrl+`)" onClick={() => { close?.(); toggleQuickShell(); }}><PhosphorTerminalIcon /></Button> : null}</div>
+    <div className="flex gap-2 p-2"><NewButton className="flex-1 text-base p-5" disabled={company?.status !== "active"} onClick={() => { close?.(); requestNewTask(); }}>{hasProjects === false ? "Add project" : "New task"}</NewButton>{context?.user?.role === "admin" ? <Button variant="outline" size="icon-lg" aria-label="Quick shell" title="Quick shell (Ctrl+`)" onClick={() => { close?.(); toggleQuickShell(); }}><PhosphorTerminalIcon /></Button> : null}</div>
   );
 }
 
@@ -62,6 +63,7 @@ function NavigationSearch({ close }: { close?: () => void }): ReactElement {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const companyId = context?.currentCompany?.id;
+  const hasProjects = useHasProjects(companyId);
   const todayPage = useExperiments()?.todayPage ?? false;
   const items: NavItem[] = [
     ...(todayPage ? [{ href: "/today", label: "Today", icon: CalendarDays }] : []),
@@ -75,7 +77,7 @@ function NavigationSearch({ close }: { close?: () => void }): ReactElement {
     window.addEventListener("suplex:command-menu", openMenu);
     return () => window.removeEventListener("suplex:command-menu", openMenu);
   }, []);
-  return <><Dialog open={open} onOpenChange={setOpen}><DialogContent><DialogHeader><DialogTitle>Command menu</DialogTitle></DialogHeader><Input autoFocus aria-label="Search Suplex" placeholder="Search the views" value={query} onChange={(event) => setQuery(event.target.value)} /><div className="space-y-1 -ml-[11px] -mr-[11px]"><button type="button" className={cn(buttonVariants({ variant: "ghost", className: "w-full justify-start focus-visible:border-foreground/25 focus-visible:ring-0 text-[16px] gap-x-[12px]" }))} onClick={() => { setOpen(false); close?.(); requestNewTask(); }}><Plus />New task <kbd className="ml-auto text-xs text-muted-foreground">C</kbd></button>{visible.map(({ href, label, icon: Icon }) => <a className={cn(buttonVariants({ variant: "ghost", className: "w-full justify-start focus-visible:border-foreground/25 focus-visible:ring-0 text-[16px] gap-x-[12px]" }))} href={href} onClick={() => { setOpen(false); close?.(); }} key={href}><Icon />{label}</a>)}</div><p className="text-xs text-muted-foreground">⌘K or / search. G then H, T, B, or M navigates. C starts a new task.</p></DialogContent></Dialog></>;
+  return <><Dialog open={open} onOpenChange={setOpen}><DialogContent><DialogHeader><DialogTitle>Command menu</DialogTitle></DialogHeader><Input autoFocus aria-label="Search Suplex" placeholder="Search the views" value={query} onChange={(event) => setQuery(event.target.value)} /><div className="space-y-1 -ml-[11px] -mr-[11px]"><button type="button" className={cn(buttonVariants({ variant: "ghost", className: "w-full justify-start focus-visible:border-foreground/25 focus-visible:ring-0 text-[16px] gap-x-[12px]" }))} onClick={() => { setOpen(false); close?.(); requestNewTask(); }}><Plus />{hasProjects === false ? "Add project" : "New task"} <kbd className="ml-auto text-xs text-muted-foreground">C</kbd></button>{visible.map(({ href, label, icon: Icon }) => <a className={cn(buttonVariants({ variant: "ghost", className: "w-full justify-start focus-visible:border-foreground/25 focus-visible:ring-0 text-[16px] gap-x-[12px]" }))} href={href} onClick={() => { setOpen(false); close?.(); }} key={href}><Icon />{label}</a>)}</div><p className="text-xs text-muted-foreground">⌘K or / search. G then H, T, B, or M navigates. C starts a new task.</p></DialogContent></Dialog></>;
 }
 
 function SecondaryNavigation(): ReactElement {

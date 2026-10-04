@@ -175,3 +175,97 @@ test("an unmounted composer does not apply a late accepted response", async () =
   expect(api.readJsonUnchecked).toHaveBeenCalledWith("/api/tasks/task-1/note", expect.objectContaining({ method: "POST", body: JSON.stringify({ note: "Fix the failing checks" }) }));
   expect(view.onChange).toHaveBeenCalledWith(task);
 });
+
+class FakeRecognition {
+  static instances: FakeRecognition[] = [];
+  continuous = false;
+  interimResults = true;
+  lang = "";
+  onresult: ((event: { resultIndex: number; results: unknown }) => void) | null = null;
+  onerror: ((event: { error: string }) => void) | null = null;
+  onend: (() => void) | null = null;
+  start = vi.fn();
+  stop = vi.fn(() => this.onend?.());
+  abort = vi.fn();
+  constructor() { FakeRecognition.instances.push(this); }
+  say(transcript: string) {
+    const result = Object.assign([{ transcript }], { isFinal: true });
+    this.onresult?.({ resultIndex: 0, results: [result] });
+  }
+}
+
+function dictationButton(container: HTMLElement) {
+  return container.querySelector<HTMLButtonElement>('button[aria-label$=" dictation"]');
+}
+
+test("dictation appends each final phrase to the draft and keeps it through an in-flight send", async () => {
+  FakeRecognition.instances = [];
+  vi.stubGlobal("webkitSpeechRecognition", FakeRecognition);
+  try {
+    const accepted = deferred<Task>();
+    api.readJsonUnchecked.mockReturnValueOnce(accepted.promise);
+    const view = mount();
+    await render(view.render);
+    const field = textarea(view.container);
+    await act(async () => { setText(field, "Fix the"); });
+    const button = dictationButton(view.container)!;
+    expect(button.getAttribute("aria-label")).toBe("Start dictation");
+    expect(button.getAttribute("aria-pressed")).toBe("false");
+
+    await act(async () => { button.click(); });
+    const recognition = FakeRecognition.instances[0]!;
+    expect(recognition.start).toHaveBeenCalledTimes(1);
+    expect(recognition.continuous).toBe(true);
+    expect(recognition.interimResults).toBe(false);
+    expect(button.getAttribute("aria-label")).toBe("Stop dictation");
+    expect(button.getAttribute("aria-pressed")).toBe("true");
+
+    await act(async () => { recognition.say(" login test "); });
+    expect(field.value).toBe("Fix the login test");
+
+    await act(async () => { submit(field); await Promise.resolve(); });
+    expect(recognition.stop).toHaveBeenCalledTimes(1);
+    expect(api.readJsonUnchecked).toHaveBeenCalledWith("/api/tasks/task-1/note", { method: "POST", body: JSON.stringify({ note: "Fix the login test" }) });
+    expect(button.getAttribute("aria-label")).toBe("Start dictation");
+
+    await act(async () => { recognition.say("and the docs"); });
+    await act(async () => { accepted.resolve(task); await accepted.promise; });
+    expect(field.value).toBe("Fix the login test and the docs");
+
+    await act(async () => { button.click(); });
+    await act(async () => { view.root.unmount(); });
+    expect(FakeRecognition.instances[1]!.abort).toHaveBeenCalledTimes(1);
+  } finally { vi.unstubAllGlobals(); }
+});
+
+test("dictation is not available without the speech API or in the desktop app", async () => {
+  const view = mount();
+  await render(view.render);
+  expect(dictationButton(view.container)).toBeNull();
+
+  vi.stubGlobal("webkitSpeechRecognition", FakeRecognition);
+  vi.stubGlobal("suplexApp", {});
+  try {
+    const desktop = mount();
+    await render(desktop.render);
+    expect(dictationButton(desktop.container)).toBeNull();
+  } finally { vi.unstubAllGlobals(); }
+});
+
+test("a blocked microphone shows a message and ignored errors show nothing", async () => {
+  FakeRecognition.instances = [];
+  vi.stubGlobal("webkitSpeechRecognition", FakeRecognition);
+  try {
+    const view = mount();
+    await render(view.render);
+    await act(async () => { dictationButton(view.container)!.click(); });
+    const recognition = FakeRecognition.instances[0]!;
+
+    await act(async () => { recognition.onerror?.({ error: "no-speech" }); recognition.onerror?.({ error: "aborted" }); });
+    expect(view.container.querySelector('[role="alert"]')).toBeNull();
+
+    await act(async () => { recognition.onerror?.({ error: "not-allowed" }); recognition.onend?.(); });
+    expect(view.container.textContent).toContain("The browser blocked the microphone.");
+    expect(dictationButton(view.container)!.getAttribute("aria-pressed")).toBe("false");
+  } finally { vi.unstubAllGlobals(); }
+});

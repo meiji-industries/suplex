@@ -15,7 +15,7 @@ const api = vi.hoisted(() => ({ readJsonUnchecked: vi.fn(), withCompany: (path: 
 vi.mock("../src/frontend/lib/api.js", async importOriginal => ({ ...(await importOriginal<Record<string, unknown>>()), ...api }));
 vi.mock("../src/frontend/shell/company-context.js", () => ({ useCompanyContext: () => ({ user: { id: "user-1" }, currentCompany: { id: "company-1", status: "active" } }), useOptionalCompanyContext: () => ({ avatars: {} }) }));
 vi.mock("../src/frontend/shell/application-frame.js", () => ({ ApplicationFrame: ({ children }: { children: ReactNode }) => children }));
-vi.mock("../src/frontend/shell/global-new-task-dialog.js", () => ({ requestNewTask: vi.fn() }));
+vi.mock("../src/frontend/shell/global-new-task-dialog.js", () => ({ requestNewTask: vi.fn(), useHasProjects: () => true }));
 vi.mock("../src/frontend/features/analytics/lib/analytics.js", async importOriginal => ({ ...(await importOriginal<Record<string, unknown>>()), useTaskCosts: () => new Map() }));
 vi.mock("../src/frontend/features/tasks/task-details.js", () => ({ TaskDetailsPage: () => null }));
 vi.mock("../src/frontend/features/tasks/task-options.js", () => ({ TaskOptions: () => null }));

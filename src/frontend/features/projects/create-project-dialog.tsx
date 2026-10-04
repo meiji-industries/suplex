@@ -7,6 +7,7 @@ import { Combobox, ComboboxContent, ComboboxEmpty, ComboboxInput, ComboboxItem, 
 import { DropdownMenu, DropdownMenuContent, DropdownMenuRadioGroup, DropdownMenuRadioItem, DropdownMenuTrigger } from "../../components/ui/dropdown-menu.js";
 import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput, InputGroupText } from "../../components/ui/input-group.js";
 import { RadioGroup, RadioGroupItem } from "../../components/ui/radio-group.js";
+import { Spinner } from "../../components/ui/spinner.js";
 import { GithubDeviceSignIn } from "../../components/app/github-device-sign-in.js";
 import { ApiError, billingSettingsPath, hasApiFinding, isApiError, readJsonUnchecked, type ApiFinding, type CompanyStatus } from "../../lib/api.js";
 import { useOptionalCompanyContext } from "../../shell/company-context.js";
@@ -59,6 +60,7 @@ export function CreateProjectDialog({
   reloadCompanies: () => Promise<void>;
 }): ReactElement {
   const [source, setSource] = useState<"clone" | "create">("clone");
+  const [host, setHost] = useState<"github" | "bitbucket" | "url">("github");
   const [repository, setRepository] = useState("");
   const [integration, setIntegration] = useState<ProjectIntegration>({ repository: { kind: "github" }, tracker: null });
   const [baseBranch, setBaseBranch] = useState("main");
@@ -75,6 +77,7 @@ export function CreateProjectDialog({
     if (open) {
       const draft = readProjectDraft(companyId);
       setSource(draft?.source ?? "clone");
+      setHost(draft?.source !== "create" && draft?.repository ? "url" : "github");
       setRepository(draft?.repository ?? "");
       setQuotaCode("");
       setIntegration({ repository: { kind: "github" }, tracker: null });
@@ -92,7 +95,7 @@ export function CreateProjectDialog({
     onOpenChange(next);
   };
 
-  const github = open && integration.repository.kind === "github";
+  const github = open && host === "github";
   const confirmGitHubAuthRequired = useCallback((reason: unknown): boolean => {
     if (!hasApiFinding(reason, "github-auth-unavailable")) return false;
     setOwnersState({ kind: "auth-required" });
@@ -116,9 +119,12 @@ export function CreateProjectDialog({
     void loadOwners();
   }, [github, loadOwners, ownersState.kind]);
   const owners = ownersState.kind === "loaded" ? ownersState.owners : [];
+  // The picker layout shows while owners load, so the field does not change shape when they arrive.
+  const ownersPending = github && (ownersState.kind === "idle" || ownersState.kind === "loading");
+  // A location typed before GitHub sign-in finished stays as typed.
   const typedRepositoryLocation = repository.trim() !== "" && /[/:]/.test(repository);
   const ownerPicker = github && owner !== "" && !typedRepositoryLocation;
-  // Without the GitHub CLI there is no owner list, and a clone takes a typed URL as for Bitbucket.
+  // Without the GitHub CLI there is no owner list, and a clone takes a typed owner/repository.
   const repositoryPicker = ownerPicker && source === "clone";
   useEffect(() => {
     if (!repositoryPicker || repositories?.owner === owner) return;
@@ -170,8 +176,21 @@ export function CreateProjectDialog({
     }
   };
 
+  const hostOptions = [...REPOSITORY_HOSTS.map(each => ({ value: each.kind, label: each.label })), ...(source === "clone" ? [{ value: "url", label: "URL" }] : [])];
+  const chooseHost = (next: string): void => {
+    setHost(next === "bitbucket" || next === "url" ? next : "github");
+    setIntegration(withRepositoryHost(integration, next === "url" ? "github" : next));
+    setRepository("");
+  };
+  // A typed URL selects the delivery host that serves it.
+  const typeRepository = (value: string): void => {
+    setRepository(value);
+    const kind = /bitbucket\.org/i.test(value) ? "bitbucket" : "github";
+    if (host === "url" && integration.repository.kind !== kind) setIntegration(withRepositoryHost(integration, kind));
+  };
   const repositoryPrefix = <InputGroupAddon>
-    <AddonMenu label="Repository host" value={integration.repository.kind} options={REPOSITORY_HOSTS.map(host => ({ value: host.kind, label: host.label }))} onChange={kind => { setIntegration(withRepositoryHost(integration, kind)); setRepository(""); }} />
+    <AddonMenu label="Repository host" value={host} options={hostOptions} onChange={chooseHost} />
+    {ownersPending && !typedRepositoryLocation ? <Spinner /> : null}
     {ownerPicker ? <><AddonMenu label="Owner" value={owner} options={owners.map(each => ({ value: each, label: each }))} onChange={chooseOwner} /><InputGroupText>/</InputGroupText></> : null}
   </InputGroupAddon>;
 
@@ -184,24 +203,24 @@ export function CreateProjectDialog({
             <p className="text-xs text-muted-foreground">{companyStatus === "paused" ? "Company paused. New projects are unavailable." : "Company archived. New projects are unavailable."}</p>
           ) : (
             <form className="grid gap-3" onSubmit={(event: FormEvent) => void submit(event)}>
-              <RadioGroup aria-label="Repository source" value={source} onValueChange={value => { setSource(value === "create" ? "create" : "clone"); setRepository(""); }} className="flex flex-wrap gap-x-4 gap-y-2">
+              <RadioGroup aria-label="Repository source" value={source} onValueChange={value => { setSource(value === "create" ? "create" : "clone"); if (value === "create" && host === "url") chooseHost("github"); else setRepository(""); }} className="flex flex-wrap gap-x-4 gap-y-2">
                 <label className="flex items-center gap-1.5 text-xs"><RadioGroupItem value="clone" />Clone existing repo</label>
                 <label className="flex items-center gap-1.5 text-xs"><RadioGroupItem value="create" />Create fresh repo</label>
               </RadioGroup>
               <Field>
-                <FieldLabel htmlFor="project-repository">{source === "clone" && !repositoryPicker ? "Repository URL" : "Repository"}</FieldLabel>
-                {repositoryPicker ? <Combobox items={repositories?.list?.map(each => each.name) ?? []} value={repository || null} onValueChange={(name: string | null) => { setRepository(name ?? ""); const picked = repositories?.list?.find(each => each.name === name); if (picked) setBaseBranch(picked.defaultBranch); }}>
-                  <ComboboxInput id="project-repository" autoFocus placeholder={repositories?.list ? "Search repositories" : "Loading repositories…"}>{repositoryPrefix}</ComboboxInput>
+                <FieldLabel htmlFor="project-repository">Repository</FieldLabel>
+                {repositoryPicker || ownersPending && source === "clone" && !typedRepositoryLocation ? <Combobox items={repositories?.list?.map(each => each.name) ?? []} value={repository || null} onValueChange={(name: string | null) => { setRepository(name ?? ""); const picked = repositories?.list?.find(each => each.name === name); if (picked) setBaseBranch(picked.defaultBranch); }}>
+                  <ComboboxInput id="project-repository" autoFocus placeholder={repositoryPicker && repositories?.list ? "Search repositories" : "Loading repositories…"}>{repositoryPrefix}</ComboboxInput>
                   <ComboboxContent><ComboboxEmpty>No repositories found.</ComboboxEmpty><ComboboxList>{(name: string) => <ComboboxItem key={name} value={name}>{name}</ComboboxItem>}</ComboboxList></ComboboxContent>
                 </Combobox> : <InputGroup>
                   {repositoryPrefix}
-                  <InputGroupInput id="project-repository" name="repository" autoFocus autoComplete="off" spellCheck={false} placeholder={source === "clone" ? `git@${hostDomain}:${integration.repository.kind === "bitbucket" ? "workspace" : "owner"}/repository.git` : integration.repository.kind === "bitbucket" ? "workspace/repository" : "repository"} value={repository} onChange={(event) => setRepository(event.target.value)} />
+                  <InputGroupInput id="project-repository" name="repository" autoFocus autoComplete="off" spellCheck={false} placeholder={host === "url" ? "git@github.com:owner/repository.git" : host === "bitbucket" ? "workspace/repository" : ownerPicker || ownersPending ? "repository" : "owner/repository"} value={repository} onChange={(event) => typeRepository(event.target.value)} />
                 </InputGroup>}
               </Field>
               <Field><FieldLabel htmlFor="create-base-branch">Base branch</FieldLabel><Input id="create-base-branch" value={baseBranch} onChange={event => setBaseBranch(event.target.value)} /></Field>
               <ProjectConnections value={integration} onChange={setIntegration} repositoryHost={false} />
               {github && ownersState.kind === "auth-required" ? <Alert><AlertDescription><div className="space-y-2"><p>GitHub is not signed in.</p>{canSignInToGitHub ? <GithubDeviceSignIn onConnected={async () => { setRepositories(null); await loadOwners(); }} /> : <p>An administrator must sign in to GitHub.</p>}</div></AlertDescription></Alert> : null}
-              {github && ownersState.kind === "failed" ? <Alert><AlertDescription><div className="space-y-2"><p>Suplex could not load GitHub repositories. Enter a repository URL or select Check again.</p><Button type="button" size="xs" variant="outline" onClick={() => void loadOwners()}>Check again</Button></div></AlertDescription></Alert> : null}
+              {github && ownersState.kind === "failed" ? <Alert><AlertDescription><div className="space-y-2"><p>Suplex could not load GitHub repositories. Enter owner/repository, or select Check again.</p><Button type="button" size="xs" variant="outline" onClick={() => void loadOwners()}>Check again</Button></div></AlertDescription></Alert> : null}
               <div className="grid"><Button size="sm" type="submit" disabled={busy || !companyId || !repository.trim()}><Plus />{busy ? source === "clone" ? "Cloning…" : "Creating…" : "Add project"}</Button></div>
             </form>
           )}

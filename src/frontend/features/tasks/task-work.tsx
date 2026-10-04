@@ -1,7 +1,7 @@
 import { addTaskNote } from "./lib/task-api.js";
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { z } from "zod";
-import { CircleDashed, MessageSquare } from "lucide-react";
+import { CircleDashed, MessageSquare, Mic, Square } from "lucide-react";
 import type { Task } from "../../contracts/tasks.js";
 import type { TaskActivityResponse } from "../../contracts/generated/TaskActivityResponse.js";
 import { useTaskDiff, useTaskDiffSummary } from "./lib/task-queries.js";
@@ -16,7 +16,9 @@ import { RootPlan, TaskTools, useTaskExecution } from "./task-execution.js";
 import { WorkflowPlan } from "./workflow-plan.js";
 import { TaskCheckResults } from "./task-check-results.js";
 import { TaskActivityTimeline } from "./task-activity-timeline.js";
-import { PromptInput, PromptInputFooter, PromptInputSubmit, PromptInputTextarea } from "../../components/ai-elements/prompt-input.js";
+import { PromptInput, PromptInputButton, PromptInputFooter, PromptInputSubmit, PromptInputTextarea } from "../../components/ai-elements/prompt-input.js";
+import { useDictation } from "./use-dictation.js";
+import { PhosphorIcon, recordingCaret } from "../../components/app/phosphor-icon.js";
 import { TaskArtifacts } from "./task-artifacts.js";
 import { useCompanyContext } from "../../shell/company-context.js";
 const DeveloperDiff = lazy(() => import("../../components/app/developer-diff.js").then(module => ({ default: module.DeveloperDiff })));
@@ -111,6 +113,9 @@ export function TaskNoteInput({ task, onChange, hideStatusHint = false }: { task
   const currentTaskId = useRef(task.id);
   const inFlight = useRef(false);
   currentTaskId.current = task.id;
+  // Each dictated phrase is an edit, so a send in flight keeps it.
+  const field = useRef<HTMLTextAreaElement>(null);
+  const dictation = useDictation(field, update => { revision.current += 1; setText(update); }, setError);
   useEffect(() => {
     mounted.current = true;
     return () => { mounted.current = false; };
@@ -120,6 +125,7 @@ export function TaskNoteInput({ task, onChange, hideStatusHint = false }: { task
   const invalid = !trimmed || trimmed.length > MAX_TASK_NOTE_LENGTH;
   const submit = async ({ text: submittedText }: { text: string }) => {
     if (inFlight.current || !submittedText.trim() || submittedText.trim().length > MAX_TASK_NOTE_LENGTH || !eligible) return;
+    dictation.stop();
     inFlight.current = true;
     const submittedTaskId = task.id;
     const submittedRevision = revision.current;
@@ -142,8 +148,8 @@ export function TaskNoteInput({ task, onChange, hideStatusHint = false }: { task
   return <section className="border-t pt-3" aria-label="Message Coordinator">
     {error ? <Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert> : null}
     <div className={error ? "mt-2" : undefined}><PromptInput maxFiles={0} onError={() => setError("Attachments are not supported. Send text only.")} onSubmit={submit}>
-      <PromptInputTextarea aria-label="Message Coordinator" placeholder="What should we steer?" value={text} onChange={event => { revision.current += 1; setText(event.currentTarget.value); }} onPaste={event => { if (Array.from(event.clipboardData.items).some(item => item.kind === "file")) { event.preventDefault(); setError("Attachments are not supported. Send text only."); } }} aria-invalid={trimmed.length > MAX_TASK_NOTE_LENGTH || undefined} />
-      <PromptInputFooter><span className="mr-auto text-xs text-muted-foreground">{trimmed.length.toLocaleString()} / {MAX_TASK_NOTE_LENGTH.toLocaleString()}</span><PromptInputSubmit status={submitting ? "submitted" : "ready"} disabled={invalid || submitting} /></PromptInputFooter>
+      <PromptInputTextarea ref={field} className={dictation.listening ? recordingCaret : undefined} aria-label="Message Coordinator" placeholder="What should we steer?" value={text} onChange={event => { revision.current += 1; setText(event.currentTarget.value); }} onPaste={event => { if (Array.from(event.clipboardData.items).some(item => item.kind === "file")) { event.preventDefault(); setError("Attachments are not supported. Send text only."); } }} aria-invalid={trimmed.length > MAX_TASK_NOTE_LENGTH || undefined} />
+      <PromptInputFooter><span className="mr-auto text-xs text-muted-foreground">{trimmed.length.toLocaleString()} / {MAX_TASK_NOTE_LENGTH.toLocaleString()}</span>{dictation.supported ? <PromptInputButton variant="outline" aria-label={dictation.listening ? "Stop dictation" : "Start dictation"} title={dictation.listening ? "Stop dictation" : "Start dictation"} aria-pressed={dictation.listening} disabled={submitting} onClick={dictation.toggle}>{dictation.listening ? <PhosphorIcon icon={Square} color="red" filled /> : <Mic />}</PromptInputButton> : null}<PromptInputSubmit status={submitting ? "submitted" : "ready"} disabled={invalid || submitting} /></PromptInputFooter>
     </PromptInput></div>
   </section>;
 }

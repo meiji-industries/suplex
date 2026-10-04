@@ -4,14 +4,19 @@ import { createRoot } from "react-dom/client";
 import { afterEach, expect, test, vi } from "vitest";
 
 const company = { id: "company-1", name: "Acme", issueCode: "ACME", status: "active" };
-const fixture = vi.hoisted(() => ({ currentCompany: undefined as typeof company | undefined }));
+const fixture = vi.hoisted(() => ({ currentCompany: undefined as typeof company | undefined, projects: [{ id: "project-1" }] }));
+vi.mock("../src/frontend/features/projects/lib/project-api.js", () => ({ listProjects: vi.fn(async () => fixture.projects) }));
+vi.mock("../src/frontend/shell/navigation-state.js", () => ({ navigate: vi.fn() }));
 vi.mock("../src/frontend/shell/company-context.js", () => ({ useOptionalCompanyContext: () => ({ currentCompany: fixture.currentCompany }) }));
 vi.mock("../src/frontend/features/tasks/new-task-dialog.js", () => ({ NewTaskDialog: ({ open }: { open: boolean }) => open ? <div role="dialog">New task opened</div> : null }));
 
-import { GlobalNewTaskDialog } from "../src/frontend/shell/global-new-task-dialog.js";
+import { GlobalNewTaskDialog, requestNewTask } from "../src/frontend/shell/global-new-task-dialog.js";
+import { navigate } from "../src/frontend/shell/navigation-state.js";
 
 afterEach(() => {
   fixture.currentCompany = undefined;
+  fixture.projects = [{ id: "project-1" }];
+  vi.mocked(navigate).mockClear();
   document.body.replaceChildren();
   window.history.replaceState({}, "", "/");
 });
@@ -63,5 +68,20 @@ test("Today without the request does not open the dialog", async () => {
   const view = mount();
   await view.render();
   expect(view.dialogs()).toBe(0);
+  await act(async () => view.root.unmount());
+});
+
+test("without projects the request opens Projects instead of the dialog", async () => {
+  fixture.currentCompany = { ...company, id: "company-empty" };
+  fixture.projects = [];
+  window.history.replaceState({}, "", "/today?new-task=1");
+  const view = mount();
+  await view.render();
+  expect(view.dialogs()).toBe(0);
+  expect(`${window.location.pathname}${window.location.search}`).toBe("/today");
+
+  await act(async () => requestNewTask());
+  expect(view.dialogs()).toBe(0);
+  expect(navigate).toHaveBeenCalledWith("/projects?company=company-empty");
   await act(async () => view.root.unmount());
 });

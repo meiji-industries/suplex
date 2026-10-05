@@ -12,7 +12,7 @@ import { Spinner } from "../../components/ui/spinner.js";
 import { Alert, AlertDescription } from "../../components/ui/alert.js";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../components/ui/select.js";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../components/ui/card.js";
-import { billingSettingsPath, withCompany } from "../../lib/api.js";
+import { ApiConnectionError, billingSettingsPath, withCompany } from "../../lib/api.js";
 import type { TaskListTask } from "../../contracts/task-responses.js";
 import type { MoveResponse } from "../../contracts/generated/MoveResponse.js";
 import type { MoveRunResponse } from "../../contracts/generated/MoveRunResponse.js";
@@ -55,7 +55,7 @@ export function TasksView({ mode = "list" }: { mode?: "list" | "board" }): React
   const selectedId = /^\/(?:tasks|board)\/([^/]+)$/.exec(window.location.pathname)?.[1]; const [initialFilters] = useState(readTaskListFilters);
   const taskList = useTaskData();
   const cacheTask = useTaskCache();
-  const [error, setError] = useState("");
+  const [error, setError] = useState<string | Error>("");
   const [archived, setArchived] = useState(initialFilters.archived);
   // The open task and the archived list poll without the sync socket. With it, the open task arrives in frames, and the archived list reads again when a task leaves or enters the active list.
   const taskQuery = useTask(selectedId);
@@ -66,7 +66,8 @@ export function TasksView({ mode = "list" }: { mode?: "list" | "board" }): React
   const projects = projectList.data ?? noProjects;
   const detailsLoaded = !companyId || (!selectedId || !taskQuery.isPending) && (!archived || !archivedList.isPending);
   const loaded = detailsLoaded && Boolean(!companyId || !projectList.isPending) && Boolean(selectedId || archived || !companyId || !taskList.isPending);
-  const readError = error || (selectedId && taskQuery.error?.message) || (archived ? archivedList.error?.message : taskList.error?.message) || projectList.error?.message || "";
+  const readFailure = [error, selectedId && taskQuery.error, archived ? archivedList.error : taskList.error, projectList.error].find(error => error && !(error instanceof ApiConnectionError));
+  const readError = readFailure instanceof Error ? readFailure.message : readFailure;
   // A successful read clears an earlier error.
   useEffect(() => setError(""), [taskQuery.dataUpdatedAt, archivedList.dataUpdatedAt]);
   const [query, setQuery] = useState(initialFilters.query);
@@ -98,7 +99,7 @@ export function TasksView({ mode = "list" }: { mode?: "list" | "board" }): React
   const planHeld = !archived && currentCompany?.plan === "free" && tasks.filter(task => task.status === "active" || task.status === "waiting_human").length >= FREE_RUNNING_TASKS ? tasks.filter(task => task.status === "queued").length : 0;
   const hasFilters = Boolean(query.trim() || status !== "all" || projectId !== "all" || boardStatus !== "all" || boardShow !== "all" || archived);
   const groups = ["backlog", "queued", "active", "waiting_human", "delivered", "cancelled"] as const;
-  return <ApplicationFrame title={mode === "board" ? "Board" : "Tasks"} viewportBound={Boolean(selectedId)} headerRight={<><Button variant="ghost" size="icon-sm" aria-label="Check tasks" onClick={() => void refresh().catch(error => setError(String(error)))}><RefreshCw /></Button></>}>
+  return <ApplicationFrame title={mode === "board" ? "Board" : "Tasks"} viewportBound={Boolean(selectedId)} headerRight={<><Button variant="ghost" size="icon-sm" aria-label="Check tasks" onClick={() => void refresh().catch(error => setError(error instanceof Error ? error : String(error)))}><RefreshCw /></Button></>}>
     {readError ? <Alert variant="destructive"><AlertDescription>{readError}</AlertDescription></Alert> : null}
     {selectedId ? selected ? <TaskDetailsPage key={selected.id} task={selected} project={project(selected.projectId)} onChange={cacheTask} backHref={taskListReturnHref(withCompany(mode === "board" ? "/board" : "/tasks", selected.companyId))} titleActions={<TaskOptions task={selected} onChange={cacheTask} onError={setError} />} /> : loaded ? <p className="p-4">Task not found</p> : <p className="flex items-center gap-2 p-4 text-xs text-muted-foreground" aria-busy="true"><Spinner /><span>Loading task…</span></p> : <div data-task-list className="min-w-0 flex flex-col flex-1">
       <ListToolbar filters={<><FilterInput label="Filter tasks" value={query} onChange={setQuery} /><ProjectSelect label="Filter by project" allLabel="All projects" projects={projects} value={projectId} onChange={setProjectId} /></>}>

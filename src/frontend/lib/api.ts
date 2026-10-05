@@ -27,6 +27,8 @@ export class ApiError extends Error {
 const OFFLINE_TOAST_ID = "suplex-offline";
 let offline = false;
 
+export class ApiConnectionError extends Error {}
+
 // The browser rejects fetch with a TypeError ("Failed to fetch") when no response arrives.
 function unreachable(): Error {
   offline = true;
@@ -34,7 +36,7 @@ function unreachable(): Error {
     ? "Suplex cannot reach the host. Check that the host is in operation, then retry."
     : "Your computer is offline. Check the network connection, then retry.";
   toast.error("Offline", { id: OFFLINE_TOAST_ID, description: message, duration: Infinity });
-  return new Error(message);
+  return new ApiConnectionError(message);
 }
 
 function reachable(): void {

@@ -88,7 +88,9 @@ export function MovesView(): ReactElement {
   };
   const started = (run: MoveRunResponse): void => {
     setStarting(null);
+    const taskId = run.runner === "task" ? run.outcomes[0]?.taskId : undefined;
     if (runsInTerminal(run.runner)) navigate(withCompany(`/moves/${run.moveId}/runs/${run.id}`, companyId));
+    else if (taskId) navigate(withCompany(`/tasks/${taskId}`, companyId));
     else if (moveId === run.moveId && !runId) void reload();
     else navigate(withCompany(`/moves/${run.moveId}`, companyId));
   };

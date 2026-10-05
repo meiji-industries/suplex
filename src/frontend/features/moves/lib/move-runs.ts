@@ -6,8 +6,8 @@ import type { MoveRunner } from "../../../contracts/generated/MoveRunner.js";
 import { useOptionalCompanyContext } from "../../../shell/company-context.js";
 import { archiveMoveRun, endMoveRun, listMoves } from "./move-api.js";
 
-/** Prompts and scripts run in a terminal. Pull request moves start tasks instead. */
-export const runsInTerminal = (runner: MoveRunner): boolean => runner !== "pull_request_tasks";
+/** Prompts and scripts run in a terminal. Pull request and task moves start tasks instead. */
+export const runsInTerminal = (runner: MoveRunner): boolean => runner === "prompt" || runner === "script";
 
 /** Each move's latest terminal run. Other runners show through the tasks they start. */
 export function useShellRuns(companyId: string | undefined): Array<{ move: MoveResponse; run: MoveRunResponse }> {

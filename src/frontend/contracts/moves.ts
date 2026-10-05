@@ -1,6 +1,9 @@
 import { z } from "zod";
 
-export const MoveRunnerSchema = z.enum(["prompt", "script", "pull_request_tasks"]);
+import { DeliveryTargetSchema, VisualEvidenceSchema } from "./tasks.js";
+import { WorkflowIdSchema } from "./workflows.js";
+
+export const MoveRunnerSchema = z.enum(["prompt", "script", "pull_request_tasks", "task"]);
 
 export const MoveBodySchema = z.object({
   projectId: z.string().min(1).max(256),
@@ -9,6 +12,10 @@ export const MoveBodySchema = z.object({
   runner: MoveRunnerSchema,
   profileId: z.string().min(1).max(256).nullable().optional(),
   confirm: z.boolean(),
+  workflow: WorkflowIdSchema.nullable().optional(),
+  deliveryTarget: DeliveryTargetSchema.nullable().optional(),
+  runProjectTests: z.boolean().optional(),
+  visualEvidence: VisualEvidenceSchema.optional(),
 }).strict();
 
 export type MoveBody = z.infer<typeof MoveBodySchema>;

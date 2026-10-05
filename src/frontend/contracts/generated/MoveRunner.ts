@@ -3,4 +3,4 @@
 /**
  * TypeScript `MoveRunner`.
  */
-export type MoveRunner = "prompt" | "script" | "pull_request_tasks";
+export type MoveRunner = "prompt" | "script" | "pull_request_tasks" | "task";

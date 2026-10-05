@@ -15,13 +15,13 @@ use serde_json::{Map, Value, json};
 use ts_rs::TS;
 
 use crate::{
-    coordination::workflow_records::normalize_workflow_input,
+    coordination::{workflow_records::normalize_workflow_input, workflows::Workflow},
     http::{AppState, contracts::typed::Contract, contracts::typed::tasks::TaskCreateBody},
     identity::companies,
     platform::database::SuplexDatabase,
     projects::service::{self as projects, Project},
     shared::{ids::random_hex_id, time::now_millis_rfc3339},
-    tasks::{TaskError, creation},
+    tasks::{TaskError, control::DeliveryTarget, creation, response::VisualEvidence},
 };
 
 pub use prompt::MoveInput;
@@ -32,6 +32,7 @@ crate::shared::wire_enum! {
         Prompt = "prompt",
         Script = "script",
         PullRequestTasks = "pull_request_tasks",
+        Task = "task",
     }
 }
 
@@ -88,6 +89,11 @@ pub struct MoveResponse {
     /// The agent profile for a prompt. None means the project's Worker.
     pub profile_id: Option<String>,
     pub confirm: bool,
+    /// The settings of the task that a `task` move starts. Other runners keep the defaults.
+    pub workflow: Workflow,
+    pub delivery_target: DeliveryTarget,
+    pub run_project_tests: bool,
+    pub visual_evidence: VisualEvidence,
     pub inputs: Vec<MoveInput>,
     pub last_run: Option<MoveRunResponse>,
     pub created_at: String,
@@ -125,11 +131,15 @@ struct StoredMove {
     runner: MoveRunner,
     profile_id: Option<String>,
     confirm: bool,
+    workflow: Workflow,
+    delivery_target: DeliveryTarget,
+    run_project_tests: bool,
+    visual_evidence: VisualEvidence,
     created_at: String,
     updated_at: String,
 }
 
-const MOVE_COLUMNS: &str = "SELECT id, company_id, project_id, name, prompt, runner, profile_id, confirm, created_at, updated_at FROM suplex_moves";
+const MOVE_COLUMNS: &str = "SELECT id, company_id, project_id, name, prompt, runner, profile_id, confirm, workflow, delivery_target, run_project_tests, visual_evidence, created_at, updated_at FROM suplex_moves";
 
 fn stored_move(row: &Row<'_>) -> rusqlite::Result<StoredMove> {
     Ok(StoredMove {
@@ -141,8 +151,12 @@ fn stored_move(row: &Row<'_>) -> rusqlite::Result<StoredMove> {
         runner: row.get(5)?,
         profile_id: row.get(6)?,
         confirm: row.get(7)?,
-        created_at: row.get(8)?,
-        updated_at: row.get(9)?,
+        workflow: row.get(8)?,
+        delivery_target: row.get(9)?,
+        run_project_tests: row.get(10)?,
+        visual_evidence: row.get(11)?,
+        created_at: row.get(12)?,
+        updated_at: row.get(13)?,
     })
 }
 
@@ -235,6 +249,10 @@ fn response(database: &SuplexDatabase, stored: StoredMove) -> Result<MoveRespons
         runner: stored.runner,
         profile_id: stored.profile_id,
         confirm: stored.confirm,
+        workflow: stored.workflow,
+        delivery_target: stored.delivery_target,
+        run_project_tests: stored.run_project_tests,
+        visual_evidence: stored.visual_evidence,
         created_at: stored.created_at,
         updated_at: stored.updated_at,
     })
@@ -275,7 +293,9 @@ fn company_project(
 
 /// The body to store: a prompt or script needs text. A script keeps no agent
 /// profile. A prompt's agent must have a terminal command line, and each pull
-/// request task can use any Worker profile the project allows.
+/// request task can use any Worker profile the project allows. A task move
+/// needs a workflow and a delivery target, and uses the project's agents and no
+/// confirmation. Other runners keep the default task settings.
 fn checked_body(
     database: &SuplexDatabase,
     project: &Project,
@@ -288,8 +308,34 @@ fn checked_body(
         MoveRunner::Script if body.prompt.trim().is_empty() => {
             return Err(TaskError::new("Write the script for this move", 422).into());
         }
+        MoveRunner::Task => {
+            match body.workflow {
+                None => {
+                    return Err(TaskError::new("Select a workflow for this move", 422).into());
+                }
+                Some(Workflow::RefinePullRequest) => {
+                    return Err(TaskError::new(
+                        "Review and repair needs a pull request. Select \"for each pull request\" to use it",
+                        422,
+                    )
+                    .into());
+                }
+                Some(_) => {}
+            }
+            if body.delivery_target.is_none() {
+                return Err(TaskError::new("Select a delivery target for this move", 422).into());
+            }
+            body.profile_id = None;
+            body.confirm = false;
+        }
         MoveRunner::Prompt | MoveRunner::PullRequestTasks => {}
         MoveRunner::Script => body.profile_id = None,
+    }
+    if body.runner != MoveRunner::Task {
+        body.workflow = None;
+        body.delivery_target = None;
+        body.run_project_tests = true;
+        body.visual_evidence = VisualEvidence::Off;
     }
     if let Some(profile_id) = body.profile_id.as_deref() {
         let profile = crate::tasks::commands::selected_profile(
@@ -356,8 +402,8 @@ pub fn create(
     database.transaction(false, |database| {
         name_taken(database, &body.project_id, &body.name, "")?;
         database.connection().execute(
-            "INSERT INTO suplex_moves (id, company_id, project_id, name, prompt, runner, profile_id, confirm, created_by_user_id, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?10)",
-            params![id, company_id, body.project_id, body.name, body.prompt, body.runner, body.profile_id, body.confirm, user_id, stamp],
+            "INSERT INTO suplex_moves (id, company_id, project_id, name, prompt, runner, profile_id, confirm, workflow, delivery_target, run_project_tests, visual_evidence, created_by_user_id, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?14)",
+            params![id, company_id, body.project_id, body.name, body.prompt, body.runner, body.profile_id, body.confirm, body.workflow.unwrap_or(Workflow::Standard), body.delivery_target.unwrap_or(DeliveryTarget::PullRequestReady), body.run_project_tests, body.visual_evidence, user_id, stamp],
         )?;
         Ok(())
     })?;
@@ -385,8 +431,8 @@ pub fn update(
     database.transaction(false, |database| {
         name_taken(database, &body.project_id, &body.name, move_id)?;
         database.connection().execute(
-            "UPDATE suplex_moves SET project_id = ?1, name = ?2, prompt = ?3, runner = ?4, profile_id = ?5, confirm = ?6, updated_at = ?7 WHERE id = ?8",
-            params![body.project_id, body.name, body.prompt, body.runner, body.profile_id, body.confirm, now_millis_rfc3339(), move_id],
+            "UPDATE suplex_moves SET project_id = ?1, name = ?2, prompt = ?3, runner = ?4, profile_id = ?5, confirm = ?6, workflow = ?7, delivery_target = ?8, run_project_tests = ?9, visual_evidence = ?10, updated_at = ?11 WHERE id = ?12",
+            params![body.project_id, body.name, body.prompt, body.runner, body.profile_id, body.confirm, body.workflow.unwrap_or(Workflow::Standard), body.delivery_target.unwrap_or(DeliveryTarget::PullRequestReady), body.run_project_tests, body.visual_evidence, now_millis_rfc3339(), move_id],
         )?;
         Ok(())
     })?;
@@ -619,6 +665,28 @@ pub async fn start(
                 create_task(state, &stored.company_id, user_id, fields, outcome).await;
             }
             outcomes
+        }
+        MoveRunner::Task => {
+            let mut outcome = MoveOutcome {
+                kind: MoveOutcomeKind::Created,
+                pull_request: None,
+                title: stored.name.clone(),
+                task_id: None,
+                reason: None,
+            };
+            let mut fields = json!({
+                "projectId": project.id, "title": stored.name,
+                "workflow": stored.workflow, "deliveryTarget": stored.delivery_target,
+                "runProjectTests": stored.run_project_tests, "visualEvidence": stored.visual_evidence,
+                "startImmediately": true,
+                "idempotencyKey": task_key("task"),
+            });
+            if !rendered.trim().is_empty() {
+                fields["description"] = json!(rendered);
+            }
+            let fields = fields.as_object().cloned().unwrap_or_default();
+            create_task(state, &stored.company_id, user_id, fields, &mut outcome).await;
+            vec![outcome]
         }
     };
     state.with_database(|database| {

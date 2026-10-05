@@ -3,12 +3,16 @@
 use std::collections::BTreeMap;
 
 use serde::Deserialize;
-use serde_json::Value;
+use serde_json::{Value, json};
 
 use super::{
     Contract, ContractResult, Fields, MAX, choice, flag, int, list, nullable, record, text, trimmed,
 };
-use crate::moves::{MoveRunner, prompt::MAX_TEXT_INPUT};
+use crate::{
+    coordination::workflows::Workflow,
+    moves::{MoveRunner, prompt::MAX_TEXT_INPUT},
+    tasks::{control::DeliveryTarget, response::VisualEvidence},
+};
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -21,6 +25,13 @@ pub struct MoveBody {
     #[serde(default)]
     pub profile_id: Option<String>,
     pub confirm: bool,
+    /// The settings of the task that a `task` move starts.
+    #[serde(default)]
+    pub workflow: Option<Workflow>,
+    #[serde(default)]
+    pub delivery_target: Option<DeliveryTarget>,
+    pub run_project_tests: bool,
+    pub visual_evidence: VisualEvidence,
 }
 
 impl Contract for MoveBody {
@@ -32,6 +43,10 @@ impl Contract for MoveBody {
             .req("runner", choice::<MoveRunner>)
             .opt("profileId", nullable(text(1, 256)))
             .req("confirm", flag)
+            .opt("workflow", nullable(choice::<Workflow>))
+            .opt("deliveryTarget", nullable(choice::<DeliveryTarget>))
+            .or("runProjectTests", json!(true), flag)
+            .or("visualEvidence", json!("off"), choice::<VisualEvidence>)
             .strict()
     }
 }

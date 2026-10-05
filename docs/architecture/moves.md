@@ -15,17 +15,18 @@ Terminal runs use the host terminal registry; see
 
 ## What a move is
 
-A move is a saved, project-scoped prompt or script that a person starts from
-the Moves page. Placeholders in its text declare inputs. Each start records a
+A move is a saved, project-scoped prompt, script, or task that a person starts
+from the Moves page. Placeholders in its text declare inputs. Each start records a
 run. There is no scheduling: a person starts every run.
 
 | Field | Meaning |
 | --- | --- |
 | `name` | Unique in its project. |
-| `prompt` | The text: a prompt, a script, or pull request instructions. Up to 20,000 characters. |
+| `prompt` | The text: a prompt, a script, pull request instructions, or a task description. Up to 20,000 characters. |
 | `runner` | What a run does. See [runners](#runners). |
 | `profile_id` | The agent profile for a `prompt` or `pull_request_tasks` move. Empty means the project's default Worker. A `script` move always has none. |
-| `confirm` | When true, the start asks for a confirmation ("ask before start"). |
+| `confirm` | When true, the start asks for a confirmation ("ask before start"). A `task` move always has false. |
+| `workflow`, `delivery_target`, `run_project_tests`, `visual_evidence` | The settings of the task that a `task` move starts. Save requires a workflow other than `refine_pull_request` and a delivery target (422). Other runners store the defaults: `standard`, `pull_request_ready`, tests on, proof off. |
 
 ## Runners
 
@@ -34,6 +35,7 @@ run. There is no scheduling: a person starts every run.
 | `prompt` | Opens a Worker agent, interactive, in a host terminal. The agent receives the rendered prompt and keeps its normal permission prompts. A login shell stays open after the agent exits. |
 | `script` | Runs the rendered text as a script in a login shell, in a host terminal. A login shell stays open after the script ends. |
 | `pull_request_tasks` | Creates one queued Pull request repair task for each open pull request that is not excluded and has no open task, through `creation::create_browser`. The rendered prompt is the description of each task. |
+| `task` | Creates one task through `creation::create_browser` and starts it at once. The title is the move name, the description is the rendered text when it is not empty, and the task uses the saved workflow, delivery target, tests, and proof. |
 
 `prompt` and `script` are terminal runners. Their terminal starts in a new
 worktree at `<worktree root>/move-<run id>`, detached at
@@ -62,6 +64,8 @@ resolves it against the project's provider policy.
 - **`pull_request_tasks`.** The profile becomes `workerProfileId` on each
   created task. Any Worker profile that the project allows is valid.
 - **`script`.** No agent. Save clears `profile_id`.
+- **`task`.** The task uses the project's Coordinator and Worker, and the
+  workflow's default Advisors. Save clears `profile_id`.
 
 The editor lists Worker profiles that the project allows. For a prompt it
 lists only Claude Code and Codex profiles. "The default agent" shows the
@@ -130,7 +134,10 @@ string, so the shell still expands `$` in it.
 3. Resolve and render the inputs.
 4. For a terminal runner: resolve the agent (prompt only), build the command,
    create the worktree, and open the host terminal `move-run:<run id>`. For
-   `pull_request_tasks`: discover pull requests and create the tasks.
+   `pull_request_tasks`: discover pull requests and create the tasks. For
+   `task`: create one task with the idempotency key
+   `move:<move id>:<run key>:task` and `startImmediately`, and record one
+   outcome, created with the task ID or failed with the reason.
 5. Insert the run row and return it.
 
 The browser decides how a start begins (`asksForInputs` in
@@ -142,7 +149,8 @@ The browser decides how a start begins (`asksForInputs` in
 - Any other move without `confirm` starts at once. The page ignores a second
   click while that start is in progress.
 
-After a terminal run starts, the page opens the run's terminal.
+After a terminal run starts, the page opens the run's terminal. After a `task`
+run starts, the page opens the created task.
 
 ## Run lifecycle
 
@@ -200,12 +208,14 @@ the move. Browser types come from `src/frontend/contracts/generated`
 
 | Table | Columns | Migrations |
 | --- | --- | --- |
-| `suplex_moves` | `id`, `company_id`, `project_id`, `name`, `prompt`, `runner` (`prompt`, `script`, `pull_request_tasks`), `profile_id` (null on profile delete), `confirm`, `created_by_user_id`, timestamps. Unique `(project_id, name)`. | `20261001003021651_add_moves`, `20261001014053320_run_moves_in_a_shell`, `20261001030651655_move_run_types_and_providers` |
+| `suplex_moves` | `id`, `company_id`, `project_id`, `name`, `prompt`, `runner` (`prompt`, `script`, `pull_request_tasks`, `task`), `profile_id` (null on profile delete), `confirm`, `workflow`, `delivery_target`, `run_project_tests`, `visual_evidence`, `created_by_user_id`, timestamps. Unique `(project_id, name)`. | `20261001003021651_add_moves`, `20261001014053320_run_moves_in_a_shell`, `20261001030651655_move_run_types_and_providers`, `20261005000102976_task_moves` |
 | `suplex_move_runs` | `id`, `move_id`, `company_id`, `project_id`, `move_name`, `runner`, `prompt`, `inputs_json`, `excluded_pull_requests_json`, `outcomes_json`, `started_by_user_id`, `started_at`, `idempotency_key`, `archived_at`, `transcript_json`. Unique `(move_id, idempotency_key)`. | `20261001003021651_add_moves`, `20261001021153679_archive_move_runs`, `20261001021832268_save_move_run_transcripts` |
 
 `20261001030651655` rebuilds `suplex_moves` to change its runner CHECK. It
 renames the `shell` runner to `prompt` in moves and in run history. Migrations
 run with foreign keys off, so the rebuild keeps run history.
+`20261005000102976` rebuilds it again the same way to allow the `task` runner
+and add the task settings columns.
 
 ## Browser surfaces
 
@@ -214,7 +224,7 @@ run with foreign keys off, so the rebuild keeps run history.
 | Moves list | `moves.tsx`, `MoveRow` | Tabs All, Live, and Ended; the ⌘K filter; the project filter; columns Move, Project, Runs, Status, and Last run; Start; a row menu with Delete. "Recommend moves" in the header, or the empty state, shows [recommendations](#recommendations). |
 | Move page | `moves.tsx`, `RunHistory` | Run history. Live rows offer Stop, ended rows offer Archive, every row offers Start again. A row opens its terminal or task. Empty history offers Run now. |
 | Run view | `move-run.tsx` | The terminal inside the app frame, with a bar for project, inputs, status, starter, Stop, Start again, full screen, and Close. Full screen shows the Suplex logo. |
-| Editor | `move-dialog.tsx` | The New Task layout. A plain field for a prompt, a terminal-styled `ScriptEditor` for a script, and the option bar "Run … with … and …". A "Placeholders" link (`placeholders-help.tsx`) opens on hover or click, explains the input syntax, and lists the inputs in the draft. `DeleteMoveDialog` is shared with the row menu. |
+| Editor | `move-dialog.tsx` | The New Task layout. A plain field for a prompt, a terminal-styled `ScriptEditor` for a script, and the option bar "Run … with … and …". For a task, the bar is "Run as a task using … with … then …" and reuses the New Task dialog's workflow icons and its tests, proof, and delivery controls (`task-settings-options.tsx`). Changing the runner resets the fields that no longer apply. A "Placeholders" link (`placeholders-help.tsx`) opens on hover or click, explains the input syntax, and lists the inputs in the draft. `DeleteMoveDialog` is shared with the row menu. |
 | Start | `start-move-dialog.tsx` | Inputs, pull request exclusions, and the confirmation. |
 | Activity | `features/tasks/recent-tasks.tsx` | Each move's latest terminal run, sorted by time with tasks. A Live badge offers Stop on hover; an Ended badge offers Archive. |
 | Board | `features/tasks/tasks.tsx` | Terminal runs are cards in Delivered, newest first with tasks. The "Tasks and moves" filter (`?show=`) selects tasks, moves, or both. |
@@ -242,7 +252,7 @@ permissions, as in your own shell.
 | --- | --- |
 | The move, its runner, agent, and confirmation | Suplex |
 | Whether a run is live | The host terminal registry |
-| Task status for `pull_request_tasks` outcomes | The task, read at display time |
+| Task status for `pull_request_tasks` and `task` outcomes | The task, read at display time |
 | Worktree contents and commits | Git |
 | Open pull requests | GitHub, read when the run starts |
 

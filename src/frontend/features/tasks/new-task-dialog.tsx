@@ -1,8 +1,8 @@
 import { updateTask, createTask } from "./lib/task-api.js";
 import { useEffect, useRef, useState, type ReactElement } from "react";
 import { isProfileAllowed } from "../projects/lib/provider-policy.js";
-import { TriangleAlert, ChevronDown, CircleOff, CirclePlus, Combine, FileText, FolderGit2, FolderKanban, GitBranch, GitMerge, GitPullRequest, GitPullRequestDraft, Inbox, ListChecks, Mic, Square, Play, ScanEye, Send, TestTube2, Wrench, X } from "lucide-react";
-import { TaskImageInputSchema, DeliveryTargetSchema, type Task, type TaskInput } from "../../contracts/tasks.js";
+import { TriangleAlert, ChevronDown, CirclePlus, FileText, FolderKanban, GitPullRequest, Inbox, Mic, Square, Play, X } from "lucide-react";
+import { TaskImageInputSchema, type Task, type TaskInput } from "../../contracts/tasks.js";
 import { ADVISOR_DEFAULT_LABELS, ADVISOR_LABELS, workflowDefinition } from "./workflow-presentation.js";
 import type { AdvisorProfileIds, WorkflowId } from "../../contracts/workflows.js";
 import type { AdvisorRole } from "../../contracts/advisor-reports.js";
@@ -18,6 +18,7 @@ import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "
 import { Input } from "../../components/ui/input.js";
 import { Textarea } from "../../components/ui/textarea.js";
 import { TaskOptionFilter } from "./task-option-filter.js";
+import { TaskChecksOption, TaskDeliveryOption, workflowIcons } from "./task-settings-options.js";
 import { InlineAttachmentList, InlineAttachmentPicker } from "../../components/ui/inline-attachment-picker.js";
 import { Alert, AlertDescription } from "../../components/ui/alert.js";
 import { EntityAvatar } from "../../components/app/entity-avatar.js";
@@ -38,20 +39,6 @@ import { PhosphorIcon, recordingCaret } from "../../components/app/phosphor-icon
 
 type Delivery = { deliveryTarget: NonNullable<TaskInput["deliveryTarget"]>; runProjectTests: boolean };
 type RecordFallback = { rootProfileId?: string | undefined; workerProfileId?: string | undefined; advisorProfileIds?: AdvisorProfileIds | undefined; deliveryTarget?: Delivery["deliveryTarget"] | undefined; runProjectTests?: boolean | undefined; visualEvidence?: NonNullable<TaskInput["visualEvidence"]> | undefined };
-const workflowIcons: Record<WorkflowId, ReactElement> = {
-  standard: <ListChecks aria-hidden="true" className="size-[11px]" />,
-  direct_build: <Send aria-hidden="true" className="size-[11px]" />,
-  independent_review: <ScanEye aria-hidden="true" className="size-[11px]" />,
-  competing_plans: <Combine aria-hidden="true" className="size-[11px]" />,
-  refine_pull_request: <Wrench aria-hidden="true" className="size-[11px]" />,
-};
-const deliveryIcons: Record<Delivery["deliveryTarget"], ReactElement> = {
-  local_worktree: <FolderGit2 aria-hidden="true" className="size-[11px]" />,
-  remote_branch: <GitBranch aria-hidden="true" className="size-[11px]" />,
-  pull_request_draft: <GitPullRequestDraft aria-hidden="true" className="size-[11px]" />,
-  pull_request_ready: <GitPullRequest aria-hidden="true" className="size-[11px]" />,
-  merged: <GitMerge aria-hidden="true" className="size-[11px]" />,
-};
 const REPAIR: WorkflowId = "refine_pull_request";
 /** Every fresh task opens with Run and open a PR; start mode and delivery target are not remembered. */
 const DEFAULT_DELIVERY: Delivery["deliveryTarget"] = "pull_request_ready";
@@ -254,7 +241,6 @@ export function NewTaskDialog({ open, onOpenChange, companyId, onCreated, initia
   const project = projects.find(project => project.id === projectId);
   const eligibleProfiles = profiles.filter(profile => isProfileAllowed(editTask ? editTask.configuration.providerPolicy : project?.providerPolicy, profile));
   const repositoryConnection = editTask ? editTask.configuration.integration?.repository : project?.integration?.repository;
-  const deliveryOptions = taskDeliveryTargetOptions.filter(option => supportsDeliveryTarget(repositoryConnection, option.value));
   const unsupportedTarget = !supportsDeliveryTarget(repositoryConnection, deliveryTarget);
   useEffect(() => { if (!repair && !supportsDeliveryTarget(repositoryConnection, deliveryTarget)) setDeliveryTarget("pull_request_draft"); }, [repair, repositoryConnection, deliveryTarget]);
   useEffect(() => {
@@ -308,11 +294,8 @@ export function NewTaskDialog({ open, onOpenChange, companyId, onCreated, initia
             <ButtonGroupText><span className="text-muted-foreground">on</span></ButtonGroupText>
             <TaskSourcePicker compact onOpenTask={openTask} pullRequestsOnly projectId={projectId} value={sourceSummary} disabled={busy || editing} trigger={<Button type="button" variant="outline" size="sm" aria-label="Pull request">{source?.kind === "pull_request" ? <><GitPullRequest aria-hidden="true" className="size-[11px]" />{`PR #${source.number}`}</> : <><TriangleAlert aria-hidden="true" className="size-[11px] text-destructive" /><span className="text-destructive">a PR</span></>}</Button>} onClear={() => { setSource(undefined); setSourceSummary(undefined); }} onSelect={(summary, selector) => { setSource(selector); setSourceSummary(summary); const prefill = prefillForTaskSource(summary); if (!title) setTitle(prefill.title); if (!description) setDescription(prefill.description); }} />
           </> : null}
-          <TaskOptionFilter prefix="with" label="Tests and proof" valueIcon={runProjectTests ? visualEvidence === "off" ? <TestTube2 aria-hidden="true" className="size-[11px]" /> : <ListChecks aria-hidden="true" className="size-[11px]" /> : visualEvidence === "off" ? <CircleOff aria-hidden="true" className="size-[11px]" /> : <ScanEye aria-hidden="true" className="size-[11px]" />} value={[...(runProjectTests ? ["tests"] : []), ...(visualEvidence !== "off" ? ["proof"] : [])]} valueLabel={[runProjectTests ? "tests" : "", visualEvidence === "off" ? "" : visualEvidence === "required" ? "necessary proof" : "proof"].filter(Boolean).join(" and ") || "no checks"} disabled={busy} options={[{ value: "tests", label: "Tests", icon: <TestTube2 aria-hidden="true" className="size-[11px]" />, disabled: !project?.verificationCommand.trim() }, { value: "proof", label: "Proof", icon: <ScanEye aria-hidden="true" className="size-[11px]" /> }]} onValueChange={values => {
-            if (project?.verificationCommand.trim()) setRunProjectTests(values.includes("tests"));
-            setVisualEvidence(values.includes("proof") ? visualEvidence === "required" ? "required" : "capture" : "off");
-          }} />
-          <TaskOptionFilter prefix="then" label="Delivery target" value={deliveryTarget} disabled={busy || repair} options={deliveryOptions.map(option => ({ value: option.value, icon: deliveryIcons[option.value], label: option.value === "pull_request_draft" ? "open a draft PR" : option.value === "pull_request_ready" ? "open a PR" : option.label.toLowerCase() }))} onValueChange={value => setDeliveryTarget(DeliveryTargetSchema.parse(value))} />
+          <TaskChecksOption runProjectTests={runProjectTests} visualEvidence={visualEvidence} verificationCommand={project?.verificationCommand} disabled={busy} onChange={checks => { setRunProjectTests(checks.runProjectTests); setVisualEvidence(checks.visualEvidence); }} />
+          <TaskDeliveryOption value={deliveryTarget} connection={repositoryConnection} disabled={busy || repair} onChange={setDeliveryTarget} />
           </ButtonGroup>
           </div>
           {blockedBy.map(prerequisite => <span key={prerequisite.id} className="flex items-center gap-1 text-xs" data-blocked-by-selection><span className="max-w-40 truncate">Blocked by {prerequisite.title}</span><Button type="button" variant="ghost" size="icon-xs" aria-label={`Remove ${prerequisite.title} from Blocked by`} disabled={busy} onClick={() => setBlockedBy(current => current.filter(selected => selected.id !== prerequisite.id))}><X /></Button></span>)}

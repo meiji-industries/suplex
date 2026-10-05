@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactElement } from "react";
-import { Bot, FolderKanban, GitPullRequest, MessageSquareText, Play, ShieldQuestion, SquareTerminal, Trash2 } from "lucide-react";
+import { Bot, FolderKanban, GitPullRequest, ListTodo, MessageSquareText, Play, ShieldQuestion, SquareTerminal, Trash2 } from "lucide-react";
 
 import { EntityAvatar } from "../../components/app/entity-avatar.js";
 import { Alert, AlertDescription } from "../../components/ui/alert.js";
@@ -12,22 +12,29 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigge
 import { Input } from "../../components/ui/input.js";
 import { NewButton } from "../../components/ui/new-button.js";
 import { MoveRunnerSchema, type MoveBody } from "../../contracts/moves.js";
+import { WorkflowIdSchema } from "../../contracts/workflows.js";
 import type { MoveResponse } from "../../contracts/generated/MoveResponse.js";
 import type { ApiProfile, ApiProject } from "../../shell/view-shared.js";
 import { isProfileAllowed } from "../projects/lib/provider-policy.js";
 import { TaskOptionFilter } from "../tasks/task-option-filter.js";
+import { TaskChecksOption, TaskDeliveryOption, workflowIcons } from "../tasks/task-settings-options.js";
+import { WORKFLOWS } from "../tasks/workflow-presentation.js";
+import { supportsDeliveryTarget } from "../tasks/lib/delivery-target-capabilities.js";
 import { createMove, deleteMove, listProfiles, updateMove } from "./lib/move-api.js";
 import { Textarea } from "../../components/ui/textarea.js";
 import { PlaceholdersHelp } from "./placeholders-help.js";
 import { ScriptEditor } from "./prompt-editor.js";
 
-export const runnerLabels = { prompt: "Prompt", script: "Shell script", pull_request_tasks: "Each pull request" } as const;
+export const runnerLabels = { prompt: "Prompt", script: "Shell script", pull_request_tasks: "Each pull request", task: "Task" } as const;
 
 const runnerOptions = [
   { value: "prompt", label: "a prompt", icon: <MessageSquareText aria-hidden="true" className="size-[11px]" /> },
   { value: "script", label: "a shell script", icon: <SquareTerminal aria-hidden="true" className="size-[11px]" /> },
   { value: "pull_request_tasks", label: "for each pull request", icon: <GitPullRequest aria-hidden="true" className="size-[11px]" /> },
+  { value: "task", label: "as a task", icon: <ListTodo aria-hidden="true" className="size-[11px]" /> },
 ];
+/** Review and repair needs a pull request, so "for each pull request" covers it. */
+const workflowOptions = WORKFLOWS.filter(definition => definition.id !== "refine_pull_request").map(definition => ({ value: definition.id, label: definition.name, icon: workflowIcons[definition.id] }));
 /** Agents with an interactive command line for a move. */
 const terminalProviders = new Set(["claude-code", "codex"]);
 
@@ -40,6 +47,7 @@ const placeholders = {
   prompt: "Write a prompt for something you do all the time",
   script: "npm run test  # Enter your command. Multiline is okay.",
   pull_request_tasks: "Instructions for each pull request",
+  task: "Write a description",
 } as const;
 
 export function MoveDialog({ companyId, projects, move, open, onOpenChange, onSaved, onDeleted }: {
@@ -58,7 +66,7 @@ export function MoveDialog({ companyId, projects, move, open, onOpenChange, onSa
   const [profiles, setProfiles] = useState<ApiProfile[]>([]);
   useEffect(() => {
     if (!open) return;
-    setDraft(move ? { projectId: move.projectId, name: move.name, prompt: move.prompt, runner: move.runner, profileId: move.profileId, confirm: move.confirm } : blank(projects));
+    setDraft(move ? { projectId: move.projectId, name: move.name, prompt: move.prompt, runner: move.runner, profileId: move.profileId, confirm: move.confirm, workflow: move.workflow, deliveryTarget: move.deliveryTarget, runProjectTests: move.runProjectTests, visualEvidence: move.visualEvidence } : blank(projects));
     setError("");
     let current = true;
     listProfiles().then(next => { if (current) setProfiles(next); }, () => { if (current) setProfiles([]); });
@@ -66,6 +74,10 @@ export function MoveDialog({ companyId, projects, move, open, onOpenChange, onSa
   }, [open, move, projects]);
   const set = <Key extends keyof MoveBody>(key: Key, value: MoveBody[Key]): void => setDraft(current => ({ ...current, [key]: value }));
   const project = projects.find(candidate => candidate.id === draft.projectId);
+  const connection = project?.integration?.repository;
+  useEffect(() => {
+    if (draft.runner === "task" && draft.deliveryTarget && !supportsDeliveryTarget(connection, draft.deliveryTarget)) setDraft(current => ({ ...current, deliveryTarget: "pull_request_draft" }));
+  }, [draft.runner, draft.deliveryTarget, connection]);
   // A prompt opens the agent in a terminal; pull request tasks take any allowed Worker.
   const agents = profiles.filter(profile => profile.role === "worker" && !profile.archivedAt && (draft.runner !== "prompt" || terminalProviders.has(profile.provider)) && isProfileAllowed(project?.providerPolicy, profile));
   const fallback = profiles.find(profile => profile.id === project?.workerProfileId);
@@ -76,7 +88,7 @@ export function MoveDialog({ companyId, projects, move, open, onOpenChange, onSa
     catch (cause) { setError(cause instanceof Error ? cause.message : "Suplex could not save the move."); }
     finally { setBusy(false); }
   };
-  const ready = Boolean(draft.projectId && draft.name.trim() && (draft.runner === "pull_request_tasks" || draft.prompt.trim()));
+  const ready = Boolean(draft.projectId && draft.name.trim() && (draft.runner === "pull_request_tasks" || draft.runner === "task" || draft.prompt.trim()));
   return <>
     <Dialog open={open} onOpenChange={next => { if (!busy) onOpenChange(next); }}>
       <DialogContent className="w-[min(92vw,936px)] max-w-none gap-0 p-0 sm:max-w-[936px]" showCloseButton={false}>
@@ -104,8 +116,14 @@ export function MoveDialog({ companyId, projects, move, open, onOpenChange, onSa
               <div className="-m-1 max-w-full overflow-x-auto p-1">
                 <ButtonGroup aria-label="Move options">
                   <TaskOptionFilter prefix="Run" label="Run" value={draft.runner} disabled={busy} options={runnerOptions} onValueChange={value => setDraft(current => withRunner(current, MoveRunnerSchema.parse(value), profiles))} />
-                  {draft.runner !== "script" ? <TaskOptionFilter prefix="with" label="Agent" value={draft.profileId ?? "default"} disabled={busy} options={agentOptions} onValueChange={value => set("profileId", value === "default" ? null : value)} /> : null}
-                  <TaskOptionFilter prefix="and" label="Start" value={draft.confirm ? "confirm" : "direct"} disabled={busy} options={startOptions} onValueChange={value => set("confirm", value === "confirm")} />
+                  {draft.runner === "task" ? <>
+                    <TaskOptionFilter prefix="using" label="Workflow" value={draft.workflow ?? "standard"} disabled={busy} options={workflowOptions} onValueChange={value => set("workflow", WorkflowIdSchema.parse(value))} />
+                    <TaskChecksOption runProjectTests={draft.runProjectTests ?? true} visualEvidence={draft.visualEvidence ?? "off"} verificationCommand={project?.verificationCommand} disabled={busy} onChange={checks => setDraft(current => ({ ...current, ...checks }))} />
+                    <TaskDeliveryOption value={draft.deliveryTarget ?? "pull_request_ready"} connection={connection} disabled={busy} onChange={target => set("deliveryTarget", target)} />
+                  </> : <>
+                    {draft.runner !== "script" ? <TaskOptionFilter prefix="with" label="Agent" value={draft.profileId ?? "default"} disabled={busy} options={agentOptions} onValueChange={value => set("profileId", value === "default" ? null : value)} /> : null}
+                    <TaskOptionFilter prefix="and" label="Start" value={draft.confirm ? "confirm" : "direct"} disabled={busy} options={startOptions} onValueChange={value => set("confirm", value === "confirm")} />
+                  </>}
                 </ButtonGroup>
               </div>
               <DialogFooter className="ml-auto flex-row items-center gap-1 sm:justify-end">
@@ -120,15 +138,21 @@ export function MoveDialog({ companyId, projects, move, open, onOpenChange, onSa
   </>;
 }
 
-/** A script keeps no agent, and a prompt keeps only an agent that runs in a terminal. */
+/**
+ * A script keeps no agent, and a prompt keeps only an agent that runs in a terminal.
+ * A task uses the project's agents, starts without a confirmation, and keeps task settings that other runners clear.
+ */
 function withRunner(draft: MoveBody, runner: MoveBody["runner"], profiles: ApiProfile[]): MoveBody {
+  if (runner === "task") return { ...draft, runner, profileId: null, confirm: false };
   const provider = profiles.find(profile => profile.id === draft.profileId)?.provider;
   const keep = runner !== "script" && (runner !== "prompt" || !provider || terminalProviders.has(provider));
-  return { ...draft, runner, profileId: keep ? draft.profileId ?? null : null };
+  return { ...draft, ...taskDefaults, runner, profileId: keep ? draft.profileId ?? null : null };
 }
 
+const taskDefaults = { workflow: "standard", deliveryTarget: "pull_request_ready", runProjectTests: true, visualEvidence: "off" } as const;
+
 function blank(projects: ApiProject[]): MoveBody {
-  return { projectId: projects[0]?.id ?? "", name: "", prompt: "", runner: "prompt", profileId: null, confirm: false };
+  return { projectId: projects[0]?.id ?? "", name: "", prompt: "", runner: "prompt", profileId: null, confirm: false, ...taskDefaults };
 }
 
 /** Asks before it deletes a move and its run history. */

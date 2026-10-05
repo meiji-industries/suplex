@@ -214,6 +214,152 @@ mod tests {
         server.abort();
     }
 
+    #[tokio::test]
+    async fn task_moves_keep_their_settings_and_start_one_task() {
+        let _transport = crate::projects::git::fixtures::Libgit2Transport::on();
+        let root = crate::projects::git::fixtures::temporary("suplex-task-move");
+        let local = root.join("repository");
+        crate::projects::git::fixtures::github_checkout(&local, &root.join("origin.git"), "acme/demo");
+        let (state, _filename) = super::super::auth::tests::state();
+        let state = state
+            .with_artifact_root(root.join("artifacts"))
+            .with_project_github(crate::projects::git::Github {
+                api: Some(("https://api.github.com".into(), "fixture-token".into())),
+                git: None,
+            });
+        let now = Utc::now();
+        let (admin, company_id) = state.with_database(|database| {
+            let admin = crate::http::routes::auth::tests::verified_sign_in(database, now).unwrap();
+            let company =
+                crate::identity::companies::create_company(database, &admin.user.id, "Task moves", now)
+                    .unwrap();
+            database.connection().execute(
+                "INSERT INTO suplex_projects (id, company_id, name, repository_path, worktree_root, repository_identity, base_branch, setup_command, verification_command, root_profile_id, worker_profile_id, agent_task_policy_json, created_at, updated_at) VALUES ('project_task_moves', ?1, 'Task moves', ?2, ?3, 'acme/demo', 'main', '', 'make test', 'profile_native_root', 'profile_native_worker', ?4, ?5, ?5)",
+                rusqlite::params![
+                    company.id,
+                    local.to_str().unwrap(),
+                    root.join("worktrees").to_str().unwrap(),
+                    json!({"workflowIds":["standard","direct_build"],"defaultWorkflowId":"standard","rootProfileIds":["profile_native_root"],"workerProfileIds":["profile_native_worker"]}).to_string(),
+                    now.to_rfc3339(),
+                ],
+            ).unwrap();
+            database.connection().execute(
+                "UPDATE suplex_profiles SET archived_at = NULL WHERE id IN ('profile_native_root','profile_native_worker')",
+                [],
+            ).unwrap();
+            (admin, company.id)
+        });
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(
+            axum::serve(
+                listener,
+                crate::http::router(state.clone())
+                    .into_make_service_with_connect_info::<std::net::SocketAddr>(),
+            )
+            .into_future(),
+        );
+        let client = reqwest::Client::new();
+        let cookie = format!("sid_v1={}", admin.session_token);
+        let send = |method: reqwest::Method, path: &str, body: Option<Value>| {
+            let request = client
+                .request(method, format!("http://{address}{path}"))
+                .header("host", "suplex.example.test:4111")
+                .header("x-forwarded-host", "suplex.example.test:4111")
+                .header("x-forwarded-proto", "https")
+                .header("origin", "https://suplex.example.test:4111")
+                .header("cookie", &cookie);
+            match body {
+                Some(body) => request.json(&body),
+                None => request,
+            }
+            .send()
+        };
+        let moves_url = format!("/api/companies/{company_id}/moves");
+        let repair = json!({"projectId":"project_task_moves","name":"Repair test suite","prompt":"Run `make test`, fix any failures","runner":"task","workflow":"direct_build","deliveryTarget":"merged","runProjectTests":false,"visualEvidence":"capture","profileId":"profile_native_worker","confirm":true});
+
+        for (change, status) in [
+            (json!({"workflow": null}), StatusCode::UNPROCESSABLE_ENTITY),
+            (json!({"workflow": "refine_pull_request"}), StatusCode::UNPROCESSABLE_ENTITY),
+            (json!({"deliveryTarget": null}), StatusCode::UNPROCESSABLE_ENTITY),
+            (json!({"workflow": "wrong"}), StatusCode::BAD_REQUEST),
+        ] {
+            let mut body = repair.clone();
+            body.as_object_mut().unwrap().extend(change.as_object().unwrap().clone());
+            let rejected = send(reqwest::Method::POST, &moves_url, Some(body)).await.unwrap();
+            assert_eq!(rejected.status(), status, "{change}");
+        }
+
+        let created = send(reqwest::Method::POST, &moves_url, Some(repair.clone()))
+            .await
+            .unwrap();
+        assert_eq!(created.status(), StatusCode::CREATED);
+        let created: Value = created.json().await.unwrap();
+        // A task move uses the project's agents and starts without a confirmation.
+        assert_eq!(
+            [&created["runner"], &created["workflow"], &created["deliveryTarget"], &created["runProjectTests"], &created["visualEvidence"], &created["profileId"], &created["confirm"]],
+            [&json!("task"), &json!("direct_build"), &json!("merged"), &json!(false), &json!("capture"), &Value::Null, &json!(false)]
+        );
+        let id = created["id"].as_str().unwrap();
+        let mut edited = repair.clone();
+        edited["deliveryTarget"] = json!("remote_branch");
+        edited["runProjectTests"] = json!(true);
+        let updated: Value = send(reqwest::Method::PATCH, &format!("/api/moves/{id}"), Some(edited))
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(
+            [&updated["workflow"], &updated["deliveryTarget"], &updated["runProjectTests"], &updated["visualEvidence"]],
+            [&json!("direct_build"), &json!("remote_branch"), &json!(true), &json!("capture")]
+        );
+        let mut merged = repair.clone();
+        merged["runProjectTests"] = json!(true);
+        send(reqwest::Method::PATCH, &format!("/api/moves/{id}"), Some(merged))
+            .await
+            .unwrap();
+
+        let runs_url = format!("/api/moves/{id}/runs");
+        let start = json!({"inputs":{},"excludedPullRequests":[],"idempotencyKey":"repair-1"});
+        let started = send(reqwest::Method::POST, &runs_url, Some(start.clone()))
+            .await
+            .unwrap();
+        assert_eq!(started.status(), StatusCode::CREATED);
+        let run: Value = started.json().await.unwrap();
+        assert_eq!(run["outcomes"].as_array().unwrap().len(), 1, "{run}");
+        assert_eq!(run["outcomes"][0]["kind"], "created", "{run}");
+        let task_id = run["outcomes"][0]["taskId"].as_str().unwrap();
+        let task: Value = send(reqwest::Method::GET, &format!("/api/tasks/{task_id}"), None)
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(
+            [&task["title"], &task["description"], &task["workflow"], &task["deliveryTarget"], &task["status"]],
+            [&json!("Repair test suite"), &json!("Run `make test`, fix any failures"), &json!("direct_build"), &json!("merged"), &json!("active")],
+            "{task}"
+        );
+        assert_eq!(
+            [&task["configuration"]["runProjectTests"], &task["configuration"]["visualEvidence"]],
+            [&json!(true), &json!("capture")],
+            "{task}"
+        );
+
+        let replay = send(reqwest::Method::POST, &runs_url, Some(start)).await.unwrap();
+        assert_eq!(replay.status(), StatusCode::OK);
+        assert_eq!(replay.json::<Value>().await.unwrap()["id"], run["id"]);
+        let tasks: i64 = state.with_database(|database| {
+            database
+                .connection()
+                .query_row("SELECT COUNT(*) FROM suplex_tasks", [], |row| row.get(0))
+                .unwrap()
+        });
+        assert_eq!(tasks, 1);
+        server.abort();
+    }
+
     fn save_transcript_for_test(database: &crate::platform::database::SuplexDatabase, run_id: &str) {
         let transcript = crate::terminals::host::Transcript {
             cols: 80,

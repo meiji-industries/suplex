@@ -60,8 +60,8 @@ test.each([1280, 390])("tasks can be created, started and viewed on the board at
       await page.goto(`${value.base}/tasks?company=${value.company.id}`);
     }
     await page.goto(`${value.base}/board?company=${value.company.id}`);
-    await page.getByRole("region", { name: "Active", exact: true }).waitFor();
-    for (const id of createdIds) expect(await page.locator(`a[href*="/board/${id}"]`).count()).toBe(1);
+    // Started tasks can leave Active before the board loads, so wait for each card in any column.
+    for (const id of createdIds) await page.locator(`[data-task-board] a[href*="/board/${id}"]`).waitFor();
     expect(value.errors).toEqual([]);
   } finally { await value.close(); }
 });

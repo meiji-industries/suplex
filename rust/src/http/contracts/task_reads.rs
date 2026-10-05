@@ -1,6 +1,6 @@
 //! Public task observations, independent of command authorization.
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use ts_rs::TS;
 
@@ -68,6 +68,33 @@ pub struct TaskActivityTurn {
     pub prompted_at: Option<String>,
     pub completed_at: Option<String>,
     pub result: Option<String>,
+    /// The Coordinator's delegation that started this Worker turn.
+    pub assignment: Option<TaskWorkerAssignment>,
+}
+
+crate::shared::wire_enum! {
+    pub enum WorkerAssignmentMode {
+        Planned = "planned",
+        Direct = "direct",
+    }
+}
+
+crate::shared::wire_enum! {
+    pub enum WorkerAssignmentPurpose {
+        Implementation = "implementation",
+        Verification = "verification",
+    }
+}
+
+/// The saved Worker workflow input, read without its range and report references.
+#[derive(Debug, PartialEq, Deserialize, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct TaskWorkerAssignment {
+    pub mode: WorkerAssignmentMode,
+    pub purpose: WorkerAssignmentPurpose,
+    pub plan: Option<String>,
+    pub acceptance_criteria: Vec<String>,
+    pub instruction: String,
 }
 
 #[derive(Serialize, TS)]

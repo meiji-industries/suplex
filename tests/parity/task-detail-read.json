@@ -26,7 +26,8 @@
           "status": "completed",
           "promptedAt": "2026-09-25T12:00:00.000Z",
           "completedAt": "2026-09-25T12:00:00.000Z",
-          "result": null
+          "result": null,
+          "assignment": null
         }
       ],
       "shellPaneId": null

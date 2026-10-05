@@ -743,4 +743,60 @@ mod tests {
         drop(state);
         fs::remove_dir_all(root).unwrap();
     }
+
+    #[test]
+    fn delegation_turns_expose_their_worker_assignment() {
+        let planned = json!({"kind":"worker","version":2,"mode":"planned","purpose":"implementation","range":null,"plan":"Add the field","acceptanceCriteria":["Field shows"],"instruction":"Build it","advisorReport":null,"candidateReports":null});
+        assert_eq!(
+            worker_assignment(Some(&planned)),
+            Some(TaskWorkerAssignment {
+                mode: WorkerAssignmentMode::Planned,
+                purpose: WorkerAssignmentPurpose::Implementation,
+                plan: Some("Add the field".into()),
+                acceptance_criteria: vec!["Field shows".into()],
+                instruction: "Build it".into(),
+            })
+        );
+        let direct = json!({"kind":"worker","mode":"direct","purpose":"verification","plan":null,"acceptanceCriteria":[],"instruction":"Run checks"});
+        let direct = worker_assignment(Some(&direct)).unwrap();
+        assert_eq!(direct.mode, WorkerAssignmentMode::Direct);
+        assert_eq!(direct.purpose, WorkerAssignmentPurpose::Verification);
+        assert_eq!(direct.plan, None);
+        // Continuation, Advisor, and legacy turns carry no Worker assignment.
+        assert_eq!(worker_assignment(None), None);
+        assert_eq!(worker_assignment(Some(&Value::Null)), None);
+        assert_eq!(worker_assignment(Some(&json!({"kind":"advisor","role":"rater"}))), None);
+        assert_eq!(worker_assignment(Some(&json!({"kind":"worker","plan":"Old"}))), None);
+    }
+
+    #[test]
+    fn legacy_standard_delegations_read_the_saved_worker_prompt() {
+        let text = crate::coordination::root_prompts::compose_worker_assignment(
+            &crate::coordination::root_prompts::WorkerAssignmentText {
+                mode: "planned",
+                purpose: "implementation",
+                plan: Some("## Steps\n\nAcceptance criteria:\n1. Not a criterion"),
+                acceptance_criteria: &["First\nline two".into(), "Second".into()],
+                instruction: "Build it",
+                visual_evidence: "off",
+                verification_range: None,
+                advisor_report: None,
+            },
+        )
+        .unwrap();
+        let prompt =
+            crate::coordination::root_prompts::worker_prompt("planned", "implementation", &text)
+                .unwrap();
+        assert_eq!(
+            legacy_worker_assignment(&prompt),
+            Some(TaskWorkerAssignment {
+                mode: WorkerAssignmentMode::Planned,
+                purpose: WorkerAssignmentPurpose::Implementation,
+                plan: Some("## Steps\n\nAcceptance criteria:\n1. Not a criterion".into()),
+                acceptance_criteria: vec!["First\nline two".into(), "Second".into()],
+                instruction: "Build it".into(),
+            })
+        );
+        assert_eq!(legacy_worker_assignment("Continue with the fix."), None);
+    }
 }

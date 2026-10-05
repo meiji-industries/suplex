@@ -22,8 +22,8 @@ const task = {
 } satisfies Task;
 
 const session = { id: "session-1", kind: "root", advisorRole: null, label: "Coordinator", profileId: "profile", generation: 1, nativeSessionId: null, paneId: null, current: true, replacement: null, harness: "claude-code" } as const;
-const done = { id: "turn-1", sessionId: "session-1", prompt: "Start", status: "completed", promptedAt: "2026-09-08T00:00:00.000Z", completedAt: "2026-09-08T00:00:05.000Z", result: JSON.stringify({ text: "First reply" }) } as const;
-const note = { id: "turn-2", sessionId: "session-1", prompt: "Human note:\nPlease continue", promptedAt: "2026-09-08T00:01:00.000Z", completedAt: null, result: null } as const;
+const done = { id: "turn-1", sessionId: "session-1", prompt: "Start", status: "completed", promptedAt: "2026-09-08T00:00:00.000Z", completedAt: "2026-09-08T00:00:05.000Z", result: JSON.stringify({ text: "First reply" }), assignment: null } as const;
+const note = { id: "turn-2", sessionId: "session-1", prompt: "Human note:\nPlease continue", promptedAt: "2026-09-08T00:01:00.000Z", completedAt: null, result: null, assignment: null } as const;
 
 function activityWith(turn: TaskActivity["turns"][number]): TaskActivity {
   return { sessions: [session], turns: [done, turn], shellPaneId: null } satisfies TaskActivity;
@@ -79,4 +79,30 @@ test("a delivered task with no messages shows the default hint", async () => {
   await view.render({ sessions: [], turns: [], shellPaneId: null });
   expect(view.container.textContent).not.toContain("resume this task");
   expect(view.container.textContent).toContain("Coordinator replies will appear here.");
+});
+
+test("the conversation shows each Worker assignment once, with the plan, criteria, and instruction", async () => {
+  const worker = { ...session, id: "worker-1", kind: "worker", label: "Worker" } as const;
+  const checker = { ...session, id: "worker-2", kind: "worker", label: "Worker" } as const;
+  const delegation = { ...done, id: "turn-3", sessionId: "worker-1", prompt: "Assignment", result: JSON.stringify({ text: "Built it" }), assignment: { mode: "planned", purpose: "implementation", plan: "## Steps\n\n1. **Add** the field", acceptanceCriteria: ["The field shows"], instruction: "Run the tests" } } satisfies TaskActivity["turns"][number];
+  const continuation = { ...done, id: "turn-4", sessionId: "worker-1", prompt: "Fix the lint error", result: JSON.stringify({ text: "Fixed" }), assignment: null } satisfies TaskActivity["turns"][number];
+  const check = { ...done, id: "turn-5", sessionId: "worker-2", prompt: "Check", result: null, assignment: { mode: "direct", purpose: "verification", plan: null, acceptanceCriteria: [], instruction: "Run pnpm check" } } satisfies TaskActivity["turns"][number];
+  const view = mount();
+  await view.render({ sessions: [session, worker, checker], turns: [done, delegation, continuation, check], shellPaneId: null });
+
+  const assignments = Array.from(view.container.querySelectorAll<HTMLElement>("[data-worker-assignment]"));
+  expect(assignments.map(item => item.dataset.workerAssignment)).toEqual(["implementation", "verification"]);
+  const [planned, verification] = assignments;
+  expect(planned?.querySelector("header")?.textContent).toBe("CoordinatorAssignment for Worker");
+  expect(planned?.querySelector('[aria-label="Plan"] h2')?.textContent).toBe("Steps");
+  expect(planned?.querySelector('[aria-label="Plan"] strong')?.textContent).toBe("Add");
+  expect(planned?.querySelector('[aria-label="Acceptance criteria"] li')?.textContent).toBe("The field shows");
+  expect(planned?.querySelector('[aria-label="Instructions"]')?.textContent).toContain("Run the tests");
+  expect(verification?.querySelector("header")?.textContent).toBe("CoordinatorAssignment for WorkerDirect buildCheck only");
+  expect(verification?.querySelector('[aria-label="Plan"]')).toBeNull();
+  // The plan precedes the Worker reply, and the continuation does not repeat it.
+  const text = view.container.textContent ?? "";
+  expect(text.indexOf("Steps")).toBeLessThan(text.indexOf("Built it"));
+  expect(text.indexOf("Built it")).toBeLessThan(text.indexOf("Fixed"));
+  expect(text.split("Steps").length).toBe(2);
 });

@@ -134,9 +134,9 @@ export function WorkflowHistory({ task, activity }: { task: Task; activity: Task
           </HistoryRow>
         </li>;
       })}
-      {task.workflow === "competing_plans" ? builds.map(({ turn }) => turn.prompt.includes("Coordinator plan:") ? <li key={turn.id} className="min-w-0" data-synthesis-assignment>
+      {task.workflow === "competing_plans" ? builds.map(({ turn }) => turn.assignment?.plan ? <li key={turn.id} className="min-w-0" data-synthesis-assignment>
         <HistoryRow title="Combined plan" icon={FileText} badge={<Badge variant="secondary">Assignment</Badge>} timestamp={<HistoryTime value={turn.promptedAt} turn={turn} />}>
-          <Markdown source={turn.prompt} />
+          <Markdown source={turn.assignment.plan} />
         </HistoryRow>
       </li> : null) : null}
     </ol>;

@@ -2,7 +2,7 @@ import { describe, expect, test } from "vitest";
 import { formatTurnDuration, turnLabel, type TaskActivity } from "../src/frontend/features/tasks/task-work.js";
 
 const completedTurn = {
-  id: "turn", sessionId: "session", prompt: "Prompt", status: "completed", promptedAt: "2026-09-21T10:00:00.000Z", completedAt: "2026-09-21T10:05:23.000Z", result: null,
+  id: "turn", sessionId: "session", prompt: "Prompt", status: "completed", promptedAt: "2026-09-21T10:00:00.000Z", completedAt: "2026-09-21T10:05:23.000Z", result: null, assignment: null,
 } satisfies TaskActivity["turns"][number];
 
 describe("formatTurnDuration", () => {

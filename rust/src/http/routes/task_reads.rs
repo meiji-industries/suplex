@@ -28,7 +28,8 @@ use crate::{
             task_reads::{
                 TaskActivityResponse, TaskActivitySession, TaskActivityTurn, TaskDiffResponse,
                 TaskDiffSummaryResponse, TaskExecutionReasoning, TaskExecutionResponse,
-                TaskExecutionSession, TaskExecutionTool, TaskToolStatus,
+                TaskExecutionSession, TaskExecutionTool, TaskToolStatus, TaskWorkerAssignment,
+                WorkerAssignmentMode, WorkerAssignmentPurpose,
             },
             typed::tasks::TaskIdParams,
         },
@@ -151,6 +152,44 @@ fn role_label(session: &SessionRow) -> &'static str {
     )
 }
 
+/// Only the delegating turn stores its own input; continuation turns carry none.
+fn worker_assignment(input: Option<&Value>) -> Option<TaskWorkerAssignment> {
+    let input = input.filter(|input| input["kind"] == "worker")?;
+    serde_json::from_value(input.clone()).ok()
+}
+
+/// Older Standard implementations stored no input, so their saved Worker
+/// prompt is the only record. Those are always planned implementations with
+/// this fixed section order; split from the end because a plan can hold any text.
+fn legacy_worker_assignment(prompt: &str) -> Option<TaskWorkerAssignment> {
+    let (_, rest) = prompt.split_once("\n\nAssignment:\nCoordinator plan:\n")?;
+    let (rest, _) = rest.rsplit_once("\n\nScreenshots:\n")?;
+    let (rest, instruction) = rest.rsplit_once("\n\nWorker instructions:\n")?;
+    let (plan, criteria) = rest.rsplit_once("\n\nAcceptance criteria:\n")?;
+    let mut acceptance_criteria = Vec::new();
+    let mut remaining = criteria;
+    for number in 1.. {
+        let Some(item) = remaining.strip_prefix(&format!("{number}. ")) else {
+            break;
+        };
+        let next = format!("\n{}. ", number + 1);
+        // Keep the newline so the next item starts with its number.
+        let (criterion, tail) = match item.split_once(&next) {
+            Some((head, _)) => (head, &item[head.len() + 1..]),
+            None => (item, ""),
+        };
+        acceptance_criteria.push(criterion.to_owned());
+        remaining = tail;
+    }
+    Some(TaskWorkerAssignment {
+        mode: WorkerAssignmentMode::Planned,
+        purpose: WorkerAssignmentPurpose::Implementation,
+        plan: Some(plan.to_owned()),
+        acceptance_criteria,
+        instruction: instruction.to_owned(),
+    })
+}
+
 /// `host` derives terminal ids for host terminals instead of stored Herdr panes.
 fn activity_document(
     rows: &RootObservationRows,
@@ -188,6 +227,15 @@ fn activity_document(
             prompted_at: turn.prompted_at.clone(),
             completed_at: turn.completed_at.clone(),
             result: turn.terminal_observation.clone(),
+            assignment: match &turn.workflow_input {
+                None if rows
+                    .session(&turn.session_id)
+                    .is_some_and(SessionRow::is_plain_worker) =>
+                {
+                    legacy_worker_assignment(&turn.prompt_text)
+                }
+                input => worker_assignment(input.as_ref()),
+            },
         })
         .collect::<Vec<_>>();
     TaskActivityResponse {

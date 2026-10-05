@@ -23,7 +23,7 @@ const review = {
   invalidReason: null, recordedAt,
 } satisfies ReviewRecord;
 const session = { id: "planner-a", kind: "worker", advisorRole: "planner_a", label: "Plan A", profileId: "profile", generation: 1, nativeSessionId: null, paneId: null, current: true, replacement: null, harness: "codex" } satisfies TaskActivity["sessions"][number];
-const turn = { id: "plan-a", sessionId: session.id, prompt: "Create the plan.", status: "prompted", promptedAt: recordedAt, completedAt: null, result: null } satisfies TaskActivity["turns"][number];
+const turn = { id: "plan-a", sessionId: session.id, prompt: "Create the plan.", status: "prompted", promptedAt: recordedAt, completedAt: null, result: null, assignment: null } satisfies TaskActivity["turns"][number];
 const roots: Root[] = [];
 
 async function mount(reviews: ReviewRecord[], activity: TaskActivity = { sessions: [], turns: [], shellPaneId: null }, workflow: Task["workflow"] = "independent_review") {
@@ -122,13 +122,13 @@ test("a planner without a report has a compact row and no expand control", async
 
 test("planner reports and the selected Worker assignment expand their complete Markdown", async () => {
   const report = "# Plan A summary\n\nUse the **existing** controls.";
-  const assignment = "Worker instructions\n\nCoordinator plan:\nCombine the plans.\n\n## Checks\n\nRun the focused checks.";
+  const coordinatorPlan = "Combine the plans.\n\n## Checks\n\nRun the focused checks.";
   const worker = { ...session, id: "worker", advisorRole: null, label: "Worker" };
   const container = await mount([], {
     sessions: [session, worker],
     turns: [
       { ...turn, status: "completed", completedAt: recordedAt, result: JSON.stringify({ text: report }) },
-      { ...turn, id: "build", sessionId: worker.id, prompt: assignment },
+      { ...turn, id: "build", sessionId: worker.id, prompt: "Worker instructions", assignment: { mode: "planned", purpose: "implementation", plan: coordinatorPlan, acceptanceCriteria: [], instruction: "Implement the plan." } },
       { ...turn, id: "other-build", sessionId: worker.id, prompt: "Continue the task." },
     ], shellPaneId: null,
   }, "competing_plans");
@@ -146,7 +146,6 @@ test("planner reports and the selected Worker assignment expand their complete M
   expect(combined.textContent).not.toContain("Combine the plans.");
   expect(combined.querySelector(".prose-suplex")).toBeNull();
   await click(element<HTMLButtonElement>(combined, "button"));
-  expect(element<HTMLElement>(combined, ".prose-suplex").textContent).toContain("Worker instructions");
   expect(element<HTMLElement>(combined, ".prose-suplex h2").textContent).toBe("Checks");
   expect(combined.textContent).toContain("Run the focused checks.");
 });

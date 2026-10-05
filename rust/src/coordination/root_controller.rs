@@ -515,7 +515,13 @@ impl AssignmentDraft<'_> {
         )
     }
 
-    fn input(&self, range: &ReviewRange, advisor_report: Value, candidate_reports: Value) -> Value {
+    /// `range` is absent only for an unpinned Standard implementation.
+    fn input(
+        &self,
+        range: Option<&ReviewRange>,
+        advisor_report: Value,
+        candidate_reports: Value,
+    ) -> Value {
         let assignment = self.assignment;
         json!({"kind":"worker","version":2,"mode":assignment.mode,"purpose":assignment.purpose,"range":range,"plan":assignment.plan,
             "acceptanceCriteria":assignment.acceptance_criteria,"instruction":assignment.instruction,
@@ -722,7 +728,14 @@ pub async fn delegate_worker(
     };
     let verification = assignment.purpose == "verification";
     if workflow == Workflow::Standard && !verification {
-        return launch_worker(database, root, assignment, &draft.text(None, None)?, None);
+        let workflow_input = draft.input(None, Value::Null, Value::Null);
+        return launch_worker(
+            database,
+            root,
+            assignment,
+            &draft.text(None, None)?,
+            Some(&workflow_input),
+        );
     }
     recheck(database, root, owner_token)?;
     let observed = current_range(database_path, &root.task_id).await?;
@@ -731,7 +744,7 @@ pub async fn delegate_worker(
     }
     let range = observed.range;
     if workflow == Workflow::Standard {
-        let workflow_input = draft.input(&range, Value::Null, Value::Null);
+        let workflow_input = draft.input(Some(&range), Value::Null, Value::Null);
         return launch_worker(
             database,
             root,
@@ -747,7 +760,7 @@ pub async fn delegate_worker(
         Some(&range),
         advisor_report.as_deref().map(|text| ("Rater", text)),
     )?;
-    let workflow_input = draft.input(&range, advisor_reference, candidate_reports);
+    let workflow_input = draft.input(Some(&range), advisor_reference, candidate_reports);
     launch_worker(database, root, assignment, &text, Some(&workflow_input))
 }
 
@@ -1177,10 +1190,17 @@ mod tests {
         assert_eq!(result["context"]["configuration"]["visualEvidence"], "off");
     }
 
-    #[test]
-    fn worker_evidence_reads_only_the_admitted_native_turn() {
+    /// A Standard task with its current Root in a fresh database.
+    fn standard_task(
+        label: &str,
+    ) -> (
+        std::path::PathBuf,
+        SuplexDatabase,
+        crate::tasks::repository::TaskRecord,
+        SessionRow,
+    ) {
         let directory =
-            std::env::temp_dir().join(format!("suplex-worker-evidence-{}", uuid::Uuid::new_v4()));
+            std::env::temp_dir().join(format!("suplex-{label}-{}", uuid::Uuid::new_v4()));
         fs::create_dir(&directory).unwrap();
         let database_path = directory.join("suplex.sqlite");
         let mut database = SuplexDatabase::open(&database_path, OpenMode::Migrate).unwrap();
@@ -1202,6 +1222,14 @@ mod tests {
             copied_from_task_id: None, depends_on: vec![], pull_request_dependencies: vec![], workflow: crate::coordination::workflows::Workflow::Standard,
         }, now).unwrap().task;
         let root = root_session_store::reserve_root(&mut database, &task.id, now).unwrap();
+        (database_path, database, task, root)
+    }
+
+    #[test]
+    fn worker_evidence_reads_only_the_admitted_native_turn() {
+        let (database_path, mut database, task, root) = standard_task("worker-evidence");
+        let directory = database_path.parent().unwrap().to_owned();
+        let now = Utc::now();
         let worker = root_session_store::launch_standard_worker(
             &mut database,
             &root,
@@ -1261,5 +1289,42 @@ mod tests {
             .is_err()
         );
         fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[tokio::test]
+    async fn standard_implementation_stores_its_unpinned_assignment() {
+        let (database_path, mut database, task, root) = standard_task("standard-delegation");
+        let identity = RootIdentity {
+            task_id: task.id.clone(),
+            session_id: root.id,
+            generation: root.generation,
+        };
+        let assignment = WorkerAssignment {
+            plan: Some("Add the field".into()),
+            acceptance_criteria: vec!["The field shows".into()],
+            instruction: "Build it".into(),
+            mode: "planned".into(),
+            purpose: "implementation".into(),
+            advisor_turn_id: None,
+            advisor_session_id: None,
+            candidate_turn_ids: None,
+            candidate_session_ids: None,
+        };
+        let result = delegate_worker(
+            &mut database,
+            &database_path,
+            &identity,
+            "unused",
+            &assignment,
+        )
+        .await
+        .unwrap();
+        let input = &result["acceptedAssignment"]["input"];
+        assert_eq!(result["acceptedAssignment"]["kind"], "workflow_input");
+        assert_eq!(input["kind"], "worker");
+        assert_eq!(input["range"], Value::Null);
+        assert_eq!(input["plan"], "Add the field");
+        assert_eq!(input["acceptanceCriteria"], json!(["The field shows"]));
+        fs::remove_dir_all(database_path.parent().unwrap()).unwrap();
     }
 }

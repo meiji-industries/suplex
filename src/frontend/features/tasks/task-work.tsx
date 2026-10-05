@@ -4,12 +4,14 @@ import { z } from "zod";
 import { CircleDashed, MessageSquare, Mic, Square } from "lucide-react";
 import type { Task } from "../../contracts/tasks.js";
 import type { TaskActivityResponse } from "../../contracts/generated/TaskActivityResponse.js";
+import type { TaskWorkerAssignment } from "../../contracts/generated/TaskWorkerAssignment.js";
 import { useTaskDiff, useTaskDiffSummary } from "./lib/task-queries.js";
 import { useTaskChecks } from "./lib/task-checks.js";
 import { Alert, AlertDescription } from "../../components/ui/alert.js";
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "../../components/ui/empty.js";
 import { Spinner } from "../../components/ui/spinner.js";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../../components/ui/tabs.js";
+import { Badge } from "../../components/ui/badge.js";
 import { Markdown } from "../../components/app/markdown.js";
 import { EntityAvatar } from "../../components/app/entity-avatar.js";
 import { RootPlan, TaskTools, useTaskExecution } from "./task-execution.js";
@@ -68,6 +70,19 @@ export function humanMessage(prompt: string): { author: string; text: string; us
   } catch { return null; }
 }
 
+/** The Coordinator's delegation, shown once at the start of each Worker session. */
+function WorkerAssignment({ assignment, worker, profileId }: { assignment: TaskWorkerAssignment; worker: string; profileId: string }) {
+  return <article className="flex min-w-0 gap-3" data-worker-assignment={assignment.purpose}>
+    <EntityAvatar kind="agent" id={profileId} name="Coordinator" size="sm" />
+    <div className="min-w-0 flex-1 space-y-2">
+      <header className="flex flex-wrap items-center gap-2 text-xs"><span className="font-medium">Coordinator</span><span className="text-muted-foreground">Assignment for {worker}</span>{assignment.mode === "direct" ? <Badge variant="secondary">Direct build</Badge> : null}{assignment.purpose === "verification" ? <Badge variant="secondary">Check only</Badge> : null}</header>
+      {assignment.plan ? <section aria-label="Plan"><Markdown source={assignment.plan} /></section> : null}
+      {assignment.acceptanceCriteria.length ? <section aria-label="Acceptance criteria" className="text-xs"><p className="font-medium">Acceptance criteria</p><ol className="list-decimal pl-4">{assignment.acceptanceCriteria.map((criterion, index) => <li key={index}>{criterion}</li>)}</ol></section> : null}
+      <section aria-label="Instructions" className="text-xs"><p className="font-medium">Instructions</p><Markdown source={assignment.instruction} /></section>
+    </div>
+  </article>;
+}
+
 export function TaskWork({ task, activity, onChange }: { task: Task; activity: TaskActivity; onChange: (task: Task) => void }) {
   const [tab, setTab] = useState("chat");
   const { user } = useCompanyContext();
@@ -78,7 +93,7 @@ export function TaskWork({ task, activity, onChange }: { task: Task; activity: T
   const pendingTurn = [...activity.turns].reverse().find(turn => (turn.status === "prompted" || turn.status === "pending_prompt") && !turn.result);
   const pendingSession = pendingTurn ? activity.sessions.find(session => session.id === pendingTurn.sessionId) : undefined;
   const pendingRole = pendingSession?.label ?? "Coordinator";
-  const showConversationPlaceholder = !pendingTurn && !activity.turns.some(turn => resultText(turn.result) || humanMessage(turn.prompt)?.text);
+  const showConversationPlaceholder = !pendingTurn && !activity.turns.some(turn => turn.assignment || resultText(turn.result) || humanMessage(turn.prompt)?.text);
   const conversationHint = task.archivedAt ? "Open the archived task before you send a message." : task.status === "backlog" ? "Start the task to work with Coordinator." : task.status === "queued" ? "You can send a message after Suplex starts the task." : task.status === "waiting_human" ? "Answer the current decision to continue with Coordinator." : task.status === "cancelled" ? "The task is cancelled." : "Coordinator replies will appear here.";
   return <Tabs value={tab} onValueChange={value => setTab(String(value))} data-task-work-tabs>
     <WorkflowPlan key={`workflow-plan-${task.id}`} task={task} activity={activity} />
@@ -86,11 +101,11 @@ export function TaskWork({ task, activity, onChange }: { task: Task; activity: T
     <div className="max-w-full border-b"><TabsList variant="line"><TabsTrigger value="chat">Chat</TabsTrigger><TabsTrigger value="activity">Activity <span className="text-xs text-muted-foreground">{activity.turns.length}</span></TabsTrigger><TabsTrigger value="diffs">Diffs{diffSummary?.available ? <span className="text-xs text-muted-foreground"> ({diffSummary.files})</span> : null}</TabsTrigger><TabsTrigger value="checks">Checks</TabsTrigger><TabsTrigger value="other">Other</TabsTrigger></TabsList></div>
     <TabsContent value="chat"><div className="grid min-w-0 gap-5 pt-3 pl-3" aria-label="Conversation">
       <RootPlan execution={execution} />
-      {activity.turns.filter(turn => resultText(turn.result) || humanMessage(turn.prompt)?.text).map(turn => {
+      {activity.turns.filter(turn => turn.assignment || resultText(turn.result) || humanMessage(turn.prompt)?.text).map(turn => {
         const session = activity.sessions.find(session => session.id === turn.sessionId);
         const role = session?.label ?? "Coordinator";
         const message = humanMessage(turn.prompt);
-        return <div key={turn.id} className="grid min-w-0 gap-5">{message?.text ? <article className="flex min-w-0 gap-3"><EntityAvatar kind="user" id={message.user?.id ?? user?.id ?? "you"} name={message.user?.name ?? user?.displayName ?? "You"} {...(!message.user && user?.avatarSeed ? { seed: user.avatarSeed } : {})} size="sm" /><div className="min-w-0 flex-1 space-y-2"><header className="flex items-center gap-2 text-xs"><span className="font-medium">{message.author}</span><span className="text-muted-foreground">{answerLabels[turn.status]}</span></header><Markdown source={message.text} /></div></article> : null}{resultText(turn.result) ? <article className="flex min-w-0 gap-3"><EntityAvatar kind="agent" id={session?.profileId ?? task.rootProfile.profileId} name={role} size="sm" /><div className="min-w-0 flex-1 space-y-2"><header className="flex items-center gap-2 text-xs"><span className="font-medium">{role}</span><span className="text-muted-foreground">{turnLabel(turn)}</span></header><Markdown source={resultText(turn.result)} /></div></article> : null}</div>;
+        return <div key={turn.id} className="grid min-w-0 gap-5">{turn.assignment ? <WorkerAssignment assignment={turn.assignment} worker={role} profileId={task.rootProfile.profileId} /> : null}{message?.text ? <article className="flex min-w-0 gap-3"><EntityAvatar kind="user" id={message.user?.id ?? user?.id ?? "you"} name={message.user?.name ?? user?.displayName ?? "You"} {...(!message.user && user?.avatarSeed ? { seed: user.avatarSeed } : {})} size="sm" /><div className="min-w-0 flex-1 space-y-2"><header className="flex items-center gap-2 text-xs"><span className="font-medium">{message.author}</span><span className="text-muted-foreground">{answerLabels[turn.status]}</span></header><Markdown source={message.text} /></div></article> : null}{resultText(turn.result) ? <article className="flex min-w-0 gap-3"><EntityAvatar kind="agent" id={session?.profileId ?? task.rootProfile.profileId} name={role} size="sm" /><div className="min-w-0 flex-1 space-y-2"><header className="flex items-center gap-2 text-xs"><span className="font-medium">{role}</span><span className="text-muted-foreground">{turnLabel(turn)}</span></header><Markdown source={resultText(turn.result)} /></div></article> : null}</div>;
       })}
       {showConversationPlaceholder ? <Empty><EmptyHeader><EmptyMedia variant="icon"><MessageSquare aria-hidden="true" /></EmptyMedia><EmptyTitle>No messages yet</EmptyTitle><EmptyDescription>{conversationHint}</EmptyDescription></EmptyHeader></Empty> : null}
       {pendingTurn ? <article className="flex min-w-0 gap-3" aria-busy="true" data-task-turn-pending={pendingTurn.status}><EntityAvatar kind="agent" id={pendingSession?.profileId ?? task.rootProfile.profileId} name={pendingRole} size="sm" /><div className="min-w-0 flex-1"><header className="flex items-center gap-2 text-xs"><span className="font-medium">{pendingRole}</span><Spinner /><span className="text-muted-foreground">{pendingTurn.status === "prompted" ? "Working" : turnLabels.pending_prompt}</span></header></div></article> : null}

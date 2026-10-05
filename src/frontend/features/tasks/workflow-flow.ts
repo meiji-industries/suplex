@@ -57,7 +57,7 @@ const RING = 22; // station halo radius
 // Tuning knobs: travel is a thrust-limited particle; the drawn orb trails it on an underdamped spring.
 const MAX_SPEED = 190, THRUST = 900, BRAKE = 420, RESPONSE = 16;
 const SPRING = 520, DAMPING = 2 * Math.sqrt(SPRING) * 0.55;
-const DWELL = 0.24, REST = 3.6, TAIL = 16, RADIUS = 3.5;
+const DWELL = 0.24, REST = 3.6, TAIL = 16, RADIUS = 3.5, PASSES = 2; // the demo plays PASSES times, then rests
 const ORBIT = 1.1, HOLD = 0.5; // live mode: halo orbit speed (rad/s) while working; where on a route the token waits
 
 type Leg = { points: Point[]; lengths: number[]; edge: FlowEdge | undefined; edgeStart: number; edgeLength: number; hold?: number };
@@ -141,7 +141,7 @@ export function animateFlow(root: SVGGElement, edges: readonly FlowEdge[], cente
   }]));
   const layer = svg(root, "g", {});
   let orbs: Orb[] = [], sparks: Spark[] = [], ripples: Ripple[] = [];
-  let phase: "rest" | "appear" | "travel" | "land" | "live" = live ? "live" : "rest", wave = 0, clock = 0.4 + Math.random() * 1.6;
+  let phase: "rest" | "appear" | "travel" | "land" | "live" = live ? "live" : "rest", wave = 0, clock = 0.4 + Math.random() * 1.6, passes = 0;
 
   const spawn = (node: string, from?: Orb): Orb => {
     const tail = svg(layer, "g", {});
@@ -336,7 +336,7 @@ export function animateFlow(root: SVGGElement, edges: readonly FlowEdge[], cente
         for (const orb of orbs) { orb.body.remove(); orb.tail.remove(); }
         orbs = [];
         phase = "rest";
-        clock = REST;
+        clock = ++passes < PASSES ? REST : Infinity;
       }
     }
     const substeps = Math.ceil(dt * 240);
@@ -404,24 +404,54 @@ export function animateFlow(root: SVGGElement, edges: readonly FlowEdge[], cente
     });
   };
 
-  let frame = 0, last = 0;
+  // True when another frame would draw the same picture: nothing travels, orbits, fades, or settles.
+  const near = (a: Point, b: Point) => Math.abs(a.x - b.x) < 0.1 && Math.abs(a.y - b.y) < 0.1;
+  const still = () => {
+    const position = live?.current;
+    if (position ? position.state === "working" : phase !== "rest") return false;
+    const scale = position?.state === "idle" ? 0.7 : 1;
+    return !sparks.length && !ripples.length
+      && orbs.every(orb => !orb.leg && !orb.queue.length && !orb.fading && !orb.merging && !orb.dying
+        && Math.abs(orb.scale - scale) < 0.002 && Math.abs(orb.pv.x) + Math.abs(orb.pv.y) < 0.5
+        && near(orb.p, orb.target) && orb.trail.every(point => near(point, orb.p)))
+      && [...glows.values()].every(glow => Math.abs(glow.level - (phase === "rest" || !glow.lit ? 0 : 0.14)) < 0.002);
+  };
+
+  // Each frame writes SVG attributes, which lays the drawing out again, so a still picture schedules no frames.
+  // It wakes when the demo's rest ends, or every 250 ms in live mode to pick up a new position or heartbeat.
+  // After its last pass the demo never wakes.
+  let frame = 0, last = 0, sleep: ReturnType<typeof setTimeout> | undefined;
+  const run = (now: number) => {
+    if (still()) {
+      if (!live && clock === Infinity) return;
+      const began = now;
+      sleep = setTimeout(() => {
+        sleep = undefined;
+        update(Math.min(5, (performance.now() - began) / 1000));
+        frame = requestAnimationFrame(tick);
+      }, live ? 250 : Math.max(16, clock * 1000));
+    } else frame = requestAnimationFrame(tick);
+  };
   const tick = (now: number) => {
-    frame = requestAnimationFrame(tick);
     // 30 fps cap: each update dirties the SVG and costs a full-page rendering update.
-    if (last && now - last < 30) return;
+    if (last && now - last < 30) {
+      frame = requestAnimationFrame(tick);
+      return;
+    }
     update(last ? Math.min(0.05, (now - last) / 1000) : 0);
     last = now;
+    run(now);
   };
+  const stop = () => { cancelAnimationFrame(frame); clearTimeout(sleep); sleep = undefined; last = 0; };
   // Runs only while the illustration is on screen; the hidden wide or compact copy stays idle.
   const observer = new IntersectionObserver(([entry]) => {
-    cancelAnimationFrame(frame);
-    last = 0;
+    stop();
     if (entry?.isIntersecting) frame = requestAnimationFrame(tick);
   });
   observer.observe(owner);
   return () => {
     observer.disconnect();
-    cancelAnimationFrame(frame);
+    stop();
     root.replaceChildren();
   };
 }

@@ -93,7 +93,8 @@ contractual data-retention guarantees or client account permissions.
    Basic authentication; without it, Suplex uses a bearer token. Git clone and
    push use your Git transport configuration, separately from these API tokens.
 3. Select the issue tracker independently. Jira needs the Cloud site, project
-   key, and email/token references. GitHub Issues needs its own owner/repository.
+   key, and email/token references. Linear needs the team key and API key
+   environment variable. GitHub Issues needs its own owner/repository.
    None disables issue search for this project. Existing projects without new
    connection settings retain their GitHub issue source behavior.
 4. Add instructions, optional local skill directories, and setup/verification
@@ -126,7 +127,7 @@ issue. The comment does not change issue status, Sprint, or Fix Version.
 Retries use the destination captured when publication began. Later association
 edits do not redirect a partially published comment.
 
-Screenshots use Jira attachments, Bitbucket Downloads, or GitHub CLI media
+Screenshots use Jira or Linear attachments, Bitbucket Downloads, or GitHub CLI media
 attachments. GitHub media requires a CLI that supports `--attach`. Suplex checks
 capability before uploading. Reviewers still need access to the provider's
 private project/repository; a local artifact URL is not an external share link.

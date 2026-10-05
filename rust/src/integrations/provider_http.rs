@@ -22,7 +22,7 @@ pub fn client() -> reqwest::Client {
 
 /// `boundedProviderResponse`: a successful body no larger than `maximum`.
 pub async fn bounded_response(
-    mut response: reqwest::Response,
+    response: reqwest::Response,
     maximum: usize,
 ) -> ProviderResult<Vec<u8>> {
     if !response.status().is_success() {
@@ -30,6 +30,14 @@ pub async fn bounded_response(
             status: response.status().as_u16(),
         }));
     }
+    bounded_body(response, maximum).await
+}
+
+/// Any response body, successful or not, no larger than `maximum`.
+pub async fn bounded_body(
+    mut response: reqwest::Response,
+    maximum: usize,
+) -> ProviderResult<Vec<u8>> {
     if response
         .content_length()
         .is_some_and(|length| length as usize > maximum)

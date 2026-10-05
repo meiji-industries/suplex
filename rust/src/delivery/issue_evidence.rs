@@ -620,12 +620,15 @@ impl Publisher<'_> {
             }
         };
         let mut links = vec![format!("[{phase}: {filename}]({url})")];
-        if connection["kind"] == "bitbucket" && issue["kind"] == "jira" {
+        if connection["kind"] == "bitbucket" && tracker.hosts_evidence_screenshots() {
             self.recheck_now()?;
             let issue_url = tracker
                 .upload(issue, &name, &bytes, mime, before_write)
                 .await?;
-            links.push(format!("[{phase}: {filename} (Jira)]({issue_url})"));
+            links.push(format!(
+                "[{phase}: {filename} ({})]({issue_url})",
+                tracker.evidence_label()
+            ));
         }
         Ok(links)
     }

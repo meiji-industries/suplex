@@ -9,6 +9,12 @@ import { ToolIcon } from "../../components/app/tool-icons.js";
 type ConnectionRow = { id: string; label: string; control: ReactNode };
 
 export const REPOSITORY_HOSTS = [{ kind: "github", label: "GitHub" }, { kind: "bitbucket", label: "Bitbucket Cloud" }] as const;
+const ISSUE_TRACKERS = [
+  { kind: "none", label: "None", icon: null, connection: null },
+  { kind: "github", label: "GitHub Issues", icon: "gh-auth", connection: { kind: "github" as const, repository: "" } },
+  { kind: "jira", label: "Jira Cloud", icon: "jira", connection: { kind: "jira" as const, site: "https://example.atlassian.net", project: "APP", emailEnvironment: "JIRA_EMAIL", tokenEnvironment: "JIRA_TOKEN" } },
+  { kind: "linear", label: "Linear", icon: "linear", connection: { kind: "linear" as const, team: "ENG", tokenEnvironment: "LINEAR_API_KEY" } },
+] as const;
 
 export function withRepositoryHost(value: ProjectIntegration, kind: string): ProjectIntegration {
   return { ...value, repository: kind === "bitbucket" ? { kind: "bitbucket", tokenEnvironment: "BITBUCKET_TOKEN" } : { kind: "github" } };
@@ -27,9 +33,10 @@ export function ProjectConnections({ value, onChange, disabled = false, layout =
       { id: "bitbucket-token", label: "Token environment variable", control: <Input id="bitbucket-token" disabled={disabled} value={repository.tokenEnvironment} onChange={event => onChange({ ...value, repository: { ...repository, tokenEnvironment: event.target.value } })} /> },
       { id: "bitbucket-user", label: "Email environment variable (optional)", control: <Input id="bitbucket-user" disabled={disabled} value={repository.usernameEnvironment ?? ""} onChange={event => onChange({ ...value, repository: { kind: "bitbucket", tokenEnvironment: repository.tokenEnvironment, ...(event.target.value ? { usernameEnvironment: event.target.value } : {}) } })} /> },
     ] : []),
-    { id: "issue-tracker", label: "Issue tracker", control: <Select disabled={disabled} value={tracker?.kind ?? "none"} onValueChange={kind => onChange({ ...value, tracker: kind === "jira" ? { kind: "jira", site: "https://example.atlassian.net", project: "APP", emailEnvironment: "JIRA_EMAIL", tokenEnvironment: "JIRA_TOKEN" } : kind === "github" ? { kind: "github", repository: "" } : null })}><SelectTrigger id="issue-tracker"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="none">None</SelectItem><SelectItem value="github"><ToolIcon tool="gh-auth" />GitHub Issues</SelectItem><SelectItem value="jira"><ToolIcon tool="jira" />Jira Cloud</SelectItem></SelectContent></Select> },
+    { id: "issue-tracker", label: "Issue tracker", control: <Select disabled={disabled} value={tracker?.kind ?? "none"} onValueChange={kind => onChange({ ...value, tracker: ISSUE_TRACKERS.find(option => option.kind === kind)?.connection ?? null })}><SelectTrigger id="issue-tracker"><SelectValue /></SelectTrigger><SelectContent>{ISSUE_TRACKERS.map(option => <SelectItem key={option.kind} value={option.kind}>{option.icon ? <ToolIcon tool={option.icon} /> : null}{option.label}</SelectItem>)}</SelectContent></Select> },
     ...(tracker?.kind === "github" ? [{ id: "issue-repository", label: "Issue repository", control: <Input id="issue-repository" disabled={disabled} placeholder="owner/repository" value={tracker.repository} onChange={event => onChange({ ...value, tracker: { ...tracker, repository: event.target.value } })} /> }] : []),
     ...(tracker?.kind === "jira" ? ([ ["site", "Jira site"], ["project", "Jira project key"], ["emailEnvironment", "Email environment variable"], ["tokenEnvironment", "Token environment variable"] ] as const).map(([key, label]) => ({ id: `jira-${key}`, label, control: <Input id={`jira-${key}`} disabled={disabled} value={tracker[key]} onChange={event => onChange({ ...value, tracker: { ...tracker, [key]: event.target.value } })} /> })) : []),
+    ...(tracker?.kind === "linear" ? ([ ["team", "Linear team key"], ["tokenEnvironment", "API key environment variable"] ] as const).map(([key, label]) => ({ id: `linear-${key}`, label, control: <Input id={`linear-${key}`} disabled={disabled} value={tracker[key]} onChange={event => onChange({ ...value, tracker: { ...tracker, [key]: event.target.value } })} /> })) : []),
   ];
   if (layout === "settings") return <SettingsSection title="Connections">{rows.map((row) => <SettingRow key={row.id} label={row.label} htmlFor={row.id}><div className="w-full sm:w-80">{row.control}</div></SettingRow>)}</SettingsSection>;
   return <FieldSet disabled={disabled}>{rows.map((row) => <Field key={row.id}><FieldLabel htmlFor={row.id}>{row.label}</FieldLabel>{row.control}</Field>)}</FieldSet>;

@@ -214,6 +214,13 @@ pub enum IssueAssociation {
         title: String,
         url: String,
     },
+    Linear {
+        team: String,
+        id: String,
+        key: String,
+        title: String,
+        url: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -441,6 +448,15 @@ fn jira_key(value: &str, _: &()) -> garde::Result {
     )
 }
 
+fn linear_team(value: &str, _: &()) -> garde::Result {
+    let mut chars = value.chars();
+    rule(
+        chars.next().is_some_and(|c| c.is_ascii_uppercase())
+            && chars.all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_'),
+        "invalid_format",
+    )
+}
+
 fn parsed_url(value: Option<&Value>) -> ContractResult<url::Url> {
     url::Url::parse(value.and_then(Value::as_str).unwrap_or_default())
         .map_err(|_| ContractFailure::Unhandled)
@@ -474,6 +490,12 @@ pub(crate) fn issue_association(input: Option<&Value>) -> ContractResult<Value> 
                 .req("key", formatted(0, MAX, jira_key))
                 .req("title", text(0, MAX))
                 .req("url", formatted(0, MAX, url)),
+            "linear" => fields
+                .req("team", formatted(0, MAX, linear_team))
+                .req("id", text(0, MAX))
+                .req("key", text(0, MAX))
+                .req("title", text(0, MAX))
+                .req("url", formatted(0, MAX, url)),
             _ => return None,
         };
         fields.strict_keys();
@@ -499,7 +521,7 @@ fn refine_issue(fields: &mut Fields, kind: &Value) -> ContractResult<()> {
             js_number(number)
         );
         url.as_str().eq_ignore_ascii_case(&expected)
-    } else {
+    } else if kind == "jira" {
         let site = parsed_url(fields.raw("site"))?;
         let expected = format!(
             "{}/browse/{}",
@@ -519,6 +541,25 @@ fn refine_issue(fields: &mut Fields, kind: &Value) -> ContractResult<()> {
             fields.fail("custom", ".site");
         }
         url.as_str() == expected
+    } else {
+        let team = raw("team");
+        let key = raw("key");
+        let valid_key = regex::Regex::new(&format!(r"^{}-[0-9]+$", regex::escape(team)))
+            .is_ok_and(|pattern| pattern.is_match(key));
+        let valid_id = uuid::Uuid::parse_str(raw("id")).is_ok();
+        let segments = url
+            .path_segments()
+            .map(Iterator::collect::<Vec<_>>)
+            .unwrap_or_default();
+        valid_id
+            && valid_key
+            && url.scheme() == "https"
+            && url.host_str() == Some("linear.app")
+            && (3..=4).contains(&segments.len())
+            && segments[1] == "issue"
+            && segments[2] == key
+            && url.query().is_none()
+            && url.fragment().is_none()
     };
     if !matches || !url.username().is_empty() || url.password().is_some() {
         fields.fail("custom", ".url");

@@ -49,6 +49,11 @@ pub enum TrackerConnection {
         #[serde(rename = "tokenEnvironment")]
         token_environment: String,
     },
+    Linear {
+        team: String,
+        #[serde(rename = "tokenEnvironment")]
+        token_environment: String,
+    },
 }
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[serde(deny_unknown_fields)]
@@ -330,6 +335,10 @@ fn jira_project(value: &str, _: &()) -> garde::Result {
     )
 }
 
+fn linear_team(value: &str, _: &()) -> garde::Result {
+    jira_project(value, &())
+}
+
 /// A Jira Cloud site; `new URL` in the refinement throws on a malformed one.
 fn jira_site(input: Option<&Value>) -> ContractResult<Value> {
     let site = text(0, MAX)(input)?;
@@ -391,6 +400,10 @@ fn tracker(input: Option<&Value>) -> ContractResult<Value> {
                 .req("site", jira_site)
                 .req("project", formatted(0, MAX, jira_project))
                 .req("emailEnvironment", reference)
+                .req("tokenEnvironment", reference)
+                .strict(),
+            "linear" => fields
+                .req("team", formatted(0, MAX, linear_team))
                 .req("tokenEnvironment", reference)
                 .strict(),
             _ => return None,

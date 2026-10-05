@@ -5,6 +5,7 @@ use chrono::Utc;
 use serde_json::{Value, json};
 
 use crate::{
+    integrations::issue_tracker::credential_environment_keys,
     platform::database::{DatabaseResult, OpenMode, SuplexDatabase},
     runtimes::{task_harness::ReaderSession, task_harness_registry},
     tasks::control::{SessionRow, TaskProfile, TurnRow, TurnStatus},
@@ -360,11 +361,10 @@ pub(crate) fn project_launch_scope(
         add_key(&repository["tokenEnvironment"]);
         add_key(&repository["usernameEnvironment"]);
     }
-    if let Some(tracker) = integration.and_then(|value| value.get("tracker"))
-        && tracker["kind"] == "jira"
-    {
-        add_key(&tracker["emailEnvironment"]);
-        add_key(&tracker["tokenEnvironment"]);
+    if let Some(tracker) = integration.and_then(|value| value.get("tracker")) {
+        for key in credential_environment_keys(tracker) {
+            add_key(&Value::String(key));
+        }
     }
     if let Some(servers) = execution.and_then(|value| value["mcp"].as_array()) {
         for server in servers {

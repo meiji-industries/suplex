@@ -9,11 +9,11 @@ export function showRecentTasks(path: string): boolean {
   return !/^\/(?:admin(?:\/|$)|profile(?:\/|$)|companies\/[^/]+\/settings(?:\/|$))/.test(path);
 }
 
-type QueuedTask = Pick<TaskListTask, "id" | "createdAt" | "dependsOn">;
+type QueuedTask = Pick<TaskListTask, "id" | "statusChangedAt" | "queuePriority" | "dependsOn">;
 
 /** Orders queued tasks by run order: each root, then its dependent chain depth-first, after all queued blockers. */
 export function queueOrder<T extends QueuedTask>(tasks: readonly T[]): T[] {
-  const sorted = [...tasks].sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
+  const sorted = [...tasks].sort((a, b) => b.queuePriority - a.queuePriority || a.statusChangedAt.localeCompare(b.statusChangedAt) || a.id.localeCompare(b.id));
   const byId = new Map(sorted.map(task => [task.id, task]));
   const pending = new Map<string, number>();
   const children = new Map<string, T[]>();

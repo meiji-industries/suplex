@@ -273,6 +273,7 @@
                           "create_queued_task",
                           "update_task",
                           "start_task",
+                          "move_to_front",
                           "disarm_task",
                           "cancel_task",
                           "archive_task",
@@ -1336,6 +1337,10 @@
                             "delivered"
                           ]
                         },
+                        "queuePriority": {
+                          "type": "integer",
+                          "minimum": 0
+                        },
                         "queue": {
                           "type": "object",
                           "properties": {
@@ -1520,6 +1525,7 @@
                             "type": "string",
                             "enum": [
                               "start_task",
+                              "move_to_front",
                               "disarm_task",
                               "cancel_task",
                               "archive_task",
@@ -2018,6 +2024,7 @@
                         "title",
                         "source",
                         "status",
+                        "queuePriority",
                         "queue",
                         "dependsOn",
                         "blockedBy",
@@ -2307,6 +2314,10 @@
                         "delivered"
                       ]
                     },
+                    "queuePriority": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
                     "queue": {
                       "type": "object",
                       "properties": {
@@ -2491,6 +2502,7 @@
                         "type": "string",
                         "enum": [
                           "start_task",
+                          "move_to_front",
                           "disarm_task",
                           "cancel_task",
                           "archive_task",
@@ -2989,6 +3001,7 @@
                     "title",
                     "source",
                     "status",
+                    "queuePriority",
                     "queue",
                     "dependsOn",
                     "blockedBy",
@@ -4308,6 +4321,10 @@
                         "delivered"
                       ]
                     },
+                    "queuePriority": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
                     "queue": {
                       "type": "object",
                       "properties": {
@@ -4492,6 +4509,7 @@
                         "type": "string",
                         "enum": [
                           "start_task",
+                          "move_to_front",
                           "disarm_task",
                           "cancel_task",
                           "archive_task",
@@ -4990,6 +5008,7 @@
                     "title",
                     "source",
                     "status",
+                    "queuePriority",
                     "queue",
                     "dependsOn",
                     "blockedBy",
@@ -5548,6 +5567,10 @@
                         "delivered"
                       ]
                     },
+                    "queuePriority": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
                     "queue": {
                       "type": "object",
                       "properties": {
@@ -5732,6 +5755,7 @@
                         "type": "string",
                         "enum": [
                           "start_task",
+                          "move_to_front",
                           "disarm_task",
                           "cancel_task",
                           "archive_task",
@@ -5937,6 +5961,7 @@
                     "title",
                     "source",
                     "status",
+                    "queuePriority",
                     "queue",
                     "dependsOn",
                     "blockedBy",
@@ -7066,6 +7091,10 @@
                             "delivered"
                           ]
                         },
+                        "queuePriority": {
+                          "type": "integer",
+                          "minimum": 0
+                        },
                         "queue": {
                           "type": "object",
                           "properties": {
@@ -7250,6 +7279,7 @@
                             "type": "string",
                             "enum": [
                               "start_task",
+                              "move_to_front",
                               "disarm_task",
                               "cancel_task",
                               "archive_task",
@@ -7510,6 +7540,7 @@
                         "title",
                         "source",
                         "status",
+                        "queuePriority",
                         "queue",
                         "dependsOn",
                         "blockedBy",
@@ -7984,7 +8015,7 @@
       "post": {
         "operationId": "commandAgentApiTask",
         "summary": "Apply an authorized task lifecycle command",
-        "description": "Only the paired agent that created the task can send a command. Every command requires the current task revision and an idempotency key. A change to only updatedAt or delivery does not make a revision stale. answer_human_question also needs questionId and exactly one of optionId or answer. It fails with answer_grant_required until an administrator grants the agent permission, with question_stale for an old questionId, with task_not_waiting when the task has no question, and with human_decision_required for a task limit decision or command cleanup. start_task queues a manual backlog task: it starts now when every prerequisite is complete and never bypasses one. disarm_task returns a queued task to the manual backlog. taskCommands lists exactly the lifecycle commands accepted by suplex_command_task. autonomousCommands also includes task creation and, when enabled, runtime delivery commands. A paired agent can answer a task's Coordinator question with answer_human_question only after an administrator lets it answer on their behalf. Task limit decisions and command cleanup confirmations stay with a person. The runtime API exposes delivery and merge commands only when capabilities reports them. Suplex can perform delivery for a task's configured target, including a merge after review, without an agent command.",
+        "description": "A paired agent can command tasks in its granted projects, including GitHub label trigger tasks. Every command requires the current task revision and an idempotency key. A change to only updatedAt or delivery does not make a revision stale. answer_human_question also needs questionId and exactly one of optionId or answer. It fails with answer_grant_required until an administrator grants the agent permission, with question_stale for an old questionId, with task_not_waiting when the task has no question, and with human_decision_required for a task limit decision or command cleanup. start_task queues a manual backlog task: it starts now when every prerequisite is complete and never bypasses one. move_to_front puts a queued task ahead of other queued tasks without bypassing prerequisites or concurrency limits. Each later promotion takes the front position. disarm_task returns a queued task to the manual backlog. taskCommands lists exactly the lifecycle commands accepted by suplex_command_task. autonomousCommands also includes task creation and, when enabled, runtime delivery commands. A paired agent can answer a task's Coordinator question with answer_human_question only after an administrator lets it answer on their behalf. Task limit decisions and command cleanup confirmations stay with a person. The runtime API exposes delivery and merge commands only when capabilities reports them. Suplex can perform delivery for a task's configured target, including a merge after review, without an agent command.",
         "security": [
           {
             "AgentApiBearer": []
@@ -8013,6 +8044,7 @@
                     "type": "string",
                     "enum": [
                       "start_task",
+                      "move_to_front",
                       "disarm_task",
                       "cancel_task",
                       "archive_task",
@@ -8189,6 +8221,10 @@
                         "cancelled",
                         "delivered"
                       ]
+                    },
+                    "queuePriority": {
+                      "type": "integer",
+                      "minimum": 0
                     },
                     "queue": {
                       "type": "object",
@@ -8374,6 +8410,7 @@
                         "type": "string",
                         "enum": [
                           "start_task",
+                          "move_to_front",
                           "disarm_task",
                           "cancel_task",
                           "archive_task",
@@ -8634,6 +8671,7 @@
                     "title",
                     "source",
                     "status",
+                    "queuePriority",
                     "queue",
                     "dependsOn",
                     "blockedBy",

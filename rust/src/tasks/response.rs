@@ -33,6 +33,7 @@ pub struct TaskResponse {
     pub(super) title: String,
     description: String,
     pub(super) status: TaskStatus,
+    pub(super) queue_priority: i64,
     pub(super) delivery_target: DeliveryTarget,
     root_profile: TaskProfile,
     worker_profile: TaskProfile,
@@ -67,6 +68,7 @@ pub struct TaskListItem {
     issue_key: Option<String>,
     title: String,
     status: TaskStatus,
+    queue_priority: i64,
     configuration: TaskListConfiguration,
     pull_request: Option<PullRequestReference>,
     human_question: Option<TaskListQuestion>,
@@ -107,6 +109,7 @@ impl From<TaskResponse> for TaskListItem {
             issue_key: task.issue_key,
             title: task.title,
             status: task.status,
+            queue_priority: task.queue_priority,
             configuration: TaskListConfiguration {
                 repository: task.configuration.repository,
                 branch: task.configuration.branch,
@@ -502,6 +505,7 @@ pub(crate) fn list_item_from_row(row: &Row<'_>) -> DatabaseResult<TaskListItem> 
         issue_key: issue_key(row)?,
         title: row.get("title")?,
         status: row.get("status")?,
+        queue_priority: row.get("queue_priority")?,
         configuration: TaskListConfiguration {
             repository: row.get("repository")?,
             branch: row.get("branch")?,
@@ -533,6 +537,7 @@ pub(crate) fn from_row(row: &Row<'_>) -> DatabaseResult<TaskResponse> {
         title: row.get("title")?,
         description: row.get("description")?,
         status,
+        queue_priority: row.get("queue_priority")?,
         delivery_target: row.get("delivery_target")?,
         root_profile: typed_column(row, "root_profile_json")?,
         worker_profile: typed_column(row, "worker_profile_json")?,
@@ -928,6 +933,7 @@ mod fixture_tests {
             created_at: timestamp.into(),
             updated_at: timestamp.into(),
             status_changed_at: timestamp.into(),
+            queue_priority: 0,
             archived_at: None,
         };
         let expected: serde_json::Value =

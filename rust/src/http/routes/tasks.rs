@@ -84,6 +84,10 @@ pub fn router() -> Router<AppState> {
             axum::routing::post(force_start_pending),
         )
         .route(
+            "/api/tasks/{task_id}/move-to-front",
+            axum::routing::post(move_to_front),
+        )
+        .route(
             "/api/tasks/{task_id}/cancel",
             axum::routing::post(cancel_pending),
         )
@@ -440,6 +444,16 @@ async fn force_start_pending(
     task_command(&state, &headers, "POST", &id, |database, user_id| {
         crate::tasks::authorize_task(database, user_id, &id)?;
         commands::force_start_user_task(database, user_id, &id, Utc::now(), waker(&state))
+    })
+}
+
+async fn move_to_front(
+    State(state): State<AppState>,
+    ValidPath(TaskIdParams { task_id: id }): TaskPath,
+    headers: HeaderMap,
+) -> Response {
+    task_command(&state, &headers, "POST", &id, |database, user_id| {
+        commands::move_user_task_to_front(database, user_id, &id, Utc::now())
     })
 }
 

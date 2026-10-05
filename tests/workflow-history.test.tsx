@@ -14,7 +14,7 @@ const task = {
   id: "task-1", companyId: "company-1", projectId: "project-1", issue: null, issueKey: null, title: "Review the task", description: "", status: "active", deliveryTarget: "pull_request_draft",
   rootProfile: profile, workerProfile: profile, workflow: "independent_review", advisorProfiles: {}, workflowState: { version: 1, reviews: [], acceptedDelivery: null, deliveryWait: null, completion: null },
   configuration: { repository: "meiji-industries/suplex", repositoryPath: "/repo", worktreeRoot: "/worktrees", branch: "review-history", baseBranch: "main", baselineSha: "a".repeat(40), startingSha: "a".repeat(40), setupCommand: "", verificationCommand: "", runProjectTests: true, visualEvidence: "off", source: null, capturedAt: recordedAt },
-  worktree: null, pullRequest: null, humanQuestion: null, blockedBy: [], queue: { projectConcurrencyLimited: false, planConcurrencyLimited: false, waitingOn: [] }, limits: { budgetUsd: 15, maxTurns: 40, admittedTurns: 0 }, wakeAt: null, images: [], artifacts: [], dependsOn: [], createdAt: recordedAt, updatedAt: recordedAt, statusChangedAt: recordedAt, archivedAt: null,
+  worktree: null, pullRequest: null, humanQuestion: null, blockedBy: [], queue: { projectConcurrencyLimited: false, planConcurrencyLimited: false, waitingOn: [] }, limits: { budgetUsd: 15, maxTurns: 40, admittedTurns: 0 }, wakeAt: null, images: [], artifacts: [], dependsOn: [], createdAt: recordedAt, updatedAt: recordedAt, statusChangedAt: recordedAt, queuePriority: 0, archivedAt: null,
 } satisfies Task;
 const review = {
   sessionId: "reviewer", turnId: "review-1", role: "reviewer",

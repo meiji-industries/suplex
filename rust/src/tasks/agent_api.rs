@@ -91,7 +91,7 @@ fn hmac(key: &str, message: &str) -> String {
     URL_SAFE_NO_PAD.encode(outer)
 }
 
-pub const TASK_COMMANDS: [&str; 9] = crate::http::contracts::typed::agent_api::TASK_COMMANDS;
+pub const TASK_COMMANDS: [&str; 10] = crate::http::contracts::typed::agent_api::TASK_COMMANDS;
 /// ponytail: one page of rows feeds upstream dependency lookup; page it if an agent ever owns more.
 const UPSTREAM_POOL: usize = 200;
 
@@ -213,7 +213,7 @@ fn require_owned(
     require_readable(database, principal, task_id)
 }
 
-/// The live archive authority an agent holds over a task it created.
+/// The live archive authority an agent holds over a task in a granted project.
 fn agent_authority(
     principal: &Principal,
 ) -> impl Fn(&SuplexDatabase, &repository::TaskRecord) -> DatabaseResult<()> + Sync + '_ {
@@ -249,6 +249,7 @@ fn permitted_commands(task: &response::TaskResponse, principal: &Principal) -> V
                 "duplicate_task",
             ],
             TaskStatus::Queued => vec![
+                "move_to_front",
                 "disarm_task",
                 "cancel_task",
                 "archive_task",
@@ -378,6 +379,7 @@ struct AgentTaskProjection<'a> {
     title: &'a str,
     source: &'a Option<task_contracts::TaskSource>,
     status: &'a str,
+    queue_priority: i64,
     queue: &'a response::TaskQueue,
     depends_on: &'a [String],
     blocked_by: Vec<Value>,
@@ -483,6 +485,7 @@ fn projection_of(
         title: &task.title,
         source,
         status: status.as_str(),
+        queue_priority: task.queue_priority,
         queue: &task.queue,
         depends_on: &task.depends_on,
         blocked_by: task
@@ -867,7 +870,7 @@ fn list_page(
 
 fn summary(task: &Value) -> Value {
     let mut fields = Map::new();
-    for name in ["id", "title", "status", "archived"] {
+    for name in ["id", "title", "status", "queuePriority", "archived"] {
         fields.insert(name.into(), task[name].clone());
     }
     if !task["workflow"]["name"].is_null() {
@@ -2364,6 +2367,7 @@ impl Drop for InFlight {
 fn command_audit(command: &str) -> &'static str {
     match command {
         "start_task" => "task_started",
+        "move_to_front" => "task_moved_to_front",
         "disarm_task" => "task_disarmed",
         "cancel_task" => "task_cancelled",
         "archive_task" => "task_archived",
@@ -2628,6 +2632,15 @@ fn apply(
         }
         "disarm_task" => {
             repository::disarm(database, task_id, now)?;
+        }
+        "move_to_front" => {
+            if !repository::move_to_front(database, task_id, now)? {
+                return Err(fail(
+                    "Only a queued task can move to the front",
+                    409,
+                    "illegal_command",
+                ));
+            }
         }
         "cancel_task" => {
             root_session_store::cancel_task(database, task_id, now)?;

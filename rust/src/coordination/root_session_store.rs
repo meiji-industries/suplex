@@ -1569,10 +1569,10 @@ pub fn admit_queued(
     Ok(admitted)
 }
 
-/// TypeScript `readyQueuedTaskIds` without a prerequisite filter, oldest queued first.
+/// Ready queued tasks, promoted tasks first, then oldest queued first.
 fn ready_queued_task_ids(database: &SuplexDatabase) -> DatabaseResult<Vec<String>> {
     let mut statement = database.connection().prepare(
-        "SELECT t.id FROM suplex_tasks t JOIN suplex_task_controls c ON c.task_id = t.id WHERE c.status = 'queued' AND t.archived_at IS NULL ORDER BY c.status_changed_at, t.id",
+        "SELECT t.id FROM suplex_tasks t JOIN suplex_task_controls c ON c.task_id = t.id WHERE c.status = 'queued' AND t.archived_at IS NULL ORDER BY c.queue_priority DESC, c.status_changed_at, t.id",
     )?;
     let ids = statement
         .query_map([], |row| row.get::<_, String>(0))?

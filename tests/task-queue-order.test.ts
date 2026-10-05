@@ -1,7 +1,7 @@
 import { expect, test } from "vitest";
 import { queueOrder } from "../src/frontend/features/tasks/lib/task-list.js";
 
-const task = (id: string, createdAt: number, dependsOn: string[] = []) => ({ id, createdAt: new Date(Date.UTC(2026, 0, 1, 0, createdAt)).toISOString(), dependsOn });
+const task = (id: string, createdAt: number, dependsOn: string[] = [], queuePriority = 0) => ({ id, statusChangedAt: new Date(Date.UTC(2026, 0, 1, 0, createdAt)).toISOString(), queuePriority, dependsOn });
 const ids = (tasks: ReturnType<typeof task>[]) => queueOrder(tasks).map(value => value.id);
 
 test("queue order puts a chain after its root when the server lists it in reverse", () => {
@@ -22,4 +22,8 @@ test("queue order treats a task blocked only outside the column as a root", () =
 
 test("queue order keeps every task exactly once in a cycle", () => {
   expect(ids([task("b", 2, ["a"]), task("a", 1, ["b"]), task("d", 4, ["c"]), task("c", 3, ["c"]), task("e", 0)])).toEqual(["e", "a", "b", "c", "d"]);
+});
+
+test("promoted tasks precede FIFO tasks while prerequisites stay first", () => {
+  expect(ids([task("first", 1), task("promoted", 3, [], 1), task("blocked", 4, ["first"], 2)])).toEqual(["promoted", "first", "blocked"]);
 });

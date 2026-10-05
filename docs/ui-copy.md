@@ -22,7 +22,7 @@
 
 `Sign in` names the host session. `Log in`, `Log out`, and `Sign up` name the Suplex account.
 
-Approved imperative verbs: Accept, Add, Answer, Approve, Cancel, Check, Continue, Copy, Create, Delete, Describe, Discard, Keep, Log in, Log out, Open, Publish, Recreate, Reject, Repair, Report, Request, Resolve, Restart, Resume, Retry, Review, Revise, Save, Select, Send, Sign in, Sign up, Start, Submit, Write.
+Approved imperative verbs: Accept, Add, Answer, Approve, Cancel, Check, Continue, Copy, Create, Delete, Describe, Discard, Keep, Log in, Log out, Move, Open, Publish, Recreate, Reject, Repair, Report, Request, Resolve, Restart, Resume, Retry, Review, Revise, Save, Select, Send, Sign in, Sign up, Start, Submit, Write.
 
 ## Glossary
 

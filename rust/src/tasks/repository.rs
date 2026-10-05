@@ -251,6 +251,18 @@ pub(crate) fn admit_queued(
     )? == 1)
 }
 
+/// Put one queued task ahead of the other queued tasks without changing its status.
+pub fn move_to_front(
+    database: &mut SuplexDatabase,
+    task_id: &str,
+    now: DateTime<Utc>,
+) -> DatabaseResult<bool> {
+    Ok(database.connection().execute(
+        "UPDATE suplex_task_controls SET queue_priority = (SELECT COALESCE(MAX(queue_priority), 0) + 1 FROM suplex_task_controls WHERE status = 'queued'), updated_at = ?2 WHERE task_id = ?1 AND status = 'queued' AND EXISTS (SELECT 1 FROM suplex_tasks WHERE id = ?1 AND archived_at IS NULL)",
+        params![task_id, rfc3339_millis(now)],
+    )? == 1)
+}
+
 /// Persist the task, control, prerequisite edges, and audit as one source-owned intent.
 pub fn create(
     database: &mut SuplexDatabase,
@@ -510,7 +522,7 @@ pub fn disarm(
             Some("backlog") => Ok(Some(false)),
             Some("queued") => {
                 database.connection().execute(
-                    "UPDATE suplex_task_controls SET status = 'backlog', updated_at = ?1 WHERE task_id = ?2 AND status = 'queued'",
+                    "UPDATE suplex_task_controls SET status = 'backlog', queue_priority = 0, updated_at = ?1 WHERE task_id = ?2 AND status = 'queued'",
                     params![rfc3339_millis(now), task_id],
                 )?;
                 Ok(Some(true))
@@ -598,7 +610,7 @@ macro_rules! task_dependencies_sql {
 }
 
 const TASK_RESPONSE_SELECT: &str = concat!(
-    r#"SELECT t.id AS id, t.company_id AS company_id, t.project_id AS project_id, t.issue_json, t.issue_number, cpy.issue_code, t.title, t.description, c.status AS status, c.delivery_target AS delivery_target, c.root_profile_json, c.worker_profile_json, c.workflow, c.advisor_profiles_json, c.workflow_state_json, t.configuration_json, c.worktree_json, c.pull_request_json, c.human_question, c.human_question_id, c.limit_pause_json, c.human_question_options_json, c.recovery_turn_id, c.wake_at, t.created_at, CASE WHEN julianday(t.updated_at) >= julianday(COALESCE(c.updated_at, t.updated_at)) THEN t.updated_at ELSE c.updated_at END AS updated_at, c.status_changed_at, t.archived_at, c.budget_usd, c.max_turns,
+    r#"SELECT t.id AS id, t.company_id AS company_id, t.project_id AS project_id, t.issue_json, t.issue_number, cpy.issue_code, t.title, t.description, c.status AS status, c.queue_priority, c.delivery_target AS delivery_target, c.root_profile_json, c.worker_profile_json, c.workflow, c.advisor_profiles_json, c.workflow_state_json, t.configuration_json, c.worktree_json, c.pull_request_json, c.human_question, c.human_question_id, c.limit_pause_json, c.human_question_options_json, c.recovery_turn_id, c.wake_at, t.created_at, CASE WHEN julianday(t.updated_at) >= julianday(COALESCE(c.updated_at, t.updated_at)) THEN t.updated_at ELSE c.updated_at END AS updated_at, c.status_changed_at, t.archived_at, c.budget_usd, c.max_turns,
     EXISTS(SELECT 1 FROM suplex_projects p WHERE p.id = t.project_id AND p.task_concurrency IS NOT NULL AND p.task_concurrency <= (SELECT COUNT(*) FROM suplex_tasks s JOIN suplex_task_controls sc ON sc.task_id = s.id WHERE s.project_id = t.project_id AND s.archived_at IS NULL AND sc.status IN ('active', 'waiting_human'))) AS project_concurrency_limited,
     "#,
     crate::running_limited_sql!(),
@@ -632,7 +644,7 @@ pub fn task_response(
 /// Only the columns of `TaskListItem`. The full select spends most of its time
 /// on columns a list drops.
 const TASK_LIST_SELECT: &str = concat!(
-    r#"SELECT t.id AS id, t.company_id AS company_id, t.project_id AS project_id, t.issue_number, cpy.issue_code, t.title, c.status AS status, json_extract(t.configuration_json, '$.repository') AS repository, json_extract(t.configuration_json, '$.branch') AS branch, c.pull_request_json, CASE WHEN c.human_question_id IS NOT NULL THEN c.human_question END AS question_text, t.created_at, CASE WHEN julianday(t.updated_at) >= julianday(COALESCE(c.updated_at, t.updated_at)) THEN t.updated_at ELSE c.updated_at END AS updated_at, c.status_changed_at, t.archived_at,
+    r#"SELECT t.id AS id, t.company_id AS company_id, t.project_id AS project_id, t.issue_number, cpy.issue_code, t.title, c.status AS status, c.queue_priority, json_extract(t.configuration_json, '$.repository') AS repository, json_extract(t.configuration_json, '$.branch') AS branch, c.pull_request_json, CASE WHEN c.human_question_id IS NOT NULL THEN c.human_question END AS question_text, t.created_at, CASE WHEN julianday(t.updated_at) >= julianday(COALESCE(c.updated_at, t.updated_at)) THEN t.updated_at ELSE c.updated_at END AS updated_at, c.status_changed_at, t.archived_at,
     "#,
     task_dependencies_sql!(),
     r#"

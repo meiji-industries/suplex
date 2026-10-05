@@ -35,13 +35,14 @@ Both the HTTP and stdio transports expose the same tools:
 | `suplex_create_task` | Create a backlog or queued task with an idempotency key. |
 | `suplex_update_task` | Change the details and Advisor profiles of a backlog or queued task with the current revision. |
 | `suplex_set_task_dependencies` | Replace the prerequisites of a task. A prerequisite task with a pull request delivery target is complete when its pull request merges. |
-| `suplex_command_task` | Apply a lifecycle command with a task revision. A change to only `updatedAt` or `delivery` does not make the revision stale. |
+| `suplex_command_task` | Apply a lifecycle command with a task revision, including `move_to_front` for queued tasks. A change to only `updatedAt` or `delivery` does not make the revision stale. |
 
 Suplex re-reads the agent, administrator authority, company access, and project grants for each access or refresh. Revocation takes effect without restarting Suplex. Access tokens apply only to `/mcp`.
 
 `suplex_update_task` changes a backlog or queued task directly. A queued task stays queued with the same prerequisites. To hold a queued task while it changes, send `disarm_task` with `suplex_command_task`, update the task, then send `start_task` to queue it again. An empty `advisorProfileIds` object returns each Advisor role to its default. An active or delivered task accepts only a later `deliveryTarget`: the Coordinator continues toward the new target, and a delivered task reopens. Other task states return `illegal_command`.
 
-Task reads cover every task in the approved projects. Lifecycle commands and dependency changes remain limited to tasks that the connected agent created.
+Task reads and lifecycle commands cover tasks in the agent's granted projects, including tasks created by GitHub label triggers.
+`move_to_front` puts a queued task ahead of other queued tasks without bypassing prerequisites or concurrency limits. Each later promotion takes the front position.
 
 MCP exposes lifecycle task commands only. It does not expose runtime delivery or merge commands. A paired agent can answer a task's Coordinator question with `answer_human_question` in `suplex_command_task` only after an administrator lets it answer on their behalf. Send `questionId` from `suplex_get_task` `question.id` and exactly one of `optionId` or `answer`. Task limit decisions and command cleanup confirmations stay with a person. See [the runtime API guide](agent-api.md#answering-a-coordinator-question). Suplex can perform a task's configured delivery, including a merge after review, without an agent command.
 

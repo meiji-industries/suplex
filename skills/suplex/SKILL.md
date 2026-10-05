@@ -200,7 +200,7 @@ every prerequisite.
 task = client.set_dependencies(task_id, [first_id, second_id])
 ```
 
-Each prerequisite must be a task this agent created.
+Each prerequisite must be a task in a granted project.
 Suplex rejects a self-reference or a cycle with `422 task_unavailable`, and an
 unavailable task with `404`; the current set stays unchanged. Unknown fields,
 such as `blockedByTaskId`, fail with `400 request_invalid`.
@@ -215,6 +215,22 @@ prerequisite is complete. It has no sessions or turns until then. Queue it at
 creation with `"queue": true`, or send `start_task` to a manual backlog task.
 `start_task` starts the task now only when every prerequisite is complete; it
 never bypasses one. `disarm_task` returns a queued task to the manual backlog.
+
+To prioritize a queued task in a granted project, read its current `revision`
+and send `move_to_front` through `suplex_command_task` or `client.command_task`.
+When the person asks you to prioritize work, inspect the queued tasks and
+promote those that match their direction. Each later call
+takes the front position. Suplex still waits for prerequisites and a project
+or plan slot. The task stays queued; `queuePriority` in task reads shows its
+priority. The Board and Tasks list show the resulting order. This also works
+for tasks created by a GitHub label trigger.
+To set a specific front order, promote the selected tasks in reverse order.
+
+```python
+task = client.get_task(task_id)
+if "move_to_front" in task["permittedCommands"]:
+    client.command_task(task_id, "move_to_front", task["revision"])
+```
 
 Every read reports `queue`: `startIntent` (`manual` or `queued`), `state`
 (`backlog`, `queued`, `running`, `needs_attention`, `delivered`, `cancelled`),
@@ -244,7 +260,7 @@ doubles its delay up to 60 seconds. Over MCP, pass `knownRevision` to
 `POST /api/agent/tasks/{taskId}/commands` with `command`, the task's current
 `revision`, an `idempotencyKey`, and `note` only for `send_task_note`.
 
-Commands: `start_task`, `disarm_task`, `cancel_task`, `archive_task`, `unarchive_task`,
+Commands: `start_task`, `move_to_front`, `disarm_task`, `cancel_task`, `archive_task`, `unarchive_task`,
 `duplicate_task`, `send_task_note`, `recheck_delivery_wait`. Send only what the
 task's `permittedCommands` lists.
 

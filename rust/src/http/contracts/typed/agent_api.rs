@@ -15,8 +15,9 @@ use super::{
     text, trimmed,
 };
 
-pub const TASK_COMMANDS: [&str; 9] = [
+pub const TASK_COMMANDS: [&str; 10] = [
     "start_task",
+    "move_to_front",
     "disarm_task",
     "cancel_task",
     "archive_task",

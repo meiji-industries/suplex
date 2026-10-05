@@ -48,6 +48,11 @@ an explicit start. Releasing a prerequisite does not itself copy another
 worktree's files, select commits, or specify how the dependent change should
 build on earlier work. Capture that intent in the task and source selection.
 
+The scheduler takes promoted queued tasks first, then other queued tasks by
+queue time. Moving a task to the front changes its order in the Board and Tasks
+list, but still waits for its prerequisites and a project or plan slot. Each
+later promotion takes the front position. Already active tasks continue.
+
 ## Parallel roles within a task
 
 The project task limit counts active tasks and tasks that await a human answer.

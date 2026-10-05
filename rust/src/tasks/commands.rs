@@ -612,6 +612,24 @@ fn require_user_task(
     Ok(task)
 }
 
+/// Promote a queued task without bypassing prerequisites or concurrency limits.
+pub fn move_user_task_to_front(
+    database: &mut SuplexDatabase,
+    actor_user_id: &str,
+    task_id: &str,
+    now: DateTime<Utc>,
+) -> DatabaseResult<TaskRecord> {
+    database.transaction(true, |database| {
+        require_user_task(database, actor_user_id, task_id)?;
+        if !repository::move_to_front(database, task_id, now)? {
+            return Err(TaskError::new("Only a queued task can move to the front", 409).into());
+        }
+        let task = repository::task_by_id(database, task_id)?.ok_or_else(TaskError::not_found)?;
+        audit(database, actor_user_id, "task_moved_to_front", &task, now)?;
+        Ok(task)
+    })
+}
+
 /// Return a queued task to the manual backlog. The same people who can start a task can disarm it.
 pub fn disarm_user_task(
     database: &mut SuplexDatabase,
@@ -628,6 +646,7 @@ pub fn disarm_user_task(
     if archived || !repository::disarm(database, task_id, now)? {
         return Err(TaskError::new("Only a task in the backlog can be disarmed", 409).into());
     }
+
     let task = repository::task_by_id(database, task_id)?.unwrap_or(task);
     audit(database, actor_user_id, "task_disarmed", &task, now)?;
     Ok(task)
@@ -1723,6 +1742,63 @@ mod tests {
         assert_eq!(number, None);
         drop(database);
         std::fs::remove_file(filename).unwrap();
+    }
+
+    #[test]
+    fn promoted_tasks_take_the_next_slots_without_bypassing_the_project_limit() {
+        let (filename, mut database, user, prepared) = command_fixture();
+        let now = Utc::now();
+        database
+            .connection()
+            .execute(
+                "UPDATE suplex_projects SET task_concurrency = 0 WHERE id = 'command_project'",
+                [],
+            )
+            .unwrap();
+        let mut queued = Vec::new();
+        for key in ["priority-one", "priority-two", "priority-three"] {
+            let task = repository::create(
+                &mut database,
+                &PreparedTask {
+                    start_queued: true,
+                    ..another(&prepared, key)
+                },
+                now,
+            )
+            .unwrap()
+            .task;
+            assert_eq!(task.status, TaskStatus::Queued);
+            queued.push(task.id);
+        }
+        assert!(move_user_task_to_front(&mut database, "missing-user", &queued[2], now).is_err());
+        move_user_task_to_front(&mut database, &user, &queued[2], now).unwrap();
+        move_user_task_to_front(&mut database, &user, &queued[1], now).unwrap();
+        assert!(
+            crate::coordination::root_session_store::admit_queued(&mut database, now)
+                .unwrap()
+                .is_empty()
+        );
+        database
+            .connection()
+            .execute(
+                "UPDATE suplex_projects SET task_concurrency = 1 WHERE id = 'command_project'",
+                [],
+            )
+            .unwrap();
+        assert_eq!(
+            crate::coordination::root_session_store::admit_queued(&mut database, now).unwrap(),
+            vec![queued[1].clone()]
+        );
+        assert_eq!(
+            repository::task_by_id(&database, &queued[2])
+                .unwrap()
+                .unwrap()
+                .status,
+            TaskStatus::Queued
+        );
+        assert!(move_user_task_to_front(&mut database, &user, &queued[1], now).is_err());
+        drop(database);
+        let _ = std::fs::remove_file(filename);
     }
 
     #[test]

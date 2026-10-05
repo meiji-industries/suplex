@@ -589,7 +589,7 @@
   },
   {
     "name": "suplex_command_task",
-    "description": "Apply one lifecycle command to a task this agent created. Reading another task in a granted project does not grant command authority. revision must come from a read after the task's last state change (a stale one fails with revision_stale); a change to only updatedAt or delivery does not make it stale, and idempotencyKey is required. start_task queues a manual backlog task: it starts now when every prerequisite is complete and never bypasses one. disarm_task returns a queued task to the manual backlog. cancel_task and archive_task are not reversible by this agent. note is only accepted by send_task_note. answer_human_question answers the task's current question: send questionId from suplex_get_task question.id and exactly one of optionId or answer. MCP exposes task lifecycle commands only. It does not expose runtime delivery or merge commands. A paired agent can answer a task's Coordinator question with answer_human_question only after an administrator lets it answer on their behalf. Task limit decisions and command cleanup confirmations stay with a person. Suplex can perform delivery for a task's configured target, including a merge after review, without an agent command.",
+    "description": "Apply one lifecycle command to a task in a granted project. revision must come from a read after the task's last state change (a stale one fails with revision_stale); a change to only updatedAt or delivery does not make it stale, and idempotencyKey is required. start_task queues a manual backlog task: it starts now when every prerequisite is complete and never bypasses one. move_to_front puts a queued task ahead of other queued tasks without bypassing prerequisites or concurrency limits. A later promotion takes the front position. disarm_task returns a queued task to the manual backlog. cancel_task and archive_task are not reversible by this agent. note is only accepted by send_task_note. answer_human_question answers the task's current question: send questionId from suplex_get_task question.id and exactly one of optionId or answer. MCP exposes task lifecycle commands only. It does not expose runtime delivery or merge commands. A paired agent can answer a task's Coordinator question with answer_human_question only after an administrator lets it answer on their behalf. Task limit decisions and command cleanup confirmations stay with a person. Suplex can perform delivery for a task's configured target, including a merge after review, without an agent command.",
     "inputSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "type": "object",
@@ -598,6 +598,7 @@
           "type": "string",
           "enum": [
             "start_task",
+            "move_to_front",
             "disarm_task",
             "cancel_task",
             "archive_task",

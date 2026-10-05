@@ -63,7 +63,7 @@ export function TaskQueueStatus({ task, editable, busy, onEdit, onAction }: { ta
   return <Alert data-task-queue-status><Info /><AlertDescription><div className="flex flex-col gap-2">
     <div>{backlogText(task)}</div>
     {task.queue.waitingOn.length ? <TaskQueueWaits task={task} /> : null}
-    {editable ? <div className="flex flex-wrap items-center gap-2"><Button size="sm" variant="outline" disabled={busy} onClick={onEdit}>Edit task</Button>{queued ? <><Button size="sm" variant="outline" disabled={busy} onClick={() => onAction("disarm")}>Send to backlog</Button><Button size="sm" variant="outline" disabled={busy} onClick={() => onAction("force-start")}>Start anyway</Button></> : <Button size="sm" disabled={busy} onClick={() => onAction("start")}>{task.queue.waitingOn.length ? "Queue task" : "Start task"}</Button>}</div> : null}
+    {editable ? <div className="flex flex-wrap items-center gap-2"><Button size="sm" variant="outline" disabled={busy} onClick={onEdit}>Edit task</Button>{queued ? <><Button size="sm" variant="outline" disabled={busy} onClick={() => onAction("move-to-front")}>Move to front</Button><Button size="sm" variant="outline" disabled={busy} onClick={() => onAction("disarm")}>Send to backlog</Button><Button size="sm" variant="outline" disabled={busy} onClick={() => onAction("force-start")}>Start anyway</Button></> : <Button size="sm" disabled={busy} onClick={() => onAction("start")}>{task.queue.waitingOn.length ? "Queue task" : "Start task"}</Button>}</div> : null}
   </div></AlertDescription></Alert>;
 }
 

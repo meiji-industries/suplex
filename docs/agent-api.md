@@ -122,9 +122,9 @@ that commands depend on. A change to only `updatedAt` or `delivery`, such as a
 host sweep or a pull request observation, does not make a revision stale. Any
 other change, including a completed command, does. A stale revision returns
 `412` with `{ "code": "revision_stale" }`; a command outside `permittedCommands` returns
-`409` with `{ "code": "illegal_command" }`. Only the paired agent that created
-the task can send a command. A command for another task returns the same `404`
-as an unavailable task. `taskCommands` from `GET /api/agent/me` lists exactly
+`409` with `{ "code": "illegal_command" }`. A paired agent can command tasks
+in its granted projects, including tasks created by GitHub label triggers.
+A command outside those projects returns `404`. `taskCommands` from `GET /api/agent/me` lists exactly
 these lifecycle commands. `autonomousCommands` from
 `GET /api/agent/capabilities` also includes task creation and, when enabled,
 the runtime delivery commands. `answer_human_question` appears in these lists
@@ -133,6 +133,11 @@ only when an administrator lets the agent answer questions; see
 runtime API exposes delivery and merge commands only when capabilities reports
 them. Suplex can perform a task's configured delivery, including a merge after
 review, without an agent command.
+
+`move_to_front` promotes a queued task ahead of other queued tasks. A later
+promotion takes the front position. It keeps the task queued and does not
+bypass prerequisites or project and plan limits. Task reads include
+`queuePriority`; the Board and Tasks list show the same priority order.
 
 ## Answering a Coordinator question
 

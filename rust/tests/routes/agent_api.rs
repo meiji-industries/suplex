@@ -455,7 +455,7 @@ pub(crate) mod tests {
                 .as_array()
                 .unwrap()
                 .len(),
-            8,
+            9,
             "answer_human_question needs the answer grant"
         );
         let (_, capabilities) = agent
@@ -903,6 +903,30 @@ pub(crate) mod tests {
         let (other, _) = pair(&agent.server, "Other commander", &["project_api"]);
         let (status, shared) = agent.call_as(&other, reqwest::Method::POST, &format!("/api/agent/tasks/{id}/commands"), Some(json!({"command": "archive_task", "revision": reopened["revision"], "idempotencyKey": "other-001"}))).await;
         assert_eq!((status, shared["archived"].as_bool()), (200, Some(true)), "{shared}");
+    }
+
+    #[tokio::test]
+    async fn paired_agent_promotes_a_queued_task_from_a_label_trigger() {
+        let agent = agent().await;
+        agent.server.state.with_database(|database| {
+            database.connection().execute("UPDATE suplex_projects SET task_concurrency = 0 WHERE id = 'project_api'", []).unwrap();
+        });
+        let task = agent.create("Trigger task", "trigger-priority-001").await;
+        let id = task["id"].as_str().unwrap();
+        let path = format!("/api/agent/tasks/{id}/commands");
+        let (status, queued) = agent.call(reqwest::Method::POST, &path, Some(json!({"command":"start_task","revision":task["revision"],"idempotencyKey":"trigger-start-001"}))).await;
+        assert_eq!((status, queued["status"].as_str()), (200, Some("queued")));
+        agent.server.state.with_database(|database| {
+            database.connection().execute("UPDATE suplex_tasks SET creator_user_id = (SELECT id FROM suplex_users WHERE role = 'admin' LIMIT 1), creator_agent_id = NULL WHERE id = ?1", [id]).unwrap();
+        });
+        let (credential, _) = pair(&agent.server, "Queue coordinator", &["project_api"]);
+        let (status, current) = agent.call_as(&credential, reqwest::Method::GET, &format!("/api/agent/tasks/{id}"), None).await;
+        assert_eq!(status, 200);
+        assert!(current["permittedCommands"].as_array().unwrap().contains(&json!("move_to_front")));
+        let command = json!({"command":"move_to_front","revision":current["revision"],"idempotencyKey":"trigger-promote-001"});
+        let (status, promoted) = agent.call_as(&credential, reqwest::Method::POST, &path, Some(command.clone())).await;
+        assert_eq!((status, promoted["status"].as_str(), promoted["queuePriority"].as_i64()), (200, Some("queued"), Some(1)));
+        assert_eq!(agent.call_as(&credential, reqwest::Method::POST, &path, Some(command)).await, (200, promoted));
     }
 
     #[tokio::test]

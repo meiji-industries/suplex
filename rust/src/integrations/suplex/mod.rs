@@ -145,6 +145,12 @@ mod tests {
         );
         let schema = serde_json::to_value(&command.input_schema).unwrap();
         assert!(
+            schema["properties"]["command"]["enum"]
+                .as_array()
+                .unwrap()
+                .contains(&json!("move_to_front"))
+        );
+        assert!(
             schema["required"]
                 .as_array()
                 .unwrap()

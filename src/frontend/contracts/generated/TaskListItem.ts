@@ -8,4 +8,4 @@ import type { TaskStatus } from "./TaskStatus.js";
 /**
  * Fields used by task lists, the board, and recent activity.
  */
-export type TaskListItem = { id: string, companyId: string, projectId: string, issueKey: string | null, title: string, status: TaskStatus, configuration: TaskListConfiguration, pullRequest: PullRequestReference | null, humanQuestion: TaskListQuestion | null, blockedBy: Array<TaskBlockedBy>, dependsOn: Array<string>, createdAt: string, updatedAt: string, statusChangedAt: string, archivedAt: string | null, };
+export type TaskListItem = { id: string, companyId: string, projectId: string, issueKey: string | null, title: string, status: TaskStatus, queuePriority: number, configuration: TaskListConfiguration, pullRequest: PullRequestReference | null, humanQuestion: TaskListQuestion | null, blockedBy: Array<TaskBlockedBy>, dependsOn: Array<string>, createdAt: string, updatedAt: string, statusChangedAt: string, archivedAt: string | null, };

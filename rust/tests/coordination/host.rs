@@ -1642,6 +1642,74 @@ mod host_tests {
     }
 
     /// TypeScript `RootController.recordWorkerResult` recovers Root inline.
+    /// A prompt claim refused at admission is a normal outcome, not a recovery failure.
+    #[tokio::test]
+    async fn a_refused_prompt_claim_is_not_a_recovery_failure() {
+        let (base, database_path, task_id) = fixture_task();
+        let worktree = base.join("worktree");
+        fs::create_dir(&worktree).unwrap();
+        let codex = base.join("codex");
+        fs::write(&codex, "#!/bin/sh\nexit 1\n").unwrap();
+        fs::set_permissions(&codex, fs::Permissions::from_mode(0o700)).unwrap();
+        let root = root_controller::prepare_root(
+            &mut SuplexDatabase::open(&database_path, OpenMode::ReadWrite).unwrap(),
+            &task_id,
+        )
+        .unwrap();
+        let worker_turn = {
+            let mut database = SuplexDatabase::open(&database_path, OpenMode::ReadWrite).unwrap();
+            database.connection().execute(
+                "UPDATE suplex_task_controls SET worktree_json = ?1 WHERE task_id = ?2",
+                rusqlite::params![serde_json::json!({"path":worktree,"branch":"task-claim","baseSha":"a","headSha":"a","dirty":false}).to_string(), task_id],
+            ).unwrap();
+            database
+                .connection()
+                .execute(
+                    "UPDATE suplex_task_turns SET status = 'completed', prompted_at = updated_at WHERE session_id = ?1",
+                    [&root.id],
+                )
+                .unwrap();
+            root_session_store::launch_standard_worker(
+                &mut database,
+                &root,
+                "Implement the fixture",
+                "Worker prompt",
+                Some(&serde_json::json!({"kind":"worker","purpose":"implementation"})),
+                Utc::now(),
+            )
+            .unwrap();
+            // The turn cap is already used, so admission refuses the claim.
+            database
+                .connection()
+                .execute(
+                    "UPDATE suplex_task_controls SET budget_usd = 0, max_turns = 1 WHERE task_id = ?1",
+                    [&task_id],
+                )
+                .unwrap();
+            let worker = root_session_store::current_worker(&database, &task_id)
+                .unwrap()
+                .unwrap();
+            root_session_store::pending_turns(&database, &worker.id)
+                .unwrap()
+                .remove(0)
+        };
+        let environment = HashMap::from([("PATH".into(), "/usr/bin:/bin".into())]);
+        recover_prepared_worker(&database_path, &base, &task_id, Some(&codex), &environment)
+            .await
+            .unwrap();
+        let database = SuplexDatabase::open(&database_path, OpenMode::ReadOnly).unwrap();
+        let attempt: Option<String> = database
+            .connection()
+            .query_row(
+                "SELECT dispatch_attempt_json FROM suplex_task_turns WHERE id = ?1",
+                [&worker_turn.id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(attempt.is_none(), "the refused prompt was not dispatched");
+        fs::remove_dir_all(base).unwrap();
+    }
+
     /// One Rust sweep records the Worker result and dispatches the Root wake.
     #[tokio::test]
     async fn sweep_dispatches_the_root_wake_from_a_worker_result() {

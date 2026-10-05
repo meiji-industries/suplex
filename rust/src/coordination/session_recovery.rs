@@ -1013,17 +1013,25 @@ fn dispatch_claimed(
         project_scope.context.as_deref(),
         project_scope.context_path.as_deref(),
     );
-    let observation = harness.dispatch(&scope, &turn.id, &prompt, &mut |server_generation| {
-        root_session_store::claim_prompt(
+    // A refused claim is not a failure: another dispatcher admitted the prompt,
+    // or the task stopped being dispatchable. The next sweep observes the result.
+    let mut refused = false;
+    let dispatched = harness.dispatch(&scope, &turn.id, &prompt, &mut |server_generation| {
+        let claimed = root_session_store::claim_prompt(
             database,
             &turn,
             launch.owner,
             server_generation,
             host.usage,
             Utc::now(),
-        )
-    })?;
-    bound.record(database, &turn, observation)
+        )?;
+        refused = !claimed;
+        Ok(claimed)
+    });
+    if refused {
+        return Ok(before);
+    }
+    bound.record(database, &turn, dispatched?)
 }
 
 fn recover_session_blocking(

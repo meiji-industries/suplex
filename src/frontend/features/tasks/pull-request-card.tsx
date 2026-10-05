@@ -38,7 +38,7 @@ export function TaskPullRequestCard({ task, onChange }: { task: Task; onChange: 
     const timer = setInterval(() => setNow(Date.now()), 1_000);
     return () => clearInterval(timer);
   }, [hasRunningCheck]);
-  const continuing = task.status === "active" && (task.deliveryTarget === "pull_request_ready" || task.deliveryTarget === "merged");
+  const continuing = task.status === "active" && task.deliveryTarget === "pull_request_ready";
   const actionable = task.status === "delivered" && !task.archivedAt && !merged;
   const canPublish = actionable && task.deliveryTarget === "pull_request_draft" && observed !== "ready" && supportsDeliveryTarget(task.configuration.integration?.repository, "pull_request_ready");
   const canMerge = actionable && (task.deliveryTarget === "pull_request_draft" || task.deliveryTarget === "pull_request_ready") && supportsDeliveryTarget(task.configuration.integration?.repository, "merged");
@@ -65,7 +65,7 @@ export function TaskPullRequestCard({ task, onChange }: { task: Task; onChange: 
       {pullRequest ? <a href={pullRequest.url} target="_blank" rel="noreferrer" aria-label="Open pull request on GitHub" className="shrink-0 text-muted-foreground"><ExternalLink className="size-3.5" /></a> : null}
     </div>
     {showActions && (continuing || error) ? <div className="flex flex-wrap items-center gap-2 border-t px-3 py-2">
-      {continuing ? <span className="text-xs text-muted-foreground">{task.deliveryTarget === "merged" ? "Coordinator works to merge this pull request." : "Coordinator prepares this pull request for review."}</span> : null}
+      {continuing ? <span className="text-xs text-muted-foreground">Coordinator prepares this pull request for review.</span> : null}
       {error ? <span role="alert" className="text-xs text-destructive">{error}</span> : null}
     </div> : null}
     {runs.length ? <ul aria-label="Pull request checks" className="border-t">{runs.map((run, index) => <CheckRunRow key={`${run.name}:${index}`} run={run} now={now} />)}</ul> : null}

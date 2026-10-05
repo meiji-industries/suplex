@@ -1,7 +1,7 @@
 import { listTasks } from "./task-api.js";
-import type { Task } from "../../../contracts/tasks.js";
+import type { TaskListTask } from "../../../contracts/task-responses.js";
 
-export async function readTaskList(companyId: string, archived = false, signal?: AbortSignal): Promise<Task[]> {
+export async function readTaskList(companyId: string, archived = false, signal?: AbortSignal): Promise<TaskListTask[]> {
   return listTasks(companyId, { archived, ...(signal ? { signal } : {}) });
 }
 
@@ -9,7 +9,7 @@ export function showRecentTasks(path: string): boolean {
   return !/^\/(?:admin(?:\/|$)|profile(?:\/|$)|companies\/[^/]+\/settings(?:\/|$))/.test(path);
 }
 
-type QueuedTask = Pick<Task, "id" | "createdAt" | "dependsOn">;
+type QueuedTask = Pick<TaskListTask, "id" | "createdAt" | "dependsOn">;
 
 /** Orders queued tasks by run order: each root, then its dependent chain depth-first, after all queued blockers. */
 export function queueOrder<T extends QueuedTask>(tasks: readonly T[]): T[] {

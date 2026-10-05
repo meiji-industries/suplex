@@ -84,10 +84,11 @@ test("a mutation response survives an older list response and updates, adds, and
   const changed = { ...before, title: "Saved" };
   await updateTaskCache(client, "user-a", changed);
   resolveOld?.([before]); await old;
-  expect(client.getQueryData(key)).toEqual([changed]);
+  expect(client.getQueryData(key)).toMatchObject([{ id: "a", title: "Saved" }]);
+  expect(client.getQueryData<{ description?: string }[]>(key)?.[0]).not.toHaveProperty("description");
   await updateTaskCache(client, "user-a", task("b"));
   await updateTaskCache(client, "user-a", { ...changed, archivedAt: new Date().toISOString() });
-  expect(client.getQueryData(key)).toEqual([task("b")]);
+  expect(client.getQueryData(key)).toMatchObject([{ id: "b" }]);
   await updateTaskCache(client, "user-b", task("a"));
   expect(client.getQueryData(taskListKey("user-b", "company-a"))).toBeUndefined();
 });

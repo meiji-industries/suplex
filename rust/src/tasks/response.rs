@@ -56,6 +56,71 @@ pub struct TaskResponse {
     pub(super) archived_at: Option<String>,
 }
 
+/// Fields used by task lists, the board, and recent activity.
+#[derive(Debug, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct TaskListItem {
+    id: String,
+    company_id: String,
+    project_id: String,
+    issue_key: Option<String>,
+    title: String,
+    status: TaskStatus,
+    configuration: TaskListConfiguration,
+    pull_request: Option<PullRequestReference>,
+    human_question: Option<TaskListQuestion>,
+    blocked_by: Vec<TaskBlockedBy>,
+    depends_on: Vec<String>,
+    created_at: String,
+    updated_at: String,
+    status_changed_at: String,
+    archived_at: Option<String>,
+}
+
+#[derive(Debug, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+struct TaskListConfiguration {
+    repository: String,
+    branch: String,
+}
+
+#[derive(Debug, Serialize, TS)]
+struct TaskListQuestion {
+    text: String,
+}
+
+impl From<TaskResponse> for TaskListItem {
+    fn from(task: TaskResponse) -> Self {
+        let human_question = task.human_question.map(|question| TaskListQuestion {
+            text: match question {
+                TaskHumanQuestion::Question { text, .. }
+                | TaskHumanQuestion::TaskLimit { text, .. } => text,
+            },
+        });
+        Self {
+            id: task.id,
+            company_id: task.company_id,
+            project_id: task.project_id,
+            issue_key: task.issue_key,
+            title: task.title,
+            status: task.status,
+            configuration: TaskListConfiguration {
+                repository: task.configuration.repository,
+                branch: task.configuration.branch,
+            },
+            pull_request: task.pull_request,
+            human_question,
+            blocked_by: task.blocked_by,
+            depends_on: task.depends_on,
+            created_at: task.created_at,
+            updated_at: task.updated_at,
+            status_changed_at: task.status_changed_at,
+            archived_at: task.archived_at,
+        }
+    }
+}
+
 #[derive(Debug, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub(super) struct PublicWorkflowState {

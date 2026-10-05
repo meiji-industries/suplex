@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type { TaskResponse } from "./generated/TaskResponse.js";
+import type { TaskListItem } from "./generated/TaskListItem.js";
 
 import { TaskSchema } from "./tasks.js";
 
@@ -15,7 +15,7 @@ export const TaskResponseSchema = TaskSchema.strip();
 
 export type { TaskResponse } from "./generated/TaskResponse.js";
 
-export type TaskListTask = TaskResponse;
+export type TaskListTask = TaskListItem;
 
 
 export const TaskHarnessKindSchema = HarnessKindSchema;

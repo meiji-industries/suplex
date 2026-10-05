@@ -13,6 +13,7 @@ use axum::{
 };
 use chrono::Utc;
 use serde::Serialize;
+use tower_http::compression::CompressionLayer;
 
 use crate::{
     http::{AppState, contracts::typed::auth::CompanyIdParams, validation::ValidPath},
@@ -33,7 +34,7 @@ pub fn router() -> Router<AppState> {
         .route("/api/companies/{company_id}/task-costs", get(task_costs))
         .route(
             "/api/companies/{company_id}/timeline",
-            get(company_timeline),
+            get(company_timeline).layer(CompressionLayer::new()),
         )
 }
 

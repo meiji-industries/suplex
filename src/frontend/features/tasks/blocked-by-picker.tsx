@@ -1,21 +1,21 @@
 import { GitPullRequest } from "lucide-react";
 import { listPullRequestSources, listTasks, type PullRequestSource } from "./lib/task-api.js";
 import { useEffect, useState, type ReactElement } from "react";
-import type { Task } from "../../contracts/tasks.js";
+import type { TaskListTask } from "../../contracts/task-responses.js";
 import { Button } from "../../components/ui/button.js";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "../../components/ui/dialog.js";
 import { Input } from "../../components/ui/input.js";
 import { Tabs, TabsList, TabsTrigger } from "../../components/ui/tabs.js";
 import { TaskStatusIcon } from "./task-status.js";
 
-export type BlockedByTaskSummary = Task["blockedBy"][number];
+export type BlockedByTaskSummary = TaskListTask["blockedBy"][number];
 export type BlockedBySelection = { kind: "task"; task: BlockedByTaskSummary } | { kind: "pull_request"; pullRequest: PullRequestSource };
 type PickerTab = BlockedBySelection["kind"];
 
 /** Searchable picker that adds one Blocked by entry. The Tasks tab lists the project's backlog, queued, active, and Answer necessary tasks; the Pull requests tab lists its open pull requests. Excluded tasks (the task itself and its current prerequisites) and pull request numbers are not offered. */
 export function BlockedByPickerDialog({ open, onOpenChange, companyId, projectId, excludeTaskIds, excludePullRequestNumbers, onSelect, onError }: { open: boolean; onOpenChange: (open: boolean) => void; companyId: string; projectId: string; excludeTaskIds: string[]; excludePullRequestNumbers: number[]; onSelect: (selection: BlockedBySelection) => void; onError?: ((message: string) => void) | undefined }): ReactElement {
   const [tab, setTab] = useState<PickerTab>("task");
-  const [tasks, setTasks] = useState<Task[]>([]);
+  const [tasks, setTasks] = useState<TaskListTask[]>([]);
   const [pullRequests, setPullRequests] = useState<{ available: boolean; sources: PullRequestSource[] }>({ available: true, sources: [] });
   const [query, setQuery] = useState("");
   const [loading, setLoading] = useState(false);

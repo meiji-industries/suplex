@@ -48,16 +48,21 @@ use crate::{
 };
 
 use super::auth;
+use tower_http::compression::CompressionLayer;
 
 type TaskPath = ValidPath<TaskIdParams>;
 
 pub fn router() -> Router<AppState> {
     Router::new()
-        .route("/api/tasks", get(list_all))
+        .route(
+            "/api/tasks",
+            get(list_all).layer::<_, std::convert::Infallible>(CompressionLayer::new()),
+        )
         .route(
             "/api/companies/{company_id}/tasks",
             get(list_company)
                 .post(create)
+                .layer::<_, std::convert::Infallible>(CompressionLayer::new())
                 .layer(DefaultBodyLimit::max(images::MAX_TASK_REQUEST_BYTES)),
         )
         .route("/api/tasks/{task_id}", get(get_one).patch(update_details))

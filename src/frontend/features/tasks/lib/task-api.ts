@@ -1,5 +1,6 @@
 import { readJsonUnchecked } from "../../../lib/api.js";
 import type { Task, TaskInput } from "../../../contracts/tasks.js";
+import type { TaskListTask } from "../../../contracts/task-responses.js";
 import type { TaskAgentSelectionRequest } from "../../../contracts/agent-selection.js";
 import type { IssueAssociation } from "../../../contracts/issues.js";
 import { TaskActivityResponseSchema, TaskDiffResponseSchema, TaskDiffSummaryResponseSchema, WorktreeAppsResponseSchema } from "../../../contracts/task-responses.js";
@@ -33,9 +34,9 @@ export async function listTaskProfiles(signal?: AbortSignal): Promise<ProfileRes
 export async function listTasks(
   companyId: string,
   options: { archived?: boolean; signal?: AbortSignal } = {},
-): Promise<Task[]> {
+): Promise<TaskListTask[]> {
   const query = options.archived === undefined ? "" : `?archived=${options.archived}`;
-  const result = await readJsonUnchecked<{ tasks: Task[] }>(
+  const result = await readJsonUnchecked<{ tasks: TaskListTask[] }>(
     `/api/companies/${encodeURIComponent(companyId)}/tasks${query}`,
     options.signal ? { signal: options.signal } : undefined,
   );

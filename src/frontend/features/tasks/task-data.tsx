@@ -3,6 +3,7 @@ import { createContext, useCallback, useContext, useMemo, type ReactNode } from 
 import { readTaskCosts } from "../analytics/lib/analytics-api.js";
 import type { TaskCostsResponse } from "../../contracts/generated/TaskCostsResponse.js";
 import type { Task } from "../../contracts/tasks.js";
+import type { TaskListTask } from "../../contracts/task-responses.js";
 import { TaskAgentsBatchResponseSchema } from "../../contracts/task-responses.js";
 import { readJsonUnchecked } from "../../lib/api.js";
 import { useCompanyContext } from "../../shell/company-context.js";
@@ -12,7 +13,7 @@ const polling = { refetchInterval: 3000, refetchIntervalInBackground: false, sta
 const emptyCosts = new Map<string, TaskCostsResponse["tasks"][number]>();
 const TaskCostsContext = createContext<{ companyId: string | undefined; costs: typeof emptyCosts }>({ companyId: undefined, costs: emptyCosts });
 export const taskCostsKey = (userId: string | undefined, companyId: string | undefined) => ["task-costs", userId, companyId] as const;
-const TaskDataContext = createContext<UseQueryResult<Task[]> | null>(null);
+const TaskDataContext = createContext<UseQueryResult<TaskListTask[]> | null>(null);
 export const taskListKey = (userId: string | undefined, companyId: string | undefined) => ["tasks", userId, companyId, "active"] as const;
 
 export function TaskDataProvider({ children }: { children: ReactNode }) {
@@ -69,10 +70,18 @@ export function useTaskAgents(taskIds: string[]) {
 export async function updateTaskCache(client: QueryClient, userId: string, task: Task): Promise<void> {
   const queryKey = taskListKey(userId, task.companyId);
   await client.cancelQueries({ queryKey, exact: true });
-  client.setQueryData<Task[]>(queryKey, current => {
+  const summary: TaskListTask = {
+    id: task.id, companyId: task.companyId, projectId: task.projectId, issueKey: task.issueKey,
+    title: task.title, status: task.status,
+    configuration: { repository: task.configuration.repository, branch: task.configuration.branch },
+    pullRequest: task.pullRequest, humanQuestion: task.humanQuestion && { text: task.humanQuestion.text },
+    blockedBy: task.blockedBy, dependsOn: task.dependsOn,
+    createdAt: task.createdAt, updatedAt: task.updatedAt, statusChangedAt: task.statusChangedAt, archivedAt: task.archivedAt,
+  };
+  client.setQueryData<TaskListTask[]>(queryKey, current => {
     if (!current) return undefined;
     if (task.archivedAt) return current.filter(row => row.id !== task.id);
-    return current.some(row => row.id === task.id) ? current.map(row => row.id === task.id ? task : row) : [task, ...current];
+    return current.some(row => row.id === task.id) ? current.map(row => row.id === task.id ? summary : row) : [summary, ...current];
   });
   if (!client.getQueryData(queryKey)) void client.invalidateQueries({ queryKey });
   void client.invalidateQueries({ queryKey: ["task-agents", userId, task.companyId] });

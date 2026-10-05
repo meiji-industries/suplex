@@ -14,6 +14,7 @@ use axum::{
 };
 use serde::Serialize;
 use serde_json::{Value, json};
+use tower_http::compression::CompressionLayer;
 
 use crate::{
     coordination::{
@@ -45,7 +46,10 @@ use super::auth;
 
 pub fn router() -> Router<AppState> {
     Router::new()
-        .route("/api/tasks/{task_id}/activity", get(activity))
+        .route(
+            "/api/tasks/{task_id}/activity",
+            get(activity).layer(CompressionLayer::new()),
+        )
         .route("/api/tasks/{task_id}/execution", get(execution))
         .route("/api/tasks/{task_id}/diff", get(diff))
         .route("/api/tasks/{task_id}/diff/summary", get(diff_summary))

@@ -18,7 +18,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from ".
 import type { MoveOutcome } from "../../contracts/generated/MoveOutcome.js";
 import type { MoveResponse } from "../../contracts/generated/MoveResponse.js";
 import type { MoveRunResponse } from "../../contracts/generated/MoveRunResponse.js";
-import type { Task } from "../../contracts/tasks.js";
+import type { TaskListTask } from "../../contracts/task-responses.js";
 import { withCompany } from "../../lib/api.js";
 import { ApplicationFrame } from "../../shell/application-frame.js";
 import { useCompanyContext } from "../../shell/company-context.js";
@@ -116,7 +116,7 @@ export function MovesView(): ReactElement {
   </ApplicationFrame>;
 }
 
-function MoveRow({ move, project, tasks, onStart, onDelete }: { move: MoveResponse; project: ApiProject | undefined; tasks: Task[]; onStart: () => void; onDelete: () => void }): ReactElement {
+function MoveRow({ move, project, tasks, onStart, onDelete }: { move: MoveResponse; project: ApiProject | undefined; tasks: TaskListTask[]; onStart: () => void; onDelete: () => void }): ReactElement {
   const lastRun = move.lastRun;
   return <DataListRow data-move-row>
     <a className="col-span-full row-start-1 grid min-w-0 grid-cols-subgrid items-center focus-visible:outline-2 focus-visible:outline-ring" href={withCompany(`/moves/${move.id}`, move.companyId)}>
@@ -135,12 +135,12 @@ function MoveRow({ move, project, tasks, onStart, onDelete }: { move: MoveRespon
   </DataListRow>;
 }
 
-function taskFor(outcome: MoveOutcome, tasks: Task[]): Task | undefined {
+function taskFor(outcome: MoveOutcome, tasks: TaskListTask[]): TaskListTask | undefined {
   return outcome.taskId ? tasks.find(task => task.id === outcome.taskId) : undefined;
 }
 
 /** Status comes from each started task. A failed start shows as failed. */
-function RunStatus({ run, tasks }: { run: MoveRunResponse; tasks: Task[] }): ReactElement {
+function RunStatus({ run, tasks }: { run: MoveRunResponse; tasks: TaskListTask[] }): ReactElement {
   if (runsInTerminal(run.runner)) return <RunBadge live={run.live} />;
   const failed = run.outcomes.filter(outcome => outcome.kind === "failed").length;
   const started = run.outcomes.map(outcome => taskFor(outcome, tasks)).filter(task => task !== undefined);
@@ -151,7 +151,7 @@ function RunStatus({ run, tasks }: { run: MoveRunResponse; tasks: Task[] }): Rea
   </span>;
 }
 
-function RunHistory({ runs, tasks, companyId, onStart, onStartAgain, onStop, onArchive }: { runs: MoveRunResponse[] | null; tasks: Task[]; companyId: string; onStart: () => void; onStartAgain: (run: MoveRunResponse) => void; onStop: (run: MoveRunResponse) => void; onArchive: (run: MoveRunResponse) => void }): ReactElement {
+function RunHistory({ runs, tasks, companyId, onStart, onStartAgain, onStop, onArchive }: { runs: MoveRunResponse[] | null; tasks: TaskListTask[]; companyId: string; onStart: () => void; onStartAgain: (run: MoveRunResponse) => void; onStop: (run: MoveRunResponse) => void; onArchive: (run: MoveRunResponse) => void }): ReactElement {
   const [open, setOpen] = useState<string | null>(null);
   if (!runs) return <LoadingState />;
   if (!runs.length) return <EmptyState icon={Zap} title="No runs" action={<Button onClick={onStart}><Play />Run now</Button>} />;

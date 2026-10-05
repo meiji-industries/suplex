@@ -13,6 +13,7 @@ use axum::{
     response::{IntoResponse, Response},
     routing::get,
 };
+use tower_http::compression::CompressionLayer;
 
 use crate::{
     http::{AppState, contracts::typed::tasks::TaskIdParams, validation::ValidPath},
@@ -23,7 +24,10 @@ use crate::{
 use super::auth;
 
 pub fn router() -> Router<AppState> {
-    Router::new().route("/api/tasks/{task_id}/timeline", get(task_timeline))
+    Router::new().route(
+        "/api/tasks/{task_id}/timeline",
+        get(task_timeline).layer(CompressionLayer::new()),
+    )
 }
 
 fn scoped(

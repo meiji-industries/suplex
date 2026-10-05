@@ -13,6 +13,7 @@ import { Alert, AlertDescription } from "../../components/ui/alert.js";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../components/ui/select.js";
 import { withCompany } from "../../lib/api.js";
 import type { Task } from "../../contracts/tasks.js";
+import type { TaskListTask } from "../../contracts/task-responses.js";
 import type { MoveResponse } from "../../contracts/generated/MoveResponse.js";
 import type { MoveRunResponse } from "../../contracts/generated/MoveRunResponse.js";
 import { TaskControlStatusSchema, type TaskControlStatus } from "../../contracts/task-control.js";
@@ -48,7 +49,7 @@ export function TasksView({ mode = "list" }: { mode?: "list" | "board" }): React
   const selectedId = /^\/(?:tasks|board)\/([^/]+)$/.exec(window.location.pathname)?.[1]; const [initialFilters] = useState(readTaskListFilters);
   const taskList = useTaskData();
   const cacheTask = useTaskCache();
-  const [archivedTasks, setArchivedTasks] = useState<Task[]>([]);
+  const [archivedTasks, setArchivedTasks] = useState<TaskListTask[]>([]);
   const [selected, setSelected] = useState<Task | null>(null);
   const [error, setError] = useState("");
   const [detailsLoaded, setLoaded] = useState(false);
@@ -127,7 +128,7 @@ export function TasksView({ mode = "list" }: { mode?: "list" | "board" }): React
   </ApplicationFrame>;
 }
 
-function BoardTaskCard({ task, project }: { task: Task; project: ApiProject | undefined }): ReactElement {
+function BoardTaskCard({ task, project }: { task: TaskListTask; project: ApiProject | undefined }): ReactElement {
   return <li className="min-w-0"><a href={withCompany(`/board/${task.id}`, task.companyId)} className="block min-w-0 rounded-md border bg-card p-3 text-xs hover:bg-background focus-visible:outline-2 focus-visible:outline-ring"><span className="flex min-w-0 items-center gap-2 font-medium leading-5"><TaskStatusIcon status={task.status} pullRequestState={task.pullRequest?.state} /><span className="min-w-0 truncate">{task.issueKey ? <span className="mr-2 text-muted-foreground">{task.issueKey}</span> : null}{task.title}</span></span>{task.blockedBy.length ? <p data-task-blocked-by className="mt-1 truncate text-muted-foreground">{blockedByLabel(task.blockedBy)}</p> : null}{task.humanQuestion ? <p className="mt-1 truncate text-muted-foreground">{task.humanQuestion.text}</p> : null}<span className="mt-2 flex min-w-0 items-center gap-1.5 text-muted-foreground"><ProjectLabel project={project} fallback={task.configuration.repository} /></span></a></li>;
 }
 
@@ -135,7 +136,7 @@ function BoardRunCard({ move, run, project }: { move: MoveResponse; run: MoveRun
   return <li className="min-w-0"><a href={withCompany(`/moves/${move.id}/runs/${run.id}`, move.companyId)} className="block min-w-0 rounded-md border bg-card p-3 text-xs hover:bg-background focus-visible:outline-2 focus-visible:outline-ring"><span className="flex min-w-0 items-center gap-2 font-medium leading-5"><Zap aria-hidden="true" className={`size-3.5 shrink-0 ${run.live ? "text-primary motion-safe:animate-pulse" : "text-muted-foreground"}`} /><span className="min-w-0 truncate">{move.name}</span></span><p className="mt-1 truncate text-muted-foreground">{run.live ? "Live" : "Ended"} · {relativeTime(run.startedAt)}</p><span className="mt-2 flex min-w-0 items-center gap-1.5 text-muted-foreground"><ProjectLabel project={project} fallback="Not available" /></span></a></li>;
 }
 
-export function TaskRow({ task, project, cost }: { task: Task; project: ApiProject | undefined; cost: ReturnType<typeof useTaskCosts> extends Map<string, infer Value> ? Value | undefined : never }): ReactElement {
+export function TaskRow({ task, project, cost }: { task: TaskListTask; project: ApiProject | undefined; cost: ReturnType<typeof useTaskCosts> extends Map<string, infer Value> ? Value | undefined : never }): ReactElement {
   const settled = task.status === "delivered" || task.status === "cancelled";
   return <DataListRow data-task-row>
     <a className="col-span-full row-start-1 grid min-w-0 grid-cols-subgrid items-center focus-visible:outline-2 focus-visible:outline-ring" href={withCompany(`/tasks/${task.id}`, task.companyId)}>

@@ -462,10 +462,12 @@ mod tests {
         .await;
         assert_eq!(listed.status(), StatusCode::OK);
         let listed = to_bytes(listed.into_body(), 128 * 1024).await.unwrap();
-        assert_eq!(
-            listed.as_ref(),
-            format!("{{\"tasks\":[{}]}}", std::str::from_utf8(&raw).unwrap()).as_bytes()
-        );
+        assert!(listed.len() < raw.len() / 2);
+        let listed: Value = serde_json::from_slice(&listed).unwrap();
+        assert_eq!(listed["tasks"][0]["id"], task_id);
+        assert_eq!(listed["tasks"][0]["title"], value["title"]);
+        assert!(listed["tasks"][0].get("description").is_none());
+        assert!(listed["tasks"][0].get("workflowState").is_none());
         let reviewed = create(
             State(state.clone()), Path("task_http_company".into()), headers.clone(),
             Bytes::from(json!({"projectId":"task_http_project","title":"Reviewed","idempotencyKey":"review-1","deliveryTarget":"local_worktree","workflow":"independent_review"}).to_string()),

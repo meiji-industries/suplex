@@ -625,7 +625,7 @@ pub fn list_visible(
     user_id: &str,
     company_id: Option<&str>,
     archived: bool,
-) -> DatabaseResult<Vec<super::response::TaskResponse>> {
+) -> DatabaseResult<Vec<super::response::TaskListItem>> {
     let visible = crate::identity::companies::list_visible_companies(database, user_id)?;
     if company_id.is_some_and(|id| !visible.iter().any(|company| company.id == id)) {
         return Err(TaskError::not_found().into());
@@ -640,7 +640,7 @@ pub fn list_visible(
     let mut rows = statement.query(params![archived, companies, company_id])?;
     let mut tasks = Vec::new();
     while let Some(row) = rows.next()? {
-        tasks.push(super::response::from_row(row)?);
+        tasks.push(super::response::from_row(row)?.into());
     }
     Ok(tasks)
 }
@@ -772,9 +772,10 @@ mod list_tests {
             let task = serde_json::to_value(&tasks[0]).unwrap();
             assert_eq!(task["id"], fixture.task_id);
             assert_eq!(task["title"], "Terminal");
-            assert_eq!(task["images"], json!([]));
+            assert!(task.get("description").is_none());
+            assert!(task.get("workflowState").is_none());
             assert_eq!(task["dependsOn"], json!([]));
-            assert_eq!(task["limits"]["admittedTurns"], 0);
+            assert!(task["configuration"]["repository"].is_string());
             assert!(list_visible(database, "user_development", Some("missing"), false).is_err());
             database.connection().execute("INSERT INTO suplex_task_pull_request_dependencies (task_id, pull_request_number, state, title, url, observed_at) VALUES (?1, 17, 'open', 'Prerequisite', 'https://example.test/pr/17', '2026-09-25T00:00:00.000Z')", [&fixture.task_id]).unwrap();
             let tasks = list_visible(database, "user_development", None, false).unwrap();

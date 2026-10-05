@@ -3,7 +3,7 @@ import { Zap } from "lucide-react";
 import { withCompany } from "../../lib/api.js";
 import { showRecentTasks } from "./lib/task-list.js";
 import { useTaskAgents, useTaskCache, useTaskData } from "./task-data.js";
-import type { Task } from "../../contracts/tasks.js";
+import type { TaskListTask } from "../../contracts/task-responses.js";
 import type { MoveRunResponse } from "../../contracts/generated/MoveRunResponse.js";
 import { SidebarGroup, SidebarGroupContent, SidebarGroupLabel, SidebarMenu, SidebarMenuButton, SidebarMenuItem } from "../../components/ui/sidebar.js";
 import { useOptionalCompanyContext } from "../../shell/company-context.js";
@@ -15,12 +15,12 @@ import { RecentPullRequest } from "./recent-pull-request.js";
 import { useTaskCosts } from "../analytics/lib/analytics.js";
 import { CostValue } from "../../components/app/cost-value.js";
 
-export function recentTasks<T extends Pick<Task, "status" | "statusChangedAt">>(tasks: T[]): T[] {
+export function recentTasks<T extends Pick<TaskListTask, "status" | "statusChangedAt">>(tasks: T[]): T[] {
   return tasks.filter(task => task.status !== "cancelled").sort((left, right) => right.statusChangedAt.localeCompare(left.statusChangedAt)).slice(0, 10);
 }
 
 /** Tasks and shell move runs, newest first. Other runners already show through the tasks they start. */
-export function recentActivity<T extends Pick<Task, "status" | "statusChangedAt">, R extends Pick<MoveRunResponse, "startedAt">>(tasks: T[], runs: R[]): Array<{ task: T; run?: never } | { run: R; task?: never }> {
+export function recentActivity<T extends Pick<TaskListTask, "status" | "statusChangedAt">, R extends Pick<MoveRunResponse, "startedAt">>(tasks: T[], runs: R[]): Array<{ task: T; run?: never } | { run: R; task?: never }> {
   return [...recentTasks(tasks).map(task => ({ at: task.statusChangedAt, item: { task } })), ...runs.map(run => ({ at: run.startedAt, item: { run } }))]
     .sort((left, right) => right.at.localeCompare(left.at)).slice(0, 10).map(entry => entry.item);
 }

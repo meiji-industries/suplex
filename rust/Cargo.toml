@@ -25,7 +25,6 @@ rusqlite = { version = "0.40.2", default-features = false, features = ["backup",
 serde = { version = "1", features = ["derive"] }
 ryu-js = "1.0.3"
 serde_json = { version = "1", features = ["preserve_order"] }
-serde_path_to_error = "0.1"
 sha2 = "0.10"
 hmac = "0.12"
 subtle = "2.6"

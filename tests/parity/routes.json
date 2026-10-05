@@ -18,7 +18,6 @@
   "GET /admin/environment",
   "GET /admin/invitations",
   "GET /admin/onboarding",
-  "GET /admin/passkeys",
   "GET /admin/profiles",
   "GET /admin/prompts",
   "GET /admin/providers",

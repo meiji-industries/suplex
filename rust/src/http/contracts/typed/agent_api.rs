@@ -371,14 +371,6 @@ impl Contract for ProjectDiscoveryQuery {
     }
 }
 
-pub fn task_command(input: Option<&Value>) -> ContractResult<Value> {
-    one_of(&TASK_COMMANDS)(input)
-}
-
-pub fn task_filter(input: Option<&Value>) -> ContractResult<Value> {
-    one_of(&TASK_FILTERS)(input)
-}
-
 /// A note belongs to `send_task_note` and only to it. `questionId` and exactly
 /// one of `optionId` or `answer` belong to `answer_human_question` and only to it.
 fn task_command_fields(fields: Fields) -> ContractResult<Value> {

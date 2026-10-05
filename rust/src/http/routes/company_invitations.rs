@@ -96,9 +96,9 @@ async fn send(
             companies::require_admin_company(db, actor, company_id)?;
             let owner = accounts::linked(db)?
                 .ok_or_else(|| PublicFailure::new(409, "Log in to Suplex before adding users"))?;
-            let policy = remote_access_repository::read(db)?;
+            let external = remote_access_repository::external_https_origin(db)?;
             let origin = remote_access_repository::effective_https_origin(
-                &policy,
+                external.as_deref(),
                 &state.session_config.reachable_address,
             )
             .ok_or_else(|| {

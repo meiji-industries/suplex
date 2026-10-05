@@ -116,13 +116,8 @@ fn recover(arguments: &[String]) -> CliResult {
     let installation = Installation::load()?;
     let mut database = SuplexDatabase::open(&installation.database, OpenMode::Migrate)?;
     let metadata = json!({"initiationMethod":"local-cli","installationId":installation.installation_id,"confirmedAt":Utc::now().to_rfc3339()}).to_string();
-    let token = crate::identity::auth::issue_administrator_invitation(
-        &mut database,
-        "recovery",
-        &metadata,
-        Utc::now(),
-    )?
-    .ok_or("Recovery invitation was not created")?;
+    let token =
+        crate::identity::auth::issue_recovery_invitation(&mut database, &metadata, Utc::now())?;
     println!(
         "Recovery link (shown once, works once, expires in 72 hours):\n{}/auth?mode=recovery&invite={token}\nOpen it from any browser that reaches this host and log in. That account becomes this host's owner.",
         installation.reachable_address

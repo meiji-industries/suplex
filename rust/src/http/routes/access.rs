@@ -13,7 +13,7 @@ use crate::{
         access::{authorize_profile, with_cookies},
         error::ApiError,
     },
-    identity::remote_access_repository::{self as remote_access, RemoteAccessPolicy},
+    identity::remote_access_repository as remote_access,
 };
 
 crate::shared::wire_enum! {
@@ -46,14 +46,14 @@ pub fn router() -> Router<AppState> {
 
 fn response(state: &AppState, _actor: &str) -> Result<AccessResponse, Box<dyn std::error::Error>> {
     state.with_database(|database| {
-        let policy = remote_access::read(database)?;
+        let external_https_origin = remote_access::external_https_origin(database)?;
         Ok(AccessResponse {
             https_origin: remote_access::effective_https_origin(
-                &policy,
+                external_https_origin.as_deref(),
                 &state.session_config.reachable_address,
             ),
             settings: AccessSettings {
-                external_https_origin: policy.external_https_origin().map(str::to_owned),
+                external_https_origin,
             },
             network_mode: state
                 .installation
@@ -85,13 +85,10 @@ async fn update(
         Err(response) => return *response,
     };
     let updated = state.with_database(|database| {
-        let policy = remote_access::normalize(
+        remote_access::set_external_https_origin(
             database,
-            RemoteAccessPolicy::Passkeys {
-                external_https_origin: settings.external_https_origin,
-            },
-        )?;
-        remote_access::update(database, policy)
+            settings.external_https_origin.as_deref(),
+        )
     });
     let response = match updated.and_then(|_| response(&state, &actor)) {
         Ok(value) => Json(value).into_response(),

@@ -16,7 +16,6 @@ pub struct SessionRef<'a> {
 pub enum DispatchState {
     NotSubmitted,
     Ambiguous,
-    Rejected,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

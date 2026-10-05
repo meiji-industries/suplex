@@ -1277,61 +1277,6 @@ pub fn record_standard_worker_result_and_wake(
     })
 }
 
-/// TypeScript `reconcileAdvisorResult`: replaces one invalid retained Advisor
-/// outcome after its native evidence, task evidence, and source were revalidated.
-pub fn reconcile_advisor_result(
-    database: &mut SuplexDatabase,
-    task_id: &str,
-    session_id: &str,
-    turn_id: &str,
-    result: &Value,
-    now: DateTime<Utc>,
-) -> DatabaseResult<()> {
-    database.transaction(true, |database| {
-        let row: Option<(Option<String>, Option<String>, Option<String>)> = database.connection().query_row(
-            "SELECT s.advisor_role,COALESCE(t.workflow_input_json,s.workflow_input_json),t.terminal_observation FROM suplex_task_sessions s JOIN suplex_task_turns t ON t.session_id = s.id WHERE s.id = ?1 AND s.task_id = ?2 AND s.kind = 'worker' AND t.id = ?3 AND t.task_id = ?2 AND t.status = 'completed'",
-            params![session_id, task_id, turn_id],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-        ).optional()?;
-        let Some((role, input, observation)) = row else {
-            return Err(CoordinationError::refused("advisor_turn_not_found").into());
-        };
-        let input = input
-            .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
-            .unwrap_or(Value::Null);
-        let Some(role) = role.filter(|role| input["kind"] == "advisor" && input["role"] == role.as_str() && result["role"] == role.as_str()) else {
-            return Err(CoordinationError::refused("advisor_role_mismatch").into());
-        };
-        if super::workflows::turn_outcome(observation.as_deref())
-            .advisor
-            .is_some_and(|advisor| !advisor["result"].is_null())
-        {
-            return Err(CoordinationError::refused("advisor_result_already_valid").into());
-        }
-        let Some(Value::Object(mut base)) = observation.and_then(|raw| serde_json::from_str::<Value>(&raw).ok()) else {
-            return Err(CoordinationError::refused("advisor_observation_invalid").into());
-        };
-        base.insert("advisor".into(), json!({"role":role,"result":result,"invalidReason":null}));
-        database.connection().execute(
-            "UPDATE suplex_task_turns SET terminal_observation = ?1, updated_at = ?2 WHERE id = ?3",
-            params![Value::Object(base).to_string(), rfc3339_millis(now), turn_id],
-        )?;
-        if let Some(role @ (AdvisorRole::Reviewer | AdvisorRole::Rater)) = AdvisorRole::parse(&role) {
-            let mut state = workflow_state(database, task_id)?;
-            let review = state
-                .reviews
-                .iter_mut()
-                .find(|review| review.session_id == session_id && review.turn_id == turn_id && review.role == role)
-                .filter(|review| review.result.is_none())
-                .ok_or_else(|| CoordinationError::refused("advisor_review_not_reconcilable"))?;
-            review.result = Some(result.clone());
-            review.invalid_reason = None;
-            write_workflow_state(database, task_id, &state, now)?;
-        }
-        Ok(())
-    })
-}
-
 /// TypeScript `recordWorkflowOutcome`: records a terminal outcome that carries
 /// no workflow proof. An existing completion is preserved.
 pub fn record_workflow_outcome(

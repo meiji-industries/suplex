@@ -158,47 +158,29 @@ pub fn get_user_by_session_with_provenance(
     Ok(public_user(database, &user_id)?.map(|user| (user, provenance)))
 }
 
-pub fn bootstrap_required(database: &SuplexDatabase) -> DatabaseResult<bool> {
-    let active_admins: i64 = database.connection().query_row(
-        "SELECT COUNT(*) FROM suplex_users WHERE role = 'admin' AND status != 'revoked'",
-        [],
-        |row| row.get(0),
-    )?;
-    Ok(active_admins == 0)
-}
-
-/// Issue the same single-use administrator enrollment token as the standalone CLI.
-pub fn issue_administrator_invitation(
+/// Issue the single-use owner recovery token that `suplex recover` prints.
+pub fn issue_recovery_invitation(
     database: &mut SuplexDatabase,
-    kind: &str,
     metadata: &str,
     now: DateTime<Utc>,
-) -> DatabaseResult<Option<String>> {
-    if kind == "bootstrap" && !bootstrap_required(database)? {
-        return Ok(None);
-    }
-    if !matches!(kind, "bootstrap" | "recovery") {
-        return Err("Invalid administrator invitation kind".into());
-    }
+) -> DatabaseResult<String> {
     database.transaction(true, |database| {
         let now_iso = rfc3339_millis(now);
         database.connection().execute(
-            "UPDATE suplex_invitations SET replaced_at = ?1 WHERE kind = ?2 AND consumed_at IS NULL AND replaced_at IS NULL",
-            params![now_iso, kind],
+            "UPDATE suplex_invitations SET replaced_at = ?1 WHERE kind = 'recovery' AND consumed_at IS NULL AND replaced_at IS NULL",
+            [&now_iso],
         )?;
-        let token = crate::shared::ids::random_secret(&format!("invite_v1_{kind}"))?;
-        let invitation_id = random_hex_id("invitation")?;
-        let display = if kind == "bootstrap" { "Suplex administrator" } else { "Administrator recovery" };
+        let token = crate::shared::ids::random_secret("invite_v1_recovery")?;
         database.connection().execute(
-            "INSERT INTO suplex_invitations (id, token_hash, kind, display_name, user_id, expires_at, consumed_at, replaced_at, created_at, metadata_json) VALUES (?1, ?2, ?3, ?4, NULL, ?5, NULL, NULL, ?6, ?7)",
-            params![invitation_id, sha256_hex(&token), kind, display, rfc3339_millis(now + Duration::hours(72)), now_iso, metadata],
+            "INSERT INTO suplex_invitations (id, token_hash, kind, display_name, user_id, expires_at, consumed_at, replaced_at, created_at, metadata_json) VALUES (?1, ?2, 'recovery', 'Administrator recovery', NULL, ?3, NULL, NULL, ?4, ?5)",
+            params![random_hex_id("invitation")?, sha256_hex(&token), rfc3339_millis(now + Duration::hours(72)), now_iso, metadata],
         )?;
         crate::identity::audit::record(database, &crate::identity::audit::AuditEvent {
             id: &random_hex_id("audit")?, actor_user_id: None, actor_agent_id: None,
-            action: if kind == "bootstrap" { "bootstrap_invitation_created" } else { "recovery_invitation_created" },
+            action: "recovery_invitation_created",
             target_user_id: None, company_id: None, metadata_json: metadata, created_at: &now_iso,
         })?;
-        Ok(Some(token))
+        Ok(token)
     })
 }
 
@@ -271,25 +253,6 @@ pub fn sign_out(
         params![sha256_hex(raw_token), rfc3339_millis(now)],
     )?;
     Ok(())
-}
-
-pub fn rollover_legacy_session(
-    database: &mut SuplexDatabase,
-    raw_token: &str,
-    now: DateTime<Utc>,
-) -> DatabaseResult<Option<String>> {
-    if raw_token.is_empty() {
-        return Ok(None);
-    }
-    database.transaction(false, |database| {
-        let token = crate::shared::ids::random_secret("session_v1")?;
-        let old_hash = sha256_hex(raw_token);
-        let changes = database.connection().execute(
-            "UPDATE suplex_sessions SET token_hash = ?2, token_version = 1, legacy_token_hash = ?1, legacy_token_expires_at = ?3 WHERE token_hash = ?1 AND token_version = 0 AND revoked_at IS NULL",
-            params![old_hash, sha256_hex(&token), rfc3339_millis(now + Duration::days(SESSION_TTL_DAYS))],
-        )?;
-        Ok((changes == 1).then_some(token))
-    })
 }
 
 pub fn update_profile(
@@ -488,7 +451,7 @@ mod tests {
     }
 
     #[test]
-    fn session_lookup_development_sign_in_sign_out_and_legacy_rollover() {
+    fn session_lookup_development_sign_in_and_sign_out() {
         let filename =
             std::env::temp_dir().join(format!("{}.sqlite", random_hex_id("suplex_auth").unwrap()));
         let mut database = SuplexDatabase::open(&filename, OpenMode::Migrate).unwrap();
@@ -510,34 +473,6 @@ mod tests {
         sign_out(&database, &signed_in.session_token, now).unwrap();
         assert!(
             get_user_by_session(&database, &signed_in.session_token, now)
-                .unwrap()
-                .is_none()
-        );
-
-        let legacy = "suplex_legacy_test_token";
-        database.connection().execute(
-            "INSERT INTO suplex_sessions (id, token_hash, user_id, expires_at, created_at, token_version) VALUES ('legacy_session', ?1, 'user_development', ?2, ?3, 0)",
-            params![sha256_hex(legacy), rfc3339_millis(now + Duration::days(7)), rfc3339_millis(now)],
-        ).unwrap();
-        let replacement = rollover_legacy_session(&mut database, legacy, now)
-            .unwrap()
-            .unwrap();
-        assert_eq!(
-            get_user_by_session(&database, legacy, now).unwrap(),
-            Some(signed_in.user.clone())
-        );
-        assert_eq!(
-            get_user_by_session(&database, &replacement, now).unwrap(),
-            Some(signed_in.user)
-        );
-        assert!(
-            rollover_legacy_session(&mut database, legacy, now)
-                .unwrap()
-                .is_none()
-        );
-        sign_out(&database, legacy, now).unwrap();
-        assert!(
-            get_user_by_session(&database, &replacement, now)
                 .unwrap()
                 .is_none()
         );

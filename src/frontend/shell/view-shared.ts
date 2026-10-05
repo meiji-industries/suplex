@@ -1,8 +1,6 @@
 import { isApiError } from "../lib/api.js";
-import type { CredentialResponse, InvitationSummaryResponse } from "../contracts/common.js";
 import type { ModelResponse, ProfileResponse, ProjectResponse } from "../contracts/projects.js";
 import type { ExternalAgentResponse } from "../contracts/generated/ExternalAgentResponse.js";
-import type { TaskListTask, TaskResponse } from "../contracts/task-responses.js";
 import type { TaskTemplateResponse } from "../contracts/task-templates.js";
 import type { WorkflowRecord } from "../contracts/workflow-presets.js";
 
@@ -10,11 +8,7 @@ export type ApiProfile = ProfileResponse;
 export type ApiWorkflow = WorkflowRecord;
 export type ApiExternalAgent = ExternalAgentResponse;
 export type ApiModel = ModelResponse;
-export type ApiInvitation = InvitationSummaryResponse;
-export type ApiCredential = CredentialResponse;
 export type ApiProject = ProjectResponse;
-export type ApiTask = TaskResponse;
-export type ApiTaskSummary = TaskListTask;
 export type ApiTaskTemplate = TaskTemplateResponse;
 
 export async function reconcileScopedNotFound(reason: unknown, reloadCompanies: () => Promise<void>): Promise<boolean> {

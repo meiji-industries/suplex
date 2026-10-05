@@ -441,7 +441,7 @@ mod tests {
         let previous = wire::HostedAccount { id: "user_67e55044-10b1-426f-9247-bb680e5fe0c9".into(), email: "previous@example.com".into(), name: None };
         let token = f.state.with_database(|db| {
             crate::accounts::link(db, &previous, &"o".repeat(43)).unwrap();
-            crate::identity::auth::issue_administrator_invitation(db, "recovery", "{}", Utc::now()).unwrap().unwrap()
+            crate::identity::auth::issue_recovery_invitation(db, "{}", Utc::now()).unwrap()
         });
         let app = crate::http::router(f.state.clone());
 

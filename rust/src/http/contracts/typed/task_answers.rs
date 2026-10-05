@@ -31,7 +31,7 @@ pub struct LimitDecisionBody {
     pub limit_decision: TaskLimitDecision,
 }
 
-pub use crate::tasks::control::{TaskLimitDecision, TaskLimits};
+pub use crate::tasks::control::TaskLimitDecision;
 
 /// `TaskLimitDecisionSchema`.
 fn limit_decision(input: Option<&Value>) -> ContractResult<Value> {

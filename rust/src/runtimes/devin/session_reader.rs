@@ -6,7 +6,7 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use serde_json::{Value, json};
+use serde_json::Value;
 
 use super::{
     advisor_evidence,
@@ -146,10 +146,6 @@ pub fn history(
         runtime_directory,
         native_session_id,
     )?))
-}
-
-pub fn execution() -> Value {
-    json!({ "tools": [], "plan": null, "limited": true })
 }
 
 pub fn turn_evidence(

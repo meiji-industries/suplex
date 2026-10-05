@@ -186,22 +186,7 @@ pub fn run(local: bool) -> Result<(), Box<dyn std::error::Error>> {
         "Saved idempotent Suplex configuration to {}",
         file.display()
     );
-    let mut database = SuplexDatabase::open(&installation.database, OpenMode::Migrate)?;
-    if let Some(token) = crate::identity::auth::issue_administrator_invitation(
-        &mut database,
-        "bootstrap",
-        "{}",
-        chrono::Utc::now(),
-    )? {
-        println!(
-            "Bootstrap enrollment (showing once): {}/auth?invite={token}",
-            installation.reachable_address
-        );
-    } else {
-        println!(
-            "Bootstrap administrator is already enrolled. Use `suplex recover` for explicit recovery."
-        );
-    }
+    SuplexDatabase::open(&installation.database, OpenMode::Migrate)?;
     if exposure == "serve" {
         configure_serve(&installation)?;
     }

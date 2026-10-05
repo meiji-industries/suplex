@@ -286,12 +286,10 @@ pnpm run test:rust
 Use the narrower projects when you need them:
 
 ```sh
-pnpm test:real
 pnpm desktop:dist
 pnpm test:packaged
 ```
 
-`test:real` runs tests that depend on installed services or credentials.
 `test:packaged` requires the desktop package from `desktop:dist`.
 `pnpm test:guarded` runs the default suite inside the production Worker Git
 guard and confirms that the guard remains active after the suite exits.

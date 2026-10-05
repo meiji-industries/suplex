@@ -49,31 +49,23 @@ parity! {
     agent_api_pairing_exchange_body: "agent-api.AgentApiPairingExchangeBodySchema" => typed!(agent_api::PairingExchangeBody),
     agent_api_project_discovery_query: "agent-api.AgentApiProjectDiscoveryQuerySchema" => typed!(agent_api::ProjectDiscoveryQuery),
     agent_api_task_command_body: "agent-api.AgentApiTaskCommandBodySchema" => typed!(agent_api::TaskCommandBody),
-    agent_api_task_command: "agent-api.AgentApiTaskCommandSchema" => agent_api::task_command,
     agent_api_task_create_body: "agent-api.AgentApiTaskCreateBodySchema" => typed!(agent_api::TaskCreateBody),
     agent_api_task_dependencies_body: "agent-api.AgentApiTaskDependenciesBodySchema" => typed!(agent_api::TaskDependenciesBody),
-    agent_api_task_filter: "agent-api.AgentApiTaskFilterSchema" => agent_api::task_filter,
     agent_api_task_id_params: "agent-api.AgentApiTaskIdParamsSchema" => typed!(agent_api::TaskIdParams),
     agent_api_task_list_query: "agent-api.AgentApiTaskListQuerySchema" => typed!(agent_api::TaskListQuery),
     auth_company_issue_code_body: "auth.CompanyIssueCodeBodySchema" => typed!(auth::CompanyIssueCodeBody),
     auth_company_name_body: "auth.CompanyNameBodySchema" => typed!(auth::CompanyNameBody),
-    auth_display_name_body: "auth.DisplayNameBodySchema" => typed!(auth::DisplayNameBody),
     auth_membership_body: "auth.MembershipBodySchema" => typed!(auth::MembershipBody),
     auth_profile_body: "auth.ProfileBodySchema" => typed!(auth::ProfileBody),
     avatars_avatar_image_body: "avatars.AvatarImageBodySchema" => typed!(avatars::AvatarImageBody),
     avatars_avatar_owner_params: "avatars.AvatarOwnerParamsSchema" => typed!(avatars::AvatarOwnerParams),
     avatars_avatar_shape: "avatars.AvatarShapeSchema" => avatars::shape,
     avatars_avatar_update_body: "avatars.AvatarUpdateBodySchema" => typed!(avatars::AvatarUpdateBody),
-    common_authentication_verification_body: "common.AuthenticationVerificationBodySchema" => typed!(auth::AuthenticationVerificationBody),
     common_company_id_params: "common.CompanyIdParamsSchema" => typed!(auth::CompanyIdParams),
     common_company_status_params: "common.CompanyStatusParamsSchema" => typed!(auth::CompanyStatusParams),
-    common_credential_id_params: "common.CredentialIdParamsSchema" => typed!(auth::CredentialIdParams),
-    common_empty_body: "common.EmptyBodySchema" => typed!(auth::EmptyBody),
     common_project_id_params: "common.ProjectIdParamsSchema" => typed!(projects::ProjectIdParams),
-    common_registration_verification_body: "common.RegistrationVerificationBodySchema" => typed!(auth::RegistrationVerificationBody),
     common_task_artifact_params: "common.TaskArtifactParamsSchema" => typed!(tasks::TaskArtifactParams),
     common_task_id_params: "common.TaskIdParamsSchema" => typed!(tasks::TaskIdParams),
-    common_token_body: "common.TokenBodySchema" => typed!(auth::TokenBody),
     common_user_id_params: "common.UserIdParamsSchema" => typed!(auth::UserIdParams),
     github_auth_git_hub_device_poll_body: "github-auth.GitHubDevicePollBodySchema" => typed!(github_auth::DevicePollBody),
     github_triggers_github_trigger_company_params: "github-triggers.GithubTriggerCompanyParamsSchema" => typed!(github_triggers::GithubTriggerCompanyParams),
@@ -185,5 +177,5 @@ fn check(contract: &str, schema: Schema) {
 
 #[test]
 fn every_request_contract_has_a_fixture_test() {
-    assert_eq!(CONTRACTS.len(), 84);
+    assert_eq!(CONTRACTS.len(), 76);
 }

@@ -4,10 +4,6 @@ export function addDays(value: Date, days: number): Date {
   return next;
 }
 
-export function titleCase(value: string): string {
-  return value[0]!.toUpperCase() + value.slice(1);
-}
-
 export function formatDuration(durationMs: number): string {
   if (durationMs <= 0) return "0m";
   const minutes = Math.max(1, Math.round(durationMs / 60_000));

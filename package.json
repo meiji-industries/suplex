@@ -18,7 +18,6 @@
     "check:full": "pnpm run check && pnpm run test:browser",
     "test": "pnpm exec vite build && env -u RUSTUP_TOOLCHAIN cargo build --manifest-path rust/Cargo.toml --bin suplex --features github-test-endpoint && vitest run --project unit",
     "test:guarded": "env -u RUSTUP_TOOLCHAIN cargo run --quiet --manifest-path rust/Cargo.toml --example guarded-tests --",
-    "test:real": "vitest run --project real",
     "test:packaged": "pnpm --filter suplex-desktop test:packaged",
     "test:browser": "pnpm exec vite build && env -u RUSTUP_TOOLCHAIN cargo build --manifest-path rust/Cargo.toml --bin suplex --features github-test-endpoint && vitest run --config vitest.browser.config.ts",
     "verify": "pnpm run check:full",
@@ -75,9 +74,7 @@
     "zod": "^4.4.3"
   },
   "devDependencies": {
-    "@eslint/js": "^10.0.1",
     "@modelcontextprotocol/sdk": "1.30.0",
-    "@simplewebauthn/server": "^13.3.2",
     "@tailwindcss/vite": "^4.3.3",
     "@types/node": "^24.10.1",
     "@types/react": "^19.2.18",

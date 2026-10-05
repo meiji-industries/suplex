@@ -1,4 +1,3 @@
-import { useSyncExternalStore } from "react";
 import type { PostHog } from "posthog-js";
 
 import type { TelemetryResponse } from "../contracts/generated/TelemetryResponse.js";
@@ -18,7 +17,6 @@ const blockedReplaySelector = [
 ].join(",");
 const staticSegments = new Set(["access", "admin", "agents", "analytics", "api", "api-mcp", "auth", "backups", "billing", "board", "companies", "environment", "health", "moves", "notice", "onboarding", "profile", "projects", "providers", "settings", "setup", "tasks", "telemetry", "templates", "terminal", "timeline", "today", "triggers", "workflows"]);
 const featureValues = new Map<string, boolean>();
-const featureSubscribers = new Set<() => void>();
 const apiErrorCodes = new Set(["authentication_required", "request_origin_invalid", "administrator_required", "billing_unavailable", "forbidden", "not_found", "validation_failed", "conflict"]);
 
 let client: PostHog | undefined;
@@ -87,17 +85,10 @@ function baseProperties(): Record<string, unknown> {
   };
 }
 
-function notifyFeatureSubscribers(): void {
-  for (const notify of featureSubscribers) notify();
-}
-
 function syncFeatureFlags(): void {
   if (!client) return;
   const replay = client.isFeatureEnabled(replayFlag, { send_event: false }) === true;
-  if (featureValues.get(replayFlag) !== replay) {
-    featureValues.set(replayFlag, replay);
-    notifyFeatureSubscribers();
-  }
+  featureValues.set(replayFlag, replay);
   syncReplay();
 }
 
@@ -163,7 +154,6 @@ function disableCapture(): void {
     client.resetGroups();
     client.reset();
   }
-  notifyFeatureSubscribers();
 }
 
 export function stopBrowserAnalytics(): void {
@@ -330,16 +320,3 @@ export function installBrowserAnalytics(): () => void {
   };
 }
 
-export function analyticsFeatureEnabled(flag: string): boolean {
-  return featureValues.get(flag) === true;
-}
-
-export function useAnalyticsFeatureFlag(flag: string): boolean {
-  return useSyncExternalStore(
-    (notify) => { featureSubscribers.add(notify); return () => featureSubscribers.delete(notify); },
-    () => analyticsFeatureEnabled(flag),
-    () => false,
-  );
-}
-
-export const analyticsFeatureFlags = { sessionReplay: replayFlag } as const;

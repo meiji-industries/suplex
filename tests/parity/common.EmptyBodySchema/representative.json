@@ -1,9 +1,0 @@
-{
-  "contract": "common.EmptyBodySchema",
-  "case": "representative",
-  "input": {},
-  "expected": {
-    "accepted": true,
-    "value": {}
-  }
-}

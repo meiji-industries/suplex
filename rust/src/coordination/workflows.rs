@@ -625,88 +625,6 @@ pub fn delivery_decision(
     })
 }
 
-/// TypeScript `deliveryWaitFingerprint` over one pull request observation.
-pub fn delivery_wait_fingerprint(observation: &Value) -> String {
-    let checks = &observation["checks"];
-    let mut failures = checks["runs"]
-        .as_array()
-        .map(|runs| {
-            runs.iter()
-                .filter(|run| run["status"] == "failing")
-                .map(|run| {
-                    format!(
-                        "{}:{}:{}",
-                        run["name"].as_str().unwrap_or_default(),
-                        run["status"].as_str().unwrap_or_default(),
-                        run["conclusion"].as_str().unwrap_or_default()
-                    )
-                })
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
-    failures.sort();
-    let pending = checks["pending"].as_f64().unwrap_or(0.0);
-    let failing = checks["failing"].as_f64().unwrap_or(0.0);
-    let mut summary = vec![json!(if pending > 0.0 { "pending" } else { "settled" })];
-    if failing > 0.0 {
-        summary.push(json!(format!(
-            "failed:{}",
-            crate::shared::js_json::stringify(&checks["failing"])
-        )));
-        summary.extend(failures.into_iter().map(Value::String));
-    }
-    crate::shared::js_json::stringify(&json!({
-        "number": observation["number"], "head": observation["headSha"], "draft": observation["isDraft"],
-        "review": observation["reviewDecision"], "mergeable": observation["mergeable"],
-        "mergeState": observation["mergeStateStatus"], "state": observation["state"], "checks": summary,
-    }))
-}
-
-pub fn same_delivery_wait_fingerprint(stored: &str, observation: &Value) -> bool {
-    let current = delivery_wait_fingerprint(observation);
-    if stored == current {
-        return true;
-    }
-    let checks = &observation["checks"];
-    if checks["pending"].as_f64().unwrap_or(0.0) == 0.0
-        || checks["failing"].as_f64().unwrap_or(0.0) > 0.0
-    {
-        return false;
-    }
-    let Ok(Value::Object(mut legacy)) = serde_json::from_str::<Value>(stored) else {
-        return false;
-    };
-    let keys = [
-        "number",
-        "head",
-        "draft",
-        "review",
-        "mergeable",
-        "mergeState",
-        "state",
-        "checks",
-    ];
-    if legacy.len() != keys.len() || !keys.iter().all(|key| legacy.contains_key(*key)) {
-        return false;
-    }
-    let Some(entries) = legacy["checks"].as_array().cloned() else {
-        return false;
-    };
-    let entries = entries
-        .iter()
-        .map(Value::as_str)
-        .collect::<Option<Vec<_>>>()
-        .unwrap_or_default();
-    if entries.is_empty()
-        || !entries.iter().any(|check| check.ends_with(":pending:"))
-        || entries.iter().any(|check| check.contains(":failing:"))
-    {
-        return false;
-    }
-    legacy.insert("checks".into(), json!(["pending"]));
-    crate::shared::js_json::stringify(&Value::Object(legacy)) == current
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1103,32 +1021,6 @@ mod tests {
             )
             .is_err()
         );
-    }
-
-    #[test]
-    fn delivery_wait_fingerprints_ignore_passing_jobs_while_another_is_pending() {
-        let observation = |pending: i64, runs: Value| json!({"number":7,"headSha":"h","baseSha":"b","isDraft":false,"reviewDecision":null,"mergeable":"MERGEABLE","mergeStateStatus":"BLOCKED","state":"open","checks":{"pending":pending,"failing":0,"runs":runs}});
-        let first = observation(
-            2,
-            json!([{"name":"lint","status":"pending"},{"name":"test","status":"pending"}]),
-        );
-        let later = observation(
-            1,
-            json!([{"name":"lint","status":"passing","conclusion":"success"},{"name":"test","status":"pending"}]),
-        );
-        let stored = delivery_wait_fingerprint(&first);
-        assert_eq!(
-            stored,
-            r#"{"number":7,"head":"h","draft":false,"review":null,"mergeable":"MERGEABLE","mergeState":"BLOCKED","state":"open","checks":["pending"]}"#
-        );
-        assert!(same_delivery_wait_fingerprint(&stored, &later));
-        let legacy = r#"{"number":7,"head":"h","draft":false,"review":null,"mergeable":"MERGEABLE","mergeState":"BLOCKED","state":"open","checks":["lint:pending:","test:pending:"]}"#;
-        assert!(same_delivery_wait_fingerprint(legacy, &later));
-        let failed = json!({"number":7,"headSha":"h","isDraft":false,"reviewDecision":null,"mergeable":"MERGEABLE","mergeStateStatus":"BLOCKED","state":"open","checks":{"pending":0,"failing":1,"runs":[{"name":"test","status":"failing","conclusion":"failure"}]}});
-        assert!(
-            delivery_wait_fingerprint(&failed).contains("\"failed:1\",\"test:failing:failure\"")
-        );
-        assert!(!same_delivery_wait_fingerprint(&stored, &failed));
     }
 
     #[test]

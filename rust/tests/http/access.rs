@@ -114,10 +114,6 @@ mod tests {
         assert_eq!(automatic.status(), 200);
         let cookie = automatic.headers().get(header::SET_COOKIE).unwrap().to_str().unwrap()
             .split(';').next().unwrap().to_owned();
-        state.with_database(|database| crate::identity::remote_access_repository::update(
-            database,
-            crate::identity::remote_access_repository::RemoteAccessPolicy::Passkeys { external_https_origin: None },
-        )).unwrap();
         let serve = client.get(format!("http://{address}/api/auth/me"))
             .header("host", "suplex.example.test:4111")
             .header("x-forwarded-host", "suplex.example.test:4111")
@@ -144,7 +140,7 @@ mod tests {
         let response = reqwest::Client::new().put(format!("http://{address}/api/admin/access"))
             .header("host", "remote.example.test:4111")
             .header("origin", "https://foreign.example.test")
-            .json(&serde_json::json!({"kind":"open","requireHttps":false,"defaultUserId":"user_development","externalHttpsOrigin":null}))
+            .json(&serde_json::json!({"externalHttpsOrigin":null}))
             .send().await.unwrap();
         assert_eq!(response.status(), 403);
         server.abort();
@@ -157,7 +153,7 @@ mod tests {
         let (mut state, path) = crate::http::routes::auth::tests::state();
         state.session_config.reachable_address = "http://127.0.0.1:4111".into();
         let before = state
-            .with_database(|database| crate::identity::remote_access_repository::read(database))
+            .with_database(|database| crate::identity::remote_access_repository::external_https_origin(database))
             .unwrap();
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
@@ -182,7 +178,7 @@ mod tests {
         assert_eq!(response.status(), 400);
         assert_eq!(
             state
-                .with_database(|database| crate::identity::remote_access_repository::read(database))
+                .with_database(|database| crate::identity::remote_access_repository::external_https_origin(database))
                 .unwrap(),
             before
         );

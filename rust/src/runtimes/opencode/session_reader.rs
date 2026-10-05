@@ -9,7 +9,7 @@ use super::{
     client::OpenCodeClient,
     contracts::{Envelope, Part, ToolPart},
     server::{self, ServerReference},
-    session::{BoxError, correlated_assistants},
+    session::BoxError,
     session_history::read_history,
 };
 use crate::{
@@ -300,11 +300,6 @@ pub fn task_usage(
     Ok(usage)
 }
 
-pub struct TurnEvidence {
-    pub tools: Vec<NativeTool>,
-    pub limitation: Option<&'static str>,
-}
-
 pub struct Timeline {
     pub usage: Vec<Value>,
     pub live_message_id: Option<String>,
@@ -379,33 +374,6 @@ impl OpenCodeSessionReader {
             execution_from_messages(&all)?,
             messages.len() >= MESSAGE_LIMIT,
         ))
-    }
-
-    /// Reads one admitted native turn. Stored completion observations are not required for correlation.
-    pub async fn turn_evidence(
-        &self,
-        session: &ReaderSession<'_>,
-        turn_id: &str,
-    ) -> Result<TurnEvidence, BoxError> {
-        let messages = match (session.current, session.native_session_id) {
-            (false, Some(native)) => self.exported(native).await?,
-            _ => self.live_messages(session).await?,
-        };
-        let correlated = correlated_assistants(&messages, turn_id);
-        if !correlated.prompt_found {
-            return Ok(TurnEvidence {
-                tools: Vec::new(),
-                limitation: Some(
-                    "The admitted native prompt is not present in the authoritative session history.",
-                ),
-            });
-        }
-        Ok(TurnEvidence {
-            tools: execution_from_messages(&correlated.messages)?.tools,
-            limitation: (correlated.reason == Some("continuation_ambiguous")).then_some(
-                "Native compaction continuation was ambiguous; only tools with an authoritative parent chain are included.",
-            ),
-        })
     }
 
     /// Returns `(status, updatedAt)` from the live server.

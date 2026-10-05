@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { expect, test } from "vitest";
 
 import { nativeBrowser } from "./helpers/native-browser.js";
-import { freePort } from "./webauthn-helpers.js";
+import { freePort } from "./helpers/free-port.js";
 
 test("OAuth consent grants one selected project and returns the client state and code", async () => {
   const port = await freePort();

@@ -1,9 +1,0 @@
-{
-  "contract": "tasks.VisualEvidenceSchema",
-  "case": "representative",
-  "input": "off",
-  "expected": {
-    "accepted": true,
-    "value": "off"
-  }
-}

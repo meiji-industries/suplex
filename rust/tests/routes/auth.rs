@@ -102,13 +102,9 @@ pub(crate) mod tests {
     pub(crate) fn require_remote_login(state: &AppState) {
         state
             .with_database(|database| {
-                crate::identity::remote_access_repository::update(
+                crate::identity::remote_access_repository::set_external_https_origin(
                     database,
-                    crate::identity::remote_access_repository::RemoteAccessPolicy::Passkeys {
-                        external_https_origin: Some(
-                            "https://suplex.example.test:4111".to_owned(),
-                        ),
-                    },
+                    Some("https://suplex.example.test:4111"),
                 )
             })
             .unwrap();

@@ -47,20 +47,16 @@ on `127.0.0.1` and stores installation data under
 Operator session. This is an owner-controlled host trust model, not isolation
 from other local processes.
 
-The **Access** settings control both network reachability and Suplex sign-in
-policy. **This Mac only** binds the bundled host to loopback. **Tailscale**
+The **Access** settings control network reachability and the external HTTPS
+origin. **This Mac only** binds the bundled host to loopback. **Tailscale**
 creates an HTTPS Serve route to the loopback host. **All networks** binds the
 host to all IPv4 interfaces and does not terminate TLS. The desktop window
 continues to use the loopback URL in every mode.
 
-An open policy assigns requests without a credential to the selected active
-account. Its current role and company memberships apply. **Require HTTPS**
-rejects remote HTTP requests; it does not claim that Suplex terminates TLS.
-Tailscale mode supplies its HTTPS address automatically. For a loopback reverse
-proxy, save the external HTTPS origin in Access settings. **Require sign-in**
-also requires HTTPS and accepts only hosted-account sessions from remote
-clients. Existing automatic and legacy sessions lose remote authority when
-this policy is enabled.
+Remote requests must arrive over verified HTTPS and carry a hosted-account
+session; automatic sessions have no remote authority. Suplex does not terminate
+TLS. Tailscale mode supplies its HTTPS address automatically. For a loopback
+reverse proxy, save the external HTTPS origin in Access settings.
 
 Local recovery is separate from remote policy. It requires an actual loopback
 peer, a loopback Host at the active port, and no forwarding or Tailscale proxy

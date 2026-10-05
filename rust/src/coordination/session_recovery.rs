@@ -1520,38 +1520,6 @@ mod tests {
             (reviews[0]["range"].clone(), reviews[0]["result"].clone()),
             (json!(range()), Value::Null)
         );
-        let result = json!({"rating":9,"blockingFindings":[],"verification":"passed","verificationSummary":"ok","summary":"Ready","role":"rater"});
-        let task_id = rater.task_id.as_str();
-        root_session_store::reconcile_advisor_result(
-            &mut database,
-            task_id,
-            rater.id.as_str(),
-            reviews[0]["turnId"].as_str().unwrap(),
-            &result,
-            Utc::now(),
-        )
-        .unwrap();
-        let state =
-            serde_json::to_value(root_session_store::workflow_state(&database, task_id).unwrap())
-                .unwrap();
-        assert_eq!(
-            (
-                state["reviews"][0]["result"]["rating"].clone(),
-                state["reviews"][0]["invalidReason"].clone()
-            ),
-            (json!(9), Value::Null)
-        );
-        assert!(
-            root_session_store::reconcile_advisor_result(
-                &mut database,
-                task_id,
-                rater.id.as_str(),
-                reviews[0]["turnId"].as_str().unwrap(),
-                &result,
-                Utc::now()
-            )
-            .is_err()
-        );
         std::fs::remove_dir_all(directory).unwrap();
     }
 

@@ -6,7 +6,6 @@ mod jira;
 mod linear;
 
 pub use github::github_image_reference;
-pub use jira::jira_evidence_document;
 
 use std::{error::Error, fmt, sync::LazyLock};
 

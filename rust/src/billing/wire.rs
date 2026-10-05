@@ -202,19 +202,6 @@ pub struct HostedSeatPreview {
     pub proration_timestamp: i64,
 }
 
-impl HostedSeatPreview {
-    pub fn valid(&self) -> bool {
-        bounded(&self.preview_id, MAX_ID)
-            && timestamp(&self.expires_at)
-            && self.current_quantity >= 1
-            && (1..=MAX_SEATS).contains(&self.requested_quantity)
-            && self.amount_due_now >= 0
-            && self.next_subtotal >= 0
-            && self.currency == SEAT_CURRENCY
-            && self.proration_timestamp > 0
-    }
-}
-
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SeatIncrease {
@@ -270,26 +257,6 @@ pub enum HostedSeatChangeResult {
         url: Option<String>,
         state: HostedBillingState,
     },
-}
-
-impl HostedSeatChangeResult {
-    pub fn valid(&self) -> bool {
-        match self {
-            Self::Applied {
-                operation_id,
-                state,
-            } => bounded(operation_id, MAX_ID) && state.valid(),
-            Self::PaymentRequired {
-                operation_id,
-                url,
-                state,
-            } => {
-                bounded(operation_id, MAX_ID)
-                    && url.as_deref().is_none_or(|url| bounded(url, MAX_URL))
-                    && state.valid()
-            }
-        }
-    }
 }
 
 /// POST /v1/portal

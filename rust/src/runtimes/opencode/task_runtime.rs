@@ -488,7 +488,6 @@ fn dispatch_state(dispatch: DispatchState) -> Dispatch {
     match dispatch {
         DispatchState::NotSubmitted => Dispatch::NotSubmitted,
         DispatchState::Ambiguous => Dispatch::Ambiguous,
-        DispatchState::Rejected => Dispatch::Rejected,
     }
 }
 

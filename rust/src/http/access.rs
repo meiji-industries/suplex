@@ -57,13 +57,13 @@ pub async fn remote_access_boundary(
     let loopback_peer = peer.is_some_and(|address| address.ip().is_loopback());
     let loopback_host = session::is_loopback_host(&state.session_config, Some(host));
     let local = loopback_peer && loopback_host && !forwarded && !tailscale;
-    let policy = match state
-        .with_database(|database| crate::identity::remote_access_repository::read(database))
-    {
-        Ok(policy) => policy,
+    let external = match state.with_database(|database| {
+        crate::identity::remote_access_repository::external_https_origin(database)
+    }) {
+        Ok(external) => external,
         Err(error) => return ApiError::response(error),
     };
-    let external = policy.external_https_origin();
+    let external = external.as_deref();
     let forwarded_https = loopback_peer
         && request
             .headers()
@@ -247,13 +247,6 @@ impl Csrf {
         } else {
             Err(PublicFailure::new(403, "request_origin_invalid").into())
         }
-    }
-}
-
-pub async fn csrf_layer(State(state): State<AppState>, request: Request, next: Next) -> Response {
-    match Csrf::check(&state, request.headers(), request.method().as_str()) {
-        Ok(_) => next.run(request).await,
-        Err(error) => error.into_response(),
     }
 }
 

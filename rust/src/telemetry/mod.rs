@@ -114,14 +114,6 @@ fn state(database: &SuplexDatabase) -> DatabaseResult<Option<State>> {
         .optional()?)
 }
 
-/// True when an administrator still has to see the notice: this build sends,
-/// the setting is on, and nobody acknowledged it on this host.
-pub fn notice_required(database: &SuplexDatabase, configured: bool) -> DatabaseResult<bool> {
-    Ok(configured
-        && environment_settings::read(database)?.telemetry_enabled
-        && state(database)?.and_then(|state| state.notice_at).is_none())
-}
-
 /// Records that an administrator saw the notice.
 pub fn acknowledge(database: &mut SuplexDatabase, now: DateTime<Utc>) -> DatabaseResult<()> {
     database.connection().execute(
@@ -856,11 +848,7 @@ mod tests {
                 .unwrap()
                 .is_none()
         );
-        assert!(notice_required(&database, true).unwrap());
-        assert!(!notice_required(&database, false).unwrap());
-
         acknowledge(&mut database, now).unwrap();
-        assert!(!notice_required(&database, true).unwrap());
         // History before the notice is never sent.
         let collected = prepare(&mut database, &test_config(), now, true)
             .unwrap()

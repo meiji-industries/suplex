@@ -557,10 +557,7 @@ pub fn observe_admission(
     log_exists: bool,
 ) -> Option<super::native::PromptObservation> {
     use super::native::{DispatchState, PromptObservation, PromptState};
-    let replayable = matches!(
-        dispatch,
-        DispatchState::NotSubmitted | DispatchState::Rejected
-    );
+    let replayable = matches!(dispatch, DispatchState::NotSubmitted);
     let reason = match record {
         Some(record) if record.session_id == session_id => return None,
         Some(_) => "session_identity_conflict",

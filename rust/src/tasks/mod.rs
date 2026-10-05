@@ -6,7 +6,6 @@ pub mod commands;
 pub mod control;
 pub mod creation;
 pub mod dependencies;
-pub mod duplicate_title;
 pub mod host;
 pub mod images;
 pub mod integration;

@@ -56,7 +56,6 @@ pub struct BackupEntry {
 pub struct Verification {
     pub valid: bool,
     pub archive_path: PathBuf,
-    pub manifest: Option<Value>,
     pub errors: Vec<String>,
     pub verified_at: String,
     pub duration_ms: u128,
@@ -411,20 +410,18 @@ fn keep_live_accounts(staged: &Connection, live_path: &Path) -> BackupResult<()>
             [],
         )?;
         // A backup from another host can hold the same username under another id; sessions follow the username.
-        for table in ["suplex_sessions"] {
-            let names = columns(table)?;
-            let values = names
-                .iter()
-                .map(|name| {
-                    if name == "\"user_id\"" {
-                        "restored.id".to_owned()
-                    } else {
-                        format!("row.{name}")
-                    }
-                })
-                .collect::<Vec<_>>();
-            staged.execute(&format!("INSERT OR IGNORE INTO main.{table} ({}) SELECT {} FROM live.{table} row JOIN live.suplex_users current ON current.id = row.user_id JOIN main.suplex_users restored ON restored.username = current.username", names.join(", "), values.join(", ")), [])?;
-        }
+        let names = columns("suplex_sessions")?;
+        let values = names
+            .iter()
+            .map(|name| {
+                if name == "\"user_id\"" {
+                    "restored.id".to_owned()
+                } else {
+                    format!("row.{name}")
+                }
+            })
+            .collect::<Vec<_>>();
+        staged.execute(&format!("INSERT OR IGNORE INTO main.suplex_sessions ({}) SELECT {} FROM live.suplex_sessions row JOIN live.suplex_users current ON current.id = row.user_id JOIN main.suplex_users restored ON restored.username = current.username", names.join(", "), values.join(", ")), [])?;
         Ok(())
     })();
     match copied {
@@ -582,7 +579,6 @@ impl BackupService {
         let verification = Verification {
             valid: errors.is_empty(),
             archive_path: archive,
-            manifest,
             errors,
             verified_at: crate::shared::time::now_millis_rfc3339(),
             duration_ms: started.elapsed().as_millis(),

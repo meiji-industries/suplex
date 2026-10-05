@@ -239,12 +239,6 @@ pub fn check_summary(observed: &Observation) -> String {
     )
 }
 
-/// TypeScript `supportsDeliveryTarget`.
-pub fn supports_delivery_target(connection: Option<&Value>, target: DeliveryTarget) -> bool {
-    connection.and_then(|connection| connection["kind"].as_str()) != Some("bitbucket")
-        || target.bitbucket_supports()
-}
-
 /// TypeScript `deliveryWaitFingerprint`.
 pub fn delivery_wait_fingerprint(observation: &Observation) -> String {
     let mut failures = observation
@@ -2637,16 +2631,6 @@ pub(crate) mod tests {
 
     #[test]
     fn target_capabilities_and_titles_match_source_schemas() {
-        let bitbucket = json!({"kind":"bitbucket"});
-        assert!(supports_delivery_target(
-            Some(&bitbucket),
-            DeliveryTarget::PullRequestDraft
-        ));
-        assert!(!supports_delivery_target(
-            Some(&bitbucket),
-            DeliveryTarget::Merged
-        ));
-        assert!(supports_delivery_target(None, DeliveryTarget::Merged));
         assert!(valid_title("Add retries"));
         assert!(!valid_title("Two\nlines"));
         assert!(valid_body(

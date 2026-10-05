@@ -1,9 +1,7 @@
 use crate::identity::IdentityError;
 use crate::shared::ids::random_hex_id;
 use crate::shared::time::rfc3339_millis;
-use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
-use chrono::{DateTime, Duration, Utc};
-use getrandom::fill as rand_bytes;
+use chrono::{DateTime, Utc};
 use rusqlite::{OptionalExtension, params};
 use serde::Serialize;
 use serde_json::Value;
@@ -14,26 +12,6 @@ use super::{
     auth::{self, AuthUser},
     companies,
 };
-
-#[derive(Clone, Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct IssuedInvitation {
-    pub token: String,
-    pub kind: String,
-    pub expires_at: String,
-    pub user: AuthUser,
-}
-
-#[derive(Clone, Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct InvitationSummary {
-    pub id: String,
-    pub kind: String,
-    pub display_name: String,
-    pub expires_at: String,
-    pub status: String,
-    pub created_at: String,
-}
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -74,50 +52,6 @@ fn audit(
     Ok(())
 }
 
-fn valid_display_name(raw: &str) -> DatabaseResult<String> {
-    let name = auth::js_trim(raw);
-    if name.is_empty() || name.encode_utf16().count() > 120 {
-        return Err(IdentityError::auth("Display name is invalid", 400, "auth_failure").into());
-    }
-    Ok(name.to_owned())
-}
-
-pub fn invite_user(
-    database: &mut SuplexDatabase,
-    actor_user_id: &str,
-    raw_display_name: &str,
-    now: DateTime<Utc>,
-) -> DatabaseResult<IssuedInvitation> {
-    let display_name = valid_display_name(raw_display_name)?;
-    database.transaction(false, |database| {
-        companies::require_admin(database, actor_user_id)?;
-        let user_id = random_hex_id("user")?;
-        let neutral_username = format!("user_v1_{user_id}");
-        let now_iso = rfc3339_millis(now);
-        database.connection().execute(
-            "INSERT INTO suplex_users (id, display_name, username, avatar_seed, role, status, created_at, updated_at, identity_version) VALUES (?1, ?2, ?3, ?3, 'member', 'pending', ?4, ?4, 1)",
-            params![user_id, display_name, neutral_username, now_iso],
-        )?;
-        let mut secret = [0_u8; 32];
-        rand_bytes(&mut secret)?;
-        let token = format!("invite_v1_user_{}", URL_SAFE_NO_PAD.encode(secret));
-        let hash = crate::shared::hash::sha256_hex(token.as_bytes());
-        let expires_at = rfc3339_millis(now + Duration::hours(72));
-        database.connection().execute(
-            "INSERT INTO suplex_invitations (id, token_hash, kind, display_name, user_id, expires_at, consumed_at, replaced_at, created_at, metadata_json) VALUES (?1, ?2, 'user', ?3, ?4, ?5, NULL, NULL, ?6, '{}')",
-            params![random_hex_id("invitation")?, hash, display_name, user_id, expires_at, now_iso],
-        )?;
-        audit(database, None, "user_invitation_created", Some(&user_id), "{}", now)?;
-        audit(database, Some(actor_user_id), "user_invited", Some(&user_id), "{}", now)?;
-        Ok(IssuedInvitation {
-            token,
-            kind: "user".to_owned(),
-            expires_at,
-            user: auth::public_user(database, &user_id)?.ok_or("invited user missing")?,
-        })
-    })
-}
-
 pub fn list_users(database: &SuplexDatabase, actor_user_id: &str) -> DatabaseResult<Vec<AuthUser>> {
     companies::require_admin(database, actor_user_id)?;
     let mut statement = database
@@ -131,40 +65,6 @@ pub fn list_users(database: &SuplexDatabase, actor_user_id: &str) -> DatabaseRes
         .collect()
 }
 
-pub fn list_invitations(
-    database: &SuplexDatabase,
-    actor_user_id: &str,
-    now: DateTime<Utc>,
-) -> DatabaseResult<Vec<InvitationSummary>> {
-    companies::require_admin(database, actor_user_id)?;
-    let mut statement = database.connection().prepare("SELECT id, kind, display_name, expires_at, consumed_at, replaced_at, created_at FROM suplex_invitations ORDER BY created_at DESC, id DESC")?;
-    let rows = statement.query_map([], |row| {
-        let expires_at: String = row.get(3)?;
-        let consumed_at: Option<String> = row.get(4)?;
-        let replaced_at: Option<String> = row.get(5)?;
-        let expired = DateTime::parse_from_rfc3339(&expires_at)
-            .is_ok_and(|time| time.timestamp_millis() <= now.timestamp_millis());
-        Ok(InvitationSummary {
-            id: row.get(0)?,
-            kind: row.get(1)?,
-            display_name: row.get(2)?,
-            expires_at,
-            status: if consumed_at.is_some() {
-                "consumed"
-            } else if replaced_at.is_some() {
-                "replaced"
-            } else if expired {
-                "expired"
-            } else {
-                "active"
-            }
-            .to_owned(),
-            created_at: row.get(6)?,
-        })
-    })?;
-    Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
-}
-
 pub fn revoke_user(
     database: &mut SuplexDatabase,
     actor_user_id: &str,
@@ -173,14 +73,37 @@ pub fn revoke_user(
 ) -> DatabaseResult<()> {
     database.transaction(false, |database| {
         companies::require_admin(database, actor_user_id)?;
-        let status: Option<String> = database.connection().query_row("SELECT status FROM suplex_users WHERE id = ?1", [target_user_id], |row| row.get(0)).optional()?;
-        if status.is_none() || status.as_deref() == Some("revoked") || target_user_id == actor_user_id {
+        let status: Option<String> = database
+            .connection()
+            .query_row(
+                "SELECT status FROM suplex_users WHERE id = ?1",
+                [target_user_id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        if status.is_none()
+            || status.as_deref() == Some("revoked")
+            || target_user_id == actor_user_id
+        {
             return Err(IdentityError::not_found().into());
         }
         let now_iso = rfc3339_millis(now);
-        database.connection().execute("UPDATE suplex_users SET status = 'revoked', updated_at = ?2 WHERE id = ?1", params![target_user_id, now_iso])?;
-        database.connection().execute("UPDATE suplex_sessions SET revoked_at = ?2 WHERE user_id = ?1 AND revoked_at IS NULL", params![target_user_id, now_iso])?;
-        audit(database, Some(actor_user_id), "user_revoked", Some(target_user_id), "{}", now)
+        database.connection().execute(
+            "UPDATE suplex_users SET status = 'revoked', updated_at = ?2 WHERE id = ?1",
+            params![target_user_id, now_iso],
+        )?;
+        database.connection().execute(
+            "UPDATE suplex_sessions SET revoked_at = ?2 WHERE user_id = ?1 AND revoked_at IS NULL",
+            params![target_user_id, now_iso],
+        )?;
+        audit(
+            database,
+            Some(actor_user_id),
+            "user_revoked",
+            Some(target_user_id),
+            "{}",
+            now,
+        )
     })
 }
 
@@ -236,7 +159,7 @@ mod tests {
     }
 
     #[test]
-    fn invitation_and_revocation_keep_shared_database_lifecycle() {
+    fn listing_and_revocation_keep_shared_database_lifecycle() {
         let path =
             std::env::temp_dir().join(format!("{}.sqlite", random_hex_id("suplex_admin").unwrap()));
         let mut database = SuplexDatabase::open(&path, OpenMode::Migrate).unwrap();
@@ -244,35 +167,23 @@ mod tests {
             .unwrap()
             .with_timezone(&Utc);
         let admin = auth::development_sign_in(&mut database, now).unwrap();
-        let invalid = invite_user(&mut database, "missing", "  ", now).unwrap_err();
-        assert_eq!(
-            invalid.downcast_ref::<IdentityError>().unwrap().status(),
-            400
-        );
-        let issued = invite_user(&mut database, &admin.user.id, "  API member  ", now).unwrap();
-        assert!(issued.token.starts_with("invite_v1_user_"));
-        assert_eq!(issued.user.display_name, "API member");
-        assert_eq!(issued.user.status, "pending");
-        assert_eq!(issued.user.username, format!("user_v1_{}", issued.user.id));
-        let token_hash = crate::shared::hash::sha256_hex(issued.token.as_bytes());
-        let stored_hash: String = database
+        let member = "user_member";
+        database
             .connection()
-            .query_row(
-                "SELECT token_hash FROM suplex_invitations WHERE user_id = ?1",
-                [&issued.user.id],
-                |row| row.get(0),
+            .execute(
+                "INSERT INTO suplex_users (id, display_name, username, avatar_seed, role, status, created_at, updated_at, identity_version) VALUES (?1, 'API member', ?1, ?1, 'member', 'pending', ?2, ?2, 1)",
+                params![member, rfc3339_millis(now)],
             )
             .unwrap();
-        assert_eq!(stored_hash, token_hash);
         assert_eq!(list_users(&database, &admin.user.id).unwrap().len(), 2);
         database
             .connection()
             .execute(
                 "UPDATE suplex_users SET status = 'active' WHERE id = ?1",
-                [&issued.user.id],
+                [member],
             )
             .unwrap();
-        let member_list = list_users(&database, &issued.user.id).unwrap_err();
+        let member_list = list_users(&database, member).unwrap_err();
         assert_eq!(
             member_list
                 .downcast_ref::<IdentityError>()
@@ -280,35 +191,15 @@ mod tests {
                 .status(),
             404
         );
-        database
-            .connection()
-            .execute(
-                "UPDATE suplex_users SET status = 'pending' WHERE id = ?1",
-                [&issued.user.id],
-            )
-            .unwrap();
-        assert_eq!(
-            list_invitations(&database, &admin.user.id, now).unwrap()[0].status,
-            "active"
-        );
-        assert_eq!(
-            list_invitations(&database, &admin.user.id, now + Duration::hours(72)).unwrap()[0]
-                .status,
-            "expired"
-        );
-        revoke_user(&mut database, &admin.user.id, &issued.user.id, now).unwrap();
+        revoke_user(&mut database, &admin.user.id, member, now).unwrap();
         let users = list_users(&database, &admin.user.id).unwrap();
         assert_eq!(
-            users
-                .iter()
-                .find(|user| user.id == issued.user.id)
-                .unwrap()
-                .status,
+            users.iter().find(|user| user.id == member).unwrap().status,
             "revoked"
         );
         assert_eq!(
             list_audit_events(&database, &admin.user.id).unwrap().len(),
-            3
+            1
         );
         let mut audit_statement = database
             .connection()
@@ -319,14 +210,7 @@ mod tests {
             .unwrap()
             .collect::<rusqlite::Result<Vec<_>>>()
             .unwrap();
-        assert_eq!(
-            actions,
-            [
-                "user_invitation_created",
-                "user_invited",
-                "user_revoked"
-            ]
-        );
+        assert_eq!(actions, ["user_revoked"]);
         drop(audit_statement);
         let self_revoke =
             revoke_user(&mut database, &admin.user.id, &admin.user.id, now).unwrap_err();

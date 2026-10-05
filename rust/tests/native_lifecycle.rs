@@ -144,30 +144,18 @@ fn rejects_non_tailnet_binding_before_opening_data() {
 }
 
 #[test]
-fn administrator_invitation_replaces_prior_token_and_preserves_recovery_metadata() {
+fn recovery_invitation_replaces_prior_token_and_preserves_metadata() {
     use suplex::{
-        identity::auth::issue_administrator_invitation,
+        identity::auth::issue_recovery_invitation,
         platform::database::{OpenMode, SuplexDatabase},
         shared::hash::sha256_hex,
     };
     let filename =
         std::env::temp_dir().join(format!("suplex-invite-{}.sqlite", uuid::Uuid::new_v4()));
     let mut database = SuplexDatabase::open(&filename, OpenMode::Migrate).unwrap();
-    // Migrations seed the development Operator; bootstrap needs no active admin.
-    database
-        .connection()
-        .execute(
-            "UPDATE suplex_users SET status = 'revoked' WHERE role = 'admin'",
-            [],
-        )
-        .unwrap();
     let now = chrono::Utc::now();
-    let first = issue_administrator_invitation(&mut database, "bootstrap", "{}", now)
-        .unwrap()
-        .unwrap();
-    let second = issue_administrator_invitation(&mut database, "bootstrap", "{}", now)
-        .unwrap()
-        .unwrap();
+    let first = issue_recovery_invitation(&mut database, "{}", now).unwrap();
+    let second = issue_recovery_invitation(&mut database, "{}", now).unwrap();
     assert_ne!(first, second);
     let replaced: Option<String> = database
         .connection()
@@ -179,14 +167,12 @@ fn administrator_invitation_replaces_prior_token_and_preserves_recovery_metadata
         .unwrap();
     assert!(replaced.is_some());
     let metadata = r#"{"initiationMethod":"local-cli","installationId":"installation-id"}"#;
-    let recovery = issue_administrator_invitation(&mut database, "recovery", metadata, now)
-        .unwrap()
-        .unwrap();
+    let recovery = issue_recovery_invitation(&mut database, metadata, now).unwrap();
     assert!(recovery.starts_with("invite_v1_recovery_"));
     let stored: (String, String) = database
         .connection()
         .query_row(
-            "SELECT token_hash, metadata_json FROM suplex_invitations WHERE kind = 'recovery'",
+            "SELECT token_hash, metadata_json FROM suplex_invitations WHERE kind = 'recovery' AND replaced_at IS NULL",
             [],
             |row| Ok((row.get(0)?, row.get(1)?)),
         )

@@ -123,7 +123,6 @@ pub struct PromptInput<'a> {
 
 #[derive(Clone, Debug)]
 pub struct OpenCodeClient {
-    pub base_url: String,
     address: Url,
     password: String,
     timeout: Duration,
@@ -152,7 +151,6 @@ impl OpenCodeClient {
                 )
             })?;
         Ok(Self {
-            base_url: address.as_str().trim_end_matches('/').to_owned(),
             address,
             password: password.to_owned(),
             timeout: Duration::from_millis(10_000),

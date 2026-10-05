@@ -263,17 +263,6 @@ pub fn find_transcript(session_id: &str, config_directory: &Path) -> io::Result<
     Ok(None)
 }
 
-pub fn read_transcript(
-    session_id: &str,
-    config_directory: &Path,
-) -> io::Result<Vec<ClaudeMessageEntry>> {
-    let path = find_transcript(session_id, config_directory)?
-        .ok_or_else(|| io::Error::other("Claude Code session transcript is not available"))?;
-    Ok(message_entries(&parse_json_lines(&fs::read_to_string(
-        path,
-    )?)))
-}
-
 pub fn blocks(entry: &ClaudeMessageEntry) -> Vec<Block> {
     match &entry.content {
         Content::Text(text) => vec![Block::Text(text.clone())],
@@ -701,20 +690,6 @@ mod tests {
         assert_eq!(
             find_transcript("abc", &config).unwrap(),
             Some(config.join("projects/-repo-b/abc.jsonl"))
-        );
-        assert_eq!(
-            read_transcript("abc", &config)
-                .unwrap()
-                .last()
-                .unwrap()
-                .uuid,
-            "a5"
-        );
-        assert!(
-            read_transcript("missing", &config)
-                .unwrap_err()
-                .to_string()
-                .contains("not available")
         );
         fs::remove_dir_all(config).unwrap();
     }

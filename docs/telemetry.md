@@ -78,7 +78,7 @@ Task context contains the built-in `workflow`, `delivery_target`,
 context is omitted. Provider profile counts are `profiles_opencode`,
 `profiles_claude_code`, `profiles_devin`, and `profiles_codex`.
 
-## Browser analytics and replay
+## Browser analytics
 
 The browser loads `posthog-js` only after the authenticated telemetry endpoint
 confirms that the build has a project key, usage data is on, and an administrator
@@ -87,12 +87,8 @@ capture. Logout, failed configuration reads, and disabled telemetry stop capture
 Settings changes notify the current tab and other tabs; a periodic refresh also
 checks the authoritative host setting.
 
-**Record session replays** is a separate, default-off host choice. Accepting the
-old usage notice does not enable it. Replay also needs the
-`suplex-app-session-replay` feature flag. All text and inputs are masked.
-Terminal, code, prompt, attachment, and image surfaces are excluded. Console
-logs, request headers and bodies, canvas capture, and cross-origin iframe capture
-are disabled. Captured routes replace resource IDs with placeholders and remove
+Session replay is disabled and has no setting or feature flag. Console logs are
+not captured. Captured routes replace resource IDs with placeholders and remove
 query strings and fragments.
 
 Browser events include `$pageview`, `screen_viewed`, `session_engaged`, sanitized
@@ -166,7 +162,7 @@ events are separate from consented website download clicks.
 
 ## Local state
 
-`suplex_telemetry` holds the notice time, replay choice, last observed version,
+`suplex_telemetry` holds the notice time, last observed version,
 and send position. `suplex_account.identify_sent_at` records the account merge. `suplex_telemetry_pull_requests` records
 which pull requests were reported. Hosted billing has a separate analytics
 outbox. None of this telemetry state is authority for a user action.

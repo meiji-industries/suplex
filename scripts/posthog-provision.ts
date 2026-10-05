@@ -80,8 +80,6 @@ export const DASHBOARDS: DashboardSpec[] = [
 ];
 
 export const FEATURE_FLAGS = [
-  { key: "suplex-app-session-replay", name: "Native app session replay", description: "Optional app replay. The app also requires explicit host replay consent. Off until privacy review and an intentional rollout.", active: false, filters: { groups: [{ properties: [], rollout_percentage: 0 }] }, tags: [OWNER_TAG, "suplex:flag:app-session-replay"] },
-  { key: "suplex-website-session-replay", name: "Website session replay", description: "Optional consented website replay. Off until privacy review and an intentional rollout.", active: false, filters: { groups: [{ properties: [], rollout_percentage: 0 }] }, tags: [OWNER_TAG, "suplex:flag:website-session-replay"] },
   { key: "suplex-website-cta-experiment", name: "Website CTA experiment", description: "Reserved website CTA experiment switch. Off until an experiment is configured.", active: false, filters: { groups: [{ properties: [], rollout_percentage: 0 }] }, tags: [OWNER_TAG, "suplex:flag:website-cta-experiment"] },
 ] as const;
 

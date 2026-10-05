@@ -233,7 +233,7 @@
         p = t.createElement("script"); p.type = "text/javascript"; p.async = true; p.src = s.api_host + "/static/array.js";
         r = t.getElementsByTagName("script")[0]; r.parentNode.insertBefore(p, r);
         var u = e; if (a !== undefined) u = e[a] = []; else a = "posthog"; u.people = u.people || [];
-        o = "capture opt_in_capturing opt_out_capturing has_opted_out_capturing set_config isFeatureEnabled onFeatureFlags startSessionRecording stopSessionRecording".split(" ");
+        o = "capture opt_in_capturing opt_out_capturing has_opted_out_capturing".split(" ");
         for (n = 0; n < o.length; n++) g(u, o[n]); e._i.push([i, s, a]);
       }, e.__SV = 1);
     }(document, window.posthog || []));
@@ -260,26 +260,12 @@
         event.properties = scrubSdkProperties(event.properties);
         return event;
       },
-      session_recording: {
-        maskAllInputs: true,
-        maskTextSelector: "*",
-        maskAllElementAttributes: true,
-        blockSelector: "[data-private],img,pre,code,iframe",
-        recordConsole: false,
-        recordHeaders: false,
-        recordBody: false,
-        maskCapturedNetworkRequestFn: function (request) {
-          var safeUrl = urlWithoutSecrets(request && (request.name || request.url), false);
-          return Object.assign({}, request, { name: safeUrl, url: safeUrl, headers: {}, requestBody: undefined, responseBody: undefined });
-        },
-      },
       loaded: function (client) {
         posthog = client;
         if (consent() === "granted" && !privacySignal()) {
           client.opt_in_capturing();
           updateAttribution();
           capturePageview();
-          client.onFeatureFlags(function () { reconcileReplay(client); });
         } else {
           client.opt_out_capturing();
         }
@@ -289,15 +275,6 @@
     document.addEventListener("click", function (event) { captureAnnotatedClick(event.target); });
   }
 
-  function reconcileReplay(client) {
-    if (consent() === "granted" && !privacySignal() && client.isFeatureEnabled("suplex-website-session-replay")) {
-      client.set_config({ disable_session_recording: false });
-      client.startSessionRecording();
-    } else {
-      client.stopSessionRecording();
-      client.set_config({ disable_session_recording: true });
-    }
-  }
 
   function removeConsentBanner() {
     var banner = document.getElementById("suplex-analytics-consent");
@@ -352,19 +329,19 @@
       removeConsentBanner();
       showSettingsButton();
       if (!started) { loadSdk(); return; }
-      if (posthog) { posthog.opt_in_capturing(); capturePageview(); reconcileReplay(posthog); }
+      if (posthog) { posthog.opt_in_capturing(); capturePageview(); }
     },
     denyConsent: function () {
       storageWrite(config.consentStorageKey, "denied");
       storageRemove(config.attributionStorageKey);
       removeConsentBanner();
       showSettingsButton();
-      if (posthog) { posthog.stopSessionRecording(); posthog.opt_out_capturing(); }
+      if (posthog) { posthog.opt_out_capturing(); }
     },
     clearConsent: function () {
       storageRemove(config.consentStorageKey);
       storageRemove(config.attributionStorageKey);
-      if (posthog) { posthog.stopSessionRecording(); posthog.opt_out_capturing(); }
+      if (posthog) { posthog.opt_out_capturing(); }
       removeSettingsButton();
       showConsentBanner();
     },

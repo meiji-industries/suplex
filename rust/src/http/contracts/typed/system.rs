@@ -136,41 +136,12 @@ pub struct TelemetryResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub account_id: Option<String>,
-    pub session_replay_enabled: bool,
 }
 
 crate::shared::wire_enum! {
     pub enum TelemetryUserRole {
         Admin = "admin",
         Member = "member",
-    }
-}
-
-/// The notice acknowledgement.
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct TelemetryNoticeBody {
-    #[serde(default)]
-    pub session_replay_enabled: bool,
-}
-
-impl Contract for TelemetryNoticeBody {
-    fn schema(input: Option<&Value>) -> ContractResult<Value> {
-        Fields::new(input)?
-            .opt("sessionReplayEnabled", flag)
-            .finish()
-    }
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct TelemetryReplayBody {
-    pub enabled: bool,
-}
-
-impl Contract for TelemetryReplayBody {
-    fn schema(input: Option<&Value>) -> ContractResult<Value> {
-        Fields::new(input)?.req("enabled", flag).strict()
     }
 }
 

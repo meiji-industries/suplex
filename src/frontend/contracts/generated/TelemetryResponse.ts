@@ -5,4 +5,4 @@ export type TelemetryResponse = { noticeRequired: boolean, enabled: boolean, pro
 /**
  * The linked Suplex account, the browser's PostHog person.
  */
-accountId?: string, sessionReplayEnabled: boolean, };
+accountId?: string, };

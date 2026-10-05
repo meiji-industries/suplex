@@ -50,10 +50,6 @@ the origin, project path, and HTTP status.
 
 The managed feature flags are created inactive with zero-percent rollout:
 
-- `suplex-app-session-replay` is the app-side replay switch; the app also
-  requires explicit host replay consent;
-- `suplex-website-session-replay` can enable masked replay after consent and a
-  separate intentional rollout;
 - `suplex-website-cta-experiment` reserves a website experiment switch.
 
 These flags do not control authentication, payment, entitlements, or application
@@ -156,11 +152,8 @@ with a Do Not Track or Global Privacy Control signal, links stay unchanged.
 
 Only the CTA label, destination hostname, platform, version, safe page fields,
 and bounded attribution fields are sent. Destination and referrer query strings
-are discarded. Automatic capture is off. Replay is off by default; if its
-disabled-by-default flag is intentionally rolled out, all text and inputs remain
-masked; images, code, preformatted text, iframes, and `[data-private]` elements
-remain blocked. Console capture is off. Replay network request URLs lose their
-query and fragment, and request or response headers and bodies are removed. SDK
+are discarded. Automatic capture is off. Session replay is disabled and has no
+switch. Console capture is off. SDK
 URL properties pass through the same query and fragment scrubber before send.
 Browser Do Not Track and Global Privacy Control signals prevent both the SDK and
 consent controls from loading. After a visitor accepts or rejects analytics, a

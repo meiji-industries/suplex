@@ -8,13 +8,8 @@ export function getTelemetry(): Promise<TelemetryResponse> {
 const telemetryRefreshKey = "suplex.telemetry.refresh";
 
 /** Records that an administrator saw the notice. */
-export async function acknowledgeTelemetry(sessionReplayEnabled: boolean): Promise<void> {
-  await readJsonUnchecked<unknown>("/api/admin/telemetry/notice", { method: "POST", body: JSON.stringify({ sessionReplayEnabled }) });
-  notifyTelemetryChanged();
-}
-
-export async function updateTelemetryReplay(enabled: boolean): Promise<void> {
-  await readJsonUnchecked<unknown>("/api/admin/telemetry/replay", { method: "POST", body: JSON.stringify({ enabled }) });
+export async function acknowledgeTelemetry(): Promise<void> {
+  await readJsonUnchecked<unknown>("/api/admin/telemetry/notice", { method: "POST" });
   notifyTelemetryChanged();
 }
 

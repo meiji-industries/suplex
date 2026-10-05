@@ -19,7 +19,7 @@ function fixture(url = "https://suplex.sh/download?utm_source=github&utm_campaig
   return window;
 }
 
-test("defaults to no capture, masked replay, and no third-party pixel", () => {
+test("defaults to no capture, no replay, and no third-party pixel", () => {
   const window = fixture();
   const win = window as unknown as AnalyticsWindow;
   expect(win.posthog).toBeUndefined();
@@ -39,8 +39,8 @@ test("defaults to no capture, masked replay, and no third-party pixel", () => {
     capture_pageview: false,
     autocapture: false,
     disable_session_recording: true,
-    session_recording: { maskAllInputs: true, maskTextSelector: "*" },
   });
+  expect(options).not.toHaveProperty("session_recording");
   expect(Array.from(window.document.scripts).map(script => script.src).filter(Boolean)).toEqual(["https://meta.suplex.sh/static/array.js"]);
   window.close();
 });
@@ -62,10 +62,6 @@ test("scrubs SDK-added URL properties before send", () => {
     $set_once: { $initial_current_url: "https://suplex.sh/", $initial_referrer: "https://news.example" },
   });
   expect(JSON.stringify(event)).not.toMatch(/private|secret/);
-  const maskNetwork = (options.session_recording as { maskCapturedNetworkRequestFn(request: Record<string, unknown>): Record<string, unknown> }).maskCapturedNetworkRequestFn;
-  const network = maskNetwork({ name: "https://api.example/data?token=private#secret", headers: { Authorization: "secret" }, requestBody: "private", responseBody: "secret" });
-  expect(network).toMatchObject({ name: "https://api.example/data", url: "https://api.example/data", headers: {} });
-  expect(JSON.stringify(network)).not.toMatch(/private|secret|Authorization/);
   window.close();
 });
 
@@ -81,30 +77,6 @@ test("does not load or persist consent when Global Privacy Control is enabled", 
   window.close();
 });
 
-test("stops replay when consent is revoked before a flag callback", () => {
-  const window = fixture();
-  const win = window as unknown as AnalyticsWindow;
-  win.SuplexAnalytics.grantConsent();
-  const options = win.posthog._i[0]![1];
-  let flagsChanged = () => {};
-  const client = {
-    capture: vi.fn(), opt_in_capturing: vi.fn(), opt_out_capturing: vi.fn(),
-    onFeatureFlags: vi.fn((callback: () => void) => { flagsChanged = callback; }),
-    isFeatureEnabled: vi.fn(() => true), set_config: vi.fn(),
-    startSessionRecording: vi.fn(), stopSessionRecording: vi.fn(),
-  };
-  (options.loaded as (loadedClient: unknown) => void)(client);
-  flagsChanged();
-  expect(client.startSessionRecording).toHaveBeenCalledTimes(1);
-  win.SuplexAnalytics.denyConsent();
-  flagsChanged();
-  expect(client.stopSessionRecording).toHaveBeenCalledTimes(2);
-  expect(client.set_config).toHaveBeenLastCalledWith({ disable_session_recording: true });
-  win.SuplexAnalytics.grantConsent();
-  expect(client.startSessionRecording).toHaveBeenCalledTimes(2);
-  window.close();
-});
-
 test("revalidates persisted attribution against the bounded allowlist", () => {
   const window = fixture();
   const win = window as unknown as AnalyticsWindow;
@@ -115,7 +87,7 @@ test("revalidates persisted attribution against the bounded allowlist", () => {
   win.SuplexAnalytics.grantConsent();
   const options = win.posthog._i[0]![1];
   const capture = vi.fn();
-  (options.loaded as (loadedClient: unknown) => void)({ capture, opt_in_capturing: vi.fn(), opt_out_capturing: vi.fn(), onFeatureFlags: vi.fn(), isFeatureEnabled: vi.fn(), set_config: vi.fn(), startSessionRecording: vi.fn(), stopSessionRecording: vi.fn() });
+  (options.loaded as (loadedClient: unknown) => void)({ capture, opt_in_capturing: vi.fn(), opt_out_capturing: vi.fn() });
   const properties = capture.mock.calls[0]![1] as Record<string, unknown>;
   expect(properties.attribution_first_source).toBe("x".repeat(120));
   expect(properties).not.toHaveProperty("attribution_first_referrer_domain");
@@ -141,16 +113,13 @@ test("the visible settings button revokes consent and reopens the choice", () =>
   win.SuplexAnalytics.grantConsent();
   const options = win.posthog._i[0]![1];
   const client = {
-    capture: vi.fn(), opt_in_capturing: vi.fn(), opt_out_capturing: vi.fn(),
-    onFeatureFlags: vi.fn(), isFeatureEnabled: vi.fn(), set_config: vi.fn(),
-    startSessionRecording: vi.fn(), stopSessionRecording: vi.fn(),
+    capture: vi.fn(), opt_in_capturing: vi.fn(), opt_out_capturing: vi.fn()
   };
   (options.loaded as (loadedClient: unknown) => void)(client);
   const settings = window.document.querySelector("#suplex-analytics-settings") as unknown as { click(): void };
   expect(settings).toBeTruthy();
   settings.click();
   expect(win.localStorage.getItem("suplex.analytics.consent.v1")).toBeNull();
-  expect(client.stopSessionRecording).toHaveBeenCalledTimes(1);
   expect(client.opt_out_capturing).toHaveBeenCalledTimes(1);
   expect(window.document.querySelector("#suplex-analytics-settings")).toBeNull();
   expect(window.document.querySelector("#suplex-analytics-consent")?.textContent).toContain("Accept");
@@ -167,10 +136,6 @@ test("captures only allowlisted, bounded attribution after consent", () => {
     capture,
     opt_in_capturing: vi.fn(),
     opt_out_capturing: vi.fn(),
-    onFeatureFlags: vi.fn(),
-    isFeatureEnabled: vi.fn(() => false),
-    set_config: vi.fn(),
-    startSessionRecording: vi.fn(),
   };
   (options.loaded as (loadedClient: unknown) => void)(client);
   expect(capture).toHaveBeenCalledWith("$pageview", expect.objectContaining({
@@ -193,7 +158,7 @@ test("emits consented download conversion without leaking the destination query"
   win.SuplexAnalytics.grantConsent();
   const options = win.posthog._i[0]![1];
   const capture = vi.fn();
-  (options.loaded as (client: unknown) => void)({ capture, get_distinct_id: () => "0190a1b2-c3d4-7e5f", opt_in_capturing: vi.fn(), opt_out_capturing: vi.fn(), onFeatureFlags: vi.fn(), isFeatureEnabled: vi.fn(), set_config: vi.fn(), startSessionRecording: vi.fn() });
+  (options.loaded as (client: unknown) => void)({ capture, get_distinct_id: () => "0190a1b2-c3d4-7e5f", opt_in_capturing: vi.fn(), opt_out_capturing: vi.fn() });
   capture.mockClear();
   const link = window.document.querySelector("#download") as unknown as { click(): void; href: string };
   link.click();

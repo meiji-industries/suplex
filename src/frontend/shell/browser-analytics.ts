@@ -10,13 +10,7 @@ export type BrowserAnalyticsContext = {
   platform: "desktop" | "browser";
 };
 
-const replayFlag = "suplex-app-session-replay";
-const blockedReplaySelector = [
-  ".xterm", "[data-terminal]", "[data-code-block]", "[data-prompt]", "[data-attachment]",
-  "form:has(textarea)", "[data-native-message-id]", "pre", "code", "img", "picture", "svg", "canvas", "video",
-].join(",");
 const staticSegments = new Set(["access", "admin", "agents", "analytics", "api", "api-mcp", "auth", "backups", "billing", "board", "companies", "environment", "health", "moves", "notice", "onboarding", "profile", "projects", "providers", "settings", "setup", "tasks", "telemetry", "templates", "terminal", "timeline", "today", "triggers", "workflows"]);
-const featureValues = new Map<string, boolean>();
 const apiErrorCodes = new Set(["authentication_required", "request_origin_invalid", "administrator_required", "billing_unavailable", "forbidden", "not_found", "validation_failed", "conflict"]);
 
 let client: PostHog | undefined;
@@ -29,7 +23,6 @@ let installed = false;
 let refreshTimer: number | undefined;
 let routeStartedAt = Date.now();
 let lastScreenScope: string | undefined;
-let removeFlagListener: (() => void) | undefined;
 
 export function sanitizeRoute(pathname: string): string {
   const segments = pathname.split("/").filter(Boolean).map((segment) => {
@@ -85,20 +78,6 @@ function baseProperties(): Record<string, unknown> {
   };
 }
 
-function syncFeatureFlags(): void {
-  if (!client) return;
-  const replay = client.isFeatureEnabled(replayFlag, { send_event: false }) === true;
-  featureValues.set(replayFlag, replay);
-  syncReplay();
-}
-
-function syncReplay(): void {
-  if (!client) return;
-  const enabled = currentTelemetry?.sessionReplayEnabled === true && featureValues.get(replayFlag) === true;
-  client.set_config({ disable_session_recording: !enabled });
-  if (enabled) client.startSessionRecording(); else client.stopSessionRecording();
-}
-
 /** The linked Suplex account, else this signed-in user on this host. */
 function personId(telemetry: TelemetryResponse): string {
   return telemetry.accountId ?? `${telemetry.installationId}:user:${telemetry.userId}`;
@@ -145,11 +124,7 @@ function disableCapture(): void {
   refreshGeneration += 1;
   currentTelemetry = undefined;
   lastScreenScope = undefined;
-  featureValues.clear();
-  removeFlagListener?.();
-  removeFlagListener = undefined;
   if (client) {
-    client.stopSessionRecording();
     client.opt_out_capturing();
     client.resetGroups();
     client.reset();
@@ -177,7 +152,6 @@ export async function applyTelemetry(response: TelemetryResponse): Promise<void>
   if (!client) client = imported.posthog;
   const activeClient = client;
   if (previousUser && previousUser !== nextUser) {
-    activeClient.stopSessionRecording();
     activeClient.resetGroups();
     activeClient.reset();
     lastScreenScope = undefined;
@@ -197,27 +171,6 @@ export async function applyTelemetry(response: TelemetryResponse): Promise<void>
       capture_dead_clicks: false,
       rageclick: false,
       disable_session_recording: true,
-      session_recording: {
-        maskAllInputs: true,
-        maskTextSelector: "*",
-        maskAllElementAttributes: true,
-        blockSelector: blockedReplaySelector,
-        recordHeaders: false,
-        recordBody: false,
-        streamNetworkBody: false,
-        recordCrossOriginIframes: false,
-        captureCanvas: { recordCanvas: false },
-        captureJsonLd: false,
-        maskCapturedNetworkRequestFn: (request) => {
-          if (!request.isInitial) return null;
-          const timing = { ...request };
-          delete timing.requestHeaders;
-          delete timing.requestBody;
-          delete timing.responseHeaders;
-          delete timing.responseBody;
-          return { ...timing, name: safeCurrentUrl() };
-        },
-      },
       enable_recording_console_log: false,
       logs: { captureConsoleLogs: false },
       mask_all_text: true,
@@ -233,10 +186,8 @@ export async function applyTelemetry(response: TelemetryResponse): Promise<void>
     initializedKey = response.projectKey;
     initializedHost = response.host;
   }
-  removeFlagListener ??= activeClient.onFeatureFlags(syncFeatureFlags);
   activeClient.opt_in_capturing({ captureEventName: false });
   identify();
-  syncFeatureFlags();
   captureScreenForNewScope();
 }
 

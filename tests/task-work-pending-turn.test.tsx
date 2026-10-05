@@ -106,3 +106,10 @@ test("the conversation shows each Worker assignment once, with the plan, criteri
   expect(text.indexOf("Built it")).toBeLessThan(text.indexOf("Fixed"));
   expect(text.split("Steps").length).toBe(2);
 });
+
+test("the conversation shows a paired agent's note under the agent's name", async () => {
+  const view = mount();
+  await view.render(activityWith({ ...note, prompt: "Agent note (agent_1):\nSkip the tests", status: "completed", noteAgentName: "Hermes" }));
+  const article = Array.from(view.container.querySelectorAll("article")).find(element => element.textContent?.includes("Skip the tests"));
+  expect(article?.querySelector("header")?.textContent).toBe("HermesSent to Coordinator");
+});

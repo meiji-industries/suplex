@@ -344,7 +344,7 @@ fn tail(path: &Path, terminals: &HostTerminals, subscriptions: &Arc<Mutex<Subscr
                         let activity = root_session_store::root_observation_rows(database, &id)
                             .ok()
                             .map(|rows| {
-                                task_reads::activity_document(&rows, &id, host.then_some(terminals))
+                                task_reads::activity_document(database, &rows, &id, host.then_some(terminals))
                             });
                         let task = kept_json(previous.task, task);
                         let activity = kept_json(previous.activity, activity);

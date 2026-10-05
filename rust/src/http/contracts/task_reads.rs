@@ -178,6 +178,10 @@ pub struct TaskActivityTurn {
     pub result: Option<String>,
     /// The Coordinator's delegation that started this Worker turn.
     pub assignment: Option<TaskWorkerAssignment>,
+    /// The current name of the paired agent that sent this note. Absent on other turns.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub note_agent_name: Option<String>,
 }
 
 crate::shared::wire_enum! {

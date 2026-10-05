@@ -190,8 +190,23 @@ fn legacy_worker_assignment(prompt: &str) -> Option<TaskWorkerAssignment> {
     })
 }
 
+/// A paired agent's note starts with `Agent note (<agentId>):`. A deleted
+/// agent has no name.
+fn note_agent_name(database: &SuplexDatabase, prompt: &str) -> Option<String> {
+    let (agent_id, _) = prompt.strip_prefix("Agent note (")?.split_once("):\n")?;
+    database
+        .connection()
+        .query_row(
+            "SELECT name FROM suplex_agents WHERE id = ?1",
+            [agent_id],
+            |row| row.get(0),
+        )
+        .ok()
+}
+
 /// `host` derives terminal ids for host terminals instead of stored Herdr panes.
 pub(crate) fn activity_document(
+    database: &SuplexDatabase,
     rows: &RootObservationRows,
     task_id: &str,
     host: Option<&HostTerminals>,
@@ -236,6 +251,7 @@ pub(crate) fn activity_document(
                 }
                 input => worker_assignment(input.as_ref()),
             },
+            note_agent_name: note_agent_name(database, &turn.prompt_text),
         })
         .collect::<Vec<_>>();
     TaskActivityResponse {
@@ -338,6 +354,7 @@ async fn activity(
     let result = state.with_database(|database| -> Result<TaskActivityResponse, Box<dyn Error>> {
         let (rows, _) = read_task(database, &user_id, &task_id)?;
         Ok(activity_document(
+            database,
             &rows,
             &task_id,
             terminals::host_enabled(database).then_some(&*state.host_terminals),

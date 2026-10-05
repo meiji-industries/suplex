@@ -419,8 +419,11 @@ fn accepted_history(turns: &[RootTurn]) -> (Vec<(String, i64)>, Vec<String>) {
     for turn in turns {
         let created_at = &turn.created_at;
         let prompt = without_current_dependency_status(&turn.prompt);
-        if let Some(note) = prompt.strip_prefix("Human note:\n") {
-            messages.push(format!("Human note ({created_at}):\n{note}"));
+        // A paired agent's note has the label `Agent note (<agentId>)`.
+        if let Some((label, note)) = prompt.split_once(":\n").filter(|(label, _)| {
+            *label == "Human note" || (label.starts_with("Agent note (") && label.ends_with(')'))
+        }) {
+            messages.push(format!("{label} ({created_at}):\n{note}"));
             continue;
         }
         let Ok(value) = serde_json::from_str::<Value>(prompt) else {
@@ -672,6 +675,8 @@ mod answer_history_tests {
             turn(
                 r#"{"question":"Use a branch?","answer":"No","answeredBy":{"agentId":"agent_1","agentName":"Hermes","userId":"user_1","userName":"Ada"}}"#,
             ),
+            turn("Human note:\nCheck the logs"),
+            turn("Agent note (agent_1):\nSkip the tests"),
         ]);
         assert_eq!(accepted.len(), 2);
         assert_eq!(
@@ -679,6 +684,8 @@ mod answer_history_tests {
             [
                 "Accepted human answer (2026-09-29T00:00:00.000Z):\nUse main?\nAnswer: Yes",
                 "Accepted answer by agent Hermes for Ada (2026-09-29T00:00:00.000Z):\nUse a branch?\nAnswer: No",
+                "Human note (2026-09-29T00:00:00.000Z):\nCheck the logs",
+                "Agent note (agent_1) (2026-09-29T00:00:00.000Z):\nSkip the tests",
             ]
         );
     }

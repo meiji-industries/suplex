@@ -370,7 +370,7 @@ pub(crate) mod tests {
         );
         assert_eq!(
             value(&first.open.activity),
-            serde_json::to_value(task_reads::activity_document(&rows, &task_id, None)).unwrap()
+            serde_json::to_value(task_reads::activity_document(&database, &rows, &task_id, None)).unwrap()
         );
         assert_eq!(
             value(&first.open.execution),

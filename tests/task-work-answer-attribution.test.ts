@@ -5,6 +5,7 @@ import { humanMessage } from "../src/frontend/features/tasks/task-work.js";
 test("a human answer and note keep their author", () => {
   expect(humanMessage(JSON.stringify({ question: "Use main?", answer: "Yes" }))).toEqual({ author: "You", text: "Yes" });
   expect(humanMessage("Human note:\nCheck the logs")).toEqual({ author: "You", text: "Check the logs" });
+  expect(humanMessage("Agent note (agent_1):\nSkip the tests")).toEqual({ author: "Agent note", text: "Skip the tests", agentId: "agent_1" });
 });
 
 test("an agent answer names the agent and the granting user", () => {

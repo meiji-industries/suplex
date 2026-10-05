@@ -6,4 +6,8 @@ export type TaskActivityTurn = { id: string, sessionId: string, prompt: string, 
 /**
  * The Coordinator's delegation that started this Worker turn.
  */
-assignment: TaskWorkerAssignment | null, };
+assignment: TaskWorkerAssignment | null, 
+/**
+ * The current name of the paired agent that sent this note. Absent on other turns.
+ */
+noteAgentName?: string, };

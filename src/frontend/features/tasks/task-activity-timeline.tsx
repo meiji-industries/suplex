@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { Info } from "lucide-react";
+import { taskTimelineSpan } from "./lib/task-timeline-span.js";
 import { useTaskTimeline } from "./lib/task-queries.js";
 import { useSyncLive } from "../../shell/sync.js";
 import { checkRunLabel, checkRunName, checkRunStatus, useTaskChecks } from "./lib/task-checks.js";
@@ -48,8 +49,7 @@ export function TaskActivityTimeline({ taskId, createdAt, checksKey }: { taskId:
   });
   const ciStart = ciRuns.reduce((first, entry) => Math.min(first, entry.start), Infinity);
   const ciEnd = ciRuns.reduce((last, entry) => Math.max(last, entry.end), -Infinity);
-  const start = Math.min(ciStart, intervals.reduce((first, entry) => Math.min(first, entry.start), Infinity));
-  const end = Math.max(ciEnd, intervals.reduce((last, entry) => Math.max(last, entry.end), -Infinity));
+  const { start, end } = taskTimelineSpan(snapshot?.activity ?? [], checks?.runs ?? [], createdAt, now, asOf);
   const worked = intervals.reduce((total, entry) => total + entry.end - entry.start, 0);
   const span = Math.max(1, end - start);
   const ticks = Array.from({ length: 5 }, (_, index) => start + span * index / 4);

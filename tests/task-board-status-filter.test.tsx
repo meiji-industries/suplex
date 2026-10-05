@@ -229,3 +229,24 @@ test("the open task page reads its task once and shows the pushed task", async (
     expect(taskReads()).toBe(1);
   } finally { await act(async () => root.unmount()); container.remove(); window.history.replaceState(null, "", "/board?company=company-1"); }
 });
+
+test("board durations use the timeline span, tick for Active, freeze for Delivered, and omit other statuses", async () => {
+  vi.useFakeTimers();
+  vi.setSystemTime(new Date("2026-09-08T00:00:20.000Z"));
+  window.history.replaceState(null, "", "/board?company=company-1");
+  const tasks = [task("active", "Live task", "active"), { ...task("delivered", "Done task", "delivered"), statusChangedAt: "2026-09-08T00:00:15.000Z" }, task("backlog", "Future task", "backlog")];
+  api.readJsonUnchecked.mockImplementation(async (path: string) => path.endsWith("/timeline") ? { unavailableSessions: 0, tasks: tasks.map(item => ({ id: item.id, projectId: item.projectId, issueKey: null, title: item.title, activity: [{ id: "turn", role: "root", agentId: "root", agentName: "Coordinator", avatarSeed: "root", status: "running", attempt: 1, startedAt: item.createdAt, finishedAt: null }] })) } : path.endsWith("/projects") ? { projects: [{ id: "project-1", name: "Suplex" }] } : { tasks: path.endsWith("/task-costs") ? [] : tasks });
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  try {
+    await act(async () => root.render(<ServerStateProvider><TaskDataProvider><TasksView mode="board" /></TaskDataProvider></ServerStateProvider>));
+    const duration = (id: string) => container.querySelector(`a[href="/board/${id}"] [data-task-duration]`)?.textContent;
+    expect(duration("active")).toBe("20s");
+    expect(duration("delivered")).toBe("15s");
+    expect(duration("backlog")).toBeUndefined();
+    await act(async () => vi.advanceTimersByTimeAsync(2000));
+    expect(duration("active")).toBe("22s");
+    expect(duration("delivered")).toBe("15s");
+  } finally { await act(async () => root.unmount()); container.remove(); }
+});

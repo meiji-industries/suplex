@@ -18,6 +18,7 @@ import type { MoveResponse } from "../../contracts/generated/MoveResponse.js";
 import type { MoveRunResponse } from "../../contracts/generated/MoveRunResponse.js";
 import { TaskControlStatusSchema, type TaskControlStatus } from "../../contracts/task-control.js";
 import { requestNewTask, useHasProjects } from "../../shell/global-new-task-dialog.js";
+import { TaskCardDuration } from "./task-card-duration.js";
 import { TaskOptions } from "./task-options.js";
 import { TaskDetailsPage } from "./task-details.js";
 import { blockedByLabel, TaskStatus, TaskStatusIcon, taskStatusLabels } from "./task-status.js";
@@ -122,7 +123,7 @@ function PlanLimitCard({ queued, billingHref }: { queued: number; billingHref: s
 
 // A pushed change replaces one task object. Memoized cards and rows keep the other tasks from rendering again.
 const BoardTaskCard = memo(function BoardTaskCard({ task, project }: { task: TaskListTask; project: ApiProject | undefined }): ReactElement {
-  return <li className="min-w-0"><a href={withCompany(`/board/${task.id}`, task.companyId)} className="block min-w-0 rounded-md border bg-card p-3 text-xs hover:bg-background focus-visible:outline-2 focus-visible:outline-ring"><span className="flex min-w-0 items-center gap-2 font-medium leading-5"><TaskStatusIcon status={task.status} pullRequestState={task.pullRequest?.state} /><span className="min-w-0 truncate">{task.issueKey ? <span className="mr-2 text-muted-foreground">{task.issueKey}</span> : null}{task.title}</span></span>{task.blockedBy.length ? <p data-task-blocked-by className="mt-1 truncate text-muted-foreground">{blockedByLabel(task.blockedBy)}</p> : null}{task.humanQuestion ? <p className="mt-1 truncate text-muted-foreground">{task.humanQuestion.text}</p> : null}<span className="mt-2 flex min-w-0 items-center gap-1.5 text-muted-foreground"><ProjectLabel project={project} fallback={task.configuration.repository} /></span></a></li>;
+  return <li className="min-w-0"><a href={withCompany(`/board/${task.id}`, task.companyId)} className="block min-w-0 rounded-md border bg-card p-3 text-xs hover:bg-background focus-visible:outline-2 focus-visible:outline-ring"><span className="flex min-w-0 items-center gap-2 font-medium leading-5"><TaskStatusIcon status={task.status} pullRequestState={task.pullRequest?.state} /><span className="min-w-0 truncate">{task.issueKey ? <span className="mr-2 text-muted-foreground">{task.issueKey}</span> : null}{task.title}</span></span>{task.blockedBy.length ? <p data-task-blocked-by className="mt-1 truncate text-muted-foreground">{blockedByLabel(task.blockedBy)}</p> : null}{task.humanQuestion ? <p className="mt-1 truncate text-muted-foreground">{task.humanQuestion.text}</p> : null}<span className="mt-2 flex min-w-0 items-center gap-1.5 text-muted-foreground"><ProjectLabel project={project} fallback={task.configuration.repository} />{task.status === "active" || task.status === "delivered" ? <TaskCardDuration key={task.statusChangedAt} task={task} /> : null}</span></a></li>;
 });
 
 function BoardRunCard({ move, run, project }: { move: MoveResponse; run: MoveRunResponse; project: ApiProject | undefined }): ReactElement {

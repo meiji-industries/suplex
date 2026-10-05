@@ -35,6 +35,7 @@ vi.mock("../src/frontend/components/ui/sidebar.js", async () => {
 });
 vi.mock("../src/frontend/features/tasks/lib/task-list.js", async importOriginal => ({ ...await importOriginal<typeof taskListModule>(), readTaskList: state.readTaskList }));
 vi.mock("../src/frontend/features/analytics/lib/analytics.js", () => ({ useTaskCosts: () => new Map() }));
+vi.mock("../src/frontend/features/tasks/lib/task-sync-api.js", () => ({ openTaskSync: () => () => undefined }));
 vi.mock("../src/frontend/features/tasks/recent-task-agents.js", () => ({ RecentTaskAgents: () => null }));
 vi.mock("../src/frontend/features/tasks/recent-pull-request.js", () => ({ RecentPullRequest: () => null }));
 vi.mock("../src/frontend/features/tasks/task-status.js", () => ({ TaskStatusIcon: () => null, taskStatusLabels: { backlog: "Backlog" }, taskStatusLabel: () => "Backlog" }));

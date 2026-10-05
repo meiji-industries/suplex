@@ -584,6 +584,19 @@ pub fn start(
     })
 }
 
+/// The `dependencies` and `pr_dependencies` columns of a task row `t`.
+macro_rules! task_dependencies_sql {
+    () => {
+        r#"(SELECT json_group_array(json_array(id, title, status, delivery_target, archived_at, pull_state)) FROM (
+        SELECT dep.id, dep.title, control.status, control.delivery_target, dep.archived_at, json_extract(control.pull_request_json, '$.state') AS pull_state
+        FROM suplex_task_dependencies d JOIN suplex_tasks dep ON dep.id = d.depends_on_task_id JOIN suplex_task_controls control ON control.task_id = dep.id WHERE d.task_id = t.id ORDER BY dep.id
+    )) AS dependencies,
+    (SELECT json_group_array(json_array(pull_request_number, state, title, url, observed_at)) FROM (
+        SELECT pull_request_number, state, title, url, observed_at FROM suplex_task_pull_request_dependencies WHERE task_id = t.id ORDER BY pull_request_number
+    )) AS pr_dependencies"#
+    };
+}
+
 const TASK_RESPONSE_SELECT: &str = concat!(
     r#"SELECT t.id AS id, t.company_id AS company_id, t.project_id AS project_id, t.issue_json, t.issue_number, cpy.issue_code, t.title, t.description, c.status AS status, c.delivery_target AS delivery_target, c.root_profile_json, c.worker_profile_json, c.workflow, c.advisor_profiles_json, c.workflow_state_json, t.configuration_json, c.worktree_json, c.pull_request_json, c.human_question, c.human_question_id, c.limit_pause_json, c.human_question_options_json, c.recovery_turn_id, c.wake_at, t.created_at, CASE WHEN julianday(t.updated_at) >= julianday(COALESCE(c.updated_at, t.updated_at)) THEN t.updated_at ELSE c.updated_at END AS updated_at, c.status_changed_at, t.archived_at, c.budget_usd, c.max_turns,
     EXISTS(SELECT 1 FROM suplex_projects p WHERE p.id = t.project_id AND p.task_concurrency IS NOT NULL AND p.task_concurrency <= (SELECT COUNT(*) FROM suplex_tasks s JOIN suplex_task_controls sc ON sc.task_id = s.id WHERE s.project_id = t.project_id AND s.archived_at IS NULL AND sc.status IN ('active', 'waiting_human'))) AS project_concurrency_limited,
@@ -593,13 +606,9 @@ const TASK_RESPONSE_SELECT: &str = concat!(
     COALESCE((SELECT default_budget_usd FROM suplex_environment_settings WHERE id = 'host'), 15.0) AS default_budget,
     COALESCE((SELECT default_max_turns FROM suplex_environment_settings WHERE id = 'host'), 40) AS default_turns,
     (SELECT COUNT(*) FROM suplex_task_turns WHERE task_id = t.id AND prompted_at IS NOT NULL) AS admitted_turns,
-    (SELECT json_group_array(json_array(id, title, status, delivery_target, archived_at, pull_state)) FROM (
-        SELECT dep.id, dep.title, control.status, control.delivery_target, dep.archived_at, json_extract(control.pull_request_json, '$.state') AS pull_state
-        FROM suplex_task_dependencies d JOIN suplex_tasks dep ON dep.id = d.depends_on_task_id JOIN suplex_task_controls control ON control.task_id = dep.id WHERE d.task_id = t.id ORDER BY dep.id
-    )) AS dependencies,
-    (SELECT json_group_array(json_array(pull_request_number, state, title, url, observed_at)) FROM (
-        SELECT pull_request_number, state, title, url, observed_at FROM suplex_task_pull_request_dependencies WHERE task_id = t.id ORDER BY pull_request_number
-    )) AS pr_dependencies,
+    "#,
+    task_dependencies_sql!(),
+    r#",
     (SELECT json_group_array(json_object('artifactId', id, 'filename', filename, 'mimeType', mime_type, 'byteSize', byte_size)) FROM (
         SELECT id, filename, mime_type, byte_size FROM suplex_artifacts WHERE task_id = t.id AND company_id = t.company_id AND kind = 'task-image' ORDER BY created_at, id
     )) AS images,
@@ -620,6 +629,25 @@ pub fn task_response(
     rows.next()?.map(super::response::from_row).transpose()
 }
 
+/// Only the columns of `TaskListItem`. The full select spends most of its time
+/// on columns a list drops.
+const TASK_LIST_SELECT: &str = concat!(
+    r#"SELECT t.id AS id, t.company_id AS company_id, t.project_id AS project_id, t.issue_number, cpy.issue_code, t.title, c.status AS status, json_extract(t.configuration_json, '$.repository') AS repository, json_extract(t.configuration_json, '$.branch') AS branch, c.pull_request_json, CASE WHEN c.human_question_id IS NOT NULL THEN c.human_question END AS question_text, t.created_at, CASE WHEN julianday(t.updated_at) >= julianday(COALESCE(c.updated_at, t.updated_at)) THEN t.updated_at ELSE c.updated_at END AS updated_at, c.status_changed_at, t.archived_at,
+    "#,
+    task_dependencies_sql!(),
+    r#"
+ FROM suplex_tasks t JOIN suplex_companies cpy ON cpy.id = t.company_id JOIN suplex_task_controls c ON c.task_id = t.id"#
+);
+const TASK_LIST_ORDER: &str = "ORDER BY julianday(CASE WHEN julianday(t.updated_at) >= julianday(c.updated_at) THEN t.updated_at ELSE c.updated_at END) DESC, t.id";
+
+fn list_items(mut rows: rusqlite::Rows<'_>) -> DatabaseResult<Vec<super::response::TaskListItem>> {
+    let mut tasks = Vec::new();
+    while let Some(row) = rows.next()? {
+        tasks.push(super::response::list_item_from_row(row)?);
+    }
+    Ok(tasks)
+}
+
 pub fn list_visible(
     database: &SuplexDatabase,
     user_id: &str,
@@ -636,13 +664,19 @@ pub fn list_visible(
             .map(|company| &company.id)
             .collect::<Vec<_>>(),
     )?;
-    let mut statement = database.connection().prepare(&format!("{TASK_RESPONSE_SELECT} WHERE (t.archived_at IS NOT NULL) = ?1 AND t.company_id IN (SELECT value FROM json_each(?2)) AND (?3 IS NULL OR t.company_id = ?3) ORDER BY julianday(CASE WHEN julianday(t.updated_at) >= julianday(c.updated_at) THEN t.updated_at ELSE c.updated_at END) DESC, t.id"))?;
-    let mut rows = statement.query(params![archived, companies, company_id])?;
-    let mut tasks = Vec::new();
-    while let Some(row) = rows.next()? {
-        tasks.push(super::response::from_row(row)?.into());
-    }
-    Ok(tasks)
+    let mut statement = database.connection().prepare(&format!("{TASK_LIST_SELECT} WHERE (t.archived_at IS NOT NULL) = ?1 AND t.company_id IN (SELECT value FROM json_each(?2)) AND (?3 IS NULL OR t.company_id = ?3) {TASK_LIST_ORDER}"))?;
+    list_items(statement.query(params![archived, companies, company_id])?)
+}
+
+/// One company's active task list, for the sync feed. The caller authorizes.
+pub(crate) fn list_active(
+    database: &SuplexDatabase,
+    company_id: &str,
+) -> DatabaseResult<Vec<super::response::TaskListItem>> {
+    let mut statement = database.connection().prepare(&format!(
+        "{TASK_LIST_SELECT} WHERE t.archived_at IS NULL AND t.company_id = ?1 {TASK_LIST_ORDER}"
+    ))?;
+    list_items(statement.query([company_id])?)
 }
 
 /// The authorized task's company and its current worktree path.

@@ -57,11 +57,11 @@ pub struct TaskResponse {
 }
 
 /// Fields used by task lists, the board, and recent activity.
-#[derive(Debug, Serialize, TS)]
+#[derive(Debug, Clone, PartialEq, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export)]
 pub struct TaskListItem {
-    id: String,
+    pub(super) id: String,
     company_id: String,
     project_id: String,
     issue_key: Option<String>,
@@ -78,18 +78,20 @@ pub struct TaskListItem {
     archived_at: Option<String>,
 }
 
-#[derive(Debug, Serialize, TS)]
+#[derive(Debug, Clone, PartialEq, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 struct TaskListConfiguration {
     repository: String,
     branch: String,
 }
 
-#[derive(Debug, Serialize, TS)]
+#[derive(Debug, Clone, PartialEq, Serialize, TS)]
 struct TaskListQuestion {
     text: String,
 }
 
+/// The list row derived from the full response. Tests hold `list_item_from_row` to it.
+#[cfg(test)]
 impl From<TaskResponse> for TaskListItem {
     fn from(task: TaskResponse) -> Self {
         let human_question = task.human_question.map(|question| TaskListQuestion {
@@ -407,12 +409,15 @@ fn nullable_typed_column<T: serde::de::DeserializeOwned>(
 
 /// The issue key, such as `SUP-12`, and the linked issue.
 fn issue_from_row(row: &Row<'_>) -> DatabaseResult<(Option<String>, Option<IssueAssociation>)> {
+    Ok((issue_key(row)?, nullable_typed_column(row, "issue_json")?))
+}
+
+fn issue_key(row: &Row<'_>) -> DatabaseResult<Option<String>> {
     let code: Option<String> = row.get("issue_code")?;
     let number: Option<i64> = row.get("issue_number")?;
-    let key = code
+    Ok(code
         .zip(number)
-        .map(|(code, number)| format!("{code}-{number}"));
-    Ok((key, nullable_typed_column(row, "issue_json")?))
+        .map(|(code, number)| format!("{code}-{number}")))
 }
 
 fn question_from_row(row: &Row<'_>) -> DatabaseResult<Option<TaskHumanQuestion>> {
@@ -477,6 +482,36 @@ struct TaskTimes {
 fn times_from_row(row: &Row<'_>) -> DatabaseResult<TaskTimes> {
     Ok(TaskTimes {
         wake_at: row.get("wake_at")?,
+        created_at: row.get("created_at")?,
+        updated_at: row.get("updated_at")?,
+        status_changed_at: row.get("status_changed_at")?,
+        archived_at: row.get("archived_at")?,
+    })
+}
+
+/// A row of the repository's list select.
+pub(crate) fn list_item_from_row(row: &Row<'_>) -> DatabaseResult<TaskListItem> {
+    let (depends_on, blocked_by, _) = dependency_projection(
+        serde_json::from_str(&row.get::<_, String>("dependencies")?)?,
+        serde_json::from_str(&row.get::<_, String>("pr_dependencies")?)?,
+    )?;
+    Ok(TaskListItem {
+        id: row.get("id")?,
+        company_id: row.get("company_id")?,
+        project_id: row.get("project_id")?,
+        issue_key: issue_key(row)?,
+        title: row.get("title")?,
+        status: row.get("status")?,
+        configuration: TaskListConfiguration {
+            repository: row.get("repository")?,
+            branch: row.get("branch")?,
+        },
+        pull_request: nullable_typed_column(row, "pull_request_json")?,
+        human_question: row
+            .get::<_, Option<String>>("question_text")?
+            .map(|text| TaskListQuestion { text }),
+        blocked_by,
+        depends_on,
         created_at: row.get("created_at")?,
         updated_at: row.get("updated_at")?,
         status_changed_at: row.get("status_changed_at")?,
@@ -576,7 +611,7 @@ crate::shared::wire_enum! {
 }
 
 /// One entry of the task's "Blocked by" list.
-#[derive(Debug, Clone, Serialize, TS)]
+#[derive(Debug, Clone, PartialEq, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct TaskBlockedBy {
     pub id: String,

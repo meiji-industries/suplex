@@ -9,6 +9,8 @@ import { TaskDataProvider, taskCostsKey, taskListKey, updateTaskCache, useTaskAg
 
 const scope = vi.hoisted(() => ({ userId: "user-a" as string | undefined, companyId: "company-a" }));
 vi.mock("../src/frontend/shell/company-context.js", () => ({ useCompanyContext: () => ({ user: scope.userId ? { id: scope.userId } : undefined, currentCompany: { id: scope.companyId } }) }));
+// These tests cover the HTTP reads. The sync socket has its tests in task-sync.test.tsx.
+vi.mock("../src/frontend/features/tasks/lib/task-sync-api.js", () => ({ openTaskSync: () => () => undefined }));
 
 function task(id: string, title = id) {
   const profile: Task["rootProfile"] = { profileId: "profile", provider: "opencode", model: "model", reasoningLevel: "medium", serviceTier: "default" };
@@ -91,6 +93,16 @@ test("a mutation response survives an older list response and updates, adds, and
   expect(client.getQueryData(key)).toMatchObject([{ id: "b" }]);
   await updateTaskCache(client, "user-b", task("a"));
   expect(client.getQueryData(taskListKey("user-b", "company-a"))).toBeUndefined();
+});
+
+test("a command response does not replace a newer pushed state", async () => {
+  const key = taskListKey("user-a", "company-a");
+  const pushed = { ...task("a", "Pushed"), updatedAt: "2026-09-09T00:00:00.000Z" };
+  client.setQueryData(key, [pushed]);
+  await updateTaskCache(client, "user-a", task("a", "Older command"));
+  expect(client.getQueryData(key)).toMatchObject([{ title: "Pushed" }]);
+  await updateTaskCache(client, "user-a", { ...pushed, title: "Newer command", updatedAt: "2026-09-10T00:00:00.000Z" });
+  expect(client.getQueryData(key)).toMatchObject([{ title: "Newer command" }]);
 });
 
 test("company and user changes isolate private data and cancel late responses", async () => {

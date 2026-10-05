@@ -7,8 +7,31 @@ use ts_rs::TS;
 use crate::{
     coordination::advisor_bridge::AdvisorRole,
     runtimes::opencode::session_reader::PlanItem,
-    tasks::control::{HarnessKind, SessionKind, SessionReplacement, TurnStatus},
+    tasks::{
+        control::{HarnessKind, SessionKind, SessionReplacement, TurnStatus},
+        response::TaskListItem,
+    },
 };
+
+/// One frame of the company sync socket. A task in `tasks` is its current
+/// state; the client replaces its copy.
+#[derive(Serialize, TS)]
+#[serde(
+    tag = "type",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+#[ts(export)]
+pub enum SyncMessage {
+    /// The full active task list.
+    Snapshot { tasks: Vec<TaskListItem> },
+    /// Tasks that are new or different, and tasks that left the active list.
+    /// Both are empty in a heartbeat.
+    Changes {
+        tasks: Vec<TaskListItem>,
+        removed_task_ids: Vec<String>,
+    },
+}
 
 #[derive(Serialize, TS)]
 #[serde(rename_all = "camelCase")]

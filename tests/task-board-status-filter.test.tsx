@@ -19,6 +19,7 @@ vi.mock("../src/frontend/shell/global-new-task-dialog.js", () => ({ requestNewTa
 vi.mock("../src/frontend/features/analytics/lib/analytics.js", async importOriginal => ({ ...(await importOriginal<Record<string, unknown>>()), useTaskCosts: () => new Map() }));
 vi.mock("../src/frontend/features/tasks/task-details.js", () => ({ TaskDetailsPage: () => null }));
 vi.mock("../src/frontend/features/tasks/task-options.js", () => ({ TaskOptions: () => null }));
+vi.mock("../src/frontend/features/tasks/lib/task-sync-api.js", () => ({ openTaskSync: () => () => undefined }));
 vi.mock("../src/frontend/components/ui/select.js", () => {
   const context = createContext<{ value?: string | undefined; onValueChange?: ((value: string) => void) | undefined; label: { current: string } }>({ label: { current: "" } });
   return {

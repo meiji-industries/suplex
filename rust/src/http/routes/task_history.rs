@@ -196,7 +196,7 @@ async fn history(
     response
 }
 
-fn origin_allowed(headers: &HeaderMap, reachable_address: &str) -> bool {
+pub(super) fn origin_allowed(headers: &HeaderMap, reachable_address: &str) -> bool {
     let Some(origin) = headers.get("origin") else {
         return true;
     };
@@ -223,7 +223,7 @@ fn origin_allowed(headers: &HeaderMap, reachable_address: &str) -> bool {
         })
 }
 
-async fn close(socket: &mut WebSocket, code: u16, reason: &'static str) {
+pub(super) async fn close(socket: &mut WebSocket, code: u16, reason: &'static str) {
     let _ = socket
         .send(Message::Close(Some(CloseFrame {
             code,

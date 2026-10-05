@@ -1,6 +1,7 @@
-import { skipToken, useQuery, useQueryClient, type QueryClient, type UseQueryResult } from "@tanstack/react-query";
-import { createContext, useCallback, useContext, useMemo, type ReactNode } from "react";
+import { replaceEqualDeep, skipToken, useQuery, useQueryClient, type QueryClient, type UseQueryResult } from "@tanstack/react-query";
+import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import { readTaskCosts } from "../analytics/lib/analytics-api.js";
+import type { SyncMessage } from "../../contracts/generated/SyncMessage.js";
 import type { TaskCostsResponse } from "../../contracts/generated/TaskCostsResponse.js";
 import type { Task } from "../../contracts/tasks.js";
 import type { TaskListTask } from "../../contracts/task-responses.js";
@@ -8,6 +9,7 @@ import { TaskAgentsBatchResponseSchema } from "../../contracts/task-responses.js
 import { readJsonUnchecked } from "../../lib/api.js";
 import { useCompanyContext } from "../../shell/company-context.js";
 import { readTaskList, showRecentTasks } from "./lib/task-list.js";
+import { openTaskSync } from "./lib/task-sync-api.js";
 
 const polling = { refetchInterval: 3000, refetchIntervalInBackground: false, staleTime: 3000 };
 const emptyCosts = new Map<string, TaskCostsResponse["tasks"][number]>();
@@ -16,14 +18,55 @@ export const taskCostsKey = (userId: string | undefined, companyId: string | und
 const TaskDataContext = createContext<UseQueryResult<TaskListTask[]> | null>(null);
 export const taskListKey = (userId: string | undefined, companyId: string | undefined) => ["tasks", userId, companyId, "active"] as const;
 
+/** Applies one sync frame to the cached list. The list keeps the server order: newest `updatedAt` first, then id. */
+export function applyTaskSync(current: TaskListTask[] | undefined, message: SyncMessage): TaskListTask[] | undefined {
+  if (message.type === "snapshot") return message.tasks;
+  if (!current) return current;
+  const changed = new Set(message.tasks.map(task => task.id));
+  const removed = new Set(message.removedTaskIds);
+  return [...current.filter(task => !changed.has(task.id) && !removed.has(task.id)), ...message.tasks]
+    .sort((left, right) => left.updatedAt === right.updatedAt ? (left.id < right.id ? -1 : 1) : left.updatedAt < right.updatedAt ? 1 : -1);
+}
+
+/**
+ * Keeps the object of each task that did not change. The default sharing compares rows by position,
+ * so a change of order replaces every row and each memoized card renders again.
+ */
+function shareTaskRows(previous: unknown, next: unknown): unknown {
+  if (!Array.isArray(previous) || !Array.isArray(next)) return next;
+  const byId = new Map<unknown, unknown>(previous.map(task => [task.id, task]));
+  const rows = next.map(task => replaceEqualDeep(byId.get(task.id), task));
+  return rows.length === previous.length && rows.every((task, index) => task === previous[index]) ? previous : rows;
+}
+
 export function TaskDataProvider({ children }: { children: ReactNode }) {
   const { user, currentCompany } = useCompanyContext();
+  const client = useQueryClient();
+  const userId = user?.id;
   const companyId = currentCompany?.id;
+  const enabled = Boolean(user && companyId && showRecentTasks(window.location.pathname));
+  // The server pushes task changes while the sync socket is open. Without it, the list polls.
+  const [live, setLive] = useState(false);
+  useEffect(() => {
+    if (!enabled || !userId || !companyId) return;
+    const queryKey = taskListKey(userId, companyId);
+    const close = openTaskSync(companyId, message => {
+      setLive(true);
+      if (message.type === "changes" && !message.tasks.length && !message.removedTaskIds.length) return;
+      // A list read that started before this frame holds older data.
+      void client.cancelQueries({ queryKey, exact: true });
+      client.setQueryData<TaskListTask[]>(queryKey, current => applyTaskSync(current, message));
+    }, () => setLive(false));
+    return () => { close(); setLive(false); };
+  }, [client, enabled, userId, companyId]);
   const query = useQuery({
-    queryKey: taskListKey(user?.id, companyId),
+    queryKey: taskListKey(userId, companyId),
     queryFn: companyId ? ({ signal }) => readTaskList(companyId, false, signal) : skipToken,
-    enabled: Boolean(user && companyId && showRecentTasks(window.location.pathname)),
+    enabled,
+    structuralSharing: shareTaskRows,
     ...polling,
+    // A slow read while the socket is open repairs a missed frame.
+    ...(live ? { refetchInterval: 60_000, staleTime: 60_000 } : {}),
   });
   const costsQuery = useQuery({
     queryKey: taskCostsKey(user?.id, companyId),
@@ -80,6 +123,8 @@ export async function updateTaskCache(client: QueryClient, userId: string, task:
   };
   client.setQueryData<TaskListTask[]>(queryKey, current => {
     if (!current) return undefined;
+    // The sync socket can deliver a newer state before this command response arrives.
+    if (current.some(row => row.id === task.id && row.updatedAt > task.updatedAt)) return current;
     if (task.archivedAt) return current.filter(row => row.id !== task.id);
     return current.some(row => row.id === task.id) ? current.map(row => row.id === task.id ? summary : row) : [summary, ...current];
   });

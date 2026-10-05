@@ -1,5 +1,5 @@
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::http::{
         contracts::typed::{agent_api::query_object, tasks::TaskHistoryQuery},
@@ -91,7 +91,7 @@ mod tests {
         assert_eq!(value["findings"][0]["code"], "invalid-too_big");
     }
 
-    struct LiveClient {
+    pub(crate) struct LiveClient {
         stream: tokio::net::TcpStream,
         pending: Vec<u8>,
     }
@@ -112,7 +112,7 @@ mod tests {
             }
         }
 
-        async fn frame(&mut self) -> (u8, Vec<u8>) {
+        pub(crate) async fn frame(&mut self) -> (u8, Vec<u8>) {
             self.ensure(2).await;
             let opcode = self.pending[0] & 0x0f;
             assert_eq!(self.pending[1] & 0x80, 0, "server frames are not masked");
@@ -143,22 +143,30 @@ mod tests {
             (opcode, payload)
         }
 
-        async fn json(&mut self) -> Value {
+        pub(crate) async fn json(&mut self) -> Value {
             let (opcode, payload) = self.frame().await;
             assert_eq!(opcode, 1);
             serde_json::from_slice(&payload).unwrap()
         }
+
+        /// A short text frame. A client frame carries a mask; a zero mask leaves the text as it is.
+        pub(crate) async fn send_text(&mut self, text: &str) {
+            let mut frame = vec![0x81, 0x80 | u8::try_from(text.len()).unwrap(), 0, 0, 0, 0];
+            frame.extend_from_slice(text.as_bytes());
+            self.stream.write_all(&frame).await.unwrap();
+        }
     }
 
-    async fn open_live(
+    /// The first 12 bytes of the response, such as `HTTP/1.1 101`, and the socket.
+    pub(crate) async fn connect(
         address: std::net::SocketAddr,
-        task_id: &str,
-        session_id: &str,
+        path: &str,
+        origin: &str,
         cookie: &str,
-    ) -> (LiveClient, Value) {
+    ) -> (String, LiveClient) {
         let mut stream = tokio::net::TcpStream::connect(address).await.unwrap();
         let request = format!(
-            "GET /api/tasks/{task_id}/sessions/{session_id}/history/live HTTP/1.1\r\nHost: {address}\r\nOrigin: http://{address}\r\nCookie: {cookie}\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n"
+            "GET {path} HTTP/1.1\r\nHost: {address}\r\nOrigin: {origin}\r\nCookie: {cookie}\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n"
         );
         stream.write_all(request.as_bytes()).await.unwrap();
         let mut bytes = Vec::new();
@@ -180,11 +188,28 @@ mod tests {
             .position(|window| window == b"\r\n\r\n")
             .unwrap()
             + 4;
-        assert!(bytes.starts_with(b"HTTP/1.1 101"));
-        let mut client = LiveClient {
+        let status = String::from_utf8_lossy(&bytes[..12]).into_owned();
+        let client = LiveClient {
             stream,
             pending: bytes.split_off(header_end),
         };
+        (status, client)
+    }
+
+    async fn open_live(
+        address: std::net::SocketAddr,
+        task_id: &str,
+        session_id: &str,
+        cookie: &str,
+    ) -> (LiveClient, Value) {
+        let (status, mut client) = connect(
+            address,
+            &format!("/api/tasks/{task_id}/sessions/{session_id}/history/live"),
+            &format!("http://{address}"),
+            cookie,
+        )
+        .await;
+        assert_eq!(status, "HTTP/1.1 101");
         let first = client.json().await;
         (client, first)
     }

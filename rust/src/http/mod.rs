@@ -19,6 +19,7 @@ use crate::platform::{config::Installation, database::SuplexDatabase, embedded};
 use crate::profiles::provider_login::ProviderLogins;
 use crate::projects::git::Github;
 use crate::tasks::host::TaskHostHandle;
+use crate::tasks::sync::TaskFeed;
 use crate::terminals::host::HostTerminals;
 
 pub mod access;
@@ -52,6 +53,7 @@ pub mod routes {
     pub mod projects;
     pub mod provider_login;
     pub mod quick_shell;
+    pub mod sync;
     pub mod task_agents;
     pub mod task_artifacts;
     pub mod task_history;
@@ -88,6 +90,7 @@ pub struct AppState {
     pub herdr: Herdr,
     pub provider_logins: Arc<ProviderLogins>,
     pub host_terminals: Arc<HostTerminals>,
+    pub task_feed: Arc<TaskFeed>,
     dev_assets_dir: Option<PathBuf>,
     /// Dynamic client registrations per source address in the last hour.
     pub oauth_registrations: OAuthRegistrations,
@@ -101,6 +104,9 @@ pub type OAuthRegistrations =
 impl AppState {
     pub fn new(database: SuplexDatabase, session_config: session::SessionConfig) -> Self {
         let host_terminals = Arc::<HostTerminals>::default();
+        let task_feed = Arc::new(TaskFeed::new(
+            database.connection().path().unwrap_or_default().into(),
+        ));
         Self {
             database: Arc::new(Mutex::new(database)),
             session_config,
@@ -114,6 +120,7 @@ impl AppState {
             herdr: Herdr::default(),
             provider_logins: Arc::new(ProviderLogins::new(host_terminals.clone())),
             host_terminals,
+            task_feed,
             dev_assets_dir: None,
             oauth_registrations: OAuthRegistrations::default(),
             billing: None,
@@ -227,6 +234,7 @@ pub fn router(state: AppState) -> Router {
         .merge(routes::task_templates::router())
         .merge(routes::moves::router())
         .merge(routes::quick_shell::router())
+        .merge(routes::sync::router())
         .merge(routes::tasks::router())
         .merge(routes::today::router())
         .merge(routes::workflows::router())
@@ -474,6 +482,7 @@ mod tests {
             herdr: Herdr::default(),
             provider_logins: Arc::default(),
             host_terminals: Arc::default(),
+            task_feed: Arc::new(TaskFeed::new(path.clone())),
             dev_assets_dir: None,
             oauth_registrations: OAuthRegistrations::default(),
             billing: None,

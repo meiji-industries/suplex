@@ -427,6 +427,26 @@ pub(crate) mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn a_loopback_redirect_matches_on_any_port_but_not_another_host_or_path() {
+        let server = server(None).await;
+        let client_id = register(&server, "Port test").await;
+        let cookie = session(&server);
+        let path = authorize_path(&client_id, "port-verifier", "port-state");
+        for (redirect, status) in [
+            ("127.0.0.1%3A63492%2Fcallback", 302),
+            ("localhost%3A9317%2Fcallback", 400),
+            ("127.0.0.1%3A63492%2Fother", 400),
+        ] {
+            let path = path.replace("127.0.0.1%3A9317%2Fcallback", redirect);
+            assert!(path.contains(redirect));
+            let response = server
+                .request(reqwest::Method::GET, &path, &[("cookie", &cookie)], None)
+                .await;
+            assert_eq!(response.status(), status, "{redirect}");
+        }
+    }
+
     /// Claude Code 2.1.283 lists tools statelessly (2026-07-28) and rejects a
     /// result without a numeric ttlMs and a public or private cacheScope.
     #[tokio::test]

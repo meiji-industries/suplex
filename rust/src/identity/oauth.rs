@@ -191,6 +191,25 @@ fn is_loopback_http(url: &url::Url) -> bool {
             .is_some_and(|host| LOOPBACK_HOSTS.contains(&host))
 }
 
+/// RFC 8252 section 7.3: a native client binds an ephemeral loopback port for
+/// each request, so the port of a loopback redirect is not compared.
+fn redirect_matches(registered: &str, requested: &str) -> bool {
+    if registered == requested {
+        return true;
+    }
+    let (Ok(mut registered), Ok(mut requested)) =
+        (url::Url::parse(registered), url::Url::parse(requested))
+    else {
+        return false;
+    };
+    if !is_loopback_http(&registered) || !is_loopback_http(&requested) {
+        return false;
+    }
+    let _ = registered.set_port(None);
+    let _ = requested.set_port(None);
+    registered == requested
+}
+
 fn valid_redirect_uri(value: &str) -> bool {
     if utf16_len(value) > 2_048 || value.contains('*') {
         return false;
@@ -397,7 +416,7 @@ impl OAuth {
             Some((id, redirects))
                 if string_array(&redirects)?
                     .iter()
-                    .any(|uri| uri == input.redirect_uri) =>
+                    .any(|uri| redirect_matches(uri, input.redirect_uri)) =>
             {
                 id
             }

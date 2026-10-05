@@ -88,12 +88,15 @@ pub fn observe(
                 Err(error) => return Err(io::Error::other(error)),
             }
         }
+        // A yielded command can outlive a turn that Codex finished; stop it either way.
         headless::stop_execution(directory, &record.generation)?;
-        result.state = PromptState::Interrupted;
-        result.reason = "tool_execution_after_process_stopped";
-    } else if completed {
+    }
+    if completed {
         result.state = PromptState::Completed;
         result.reason = "native_turn_completed";
+    } else if !result.unsettled_tool_ids.is_empty() {
+        result.state = PromptState::Interrupted;
+        result.reason = "tool_execution_after_process_stopped";
     } else if transcript::failure(&events).is_some() {
         result.state = PromptState::Error;
         result.reason = "native_error";
@@ -279,6 +282,27 @@ mod tests {
             Some("thread-1")
         );
         assert_eq!(result_text(&directory, "msg_1").unwrap(), "Done");
+        let started = "{\"type\":\"item.started\",\"item\":{\"id\":\"item_1\",\"type\":\"command_execution\"}}\n";
+        for (events, state) in [
+            (
+                format!("{started}{{\"type\":\"turn.completed\"}}\n"),
+                PromptState::Completed,
+            ),
+            (started.to_owned(), PromptState::Interrupted),
+        ] {
+            fs::write(headless::turn_file(&directory, "msg_1", "jsonl"), events).unwrap();
+            fs::write(headless::turn_file(&directory, "msg_1", "exit"), "0").unwrap();
+            let yielded = observe(
+                &directory,
+                "session-1",
+                "msg_1",
+                DispatchState::Ambiguous,
+                None,
+            )
+            .unwrap();
+            assert_eq!(yielded.state, state);
+            assert_eq!(yielded.unsettled_tool_ids, ["item_1"]);
+        }
         fs::remove_dir_all(directory).unwrap();
     }
 

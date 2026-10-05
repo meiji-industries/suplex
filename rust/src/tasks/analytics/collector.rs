@@ -104,7 +104,7 @@ pub fn collect(
     startup: bool,
     now: DateTime<Utc>,
     read_usage: &mut ReadUsage<'_>,
-    report: &mut dyn FnMut(Box<dyn Error>),
+    report: &mut dyn FnMut(&str, Box<dyn Error>),
 ) -> DatabaseResult<()> {
     let tasks = {
         let mut statement = database.connection().prepare(
@@ -179,8 +179,14 @@ pub fn collect(
                     Ok(usage) => record(database, &task_id, &session.id, &usage, &started)?,
                     Err(error) => {
                         failed(database, &task_id, &session.id, &now_millis_rfc3339())?;
-                        if !missing_opencode_session(error.as_ref()) {
-                            report(error);
+                        if !missing_native_session(error.as_ref()) {
+                            report(
+                                &format!(
+                                    "task {task_id} {} session {} ({})",
+                                    session.kind, session.id, session.native_session_id
+                                ),
+                                error,
+                            );
                         }
                     }
                 }
@@ -188,24 +194,24 @@ pub fn collect(
             Ok(())
         };
         if let Err(error) = pass() {
-            report(error);
+            report(&format!("task {task_id}"), error);
         }
     }
     Ok(())
 }
 
-/// TypeScript skips `OpenCodeFailure` `not_found`: a session OpenCode no longer has is stale, not an error.
-fn missing_opencode_session(error: &(dyn Error + 'static)) -> bool {
+/// A session its runtime no longer has, or a native history file that is gone, is stale, not an error.
+fn missing_native_session(error: &(dyn Error + 'static)) -> bool {
     use crate::runtimes::opencode::session_history::SessionNotFound;
     error.is::<SessionNotFound>()
-        || error
-            .downcast_ref::<std::io::Error>()
-            .and_then(std::io::Error::get_ref)
-            .is_some_and(
-                <dyn std::error::Error + std::marker::Send + std::marker::Sync + 'static>::is::<
-                    SessionNotFound,
-                >,
-            )
+        || error.downcast_ref::<std::io::Error>().is_some_and(|error| {
+            error.kind() == std::io::ErrorKind::NotFound
+                || error.get_ref().is_some_and(
+                    <dyn std::error::Error + std::marker::Send + std::marker::Sync + 'static>::is::<
+                        SessionNotFound,
+                    >,
+                )
+        })
 }
 
 fn incomplete_usage_diagnostic(mut error: &(dyn Error + 'static)) -> Option<serde_json::Value> {
@@ -248,11 +254,11 @@ pub fn spawn(database_path: PathBuf, mut shutdown: watch::Receiver<bool>) {
                     let home = instance_home(&path, &session.id);
                     read_native_usage(&path, session, home.as_deref(), catalog.as_deref())
                 };
-                let mut report = |error: Box<dyn Error>| {
+                let mut report = |context: &str, error: Box<dyn Error>| {
                     if let Some(event) = incomplete_usage_diagnostic(error.as_ref()) {
                         crate::platform::system_events::emit(event);
                     } else {
-                        eprintln!("Analytics observation failed: {error}");
+                        eprintln!("Analytics observation failed for {context}: {error}");
                     }
                 };
                 collect(&mut database, startup, Utc::now(), &mut read, &mut report)
@@ -416,7 +422,7 @@ mod tests {
                 reads += 1;
                 Ok(vec![refreshed.clone()])
             };
-            let mut report = |error: Box<dyn Error>| panic!("{error}");
+            let mut report = |_: &str, error: Box<dyn Error>| panic!("{error}");
             collect(
                 &mut database,
                 native == "devin-old",
@@ -442,7 +448,7 @@ mod tests {
                 false,
                 Utc::now(),
                 &mut |_| Ok(vec![refreshed.clone()]),
-                &mut |_| errors += 1,
+                &mut |_, _| errors += 1,
             )
             .unwrap();
             assert_eq!(errors, 1);
@@ -661,7 +667,7 @@ mod tests {
             reads += 1;
             Ok(vec![usage_with(3.0)])
         };
-        let mut report = |error: Box<dyn Error>| panic!("{error}");
+        let mut report = |_: &str, error: Box<dyn Error>| panic!("{error}");
         collect(&mut database, true, Utc::now(), &mut read, &mut report).unwrap();
         collect(&mut database, false, Utc::now(), &mut read, &mut report).unwrap();
         assert_eq!(reads, 1);
@@ -711,7 +717,7 @@ mod tests {
                     Err("history is missing".into())
                 }
             };
-            let mut report = |_: Box<dyn Error>| *errors += 1;
+            let mut report = |_: &str, _: Box<dyn Error>| *errors += 1;
             collect(database, false, now, &mut read, &mut report).unwrap();
         };
         pass(
@@ -774,7 +780,10 @@ mod tests {
                 crate::runtimes::opencode::session_history::SessionNotFound,
             )))
         };
-        let mut report = |_: Box<dyn Error>| errors += 1;
+        assert!(missing_native_session(&std::io::Error::from(
+            std::io::ErrorKind::NotFound
+        )));
+        let mut report = |_: &str, _: Box<dyn Error>| errors += 1;
         collect(&mut database, false, Utc::now(), &mut read, &mut report).unwrap();
         assert_eq!(errors, 0);
         assert!(
@@ -833,12 +842,8 @@ mod tests {
             ("codex-worker".to_owned(), "msg_worker".to_owned(), 7.0),
         ];
         assert_eq!(saved(&database), expected);
-        assert_eq!(
-            record(&mut database, "t", "s", &[], &time)
-                .unwrap_err()
-                .to_string(),
-            "Native usage has no completed observations"
-        );
+        // An empty read keeps the saved usage and still counts as an observation.
+        record(&mut database, "t", "s", &[], &time).unwrap();
         assert_eq!(saved(&database), expected);
         let _ = fs::remove_file(path);
     }

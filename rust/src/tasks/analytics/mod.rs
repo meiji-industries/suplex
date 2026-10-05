@@ -99,28 +99,11 @@ pub fn record(
 ) -> DatabaseResult<()> {
     database.transaction(false, |database| {
         let connection = database.connection();
-        let bound: Option<String> = connection
-            .query_row(
-                "SELECT native_session_id FROM suplex_task_sessions WHERE id = ?1 AND task_id = ?2",
-                params![session_id, task_id],
-                |row| row.get(0),
-            )
-            .optional()?
-            .flatten();
-        let native = usage.first().map(|entry| entry.session_id.clone()).or(bound);
-        if let Some(native) = &native {
-            if usage.is_empty()
-                && connection.query_row(
-                    "SELECT EXISTS(SELECT 1 FROM suplex_task_usage WHERE task_id = ?1 AND session_id = ?2)",
-                    params![task_id, native],
-                    |row| row.get::<_, bool>(0),
-                )?
-            {
-                return Err("Native usage has no completed observations".into());
-            }
+        // An empty read keeps the saved rows: the native source no longer has them.
+        if let Some(entry) = usage.first() {
             connection.execute(
                 "DELETE FROM suplex_task_usage WHERE task_id = ?1 AND session_id = ?2",
-                params![task_id, native],
+                params![task_id, entry.session_id],
             )?;
         }
         for entry in usage {

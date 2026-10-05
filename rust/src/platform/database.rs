@@ -131,7 +131,10 @@ impl SuplexDatabase {
         let depth = self.callbacks.len();
         let savepoint = format!("suplex_nested_{depth}");
         let begin = if depth == 0 {
-            if immediate {
+            // A deferred transaction that reads and then writes fails with "database is
+            // locked" at once when another connection writes; SQLite skips the busy
+            // timeout for that upgrade. Take the write lock first on every writable connection.
+            if immediate || self.mode != OpenMode::ReadOnly {
                 "BEGIN IMMEDIATE"
             } else {
                 "BEGIN"
@@ -709,6 +712,35 @@ mod tests {
             )
             .unwrap();
         assert_eq!(ledger_exists, 0);
+        drop(database);
+        let _ = fs::remove_file(&filename);
+    }
+
+    #[test]
+    fn read_then_write_transaction_waits_for_a_concurrent_writer() {
+        let filename = temporary_database();
+        let mut database = SuplexDatabase::open(&filename, OpenMode::Migrate).unwrap();
+        database
+            .connection()
+            .execute_batch("CREATE TABLE busy_probe (value INTEGER)")
+            .unwrap();
+        let writer = Connection::open(&filename).unwrap();
+        writer.execute_batch("BEGIN IMMEDIATE").unwrap();
+        let holder = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(200));
+            writer.execute_batch("COMMIT").unwrap();
+        });
+        database
+            .transaction(false, |database| {
+                let connection = database.connection();
+                connection.query_row("SELECT COUNT(*) FROM busy_probe", [], |row| {
+                    row.get::<_, i64>(0)
+                })?;
+                connection.execute("INSERT INTO busy_probe VALUES (1)", [])?;
+                Ok(())
+            })
+            .unwrap();
+        holder.join().unwrap();
         drop(database);
         let _ = fs::remove_file(&filename);
     }

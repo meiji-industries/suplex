@@ -2,7 +2,7 @@ import { z } from "zod";
 import type { Task } from "../../contracts/tasks.js";
 import { ADVISOR_LABELS, latestReview } from "./workflow-presentation.js";
 import type { ReviewRecord } from "../../contracts/generated/ReviewRecord.js";
-import { ReviewerResultSchema, RaterResultSchema } from "../../contracts/advisor-reports.js";
+import { ReviewerResultSchema, RaterResultSchema, REPAIR_RATING_TARGET } from "../../contracts/advisor-reports.js";
 import { formatTurnDuration, type TaskActivity } from "./task-work.js";
 import { Badge } from "../../components/ui/badge.js";
 import { Button } from "../../components/ui/button.js";
@@ -104,9 +104,7 @@ export function WorkflowHistory({ task, activity }: { task: Task; activity: Task
     return session?.kind === "worker" && !session.advisorRole ? [{ session, turn }] : [];
   });
   if (!reviews.length && !planners.length) return null;
-  return <Collapsible.Root data-workflow-history defaultOpen className="space-y-2 text-xs">
-    <Collapsible.Trigger className="group flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"><ChevronRight className="size-3.5 transition-transform group-data-[panel-open]:rotate-90" aria-hidden="true" />Review history <span className="text-muted-foreground">{reviews.length || planners.length}</span></Collapsible.Trigger>
-    <Collapsible.Panel><ol className="grid min-w-0 divide-y overflow-hidden rounded-md border" aria-label="Review rounds">
+  return <ol data-workflow-history className="grid min-w-0 divide-y overflow-hidden rounded-md border text-xs" aria-label="Review rounds">
       {reviews.map((record, index) => {
         const result = reviewResult(record);
         const round = reviews.filter((candidate, position) => candidate.role === record.role && position <= index).length;
@@ -115,7 +113,8 @@ export function WorkflowHistory({ task, activity }: { task: Task; activity: Task
           <HistoryRow title={`${ADVISOR_LABELS[record.role]} round ${round}`} icon={!result ? XCircle : result.role === "rater" ? Gauge : result.approved ? CheckCircle2 : XCircle}
             badge={<Badge variant={result ? "secondary" : "destructive"}>{resultLabel(result)}</Badge>}
             timestamp={<HistoryTime value={record.recordedAt} turn={activity.turns.find(turn => turn.id === record.turnId)} />}
-            findings={result && result.blockingFindings.length > 0 ? <Badge variant="destructive">{result.blockingFindings.length} blocking {result.blockingFindings.length === 1 ? "finding" : "findings"}</Badge> : null}>
+            findings={result && result.blockingFindings.length > 0 ? <Badge variant="destructive">{result.blockingFindings.length} blocking {result.blockingFindings.length === 1 ? "finding" : "findings"}</Badge>
+              : result && (result.role === "rater" ? result.rating >= REPAIR_RATING_TARGET : result.approved) ? <Badge variant="green">Passed</Badge> : null}>
             {result || record.invalidReason || report ? <>
               {result ? <>
                 <section data-review-section="summary"><p className="mb-1 font-medium">Summary</p><Markdown source={result.summary} /></section>
@@ -140,6 +139,5 @@ export function WorkflowHistory({ task, activity }: { task: Task; activity: Task
           <Markdown source={turn.prompt} />
         </HistoryRow>
       </li> : null) : null}
-    </ol></Collapsible.Panel>
-  </Collapsible.Root>;
+    </ol>;
 }

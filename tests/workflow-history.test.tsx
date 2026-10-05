@@ -54,11 +54,8 @@ test("a reviewer row keeps compact facts visible while findings, verification, a
   const report = "## Repair plan\n\nKeep the **answer** in the task action.";
   const container = await mount([review], { sessions: [], turns: [{ ...turn, id: review.turnId, sessionId: review.sessionId, status: "completed", completedAt: recordedAt, result: JSON.stringify({ text: report }) }], shellPaneId: null });
   const history = element<HTMLElement>(container, "[data-workflow-history]");
-  const sectionToggle = element<HTMLButtonElement>(history, "button");
-  expect(sectionToggle.textContent).toContain("Review history 1");
-  expect(sectionToggle.getAttribute("aria-expanded")).toBe("true");
-  expect(history.querySelector("details, summary")).toBeNull();
-  expect(history.querySelector('ol[aria-label="Review rounds"]')).not.toBeNull();
+  expect(history.matches('ol[aria-label="Review rounds"]')).toBe(true);
+  expect(history.textContent).not.toContain("Review history");
 
   const card = element<HTMLElement>(history, '[data-review-round="reviewer"]');
   expect(card.textContent).toContain("Reviewer round 1");
@@ -90,18 +87,13 @@ test("a reviewer row keeps compact facts visible while findings, verification, a
   await click(toggle);
   expect(toggle.getAttribute("aria-expanded")).toBe("false");
   expect(card.querySelector(".prose-suplex")).toBeNull();
-  await click(sectionToggle);
-  expect(sectionToggle.getAttribute("aria-expanded")).toBe("false");
-  expect(history.querySelector('ol[aria-label="Review rounds"]')).toBeNull();
-  await click(sectionToggle);
-  expect(history.querySelector('ol[aria-label="Review rounds"]')).not.toBeNull();
 });
 
-test("an approved reviewer omits an empty blocking-finding count", async () => {
+test("an approved reviewer shows a passed badge instead of a blocking-finding count", async () => {
   const approved = { ...review, result: { ...review.result, approved: true, blockingFindings: [] } };
   const container = await mount([approved]);
   const card = element<HTMLElement>(container, '[data-review-round="reviewer"]');
-  expect(element<HTMLElement>(card, '[data-slot="badge"]').textContent).toBe("Approved");
+  expect(Array.from(card.querySelectorAll('[data-slot="badge"]'), badge => badge.textContent)).toEqual(["Passed", "Approved"]);
   expect(card.textContent).not.toContain("blocking finding");
 });
 

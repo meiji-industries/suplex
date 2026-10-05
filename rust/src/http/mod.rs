@@ -18,8 +18,8 @@ use crate::integrations::{github_device::DeviceAuth, herdr::Herdr};
 use crate::platform::{config::Installation, database::SuplexDatabase, embedded};
 use crate::profiles::provider_login::ProviderLogins;
 use crate::projects::git::Github;
+use crate::sync::CompanyFeed;
 use crate::tasks::host::TaskHostHandle;
-use crate::tasks::sync::TaskFeed;
 use crate::terminals::host::HostTerminals;
 
 pub mod access;
@@ -90,7 +90,7 @@ pub struct AppState {
     pub herdr: Herdr,
     pub provider_logins: Arc<ProviderLogins>,
     pub host_terminals: Arc<HostTerminals>,
-    pub task_feed: Arc<TaskFeed>,
+    pub company_feed: Arc<CompanyFeed>,
     dev_assets_dir: Option<PathBuf>,
     /// Dynamic client registrations per source address in the last hour.
     pub oauth_registrations: OAuthRegistrations,
@@ -104,8 +104,9 @@ pub type OAuthRegistrations =
 impl AppState {
     pub fn new(database: SuplexDatabase, session_config: session::SessionConfig) -> Self {
         let host_terminals = Arc::<HostTerminals>::default();
-        let task_feed = Arc::new(TaskFeed::new(
+        let company_feed = Arc::new(CompanyFeed::new(
             database.connection().path().unwrap_or_default().into(),
+            host_terminals.clone(),
         ));
         Self {
             database: Arc::new(Mutex::new(database)),
@@ -120,7 +121,7 @@ impl AppState {
             herdr: Herdr::default(),
             provider_logins: Arc::new(ProviderLogins::new(host_terminals.clone())),
             host_terminals,
-            task_feed,
+            company_feed,
             dev_assets_dir: None,
             oauth_registrations: OAuthRegistrations::default(),
             billing: None,
@@ -160,6 +161,7 @@ impl AppState {
     /// terminals of finished tasks.
     pub fn with_host_terminals(mut self, host_terminals: Arc<HostTerminals>) -> Self {
         self.provider_logins = Arc::new(ProviderLogins::new(host_terminals.clone()));
+        self.company_feed = Arc::new(self.company_feed.with_terminals(host_terminals.clone()));
         self.host_terminals = host_terminals;
         self
     }
@@ -482,7 +484,7 @@ mod tests {
             herdr: Herdr::default(),
             provider_logins: Arc::default(),
             host_terminals: Arc::default(),
-            task_feed: Arc::new(TaskFeed::new(path.clone())),
+            company_feed: Arc::new(CompanyFeed::new(path.clone(), Arc::default())),
             dev_assets_dir: None,
             oauth_registrations: OAuthRegistrations::default(),
             billing: None,

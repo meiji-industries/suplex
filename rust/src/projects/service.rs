@@ -111,6 +111,11 @@ struct StoredProject {
 
 const SELECTION: &str = "SELECT p.integration_json, p.execution_json, p.provider_policy_json, p.id, p.company_id, p.name, p.repository_path, p.worktree_root, p.repository_identity, p.base_branch, p.setup_command, p.verification_command, p.root_profile_id, p.worker_profile_id, p.agent_task_policy_json, p.created_at, p.updated_at, p.alt_profile_id, p.task_concurrency FROM suplex_projects p";
 
+/// The stored columns of one company's projects, for the sync feed.
+pub(crate) fn company_selection() -> String {
+    format!("{SELECTION} WHERE p.company_id = ?1 ORDER BY p.id")
+}
+
 fn stored(row: &Row<'_>) -> rusqlite::Result<StoredProject> {
     Ok(StoredProject {
         integration_json: row.get(0)?,

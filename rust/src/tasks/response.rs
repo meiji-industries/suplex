@@ -61,7 +61,7 @@ pub struct TaskResponse {
 #[serde(rename_all = "camelCase")]
 #[ts(export)]
 pub struct TaskListItem {
-    pub(super) id: String,
+    pub(crate) id: String,
     company_id: String,
     project_id: String,
     issue_key: Option<String>,

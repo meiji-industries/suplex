@@ -20,8 +20,7 @@ use crate::{
     http::{
         AppState,
         contracts::typed::system::{
-            EnvironmentPatch, ExperimentsResponse,
-            TelemetryResponse, TelemetryUserRole,
+            EnvironmentPatch, ExperimentsResponse, TelemetryResponse, TelemetryUserRole,
         },
         session,
         validation::Valid,
@@ -245,10 +244,7 @@ async fn read_telemetry(
 }
 
 /// `POST /api/admin/telemetry/notice`: an administrator saw the notice.
-async fn acknowledge_telemetry(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-) -> Response {
+async fn acknowledge_telemetry(State(state): State<AppState>, headers: HeaderMap) -> Response {
     let (_, cookies) = match administrator(&state, &headers, &Method::POST, ADMIN_REQUIRED) {
         Ok(value) => value,
         Err(response) => return *response,

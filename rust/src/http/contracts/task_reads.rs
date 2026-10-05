@@ -6,6 +6,7 @@ use ts_rs::TS;
 
 use crate::{
     coordination::advisor_bridge::AdvisorRole,
+    moves::MoveResponse,
     runtimes::opencode::session_reader::PlanItem,
     tasks::{
         control::{HarnessKind, SessionKind, SessionReplacement, TurnStatus},
@@ -13,8 +14,8 @@ use crate::{
     },
 };
 
-/// One frame of the company sync socket. A task in `tasks` is its current
-/// state; the client replaces its copy.
+/// One frame of the company sync socket. A task or a move in a frame is its
+/// current state; the client replaces its copy.
 #[derive(Serialize, TS)]
 #[serde(
     tag = "type",
@@ -23,13 +24,24 @@ use crate::{
 )]
 #[ts(export)]
 pub enum SyncMessage {
-    /// The full active task list.
-    Snapshot { tasks: Vec<TaskListItem> },
-    /// Tasks that are new or different, and tasks that left the active list.
-    /// Both are empty in a heartbeat.
-    Changes {
+    /// The full active task list and every move. The client reads the
+    /// projects over HTTP when it receives this frame.
+    Snapshot {
         tasks: Vec<TaskListItem>,
+        moves: Vec<MoveResponse>,
+    },
+    /// What changed. A heartbeat carries no change.
+    Changes {
+        /// Tasks that are new or different.
+        tasks: Vec<TaskListItem>,
+        /// Tasks that left the active list.
         removed_task_ids: Vec<String>,
+        /// Every move, when one changed.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        moves: Option<Vec<MoveResponse>>,
+        /// A project changed. The client reads the projects over HTTP.
+        projects_changed: bool,
     },
 }
 

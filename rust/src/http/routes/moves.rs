@@ -47,12 +47,8 @@ pub fn router() -> Router<AppState> {
         )
 }
 
-/// A run is live while its host terminal is open. The terminal is the authority.
-fn observed(state: &AppState, mut run: moves::MoveRunResponse) -> moves::MoveRunResponse {
-    run.live = state
-        .host_terminals
-        .contains(&moves::shell::terminal_id(&run.id));
-    run
+fn observed(state: &AppState, run: moves::MoveRunResponse) -> moves::MoveRunResponse {
+    moves::observed(&state.host_terminals, run)
 }
 
 pub(super) fn admitted(

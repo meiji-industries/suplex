@@ -8,6 +8,9 @@ import type { TaskListTask } from "../../contracts/task-responses.js";
 import { TaskAgentsBatchResponseSchema } from "../../contracts/task-responses.js";
 import { readJsonUnchecked } from "../../lib/api.js";
 import { useCompanyContext } from "../../shell/company-context.js";
+import { SyncLiveContext, syncedPolling } from "../../shell/sync.js";
+import { movesKey } from "../moves/lib/move-runs.js";
+import { projectsKey } from "../projects/lib/projects.js";
 import { readTaskList, showRecentTasks } from "./lib/task-list.js";
 import { openTaskSync } from "./lib/task-sync-api.js";
 
@@ -18,7 +21,7 @@ export const taskCostsKey = (userId: string | undefined, companyId: string | und
 const TaskDataContext = createContext<UseQueryResult<TaskListTask[]> | null>(null);
 export const taskListKey = (userId: string | undefined, companyId: string | undefined) => ["tasks", userId, companyId, "active"] as const;
 
-/** Applies one sync frame to the cached list. The list keeps the server order: newest `updatedAt` first, then id. */
+/** Applies the tasks of one sync frame to the cached list. The list keeps the server order: newest `updatedAt` first, then id. */
 export function applyTaskSync(current: TaskListTask[] | undefined, message: SyncMessage): TaskListTask[] | undefined {
   if (message.type === "snapshot") return message.tasks;
   if (!current) return current;
@@ -45,17 +48,25 @@ export function TaskDataProvider({ children }: { children: ReactNode }) {
   const userId = user?.id;
   const companyId = currentCompany?.id;
   const enabled = Boolean(user && companyId && showRecentTasks(window.location.pathname));
-  // The server pushes task changes while the sync socket is open. Without it, the list polls.
+  // The server pushes task and move changes while the sync socket is open. Without it, the lists poll.
   const [live, setLive] = useState(false);
   useEffect(() => {
     if (!enabled || !userId || !companyId) return;
     const queryKey = taskListKey(userId, companyId);
     const close = openTaskSync(companyId, message => {
       setLive(true);
-      if (message.type === "changes" && !message.tasks.length && !message.removedTaskIds.length) return;
-      // A list read that started before this frame holds older data.
-      void client.cancelQueries({ queryKey, exact: true });
-      client.setQueryData<TaskListTask[]>(queryKey, current => applyTaskSync(current, message));
+      // A read that started before this frame holds older data.
+      if (message.type === "snapshot" || message.tasks.length || message.removedTaskIds.length) {
+        void client.cancelQueries({ queryKey, exact: true });
+        client.setQueryData<TaskListTask[]>(queryKey, current => applyTaskSync(current, message));
+      }
+      if (message.moves) {
+        const moves = movesKey(userId, companyId);
+        void client.cancelQueries({ queryKey: moves, exact: true });
+        client.setQueryData(moves, message.moves);
+      }
+      // Projects travel over HTTP. A snapshot can follow a time without the socket.
+      if (message.type === "snapshot" || message.projectsChanged) void client.invalidateQueries({ queryKey: projectsKey(userId, companyId), exact: true }, { cancelRefetch: false });
     }, () => setLive(false));
     return () => { close(); setLive(false); };
   }, [client, enabled, userId, companyId]);
@@ -64,9 +75,7 @@ export function TaskDataProvider({ children }: { children: ReactNode }) {
     queryFn: companyId ? ({ signal }) => readTaskList(companyId, false, signal) : skipToken,
     enabled,
     structuralSharing: shareTaskRows,
-    ...polling,
-    // A slow read while the socket is open repairs a missed frame.
-    ...(live ? { refetchInterval: 60_000, staleTime: 60_000 } : {}),
+    ...syncedPolling(live),
   });
   const costsQuery = useQuery({
     queryKey: taskCostsKey(user?.id, companyId),
@@ -80,7 +89,7 @@ export function TaskDataProvider({ children }: { children: ReactNode }) {
     companyId,
     costs: user && !costsQuery.isError && costsQuery.data ? new Map(costsQuery.data.tasks.map(task => [task.id, task])) : emptyCosts,
   }), [companyId, user?.id, costsQuery.data, costsQuery.isError]);
-  return <TaskDataContext.Provider value={query}><TaskCostsContext.Provider value={costs}>{children}</TaskCostsContext.Provider></TaskDataContext.Provider>;
+  return <SyncLiveContext.Provider value={live}><TaskDataContext.Provider value={query}><TaskCostsContext.Provider value={costs}>{children}</TaskCostsContext.Provider></TaskDataContext.Provider></SyncLiveContext.Provider>;
 }
 
 export function useTaskData() {

@@ -22,6 +22,7 @@ use crate::{
     projects::service::{self as projects, Project},
     shared::{ids::random_hex_id, time::now_millis_rfc3339},
     tasks::{TaskError, control::DeliveryTarget, creation, response::VisualEvidence},
+    terminals::host::HostTerminals,
 };
 
 pub use prompt::MoveInput;
@@ -57,7 +58,7 @@ pub struct MoveOutcome {
     pub reason: Option<String>,
 }
 
-#[derive(Clone, Debug, Serialize, TS)]
+#[derive(Clone, Debug, PartialEq, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export)]
 pub struct MoveRunResponse {
@@ -76,7 +77,7 @@ pub struct MoveRunResponse {
     pub live: bool,
 }
 
-#[derive(Clone, Debug, Serialize, TS)]
+#[derive(Clone, Debug, PartialEq, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export)]
 pub struct MoveResponse {
@@ -375,18 +376,32 @@ pub fn list(
     company_id: &str,
 ) -> Result<MovesResponse, Box<dyn Error>> {
     companies::require_company_access(database, user_id, company_id)?;
+    let mut moves = list_company(database, company_id)?;
+    moves.retain(|item| projects::get(database, user_id, &item.project_id).is_ok());
+    Ok(MovesResponse { moves })
+}
+
+/// Every move of the company, for the sync feed. The caller authorizes.
+pub(crate) fn list_company(
+    database: &SuplexDatabase,
+    company_id: &str,
+) -> Result<Vec<MoveResponse>, Box<dyn Error>> {
     let mut statement = database.connection().prepare(&format!(
         "{MOVE_COLUMNS} WHERE company_id = ?1 ORDER BY name COLLATE NOCASE, id"
     ))?;
     let stored = statement
         .query_map([company_id], stored_move)?
         .collect::<rusqlite::Result<Vec<_>>>()?;
-    let moves = stored
+    stored
         .into_iter()
-        .filter(|stored| projects::get(database, user_id, &stored.project_id).is_ok())
         .map(|stored| response(database, stored))
-        .collect::<Result<_, _>>()?;
-    Ok(MovesResponse { moves })
+        .collect()
+}
+
+/// A run is live while its host terminal is open. The terminal is the authority.
+pub fn observed(terminals: &HostTerminals, mut run: MoveRunResponse) -> MoveRunResponse {
+    run.live = terminals.contains(&shell::terminal_id(&run.id));
+    run
 }
 
 pub fn create(

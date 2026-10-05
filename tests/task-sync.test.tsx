@@ -4,10 +4,12 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import type { TaskListTask } from "../src/frontend/contracts/task-responses.js";
+import { useShellRuns } from "../src/frontend/features/moves/lib/move-runs.js";
+import { useProjects } from "../src/frontend/features/projects/lib/projects.js";
 import { TaskDataProvider, useTaskData } from "../src/frontend/features/tasks/task-data.js";
 
 const scope = vi.hoisted(() => ({ companyId: "company-a" }));
-vi.mock("../src/frontend/shell/company-context.js", () => ({ useCompanyContext: () => ({ user: { id: "user-a" }, currentCompany: { id: scope.companyId } }) }));
+vi.mock("../src/frontend/shell/company-context.js", () => { const context = () => ({ user: { id: "user-a" }, currentCompany: { id: scope.companyId } }); return { useCompanyContext: context, useOptionalCompanyContext: context }; });
 
 class FakeWebSocket {
   static instances: FakeWebSocket[] = [];
@@ -32,9 +34,19 @@ function row(id: string, title = id, updatedAt = "2026-09-08T00:00:00.000Z"): Ta
 }
 
 let rows: TaskListTask[] | undefined;
+let runs: string[] = [];
+let projects: string[] | undefined;
 function Capture() {
   rows = useTaskData().data;
   return null;
+}
+function CaptureLists() {
+  runs = useShellRuns(scope.companyId).map(({ move, run }) => `${move.name}:${run.live ? "live" : "ended"}`);
+  projects = useProjects(scope.companyId).data?.map(project => project.name);
+  return <Capture />;
+}
+function move(name: string, live: boolean) {
+  return { id: name, name, projectId: "project", lastRun: { id: `${name}-run`, runner: "script", live, startedAt: "2026-09-08T00:00:00.000Z" } };
 }
 
 let root: Root;
@@ -42,9 +54,11 @@ let container: HTMLDivElement;
 let client: QueryClient;
 let listed: TaskListTask[];
 let fetch: ReturnType<typeof vi.fn<(url: string) => Promise<Response>>>;
-const lists = () => fetch.mock.calls.filter(([url]) => url.includes("/tasks?")).length;
+const reads = (part: string) => fetch.mock.calls.filter(([url]) => url.includes(part)).length;
+const lists = () => reads("/tasks?");
+let projectNames: string[];
 const sockets = () => FakeWebSocket.instances;
-const render = () => act(async () => root.render(<QueryClientProvider client={client}><TaskDataProvider><Capture /></TaskDataProvider></QueryClientProvider>));
+const render = (all = false) => act(async () => root.render(<QueryClientProvider client={client}><TaskDataProvider>{all ? <CaptureLists /> : <Capture />}</TaskDataProvider></QueryClientProvider>));
 const emit = (socket: FakeWebSocket | undefined, message: unknown) => act(async () => socket?.emit(message));
 const titles = () => rows?.map(task => task.title);
 
@@ -55,9 +69,10 @@ beforeEach(() => {
   focusManager.setFocused(true);
   scope.companyId = "company-a";
   FakeWebSocket.instances = [];
-  rows = undefined;
+  rows = undefined; runs = []; projects = undefined;
   listed = [row("a"), row("b")];
-  fetch = vi.fn(async (url: string) => new Response(JSON.stringify({ tasks: url.includes("/tasks?") ? listed : [] })));
+  projectNames = ["Repository"];
+  fetch = vi.fn(async (url: string) => new Response(JSON.stringify({ tasks: url.includes("/tasks?") ? listed : [], moves: [move("Polled", false)], projects: projectNames.map(name => ({ id: name, name })) })));
   vi.stubGlobal("fetch", fetch);
   vi.stubGlobal("WebSocket", FakeWebSocket);
   window.history.replaceState({}, "", "/tasks");
@@ -78,19 +93,19 @@ test("a snapshot stops the 3 second poll, and changes replace, order, and remove
   expect(sockets()).toHaveLength(1);
   expect(sockets()[0]?.url).toContain("/api/companies/company-a/sync");
 
-  await emit(sockets()[0], { type: "snapshot", tasks: [row("a"), row("b"), row("c")] });
+  await emit(sockets()[0], { type: "snapshot", tasks: [row("a"), row("b"), row("c")], moves: [] });
   expect(titles()).toEqual(["a", "b", "c"]);
   const unchanged = rows?.[0];
   await act(async () => vi.advanceTimersByTimeAsync(9000));
   expect(lists()).toBe(1);
 
-  await emit(sockets()[0], { type: "changes", tasks: [row("c", "Renamed", "2026-09-09T00:00:00.000Z"), row("d")], removedTaskIds: ["b"] });
+  await emit(sockets()[0], { type: "changes", tasks: [row("c", "Renamed", "2026-09-09T00:00:00.000Z"), row("d")], removedTaskIds: ["b"], projectsChanged: false });
   expect(titles()).toEqual(["Renamed", "a", "d"]);
   expect(rows?.[1]).toBe(unchanged);
 
   // A heartbeat changes nothing.
   const before = rows;
-  await emit(sockets()[0], { type: "changes", tasks: [], removedTaskIds: [] });
+  await emit(sockets()[0], { type: "changes", tasks: [], removedTaskIds: [], projectsChanged: false });
   expect(rows).toBe(before);
 
   // The slow read repairs a missed frame.
@@ -99,15 +114,39 @@ test("a snapshot stops the 3 second poll, and changes replace, order, and remove
   expect(titles()).toEqual(["a", "b"]);
 });
 
+test("moves arrive whole, and a project change reads the projects over HTTP", async () => {
+  await render(true);
+  expect(runs).toEqual(["Polled:ended"]);
+  expect(projects).toEqual(["Repository"]);
+  expect([reads("/moves"), reads("/projects")]).toEqual([1, 1]);
+
+  // A snapshot can follow a time without the socket, so it reads the projects again. The moves arrive in the frame.
+  await emit(sockets()[0], { type: "snapshot", tasks: listed, moves: [move("Deploy", true)] });
+  expect(runs).toEqual(["Deploy:live"]);
+  await act(async () => vi.advanceTimersByTimeAsync(9000));
+  expect([reads("/moves"), reads("/projects")]).toEqual([1, 2]);
+
+  const before = rows;
+  await emit(sockets()[0], { type: "changes", tasks: [], removedTaskIds: [], moves: [move("Deploy", false)], projectsChanged: false });
+  expect(runs).toEqual(["Deploy:ended"]);
+  expect(rows).toBe(before);
+  expect(reads("/projects")).toBe(2);
+
+  projectNames = ["Renamed"];
+  await emit(sockets()[0], { type: "changes", tasks: [], removedTaskIds: [], projectsChanged: true });
+  expect(projects).toEqual(["Renamed"]);
+  expect([reads("/moves"), reads("/projects")]).toEqual([1, 3]);
+});
+
 test("a closed or silent socket polls again and connects again", async () => {
   await render();
-  await emit(sockets()[0], { type: "snapshot", tasks: listed });
+  await emit(sockets()[0], { type: "snapshot", tasks: listed, moves: [] });
   await act(async () => sockets()[0]?.close());
   await act(async () => vi.advanceTimersByTimeAsync(3000));
   expect(lists()).toBe(2);
   expect(sockets()).toHaveLength(2);
 
-  await emit(sockets()[1], { type: "snapshot", tasks: listed });
+  await emit(sockets()[1], { type: "snapshot", tasks: listed, moves: [] });
   const reads = lists();
   await act(async () => vi.advanceTimersByTimeAsync(44_000));
   expect([lists(), sockets().length]).toEqual([reads, 2]);
@@ -131,7 +170,7 @@ test("a list read in flight does not replace a pushed state", async () => {
   let release: ((response: Response) => void) | undefined;
   fetch.mockImplementation((url: string) => url.includes("/tasks?") ? new Promise<Response>(resolve => { release = resolve; }) : Promise.resolve(new Response('{"tasks":[]}')));
   await render();
-  await emit(sockets()[0], { type: "snapshot", tasks: [row("a", "Pushed")] });
+  await emit(sockets()[0], { type: "snapshot", tasks: [row("a", "Pushed")], moves: [] });
   await act(async () => release?.(new Response(JSON.stringify({ tasks: [row("a", "Old")] }))));
   expect(titles()).toEqual(["Pushed"]);
 });
@@ -144,6 +183,6 @@ test("a company change closes the socket and ignores its late frames", async () 
   await render();
   expect(sockets()).toHaveLength(2);
   expect(sockets()[1]?.url).toContain("/api/companies/company-b/sync");
-  await emit(first, { type: "snapshot", tasks: [row("a", "Company A")] });
+  await emit(first, { type: "snapshot", tasks: [row("a", "Company A")], moves: [] });
   expect(titles()).toEqual([]);
 });

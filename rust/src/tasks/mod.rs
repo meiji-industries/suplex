@@ -17,7 +17,6 @@ pub mod pull_request_dependencies;
 pub mod repository;
 pub mod response;
 pub mod sources;
-pub mod sync;
 pub mod templates;
 pub mod timeline;
 pub mod today_repository;

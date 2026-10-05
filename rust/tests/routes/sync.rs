@@ -56,7 +56,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             client.json().await,
-            json!({"type": "snapshot", "tasks": listed})
+            json!({"type": "snapshot", "tasks": listed, "moves": []})
         );
 
         // A raw connection stands in for another process.
@@ -70,6 +70,29 @@ mod tests {
         assert_eq!(changes["tasks"][0]["id"], task_id);
         assert_eq!(changes["tasks"][0]["title"], "Renamed");
         assert_eq!(changes["removedTaskIds"], json!([]));
+        assert_eq!(changes["projectsChanged"], false);
+        assert!(changes.get("moves").is_none());
+
+        // A project change tells the client to read the projects. A move change carries every move.
+        other
+            .execute("UPDATE suplex_projects SET name = 'Renamed' WHERE id = 'project_media'", [])
+            .unwrap();
+        assert_eq!(
+            client.json().await,
+            json!({"type": "changes", "tasks": [], "removedTaskIds": [], "projectsChanged": true})
+        );
+        other.execute(
+            "INSERT INTO suplex_moves (id, company_id, project_id, name, prompt, runner, profile_id, confirm, workflow, delivery_target, run_project_tests, visual_evidence, created_by_user_id, created_at, updated_at) VALUES ('move_one', 'company_media', 'project_media', 'Say hello', 'echo hello', 'script', NULL, 0, 'standard', 'pull_request_ready', 1, 'off', 'user_development', ?1, ?1)",
+            [Utc::now().to_rfc3339()],
+        ).unwrap();
+        let moved = client.json().await;
+        assert_eq!(moved["moves"][0]["name"], "Say hello");
+        assert_eq!(moved["tasks"], json!([]));
+        // The pushed moves are the list that `GET /api/companies/{id}/moves` returns.
+        let moves = state
+            .with_database(|database| crate::moves::list(database, "user_development", "company_media"))
+            .unwrap();
+        assert_eq!(moved["moves"], serde_json::to_value(&moves.moves).unwrap());
 
         other
             .execute(
@@ -79,12 +102,14 @@ mod tests {
             .unwrap();
         assert_eq!(
             client.json().await,
-            json!({"type": "changes", "tasks": [], "removedTaskIds": [task_id]})
+            json!({"type": "changes", "tasks": [], "removedTaskIds": [task_id], "projectsChanged": false})
         );
 
         // A socket that connects later starts from the current list.
         let (_, mut late) = connect(address, SYNC, &origin, "").await;
-        assert_eq!(late.json().await, json!({"type": "snapshot", "tasks": []}));
+        let snapshot = late.json().await;
+        assert_eq!(snapshot["tasks"], json!([]));
+        assert_eq!(snapshot["moves"], moved["moves"]);
         late.send_text("hello").await;
         assert_eq!(close_code(&mut late).await, 1008);
 

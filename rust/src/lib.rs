@@ -13,6 +13,7 @@ pub mod profiles;
 pub mod projects;
 pub mod runtimes;
 pub mod shared;
+pub mod sync;
 pub mod tasks;
 pub mod telemetry;
 pub mod terminals;

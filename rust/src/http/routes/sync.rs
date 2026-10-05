@@ -1,6 +1,6 @@
-//! The company sync socket: the active task list, then its changes.
+//! The company sync socket: the company's lists, then their changes.
 
-use std::time::Duration;
+use std::{sync::Arc, time::Duration};
 
 use axum::{
     Router,
@@ -24,7 +24,7 @@ use crate::{
         validation::ValidPath,
     },
     identity::companies,
-    tasks::sync::{TaskList, diff},
+    sync::{Published, diff},
 };
 
 use super::{
@@ -93,32 +93,44 @@ async fn sync_socket(
         close(&mut socket, 4403, "origin").await;
         return;
     }
-    let mut feed = state.task_feed.subscribe(&company_id);
-    let mut sent: Option<TaskList> = None;
+    let mut feed = state.company_feed.subscribe(&company_id);
+    let mut sent: Option<Published> = None;
     let mut heartbeat = tokio::time::interval(HEARTBEAT);
     heartbeat.tick().await;
     loop {
-        // The channel holds only the newest list, so a slow client skips
+        // The channel holds only the newest lists, so a slow client skips
         // intermediate states.
         let latest = feed.borrow_and_update().clone();
         let message = match (&sent, latest) {
             (_, None) => None,
             (None, Some(next)) => {
                 let message = SyncMessage::Snapshot {
-                    tasks: next.to_vec(),
+                    tasks: next.tasks.to_vec(),
+                    moves: next.moves.to_vec(),
                 };
                 sent = Some(next);
                 Some(message)
             }
             (Some(previous), Some(next)) => {
-                let (tasks, removed_task_ids) = diff(previous, &next);
+                let (tasks, removed_task_ids) = if Arc::ptr_eq(&previous.tasks, &next.tasks) {
+                    (vec![], vec![])
+                } else {
+                    diff(&previous.tasks, &next.tasks)
+                };
+                let moves =
+                    (!Arc::ptr_eq(&previous.moves, &next.moves)).then(|| next.moves.to_vec());
+                let projects_changed = !Arc::ptr_eq(&previous.projects, &next.projects);
                 sent = Some(next);
-                (!tasks.is_empty() || !removed_task_ids.is_empty()).then_some(
-                    SyncMessage::Changes {
+                (!tasks.is_empty()
+                    || !removed_task_ids.is_empty()
+                    || moves.is_some()
+                    || projects_changed)
+                    .then_some(SyncMessage::Changes {
                         tasks,
                         removed_task_ids,
-                    },
-                )
+                        moves,
+                        projects_changed,
+                    })
             }
         };
         if let Some(message) = message
@@ -149,7 +161,7 @@ async fn sync_socket(
                     close(&mut socket, 4403, "access revoked").await;
                     return;
                 }
-                let idle = SyncMessage::Changes { tasks: vec![], removed_task_ids: vec![] };
+                let idle = SyncMessage::Changes { tasks: vec![], removed_task_ids: vec![], moves: None, projects_changed: false };
                 if !send(&mut socket, &idle).await {
                     close(&mut socket, 1013, "client too slow").await;
                     return;

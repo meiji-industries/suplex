@@ -34,13 +34,14 @@ import { replaceEqualDeep } from "@tanstack/react-query";
 import { useShellRuns } from "../moves/lib/move-runs.js";
 import { LoadingState } from "../../components/app/loading-state.js";
 import { getBillingSummary } from "../settings/lib/billing-api.js";
-import { listProjects } from "../projects/lib/project-api.js"; import { readTaskListFilters, taskListReturnHref, useTaskListScroll, useTaskListUrl } from "./lib/task-list-url-state.js";
+import { useProjects } from "../projects/lib/projects.js"; import { readTaskListFilters, taskListReturnHref, useTaskListScroll, useTaskListUrl } from "./lib/task-list-url-state.js";
 
 type BoardView = "compact" | "full";
 const boardShowOptions = [["all", "Tasks and moves", ListFilter], ["tasks", "Tasks", ClipboardList], ["moves", "Moves", Zap]] as const;
 const shortDate = new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric" });
 /** The Free plan limit in `rust/src/billing/mod.rs`. */
 const FREE_RUNNING_TASKS = 3;
+const noProjects: ApiProject[] = [];
 const taskViews = [["active", "Active"], ["backlog", "Backlog"], ["queued", "Queued"], ["all", "All tasks"], ["archived", "Archived"]] as const;
 
 /** Task, project, branch, status, PR, cost, and updated columns of the wide task list. */
@@ -59,11 +60,12 @@ export function TasksView({ mode = "list" }: { mode?: "list" | "board" }): React
   const [detailsLoaded, setLoaded] = useState(false);
   const [archived, setArchived] = useState(initialFilters.archived);
   const tasks = archived ? archivedTasks : taskList.data ?? [];
-  const loaded = detailsLoaded && Boolean(selectedId || archived || !companyId || !taskList.isPending);
-  const readError = error || (!archived && taskList.error?.message) || "";
+  const projectList = useProjects(companyId);
+  const projects = projectList.data ?? noProjects;
+  const loaded = detailsLoaded && Boolean(!companyId || !projectList.isPending) && Boolean(selectedId || archived || !companyId || !taskList.isPending);
+  const readError = error || (!archived && taskList.error?.message) || projectList.error?.message || "";
   const [query, setQuery] = useState(initialFilters.query);
   const [status, setStatus] = useState(initialFilters.status);
-  const [projects, setProjects] = useState<ApiProject[]>([]);
   const [projectId, setProjectId] = useState(initialFilters.projectId);
   const [boardView, setBoardView] = useState<BoardView>(initialFilters.boardView);
   const [boardStatus, setBoardStatus] = useState<TaskControlStatus | "all">(() => { const value = initialFilters.boardStatus; return value !== "all" && TaskControlStatusSchema.safeParse(value).success ? TaskControlStatusSchema.parse(value) : "all"; });
@@ -74,17 +76,15 @@ export function TasksView({ mode = "list" }: { mode?: "list" | "board" }): React
   currentScope.current = scope;
   const reload = useCallback(async () => {
     if (!companyId) { setLoaded(true); return; }
-    const [result, task, projectResult] = await Promise.all([
+    const [result, task] = await Promise.all([
       archived ? listTasks(companyId, { archived: true }) : Promise.resolve(null),
       selectedId ? getTask(selectedId) : Promise.resolve(null),
-      listProjects(companyId),
     ]);
     if (currentScope.current !== scope) return;
     if (task && task.companyId !== companyId) throw new Error("This task is not in the selected company");
     // Keep the previous references when a poll returns equal data, so an idle list does not render again.
     if (result) setArchivedTasks(previous => replaceEqualDeep(previous, result));
     setSelected(previous => replaceEqualDeep(previous, task));
-    setProjects(previous => replaceEqualDeep(previous, projectResult));
     setLoaded(true);
     setError("");
   }, [companyId, selectedId, archived, scope]);
@@ -100,11 +100,12 @@ export function TasksView({ mode = "list" }: { mode?: "list" | "board" }): React
       finally { reading = false; }
     };
     void poll();
-    const timer = setInterval(() => { if (document.visibilityState !== "hidden") void poll(); }, 3000);
+    // The sync socket keeps the active tasks, the moves, and the projects current. Only an open task and the archived list poll.
+    const timer = selectedId || archived ? setInterval(() => { if (document.visibilityState !== "hidden") void poll(); }, 3000) : undefined;
     return () => { closed = true; clearInterval(timer); };
   }, [reload]);
   const updateTask = (task: Task) => { setSelected(task); cacheTask(task); };
-  const refresh = async () => { await Promise.all([reload(), ...(!archived && companyId ? [taskList.refetch({ throwOnError: true })] : [])]); };
+  const refresh = async () => { await Promise.all([reload(), projectList.refetch({ throwOnError: true }), ...(!archived && companyId ? [taskList.refetch({ throwOnError: true })] : [])]); };
   const visible = tasks.filter(task => (mode !== "board" || boardShow !== "moves") && (status === "all" || task.status === status || status === "active" && task.status === "waiting_human") && (boardStatus === "all" || task.status === boardStatus) && (projectId === "all" || task.projectId === projectId) && `${task.issueKey ?? ""} ${task.title}`.toLowerCase().includes(query.trim().toLowerCase()));
   // Move runs show as delivered work on the board.
   const boardRuns = useShellRuns(mode === "board" && !selectedId && !archived ? companyId : undefined).filter(({ move }) => boardShow !== "tasks" && status === "all" && (boardStatus === "all" || boardStatus === "delivered") && (projectId === "all" || move.projectId === projectId) && move.name.toLowerCase().includes(query.trim().toLowerCase()));
@@ -128,7 +129,7 @@ export function TasksView({ mode = "list" }: { mode?: "list" | "board" }): React
   const groups = ["backlog", "queued", "active", "waiting_human", "delivered", "cancelled"] as const;
   return <ApplicationFrame title={mode === "board" ? "Board" : "Tasks"} viewportBound={Boolean(selectedId)} headerRight={<><Button variant="ghost" size="icon-sm" aria-label="Check tasks" onClick={() => void refresh().catch(error => setError(String(error)))}><RefreshCw /></Button></>}>
     {readError ? <Alert variant="destructive"><AlertDescription>{readError}</AlertDescription></Alert> : null}
-    {selectedId ? selected ? <TaskDetailsPage key={selected.id} task={selected} project={projects.find(project => project.id === selected.projectId)} onChange={updateTask} backHref={taskListReturnHref(withCompany(mode === "board" ? "/board" : "/tasks", selected.companyId))} titleActions={<TaskOptions task={selected} onChange={updateTask} onError={setError} />} /> : loaded ? <p className="p-4">Task not found</p> : <p className="flex items-center gap-2 p-4 text-xs text-muted-foreground" aria-busy="true"><Spinner /><span>Loading task…</span></p> : <div data-task-list className="min-w-0 flex flex-col flex-1">
+    {selectedId ? selected ? <TaskDetailsPage key={selected.id} task={selected} project={project(selected.projectId)} onChange={updateTask} backHref={taskListReturnHref(withCompany(mode === "board" ? "/board" : "/tasks", selected.companyId))} titleActions={<TaskOptions task={selected} onChange={updateTask} onError={setError} />} /> : loaded ? <p className="p-4">Task not found</p> : <p className="flex items-center gap-2 p-4 text-xs text-muted-foreground" aria-busy="true"><Spinner /><span>Loading task…</span></p> : <div data-task-list className="min-w-0 flex flex-col flex-1">
       <ListToolbar filters={<><FilterInput label="Filter tasks" value={query} onChange={setQuery} /><ProjectSelect label="Filter by project" allLabel="All projects" projects={projects} value={projectId} onChange={setProjectId} /></>}>
         <ViewTabs value={archived ? "archived" : status} options={taskViews} onChange={value => { setArchived(value === "archived"); setStatus(value === "archived" ? "all" : value); }} />{mode === "board" ? <Select value={boardView} onValueChange={value => { if (value === "compact" || value === "full") setBoardView(value); }}><SelectTrigger aria-label="Board view"><SelectValue>{value => value === "full" ? "Full" : "Compact"}</SelectValue></SelectTrigger><SelectContent><SelectItem value="compact">Compact</SelectItem><SelectItem value="full">Full</SelectItem></SelectContent></Select> : null}{mode === "board" ? <Select value={boardShow} onValueChange={value => { const option = boardShowOptions.find(([candidate]) => candidate === value); if (option) setBoardShow(option[0]); }}><SelectTrigger aria-label="Show tasks or moves"><SelectValue>{() => boardShowOptions.filter(([value]) => value === boardShow).map(([value, label, Icon]) => <Fragment key={value}><Icon aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground" />{label}</Fragment>)}</SelectValue></SelectTrigger><SelectContent className="w-max min-w-(--anchor-width)">{boardShowOptions.map(([value, label, Icon]) => <SelectItem key={value} value={value}><Icon aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground" />{label}</SelectItem>)}</SelectContent></Select> : null}{mode === "board" ? <Select value={boardStatus} onValueChange={value => setBoardStatus(value ?? "all")}><SelectTrigger aria-label="Filter by status"><SelectValue>{value => value === "all" ? <><ListFilter aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground" />All statuses</> : <><TaskStatusIcon status={TaskControlStatusSchema.parse(value)} />{taskStatusLabels[TaskControlStatusSchema.parse(value)]}</>}</SelectValue></SelectTrigger><SelectContent className="w-max min-w-(--anchor-width)"><SelectItem value="all"><ListFilter aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground" />All statuses</SelectItem>{TaskControlStatusSchema.options.map(value => <SelectItem key={value} value={value}><TaskStatusIcon status={value} />{taskStatusLabels[value]}</SelectItem>)}</SelectContent></Select> : null}
       </ListToolbar>

@@ -63,25 +63,38 @@ pub(crate) mod tests {
         .id
     }
 
-    /// The published list as JSON, when `ready` accepts it.
-    fn wait(
-        receiver: &watch::Receiver<Option<TaskList>>,
-        ready: impl Fn(&[Value]) -> bool,
-    ) -> Vec<Value> {
+    /// The published lists, when `ready` accepts them.
+    fn wait_lists(
+        receiver: &watch::Receiver<Option<Published>>,
+        ready: impl Fn(&CompanyLists) -> bool,
+    ) -> Published {
         let deadline = Instant::now() + Duration::from_secs(5);
         loop {
-            let published = serde_json::to_value(receiver.borrow().as_deref()).unwrap();
-            if let Some(tasks) = published.as_array()
-                && ready(tasks)
+            if let Some(lists) = receiver.borrow().clone()
+                && ready(&lists)
             {
-                return tasks.clone();
+                return lists;
             }
             assert!(
                 Instant::now() < deadline,
-                "the feed did not publish the expected list: {published}"
+                "the feed did not publish the expected lists"
             );
             std::thread::sleep(Duration::from_millis(10));
         }
+    }
+
+    fn json<T: serde::Serialize>(list: &[T]) -> Vec<Value> {
+        list.iter()
+            .map(|item| serde_json::to_value(item).unwrap())
+            .collect()
+    }
+
+    /// The published tasks as JSON, when `ready` accepts them.
+    fn wait(
+        receiver: &watch::Receiver<Option<Published>>,
+        ready: impl Fn(&[Value]) -> bool,
+    ) -> Vec<Value> {
+        json(&wait_lists(receiver, |lists| ready(&json(&lists.tasks))).tasks)
     }
 
     #[test]
@@ -144,7 +157,7 @@ pub(crate) mod tests {
     #[test]
     fn feed_publishes_writes_from_other_connections() {
         let (directory, path, mut database, first) = fixture();
-        let feed = TaskFeed::new(path.clone());
+        let feed = CompanyFeed::new(path.clone(), Arc::default());
         let receiver = feed.subscribe("company_media");
         wait(&receiver, |tasks| tasks[0]["title"] == "Media task");
 
@@ -189,10 +202,64 @@ pub(crate) mod tests {
         fs::remove_dir_all(directory).unwrap();
     }
 
+    #[tokio::test(flavor = "multi_thread")]
+    async fn feed_publishes_moves_run_liveness_and_project_changes() {
+        let (directory, path, database, _) = fixture();
+        let terminals = Arc::<HostTerminals>::default();
+        let feed = CompanyFeed::new(path, terminals.clone());
+        let receiver = feed.subscribe("company_media");
+        let first = wait_lists(&receiver, |_| true);
+        assert!(first.moves.is_empty());
+
+        let now = Utc::now().to_rfc3339();
+        let connection = database.connection();
+        connection.execute(
+            "INSERT INTO suplex_moves (id, company_id, project_id, name, prompt, runner, profile_id, confirm, workflow, delivery_target, run_project_tests, visual_evidence, created_by_user_id, created_at, updated_at) VALUES ('move_one', 'company_media', 'project_media', 'Say hello', 'echo hello', 'script', NULL, 0, 'standard', 'pull_request_ready', 1, 'off', 'user_development', ?1, ?1)",
+            [&now],
+        ).unwrap();
+        let with_move = wait_lists(&receiver, |lists| lists.moves.len() == 1);
+        assert_eq!(json(&with_move.moves)[0]["name"], "Say hello");
+        // A list that did not change keeps its allocation, so a socket skips it.
+        assert!(Arc::ptr_eq(&with_move.tasks, &first.tasks));
+        assert!(Arc::ptr_eq(&with_move.projects, &first.projects));
+
+        connection.execute(
+            "INSERT INTO suplex_move_runs (id, move_id, company_id, project_id, move_name, runner, prompt, inputs_json, excluded_pull_requests_json, outcomes_json, started_by_user_id, started_at, idempotency_key) VALUES ('run_one', 'move_one', 'company_media', 'project_media', 'Say hello', 'script', 'echo hello', '{}', '[]', '[]', 'user_development', ?1, 'run-one-key')",
+            [&now],
+        ).unwrap();
+        let live = |lists: &CompanyLists| {
+            lists.moves[0].last_run.as_ref().map(|run| run.live)
+        };
+        wait_lists(&receiver, |lists| live(lists) == Some(false));
+
+        // The terminal registry is in memory. No commit reports these two changes.
+        let terminal = moves::shell::terminal_id("run_one");
+        let viewer = terminals
+            .open(
+                &terminal,
+                crate::terminals::host::Spec::mirror("task", "sleep 30", std::env::temp_dir()),
+                80,
+                24,
+            )
+            .unwrap();
+        wait_lists(&receiver, |lists| live(lists) == Some(true));
+        terminals.close(&terminal);
+        let ended = wait_lists(&receiver, |lists| live(lists) == Some(false));
+        drop(viewer);
+
+        connection
+            .execute("UPDATE suplex_projects SET name = 'Renamed' WHERE id = 'project_media'", [])
+            .unwrap();
+        let renamed = wait_lists(&receiver, |lists| !Arc::ptr_eq(&lists.projects, &ended.projects));
+        assert!(Arc::ptr_eq(&renamed.moves, &ended.moves));
+        assert!(Arc::ptr_eq(&renamed.tasks, &first.tasks));
+        fs::remove_dir_all(directory).unwrap();
+    }
+
     #[test]
     fn feed_stops_without_subscribers_and_starts_again() {
         let (directory, path, _database, first) = fixture();
-        let feed = TaskFeed::new(path);
+        let feed = CompanyFeed::new(path, Arc::default());
         let receiver = feed.subscribe("company_media");
         wait(&receiver, |tasks| tasks.len() == 1);
         drop(receiver);
@@ -211,7 +278,7 @@ pub(crate) mod tests {
         let missing = std::env::temp_dir()
             .join(format!("suplex-sync-missing-{}", Uuid::new_v4()))
             .join("suplex.sqlite");
-        let feed = TaskFeed::new(missing);
+        let feed = CompanyFeed::new(missing, Arc::default());
         let receiver = feed.subscribe("company_media");
         let deadline = Instant::now() + Duration::from_secs(5);
         while receiver.has_changed().is_ok() {

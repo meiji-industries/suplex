@@ -54,7 +54,8 @@ async function startRustServer(root: string, port: number, options: FixtureOptio
   let failure: Error | undefined;
   child.once("error", error => { failure = error; });
   const outputFile = process.env.SUPLEX_OUTPUT_FILE;
-  for (const stream of [child.stdout, child.stderr]) stream.on("data", chunk => { output = (output + String(chunk)).slice(-8_000); if (outputFile) appendFileSync(outputFile, chunk); });
+  let listening = false;
+  for (const stream of [child.stdout, child.stderr]) stream.on("data", chunk => { output = (output + String(chunk)).slice(-8_000); listening ||= /^URL: /m.test(output); if (outputFile) appendFileSync(outputFile, chunk); });
   const exited = new Promise<void>(accept => child.once("close", () => accept()));
   let stopped = false;
   const stop = async () => {
@@ -76,7 +77,9 @@ async function startRustServer(root: string, port: number, options: FixtureOptio
     const deadline = Date.now() + 15_000;
     while (Date.now() < deadline) {
       if (failure || child.exitCode !== null || child.signalCode !== null) throw new Error(`Rust fixture exited: ${failure?.message ?? output}`);
-      try { if ((await fetch(`http://127.0.0.1:${port}/auth`, { signal: AbortSignal.timeout(500) })).ok) return stop; } catch { /* Waiting for the listener. */ }
+      // The server prints its URL only after it binds. Without this, a parallel
+      // fixture that won the same port can answer the probe instead.
+      if (listening) try { if ((await fetch(`http://127.0.0.1:${port}/auth`, { signal: AbortSignal.timeout(500) })).ok) return stop; } catch { /* Waiting for the listener. */ }
       await new Promise(accept => setTimeout(accept, 100));
     }
     throw new Error(`Rust fixture did not listen on ${port}: ${output}`);
@@ -86,12 +89,16 @@ async function startRustServer(root: string, port: number, options: FixtureOptio
 export async function nativeFixture(host = "127.0.0.1", reachableAddress?: string, options: FixtureOptions = {}) {
   if (host !== "127.0.0.1") throw new Error("Rust browser fixtures require loopback");
   const directory = await mkdtemp(join(tmpdir(), "suplex-browser-"));
-  const port = reachableAddress ? Number(new URL(reachableAddress).port) : await loopbackPort();
-  const base = `http://127.0.0.1:${port}`;
+  let port = reachableAddress ? Number(new URL(reachableAddress).port) : await loopbackPort();
   let stopRust: (() => Promise<void>) | undefined;
   let database: DatabaseSync | undefined;
   try {
-    stopRust = await startRustServer(directory, port, options);
+    // Another parallel fixture can take a probed free port before this server binds.
+    for (let attempt = 1; !stopRust; attempt++) {
+      try { stopRust = await startRustServer(directory, port, options); }
+      catch (error) { if (reachableAddress || attempt === 3 || !String(error).includes("AddrInUse")) throw error; port = await loopbackPort(); }
+    }
+    const base = `http://127.0.0.1:${port}`;
     const signIn = await fetch(`${base}/api/auth/me`);
     if (!signIn.ok) throw new Error(`Fixture sign-in failed: ${signIn.status} ${await signIn.text()}`);
     const user = (await signIn.json() as { user: { id: string } }).user;

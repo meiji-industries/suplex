@@ -50,8 +50,8 @@ commits in the task worktree, then returns its result to Coordinator.
 _Avoid_: Builder, Developer, nested agent.
 
 **Workflow**
-A named preset selects one built-in sequence of agents and checks for a task: Standard, Direct build,
-Second opinion, Combined planning, or Pull request repair. A task captures its
+A named preset selects one built-in sequence of agents and checks for a task: Plan and build, Simple task,
+Double reviews, Double plans, Review and repair, or Approve then build. A task captures its
 workflow and Advisor profiles at creation.
 _Avoid_: Arbitrary step graph.
 

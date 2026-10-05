@@ -636,6 +636,32 @@ fn candidate_plan_reports(
     Ok(Value::Array(reports))
 }
 
+/// Approve then build: the first implementation builds the user-approved plan
+/// exactly. Repairs and checks after that build need no new approval.
+pub(crate) fn check_plan_approval(
+    rows: &RootObservationRows,
+    workflow: Workflow,
+    assignment: &WorkerAssignment,
+) -> DatabaseResult<()> {
+    if workflow != Workflow::ApproveThenBuild
+        || assignment.purpose != "implementation"
+        || implementation_built(rows)
+    {
+        return Ok(());
+    }
+    let approved = rows
+        .control
+        .workflow_state
+        .plan_approval
+        .as_ref()
+        .and_then(|approval| approval.approved.as_deref());
+    match approved {
+        Some(plan) if assignment.plan.as_deref().map(str::trim) == Some(plan) => Ok(()),
+        Some(_) => Err(CoordinationError::refused("This plan is not the plan the user approved. Delegate the approved plan exactly, or call request_plan_approval with the new plan and end this turn.").into()),
+        None => Err(CoordinationError::refused("The user has not approved a plan. Call request_plan_approval with the complete plan and end this turn. Delegate Worker after the user approves it.").into()),
+    }
+}
+
 /// Pull request repair: the implementation carries the latest valid Rater
 /// report text and its reference.
 fn rater_reference(
@@ -754,6 +780,7 @@ pub async fn delegate_worker(
         );
     }
     let rows = root_session_store::root_observation_rows(database, &root.task_id)?;
+    check_plan_approval(&rows, workflow, assignment)?;
     let candidate_reports = candidate_plan_reports(&rows, workflow, assignment, &range)?;
     let (advisor_report, advisor_reference) = advisor_references(&rows, workflow, assignment)?;
     let text = draft.text(
@@ -1138,6 +1165,33 @@ pub fn ask_human(
     Ok(serde_json::to_value(
         root_session_store::root_observation_rows(database, &root.task_id)?.control,
     )?)
+}
+
+const PLAN_APPROVAL_NEXT: &str = "End this Coordinator turn now. Suplex sends the user's answer as a new turn on this same session. Do not delegate Worker before the user approves the plan.";
+
+/// Approve then build: record the plan and wait for the user to approve it.
+pub fn request_plan_approval(
+    database: &mut SuplexDatabase,
+    root: &RootIdentity,
+    plan: &str,
+) -> DatabaseResult<Value> {
+    let rows = open_root(database, root)?;
+    if rows.control.workflow != Workflow::ApproveThenBuild {
+        return Err(invalid(
+            "request_plan_approval is legal only for Approve then build.",
+        ));
+    }
+    if !root_session_store::request_plan_approval_for_root(
+        database,
+        &root.task_id,
+        &root.session_id,
+        root.generation,
+        plan,
+        chrono::Utc::now(),
+    )? {
+        return Err(invalid("The current Root could not ask for plan approval"));
+    }
+    Ok(json!({"status":"waiting_human","next":PLAN_APPROVAL_NEXT}))
 }
 
 #[cfg(test)]

@@ -175,6 +175,58 @@ pub fn ask_human_for_root(
     options: &Value,
     now: DateTime<Utc>,
 ) -> DatabaseResult<bool> {
+    ask_root_question(
+        database, task_id, session_id, generation, question, options, None, now,
+    )
+}
+
+/// The fixed option that approves a proposed plan. Any other answer requests changes.
+pub const APPROVE_PLAN_LABEL: &str = "Approve the plan";
+pub const APPROVE_PLAN_DESCRIPTION: &str = "Worker starts the build with this plan.";
+
+/// Approve then build: record the proposed plan and ask the user to approve
+/// it, in one transaction. A newer request replaces the proposed plan; the
+/// last approved plan stays until the user approves another.
+pub fn request_plan_approval_for_root(
+    database: &mut SuplexDatabase,
+    task_id: &str,
+    session_id: &str,
+    generation: i64,
+    plan: &str,
+    now: DateTime<Utc>,
+) -> DatabaseResult<bool> {
+    let plan = plan.trim();
+    if plan.is_empty() {
+        return Err(CoordinationError::refused("plan_is_empty").into());
+    }
+    let question = format!("Approve this plan before Worker starts the build?\n\n{plan}");
+    let options = json!([
+        {"label": APPROVE_PLAN_LABEL, "description": APPROVE_PLAN_DESCRIPTION, "recommended": false},
+        {"label": "Request changes", "description": "Coordinator revises the plan and asks you again. To describe the changes, write them in Other.", "recommended": false},
+    ]);
+    ask_root_question(
+        database,
+        task_id,
+        session_id,
+        generation,
+        &question,
+        &options,
+        Some(plan),
+        now,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn ask_root_question(
+    database: &mut SuplexDatabase,
+    task_id: &str,
+    session_id: &str,
+    generation: i64,
+    question: &str,
+    options: &Value,
+    plan: Option<&str>,
+    now: DateTime<Utc>,
+) -> DatabaseResult<bool> {
     let question = question.trim();
     if question.is_empty() {
         return Err(CoordinationError::refused("question_is_empty").into());
@@ -182,8 +234,8 @@ pub fn ask_human_for_root(
     let options = serde_json::to_string(options)?;
     let changed = database.transaction(true, |database| {
         Ok(database.connection().execute(
-            "UPDATE suplex_task_controls SET status = 'waiting_human', human_question = ?1, human_question_options_json = ?2, human_question_id = ?3, limit_pause_json = NULL, wake_at = NULL, workflow_state_json = json_set(workflow_state_json, '$.deliveryWait', json('null')), updated_at = ?4 WHERE task_id = ?5 AND status = 'active' AND root_session_id = ?6 AND EXISTS (SELECT 1 FROM suplex_task_sessions s WHERE s.id = ?6 AND s.task_id = suplex_task_controls.task_id AND s.kind = 'root' AND s.generation = ?7 AND s.is_current = 1 AND s.lifecycle <> 'cancelled')",
-            params![question, options, Uuid::new_v4().to_string(), rfc3339_millis(now), task_id, session_id, generation],
+            "UPDATE suplex_task_controls SET status = 'waiting_human', human_question = ?1, human_question_options_json = ?2, human_question_id = ?3, limit_pause_json = NULL, wake_at = NULL, workflow_state_json = CASE WHEN ?8 IS NULL THEN json_set(workflow_state_json, '$.deliveryWait', json('null')) ELSE json_set(workflow_state_json, '$.deliveryWait', json('null'), '$.planApproval', json_object('proposed', ?8, 'questionId', ?3, 'approved', json_extract(workflow_state_json, '$.planApproval.approved'))) END, updated_at = ?4 WHERE task_id = ?5 AND status = 'active' AND root_session_id = ?6 AND EXISTS (SELECT 1 FROM suplex_task_sessions s WHERE s.id = ?6 AND s.task_id = suplex_task_controls.task_id AND s.kind = 'root' AND s.generation = ?7 AND s.is_current = 1 AND s.lifecycle <> 'cancelled')",
+            params![question, options, Uuid::new_v4().to_string(), rfc3339_millis(now), task_id, session_id, generation, plan],
         )? == 1)
     })?;
     if changed {
@@ -419,10 +471,14 @@ pub fn answer_human(
         if let Some(recovery_turn_id) = recovery_turn_id {
             record_confirmed_interruption(database, task_id, &recovery_turn_id, question_id, answer, now)?;
         }
-        let prompt = js_json::stringify(&match answered_by {
+        let mut prompt = match answered_by {
             Some(answered_by) => serde_json::json!({"question":question,"answer":answer,"answeredBy":answered_by}),
             None => serde_json::json!({"question":question,"answer":answer}),
-        });
+        };
+        if let Some(approval) = record_plan_answer(database, task_id, question_id, answer)? {
+            prompt["planApproval"] = approval.into();
+        }
+        let prompt = js_json::stringify(&prompt);
         let id = new_turn_id(now)?;
         let time = rfc3339_millis(now);
         insert_pending_turn(database, &NewTurn { id: &id, task_id, session_id: &root.id, generation: root.generation, assignment_hash: None, prompt: &prompt, workflow_input: None }, &time)?;
@@ -433,6 +489,33 @@ pub fn answer_human(
         Ok(())
     })?;
     observe_lifecycle(database, task_id)
+}
+
+/// An answer to the current plan approval question: the approve option
+/// records the proposed plan as approved; any other answer requests changes.
+fn record_plan_answer(
+    database: &SuplexDatabase,
+    task_id: &str,
+    question_id: &str,
+    answer: &str,
+) -> DatabaseResult<Option<&'static str>> {
+    let pending: bool = database.connection().query_row(
+        "SELECT json_extract(workflow_state_json, '$.planApproval.questionId') IS ?2 FROM suplex_task_controls WHERE task_id = ?1",
+        params![task_id, question_id],
+        |row| row.get(0),
+    )?;
+    if !pending {
+        return Ok(None);
+    }
+    let choice = format!("{APPROVE_PLAN_LABEL}: {APPROVE_PLAN_DESCRIPTION}");
+    if answer != APPROVE_PLAN_LABEL && answer != choice {
+        return Ok(Some("changes_requested"));
+    }
+    database.connection().execute(
+        "UPDATE suplex_task_controls SET workflow_state_json = json_set(workflow_state_json, '$.planApproval.approved', json_extract(workflow_state_json, '$.planApproval.proposed')) WHERE task_id = ?1",
+        [task_id],
+    )?;
+    Ok(Some("approved"))
 }
 
 /// Reserve the next Worker turn atomically with Root identity and

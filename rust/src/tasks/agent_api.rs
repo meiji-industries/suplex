@@ -1139,6 +1139,7 @@ fn validate_workflow(
             "direct_build" => "Direct build",
             "independent_review" => "Second opinion",
             "competing_plans" => "Combined planning",
+            "approve_then_build" => "Approve then build",
             _ => "Pull request repair",
         };
         return Err(workflow_input_failure(&format!(
@@ -1167,15 +1168,7 @@ fn normalize_workflow(fields: &mut Map<String, Value>) -> DatabaseResult<()> {
         .and_then(Value::as_str)
         .unwrap_or("standard")
         .to_owned();
-    if ![
-        "standard",
-        "direct_build",
-        "independent_review",
-        "competing_plans",
-        "refine_pull_request",
-    ]
-    .contains(&workflow.as_str())
-    {
+    if crate::coordination::workflows::workflow_definition(&workflow).is_none() {
         return Err(workflow_input_failure(
             "The selected workflow does not exist",
         ));

@@ -42,7 +42,7 @@ export function TaskQuestion({ question, busy, onAnswer, onLimitDecision }: { qu
   }}>
     <QuestionnaireItem name="answer" required disabled={busy} onStatusChange={status => setAnswered(status === "answered")}>
       <QuestionnaireTitle>Answer necessary</QuestionnaireTitle>
-      <QuestionnaireDescription>{question.text}</QuestionnaireDescription>
+      <QuestionnaireDescription>{question.text.split("\n").flatMap((line, index) => index ? [<br key={index} />, line] : [line])}</QuestionnaireDescription>
       <QuestionnaireChoices>
         {choices.map(choice => <QuestionnaireChoice key={choice.value} value={choice.value}><span>{choice.label} {choice.recommended ? <Badge variant="secondary">Recommended</Badge> : null}</span><QuestionnaireChoiceDescription>{choice.description}</QuestionnaireChoiceDescription></QuestionnaireChoice>)}
         <label className="grid gap-2"><span>Other</span><QuestionnaireInput aria-label="Answer" placeholder="Write another answer" /></label>

@@ -69,6 +69,7 @@ const stationMeta = {
   objective: { label: "Objective", icon: Crosshair, tone: "source" },
   source: { label: "Pull request", icon: GitPullRequest, tone: "source" },
   plan: { label: "Coordinator", icon: ListChecks, tone: "coordinator", role: "root" },
+  approval: { label: "User", caption: "approves the plan", icon: UserRound, tone: "source" },
   "plan-a": { label: "Plan A", icon: FileText, tone: "planner", role: "planner_a", sheet: true },
   "plan-b": { label: "Plan B", icon: FileText, tone: "advisor", role: "planner_b", sheet: true },
   combine: { label: "Coordinator", caption: "combines plans", icon: Combine, tone: "coordinator", role: "root" },
@@ -82,7 +83,7 @@ const stationMeta = {
   merge: { label: "Suplex", caption: "merges the PR", icon: GitMerge, tone: "source" },
 } as const;
 type StationId = keyof typeof stationMeta;
-const returnRoutes = new Set(["review-build", "reviewer-build", "repair-rater"]);
+const returnRoutes = new Set(["review-build", "reviewer-build", "repair-rater", "approval-plan"]);
 type Layout = (typeof layouts)[WorkflowId]["wide"];
 
 function Flow({ layout, position }: { layout: Layout; position: WorkflowPosition | null }) {
@@ -114,7 +115,7 @@ function artwork({ workflow, delivery, compact, agents, agentNames, avatars, arr
     const { x, y } = nodePoints[id]!;
     const role = "role" in meta ? meta.role : undefined;
     const deliveryNode = id === "delivery" || id === "merge";
-    const control = id === "objective" ? author : deliveryNode ? <SuplexAgent /> : role ? agents[role] ?? (agentNames[role] ? <span className="inline-flex h-6 items-center font-medium">{agentNames[role]}</span> : undefined) : undefined;
+    const control = id === "objective" || id === "approval" ? author : deliveryNode ? <SuplexAgent /> : role ? agents[role] ?? (agentNames[role] ? <span className="inline-flex h-6 items-center font-medium">{agentNames[role]}</span> : undefined) : undefined;
     const caption = id === "plan" ? workflow === "direct_build" ? "delegates" : "writes the plan"
       : id === "objective" ? "prompts"
       : id === "plan-a" || id === "plan-b" ? "plans"
@@ -127,11 +128,11 @@ function artwork({ workflow, delivery, compact, agents, agentNames, avatars, arr
     if (compact && !deliveryNode) {
       if ((id === "plan-a" || id === "plan-b") && !control) labelAt = [x + (id === "plan-a" ? 56 : -56), y - 20];
       else if (id === "plan-a" || id === "plan-b" || id === "repair") labelAt = [x, y + 36];
-      else labelAt = [x + (id === "plan" || id === "build" || id === "review" || id === "rater" ? -88 : 88), y - 2];
+      else labelAt = [x + (id === "plan" || id === "approval" || id === "build" || id === "review" || id === "rater" ? -88 : 88), y - 2];
     }
     return { id, x, y, label: id === "source" && pullRequestNumber ? `PR #${pullRequestNumber}` : meta.label, caption, icon: id === "plan" && workflow === "direct_build" ? Send : meta.icon,
       tone: meta.tone, sheet: "sheet" in meta && meta.sheet, labelAt, control,
-      avatar: id === "objective" ? authorAvatar : deliveryNode ? <img src={suplexMark} alt="" className="size-8 invert dark:invert-0" /> : role ? avatars[role] : undefined,
+      avatar: id === "objective" || id === "approval" ? authorAvatar : deliveryNode ? <img src={suplexMark} alt="" className="size-8 invert dark:invert-0" /> : role ? avatars[role] : undefined,
       active: Boolean(position?.targets.includes(id)) };
   });
   return {
@@ -187,7 +188,7 @@ export function WorkflowIllustration({ workflow, delivery, agents = {}, agentNam
   const authorAvatar = user ? <EntityAvatar kind="user" id={user.id} name={user.displayName} seed={user.avatarSeed} size="default" /> : <UserRound className="size-8" />;
   const definition = workflowDefinition(workflow);
   const now = position?.targets.map(target => target in stationMeta ? stationMeta[target as StationId].label : "Coordinator").join(" and ");
-  const description = `${definition.steps.join(" ")}${workflow === "refine_pull_request" ? " Coordinator directs repair or delivery after each rating." : " Coordinator can send changes back to Worker after review."} Delivery: ${delivery}.${now ? ` Current step: ${now} (${position!.state}).` : ""}`;
+  const description = `${definition.steps.join(" ")}${workflow === "approve_then_build" ? " If you request changes, Coordinator revises the plan and asks you again." : ""}${workflow === "refine_pull_request" ? " Coordinator directs repair or delivery after each rating." : " Coordinator can send changes back to Worker after review."} Delivery: ${delivery}.${now ? ` Current step: ${now} (${position!.state}).` : ""}`;
   const deliveryAction = ({
     "Keep in worktree": "keeps changes local",
     "Push branch": "pushes the branch",

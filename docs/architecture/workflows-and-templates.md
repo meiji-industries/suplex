@@ -11,7 +11,7 @@ repeatable task are reusable and which belong to one execution. Sources:
 
 A built-in workflow defines the role sequence: who plans, who implements, and
 which independent review participates. The [product guide](../product.md#workflows-and-delivery)
-owns the catalog of five workflows. Coordinator and Worker are responsibilities;
+owns the catalog of six workflows. Coordinator and Worker are responsibilities;
 a profile selects the agent tool and model for a role. "Senior" and "junior"
 describe the intended division of work, not a measured model capability.
 

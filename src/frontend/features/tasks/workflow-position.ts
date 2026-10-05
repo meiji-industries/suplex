@@ -45,7 +45,10 @@ export function workflowPosition(task: Task, activity: TaskActivityResponse, age
   });
   const previous = turnActors.findLast(({ actor }) => actor.kind !== "root")?.actor;
   const at = (actor: Actor) => station(task, actor, previous);
-  if (task.status === "waiting_human") return { targets: [at({ kind: "root" })], state: "waiting" };
+  if (task.status === "waiting_human") {
+    const approval = task.workflowState.planApproval;
+    return { targets: [approval && approval.questionId === task.humanQuestion?.id ? "approval" : at({ kind: "root" })], state: "waiting" };
+  }
   const live = agents
     ? agents.flatMap(agent => agentStates[agent.status] ? [{ actor: { kind: agent.role, advisorRole: agent.advisorRole }, state: agentStates[agent.status]! }] : [])
     : turnActors.filter(({ turn }) => !turn.result && (turn.status === "prompted" || turn.status === "pending_prompt"))

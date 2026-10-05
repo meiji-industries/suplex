@@ -1476,6 +1476,153 @@ mod tests {
     }
 
     #[test]
+    fn approve_then_build_gates_the_first_build_on_the_durable_approved_plan() {
+        use crate::coordination::root_controller::{WorkerAssignment, check_plan_approval};
+        let (directory, mut database, root) = fixture("approve_then_build");
+        let task_id = root.task_id.clone();
+        let assignment = |plan: &str, purpose: &str| WorkerAssignment {
+            plan: Some(plan.into()),
+            acceptance_criteria: vec!["Done".into()],
+            instruction: "Build".into(),
+            mode: "planned".into(),
+            purpose: purpose.into(),
+            advisor_turn_id: None,
+            advisor_session_id: None,
+            candidate_turn_ids: None,
+            candidate_session_ids: None,
+        };
+        // Every read reopens the database, so the decision uses only durable rows.
+        let path = directory.join("suplex.sqlite");
+        let rows = || {
+            let database = SuplexDatabase::open(&path, OpenMode::ReadWrite).unwrap();
+            root_session_store::root_observation_rows(&database, &task_id).unwrap()
+        };
+        let gate = |plan: &str, purpose: &str| {
+            check_plan_approval(
+                &rows(),
+                Workflow::ApproveThenBuild,
+                &assignment(plan, purpose),
+            )
+            .map_err(|error| error.to_string())
+        };
+        let ask = |database: &mut SuplexDatabase, plan: &str| {
+            assert!(
+                root_session_store::request_plan_approval_for_root(
+                    database,
+                    &root.task_id,
+                    &root.id,
+                    root.generation,
+                    plan,
+                    Utc::now()
+                )
+                .unwrap()
+            );
+            rows().control.human_question_id.unwrap()
+        };
+        let answer = |database: &mut SuplexDatabase, question: &str, text: &str| {
+            root_session_store::answer_human(
+                database,
+                &root.task_id,
+                question,
+                text,
+                false,
+                None,
+                Utc::now(),
+            )
+            .unwrap();
+            rows().turns.last().unwrap().prompt_text.clone()
+        };
+        assert!(
+            gate("Plan A", "implementation")
+                .unwrap_err()
+                .contains("request_plan_approval")
+        );
+        assert_eq!(gate("Check", "verification"), Ok(()));
+
+        let question = ask(&mut database, "  Plan A  ");
+        let waiting = rows().control;
+        assert_eq!(waiting.status, TaskStatus::WaitingHuman);
+        assert!(waiting.human_question.unwrap().ends_with("\n\nPlan A"));
+        let prompt = answer(&mut database, &question, "Add a migration test.");
+        assert!(
+            prompt.contains("\"planApproval\":\"changes_requested\""),
+            "{prompt}"
+        );
+        assert!(prompt.contains("Add a migration test."));
+        assert!(
+            gate("Plan A", "implementation")
+                .unwrap_err()
+                .contains("request_plan_approval")
+        );
+
+        let question = ask(&mut database, "Plan B");
+        let prompt = answer(
+            &mut database,
+            &question,
+            "Approve the plan: Worker starts the build with this plan.",
+        );
+        assert!(prompt.contains("\"planApproval\":\"approved\""), "{prompt}");
+        assert_eq!(gate("Plan B", "implementation"), Ok(()));
+        assert!(
+            gate("Plan C", "implementation")
+                .unwrap_err()
+                .contains("not the plan the user approved")
+        );
+
+        // A newer request replaces only the proposed plan; the approved plan stays.
+        let question = ask(&mut database, "Plan C");
+        let approval = rows().control.workflow_state.plan_approval.unwrap();
+        assert_eq!(
+            (approval.proposed.as_str(), approval.approved.as_deref()),
+            ("Plan C", Some("Plan B"))
+        );
+        assert!(gate("Plan C", "implementation").is_err());
+        answer(&mut database, &question, "Keep plan B.");
+
+        let input = json!({"kind":"worker","version":2,"mode":"planned","purpose":"implementation","range":range(),"plan":"Plan B"});
+        let worker = root_session_store::launch_standard_worker(
+            &mut database,
+            &root,
+            "Build",
+            "Build",
+            Some(&input),
+            Utc::now(),
+        )
+        .unwrap();
+        assert!(
+            workflows::workflow_ready_for_delivery(
+                Workflow::ApproveThenBuild,
+                &rows().control.workflow_state,
+                &rows().sessions,
+                &rows().turns,
+                &range()
+            )
+            .is_err()
+        );
+        record(
+            &mut database,
+            &worker,
+            "w:1:completed",
+            &json!({"state":"completed","text":"Built"}),
+            None,
+        )
+        .unwrap();
+        assert_eq!(gate("Repair the test", "implementation"), Ok(()));
+        let after = rows();
+        assert_eq!(
+            workflows::workflow_ready_for_delivery(
+                Workflow::ApproveThenBuild,
+                &after.control.workflow_state,
+                &after.sessions,
+                &after.turns,
+                &range()
+            ),
+            Ok(())
+        );
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
     fn rater_results_keep_their_launch_range_and_duplicates_add_no_record() {
         let (directory, mut database, root) = fixture("refine_pull_request");
         let rater = root_session_store::launch_advisor(

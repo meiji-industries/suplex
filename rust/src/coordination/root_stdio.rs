@@ -58,6 +58,7 @@ enum RootCall {
         question: String,
         options: Value,
     },
+    RequestPlanApproval(String),
 }
 
 #[derive(Deserialize)]
@@ -87,6 +88,9 @@ enum WireCall {
     AskHuman {
         question: String,
         options: Vec<HumanQuestionOption>,
+    },
+    RequestPlanApproval {
+        plan: String,
     },
 }
 
@@ -409,6 +413,13 @@ fn parse_call(mut input: Map<String, Value>) -> Result<RootCall, String> {
             Ok(RootCall::DelegateAdvisor { role, brief })
         }
         WireCall::DelegatePlanners(_) => Ok(RootCall::DelegatePlanners),
+        WireCall::RequestPlanApproval { plan } => {
+            let plan = js_trim(&plan).to_owned();
+            if plan.is_empty() {
+                return Err("plan: expected nonempty text".into());
+            }
+            Ok(RootCall::RequestPlanApproval(plan))
+        }
         WireCall::AskHuman {
             question,
             mut options,
@@ -451,7 +462,7 @@ fn tool() -> Tool {
         serde_json::from_value::<Map<String, Value>>(json!({
             "type":"object",
             "properties":{
-                "kind":{"type":"string","enum":["observe","read_image","read_worker_evidence","delegate_worker","delegate_advisor","delegate_planners","replace_worker","request_delivery","ask_human"],"description":"Fields per kind. observe: no other fields. read_image: required artifactId. read_worker_evidence: required turnId; optional toolId, field (input/output/error), position (head/tail), cursor, maxCharacters (1000..20000). delegate_worker: required acceptanceCriteria, instruction; plan is required when mode is planned or omitted; optional mode (planned or direct; direct only for Direct build), purpose (implementation or verification), advisorTurnId (Pull request repair: the latest valid Rater report turn), candidateTurnIds (Combined planning: the Plan A and Plan B report turns), advisorSessionId and candidateSessionIds (legacy session forms). delegate_advisor: required role (reviewer, planner_a, planner_b, rater); optional brief (Reviewer only: your plan and acceptance criteria). delegate_planners: no other fields; Combined planning reserves Plan A and Plan B together. replace_worker: required sessionId and reason; optional handoff. request_delivery: required operation; expectedHead and review are required for push_branch, create_or_adopt_pull_request, request_review, and merge_pull_request; pullRequestTitle and pullRequestBody create a pull request. ask_human: required question, options."},
+                "kind":{"type":"string","enum":["observe","read_image","read_worker_evidence","delegate_worker","delegate_advisor","delegate_planners","replace_worker","request_delivery","ask_human","request_plan_approval"],"description":"Fields per kind. observe: no other fields. read_image: required artifactId. read_worker_evidence: required turnId; optional toolId, field (input/output/error), position (head/tail), cursor, maxCharacters (1000..20000). delegate_worker: required acceptanceCriteria, instruction; plan is required when mode is planned or omitted; optional mode (planned or direct; direct only for Direct build), purpose (implementation or verification), advisorTurnId (Pull request repair: the latest valid Rater report turn), candidateTurnIds (Combined planning: the Plan A and Plan B report turns), advisorSessionId and candidateSessionIds (legacy session forms). delegate_advisor: required role (reviewer, planner_a, planner_b, rater); optional brief (Reviewer only: your plan and acceptance criteria). delegate_planners: no other fields; Combined planning reserves Plan A and Plan B together. replace_worker: required sessionId and reason; optional handoff. request_delivery: required operation; expectedHead and review are required for push_branch, create_or_adopt_pull_request, request_review, and merge_pull_request; pullRequestTitle and pullRequestBody create a pull request. ask_human: required question, options. request_plan_approval: required plan; Approve then build only. Suplex shows the complete plan to the user and waits for approval or change requests."},
                 "sessionId":{"type":"string","minLength":1},
                 "reason":{"type":"string","minLength":1},
                 "handoff":{"type":"string"},
@@ -554,6 +565,9 @@ impl RootBridgeServer {
                     }
                     RootCall::AskHuman { question, options } => {
                         root_controller::ask_human(db, &root, &question, &options)
+                    }
+                    RootCall::RequestPlanApproval(plan) => {
+                        root_controller::request_plan_approval(db, &root, &plan)
                     }
                 }
                 .map_err(|error| error.to_string())
@@ -748,6 +762,12 @@ mod tests {
         ));
         assert!(parse(json!({"kind":"delegate_planners","role":"planner_a"})).is_err());
         assert!(matches!(
+            parse(json!({"kind":"request_plan_approval","plan":" Build it "})),
+            Ok(RootCall::RequestPlanApproval(plan)) if plan == "Build it"
+        ));
+        assert!(parse(json!({"kind":"request_plan_approval","plan":"  "})).is_err());
+        assert!(parse(json!({"kind":"request_plan_approval"})).is_err());
+        assert!(matches!(
             parse(json!({"kind":"delegate_worker","acceptanceCriteria":["Done"],"instruction":"Build","mode":"direct"})),
             Ok(RootCall::DelegateWorker(assignment)) if assignment.plan.is_none() && assignment.mode == "direct"
         ));
@@ -773,7 +793,8 @@ mod tests {
                 "delegate_planners",
                 "replace_worker",
                 "request_delivery",
-                "ask_human"
+                "ask_human",
+                "request_plan_approval"
             ])
         );
         assert_eq!(

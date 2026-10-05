@@ -73,3 +73,13 @@ test("every live target is reachable from the start along the diagram's routes",
   expect(route(edges, "repair", "coordinator")?.map(edge => edge.id)).toEqual(["repair-rater", "rater-coordinator"]);
   expect(route(edges, "merge", "source")).toBeNull();
 });
+
+test("approve then build waits on the approval station only for the plan approval question", () => {
+  const question = (id: string) => ({ kind: "question" as const, id, text: "Approve this plan?", options: [], requiresCommandCleanup: false });
+  const planApproval = { proposed: "Plan", questionId: "q-plan", approved: null };
+  const waiting = (id: string) => task({ workflow: "approve_then_build", status: "waiting_human", humanQuestion: question(id), workflowState: { ...base.workflowState, planApproval } });
+  expect(workflowPosition(waiting("q-plan"), activity(turn("root")), [agent("root", "idle")])).toEqual({ targets: ["approval"], state: "waiting" });
+  expect(workflowPosition(waiting("q-other"), activity(turn("root")), [agent("root", "idle")])).toEqual({ targets: ["plan"], state: "waiting" });
+  expect(workflowPosition(task({ workflow: "approve_then_build" }), activity(turn("root", true)), [agent("root", "working")])).toEqual({ targets: ["plan"], state: "working" });
+  expect(workflowPosition(task({ workflow: "approve_then_build" }), activity(turn("root"), turn("worker", true)), [agent("worker", "working")])).toEqual({ targets: ["build"], state: "working" });
+});

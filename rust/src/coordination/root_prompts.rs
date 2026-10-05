@@ -69,6 +69,7 @@ pub fn initial_coordinator_prompt(
         Workflow::RefinePullRequest => {
             Some(include_str!("prompts/workflow_refine_pull_request.txt"))
         }
+        Workflow::ApproveThenBuild => Some(include_str!("prompts/workflow_approve_then_build.txt")),
     };
     let mut prompt = if let Some(instructions) = instructions {
         let base_branch = &intent.base_branch;
@@ -358,6 +359,9 @@ pub fn worker_result_wake(
         }
         Workflow::CompetingPlans => {
             "Compare the result with the accepted combined assignment. Request coherent repairs if necessary, then request the selected delivery target."
+        }
+        Workflow::ApproveThenBuild => {
+            "Compare the result with the user-approved plan and its acceptance criteria. Request coherent repairs or missing checks if necessary, then request the selected delivery target."
         }
         Workflow::DirectBuild => {
             "Compare the result with the accepted assignment and acceptance outcomes. Request coherent repairs or missing checks if necessary, then request the selected delivery target."

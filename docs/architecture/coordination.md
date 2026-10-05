@@ -31,13 +31,16 @@ limit overrides inherit them at admission time. See [settings and limits](settin
 Coordinator owns investigation, delegation, review, and delivery requests.
 Worker implements changes. Advisors provide the selected workflow's planning
 or independent review. The [product guide](../product.md#workflows-and-delivery)
-describes the five built-in workflows; task instructions customize their work without
+describes the six built-in workflows; task instructions customize their work without
 creating an arbitrary workflow graph.
 
 The ordinary delegation slot is shared by Worker and individual Advisors.
 Combined planning reserves separate Plan A and Plan B slots on the same pinned
 input. Both terminal reports must arrive before Coordinator receives the
-combined result. This is distinct from running multiple implementation
+combined result. Approve then build has no Advisor: Coordinator calls
+`request_plan_approval`, the task waits for your answer, and Suplex records the
+approved plan in the task's workflow state. The first Worker implementation
+must carry that exact plan. This is distinct from running multiple implementation
 candidates and choosing a winner, which remains a proposal.
 
 Coordinator continues in its native conversation after a handoff. Persisted

@@ -35,7 +35,7 @@ export function planFlow(edges: readonly FlowEdge[]): FlowEdge[][] {
     }
     return [];
   };
-  let at = [...new Set(edges.map(edge => edge.from).filter(node => !edges.some(edge => edge.to === node)))];
+  let at = [...new Set(edges.map(edge => edge.from).filter(node => !edges.some(edge => edge.to === node && !edge.returns)))];
   const waves: FlowEdge[][] = [];
   while (at.some(node => !terminal(node)) && waves.length < 64) {
     const wave = at.flatMap(node => {

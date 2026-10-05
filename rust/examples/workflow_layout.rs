@@ -70,12 +70,22 @@ const GRAPHS: &[Graph] = &[
             ("coordinator", "merge"),
         ],
     ),
+    (
+        "approve_then_build",
+        &["plan", "approval", "build", "review", "delivery"],
+        &[
+            ("plan", "approval"),
+            ("approval", "build"),
+            ("build", "review"),
+            ("review", "delivery"),
+        ],
+    ),
 ];
 
 fn layout(id: &str, nodes: &[&str], edges: &[(&str, &str)], compact: bool) -> Value {
     let wide_spacing = match id {
         "standard" | "direct_build" => "140",
-        "independent_review" | "refine_pull_request" => "108",
+        "independent_review" | "refine_pull_request" | "approve_then_build" => "108",
         _ => "76",
     };
     let input = json!({
@@ -188,36 +198,10 @@ fn layout(id: &str, nodes: &[&str], edges: &[(&str, &str)], compact: bool) -> Va
         }
     }
     if id != "refine_pull_request" {
-        let build = positions
-            .iter()
-            .find(|node| node["id"] == "build")
-            .expect("ELK layout output is complete");
-        let review = positions
-            .iter()
-            .find(|node| node["id"] == "review")
-            .expect("ELK layout output is complete");
-        let bx = build["x"].as_f64().expect("ELK layout output is complete") + 22.0;
-        let by = build["y"].as_f64().expect("ELK layout output is complete") + 22.0;
-        let rx = review["x"].as_f64().expect("ELK layout output is complete") + 22.0;
-        let ry = review["y"].as_f64().expect("ELK layout output is complete") + 22.0;
-        let points = if compact {
-            let loop_x = bx.max(rx) + 44.0;
-            vec![
-                json!({"x": rx + 22.0, "y": ry}),
-                json!({"x": loop_x, "y": ry}),
-                json!({"x": loop_x, "y": by}),
-                json!({"x": bx + 22.0, "y": by}),
-            ]
-        } else {
-            let loop_y = by.min(ry) - 32.0;
-            vec![
-                json!({"x": rx, "y": ry - 22.0}),
-                json!({"x": rx, "y": loop_y}),
-                json!({"x": bx, "y": loop_y}),
-                json!({"x": bx, "y": by - 22.0}),
-            ]
-        };
-        routes.push(json!({"id": "review-build", "points": points}));
+        routes.push(return_route(&positions, "review", "build", compact));
+    }
+    if id == "approve_then_build" {
+        routes.push(return_route(&positions, "approval", "plan", compact));
     }
     let width = if id == "refine_pull_request" && !compact {
         json!(
@@ -230,6 +214,30 @@ fn layout(id: &str, nodes: &[&str], edges: &[(&str, &str)], compact: bool) -> Va
         result["width"].clone()
     };
     json!({"width": width, "height": result["height"], "nodes": positions, "edges": routes})
+}
+
+/// A dashed route back to an earlier station: above the row when wide, to
+/// the right of the column when compact.
+fn return_route(positions: &[Value], from: &str, to: &str, compact: bool) -> Value {
+    let center = |id: &str| {
+        let node = positions
+            .iter()
+            .find(|node| node["id"] == id)
+            .expect("ELK layout output is complete");
+        (
+            node["x"].as_f64().expect("ELK layout output is complete") + 22.0,
+            node["y"].as_f64().expect("ELK layout output is complete") + 22.0,
+        )
+    };
+    let ((fx, fy), (tx, ty)) = (center(from), center(to));
+    let points = if compact {
+        let loop_x = fx.max(tx) + 44.0;
+        json!([{"x": fx + 22.0, "y": fy}, {"x": loop_x, "y": fy}, {"x": loop_x, "y": ty}, {"x": tx + 22.0, "y": ty}])
+    } else {
+        let loop_y = fy.min(ty) - 32.0;
+        json!([{"x": fx, "y": fy - 22.0}, {"x": fx, "y": loop_y}, {"x": tx, "y": loop_y}, {"x": tx, "y": ty - 22.0}])
+    };
+    json!({"id": format!("{from}-{to}"), "points": points})
 }
 
 fn main() {

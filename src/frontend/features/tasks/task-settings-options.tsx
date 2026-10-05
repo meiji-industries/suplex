@@ -1,5 +1,5 @@
 import type { ReactElement } from "react";
-import { CircleOff, Combine, FolderGit2, GitBranch, GitMerge, GitPullRequest, GitPullRequestDraft, ListChecks, ScanEye, Send, TestTube2, Wrench } from "lucide-react";
+import { CircleOff, Combine, FolderGit2, GitBranch, GitMerge, GitPullRequest, GitPullRequestDraft, ListChecks, ScanEye, Send, TestTube2, UserCheck, Wrench } from "lucide-react";
 
 import type { RepositoryConnection } from "../../contracts/project-integration.js";
 import { DeliveryTargetSchema, type DeliveryTarget, type TaskInput } from "../../contracts/tasks.js";
@@ -16,6 +16,7 @@ export const workflowIcons: Record<WorkflowId, ReactElement> = {
   independent_review: <ScanEye aria-hidden="true" className="size-[11px]" />,
   competing_plans: <Combine aria-hidden="true" className="size-[11px]" />,
   refine_pull_request: <Wrench aria-hidden="true" className="size-[11px]" />,
+  approve_then_build: <UserCheck aria-hidden="true" className="size-[11px]" />,
 };
 
 const deliveryIcons: Record<DeliveryTarget, ReactElement> = {

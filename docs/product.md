@@ -86,17 +86,21 @@ part of each claim, not optional qualifications.
 
 ## Workflows and delivery
 
-The five built-in workflows are:
+The six built-in workflows are:
 
-- **Standard:** Coordinator plans, Worker implements, Coordinator reviews.
-- **Direct build:** Worker chooses the approach from the task instructions;
+- **Plan and build** (`standard`): Coordinator plans, Worker implements, Coordinator reviews.
+- **Simple task** (`direct_build`): Worker chooses the approach from the task instructions;
   Coordinator reviews the result.
-- **Second opinion:** a read-only Reviewer checks the current change before delivery.
-- **Combined planning:** Plan A and Plan B produce independent plans; Coordinator
+- **Double reviews** (`independent_review`): a read-only Reviewer checks the current change before delivery.
+- **Double plans** (`competing_plans`): Plan A and Plan B produce independent plans; Coordinator
   combines them before implementation.
-- **Pull request repair:** a Rater reviews an existing open PR, Worker repairs it,
+- **Review and repair** (`refine_pull_request`): a Rater reviews an existing open PR, Worker repairs it,
   and rating repeats until the current change earns at least 9 with no blocking
   findings. Delivery then pursues merging that PR subject to GitHub checks and policy.
+- **Approve then build** (`approve_then_build`): Coordinator plans and asks you to
+  approve the complete plan or request changes. Suplex records the approved plan and
+  refuses the first Worker build unless it uses that exact plan. Repairs after
+  that build need no new approval. Coordinator then reviews and delivers.
 
 Named presets reuse these sequences; they do not introduce new step types.
 See [workflows and templates](architecture/workflows-and-templates.md) for

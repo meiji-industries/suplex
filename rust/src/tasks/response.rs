@@ -2,7 +2,7 @@
 
 use crate::coordination::{
     advisor_bridge::AdvisorRole,
-    workflows::{Completion, DeliveryWait, ReviewRecord, Workflow, WorkflowState},
+    workflows::{Completion, DeliveryWait, PlanApproval, ReviewRecord, Workflow, WorkflowState},
 };
 use crate::delivery::inspection::ReviewRange;
 use crate::http::contracts::typed::{
@@ -135,6 +135,9 @@ pub(super) struct PublicWorkflowState {
     accepted_delivery: Option<ReviewRange>,
     pub(super) delivery_wait: Option<DeliveryWait>,
     pub(super) completion: Option<Completion>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    plan_approval: Option<PlanApproval>,
 }
 
 #[derive(Debug, Serialize, TS)]
@@ -180,6 +183,7 @@ fn workflow_state(row: &Row<'_>) -> DatabaseResult<PublicWorkflowState> {
         accepted_delivery: state.accepted_delivery,
         delivery_wait: state.delivery_wait,
         completion: state.completion,
+        plan_approval: state.plan_approval,
     })
 }
 
@@ -861,6 +865,7 @@ mod fixture_tests {
                 accepted_delivery: None,
                 delivery_wait: None,
                 completion: None,
+                plan_approval: None,
             },
             depends_on: vec!["task_00".into()],
             configuration: TaskConfiguration {

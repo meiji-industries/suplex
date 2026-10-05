@@ -45,6 +45,7 @@ export function WorkflowStatus({ task }: { task: Task }) {
   else if (task.status === "delivered" || state.completion?.kind === "workflow") items.push("Delivered");
   else if (state.deliveryWait?.reason === "merge_queue") items.push("Merge requested");
   else if (state.deliveryWait) items.push(state.deliveryWait.reason === "observation" ? "GitHub observation pending" : "CI pending");
+  if (task.workflow === "approve_then_build") items.push(state.planApproval?.approved ? "Plan approved" : "Plan not approved");
   if (role) {
     if (!latest || !result) items.push(latest ? `${ADVISOR_LABELS[role]} report invalid` : "Not rated");
     else {
@@ -103,7 +104,8 @@ export function WorkflowHistory({ task, activity }: { task: Task; activity: Task
     const session = activity.sessions.find(candidate => candidate.id === turn.sessionId);
     return session?.kind === "worker" && !session.advisorRole ? [{ session, turn }] : [];
   });
-  if (!reviews.length && !planners.length) return null;
+  const approvedPlan = task.workflowState.planApproval?.approved;
+  if (!reviews.length && !planners.length && !approvedPlan) return null;
   return <ol data-workflow-history className="grid min-w-0 divide-y overflow-hidden rounded-md border text-xs" aria-label="Review rounds">
       {reviews.map((record, index) => {
         const result = reviewResult(record);
@@ -134,6 +136,11 @@ export function WorkflowHistory({ task, activity }: { task: Task; activity: Task
           </HistoryRow>
         </li>;
       })}
+      {approvedPlan ? <li className="min-w-0" data-approved-plan>
+        <HistoryRow title="You" icon={CheckCircle2} badge={<Badge variant="secondary">Approved plan</Badge>}>
+          <Markdown source={approvedPlan} />
+        </HistoryRow>
+      </li> : null}
       {task.workflow === "competing_plans" ? builds.map(({ turn }) => turn.assignment?.plan ? <li key={turn.id} className="min-w-0" data-synthesis-assignment>
         <HistoryRow title="Combined plan" icon={FileText} badge={<Badge variant="secondary">Assignment</Badge>} timestamp={<HistoryTime value={turn.promptedAt} turn={turn} />}>
           <Markdown source={turn.assignment.plan} />

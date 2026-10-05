@@ -3,4 +3,4 @@
 /**
  * TypeScript `WorkflowId`.
  */
-export type Workflow = "standard" | "direct_build" | "independent_review" | "competing_plans" | "refine_pull_request";
+export type Workflow = "standard" | "direct_build" | "independent_review" | "competing_plans" | "refine_pull_request" | "approve_then_build";

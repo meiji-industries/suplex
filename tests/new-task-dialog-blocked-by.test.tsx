@@ -483,3 +483,19 @@ test("templates replace the selected workflow, illustration, and admitted Adviso
   await submitTask(container);
   expect(latestRequest("POST").advisorProfileIds).toEqual({});
 });
+
+test("Approve then build is a workflow choice with its own illustration", async () => {
+  const approval = { ...workflow, id: "workflow_native_approve_then_build", name: "Approve then build", engine: "approve_then_build", advisorProfileIds: {} };
+  const fallback = api.readJsonUnchecked.getMockImplementation()!;
+  api.readJsonUnchecked.mockImplementation(async (url: string, init?: RequestInit) => {
+    if (url === "/api/workflows?includeArchived=true") return { workflows: [workflow, approval] };
+    return fallback(url, init);
+  });
+  const { container } = mount();
+  await flush();
+  await selectOption(container, "Workflow", "Approve then build");
+  expect(button(container, "Workflow").textContent).toBe("Approve then build");
+  expect(container.querySelector('[data-workflow-illustration="approve_then_build"]')).not.toBeNull();
+  await submitTask(container);
+  expect(latestRequest("POST")).toMatchObject({ workflow: "approve_then_build", advisorProfileIds: {} });
+});

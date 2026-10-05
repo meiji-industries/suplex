@@ -6,7 +6,7 @@ const id = z.string().min(1).max(256);
 
 const commit = z.string().regex(/^[a-f0-9]{40,64}$/i);
 
-export const WorkflowIdSchema = z.enum(["standard", "direct_build", "independent_review", "competing_plans", "refine_pull_request"]);
+export const WorkflowIdSchema = z.enum(["standard", "direct_build", "independent_review", "competing_plans", "refine_pull_request", "approve_then_build"]);
 
 export type WorkflowId = z.infer<typeof WorkflowIdSchema>;
 
@@ -29,4 +29,4 @@ export const DeliveryWaitSchema = z.object({ headSha: z.string().min(1), fingerp
 
 export const WorkflowCompletionSchema = z.object({ kind: z.enum(["workflow", "external_merge"]), reviewedHead: z.string().nullable(), pullRequestNumber: z.number().int().positive().nullable(), observedAt: z.string() }).strict();
 
-export const PublicWorkflowStateSchema = z.object({ version: z.literal(1), reviews: z.array(ReviewRecordSchema), acceptedDelivery: ReviewRangeSchema.nullable(), deliveryWait: DeliveryWaitSchema.nullable(), completion: WorkflowCompletionSchema.nullable() }).strict();
+export const PublicWorkflowStateSchema = z.object({ version: z.literal(1), reviews: z.array(ReviewRecordSchema), acceptedDelivery: ReviewRangeSchema.nullable(), deliveryWait: DeliveryWaitSchema.nullable(), completion: WorkflowCompletionSchema.nullable(), planApproval: z.object({ proposed: z.string(), questionId: z.string(), approved: z.string().nullable() }).strict().optional() }).strict();

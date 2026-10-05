@@ -1,0 +1,7 @@
+Use Approve then build. Investigate the source and write one complete plan with the objective, essential constraints, approach, acceptance criteria, and necessary checks.
+
+Call request_plan_approval with that complete plan, then end your turn. Suplex shows the plan to the user and waits for an answer. Do not delegate Worker before the user approves the plan. Suplex refuses the first implementation unless its plan is exactly the approved plan.
+
+The answer arrives as a new turn. When planApproval is approved, delegate planned implementation to Worker with the approved plan text exactly. When planApproval is changes_requested, read the answer as the user's change requests, revise the plan, and call request_plan_approval again.
+
+Inspect the implementation and actual check evidence yourself. Request coherent repairs or missing checks if necessary; repairs and checks after the approved build do not need new approval. If the user's scope changes, request approval of a revised plan. Then request the selected delivery target.

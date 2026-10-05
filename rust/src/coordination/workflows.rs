@@ -19,7 +19,7 @@ pub struct WorkflowDefinition {
     pub advisor_roles: &'static [&'static str],
 }
 
-pub const WORKFLOWS: [WorkflowDefinition; 5] = [
+pub const WORKFLOWS: [WorkflowDefinition; 6] = [
     WorkflowDefinition {
         id: "standard",
         name: "Plan and build",
@@ -45,6 +45,11 @@ pub const WORKFLOWS: [WorkflowDefinition; 5] = [
         name: "Review and repair",
         advisor_roles: &["rater"],
     },
+    WorkflowDefinition {
+        id: "approve_then_build",
+        name: "Approve then build",
+        advisor_roles: &[],
+    },
 ];
 
 crate::shared::wire_enum! {
@@ -55,6 +60,7 @@ crate::shared::wire_enum! {
         IndependentReview = "independent_review",
         CompetingPlans = "competing_plans",
         RefinePullRequest = "refine_pull_request",
+        ApproveThenBuild = "approve_then_build",
     }
 }
 
@@ -136,6 +142,18 @@ pub struct WorkflowState {
     pub agent_selections: Option<BTreeMap<String, AgentSelection>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub initial_root_selection_session_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plan_approval: Option<PlanApproval>,
+}
+
+/// Approve then build: the plan the Coordinator last asked the user to
+/// approve, and the plan the user last approved.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct PlanApproval {
+    pub proposed: String,
+    pub question_id: String,
+    pub approved: Option<String>,
 }
 
 impl Default for WorkflowState {
@@ -151,6 +169,7 @@ impl Default for WorkflowState {
             delivery_history: None,
             agent_selections: None,
             initial_root_selection_session_id: None,
+            plan_approval: None,
         }
     }
 }
@@ -444,7 +463,7 @@ pub fn worker_candidate_reports(input: &Value) -> Option<[Value; 2]> {
 /// Whether the workflow's obligations for the actual range are complete.
 pub fn workflow_ready_for_delivery(
     workflow: Workflow,
-    reviews: &[ReviewRecord],
+    state: &WorkflowState,
     sessions: &[SessionRow],
     turns: &[TurnRow],
     actual: &ReviewRange,
@@ -510,8 +529,31 @@ pub fn workflow_ready_for_delivery(
                 Err("Double plans requires two valid plan reports and a completed Worker build of the combined plan before delivery.".into())
             }
         }
+        Workflow::ApproveThenBuild => {
+            let approved = state
+                .plan_approval
+                .as_ref()
+                .and_then(|approval| approval.approved.as_deref());
+            let built = turns.iter().any(|turn| {
+                let input = turn_workflow_input(sessions, turn);
+                worker_turn(turn)
+                    && input.is_some_and(|input| {
+                        input["kind"] == "worker"
+                            && input["purpose"] == "implementation"
+                            && approved.is_some_and(|plan| {
+                                input["plan"].as_str().map(str::trim) == Some(plan)
+                            })
+                    })
+                    && succeeded(turn)
+            });
+            if built {
+                Ok(())
+            } else {
+                Err("Approve then build requires a completed Worker build of the user-approved plan before delivery.".into())
+            }
+        }
         Workflow::IndependentReview | Workflow::RefinePullRequest => {
-            review_gate(workflow, reviews, actual)
+            review_gate(workflow, &state.reviews, actual)
         }
     }
 }
@@ -532,7 +574,10 @@ pub fn review_role(workflow: Workflow) -> Option<AdvisorRole> {
     match workflow {
         Workflow::RefinePullRequest => Some(AdvisorRole::Rater),
         Workflow::IndependentReview => Some(AdvisorRole::Reviewer),
-        Workflow::Standard | Workflow::DirectBuild | Workflow::CompetingPlans => None,
+        Workflow::Standard
+        | Workflow::DirectBuild
+        | Workflow::CompetingPlans
+        | Workflow::ApproveThenBuild => None,
     }
 }
 
@@ -616,13 +661,12 @@ pub fn delivery_decision(
     if !require_review {
         return Ok(());
     }
-    let reviews = &control.workflow_state.reviews;
-    workflow_ready_for_delivery(workflow, reviews, sessions, turns, range).map_err(|reason| {
-        DeliveryRefusal {
+    workflow_ready_for_delivery(workflow, &control.workflow_state, sessions, turns, range).map_err(
+        |reason| DeliveryRefusal {
             code: "workflow_review_required",
             reason,
-        }
-    })
+        },
+    )
 }
 
 #[cfg(test)]
@@ -653,7 +697,7 @@ mod tests {
     }
 
     #[test]
-    fn the_catalog_has_five_workflows_with_fixed_roles() {
+    fn the_catalog_has_six_workflows_with_fixed_roles() {
         assert_eq!(
             WORKFLOWS
                 .iter()
@@ -664,7 +708,8 @@ mod tests {
                 "direct_build",
                 "independent_review",
                 "competing_plans",
-                "refine_pull_request"
+                "refine_pull_request",
+                "approve_then_build"
             ]
         );
         assert_eq!(
@@ -677,7 +722,8 @@ mod tests {
                 "Simple task",
                 "Double reviews",
                 "Double plans",
-                "Review and repair"
+                "Review and repair",
+                "Approve then build"
             ]
         );
         assert_eq!(
@@ -954,7 +1000,7 @@ mod tests {
         assert_eq!(
             workflow_ready_for_delivery(
                 Workflow::DirectBuild,
-                &[],
+                &WorkflowState::default(),
                 std::slice::from_ref(&direct_worker),
                 std::slice::from_ref(&direct),
                 &range
@@ -970,7 +1016,7 @@ mod tests {
         assert!(
             workflow_ready_for_delivery(
                 Workflow::DirectBuild,
-                &[],
+                &WorkflowState::default(),
                 std::slice::from_ref(&direct_worker),
                 &[planned],
                 &range
@@ -998,7 +1044,7 @@ mod tests {
         assert_eq!(
             workflow_ready_for_delivery(
                 Workflow::CompetingPlans,
-                &[],
+                &WorkflowState::default(),
                 &sessions,
                 &[a.clone(), b.clone(), build.clone()],
                 &range
@@ -1014,13 +1060,57 @@ mod tests {
         assert!(
             workflow_ready_for_delivery(
                 Workflow::CompetingPlans,
-                &[],
+                &WorkflowState::default(),
                 &sessions,
                 &[a, invalid_b, build],
                 &range
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn approve_then_build_delivers_only_a_completed_build_of_the_approved_plan() {
+        let worker = SessionRow::fixture("w", SessionKind::Worker);
+        let build = |plan: &str, status: TurnStatus| TurnRow {
+            workflow_input: Some(
+                json!({"kind":"worker","version":2,"mode":"planned","purpose":"implementation","plan":plan}),
+            ),
+            terminal_observation: Some(json!({"state":"completed"}).to_string()),
+            ..TurnRow::fixture("t", "w", status)
+        };
+        let state = |approved: Option<&str>| WorkflowState {
+            plan_approval: Some(PlanApproval {
+                proposed: "Revised".into(),
+                question_id: "q".into(),
+                approved: approved.map(str::to_owned),
+            }),
+            ..WorkflowState::default()
+        };
+        let ready = |state: &WorkflowState, turn: TurnRow| {
+            workflow_ready_for_delivery(
+                Workflow::ApproveThenBuild,
+                state,
+                std::slice::from_ref(&worker),
+                &[turn],
+                &range(),
+            )
+        };
+        assert_eq!(
+            ready(&state(Some("Plan")), build("Plan", TurnStatus::Completed)),
+            Ok(())
+        );
+        assert!(ready(&state(Some("Plan")), build("Other", TurnStatus::Completed)).is_err());
+        assert!(ready(&state(Some("Plan")), build("Plan", TurnStatus::Prompted)).is_err());
+        assert!(ready(&state(None), build("Revised", TurnStatus::Completed)).is_err());
+        assert!(
+            ready(
+                &WorkflowState::default(),
+                build("Plan", TurnStatus::Completed)
+            )
+            .is_err()
+        );
+        assert_eq!(review_role(Workflow::ApproveThenBuild), None);
     }
 
     #[test]

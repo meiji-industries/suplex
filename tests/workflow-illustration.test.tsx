@@ -1,15 +1,19 @@
 // @vitest-environment happy-dom
 import { renderToStaticMarkup } from "react-dom/server";
-import { expect, test } from "vitest";
+import { expect, test, vi } from "vitest";
 import { WorkflowIllustration } from "../src/frontend/features/tasks/workflow-illustration.js";
 import { WORKFLOWS } from "../src/frontend/features/tasks/workflow-presentation.js";
 import { flowEdges, planFlow } from "../src/frontend/features/tasks/workflow-flow.js";
 import layouts from "../src/frontend/features/tasks/workflow-layouts.json" with { type: "json" };
 
+const signedIn = vi.hoisted(() => ({ user: undefined as { id: string; displayName: string; avatarSeed: string } | undefined }));
+vi.mock("../src/frontend/shell/company-context.js", () => ({ useOptionalCompanyContext: () => signedIn.user ? { user: signedIn.user, avatars: {} } : undefined }));
+
 test.each(WORKFLOWS)("$name describes the actual workflow and delivery in both layouts", definition => {
   if (definition.id !== "refine_pull_request") {
     const main = definition.id === "competing_plans" ? ["objective", "combine", "build", "review", "delivery"]
       : definition.id === "independent_review" ? ["plan", "build", "review", "reviewer", "delivery"]
+      : definition.id === "approve_then_build" ? ["plan", "approval", "build", "review", "delivery"]
       : ["plan", "build", "review", "delivery"];
     for (const [mode, axis, crossAxis] of [["wide", "x", "y"], ["compact", "y", "x"]] as const) {
       const nodes = main.map(id => layouts[definition.id][mode].nodes.find(node => node.id === id)!);
@@ -56,6 +60,13 @@ test.each(WORKFLOWS)("$name describes the actual workflow and delivery in both l
     if (definition.id === "competing_plans") {
       for (const path of ["objective-plan-a", "objective-plan-b", "plan-a-combine", "plan-b-combine", "build-review", "review-delivery"]) expect(diagram.querySelector(`[data-illustration-route="${path}"]`)).not.toBeNull();
       expect(diagram.querySelector('[data-illustration-control="objective"]')?.textContent).toBe("Userprompts");
+    }
+    if (definition.id === "approve_then_build") {
+      for (const path of ["plan-approval", "approval-build", "build-review", "review-delivery"]) expect(diagram.querySelector(`[data-illustration-route="${path}"]`)?.getAttribute("stroke-dasharray")).toBeNull();
+      expect(diagram.querySelector('[data-illustration-route="approval-plan"]')?.getAttribute("stroke-dasharray")).toBe("3 5");
+      expect(diagram.querySelector('[data-illustration-control="approval"]')?.textContent).toBe("Userapproves the plan");
+      expect(diagram.querySelector('[data-illustration-avatar="approval"] svg.lucide-user-round')).not.toBeNull();
+      expect(diagram.querySelector("desc")?.textContent).toContain("If you request changes, Coordinator revises the plan and asks you again.");
     }
     if (definition.id === "independent_review") {
       expect(diagram.querySelector('[data-illustration-route="reviewer-build"]')).not.toBeNull();
@@ -105,7 +116,7 @@ test("read-only agent names replace role labels only when their profiles resolve
 
 test.each(WORKFLOWS)("$name flow travels every route and ends at the terminal station", definition => {
   for (const layout of Object.values(layouts[definition.id])) {
-    const edges = flowEdges(layout, new Set(["review-build", "reviewer-build", "repair-rater"]));
+    const edges = flowEdges(layout, new Set(["review-build", "reviewer-build", "repair-rater", "approval-plan"]));
     const waves = planFlow(edges);
     expect(new Set(waves.flat())).toEqual(new Set(edges));
     for (const [index, wave] of waves.entries()) if (index) expect(wave.every(edge => waves[index - 1]!.some(previous => previous.to === edge.from))).toBe(true);
@@ -113,7 +124,23 @@ test.each(WORKFLOWS)("$name flow travels every route and ends at the terminal st
     expect(end).toHaveLength(1);
     expect(edges.some(edge => edge.from === end[0]!.to)).toBe(false);
   }
+  if (definition.id === "approve_then_build") expect(planFlow(flowEdges(layouts.approve_then_build.wide, new Set(["review-build", "approval-plan"]))).map(wave => wave.map(edge => edge.id))).toEqual([
+    ["plan-approval"], ["approval-plan"], ["plan-approval"], ["approval-build"], ["build-review"], ["review-build"], ["build-review"], ["review-delivery"],
+  ]);
   if (definition.id === "competing_plans") expect(planFlow(flowEdges(layouts.competing_plans.wide, new Set())).map(wave => wave.map(edge => edge.id))).toEqual([
     ["objective-plan-a", "objective-plan-b"], ["plan-a-combine", "plan-b-combine"], ["combine-build"], ["build-review"], ["review-build"], ["build-review"], ["review-delivery"],
   ]);
+});
+
+test("approve then build shows the signed-in user at the approval station", () => {
+  signedIn.user = { id: "user-1", displayName: "Ada Lovelace", avatarSeed: "ada" };
+  try {
+    const element = document.createElement("div");
+    element.innerHTML = renderToStaticMarkup(<WorkflowIllustration workflow="approve_then_build" delivery="Push branch" />);
+    for (const diagram of Array.from(element.querySelectorAll("[data-illustration-layout]"))) {
+      expect(diagram.querySelector('[data-illustration-control="approval"]')?.textContent).toBe("Ada Lovelaceapproves the plan");
+      expect(diagram.querySelector('[data-illustration-avatar="approval"] svg.lucide-user-round')).toBeNull();
+      expect(diagram.querySelector('[data-illustration-avatar="approval"] [data-slot="avatar"]')?.textContent).toBe("A");
+    }
+  } finally { signedIn.user = undefined; }
 });

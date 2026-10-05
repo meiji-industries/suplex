@@ -164,7 +164,7 @@ mod tests {
         .json()
         .await
         .unwrap();
-        assert_eq!(all["workflows"].as_array().unwrap().len(), 7);
+        assert_eq!(all["workflows"].as_array().unwrap().len(), 8);
         let audits: i64 = state.with_database(|database| {
             database.connection().query_row(
                 "SELECT COUNT(*) FROM suplex_audit_events WHERE action IN ('workflow_created', 'workflow_updated')",
@@ -252,7 +252,7 @@ mod tests {
         assert_eq!(active.status(), StatusCode::OK);
         let active: serde_json::Value =
             serde_json::from_slice(&to_bytes(active.into_body(), 8192).await.unwrap()).unwrap();
-        assert_eq!(active["workflows"].as_array().unwrap().len(), 4);
+        assert_eq!(active["workflows"].as_array().unwrap().len(), 5);
         let all = list(
             State(state.clone()),
             OriginalUri("/api/workflows?includeArchived=true".parse().unwrap()),
@@ -266,8 +266,8 @@ mod tests {
             r#""advisorProfileIds":{"reviewer":"x","planner_a":"a","planner_b":"b","rater":"r"}"#
         ));
         let all: serde_json::Value = serde_json::from_slice(&all).unwrap();
-        assert_eq!(all["workflows"].as_array().unwrap().len(), 5);
-        assert_eq!(all["workflows"][2]["id"], "workflow_native_standard");
+        assert_eq!(all["workflows"].as_array().unwrap().len(), 6);
+        assert_eq!(all["workflows"][3]["id"], "workflow_native_standard");
         drop(state);
         let _ = std::fs::remove_file(&path);
         let _ = std::fs::remove_file(path.with_extension("sqlite-wal"));

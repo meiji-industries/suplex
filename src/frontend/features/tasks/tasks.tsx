@@ -112,6 +112,8 @@ export function TasksView({ mode = "list" }: { mode?: "list" | "board" }): React
   // Delivered work, move runs too, shows the newest first.
   const boardColumn = (value: TaskControlStatus): ReactElement[] => {
     const column = visible.filter(task => task.status === value);
+    // Active work shows the task that became active last first.
+    if (value === "active") column.sort((left, right) => right.statusChangedAt.localeCompare(left.statusChangedAt) || left.id.localeCompare(right.id));
     if (value === "queued") return queueOrder(column).map(task => <BoardTaskCard key={task.id} task={task} project={project(task.projectId)} />);
     if (value !== "delivered") return column.map(task => <BoardTaskCard key={task.id} task={task} project={project(task.projectId)} />);
     return [

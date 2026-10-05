@@ -28,6 +28,7 @@ import { WorkflowHistory, WorkflowStatus } from "./workflow-history.js";
 import { TaskPullRequestCard } from "./pull-request-card.js";
 import { showWorktreeMenu, TaskWorktreeMenu } from "./task-worktree-menu.js";
 import { workflowDefinition } from "./workflow-presentation.js";
+import { copyToClipboard } from "../../lib/clipboard.js";
 
 const emptyActivity: TaskActivity = { sessions: [], turns: [], shellPaneId: null };
 
@@ -35,7 +36,7 @@ function CopyValue({ label, value, children }: { label: string; value: string; c
   const [copied, setCopied] = useState(false);
   useEffect(() => { if (!copied) return; const timer = setTimeout(() => setCopied(false), 1_500); return () => clearTimeout(timer); }, [copied]);
   return <span className="flex min-w-0 items-center gap-1.5">
-    <button type="button" className="shrink-0 text-muted-foreground hover:text-foreground" aria-label={copied ? `Copied ${label}` : `Copy ${label}`} title={copied ? "Copied" : "Copy"} onClick={() => { void navigator.clipboard.writeText(value).then(() => setCopied(true), () => setCopied(false)); }}><ClipboardCopy className="size-3.5" /></button>
+    <button type="button" className="shrink-0 text-muted-foreground hover:text-foreground" aria-label={copied ? `Copied ${label}` : `Copy ${label}`} title={copied ? "Copied" : "Copy"} onClick={() => { void copyToClipboard(value, `Copied the ${label} to clipboard`).then(setCopied); }}><ClipboardCopy className="size-3.5" /></button>
     {children}
   </span>;
 }

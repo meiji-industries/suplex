@@ -2,6 +2,7 @@ import { useEffect, useState, type ReactElement } from "react";
 
 import { GitHubDevicePollResponseSchema, GitHubDeviceStartResponseSchema, type GitHubDevicePollResponse, type GitHubDeviceStartResponse } from "../../contracts/github-auth.js";
 import { readJsonUnchecked } from "../../lib/api.js";
+import { copyToClipboard } from "../../lib/clipboard.js";
 import { getGitHubAuthStatus } from "../../features/settings/lib/github-auth-api.js";
 import { Button } from "../ui/button.js";
 import { Spinner } from "../ui/spinner.js";
@@ -85,11 +86,10 @@ export function GithubDeviceSignIn({ onConnected, label, primary = false }: { on
 
   const copy = async (): Promise<void> => {
     if (!flow) return;
-    try {
-      await navigator.clipboard.writeText(flow.userCode);
+    if (await copyToClipboard(flow.userCode, "Copied the GitHub sign-in code to clipboard")) {
       setCopied(true);
       setMessage("");
-    } catch {
+    } else {
       setMessage("Select the code and copy it.");
     }
   };

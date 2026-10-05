@@ -12,6 +12,7 @@ import { toolIcons } from "../../components/app/tool-icons.js";
 import { setExperiments } from "../../shell/experiments-api.js";
 import { useCompanyContext } from "../../shell/company-context.js";
 import { withCompany } from "../../lib/api.js";
+import { copyToClipboard } from "../../lib/clipboard.js";
 import { getEnvironmentSettings, updateEnvironmentSettings, type EnvironmentSettings } from "./lib/environment-api.js";
 
 type TerminalChoice = "suplex" | "herdr";
@@ -28,7 +29,7 @@ function HerdrAvailability(): ReactElement {
   const check = snapshot?.checks.find(candidate => candidate.id === "herdr-readiness");
   const version = check?.details.serverVersion ?? check?.details.clientVersion;
   const copy = async (command: string): Promise<void> => {
-    try { await navigator.clipboard.writeText(command); setCopied(true); } catch { setCopied(false); }
+    setCopied(await copyToClipboard(command, "Copied the Herdr command to clipboard"));
   };
   const status = !check ? null : check.status === "healthy" ? <Badge variant="green">Available</Badge> : check.summary.endsWith("is not installed") ? <Badge variant="destructive">Not installed</Badge> : check.status === "warning" ? <Badge variant="amber">Needs attention</Badge> : <Badge variant="destructive">Unavailable</Badge>;
   return <section className="mb-10">

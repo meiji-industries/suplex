@@ -1,3 +1,4 @@
+import { copyToClipboard } from "../../../lib/clipboard.js";
 import { FitAddon } from "@xterm/addon-fit";
 import { Unicode11Addon } from "@xterm/addon-unicode11";
 import { WebglAddon } from "@xterm/addon-webgl";
@@ -275,7 +276,7 @@ export function PaneTerminal({ path, interactive, paneId, label, onEnded }: { pa
       setScrolledUp(!followTailRef.current);
     });
     terminal.attachCustomKeyEventHandler((event) => {
-      if (event.type === "keydown" && (event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "c" && terminal.getSelection()) { void navigator.clipboard.writeText(terminal.getSelection()).catch(() => undefined); terminal.clearSelection(); return false; }
+      if (event.type === "keydown" && (event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "c" && terminal.getSelection()) { void copyToClipboard(terminal.getSelection(), "Copied the terminal selection to clipboard"); terminal.clearSelection(); return false; }
       return true;
     });
     const observer = new ResizeObserver(() => { window.clearTimeout(resizeTimer); resizeTimer = window.setTimeout(() => {

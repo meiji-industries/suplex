@@ -28,7 +28,7 @@ async fn active_and_finished_sweeps_collect_generated_media() {
     database
         .connection()
         .execute(
-            "UPDATE suplex_task_controls SET status = 'cancelled' WHERE task_id = ?1",
+            "UPDATE suplex_task_controls SET status = 'cancelled', delivery_target = 'local_worktree' WHERE task_id = ?1",
             [&task_id],
         )
         .unwrap();
@@ -64,8 +64,8 @@ async fn active_and_finished_sweeps_collect_generated_media() {
         )
         .unwrap();
     drop(database);
-    let _ = tokio::time::timeout(
-        Duration::from_secs(5),
+    tokio::time::timeout(
+        Duration::from_secs(30),
         sweep_task(
             &database_path,
             &artifact_root,
@@ -74,7 +74,9 @@ async fn active_and_finished_sweeps_collect_generated_media() {
             &HashMap::new(),
         ),
     )
-    .await;
+    .await
+    .expect("active task sweep timed out")
+    .unwrap();
     let database = SuplexDatabase::open(&database_path, OpenMode::ReadWrite).unwrap();
     assert_eq!(
         database

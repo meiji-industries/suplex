@@ -1,8 +1,9 @@
 import { renameTask, runTaskAction } from "./lib/task-api.js";
 import { useState } from "react";
-import { Archive, ArchiveRestore, Copy, Ellipsis, Pencil, RefreshCw, Square } from "lucide-react";
+import { Archive, ArchiveRestore, Copy, Ellipsis, Link, Pencil, RefreshCw, Square } from "lucide-react";
 import type { Task } from "../../contracts/tasks.js";
 import { withCompany } from "../../lib/api.js";
+import { copyToClipboard } from "../../lib/clipboard.js";
 import { navigate } from "../../shell/navigation-state.js";
 import { duplicateTaskDraft, type NewTaskDraft } from "./lib/duplicate-task-prefill.js";
 import { ArchiveTaskDialog } from "./archive-task-dialog.js";
@@ -40,7 +41,7 @@ export function TaskOptions({ task, onChange, onError }: { task: Task; onChange:
     catch (error) { onError(error instanceof Error ? error.message : "The action failed"); }
     finally { setBusy(false); }
   };
-  return <><DropdownMenu><DropdownMenuTrigger render={<Button className="border-t-[var(--border)] border-r-[var(--border)] border-b-[var(--border)] border-l-[var(--border)] pr-[10px] pb-[10px] pl-[10px] w-auto h-auto pt-[10px]" size="icon-xs" variant="ghost" aria-label="Task options" />}><Ellipsis className="size-3.5" /></DropdownMenuTrigger><DropdownMenuContent align="end" className="w-max">
+  return <><Button type="button" size="icon" variant="outline" aria-label="Copy task URL" title="Copy task URL" onClick={() => void copyToClipboard(window.location.origin + withCompany(`/tasks/${task.id}`, task.companyId), "Copied the task URL to clipboard")}><Link className="size-3.5" /></Button><DropdownMenu><DropdownMenuTrigger render={<Button size="icon" variant="outline" aria-label="Task options" />}><Ellipsis className="size-3.5" /></DropdownMenuTrigger><DropdownMenuContent align="end" className="w-max">
     <DropdownMenuItem disabled={busy} onClick={() => void act("refresh")}><RefreshCw />Refresh</DropdownMenuItem>
     <DropdownMenuItem disabled={busy} onClick={() => { setTitle(task.title); setRenameOpen(true); }}><Pencil />Rename</DropdownMenuItem>
     <DropdownMenuItem disabled={busy} onClick={() => void duplicate()}><Copy />Duplicate</DropdownMenuItem>

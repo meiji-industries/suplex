@@ -1,4 +1,5 @@
 import { readJsonUnchecked } from "../../lib/api.js";
+import { copyToClipboard } from "../../lib/clipboard.js";
 import type { ApiExternalAgent } from "../../shell/view-shared.js";
 import { externalAgentSetupInstructions } from "./external-agent-setup-instructions.js";
 import { replaceExternalAgentProjects, revokeExternalAgent as revokeAgent, setExternalAgentAnswerGrant } from "./external-agent-api.js";
@@ -174,10 +175,9 @@ export function createExternalAgentActions({
   };
   const copyPairingCode = async (): Promise<void> => {
     if (!pairingCodeData?.code) return;
-    try {
-      await navigator.clipboard.writeText(pairingCodeData.code);
+    if (await copyToClipboard(pairingCodeData.code, "Copied the pairing code to clipboard")) {
       setPairingCodeCopied(true);
-    } catch {
+    } else {
       setError("Unable to copy pairing code");
     }
   };
@@ -187,10 +187,9 @@ export function createExternalAgentActions({
       externalAgentProfileName,
     );
     if (!instructions) return;
-    try {
-      await navigator.clipboard.writeText(instructions);
+    if (await copyToClipboard(instructions, "Copied the external agent setup instructions to clipboard")) {
       setPairingInstructionsCopied(true);
-    } catch {
+    } else {
       setPairingInstructionsCopied(false);
       setError("Unable to copy ExternalAgent setup instructions");
     }

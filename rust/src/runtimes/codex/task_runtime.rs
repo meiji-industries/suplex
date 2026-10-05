@@ -481,9 +481,16 @@ mod tests {
             if let Ok(status) = fs::read_to_string(&exit) {
                 assert_eq!(status.trim(), "0");
                 assert_eq!(
-                    result.state,
-                    crate::runtimes::native::PromptState::Running,
-                    "{result:?}"
+                    runtime::observe(
+                        &directory,
+                        "codex-advisor-1",
+                        "msg_advisor",
+                        crate::runtimes::native::DispatchState::Ambiguous,
+                        None,
+                    )
+                    .unwrap()
+                    .state,
+                    crate::runtimes::native::PromptState::Completed
                 );
                 fs::remove_dir_all(base).unwrap();
                 return;

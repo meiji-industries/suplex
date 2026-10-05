@@ -1,3 +1,4 @@
+import { copyToClipboard } from "../../lib/clipboard.js";
 import { ProfileFields } from "../profiles/profile-fields.js";
 import { SettingsSection, SettingRow } from "../settings/settings-layout.js";
 import { getAccount } from "../account/lib/account-api.js";
@@ -194,7 +195,7 @@ export function OnboardingView(): ReactElement {
             {check ? <CheckStatusIndicator check={check} healthyLabel="Done" /> : loading ? <Skeleton className="h-5 w-16 shrink-0" /> : <Badge variant="outline">Not available</Badge>}
           </div>
           {check && check.status !== "healthy" && check.remedy ? <div className="mt-2 flex gap-2">
-            {check.remedyKind === "command" ? <><code className="min-w-0 flex-1 break-all text-xs">{check.remedy}</code><Button size="xs" variant="outline" onClick={() => void navigator.clipboard.writeText(check.remedy!)}><Copy />Copy</Button></> : <Button size="xs" variant="outline" nativeButton={false} render={<a href={check.remedy ?? "#"} target="_blank" rel="noreferrer" />}>Open the instructions</Button>}
+            {check.remedyKind === "command" ? <><code className="min-w-0 flex-1 break-all text-xs">{check.remedy}</code><Button size="xs" variant="outline" onClick={() => void copyToClipboard(check.remedy!, "Copied the setup command to clipboard")}><Copy />Copy</Button></> : <Button size="xs" variant="outline" nativeButton={false} render={<a href={check.remedy ?? "#"} target="_blank" rel="noreferrer" />}>Open the instructions</Button>}
           </div> : null}
           {id === "gh-auth" && check?.details.method === "device" && check.status !== "healthy" && user?.role === "admin" ? <div className="mt-2"><GithubDeviceSignIn onConnected={async () => { await refresh(); await reload(); }} /></div> : null}
         </div>;

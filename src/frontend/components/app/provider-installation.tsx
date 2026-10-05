@@ -2,6 +2,7 @@ import { Check, Copy, ExternalLink } from "lucide-react";
 import { useState, type ReactElement } from "react";
 
 import type { HarnessKind } from "../../contracts/harness-kind.js";
+import { copyToClipboard } from "../../lib/clipboard.js";
 import { Button } from "../ui/button.js";
 
 export type ProviderInstallation = {
@@ -39,12 +40,7 @@ export function ProviderInstallationInstructions({ provider, checkLabel }: { pro
   const installation = PROVIDER_INSTALLATIONS[provider];
   const [copyStatus, setCopyStatus] = useState<"idle" | "copied" | "failed">("idle");
   const copy = async (): Promise<void> => {
-    try {
-      await navigator.clipboard.writeText(installation.command);
-      setCopyStatus("copied");
-    } catch {
-      setCopyStatus("failed");
-    }
+    setCopyStatus(await copyToClipboard(installation.command, "Copied the install command to clipboard") ? "copied" : "failed");
   };
   return <div className="space-y-2 text-xs text-muted-foreground">
     <p>Install on the machine that runs Suplex. Select {checkLabel} after installation.</p>
@@ -64,12 +60,7 @@ export function ProviderInstallCommand({ provider }: { provider: HarnessKind }):
   const installation = PROVIDER_INSTALLATIONS[provider];
   const [copyStatus, setCopyStatus] = useState<"idle" | "copied" | "failed">("idle");
   const copy = async (): Promise<void> => {
-    try {
-      await navigator.clipboard.writeText(installation.command);
-      setCopyStatus("copied");
-    } catch {
-      setCopyStatus("failed");
-    }
+    setCopyStatus(await copyToClipboard(installation.command, "Copied the install command to clipboard") ? "copied" : "failed");
   };
   const notes = [installation.os, installation.prerequisite].filter(Boolean).join(". ");
   return <div className="flex min-w-0 max-w-full items-center gap-1">

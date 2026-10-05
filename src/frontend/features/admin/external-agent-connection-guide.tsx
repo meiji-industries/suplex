@@ -3,6 +3,7 @@ import { useEffect, useState, type ReactElement } from "react";
 
 import { Button } from "../../components/ui/button.js";
 import { readJsonUnchecked } from "../../lib/api.js";
+import { copyToClipboard } from "../../lib/clipboard.js";
 import { SettingRow, SettingsSection } from "../settings/settings-layout.js";
 
 function CodeBlock({ children }: { children: string }): ReactElement {
@@ -15,7 +16,7 @@ function CodeBlock({ children }: { children: string }): ReactElement {
 
 function CopyButton({ text, label }: { text: string; label: string }): ReactElement {
   const [copied, setCopied] = useState(false);
-  return <Button variant="ghost" size="sm" aria-label={label} onClick={() => void navigator.clipboard.writeText(text).then(() => setCopied(true), () => setCopied(false))}>{copied ? <Check /> : <Copy />}{copied ? "Copied" : "Copy"}</Button>;
+  return <Button variant="ghost" size="sm" aria-label={label} onClick={() => void copyToClipboard(text, `Copied ${label.slice("Copy ".length)} to clipboard`).then(setCopied)}>{copied ? <Check /> : <Copy />}{copied ? "Copied" : "Copy"}</Button>;
 }
 
 function OpenLink({ href, children }: { href: string; children: string }): ReactElement {

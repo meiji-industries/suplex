@@ -6,6 +6,7 @@ import { listWorktreeApps, openWorktree } from "./lib/task-api.js";
 import { Button } from "../../components/ui/button.js";
 import { ButtonGroup } from "../../components/ui/button-group.js";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "../../components/ui/dropdown-menu.js";
+import { copyToClipboard } from "../../lib/clipboard.js";
 
 const lastAppKey = "suplex.worktreeApp";
 
@@ -46,12 +47,8 @@ export function TaskWorktreeMenu({ taskId, path, onError }: { taskId: string; pa
     const copiedPath = path;
     const generation = ++copyGeneration.current;
     setCopyState("");
-    try {
-      await navigator.clipboard.writeText(copiedPath);
-      if (generation === copyGeneration.current) setCopyState("copied");
-    } catch {
-      if (generation === copyGeneration.current) setCopyState("failed");
-    }
+    const copied = await copyToClipboard(copiedPath, "Copied the worktree path to clipboard");
+    if (generation === copyGeneration.current) setCopyState(copied ? "copied" : "failed");
   };
   const open = async (app: WorktreeApp) => {
     setLastApp(app);

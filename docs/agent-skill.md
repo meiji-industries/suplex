@@ -15,7 +15,15 @@ agent to prefer the MCP tools when the bridge is registered.
 
 ## Install
 
-Copy `skills/suplex/` into the skill directory for your agent host. The client
+The public `meiji-industries/suplex-skills` repository holds a copy of
+`skills/`. `.github/workflows/sync-skills.yml` updates it on each push to
+`main` that changes `skills/`. Install the skill from there:
+
+```bash
+npx skills add meiji-industries/suplex-skills --skill suplex --global
+```
+
+Or copy `skills/suplex/` into the skill directory for your agent host. The client
 needs Python 3.10 or later and no packages. Set these values in the client
 process environment:
 

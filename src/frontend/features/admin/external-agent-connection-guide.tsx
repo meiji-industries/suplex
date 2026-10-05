@@ -33,13 +33,17 @@ export function ExternalAgentConnectionGuide(): ReactElement {
     }).catch(() => undefined);
   }, []);
   const claudeCommands = mcpUrl ? `claude mcp add --transport http suplex ${mcpUrl}\nclaude mcp login suplex` : "";
-  const environment = `SUPLEX_BASE_URL=${baseUrl}\nSUPLEX_AGENT_CREDENTIAL=<returned credential>`;
+  const skillCommand = "npx skills add meiji-industries/suplex-skills --skill suplex --global";
+  const environment =`SUPLEX_BASE_URL=${baseUrl}\nSUPLEX_AGENT_CREDENTIAL=<returned credential>`;
   const stdioConfig = `[mcp_servers.suplex]\ncommand = "suplex"\nargs = ["mcp"]\nenv_vars = ["SUPLEX_BASE_URL", "SUPLEX_AGENT_CREDENTIAL"]`;
   return (
     <>
       <SettingsSection title="Connect an external client" description="Connect Claude Code to Suplex with OAuth. Suplex asks you to approve the company and projects.">
         <SettingRow label="Claude Code" description={mcpUrl ? <>Run these commands. You can also run <code>/mcp</code> in Claude Code and select <code>Authenticate</code>.<CodeBlock>{claudeCommands}</CodeBlock></> : "Suplex is reading the canonical MCP address."}>
           {mcpUrl ? <CopyButton text={claudeCommands} label="Copy the Claude Code commands" /> : null}
+        </SettingRow>
+        <SettingRow label="Suplex skill" description={<>Run this command on the client computer. The skill gives the agent the rules for Suplex tasks.<CodeBlock>{skillCommand}</CodeBlock></>}>
+          <CopyButton text={skillCommand} label="Copy the skill command" />
         </SettingRow>
         <SettingRow label="Remote MCP clients" description={<>Use {mcpUrl ? <code>{mcpUrl}</code> : "the MCP address"} in clients that support Streamable HTTP and OAuth. Remote web clients need reachable HTTPS. Suplex has not tested the ChatGPT or Claude web setup in this release.</>} />
       </SettingsSection>

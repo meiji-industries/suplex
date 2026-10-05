@@ -19,7 +19,7 @@
   #remote, #tailscale-section { display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; margin: 20px 0 0; padding: 0; border: 0; min-width: 0; contain: inline-size; }
   #remote[disabled] { display: none; }
   /* Match the app's InputGroup while keeping the native protocol and port controls. */
-  .input-group { display: flex; align-items: center; height: 36px; border: 1px solid oklch(1 0 0 / 15%); border-radius: 9999px; background: oklch(1 0 0 / 4.5%); box-shadow: 0 1px 2px rgb(0 0 0 / 0.12); transition: border-color 150ms, box-shadow 150ms; }
+  .input-group { position: relative; display: flex; align-items: center; height: 36px; border: 1px solid oklch(1 0 0 / 15%); border-radius: 9999px; background: oklch(1 0 0 / 4.5%); box-shadow: 0 1px 2px rgb(0 0 0 / 0.12); transition: border-color 150ms, box-shadow 150ms; }
   .input-group:has(:focus-visible) { border-color: oklch(0.556 0 0); box-shadow: 0 0 0 3px oklch(0.556 0 0 / 50%); }
   .input-group input, .input-group select { font: 14px/1.5 -apple-system, system-ui, sans-serif; height: 100%; min-width: 0; padding: 0 8px; border: 0; background: none; color: inherit; outline: none; }
   .input-group input::placeholder { color: oklch(0.708 0 0); }
@@ -27,21 +27,20 @@
   .input-group > span { color: #737373; }
   #host, #machine { flex: 1; }
   #port { width: 64px; }
-  /* Styled like shadcn's Select through Chromium's customizable <select>; keyboard and screen reader behavior stay native. */
-  #machine, #machine::picker(select) { appearance: base-select; }
-  #machine { display: flex; align-items: center; gap: 8px; min-width: 0; padding: 0 10px 0 8px; color: inherit; cursor: pointer; }
+  /* Styled like shadcn's Select. A trigger and a listbox built by hand, because WKWebView has no customizable <select>. */
+  #machine { gap: 8px; justify-content: flex-start; min-width: 0; height: 100%; min-height: 0; padding: 0 10px 0 8px; border: 0; border-radius: 0; background: none; color: inherit; font-size: 14px; text-align: left; outline: none; }
+  #machine:hover:not(:disabled) { background: none; }
   #machine[hidden] { display: none; }
-  #machine::picker-icon { color: #737373; }
-  #machine > button { display: flex; align-items: center; justify-content: flex-start; flex: 1; min-width: 0; min-height: 0; padding: 0; border: 0; background: none; color: inherit; font: inherit; text-align: left; }
-  #machine > button:hover { background: none; }
-  #machine selectedcontent { display: flex; align-items: center; gap: 8px; min-width: 0; overflow: hidden; white-space: nowrap; }
-  #machine selectedcontent .m-meta { display: none; }
-  #machine:has(option[value=""]:checked) selectedcontent { color: #737373; }
-  #machine option[value=""] { display: none; }
-  #machine::picker(select) { position-try-order: normal; margin-top: 4px; padding: 4px; max-height: 280px; border: 1px solid #303030; border-radius: 8px; background: #141414; color: #e5e5e5; box-shadow: 0 8px 24px rgb(0 0 0 / 0.45); }
-  #machine option { display: flex; align-items: center; gap: 8px; min-height: 30px; padding: 0 8px; border-radius: 5px; font-size: 13px; cursor: pointer; }
-  #machine option:hover, #machine option:focus-visible { background: #262626; outline: none; }
-  #machine option::checkmark { order: 1; content: "✓"; color: #a3a3a3; }
+  #machine .m-value { display: flex; flex: 1; align-items: center; gap: 8px; min-width: 0; overflow: hidden; white-space: nowrap; }
+  #machine .m-value:empty::before { content: "Select a machine"; color: #737373; }
+  #machine svg { flex: none; width: 16px; height: 16px; fill: none; stroke: #737373; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+  /* The list hangs below the whole input group. Nothing above it clips overflow: `contain: inline-size` does not. */
+  #machines { position: absolute; top: calc(100% + 4px); left: 0; right: 0; z-index: 1; padding: 4px; max-height: 280px; overflow-y: auto; border: 1px solid #303030; border-radius: 8px; background: #141414; color: #e5e5e5; box-shadow: 0 8px 24px rgb(0 0 0 / 0.45); }
+  #machines[hidden] { display: none; }
+  #machines [role="option"] { display: flex; align-items: center; gap: 8px; min-height: 30px; padding: 0 8px; border-radius: 5px; font-size: 13px; cursor: pointer; outline: none; }
+  #machines [role="option"]:focus { background: #262626; }
+  #machines [role="option"]::after { content: "✓"; color: #a3a3a3; visibility: hidden; }
+  #machines [aria-selected="true"]::after { visibility: visible; }
   .m-dot { flex: none; width: 6px; height: 6px; border-radius: 50%; background: #737373; }
   .m-dot[data-state="found"] { background: #22c55e; animation: pulse 1.6s ease-out infinite; }
   .m-dot[data-state="offline"] { background: none; box-shadow: inset 0 0 0 1px #525252; }
@@ -114,7 +113,8 @@
       <div class="row">
         <div class="input-group" role="group" data-tauri-drag-region="false">
           <select id="protocol" aria-label="Protocol"><option value="tailscale" disabled>Tailscale</option><option value="https" selected>https://</option><option value="http">http://</option></select>
-          <select id="machine" aria-label="Tailnet machine" hidden disabled><button><selectedcontent></selectedcontent></button><option value="" hidden>Select a machine</option></select>
+          <button id="machine" type="button" role="combobox" aria-label="Tailnet machine" aria-haspopup="listbox" aria-controls="machines" aria-expanded="false" hidden disabled><span class="m-value"></span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></button>
+          <div id="machines" role="listbox" aria-label="Tailnet machine" hidden></div>
           <input id="host" type="text" required placeholder="suplex.tailnet.ts.net" autocomplete="off" spellcheck="false">
           <span aria-hidden="true">:</span>
           <input id="port" type="text" inputmode="numeric" pattern="[0-9]{1,5}" value="4111" placeholder="port" aria-label="Port">
@@ -138,6 +138,7 @@
   const host = document.getElementById("host");
   const port = document.getElementById("port");
   const machine = document.getElementById("machine");
+  const machineList = document.getElementById("machines");
   // Tailscale is https:// to a machine's MagicDNS name, where `tailscale serve` publishes Suplex.
   const tailnet = () => protocol.value === "tailscale";
   const address = () => {
@@ -194,7 +195,6 @@
   modes.addEventListener("change", (event) => {
     sync();
     if (event.target.name === "mode" && !remote.disabled) (tailnet() ? machine : host).focus();
-    if (event.target === machine && machine.value) test.click();
   });
   remote.addEventListener("input", () => {
     // A pasted full URL fills all three fields.
@@ -222,17 +222,71 @@
     if (result.ok) next.focus();
   });
   // One row per machine: status dot, name, MagicDNS host, and what Suplex knows about it.
-  const machineOption = (each) => {
-    const option = new Option("", each.host);
+  const machineRow = (each) => {
+    const row = document.createElement("div");
+    row.setAttribute("role", "option");
+    row.tabIndex = -1;
+    row.dataset.value = each.host;
     for (const [name, text] of [["m-dot", ""], ["m-name", each.name], ["m-host", each.host], ["m-meta", each.online ? "" : "Offline"]]) {
       const part = document.createElement("span");
       part.className = name;
       part.textContent = text;
-      option.append(part);
+      row.append(part);
     }
-    option.querySelector(".m-dot").dataset.state = each.online ? "online" : "offline";
-    return option;
+    row.querySelector(".m-dot").dataset.state = each.online ? "online" : "offline";
+    return row;
   };
+  // Select a row and show its dot, name, and host in the trigger. A value with no row selects nothing, as in a <select>.
+  const pick = (value) => {
+    const row = [...machineList.children].find((each) => each.dataset.value === value);
+    machine.value = row ? value : "";
+    for (const each of machineList.children) each.setAttribute("aria-selected", String(each === row));
+    machine.querySelector(".m-value").replaceChildren(...(row ? [...row.querySelectorAll(".m-dot, .m-name, .m-host")].map((part) => part.cloneNode(true)) : []));
+  };
+  const open = () => {
+    machineList.hidden = false;
+    machine.setAttribute("aria-expanded", "true");
+    (machineList.querySelector('[aria-selected="true"]') ?? machineList.firstElementChild)?.focus();
+  };
+  const close = () => {
+    machineList.hidden = true;
+    machine.setAttribute("aria-expanded", "false");
+  };
+  // A new machine is tested at once.
+  const choose = (row) => {
+    close();
+    machine.focus();
+    if (row.dataset.value === machine.value) return;
+    pick(row.dataset.value);
+    status.textContent = "";
+    sync();
+    test.click();
+  };
+  machine.addEventListener("click", () => (machineList.hidden ? open() : close()));
+  machine.addEventListener("keydown", (event) => {
+    if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
+    event.preventDefault();
+    open();
+  });
+  machineList.addEventListener("click", (event) => {
+    const row = event.target.closest('[role="option"]');
+    if (row) choose(row);
+  });
+  machineList.addEventListener("pointermove", (event) => event.target.closest('[role="option"]')?.focus({ preventScroll: true }));
+  machineList.addEventListener("keydown", (event) => {
+    const rows = [...machineList.children];
+    const at = rows.indexOf(document.activeElement);
+    const to = { ArrowDown: Math.min(at + 1, rows.length - 1), ArrowUp: Math.max(at - 1, 0), Home: 0, End: rows.length - 1 }[event.key];
+    if (to !== undefined) rows[to]?.focus();
+    else if (event.key === "Enter" && at >= 0) choose(rows[at]);
+    else if (event.key === "Escape") { close(); machine.focus(); }
+    else if (event.key === "Tab") { close(); return; }
+    else return;
+    event.preventDefault();
+  });
+  document.addEventListener("pointerdown", (event) => {
+    if (!machine.contains(event.target) && !machineList.contains(event.target)) close();
+  });
   const scanButton = document.getElementById("scan");
   const indicator = document.getElementById("tailscale");
   const action = document.getElementById("tailscale-action");
@@ -269,15 +323,15 @@
       const machines = status.machines;
       const kept = chosen() === "instance" ? selected().dataset.url : null;
       const picked = machine.value;
-      machine.length = 1;
+      machineList.replaceChildren();
       for (const card of cards.querySelectorAll(".instance")) card.remove();
       show(status);
       protocol.options[0].disabled = !machines.length;
       if (!machines.length) {
         if (tailnet()) protocol.value = "https";
       } else {
-        for (const each of machines) machine.add(machineOption(each));
-        machine.value = picked;
+        for (const each of machines) machineList.append(machineRow(each));
+        pick(picked);
         if (!host.value.trim()) protocol.value = "tailscale";
         const online = machines.filter((each) => each.online);
         const answered = await Promise.all(online.map(async (each) => (await window.suplexDesktop.testConnection(`https://${each.host}:4111`)).ok));
@@ -285,11 +339,11 @@
         const template = document.getElementById("instance");
         // Machines that run Suplex go first, above the other online machines and then the offline ones.
         for (const [index, each] of found.entries()) {
-          const option = [...machine.options].find((candidate) => candidate.value === each.host);
-          if (option) {
-            option.querySelector(".m-dot").dataset.state = "found";
-            option.querySelector(".m-meta").textContent = "Suplex";
-            machine.insertBefore(option, machine.options[index + 1]);
+          const row = [...machineList.children].find((candidate) => candidate.dataset.value === each.host);
+          if (row) {
+            row.querySelector(".m-dot").dataset.state = "found";
+            row.querySelector(".m-meta").textContent = "Suplex";
+            machineList.insertBefore(row, machineList.children[index]);
           }
           const card = template.content.firstElementChild.cloneNode(true);
           const input = card.querySelector("input");
@@ -300,6 +354,8 @@
           cards.insertBefore(card, cards.querySelector("label:not(.instance)"));
         }
       }
+      // Keep a machine chosen during the probes, and show a found dot in the trigger.
+      pick(machine.value);
       sync();
     } finally {
       scanButton.disabled = false;

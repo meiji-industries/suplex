@@ -37,7 +37,15 @@ fn every_page_is_local_with_no_external_resources_or_chromium_only_css() {
         for external in ["src=\"http", "src=\"//", "href=\"//", "<script src"] {
             assert!(!html.contains(external), "{page} loads {external}");
         }
-        for chromium in ["-webkit-app-region", "titlebar-area", " onclick="] {
+        // WKWebView has no customizable <select>; it shows the native menu and runs each option's parts together.
+        for chromium in [
+            "-webkit-app-region",
+            "titlebar-area",
+            " onclick=",
+            "base-select",
+            "::picker(",
+            "<selectedcontent",
+        ] {
             assert!(!html.contains(chromium), "{page} uses {chromium}");
         }
         assert!(
@@ -106,6 +114,7 @@ fn choice_keeps_its_copy_saved_hosts_and_proven_remote_continue() {
         "window.suplexDesktop.selectHost(origin)",
         "window.suplexDesktop.removeHost(origin)",
         "<fieldset id=\"remote\" disabled>",
+        "<div id=\"machines\" role=\"listbox\" aria-label=\"Tailnet machine\" hidden></div>",
         "await window.suplexDesktop.testConnection(candidate)",
         "next.disabled = chosen() === null || (chosen() === \"remote\" && (url.value === \"\" || url.value !== proven));",
         "window.suplexDesktop.choose(\"local\")",

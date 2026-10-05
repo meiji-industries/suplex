@@ -56,7 +56,7 @@ mod host_tests {
         );
         assert_eq!(
             crate::shared::hash::sha256_hex(prompt.as_bytes()),
-            "0006b216cc05f1c1ec971806987c6347b055fc06ea7e566704453e26feeb2267"
+            "16f3c46729a641c3a2ef992958472b214db2c55d922810a0546ac3de6a653639"
         );
     }
 

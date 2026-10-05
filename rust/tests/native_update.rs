@@ -429,8 +429,12 @@ fn stopping_supervisor_cancels_installer_and_does_not_restart_host() {
     )
     .unwrap();
     let pid = registry["process"]["pid"].as_u64().unwrap() as i32;
+    // The host runs `ps` without a locale; a localized start time would not match.
     let start = Command::new("ps")
         .args(["-p", &pid.to_string(), "-o", "lstart="])
+        .env_remove("LANG")
+        .env_remove("LC_ALL")
+        .env_remove("LC_TIME")
         .output()
         .unwrap();
     let start = String::from_utf8(start.stdout).unwrap().trim().to_owned();

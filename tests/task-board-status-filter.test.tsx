@@ -11,9 +11,9 @@ import { TaskDataProvider } from "../src/frontend/features/tasks/task-data.js";
 
 import type { Task } from "../src/frontend/contracts/tasks.js";
 
-const api = vi.hoisted(() => ({ readJsonUnchecked: vi.fn(), withCompany: (path: string) => path }));
+const api = vi.hoisted(() => ({ company: { id: "company-1", status: "active", plan: "pro" }, user: { id: "user-1", role: "admin" }, readJsonUnchecked: vi.fn(), withCompany: (path: string) => path }));
 vi.mock("../src/frontend/lib/api.js", async importOriginal => ({ ...(await importOriginal<Record<string, unknown>>()), ...api }));
-vi.mock("../src/frontend/shell/company-context.js", () => ({ useCompanyContext: () => ({ user: { id: "user-1" }, currentCompany: { id: "company-1", status: "active" } }), useOptionalCompanyContext: () => ({ avatars: {} }) }));
+vi.mock("../src/frontend/shell/company-context.js", () => ({ useCompanyContext: () => ({ user: api.user, currentCompany: api.company }), useOptionalCompanyContext: () => ({ avatars: {} }) }));
 vi.mock("../src/frontend/shell/application-frame.js", () => ({ ApplicationFrame: ({ children }: { children: ReactNode }) => children }));
 vi.mock("../src/frontend/shell/global-new-task-dialog.js", () => ({ requestNewTask: vi.fn(), useHasProjects: () => true }));
 vi.mock("../src/frontend/features/analytics/lib/analytics.js", async importOriginal => ({ ...(await importOriginal<Record<string, unknown>>()), useTaskCosts: () => new Map() }));
@@ -124,6 +124,31 @@ test("the board keeps queued and backlog tasks in separate columns and filters",
   expect(columns()).toEqual(["Backlog"]);
   expect(container.textContent).not.toContain("Ship after review");
   await act(async () => root.unmount());
+});
+
+test("Free with 3 running tasks shows the plan limit card at the top of Active, and Pro does not", async () => {
+  const tasks = [task("task-1", "One", "active"), task("task-2", "Two", "active"), task("task-3", "Three", "waiting_human"), task("task-4", "Four", "queued"), task("task-5", "Five", "queued")];
+  api.readJsonUnchecked.mockImplementation(async (path: string) => path === "/api/billing" ? { trialAvailable: true } : path.includes("/projects") ? { projects: [] } : { tasks: path.endsWith("/task-costs") ? [] : tasks });
+  const render = async (plan: string): Promise<string | null | undefined> => {
+    api.company.plan = plan;
+    window.history.replaceState(null, "", "/board?company=company-1");
+    const container = document.createElement("div");
+    document.body.append(container);
+    const root = createRoot(container);
+    await act(async () => { root.render(<ServerStateProvider><TaskDataProvider><TasksView mode="board" /></TaskDataProvider></ServerStateProvider>); });
+    await vi.waitFor(() => expect(container.querySelector('section[aria-label="Active"]')).not.toBeNull());
+    await act(async () => {});
+    const first = container.querySelector('section[aria-label="Active"] ul')?.firstElementChild;
+    const text = first?.querySelector("[data-plan-limit-card]") ? first.textContent : null;
+    const href = first?.querySelector("a")?.getAttribute("href");
+    await act(async () => root.unmount());
+    container.remove();
+    return text && `${text} -> ${href}`;
+  };
+  try {
+    expect(await render("free")).toBe("2 tasks are ready. 3 slots are full.Free runs 3 tasks at a time. Pro runs the full queue at the same time.Start all 2 with a free trialPro is free for 30 days. No credit card is necessary. -> /billing?company=company-1");
+    expect(await render("pro")).toBeNull();
+  } finally { api.company.plan = "pro"; }
 });
 
 test("board cards render the project avatar and preserve the repository fallback", async () => {

@@ -36,6 +36,18 @@ run = "pnpm run dev:watch"
 description = "Alias for the native development stack"
 run = "mise run dev"
 
+[tasks."server:dev"]
+description = "Alias for the native development stack"
+run = "mise run dev"
+
+[tasks."server:prod"]
+description = "Build the release binary and run it in the foreground on port 4111"
+run = '''
+set -e
+pnpm run build
+SUPLEX_PORT=4111 exec "${CARGO_TARGET_DIR:-rust/target}/release/suplex" start --foreground
+'''
+
 [tasks."build:rust"]
 description = "Build the native binary with frontend assets and migrations"
 run = "pnpm run build"

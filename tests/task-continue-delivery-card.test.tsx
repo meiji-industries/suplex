@@ -4,8 +4,9 @@ import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import type { Task } from "../src/frontend/contracts/tasks.js";
 
-const state = vi.hoisted(() => ({ checks: { available: true, pullRequestState: "draft", runs: [] } as { available: boolean; pullRequestState: "draft" | "ready" | "merged"; runs: [] }, readJsonUnchecked: vi.fn() }));
-vi.mock("../src/frontend/features/tasks/lib/task-checks.js", () => ({ useTaskChecks: () => ({ checks: state.checks }) }));
+type Checks = { available: boolean; pullRequestState: "draft" | "ready" | "merged" | "closed"; runs: Array<{ name: string; status: "pending" | "failing" | "successful"; url: null }> };
+const state = vi.hoisted(() => ({ checks: { available: true, pullRequestState: "draft", runs: [] } as Checks, readJsonUnchecked: vi.fn() }));
+vi.mock("../src/frontend/features/tasks/lib/task-checks.js", async (importOriginal) => ({ ...await importOriginal<object>(), useTaskChecks: () => ({ checks: state.checks }) }));
 vi.mock("../src/frontend/lib/api.js", () => ({ readJsonUnchecked: state.readJsonUnchecked }));
 import { TaskPullRequestCard } from "../src/frontend/features/tasks/pull-request-card.js";
 
@@ -70,4 +71,44 @@ test("missing pull request and checks still allow continuation, and a failed req
 
   await act(async () => { root.render(<TaskPullRequestCard task={{ ...task, deliveryTarget: "local_worktree" }} onChange={onChange} />); });
   expect(container.textContent).not.toContain("Continue to merge");
+});
+
+test("Fix CI shows only for a delivered open pull request with a failed check and sends a repair note", async () => {
+  const container = document.createElement("div"); document.body.append(container);
+  const root = createRoot(container); mounts.push(root);
+  const onChange = vi.fn();
+  const failed = [{ name: "test", status: "failing", url: null }, { name: "lint", status: "successful", url: null }] satisfies Checks["runs"];
+  const fixCi = () => Array.from(container.querySelectorAll("button")).find(button => button.textContent === "Fix CI");
+  const primaryButtons = () => Array.from(container.querySelectorAll("button")).filter(button => button.dataset.variant === "default");
+  const render = async (checks: Checks, rendered: Task = task) => { state.checks = checks; await act(async () => { root.render(<TaskPullRequestCard task={rendered} onChange={onChange} />); }); };
+
+  await render({ available: true, pullRequestState: "ready", runs: failed });
+  expect(fixCi()).toBeDefined();
+  expect(container.textContent).not.toContain("Open");
+  expect(primaryButtons().map(button => button.textContent)).toEqual(["Fix CI"]);
+  state.readJsonUnchecked.mockResolvedValueOnce({ ...task, status: "active" });
+  await act(async () => { fixCi()?.click(); });
+  expect(state.readJsonUnchecked).toHaveBeenCalledWith("/api/tasks/task-1/note", { method: "POST", body: JSON.stringify({ note: "Fix the failing pull request checks." }) });
+  expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ status: "active" }));
+
+  state.readJsonUnchecked.mockRejectedValueOnce(new Error("Note failed"));
+  await act(async () => { fixCi()?.click(); });
+  expect(container.querySelector('[role="alert"]')?.textContent).toBe("Note failed");
+
+  await render({ available: true, pullRequestState: "draft", runs: failed });
+  expect(fixCi()).toBeDefined();
+  expect(container.textContent).toContain("Draft");
+  expect(primaryButtons().map(button => button.textContent)).toEqual(["Fix CI"]);
+
+  await render({ available: true, pullRequestState: "ready", runs: [{ name: "test", status: "successful", url: null }] });
+  expect(fixCi()).toBeUndefined();
+  await render({ available: true, pullRequestState: "merged", runs: failed });
+  expect(fixCi()).toBeUndefined();
+  await render({ available: true, pullRequestState: "closed", runs: failed });
+  expect(fixCi()).toBeUndefined();
+  expect(container.textContent).toContain("Closed");
+  await render({ available: true, pullRequestState: "ready", runs: failed }, { ...task, archivedAt: "2026-09-09T00:00:00.000Z" });
+  expect(fixCi()).toBeUndefined();
+  await render({ available: true, pullRequestState: "ready", runs: failed }, { ...task, status: "active" });
+  expect(fixCi()).toBeUndefined();
 });

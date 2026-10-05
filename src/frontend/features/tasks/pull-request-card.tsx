@@ -1,4 +1,4 @@
-import { continueTaskDelivery } from "./lib/task-api.js";
+import { addTaskNote, continueTaskDelivery } from "./lib/task-api.js";
 import { useEffect, useState, type ReactElement } from "react";
 import { CheckCircle2, CircleMinus, ExternalLink, GitMerge, GitPullRequest, LoaderCircle, XCircle } from "lucide-react";
 import type { Task } from "../../contracts/tasks.js";
@@ -42,23 +42,26 @@ export function TaskPullRequestCard({ task, onChange }: { task: Task; onChange: 
   const actionable = task.status === "delivered" && !task.archivedAt && !merged;
   const canPublish = actionable && task.deliveryTarget === "pull_request_draft" && observed !== "ready" && supportsDeliveryTarget(task.configuration.integration?.repository, "pull_request_ready");
   const canMerge = actionable && (task.deliveryTarget === "pull_request_draft" || task.deliveryTarget === "pull_request_ready") && supportsDeliveryTarget(task.configuration.integration?.repository, "merged");
-  const continueDelivery = async (deliveryTarget: "pull_request_ready" | "merged") => {
+  const canFixCi = actionable && observed !== "closed" && runs.some((run) => checkRunStatus(run) === "failed");
+  const perform = async (action: () => Promise<Task>) => {
     if (pending) return;
     setPending(true); setError("");
-    try { onChange(await continueTaskDelivery(task.id, deliveryTarget)); }
-    catch (cause) { setError(cause instanceof Error ? cause.message : "Suplex could not continue delivery."); }
+    try { onChange(await action()); }
+    catch (cause) { setError(cause instanceof Error ? cause.message : "Suplex could not update the task."); }
     finally { setPending(false); }
   };
-  const showActions = continuing || canPublish || canMerge;
+  const continueDelivery = (deliveryTarget: "pull_request_ready" | "merged") => perform(() => continueTaskDelivery(task.id, deliveryTarget));
+  const showActions = continuing || canPublish || canMerge || canFixCi;
   return <div data-active-pull-request className="rounded-md border">
     <div className="flex min-w-0 items-center gap-3 p-3">
       {pullRequest ? <a href={pullRequest.url} target="_blank" rel="noreferrer" className="flex min-w-0 flex-1 items-center gap-3 hover:underline">
         {merged ? <GitMerge className="size-5 shrink-0 text-violet-500" /> : <GitPullRequest className="size-5 shrink-0 text-emerald-500" />}
         <span className="min-w-0 flex-1"><span className="block truncate text-sm font-medium">{task.title}</span><span className="text-xs text-muted-foreground">{task.configuration.repository} #{pullRequest.number}</span></span>
       </a> : <><GitPullRequest className="size-5 shrink-0" /><span className="min-w-0 flex-1 truncate text-sm font-medium">{task.title}</span></>}
-      {pullRequest ? <Badge variant="secondary">{state}</Badge> : null}
-      {canPublish ? <Button size="sm" disabled={pending} onClick={() => void continueDelivery("pull_request_ready")}>Publish for review</Button> : null}
-      {canMerge ? <Button size="sm" variant={canPublish ? "outline" : "default"} disabled={pending} onClick={() => void continueDelivery("merged")}>Continue to merge</Button> : null}
+      {pullRequest && state !== "Open" ? <Badge variant="secondary">{state}</Badge> : null}
+      {canFixCi ? <Button size="sm" disabled={pending} onClick={() => void perform(() => addTaskNote(task.id, "Fix the failing pull request checks."))}>Fix CI</Button> : null}
+      {canPublish ? <Button size="sm" variant={canFixCi ? "outline" : "default"} disabled={pending} onClick={() => void continueDelivery("pull_request_ready")}>Publish for review</Button> : null}
+      {canMerge ? <Button size="sm" variant={canPublish || canFixCi ? "outline" : "default"} disabled={pending} onClick={() => void continueDelivery("merged")}>Continue to merge</Button> : null}
       {pullRequest ? <a href={pullRequest.url} target="_blank" rel="noreferrer" aria-label="Open pull request on GitHub" className="shrink-0 text-muted-foreground"><ExternalLink className="size-3.5" /></a> : null}
     </div>
     {showActions && (continuing || error) ? <div className="flex flex-wrap items-center gap-2 border-t px-3 py-2">

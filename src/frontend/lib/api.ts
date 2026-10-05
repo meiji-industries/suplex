@@ -1,3 +1,4 @@
+import { toast } from "sonner";
 import type { AuthUserResponse, CompanyResponse } from "../contracts/common.js";
 import { clientTabId, reportApiActivity, reportAuthenticatedResume } from "../shell/client-lifecycle.js";
 import { reportApiFailure } from "./analytics-capture.js";
@@ -21,6 +22,25 @@ export class ApiError extends Error {
     if (current !== undefined) this.current = current;
     if (code !== undefined) this.code = code;
   }
+}
+
+const OFFLINE_TOAST_ID = "suplex-offline";
+let offline = false;
+
+// The browser rejects fetch with a TypeError ("Failed to fetch") when no response arrives.
+function unreachable(): Error {
+  offline = true;
+  const message = navigator.onLine
+    ? "Suplex cannot reach the host. Check that the host is in operation, then retry."
+    : "Your computer is offline. Check the network connection, then retry.";
+  toast.error("Offline", { id: OFFLINE_TOAST_ID, description: message, duration: Infinity });
+  return new Error(message);
+}
+
+function reachable(): void {
+  if (!offline) return;
+  offline = false;
+  toast.success("Online again", { id: OFFLINE_TOAST_ID, description: undefined, duration: 3000 });
 }
 
 function cookieValue(name: string): string | undefined {
@@ -56,7 +76,8 @@ export async function readJson(url: string, init?: RequestInit): Promise<unknown
       ...(clientId ? { "X-Suplex-Tab-Id": clientId } : {}),
       ...(init?.headers ?? {}),
     },
-  });
+  }).catch((error: unknown) => { throw error instanceof TypeError ? unreachable() : error; });
+  reachable();
   const text = await response.text();
   let body: unknown = {};
   try {

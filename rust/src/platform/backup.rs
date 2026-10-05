@@ -193,9 +193,7 @@ fn remove_authentication_state(snapshot: &Path) -> BackupResult<()> {
     let mut connection = Connection::open(snapshot)?;
     let transaction = connection.transaction()?;
     for table in [
-        "suplex_challenges",
         "suplex_sessions",
-        "suplex_credentials",
         "suplex_invitations",
         "suplex_external_agent_credentials",
         "suplex_external_agent_pairing_codes",
@@ -391,7 +389,7 @@ fn check_database(root: &Path, manifest: &Value, errors: &mut Vec<String>) -> Ba
     Ok(())
 }
 
-/// Copy the live users, passkeys, and sessions into the staged database in
+/// Copy the live users and sessions into the staged database in
 /// one transaction, so the administrator who restores stays signed in.
 fn keep_live_accounts(staged: &Connection, live_path: &Path) -> BackupResult<()> {
     staged.pragma_update(None, "foreign_keys", "ON")?;
@@ -412,8 +410,8 @@ fn keep_live_accounts(staged: &Connection, live_path: &Path) -> BackupResult<()>
             ),
             [],
         )?;
-        // A backup from another host can hold the same username under another id; passkeys follow the username.
-        for table in ["suplex_credentials", "suplex_sessions"] {
+        // A backup from another host can hold the same username under another id; sessions follow the username.
+        for table in ["suplex_sessions"] {
             let names = columns(table)?;
             let values = names
                 .iter()
@@ -543,7 +541,7 @@ impl BackupService {
                 },
                 "entries": entries,
                 "database": {"path": "app/suplex.sqlite", "integrity": "ok"},
-                "secretsExcluded": ["credential registrations", "passkeys", "sessions", "challenges", "invitation tokens", "external agent credentials", "OAuth tokens and authorization codes", "OAuth pending authorizations", "OAuth cursor keys", "provider API keys", "external agent pairing codes", "cookies", "private keys", "provider tokens", "Engine API keys", "generated environment files"],
+                "secretsExcluded": ["sessions", "challenges", "invitation tokens", "external agent credentials", "OAuth tokens and authorization codes", "OAuth pending authorizations", "OAuth cursor keys", "provider API keys", "external agent pairing codes", "cookies", "private keys", "provider tokens", "Engine API keys", "generated environment files"],
                 "requiredConfiguration": ["accessMode", "reachableAddress", "databasePath", "artifactRoot", "installationId"],
             });
             crate::shared::fs::write_private(
@@ -651,7 +649,7 @@ impl BackupService {
     }
 
     /// Replaces the live database and adds the backup's artifacts. Current
-    /// users, passkeys and sessions stay, because the backup excludes them and
+    /// users and sessions stay, because the backup excludes them and
     /// the administrator who restores must stay signed in.
     pub fn restore_in_place(&self, archive_path: &Path) -> BackupResult<()> {
         let staging = staging("suplex-backup-restore-")?;

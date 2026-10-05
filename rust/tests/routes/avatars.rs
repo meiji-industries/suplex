@@ -66,7 +66,7 @@ pub(crate) mod tests {
         let (state, filename) = auth::tests::state();
         let now = Utc::now();
         let time = now.to_rfc3339();
-        let admin = auth::tests::operator_passkey(&state, now);
+        let admin = auth::tests::operator_account(&state, now);
         let root = std::env::temp_dir().join(format!("suplex-avatars-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(root.join("repo/public")).unwrap();
         std::fs::write(root.join("repo/public/favicon.ico"), b"icon").unwrap();
@@ -79,7 +79,7 @@ pub(crate) mod tests {
             connection.execute("INSERT OR IGNORE INTO suplex_memberships (user_id, company_id, created_at) VALUES ('member', 'other_member_company', ?1)", [&time]).unwrap();
             crate::http::routes::auth::tests::verified_session(database, "member", now).unwrap()
         });
-        auth::tests::require_passkeys(&state);
+        auth::tests::require_remote_login(&state);
         let app = crate::http::router(state.clone());
         let admin_cookie = format!("sid_v1={admin}");
         let member_cookie = format!("sid_v1={member_token}");

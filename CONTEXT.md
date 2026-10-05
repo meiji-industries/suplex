@@ -159,14 +159,14 @@ admitted prompt.
 _Avoid_: Agent completion claim, automatic server-death inference.
 
 **Suplex user**
-A passkey-authenticated person with explicit company membership. An instance
+A person with explicit company membership. An instance
 administrator also controls host setup and recovery.
 _Avoid_: Anonymous operator, provider identity.
 
 **Suplex account**
 The hosted identity at `suplex.sh` (Google, GitHub, or email) linked to one
 installation. Every person on that host is covered by it. It is the PostHog
-person, not an access credential: passkeys still sign each person in.
+person, not an access credential.
 _Avoid_: User account, login, profile.
 
 **External agent**

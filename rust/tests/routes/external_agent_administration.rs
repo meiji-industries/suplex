@@ -35,7 +35,7 @@ pub(crate) mod tests {
         let (mut state, path) = state.unwrap_or_else(auth::tests::state);
         let now = chrono::Utc::now();
         let stamp = rfc3339_millis(now);
-        let admin = auth::tests::operator_passkey(&state, now);
+        let admin = auth::tests::operator_account(&state, now);
         let member = state.with_database(|database| {
             let connection = database.connection();
             connection.execute("INSERT INTO suplex_users (id, display_name, username, role, status, created_at, updated_at, identity_version) VALUES ('member_user', 'Member', 'user_v1_member_user', 'member', 'active', ?1, ?1, 1)", [&stamp]).unwrap();
@@ -255,7 +255,7 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn only_live_administrators_manage_agents_and_validation_precedes_authority() {
         let server = server(None).await;
-        auth::tests::require_passkeys(&server.state);
+        auth::tests::require_remote_login(&server.state);
         let body =
             json!({"name": "Anon", "companyId": "company_api", "projectIds": ["project_api"]});
         assert_eq!(

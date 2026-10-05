@@ -16,8 +16,7 @@ lists file sizes and SHA-256 hashes; verification also checks SQLite integrity
 and the size and hash of artifacts named by the database. Archive paths are
 checked before extraction.
 
-Authentication state is removed from the snapshot: passkey credentials,
-sessions, invitations, challenges, external-agent credentials and pairing
+Authentication state is removed from the snapshot: sessions, invitations, external-agent credentials and pairing
 codes, and OAuth tokens and authorization codes. OAuth grant cursor keys are
 rotated. Generated environment files, provider tokens, private keys, and
 provider login directories are not copied into the archive. User records
@@ -36,7 +35,7 @@ Creating a backup verifies it before listing it for download. Restoring an
 uploaded archive verifies it, migrates the staged database to the running
 build's schema, then replaces the live database and copies artifacts into the
 host's artifact directory. The browser reloads after success. The current
-host's users, passkeys, and sessions are copied into the staged database so
+host's users and sessions are copied into the staged database so
 the restoring administrator can remain signed in. The archived configuration
 record is not applied to the running installation. Artifact files already on
 the host that the archive does not name are not deleted by this copy.

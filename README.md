@@ -143,15 +143,13 @@ pnpm run suplex setup          # Tailscale access; add --local for a 127.0.0.1-o
 pnpm run suplex start
 ```
 
-Setup writes protected local configuration. In Tailscale mode it prints a
-one-time passkey enrollment URL; the service supports Tailscale Serve HTTPS or
+Setup writes protected local configuration. In Tailscale mode the service supports Tailscale Serve HTTPS or
 a direct Tailscale HTTP bind and rejects public and LAN bindings. In local mode
 (`SUPLEX_ACCESS_MODE=local`) the service binds only `127.0.0.1` and every
 request from the loopback host is the built-in Operator administrator. Local
-administration and passkey recovery use `pnpm run suplex recover --confirm-recovery`.
+administration and recovery use `pnpm run suplex recover --confirm-recovery`.
 
-When switching from the retired TypeScript server, register passkeys again and
-sign in to GitHub again. Existing task data and the SQL migration history are
+When switching from the retired TypeScript server, sign in to GitHub again. Existing task data and the SQL migration history are
 preserved; credential formats are not shared between the two implementations.
 
 `pnpm run suplex install --manifest` lists the install stages the desktop app
@@ -185,7 +183,7 @@ The tailnet is the login boundary. A request from the loopback host, a request
 that Tailscale Serve stamped with a `Tailscale-User-Login` identity, or, in
 direct Tailscale mode, a request addressed to the Tailscale hostname receives
 the built-in Operator administrator session. Funnel traffic and tagged devices
-carry no identity header and see the passkey sign-in instead.
+carry no identity header and see the account login instead.
 
 ### Desktop app
 
@@ -264,8 +262,7 @@ pnpm run suplex restore /path/to/suplex-backup.tar.gz /path/to/empty-restore-dir
 ```
 
 Backups contain Suplex's database, artifacts, and non-secret configuration.
-They exclude provider credentials, generated environment files, and passkey
-credentials. Restore requires an empty destination and fresh authentication.
+They exclude provider credentials, and generated environment files. Restore requires an empty destination and fresh authentication.
 OpenCode's native storage and Git repositories are separate host data. A Suplex
 backup alone cannot restore missing native sessions or repository contents.
 

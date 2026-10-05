@@ -133,7 +133,7 @@ async fn send(
 mod tests {
     use super::*;
     use crate::http::routes::{
-        auth::tests::{operator_passkey, state},
+        auth::tests::{operator_account, state},
         avatars::tests::{call, json_body},
     };
     use serde_json::json;
@@ -168,7 +168,7 @@ mod tests {
         let origin = format!("http://{}", listener.local_addr().unwrap());
         let server = tokio::spawn(axum::serve(listener, hosted).into_future());
         let (state, _) = state();
-        let admin = operator_passkey(&state, Utc::now());
+        let admin = operator_account(&state, Utc::now());
         state.with_database(|db| db.connection().execute("INSERT INTO suplex_companies (id,name,status,created_at) VALUES ('company_invite','Invites','active','2026-10-03T00:00:00.000Z')", []).unwrap());
         let state = state.with_accounts(accounts::AccountClient::new(
             origin.parse().unwrap(),

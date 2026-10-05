@@ -34,7 +34,6 @@ tokio-util = { version = "0.7", features = ["io"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 url = "2"
 uuid = { version = "1", features = ["v4", "serde"] }
-webauthn-rs = { version = "=0.5.4", features = ["danger-allow-state-serialisation", "danger-credential-internals"] }
 octocrab = { version = "0.54.2", default-features = false, features = ["default-client", "follow-redirect", "jwt-rust-crypto", "rustls", "rustls-ring", "timeout", "tracing"] }
 keyring = { version = "4.2.0", default-features = false, features = ["v1", "apple-native-keyring-store"] }
 serde-saphyr = { version = "1.3.0", default-features = false, features = ["deserialize"] }
@@ -48,7 +47,6 @@ security-framework-sys = "2.17"
 
 [dev-dependencies]
 elkrs = "0.1.1"
-webauthn-authenticator-rs = { version = "=0.5.4", features = ["softtoken"] }
 
 [profile.dev]
 debug = "line-tables-only"

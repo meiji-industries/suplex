@@ -55,7 +55,7 @@ export function BackupSettingsView(): ReactElement {
   const createButton = <Button size="sm" onClick={() => void create()} disabled={creating}>{creating ? "Creating…" : "Create backup"}</Button>;
 
   return <SettingsLayout title="Backups" companyId={companyId} backHref={withCompany("/", companyId)} activeHref={withCompany("/admin/backups", companyId)}>
-    <SettingsContent title="Backups" description="Each backup contains the database, artifacts and non-secret configuration. Credentials and passkeys are not in the backup.">
+    <SettingsContent title="Backups" description="Each backup contains the database, artifacts and non-secret configuration. Credentials are not in the backup.">
       <SettingsSection>
         {backups?.length === 0 ? <SettingRow label="No backups yet" description="Create one to download a copy of this Suplex host's data.">{createButton}</SettingRow> : null}
         {backups?.length ? <>
@@ -75,7 +75,7 @@ export function BackupSettingsView(): ReactElement {
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>Restore {restoreFile?.name}?</AlertDialogTitle>
-            <AlertDialogDescription>Suplex replaces all tasks, projects and settings on this host with the data in this backup. Suplex keeps your users and passkeys. You cannot undo this.</AlertDialogDescription>
+            <AlertDialogDescription>Suplex replaces all tasks, projects and settings on this host with the data in this backup. Suplex keeps your users. You cannot undo this.</AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel disabled={restoring}>Cancel</AlertDialogCancel>

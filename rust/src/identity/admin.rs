@@ -35,18 +35,6 @@ pub struct InvitationSummary {
     pub created_at: String,
 }
 
-#[derive(Clone, Debug, Serialize, ts_rs::TS)]
-#[serde(rename_all = "camelCase")]
-pub struct CredentialSummary {
-    pub id: String,
-    pub user_id: String,
-    pub credential_id: String,
-    pub label: String,
-    pub rp_id: Option<String>,
-    pub created_at: String,
-    pub revoked_at: Option<String>,
-}
-
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AuditEvent {
@@ -177,98 +165,6 @@ pub fn list_invitations(
     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
 }
 
-pub fn list_credentials(
-    database: &SuplexDatabase,
-    actor_user_id: &str,
-) -> DatabaseResult<Vec<CredentialSummary>> {
-    companies::require_admin(database, actor_user_id)?;
-    let mut statement = database.connection().prepare("SELECT id, user_id, credential_id, label, rp_id, created_at, revoked_at FROM suplex_credentials ORDER BY created_at ASC, id ASC")?;
-    Ok(statement
-        .query_map([], |row| {
-            Ok(CredentialSummary {
-                id: row.get(0)?,
-                user_id: row.get(1)?,
-                credential_id: row.get(2)?,
-                label: row.get(3)?,
-                rp_id: row.get(4)?,
-                created_at: row.get(5)?,
-                revoked_at: row.get(6)?,
-            })
-        })?
-        .collect::<rusqlite::Result<Vec<_>>>()?)
-}
-
-pub fn revoke_credential(
-    database: &mut SuplexDatabase,
-    actor_user_id: &str,
-    credential_id: &str,
-    now: DateTime<Utc>,
-) -> DatabaseResult<()> {
-    database.transaction(false, |database| {
-        companies::require_admin(database, actor_user_id)?;
-        let credential: Option<(String, Option<String>)> = database
-            .connection()
-            .query_row(
-                "SELECT user_id, revoked_at FROM suplex_credentials WHERE id = ?1",
-                [credential_id],
-                |row| Ok((row.get(0)?, row.get(1)?)),
-            )
-            .optional()?;
-        let Some((user_id, None)) = credential else {
-            return Err(IdentityError::not_found().into());
-        };
-        if user_id == actor_user_id {
-            return Err(IdentityError::not_found().into());
-        }
-        database.connection().execute(
-            "UPDATE suplex_credentials SET revoked_at = ?2 WHERE id = ?1",
-            params![credential_id, rfc3339_millis(now)],
-        )?;
-        audit(
-            database,
-            Some(actor_user_id),
-            "credential_revoked",
-            Some(&user_id),
-            "{}",
-            now,
-        )
-    })
-}
-
-pub fn rename_own_credential(
-    database: &mut SuplexDatabase,
-    user_id: &str,
-    credential_id: &str,
-    raw_label: &str,
-) -> DatabaseResult<()> {
-    let label = auth::js_trim(raw_label);
-    if label.is_empty() || label.encode_utf16().count() > 120 {
-        return Err(
-            IdentityError::auth("Passkey name is invalid", 400, "passkey_label_invalid").into(),
-        );
-    }
-    let updated =
-        super::passkey_repository::rename_own_credential(database, user_id, credential_id, label)?;
-    if updated != 1 {
-        return Err(IdentityError::not_found().into());
-    }
-    Ok(())
-}
-
-pub fn revoke_own_credential(
-    database: &mut SuplexDatabase,
-    user_id: &str,
-    credential_id: &str,
-    now: DateTime<Utc>,
-) -> DatabaseResult<()> {
-    let updated =
-        super::passkey_repository::revoke_own_credential(database, user_id, credential_id, now)?;
-    if updated != 1 {
-        return Err(IdentityError::not_found().into());
-    }
-    Ok(())
-}
-
 pub fn revoke_user(
     database: &mut SuplexDatabase,
     actor_user_id: &str,
@@ -283,7 +179,6 @@ pub fn revoke_user(
         }
         let now_iso = rfc3339_millis(now);
         database.connection().execute("UPDATE suplex_users SET status = 'revoked', updated_at = ?2 WHERE id = ?1", params![target_user_id, now_iso])?;
-        database.connection().execute("UPDATE suplex_credentials SET revoked_at = ?2 WHERE user_id = ?1 AND revoked_at IS NULL", params![target_user_id, now_iso])?;
         database.connection().execute("UPDATE suplex_sessions SET revoked_at = ?2 WHERE user_id = ?1 AND revoked_at IS NULL", params![target_user_id, now_iso])?;
         audit(database, Some(actor_user_id), "user_revoked", Some(target_user_id), "{}", now)
     })
@@ -401,27 +296,6 @@ mod tests {
                 .status,
             "expired"
         );
-        let credential_id = random_hex_id("credential").unwrap();
-        database.connection().execute(
-            "INSERT INTO suplex_credentials (id, user_id, credential_id, public_key, counter, transports, created_at) VALUES (?1, ?2, 'member-passkey', X'00', 0, '[]', ?3)",
-            params![credential_id, issued.user.id, rfc3339_millis(now)],
-        ).unwrap();
-        assert_eq!(
-            list_credentials(&database, &admin.user.id).unwrap().len(),
-            1
-        );
-        revoke_credential(&mut database, &admin.user.id, &credential_id, now).unwrap();
-        assert!(
-            list_credentials(&database, &admin.user.id).unwrap()[0]
-                .revoked_at
-                .is_some()
-        );
-        let duplicate =
-            revoke_credential(&mut database, &admin.user.id, &credential_id, now).unwrap_err();
-        assert_eq!(
-            duplicate.downcast_ref::<IdentityError>().unwrap().status(),
-            404
-        );
         revoke_user(&mut database, &admin.user.id, &issued.user.id, now).unwrap();
         let users = list_users(&database, &admin.user.id).unwrap();
         assert_eq!(
@@ -434,7 +308,7 @@ mod tests {
         );
         assert_eq!(
             list_audit_events(&database, &admin.user.id).unwrap().len(),
-            4
+            3
         );
         let mut audit_statement = database
             .connection()
@@ -450,7 +324,6 @@ mod tests {
             [
                 "user_invitation_created",
                 "user_invited",
-                "credential_revoked",
                 "user_revoked"
             ]
         );

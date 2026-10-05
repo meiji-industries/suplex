@@ -31,12 +31,6 @@ pub(crate) fn safe_metadata(raw: &str) -> Map<String, Value> {
     }
 }
 
-pub(crate) fn metadata_with_string(raw: &str, name: &str, value: &str) -> String {
-    let mut fields = safe_metadata(raw);
-    fields.insert(name.to_owned(), Value::String(value.to_owned()));
-    Value::Object(fields).to_string()
-}
-
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, ts_rs::TS)]
 #[serde(rename_all = "camelCase")]
 pub struct AuthUser {
@@ -229,6 +223,7 @@ pub(crate) fn create_session_with_provenance(
     Ok(token)
 }
 
+#[cfg(test)]
 pub(crate) fn create_session(
     database: &SuplexDatabase,
     user_id: &str,
@@ -483,15 +478,11 @@ mod tests {
     }
 
     #[test]
-    fn metadata_filter_keeps_string_entries_and_overwrites_invitation() {
+    fn metadata_filter_keeps_string_entries() {
         let raw = r#"{"first":"one","skip":1,"invitationId":"old"}"#;
         assert_eq!(
             Value::Object(safe_metadata(raw)).to_string(),
             r#"{"first":"one","invitationId":"old"}"#
-        );
-        assert_eq!(
-            metadata_with_string(raw, "invitationId", "invitation_new"),
-            r#"{"first":"one","invitationId":"invitation_new"}"#
         );
         assert_eq!(safe_metadata("not json"), Map::new());
     }

@@ -3,15 +3,10 @@ pub mod answer_grant_repository;
 pub mod audit;
 pub mod auth;
 pub mod avatars;
-pub mod ceremony;
 pub mod companies;
 pub mod external_agents;
 pub mod oauth;
-mod passkey_repository;
 pub mod remote_access_repository;
-#[cfg(test)]
-pub(crate) mod test_repository;
-pub mod webauthn;
 
 use crate::shared::PublicFailure;
 

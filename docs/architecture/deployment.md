@@ -58,16 +58,9 @@ account. Its current role and company memberships apply. **Require HTTPS**
 rejects remote HTTP requests; it does not claim that Suplex terminates TLS.
 Tailscale mode supplies its HTTPS address automatically. For a loopback reverse
 proxy, save the external HTTPS origin in Access settings. **Require sign-in**
-also requires HTTPS and accepts only passkey-authenticated sessions from remote
+also requires HTTPS and accepts only hosted-account sessions from remote
 clients. Existing automatic and legacy sessions lose remote authority when
 this policy is enabled.
-
-Passkeys are scoped to the configured HTTPS origin. Open that address from the
-Access page before enrolling or authenticating with a passkey. Existing
-passkeys can be renamed or removed from local Access settings. A hostname
-change can require enrollment at the new relying-party hostname; credentials
-without matching relying-party metadata are not presented as universally
-portable.
 
 Local recovery is separate from remote policy. It requires an actual loopback
 peer, a loopback Host at the active port, and no forwarding or Tailscale proxy

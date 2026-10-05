@@ -36,7 +36,6 @@ pub fn router() -> Router<AppState> {
         .route("/admin/companies", get(admin))
         .route("/admin/access", get(admin))
         .route("/admin/invitations", get(admin))
-        .route("/admin/passkeys", get(admin))
         .route("/companies/{company_id}/settings", get(company_settings))
         .route("/profile", get(profile))
         .route("/billing", get(billing))

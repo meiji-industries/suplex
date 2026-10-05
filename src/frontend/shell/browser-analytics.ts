@@ -16,7 +16,7 @@ const blockedReplaySelector = [
   ".xterm", "[data-terminal]", "[data-code-block]", "[data-prompt]", "[data-attachment]",
   "form:has(textarea)", "[data-native-message-id]", "pre", "code", "img", "picture", "svg", "canvas", "video",
 ].join(",");
-const staticSegments = new Set(["access", "admin", "agents", "analytics", "api", "api-mcp", "auth", "backups", "billing", "board", "companies", "environment", "health", "moves", "notice", "onboarding", "passkeys", "profile", "projects", "providers", "settings", "setup", "tasks", "telemetry", "templates", "terminal", "timeline", "today", "triggers", "workflows"]);
+const staticSegments = new Set(["access", "admin", "agents", "analytics", "api", "api-mcp", "auth", "backups", "billing", "board", "companies", "environment", "health", "moves", "notice", "onboarding", "profile", "projects", "providers", "settings", "setup", "tasks", "telemetry", "templates", "terminal", "timeline", "today", "triggers", "workflows"]);
 const featureValues = new Map<string, boolean>();
 const featureSubscribers = new Set<() => void>();
 const apiErrorCodes = new Set(["authentication_required", "request_origin_invalid", "administrator_required", "billing_unavailable", "forbidden", "not_found", "validation_failed", "conflict"]);

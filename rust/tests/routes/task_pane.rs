@@ -373,7 +373,7 @@ pub(crate) mod tests {
             "UPDATE suplex_task_sessions SET pane_id = 'pane-root' WHERE id = ?1",
             &[&fixture.root_session_id],
         );
-        crate::http::routes::auth::tests::require_passkeys(&fixture.state);
+        crate::http::routes::auth::tests::require_remote_login(&fixture.state);
         let address = fixture.serve().await;
         let path = format!("/api/tasks/{}/pane/root/terminal", fixture.task_id);
         let (status, _) = connect(address, &path, &[("host", "suplex.example.test:4113"), ("x-forwarded-host", "suplex.example.test:4111"), ("x-forwarded-proto", "https")]).await;

@@ -70,8 +70,7 @@ function AppView(): ReactElement {
   if (pathname === "/admin/backups") return <BackupSettingsView />;
   if (pathname === "/admin/workflows") return <WorkflowSettingsView />;
   if (pathname === "/admin/triggers") return <TriggerSettingsView />;
-  if (pathname === "/admin/passkeys") window.history.replaceState({}, "", `/admin/access${window.location.search}`);
-  if (pathname === "/admin/access" || pathname === "/admin/passkeys") return <AccessView />;
+  if (pathname === "/admin/access") return <AccessView />;
   if (pathname === "/admin" || pathname === "/admin/agents" || pathname === "/admin/companies" || pathname === "/admin/invitations") return <AdminView />;
   if (/^\/companies\/[^/]+\/settings$/.test(pathname)) return <CompanySettingsView />;
   if (pathname === "/profile") return <ProfileView />;

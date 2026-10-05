@@ -116,7 +116,7 @@ mod tests {
             invalid.json::<Value>().await.unwrap()["findings"][0]["field"],
             ".app"
         );
-        crate::http::routes::auth::tests::require_passkeys(&fixture.state);
+        crate::http::routes::auth::tests::require_remote_login(&fixture.state);
         let anonymous = client
             .get(&apps)
             .header("host", "suplex.tailnet.ts.net:4113")

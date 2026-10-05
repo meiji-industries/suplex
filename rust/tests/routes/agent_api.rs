@@ -1669,7 +1669,7 @@ pub(crate) mod tests {
         assert_eq!(before.1.as_deref(), Some(question.as_str()));
 
         // Only an administrator changes the grant.
-        route_auth::tests::require_passkeys(&agent.server.state);
+        route_auth::tests::require_remote_login(&agent.server.state);
         let grant_path = format!("/api/admin/external-agents/{}/answer-grant", agent.agent_id);
         let body = Some(json!({"granted": true}));
         assert_eq!(

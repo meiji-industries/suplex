@@ -205,14 +205,14 @@ mod tests {
         use axum::http::StatusCode;
         let (state, filename) = crate::http::routes::auth::tests::state();
         let now = Utc::now();
-        let admin = crate::http::routes::auth::tests::operator_passkey(&state, now);
+        let admin = crate::http::routes::auth::tests::operator_account(&state, now);
         let member = state.with_database(|database| {
             database.connection().execute("INSERT INTO suplex_users (id, display_name, username, role, status, created_at, updated_at, identity_version) VALUES ('member', 'M', 'member', 'member', 'active', ?1, ?1, 1)", [now.to_rfc3339()]).unwrap();
             database.connection().execute("INSERT INTO suplex_companies (id, name, status, created_at) VALUES ('company_models', 'Models', 'active', ?1)", [now.to_rfc3339()]).unwrap();
             database.connection().execute("INSERT INTO suplex_memberships (company_id, user_id, created_at) VALUES ('company_models', 'member', ?1)", [now.to_rfc3339()]).unwrap();
             crate::http::routes::auth::tests::verified_session(database, "member", now).unwrap()
         });
-        crate::http::routes::auth::tests::require_passkeys(&state);
+        crate::http::routes::auth::tests::require_remote_login(&state);
         let app = crate::http::router(state.clone());
         let admin = format!("sid_v1={admin}");
         let member = format!("sid_v1={member}");

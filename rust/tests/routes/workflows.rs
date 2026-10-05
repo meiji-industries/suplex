@@ -13,8 +13,8 @@ mod tests {
     #[tokio::test]
     async fn workflow_api_edits_default_agents_validates_them_and_archives() {
         let (state, filename) = super::super::auth::tests::state();
-        let admin = super::super::auth::tests::operator_passkey(&state, Utc::now());
-        super::super::auth::tests::require_passkeys(&state);
+        let admin = super::super::auth::tests::operator_account(&state, Utc::now());
+        super::super::auth::tests::require_remote_login(&state);
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let server =

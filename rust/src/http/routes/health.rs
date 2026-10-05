@@ -131,7 +131,7 @@ pub fn health_page(snapshot: &Value) -> String {
             1,
         )
         .replacen(
-            "<noscript>Suplex requires JavaScript for passkey authentication.</noscript>\n    <script>window.__SUPLEX_VIEW__ = \"health\";</script>",
+            "<noscript>Suplex requires JavaScript.</noscript>\n    <script>window.__SUPLEX_VIEW__ = \"health\";</script>",
             &fallback,
             1,
         )

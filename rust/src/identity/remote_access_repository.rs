@@ -38,10 +38,6 @@ impl RemoteAccessPolicy {
         }
     }
 
-    pub fn requires_passkeys(&self) -> bool {
-        matches!(self, Self::Passkeys { .. })
-    }
-
     pub fn external_https_origin(&self) -> Option<&str> {
         match self {
             Self::Open {

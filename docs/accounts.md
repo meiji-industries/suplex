@@ -178,7 +178,7 @@ the app never asks for a login.
 - **Remote members.** All remote requests require HTTPS. Tailscale Serve or a
   loopback HTTPS proxy supplies the verified origin. Remote browser sessions
   require a hosted account login and current company membership. Old automatic
-  and passkey sessions do not grant remote access.
+  sessions do not grant remote access.
 - **Login.** `POST /api/account/login` creates a verifier and sends its challenge
   to the hosted service. A separate HttpOnly cookie binds the attempt to the
   browser. Polling requires that cookie and the same local/remote context.

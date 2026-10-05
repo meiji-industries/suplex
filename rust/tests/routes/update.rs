@@ -20,7 +20,7 @@ mod tests {
     #[tokio::test]
     async fn update_reports_the_current_build_and_restart_needs_an_administrator() {
         let (state, filename) = state();
-        crate::http::routes::auth::tests::require_passkeys(&state);
+        crate::http::routes::auth::tests::require_remote_login(&state);
         let (address, server) = serve(state.clone()).await;
         let client = reqwest::Client::new();
         let get = |path: &str, host: Option<&str>| {
@@ -106,7 +106,7 @@ mod tests {
     async fn client_lifecycle_reports_are_bounded_and_authenticated() {
         let logs = system_events::install_for_test();
         let (state, filename) = state();
-        crate::http::routes::auth::tests::require_passkeys(&state);
+        crate::http::routes::auth::tests::require_remote_login(&state);
         let (address, server) = serve(state).await;
         let client = reqwest::Client::new();
         let tab = uuid::Uuid::new_v4().to_string();

@@ -99,7 +99,7 @@ pub(crate) mod tests {
         (AppState::new(database, config), filename)
     }
 
-    pub(crate) fn require_passkeys(state: &AppState) {
+    pub(crate) fn require_remote_login(state: &AppState) {
         state
             .with_database(|database| {
                 crate::identity::remote_access_repository::update(
@@ -132,7 +132,7 @@ pub(crate) mod tests {
         Ok(token)
     }
 
-    pub(crate) fn operator_passkey(state: &AppState, now: chrono::DateTime<Utc>) -> String {
+    pub(crate) fn operator_account(state: &AppState, now: chrono::DateTime<Utc>) -> String {
         state
             .with_database(|database| {
                 auth::development_sign_in(database, now)?;

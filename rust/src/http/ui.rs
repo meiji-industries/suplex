@@ -12,7 +12,7 @@ fn page_template() -> &'static str {
   </head>
   <body>
     <div id="suplex-app"><div class="suplex-boot" role="status" aria-label="Suplex loads the app"><span></span></div></div>
-    <noscript>Suplex requires JavaScript for passkey authentication.</noscript>
+    <noscript>Suplex requires JavaScript.</noscript>
     <script>window.__SUPLEX_VIEW__ = "auth";</script>
     <script type="module" src="/assets/suplex-ui.js"></script>
   </body>

@@ -50,7 +50,7 @@ afterEach(async () => {
   document.body.replaceChildren();
 });
 
-test("a reviewer card keeps its summary and result visible while findings, verification, and Markdown expand", async () => {
+test("a reviewer row keeps compact facts visible while findings, verification, and Markdown expand", async () => {
   const report = "## Repair plan\n\nKeep the **answer** in the task action.";
   const container = await mount([review], { sessions: [], turns: [{ ...turn, id: review.turnId, sessionId: review.sessionId, status: "completed", completedAt: recordedAt, result: JSON.stringify({ text: report }) }], shellPaneId: null });
   const history = element<HTMLElement>(container, "[data-workflow-history]");
@@ -62,27 +62,26 @@ test("a reviewer card keeps its summary and result visible while findings, verif
 
   const card = element<HTMLElement>(history, '[data-review-round="reviewer"]');
   expect(card.textContent).toContain("Reviewer round 1");
-  expect(element<HTMLElement>(card, '[data-slot="badge"]').textContent).toBe("Not approved");
-  expect(card.textContent).toContain("Repair the task action.");
+  expect(Array.from(card.querySelectorAll('[data-slot="badge"]'), badge => badge.textContent)).toEqual(["1 blocking finding", "Not approved"]);
+  expect(card.textContent).not.toContain("Repair the task action.");
   expect(card.textContent).toContain("1 blocking finding");
-  expect(element<HTMLElement>(card, "code").textContent).toBe("aaaaaaaaaa..bbbbbbbbbb");
-  expect(element<HTMLElement>(card, "code").getAttribute("title")).toBe(`${review.range.baseSha}..${review.range.headSha}`);
+  expect(card.querySelector("code")).toBeNull();
   expect(element<HTMLElement>(card, "time").getAttribute("datetime")).toBe(recordedAt);
   expect(card.textContent).not.toContain("The task action drops the answer.");
   expect(card.textContent).not.toContain("The focused checks passed.");
   expect(card.querySelector(".prose-suplex")).toBeNull();
 
-  const toggle = element<HTMLButtonElement>(card, 'button[data-slot="plan-trigger"]');
+  const toggle = element<HTMLButtonElement>(card, 'button[data-slot="history-trigger"]');
   expect(toggle.textContent).toContain("Show details for Reviewer round 1");
   expect(toggle.type).toBe("button");
   expect(toggle.getAttribute("aria-expanded")).toBe("false");
   await click(toggle);
   expect(document.activeElement).toBe(toggle);
   expect(toggle.getAttribute("aria-expanded")).toBe("true");
-  const detail = element<HTMLElement>(card, '[data-plan-slot="plan-content"]');
+  const detail = element<HTMLElement>(card, '[data-slot="history-content"]');
   expect(toggle.getAttribute("aria-controls")).toBe(detail.id);
   expect(detail.textContent).toContain("Repair the task action.");
-  expect(detail.textContent).toContain("Verification: Passed");
+  expect(element<HTMLElement>(detail, '[data-review-section="verification"] [data-slot="badge"]').textContent).toBe("Passed");
   expect(detail.textContent).toContain("The focused checks passed.");
   expect(element<HTMLElement>(detail, "ul li").textContent).toBe("The task action drops the answer.");
   expect(element<HTMLElement>(detail, ".prose-suplex h2").textContent).toBe("Repair plan");
@@ -113,21 +112,20 @@ test("an invalid reviewer keeps its round number and expands the destructive inv
   const card = cards.item(1);
   expect(card.textContent).toContain("Reviewer round 2");
   expect(element<HTMLElement>(card, '[data-slot="badge"]').textContent).toBe("Invalid");
-  expect(card.textContent).toContain(invalid.invalidReason);
-  expect(card.querySelector('[data-plan-slot="plan-content"]')).toBeNull();
-  await click(element<HTMLButtonElement>(card, "button"));
-  const reason = element<HTMLElement>(card, '[data-plan-slot="plan-content"] p');
+  expect(card.textContent).not.toContain(invalid.invalidReason);
+  expect(card.querySelector('[data-slot="history-content"]')).toBeNull();
+  await click(element<HTMLButtonElement>(card, 'button[data-slot="history-trigger"]'));
+  const reason = element<HTMLElement>(card, '[data-slot="history-content"] p');
   expect(reason.textContent).toBe(invalid.invalidReason);
   expect(reason.classList.contains("text-destructive")).toBe(true);
 });
 
-test("a planner without a report has a small summary card and no expand control", async () => {
+test("a planner without a report has a compact row and no expand control", async () => {
   const container = await mount([], { sessions: [session], turns: [turn], shellPaneId: null }, "competing_plans");
   const card = element<HTMLElement>(container, '[data-plan-report="planner_a"]');
   expect(card.textContent).toContain("Plan A");
   expect(element<HTMLElement>(card, '[data-slot="badge"]').textContent).toBe("No report yet");
-  expect(element<HTMLElement>(card, '[data-slot="plan"]').getAttribute("data-size")).toBe("sm");
-  expect(card.querySelector("button, [aria-expanded], [data-plan-slot=plan-content]")).toBeNull();
+  expect(card.querySelector("button, [aria-expanded], [data-slot=history-content]")).toBeNull();
 });
 
 test("planner reports and the selected Worker assignment expand their complete Markdown", async () => {
@@ -144,7 +142,7 @@ test("planner reports and the selected Worker assignment expand their complete M
   }, "competing_plans");
   const plan = element<HTMLElement>(container, '[data-plan-report="planner_a"]');
   expect(element<HTMLElement>(plan, '[data-slot="badge"]').textContent).toBe("Report");
-  expect(plan.textContent).toContain("Plan A summary");
+  expect(plan.textContent).not.toContain("Plan A summary");
   expect(plan.querySelector(".prose-suplex")).toBeNull();
   await click(element<HTMLButtonElement>(plan, "button"));
   expect(element<HTMLElement>(plan, ".prose-suplex h1").textContent).toBe("Plan A summary");
@@ -153,10 +151,49 @@ test("planner reports and the selected Worker assignment expand their complete M
   expect(container.querySelectorAll("[data-synthesis-assignment]")).toHaveLength(1);
   const combined = element<HTMLElement>(container, "[data-synthesis-assignment]");
   expect(combined.textContent).toContain("Combined plan");
-  expect(combined.textContent).toContain("Combine the plans.");
+  expect(combined.textContent).not.toContain("Combine the plans.");
   expect(combined.querySelector(".prose-suplex")).toBeNull();
   await click(element<HTMLButtonElement>(combined, "button"));
   expect(element<HTMLElement>(combined, ".prose-suplex").textContent).toContain("Worker instructions");
   expect(element<HTMLElement>(combined, ".prose-suplex h2").textContent).toBe("Checks");
   expect(combined.textContent).toContain("Run the focused checks.");
+});
+
+test("a Rater report renders Markdown in each structured result field", async () => {
+  const rater = {
+    ...review,
+    sessionId: "rater",
+    turnId: "rating-1",
+    role: "rater",
+    result: {
+      role: "rater",
+      rating: 7,
+      summary: "## Rating summary\n\nThe **core flow** works.\n\n- Keep the compact row",
+      blockingFindings: ["### Lost state\n\nPreserve `answerText`.\n\n- Add a regression check"],
+      verification: "passed",
+      verificationSummary: "### Focused checks\n\nRan `pnpm test`.\n\n1. Unit tests passed",
+    },
+  } satisfies ReviewRecord;
+  const container = await mount([rater], { sessions: [], turns: [], shellPaneId: null }, "refine_pull_request");
+  const row = element<HTMLElement>(container, '[data-review-round="rater"]');
+  expect(row.textContent).toContain("Rater round 1");
+  expect(Array.from(row.querySelectorAll('[data-slot="badge"]'), badge => badge.textContent)).toEqual(["1 blocking finding", "7/10"]);
+  expect(row.textContent).toContain("1 blocking finding");
+  expect(row.textContent).not.toContain("Rating summary");
+
+  await click(element<HTMLButtonElement>(row, 'button[data-slot="history-trigger"]'));
+  const summary = element<HTMLElement>(row, '[data-review-section="summary"]');
+  expect(element<HTMLElement>(summary, "h2").textContent).toBe("Rating summary");
+  expect(element<HTMLElement>(summary, "strong").textContent).toBe("core flow");
+  expect(element<HTMLElement>(summary, "li").textContent).toBe("Keep the compact row");
+
+  const verification = element<HTMLElement>(row, '[data-review-section="verification"]');
+  expect(element<HTMLElement>(verification, "h3").textContent).toBe("Focused checks");
+  expect(element<HTMLElement>(verification, "code").textContent).toBe("pnpm test");
+  expect(element<HTMLElement>(verification, "ol li").textContent).toBe("Unit tests passed");
+
+  const findings = element<HTMLElement>(row, '[data-review-section="findings"]');
+  expect(element<HTMLElement>(findings, "h3").textContent).toBe("Lost state");
+  expect(element<HTMLElement>(findings, "code").textContent).toBe("answerText");
+  expect(element<HTMLElement>(findings, ".prose-suplex li").textContent).toBe("Add a regression check");
 });

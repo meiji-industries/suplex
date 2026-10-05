@@ -3,13 +3,13 @@ import type { Task } from "../../contracts/tasks.js";
 import { ADVISOR_LABELS, latestReview } from "./workflow-presentation.js";
 import type { ReviewRecord } from "../../contracts/generated/ReviewRecord.js";
 import { ReviewerResultSchema, RaterResultSchema } from "../../contracts/advisor-reports.js";
-import type { TaskActivity } from "./task-work.js";
+import { formatTurnDuration, type TaskActivity } from "./task-work.js";
 import { Badge } from "../../components/ui/badge.js";
+import { Button } from "../../components/ui/button.js";
 import { Markdown } from "../../components/app/markdown.js";
 import { CheckCircle2, ChevronRight, FileText, Gauge, XCircle, type LucideIcon } from "lucide-react";
 import type { ReactNode } from "react";
 import { Collapsible } from "../../components/ui/collapsible.js";
-import { Plan, PlanAction, PlanContent, PlanHeader, PlanTitle, PlanTrigger } from "../../components/ui/plan.js";
 
 const ObservationSchema = z.object({ text: z.string().optional() });
 const short = (sha: string) => sha.slice(0, 10);
@@ -56,34 +56,40 @@ export function WorkflowStatus({ task }: { task: Task }) {
   return <span data-workflow-status className="flex flex-wrap gap-1">{items.map(item => <Badge key={item} variant={item === "Review stale" || item === "Workflow verification incomplete" ? "destructive" : "secondary"}>{item}</Badge>)}</span>;
 }
 
-function HistoryCard({ title, icon: Icon, badge, summary, meta, children }: {
+function HistoryRow({ title, icon: Icon, badge, timestamp, findings, children }: {
   title: string;
   icon: LucideIcon;
   badge: ReactNode;
-  summary: string;
-  meta: ReactNode;
+  timestamp?: ReactNode;
+  findings?: ReactNode;
   children?: ReactNode;
 }) {
-  return <Plan>
-    <PlanHeader>
-      <div className="min-w-0 space-y-1">
-        <PlanTitle><div className="flex flex-wrap items-center gap-2"><Icon className="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" /><span>{title}</span>{badge}</div></PlanTitle>
-        <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
-          {summary ? <p className="min-w-0 flex-1 truncate" title={summary}>{summary}</p> : null}
-          <div className="ml-auto flex flex-wrap items-center justify-end gap-x-3 gap-y-1">{meta}</div>
-        </div>
-      </div>
-      {children ? <PlanAction><PlanTrigger label={`Show details for ${title}`} /></PlanAction> : null}
-    </PlanHeader>
-    {children ? <PlanContent><div className="min-w-0 space-y-2 text-xs">{children}</div></PlanContent> : null}
-  </Plan>;
+  return <Collapsible.Root>
+    <div className="flex min-h-9 items-center gap-2 px-2 py-1">
+      <Icon className="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
+      <span className="shrink-0 font-medium">{title}</span>
+      {findings}
+      <span className="min-w-0 flex-1 truncate text-right text-muted-foreground tabular-nums">{timestamp}</span>
+      {badge}
+      {children ? <Collapsible.Trigger data-slot="history-trigger" render={<Button type="button" variant="ghost" size="icon-xs" />}>
+        <ChevronRight className="transition-transform group-aria-expanded/button:rotate-90" aria-hidden="true" />
+        <span className="sr-only">Show details for {title}</span>
+      </Collapsible.Trigger> : <span className="size-6 shrink-0" aria-hidden="true" />}
+    </div>
+    {children ? <Collapsible.Panel data-slot="history-content" className="border-t bg-muted/20 px-3 py-2">
+      <div className="min-w-0 space-y-3 text-xs">{children}</div>
+    </Collapsible.Panel> : null}
+  </Collapsible.Root>;
 }
 
 const verificationLabels = { passed: "Passed", not_applicable: "Not applicable", missing: "Missing", failed: "Failed" };
-const summaryLine = (text: string) => text.split("\n").find(line => line.trim())?.replace(/^#{1,6}\s+/, "").trim() ?? "";
 
-function HistoryTime({ value }: { value: string | null }) {
-  return value ? <time dateTime={value}>{new Date(value).toLocaleString()}</time> : null;
+/** How long the turn took, or when it was recorded if the turn's times are not known. */
+function HistoryTime({ value, turn }: { value: string | null; turn: TaskActivity["turns"][number] | undefined }) {
+  if (!value) return null;
+  const duration = turn?.promptedAt && turn.completedAt ? Date.parse(turn.completedAt) - Date.parse(turn.promptedAt) : NaN;
+  const date = new Date(value);
+  return <time dateTime={value} title={date.toLocaleString()}>{duration >= 0 ? formatTurnDuration(duration) : date.toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}</time>;
 }
 
 /** Review rounds, invalid attempts, and the candidate plans behind a build, each opening its full native report. */
@@ -100,36 +106,39 @@ export function WorkflowHistory({ task, activity }: { task: Task; activity: Task
   if (!reviews.length && !planners.length) return null;
   return <Collapsible.Root data-workflow-history defaultOpen className="space-y-2 text-xs">
     <Collapsible.Trigger className="group flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"><ChevronRight className="size-3.5 transition-transform group-data-[panel-open]:rotate-90" aria-hidden="true" />Review history <span className="text-muted-foreground">{reviews.length || planners.length}</span></Collapsible.Trigger>
-    <Collapsible.Panel><ol className="grid min-w-0 gap-2" aria-label="Review rounds">
+    <Collapsible.Panel><ol className="grid min-w-0 divide-y overflow-hidden rounded-md border" aria-label="Review rounds">
       {reviews.map((record, index) => {
         const result = reviewResult(record);
         const round = reviews.filter((candidate, position) => candidate.role === record.role && position <= index).length;
         const report = reportText(activity, record.turnId);
         return <li key={record.turnId} className="min-w-0" data-review-round={record.role}>
-          <HistoryCard title={`${ADVISOR_LABELS[record.role]} round ${round}`} icon={!result ? XCircle : result.role === "rater" ? Gauge : result.approved ? CheckCircle2 : XCircle}
+          <HistoryRow title={`${ADVISOR_LABELS[record.role]} round ${round}`} icon={!result ? XCircle : result.role === "rater" ? Gauge : result.approved ? CheckCircle2 : XCircle}
             badge={<Badge variant={result ? "secondary" : "destructive"}>{resultLabel(result)}</Badge>}
-            summary={result?.summary ?? record.invalidReason ?? ""}
-            meta={<><code title={`${record.range.baseSha}..${record.range.headSha}`}>{short(record.range.baseSha)}..{short(record.range.headSha)}</code><HistoryTime value={record.recordedAt} />{result && result.blockingFindings.length > 0 ? <span>{result.blockingFindings.length} blocking {result.blockingFindings.length === 1 ? "finding" : "findings"}</span> : null}</>}>
+            timestamp={<HistoryTime value={record.recordedAt} turn={activity.turns.find(turn => turn.id === record.turnId)} />}
+            findings={result && result.blockingFindings.length > 0 ? <Badge variant="destructive">{result.blockingFindings.length} blocking {result.blockingFindings.length === 1 ? "finding" : "findings"}</Badge> : null}>
             {result || record.invalidReason || report ? <>
-              {result ? <><p>{result.summary}</p><p className="text-muted-foreground">Verification: {verificationLabels[result.verification]}</p><p className="text-muted-foreground">{result.verificationSummary}</p></> : record.invalidReason ? <p className="text-destructive">{record.invalidReason}</p> : null}
-              {result?.blockingFindings.length ? <div className="space-y-1"><p className="font-medium">Blocking findings</p><ul className="list-disc pl-4 text-muted-foreground">{result.blockingFindings.map(finding => <li key={finding}>{finding}</li>)}</ul></div> : null}
+              {result ? <>
+                <section data-review-section="summary"><p className="mb-1 font-medium">Summary</p><Markdown source={result.summary} /></section>
+                <section data-review-section="verification"><div className="mb-1 flex items-center gap-2"><p className="font-medium">Verification</p><Badge variant="outline">{verificationLabels[result.verification]}</Badge></div><Markdown source={result.verificationSummary} /></section>
+              </> : record.invalidReason ? <p className="text-destructive">{record.invalidReason}</p> : null}
+              {result?.blockingFindings.length ? <section data-review-section="findings"><p className="mb-1 font-medium">Blocking findings</p><ul className="space-y-2 pl-4 text-muted-foreground">{result.blockingFindings.map(finding => <li key={finding} className="list-disc"><Markdown source={finding} /></li>)}</ul></section> : null}
               {report ? <Markdown source={report} /> : null}
             </> : null}
-          </HistoryCard>
+          </HistoryRow>
         </li>;
       })}
       {planners.map(({ session, turn }) => {
         const report = reportText(activity, turn.id);
         return <li key={turn.id} className="min-w-0" data-plan-report={session.advisorRole}>
-          <HistoryCard title={session.label} icon={FileText} badge={<Badge variant={report ? "secondary" : "outline"}>{report ? "Report" : "No report yet"}</Badge>} summary={summaryLine(report)} meta={<HistoryTime value={turn.completedAt ?? turn.promptedAt} />}>
+          <HistoryRow title={session.label} icon={FileText} badge={<Badge variant={report ? "secondary" : "outline"}>{report ? "Report" : "No report yet"}</Badge>} timestamp={<HistoryTime value={turn.completedAt ?? turn.promptedAt} turn={turn} />}>
             {report ? <Markdown source={report} /> : null}
-          </HistoryCard>
+          </HistoryRow>
         </li>;
       })}
       {task.workflow === "competing_plans" ? builds.map(({ turn }) => turn.prompt.includes("Coordinator plan:") ? <li key={turn.id} className="min-w-0" data-synthesis-assignment>
-        <HistoryCard title="Combined plan" icon={FileText} badge={<Badge variant="secondary">Assignment</Badge>} summary={summaryLine(turn.prompt.slice(turn.prompt.indexOf("Coordinator plan:") + "Coordinator plan:".length))} meta={<HistoryTime value={turn.promptedAt} />}>
+        <HistoryRow title="Combined plan" icon={FileText} badge={<Badge variant="secondary">Assignment</Badge>} timestamp={<HistoryTime value={turn.promptedAt} turn={turn} />}>
           <Markdown source={turn.prompt} />
-        </HistoryCard>
+        </HistoryRow>
       </li> : null) : null}
     </ol></Collapsible.Panel>
   </Collapsible.Root>;

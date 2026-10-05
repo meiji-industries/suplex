@@ -149,9 +149,16 @@ pub(crate) mod tests {
             serde_json::from_slice(&payload).unwrap()
         }
 
-        /// A short text frame. A client frame carries a mask; a zero mask leaves the text as it is.
+        /// A text frame of less than 64 KiB. A client frame carries a mask; a zero mask leaves the text as it is.
         pub(crate) async fn send_text(&mut self, text: &str) {
-            let mut frame = vec![0x81, 0x80 | u8::try_from(text.len()).unwrap(), 0, 0, 0, 0];
+            let mut frame = match u8::try_from(text.len()) {
+                Ok(length @ 0..=125) => vec![0x81, 0x80 | length],
+                _ => [0x81, 0x80 | 126]
+                    .into_iter()
+                    .chain(u16::try_from(text.len()).unwrap().to_be_bytes())
+                    .collect(),
+            };
+            frame.extend([0, 0, 0, 0]);
             frame.extend_from_slice(text.as_bytes());
             self.stream.write_all(&frame).await.unwrap();
         }

@@ -10,7 +10,7 @@ import { TaskDataProvider, taskCostsKey, taskListKey, updateTaskCache, useTaskAg
 const scope = vi.hoisted(() => ({ userId: "user-a" as string | undefined, companyId: "company-a" }));
 vi.mock("../src/frontend/shell/company-context.js", () => ({ useCompanyContext: () => ({ user: scope.userId ? { id: scope.userId } : undefined, currentCompany: { id: scope.companyId } }) }));
 // These tests cover the HTTP reads. The sync socket has its tests in task-sync.test.tsx.
-vi.mock("../src/frontend/features/tasks/lib/task-sync-api.js", () => ({ openTaskSync: () => () => undefined }));
+vi.mock("../src/frontend/features/tasks/lib/task-sync-api.js", () => ({ openTaskSync: () => ({ close: () => undefined, watch: () => undefined }) }));
 
 function task(id: string, title = id) {
   const profile: Task["rootProfile"] = { profileId: "profile", provider: "opencode", model: "model", reasoningLevel: "medium", serviceTier: "default" };

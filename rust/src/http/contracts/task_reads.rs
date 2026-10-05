@@ -6,11 +6,13 @@ use ts_rs::TS;
 
 use crate::{
     coordination::advisor_bridge::AdvisorRole,
+    http::contracts::typed::projects::ProjectResponse,
     moves::MoveResponse,
     runtimes::opencode::session_reader::PlanItem,
     tasks::{
         control::{HarnessKind, SessionKind, SessionReplacement, TurnStatus},
-        response::TaskListItem,
+        response::{TaskListItem, TaskResponse},
+        timeline::TimelineResponse,
     },
 };
 
@@ -23,12 +25,17 @@ use crate::{
     rename_all_fields = "camelCase"
 )]
 #[ts(export)]
-pub enum SyncMessage {
-    /// The full active task list and every move. The client reads the
-    /// projects over HTTP when it receives this frame.
+pub enum SyncMessage<'a> {
+    /// The full active task list, every move, every project, and the cost of
+    /// every task. Each project is an element of `GET /api/companies/{id}/projects`.
     Snapshot {
         tasks: Vec<TaskListItem>,
         moves: Vec<MoveResponse>,
+        /// Absent until the server read the costs once; a later frame carries them.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        costs: Option<Vec<TaskCost>>,
+        projects: Vec<ProjectResponse>,
     },
     /// What changed. A heartbeat carries no change.
     Changes {
@@ -40,9 +47,98 @@ pub enum SyncMessage {
         #[serde(skip_serializing_if = "Option::is_none")]
         #[ts(optional)]
         moves: Option<Vec<MoveResponse>>,
-        /// A project changed. The client reads the projects over HTTP.
-        projects_changed: bool,
+        /// Every task cost, when one changed.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        costs: Option<Vec<TaskCost>>,
+        /// Every project, when one changed.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        projects: Option<Vec<ProjectResponse>>,
     },
+    /// The agents of each watched task that changed. The first frame after a
+    /// `watch` carries every watched task the server could read.
+    Agents { tasks: Vec<&'a TaskAgents> },
+    /// The values of the open task that changed. The first frame after a
+    /// `watch` carries every value the server could read. Each value is the
+    /// body of its HTTP endpoint.
+    OpenTask {
+        task_id: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        task: Option<&'a TaskResponse>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        activity: Option<&'a TaskActivityResponse>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        execution: Option<&'a TaskExecutionResponse>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        timeline: Option<&'a TimelineResponse>,
+    },
+}
+
+/// A frame the browser sends on the company sync socket.
+#[derive(Deserialize, TS)]
+#[serde(
+    tag = "type",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+#[ts(export)]
+pub enum SyncRequest {
+    /// The tasks this tab shows now. Each request replaces the previous one.
+    Watch {
+        /// Tasks whose agents the tab shows. The server uses at most 50 and ignores ids outside the company.
+        agent_task_ids: Vec<String>,
+        /// The task whose page is open, archived or not. The server ignores a task outside the company.
+        open_task_id: Option<String>,
+    },
+}
+
+crate::shared::wire_enum! {
+    pub enum TaskAgentStatus {
+        Queued = "queued",
+        Working = "working",
+        Retrying = "retrying",
+        Idle = "idle",
+        WaitingHuman = "waiting_human",
+        Stopped = "stopped",
+        Unknown = "unknown",
+    }
+}
+
+/// One current agent of a task: saved session intent and its native status.
+#[derive(Clone, PartialEq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct TaskAgent {
+    pub id: String,
+    pub role: SessionKind,
+    pub advisor_role: Option<AdvisorRole>,
+    pub label: String,
+    pub pane_id: Option<String>,
+    pub status: TaskAgentStatus,
+    pub status_changed_at: Option<String>,
+}
+
+#[derive(Serialize, TS)]
+#[ts(export)]
+pub struct TaskAgentsResponse {
+    pub agents: Vec<TaskAgent>,
+}
+
+#[derive(Clone, PartialEq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct TaskAgents {
+    pub task_id: String,
+    pub agents: Vec<TaskAgent>,
+}
+
+#[derive(Serialize, TS)]
+#[ts(export)]
+pub struct TaskAgentsBatchResponse {
+    pub tasks: Vec<TaskAgents>,
 }
 
 #[derive(Serialize, TS)]
@@ -206,7 +302,7 @@ pub struct TaskCostsResponse {
     pub tasks: Vec<TaskCost>,
 }
 
-#[derive(Serialize, TS)]
+#[derive(Clone, PartialEq, Serialize, TS)]
 pub struct TaskCost {
     pub id: String,
     pub cost: Option<f64>,

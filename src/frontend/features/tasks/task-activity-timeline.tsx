@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Info } from "lucide-react";
 import { useTaskTimeline } from "./lib/task-queries.js";
+import { useSyncLive } from "../../shell/sync.js";
 import { checkRunLabel, checkRunName, checkRunStatus, useTaskChecks } from "./lib/task-checks.js";
 import { taskTimelineDuration } from "../timeline/lib/task-timeline-duration.js";
 import { Alert, AlertDescription } from "../../components/ui/alert.js";
@@ -18,15 +19,17 @@ function timestamp(value: number): string {
 
 export function TaskActivityTimeline({ taskId, createdAt, checksKey }: { taskId: string; createdAt: string; checksKey?: string | null }) {
   const query = useTaskTimeline(taskId);
+  const live = useSyncLive();
   // Same refresh key as the Checks tab: both share one poll per task.
   const { checks } = useTaskChecks(checksKey ? taskId : null, checksKey);
-  const snapshot = query.data ? { activity: query.data.tasks.find(task => task.id === taskId)?.activity ?? [], readAt: query.dataUpdatedAt } : null;
   const error = query.isError ? "Timeline is not available." : "";
   const [now, setNow] = useState(Date.now);
   useEffect(() => {
     const clock = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(clock);
   }, [taskId]);
+  // The sync socket pushes each change of the open task's timeline, so an unchanged value stays current while it is open.
+  const snapshot = query.data ? { activity: query.data.tasks.find(task => task.id === taskId)?.activity ?? [], readAt: live && !error ? Math.max(now, query.dataUpdatedAt) : query.dataUpdatedAt } : null;
   const liveUntil = snapshot ? snapshot.readAt + freshnessMs : now;
   const asOf = Math.min(Math.max(now, snapshot?.readAt ?? now), error ? snapshot?.readAt ?? now : liveUntil);
   const intervals = (snapshot?.activity ?? []).map(entry => ({

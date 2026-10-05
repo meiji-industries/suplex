@@ -22,8 +22,8 @@ export type TaskAction = "refresh" | "cancel" | "unarchive" | "disarm" | "start"
 const taskPath = (taskId: string, suffix = ""): string =>
   `/api/tasks/${encodeURIComponent(taskId)}${suffix}`;
 
-export function getTask(taskId: string): Promise<Task> {
-  return readJsonUnchecked<Task>(taskPath(taskId));
+export function getTask(taskId: string, signal?: AbortSignal): Promise<Task> {
+  return readJsonUnchecked<Task>(taskPath(taskId), signal ? { signal } : undefined);
 }
 
 export async function listTaskProfiles(signal?: AbortSignal): Promise<ProfileResponse[]> {

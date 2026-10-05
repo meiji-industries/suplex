@@ -10,7 +10,7 @@ vi.mock("../src/frontend/components/app/github-device-sign-in.js", () => ({ Gith
 import { RecentRepositories } from "../src/frontend/features/projects/recent-repositories.js";
 import { ApiError } from "../src/frontend/lib/api.js";
 import type { RecentRepository } from "../src/frontend/contracts/generated/RecentRepository.js";
-import { ProjectResponseSchema } from "../src/frontend/contracts/projects.js";
+import type { ProjectResponse } from "../src/frontend/contracts/projects.js";
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 
@@ -46,7 +46,11 @@ test("load more appends distinct repositories and ends on the last page", async 
 });
 
 test("an excluded-only page still offers more and a failure retries the same page", async () => {
-  const project = ProjectResponseSchema.parse({ id: "project-1", companyId: "company-1", name: "Existing", repository: "acme/existing", repositoryPath: "/repo", worktreeRoot: "/worktrees", baseBranch: "main", setupCommand: "", verificationCommand: "", rootProfileId: "root", workerProfileId: "worker", taskConcurrency: null, createdAt: "", updatedAt: "" });
+  const project: ProjectResponse = {
+    id: "project-1", companyId: "company-1", name: "Existing", repository: "acme/existing", repositoryPath: "/repo", worktreeRoot: "/worktrees", baseBranch: "main", setupCommand: "", verificationCommand: "", rootProfileId: "root", workerProfileId: "worker", altProfileId: "root",
+    agentTaskPolicy: { workflowIds: ["standard"], defaultWorkflowId: "standard", templateIds: [], rootProfileIds: ["root"], workerProfileIds: ["worker"], advisorProfileIds: { reviewer: [], planner_a: [], planner_b: [], rater: [] }, deliveryTarget: "pull_request_draft", runProjectTests: true, visualEvidence: "off" },
+    providerPolicy: null, taskConcurrency: null, createdAt: "", updatedAt: "",
+  };
   projectApi.listRecentRepositories.mockResolvedValueOnce({ repositories: [repository("acme/existing")], nextPage: 2 })
     .mockRejectedValueOnce(new Error("network"))
     .mockResolvedValueOnce({ repositories: [repository("acme/next")], nextPage: null });

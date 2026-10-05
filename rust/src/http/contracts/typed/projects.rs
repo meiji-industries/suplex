@@ -106,7 +106,7 @@ pub struct ProjectExecution {
     #[serde(default)]
     pub mcp: Vec<McpServer>,
 }
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct AdvisorProfilePolicy {
     #[serde(default)]
@@ -118,7 +118,7 @@ pub struct AdvisorProfilePolicy {
     #[serde(default)]
     pub rater: Vec<String>,
 }
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ProjectAgentTaskPolicy {
     pub workflow_ids: Vec<String>,
@@ -198,13 +198,16 @@ pub enum ProjectCreateBody {
     NewRepository(NewRepositoryCreate),
     Local(Box<LocalProjectCreate>),
 }
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export)]
 pub struct ProjectResponse {
     pub alt_profile_id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub integration: Option<ProjectIntegration>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub execution: Option<ProjectExecution>,
     pub id: String,
     pub company_id: String,
@@ -212,6 +215,7 @@ pub struct ProjectResponse {
     pub repository_path: String,
     pub worktree_root: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub repository: Option<String>,
     pub base_branch: String,
     pub setup_command: String,

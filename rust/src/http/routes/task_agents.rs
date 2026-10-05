@@ -17,7 +17,7 @@ use axum::{
 };
 use chrono::{DateTime, Utc};
 use rusqlite::OptionalExtension;
-use serde_json::{Value, json};
+use serde::Serialize;
 
 use crate::{
     coordination::{
@@ -27,10 +27,15 @@ use crate::{
     },
     http::{
         AppState,
-        contracts::typed::{
-            agent_api::query_object,
-            auth::CompanyIdParams,
-            tasks::{TaskAgentsBatchQuery, TaskIdParams},
+        contracts::{
+            task_reads::{
+                TaskAgent, TaskAgentStatus, TaskAgents, TaskAgentsBatchResponse, TaskAgentsResponse,
+            },
+            typed::{
+                agent_api::query_object,
+                auth::CompanyIdParams,
+                tasks::{TaskAgentsBatchQuery, TaskIdParams},
+            },
         },
         validation::{ValidPath, valid},
     },
@@ -51,7 +56,7 @@ pub fn router() -> Router<AppState> {
         )
 }
 
-fn respond(result: Result<Value, Box<dyn Error>>, cookies: Vec<String>) -> Response {
+fn respond<T: Serialize>(result: Result<T, Box<dyn Error>>, cookies: Vec<String>) -> Response {
     let mut response = match result {
         Ok(value) => {
             let mut response = Json(value).into_response();
@@ -67,7 +72,7 @@ fn respond(result: Result<Value, Box<dyn Error>>, cookies: Vec<String>) -> Respo
     response
 }
 
-struct AgentTask {
+pub(crate) struct AgentTask {
     id: String,
     status: TaskStatus,
     rows: RootObservationRows,
@@ -78,8 +83,16 @@ fn task(
     user_id: &str,
     task_id: &str,
 ) -> Result<AgentTask, Box<dyn Error>> {
+    crate::tasks::authorize_task(database, user_id, task_id)?;
+    saved_task(database, task_id)
+}
+
+/// The task's saved sessions. The caller authorizes.
+pub(crate) fn saved_task(
+    database: &SuplexDatabase,
+    task_id: &str,
+) -> Result<AgentTask, Box<dyn Error>> {
     let record = repository::task_by_id(database, task_id)?.ok_or_else(TaskError::not_found)?;
-    companies::require_company_access(database, user_id, &record.company_id)?;
     Ok(AgentTask {
         id: record.id,
         status: record.status,
@@ -139,21 +152,22 @@ fn native_status(
         .ok()
 }
 
-/// Null when the native time is not a valid date.
-fn iso_timestamp(value: f64) -> Value {
+/// `None` when the native time is not a valid date.
+fn iso_timestamp(value: f64) -> Option<String> {
     DateTime::<Utc>::from_timestamp_millis(value as i64)
         .filter(|_| value.is_finite())
-        .map_or(Value::Null, |time| json!(rfc3339_millis(time)))
+        .map(rfc3339_millis)
 }
 
 /// `host` derives terminal ids for host terminals instead of stored Herdr panes.
-fn agents(task: &AgentTask, database_path: &std::path::Path, host: bool) -> Vec<Value> {
-    task.rows
+pub(crate) fn agents(task: &AgentTask, database_path: &std::path::Path, host: bool) -> TaskAgents {
+    let agents = task
+        .rows
         .sessions
         .iter()
         .filter(|session| session.current)
         .map(|session| {
-            let (status, changed_at) = if matches!(
+            let (status, status_changed_at) = if matches!(
                 session.lifecycle,
                 SessionLifecycle::Stopped | SessionLifecycle::Cancelled
             ) {
@@ -161,32 +175,42 @@ fn agents(task: &AgentTask, database_path: &std::path::Path, host: bool) -> Vec<
                     .stopped_at
                     .as_ref()
                     .or(session.stop_requested_at.as_ref());
-                ("stopped", json!(changed))
+                (TaskAgentStatus::Stopped, changed.cloned())
             } else if session.native_session_id.is_none() {
-                ("queued", Value::Null)
+                (TaskAgentStatus::Queued, None)
             } else {
                 match native_status(database_path, session) {
-                    Some(("busy", _)) => ("working", Value::Null),
-                    Some(("retry", _)) => ("retrying", Value::Null),
+                    Some(("busy", _)) => (TaskAgentStatus::Working, None),
+                    Some(("retry", _)) => (TaskAgentStatus::Retrying, None),
                     Some(_)
                         if session.kind == SessionKind::Root
                             && task.status == TaskStatus::WaitingHuman =>
                     {
-                        ("waiting_human", Value::Null)
+                        (TaskAgentStatus::WaitingHuman, None)
                     }
-                    Some((_, time)) => ("idle", iso_timestamp(time)),
-                    None => ("unknown", Value::Null),
+                    Some((_, time)) => (TaskAgentStatus::Idle, iso_timestamp(time)),
+                    None => (TaskAgentStatus::Unknown, None),
                 }
             };
-            json!({
-                "id":session.id, "role":session.kind,
-                "advisorRole":session.advisor_role, "label":label(session),
-                "paneId":crate::terminals::session_pane(host, session, task.rows.profile_of(session).provider),
-                "status":status,
-                "statusChangedAt":changed_at,
-            })
+            TaskAgent {
+                id: session.id.clone(),
+                role: session.kind,
+                advisor_role: session.advisor_role,
+                label: label(session).into(),
+                pane_id: crate::terminals::session_pane(
+                    host,
+                    session,
+                    task.rows.profile_of(session).provider,
+                ),
+                status,
+                status_changed_at,
+            }
         })
-        .collect()
+        .collect();
+    TaskAgents {
+        task_id: task.id.clone(),
+        agents,
+    }
 }
 
 fn database_path(database: &SuplexDatabase) -> Result<PathBuf, Box<dyn Error>> {
@@ -215,11 +239,11 @@ async fn task_agents(
         ))
     }) {
         Ok(value) => value,
-        Err(error) => return respond(Err(error), cookies),
+        Err(error) => return respond::<()>(Err(error), cookies),
     };
-    let result = match tokio::task::spawn_blocking(
-        move || json!({"agents":agents(&task_snapshot, &database_path, host)}),
-    )
+    let result = match tokio::task::spawn_blocking(move || TaskAgentsResponse {
+        agents: agents(&task_snapshot, &database_path, host).agents,
+    })
     .await
     {
         Ok(value) => state
@@ -252,24 +276,32 @@ async fn company_task_agents(
         ))
     }) {
         Ok(value) => value,
-        Err(error) => return respond(Err(error), cookies),
+        Err(error) => return respond::<()>(Err(error), cookies),
     };
     let results = match tokio::task::spawn_blocking(move || {
         tasks
             .iter()
-            .map(|task| json!({"taskId":task.id,"agents":agents(task,&database_path,host)}))
+            .map(|task| agents(task, &database_path, host))
             .collect::<Vec<_>>()
     })
     .await
     {
         Ok(value) => value,
-        Err(error) => return respond(Err(Box::new(error)), cookies),
+        Err(error) => return respond::<()>(Err(Box::new(error)), cookies),
     };
     let result = state
         .with_database(|database| visible_tasks(database, &user_id, &company_id, &ids))
         .map(|visible| {
-            let ids = visible.into_iter().map(|task| task.id).collect::<std::collections::HashSet<_>>();
-            json!({"tasks":results.into_iter().filter(|task| task["taskId"].as_str().is_some_and(|id| ids.contains(id))).collect::<Vec<_>>()})
+            let ids = visible
+                .into_iter()
+                .map(|task| task.id)
+                .collect::<std::collections::HashSet<_>>();
+            TaskAgentsBatchResponse {
+                tasks: results
+                    .into_iter()
+                    .filter(|task| ids.contains(&task.task_id))
+                    .collect(),
+            }
         });
     respond(result, cookies)
 }

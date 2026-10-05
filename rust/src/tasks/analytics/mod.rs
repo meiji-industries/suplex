@@ -431,10 +431,27 @@ pub fn company_task_ids(
     company_id: &str,
     archived: bool,
 ) -> DatabaseResult<Vec<String>> {
+    require_visible(database, user_id, company_id)?;
+    task_ids(database, company_id, archived)
+}
+
+fn require_visible(
+    database: &SuplexDatabase,
+    user_id: &str,
+    company_id: &str,
+) -> DatabaseResult<()> {
     let visible = companies::list_visible_companies(database, user_id)?;
     if !visible.iter().any(|company| company.id == company_id) {
         return Err(TaskError::not_found().into());
     }
+    Ok(())
+}
+
+fn task_ids(
+    database: &SuplexDatabase,
+    company_id: &str,
+    archived: bool,
+) -> DatabaseResult<Vec<String>> {
     let mut statement = database.connection().prepare(
         "SELECT t.id FROM suplex_tasks t JOIN suplex_task_controls c ON c.task_id = t.id WHERE t.company_id = ?1 AND (t.archived_at IS NOT NULL) = ?2 ORDER BY julianday(CASE WHEN julianday(t.updated_at) >= julianday(c.updated_at) THEN t.updated_at ELSE c.updated_at END) DESC, t.id",
     )?;
@@ -459,8 +476,18 @@ pub fn analytics(
     company_id: &str,
     now: DateTime<Utc>,
 ) -> DatabaseResult<Value> {
-    let mut ids = company_task_ids(database, user_id, company_id, false)?;
-    ids.extend(company_task_ids(database, user_id, company_id, true)?);
+    require_visible(database, user_id, company_id)?;
+    company_analytics(database, company_id, now)
+}
+
+/// `analytics` for the sync feed. The caller authorizes.
+pub(crate) fn company_analytics(
+    database: &SuplexDatabase,
+    company_id: &str,
+    now: DateTime<Utc>,
+) -> DatabaseResult<Value> {
+    let mut ids = task_ids(database, company_id, false)?;
+    ids.extend(task_ids(database, company_id, true)?);
     let mut tasks = Vec::new();
     for id in ids {
         let Some(task) = task_response::get(database, &id)? else {

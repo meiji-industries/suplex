@@ -5,4 +5,4 @@ The full raw `GET /api/tasks/:id` response was captured from the synthetic `nati
 SHA-256:
 
 - `database.sqlite`: `4c633a9ef6c18eaea78503754e0a1e859c2ae7b8991af3ac126d5c2661522641`
-- `expected.json`: `f8a044b2884893edbc7b5fc358245e772fbd55a8315d955147cae2ce2df04084`
+- `expected.json`: `8c3d24dfc106efd74372bf774edfdc0d9d377fb422190c1d24a5002b96799216`

@@ -21,6 +21,7 @@ force the person back through a prescribed workflow.
 | Instance, project, and task settings; resource allowances | [Settings and limits](settings-and-limits.md) |
 | Backup contents, restore, and native-state boundaries | [Backup and restore](backup-and-restore.md) |
 | Host processes, scheduling, and state ownership | [Runtime](runtime.md) |
+| Company sync socket, pushed lists and task values, and polling fallback | [Sync feed](sync.md) |
 | Task lifecycle, role sessions, and delegation | [Coordination](coordination.md) |
 | Reusable workflows, named presets, templates, and intake | [Workflows and templates](workflows-and-templates.md) |
 | Saved prompts and scripts, agents, terminal runs, transcripts, and run history | [Moves](moves.md) |

@@ -74,7 +74,7 @@ export type ProfileResponse = z.infer<typeof ProfileResponseSchema>;
 
 export type ModelResponse = z.infer<typeof ModelResponseSchema>;
 
-export type ProjectResponse = z.infer<typeof ProjectResponseSchema>;
+export type { ProjectResponse } from "./generated/ProjectResponse.js";
 
 export type ProjectPatchBody = z.infer<typeof ProjectPatchBodySchema>;
 

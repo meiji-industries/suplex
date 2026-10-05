@@ -35,6 +35,7 @@ mod tests {
     }
     use crate::http::session;
     use crate::platform::database::OpenMode;
+    use serde_json::{Value, json};
     use axum::{body::to_bytes, http::HeaderValue};
     use std::{
         fs,
@@ -186,7 +187,7 @@ mod tests {
         let agents = tokio::task::spawn_blocking(move || agents(&task, &path, false))
             .await
             .unwrap();
-        assert_eq!(agents[0]["status"], "working");
+        assert_eq!(agents.agents[0].status, TaskAgentStatus::Working);
         std::fs::remove_dir_all(root).unwrap();
     }
 

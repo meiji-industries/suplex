@@ -45,7 +45,9 @@ at its operation boundary. Provider sign-in checks do not prove model access.
 The task list and recent-task sidebar share one foreground query. Recent-task
 agent rows use one company-scoped batch read through the
 [task-agent route](../../rust/src/http/routes/task_agents.rs). The batch reduces
-browser requests while native status reads still run for its tasks. The
+browser requests while native status reads still run for its tasks. While the
+[company sync socket](sync.md) is open, the host pushes changes into these
+caches and the reads repeat every 60 seconds; without it, they poll. The
 [query client](../../src/frontend/shell/server-state.tsx) is scoped to the
 signed-in user and clears private data on sign-out. Query caches are display
 observations: stale or failed reads do not change command authorization, and

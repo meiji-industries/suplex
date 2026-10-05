@@ -477,6 +477,7 @@ mod migration_regressions {
             "SELECT * FROM suplex_task_controls ORDER BY task_id",
         );
         for control in expected.as_array_mut().unwrap() {
+            control["queue_priority"] = json!(0);
             if control["task_id"] == "queued" {
                 control["status"] = json!("queued");
             }

@@ -17,9 +17,10 @@ vi.mock("../src/frontend/shell/company-context.js", () => ({ useCompanyContext: 
 vi.mock("../src/frontend/shell/application-frame.js", () => ({ ApplicationFrame: ({ children }: { children: ReactNode }) => children }));
 vi.mock("../src/frontend/shell/global-new-task-dialog.js", () => ({ requestNewTask: vi.fn(), useHasProjects: () => true }));
 vi.mock("../src/frontend/features/analytics/lib/analytics.js", async importOriginal => ({ ...(await importOriginal<Record<string, unknown>>()), useTaskCosts: () => new Map() }));
-vi.mock("../src/frontend/features/tasks/task-details.js", () => ({ TaskDetailsPage: () => null }));
+vi.mock("../src/frontend/features/tasks/task-details.js", () => ({ TaskDetailsPage: ({ task }: { task: Task }) => <h2>{task.title}</h2> }));
 vi.mock("../src/frontend/features/tasks/task-options.js", () => ({ TaskOptions: () => null }));
-vi.mock("../src/frontend/features/tasks/lib/task-sync-api.js", () => ({ openTaskSync: () => () => undefined }));
+const sync = vi.hoisted(() => ({ emit: (_message: unknown): void => undefined }));
+vi.mock("../src/frontend/features/tasks/lib/task-sync-api.js", () => ({ openTaskSync: (_companyId: string, onMessage: (message: unknown) => void) => { sync.emit = onMessage; return { close: () => undefined, watch: () => undefined }; } }));
 vi.mock("../src/frontend/components/ui/select.js", () => {
   const context = createContext<{ value?: string | undefined; onValueChange?: ((value: string) => void) | undefined; label: { current: string } }>({ label: { current: "" } });
   return {
@@ -179,4 +180,52 @@ test("board cards label every Blocked by task and list rows omit it", async () =
     expect(Array.from(container.querySelectorAll("[data-task-blocked-by]")).map(label => label.textContent)).toEqual(mode === "board" ? ["Blocked by Repair the poller · Active, Plan the migration · Delivered"] : []);
     await act(async () => { root.unmount(); container.remove(); });
   }
+});
+
+test("with the sync socket, the archived list reads again only when a task leaves or enters the active list", async () => {
+  vi.useFakeTimers();
+  window.history.replaceState(null, "", "/tasks?company=company-1");
+  const active = [task("task-1", "Repair the poller", "active"), task("task-2", "Plan the migration", "backlog")];
+  api.readJsonUnchecked.mockClear();
+  api.readJsonUnchecked.mockImplementation(async (path: string) => path.includes("/projects") ? { projects: [] } : { tasks: path.endsWith("/task-costs") ? [] : path.includes("archived=true") ? [task("task-9", "Old work", "delivered")] : active });
+  const archivedReads = () => api.readJsonUnchecked.mock.calls.filter(([path]) => String(path).includes("archived=true")).length;
+  const emit = (message: unknown) => act(async () => sync.emit(message));
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  try {
+    await act(async () => root.render(<ServerStateProvider><TaskDataProvider><TasksView mode="list" /></TaskDataProvider></ServerStateProvider>));
+    await act(async () => Array.from(container.querySelectorAll<HTMLButtonElement>('[role="tab"]')).find(tab => tab.textContent === "Archived")?.click());
+    expect(container.textContent).toContain("Old work");
+    expect(archivedReads()).toBe(1);
+    await emit({ type: "snapshot", tasks: active, moves: [], costs: [] });
+    await act(async () => vi.advanceTimersByTimeAsync(9000));
+    expect(archivedReads()).toBe(1);
+    await emit({ type: "changes", tasks: [{ ...active[0], title: "Renamed" }], removedTaskIds: [] });
+    expect(archivedReads()).toBe(1);
+    await emit({ type: "changes", tasks: [], removedTaskIds: ["task-2"] });
+    expect(archivedReads()).toBe(2);
+    await emit({ type: "changes", tasks: [active[1]], removedTaskIds: [] });
+    expect(archivedReads()).toBe(3);
+  } finally { await act(async () => root.unmount()); container.remove(); window.history.replaceState(null, "", "/board?company=company-1"); }
+});
+
+test("the open task page reads its task once and shows the pushed task", async () => {
+  vi.useFakeTimers();
+  window.history.replaceState(null, "", "/tasks/task-1?company=company-1");
+  api.readJsonUnchecked.mockClear();
+  api.readJsonUnchecked.mockImplementation(async (path: string) => path === "/api/tasks/task-1" ? task("task-1", "Read task", "active") : path.includes("/projects") ? { projects: [] } : { tasks: [] });
+  const taskReads = () => api.readJsonUnchecked.mock.calls.filter(([path]) => path === "/api/tasks/task-1").length;
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  try {
+    await act(async () => root.render(<ServerStateProvider><TaskDataProvider><TasksView mode="list" /></TaskDataProvider></ServerStateProvider>));
+    expect(container.querySelector("h2")?.textContent).toBe("Read task");
+    await act(async () => sync.emit({ type: "snapshot", tasks: [], moves: [], costs: [] }));
+    await act(async () => sync.emit({ type: "openTask", taskId: "task-1", task: { ...task("task-1", "Pushed task", "active"), updatedAt: "2026-09-09T00:00:00.000Z" } }));
+    expect(container.querySelector("h2")?.textContent).toBe("Pushed task");
+    await act(async () => vi.advanceTimersByTimeAsync(9000));
+    expect(taskReads()).toBe(1);
+  } finally { await act(async () => root.unmount()); container.remove(); window.history.replaceState(null, "", "/board?company=company-1"); }
 });

@@ -870,8 +870,12 @@ fn list_page(
 
 fn summary(task: &Value) -> Value {
     let mut fields = Map::new();
-    for name in ["id", "title", "status", "queuePriority", "archived"] {
+    for name in ["id", "title", "status", "archived"] {
         fields.insert(name.into(), task[name].clone());
+    }
+    // A summary omits the default priority to stay small.
+    if task["queuePriority"] != 0 {
+        fields.insert("queuePriority".into(), task["queuePriority"].clone());
     }
     if !task["workflow"]["name"].is_null() {
         fields.insert("workflow".into(), task["workflow"]["name"].clone());

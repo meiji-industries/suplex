@@ -1,28 +1,29 @@
-import { replaceEqualDeep, skipToken, useQuery, useQueryClient, type QueryClient, type UseQueryResult } from "@tanstack/react-query";
-import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
+import { replaceEqualDeep, skipToken, useQuery, useQueryClient, type QueryClient, type QueryKey, type UseQueryResult } from "@tanstack/react-query";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { readTaskCosts } from "../analytics/lib/analytics-api.js";
 import type { SyncMessage } from "../../contracts/generated/SyncMessage.js";
+import type { TaskAgents } from "../../contracts/generated/TaskAgents.js";
 import type { TaskCostsResponse } from "../../contracts/generated/TaskCostsResponse.js";
 import type { Task } from "../../contracts/tasks.js";
 import type { TaskListTask } from "../../contracts/task-responses.js";
 import { TaskAgentsBatchResponseSchema } from "../../contracts/task-responses.js";
 import { readJsonUnchecked } from "../../lib/api.js";
 import { useCompanyContext } from "../../shell/company-context.js";
-import { SyncLiveContext, syncedPolling } from "../../shell/sync.js";
+import { SyncLiveContext, SyncWatchContext, syncedPolling, useSyncLive, useSyncWatch } from "../../shell/sync.js";
 import { movesKey } from "../moves/lib/move-runs.js";
 import { projectsKey } from "../projects/lib/projects.js";
+import { taskObservationKey } from "./lib/task-queries.js";
 import { readTaskList, showRecentTasks } from "./lib/task-list.js";
 import { openTaskSync } from "./lib/task-sync-api.js";
 
-const polling = { refetchInterval: 3000, refetchIntervalInBackground: false, staleTime: 3000 };
 const emptyCosts = new Map<string, TaskCostsResponse["tasks"][number]>();
 const TaskCostsContext = createContext<{ companyId: string | undefined; costs: typeof emptyCosts }>({ companyId: undefined, costs: emptyCosts });
 export const taskCostsKey = (userId: string | undefined, companyId: string | undefined) => ["task-costs", userId, companyId] as const;
 const TaskDataContext = createContext<UseQueryResult<TaskListTask[]> | null>(null);
-export const taskListKey = (userId: string | undefined, companyId: string | undefined) => ["tasks", userId, companyId, "active"] as const;
+export const taskListKey = (userId: string | undefined, companyId: string | undefined, archived = false) => ["tasks", userId, companyId, archived ? "archived" : "active"] as const;
 
 /** Applies the tasks of one sync frame to the cached list. The list keeps the server order: newest `updatedAt` first, then id. */
-export function applyTaskSync(current: TaskListTask[] | undefined, message: SyncMessage): TaskListTask[] | undefined {
+export function applyTaskSync(current: TaskListTask[] | undefined, message: Extract<SyncMessage, { type: "snapshot" | "changes" }>): TaskListTask[] | undefined {
   if (message.type === "snapshot") return message.tasks;
   if (!current) return current;
   const changed = new Set(message.tasks.map(task => task.id));
@@ -50,26 +51,71 @@ export function TaskDataProvider({ children }: { children: ReactNode }) {
   const enabled = Boolean(user && companyId && showRecentTasks(window.location.pathname));
   // The server pushes task and move changes while the sync socket is open. Without it, the lists poll.
   const [live, setLive] = useState(false);
+  // Components declare the task agents and the open task they show. One watch frame follows a burst of renders.
+  const watches = useRef(new Set<{ agentTaskIds: string[]; openTaskId: string | null }>());
+  const socket = useRef<ReturnType<typeof openTaskSync>>(undefined);
+  const timer = useRef<number>(undefined);
+  const flush = useCallback(() => {
+    window.clearTimeout(timer.current);
+    timer.current = window.setTimeout(() => {
+      const all = [...watches.current];
+      socket.current?.watch({ type: "watch", agentTaskIds: [...new Set(all.flatMap(entry => entry.agentTaskIds))].sort(), openTaskId: all.find(entry => entry.openTaskId)?.openTaskId ?? null });
+    }, 50);
+  }, []);
+  const declare = useCallback((agentTaskIds: string[], openTaskId: string | null) => {
+    const entry = { agentTaskIds, openTaskId };
+    watches.current.add(entry); flush();
+    return () => { watches.current.delete(entry); flush(); };
+  }, [flush]);
   useEffect(() => {
     if (!enabled || !userId || !companyId) return;
     const queryKey = taskListKey(userId, companyId);
-    const close = openTaskSync(companyId, message => {
+    // A read that started before a frame holds older data.
+    const push = <T,>(key: QueryKey, value: T | undefined, keep?: (current: T, value: T) => boolean): void => {
+      if (value === undefined) return;
+      void client.cancelQueries({ queryKey: key, exact: true });
+      const before = client.getQueryData<T>(key);
+      if (before === undefined || !keep?.(before, value)) client.setQueryData<T>(key, value);
+    };
+    const sync = openTaskSync(companyId, message => {
       setLive(true);
-      // A read that started before this frame holds older data.
+      if (message.type === "agents") {
+        // Each element replaces the agents of one task in every batch that shows the task.
+        for (const [key, current] of client.getQueriesData<TaskAgents[]>({ queryKey: ["task-agents", userId, companyId] })) {
+          const ids: unknown = key[3];
+          if (!Array.isArray(ids)) continue;
+          const pushed = message.tasks.filter(entry => ids.includes(entry.taskId));
+          // A batch without a value waits for its first read, unless the frame has all of its tasks.
+          if (pushed.length && (current || pushed.length === ids.length)) push(key, [...(current ?? []).map(row => pushed.find(entry => entry.taskId === row.taskId) ?? row), ...pushed.filter(entry => !current?.some(row => row.taskId === entry.taskId))]);
+        }
+        return;
+      }
+      if (message.type === "openTask") {
+        const key = (part: string) => [...taskObservationKey(userId, companyId, message.taskId), part];
+        // A command response can be newer than the pushed task.
+        push<Task>(key("task"), message.task, (current, task) => current.updatedAt > task.updatedAt);
+        push(key("activity"), message.activity);
+        push(key("timeline"), message.timeline);
+        push(key("execution"), message.execution);
+        return;
+      }
+      const before = client.getQueryData<TaskListTask[]>(queryKey);
       if (message.type === "snapshot" || message.tasks.length || message.removedTaskIds.length) {
         void client.cancelQueries({ queryKey, exact: true });
         client.setQueryData<TaskListTask[]>(queryKey, current => applyTaskSync(current, message));
       }
-      if (message.moves) {
-        const moves = movesKey(userId, companyId);
-        void client.cancelQueries({ queryKey: moves, exact: true });
-        client.setQueryData(moves, message.moves);
-      }
-      // Projects travel over HTTP. A snapshot can follow a time without the socket.
-      if (message.type === "snapshot" || message.projectsChanged) void client.invalidateQueries({ queryKey: projectsKey(userId, companyId), exact: true }, { cancelRefetch: false });
+      // The archived list changes when a task leaves or enters the active list.
+      const ids = new Set(before?.map(task => task.id));
+      const after = client.getQueryData<TaskListTask[]>(queryKey);
+      if (before && after && (after.length !== ids.size || after.some(task => !ids.has(task.id)))) void client.invalidateQueries({ queryKey: taskListKey(userId, companyId, true), exact: true });
+      push(movesKey(userId, companyId), message.moves);
+      push(taskCostsKey(userId, companyId), message.costs && { tasks: message.costs });
+      push(projectsKey(userId, companyId), message.projects);
     }, () => setLive(false));
-    return () => { close(); setLive(false); };
-  }, [client, enabled, userId, companyId]);
+    socket.current = sync;
+    flush();
+    return () => { sync.close(); socket.current = undefined; setLive(false); };
+  }, [client, enabled, userId, companyId, flush]);
   const query = useQuery({
     queryKey: taskListKey(userId, companyId),
     queryFn: companyId ? ({ signal }) => readTaskList(companyId, false, signal) : skipToken,
@@ -81,15 +127,13 @@ export function TaskDataProvider({ children }: { children: ReactNode }) {
     queryKey: taskCostsKey(user?.id, companyId),
     queryFn: companyId ? ({ signal }) => readTaskCosts(companyId, signal) : skipToken,
     enabled: Boolean(user && companyId && /^\/(?:(?:tasks|board)(?:\/|$)|(?:timeline|analytics|setup)$)/.test(window.location.pathname)),
-    refetchInterval: 30_000,
-    refetchIntervalInBackground: false,
-    staleTime: 30_000,
+    ...syncedPolling(live, 30_000),
   });
   const costs = useMemo(() => ({
     companyId,
     costs: user && !costsQuery.isError && costsQuery.data ? new Map(costsQuery.data.tasks.map(task => [task.id, task])) : emptyCosts,
   }), [companyId, user?.id, costsQuery.data, costsQuery.isError]);
-  return <SyncLiveContext.Provider value={live}><TaskDataContext.Provider value={query}><TaskCostsContext.Provider value={costs}>{children}</TaskCostsContext.Provider></TaskDataContext.Provider></SyncLiveContext.Provider>;
+  return <SyncLiveContext.Provider value={live}><SyncWatchContext.Provider value={declare}><TaskDataContext.Provider value={query}><TaskCostsContext.Provider value={costs}>{children}</TaskCostsContext.Provider></TaskDataContext.Provider></SyncWatchContext.Provider></SyncLiveContext.Provider>;
 }
 
 export function useTaskData() {
@@ -107,6 +151,7 @@ export function useTaskAgents(taskIds: string[]) {
   const { user, currentCompany } = useCompanyContext();
   const companyId = currentCompany?.id;
   const ids = [...new Set(taskIds)].sort();
+  useSyncWatch(ids, null);
   return useQuery({
     queryKey: ["task-agents", user?.id, companyId, ids],
     queryFn: companyId ? async ({ signal }) => TaskAgentsBatchResponseSchema.parse(await readJsonUnchecked(
@@ -115,13 +160,15 @@ export function useTaskAgents(taskIds: string[]) {
     placeholderData: (previous, previousQuery) =>
       previousQuery?.queryKey[1] === user?.id && previousQuery?.queryKey[2] === companyId ? previous : undefined,
     enabled: Boolean(user && companyId && ids.length),
-    ...polling,
+    ...syncedPolling(useSyncLive()),
   });
 }
 
 export async function updateTaskCache(client: QueryClient, userId: string, task: Task): Promise<void> {
   const queryKey = taskListKey(userId, task.companyId);
-  await client.cancelQueries({ queryKey, exact: true });
+  const detail = [...taskObservationKey(userId, task.companyId, task.id), "task"];
+  await Promise.all([client.cancelQueries({ queryKey, exact: true }), client.cancelQueries({ queryKey: detail, exact: true })]);
+  client.setQueryData<Task>(detail, current => current && current.updatedAt > task.updatedAt ? current : task);
   const summary: TaskListTask = {
     id: task.id, companyId: task.companyId, projectId: task.projectId, issueKey: task.issueKey,
     title: task.title, status: task.status,
@@ -138,6 +185,8 @@ export async function updateTaskCache(client: QueryClient, userId: string, task:
     return current.some(row => row.id === task.id) ? current.map(row => row.id === task.id ? summary : row) : [summary, ...current];
   });
   if (!client.getQueryData(queryKey)) void client.invalidateQueries({ queryKey });
+  // The list frame of this change finds the active list already current, so it does not report an archive or a restore.
+  void client.invalidateQueries({ queryKey: taskListKey(userId, task.companyId, true), exact: true });
   void client.invalidateQueries({ queryKey: ["task-agents", userId, task.companyId] });
 }
 

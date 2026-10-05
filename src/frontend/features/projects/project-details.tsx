@@ -170,7 +170,13 @@ export function ProjectDetails({ projectId }: { projectId: string }): ReactEleme
       const result = await patch(body);
       if (token !== saveTokens.current.general || generation !== loadToken.current) return;
       const saved = generalDraft(result);
-      setProject((current) => current ? { ...current, name: result.name, repository: result.repository, repositoryPath: result.repositoryPath, baseBranch: result.baseBranch, updatedAt: result.updatedAt } : current);
+      setProject((current) => {
+        if (!current) return current;
+        // The response omits the repository when the project has none.
+        const next = { ...current, name: result.name, repositoryPath: result.repositoryPath, baseBranch: result.baseBranch, updatedAt: result.updatedAt };
+        if (result.repository === undefined) delete next.repository; else next.repository = result.repository;
+        return next;
+      });
       setGeneral((current) => current ? { saved, draft: same(current.draft, submitted) ? saved : current.draft, status: same(current.draft, submitted) ? { kind: "saved" } : idle } : current);
     } catch (reason) {
       if (token === saveTokens.current.general && generation === loadToken.current) setGeneral((current) => current ? { ...current, status: saveFailure(reason, "Unable to save General") } : current);
@@ -253,7 +259,13 @@ export function ProjectDetails({ projectId }: { projectId: string }): ReactEleme
       const result = await patch(body);
       if (token !== saveTokens.current.connections || generation !== loadToken.current) return;
       const saved = connectionsDraft(result);
-      setProject((current) => current ? { ...current, integration: result.integration, execution: { ...(current.execution ?? ProjectExecutionSchema.parse({})), environment: result.execution?.environment ?? {}, mcp: result.execution?.mcp ?? [] }, updatedAt: result.updatedAt } : current);
+      setProject((current) => {
+        if (!current) return current;
+        // The response omits the integration when the project has none.
+        const next = { ...current, execution: { ...(current.execution ?? ProjectExecutionSchema.parse({})), environment: result.execution?.environment ?? {}, mcp: result.execution?.mcp ?? [] }, updatedAt: result.updatedAt };
+        if (result.integration === undefined) delete next.integration; else next.integration = result.integration;
+        return next;
+      });
       setConnections((current) => current ? { saved, draft: same(current.draft, submitted) ? saved : current.draft, status: same(current.draft, submitted) ? { kind: "saved" } : idle } : current);
     } catch (reason) {
       if (token === saveTokens.current.connections && generation === loadToken.current) setConnections((current) => current ? { ...current, status: saveFailure(reason, "Unable to save Connections") } : current);

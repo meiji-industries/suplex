@@ -111,11 +111,6 @@ struct StoredProject {
 
 const SELECTION: &str = "SELECT p.integration_json, p.execution_json, p.provider_policy_json, p.id, p.company_id, p.name, p.repository_path, p.worktree_root, p.repository_identity, p.base_branch, p.setup_command, p.verification_command, p.root_profile_id, p.worker_profile_id, p.agent_task_policy_json, p.created_at, p.updated_at, p.alt_profile_id, p.task_concurrency FROM suplex_projects p";
 
-/// The stored columns of one company's projects, for the sync feed.
-pub(crate) fn company_selection() -> String {
-    format!("{SELECTION} WHERE p.company_id = ?1 ORDER BY p.id")
-}
-
 fn stored(row: &Row<'_>) -> rusqlite::Result<StoredProject> {
     Ok(StoredProject {
         integration_json: row.get(0)?,
@@ -472,37 +467,38 @@ pub fn list(
     let role = active_role(database, actor_user_id)?;
     if let Some(company_id) = company_id {
         companies::require_company_access(database, actor_user_id, company_id)?;
+        return list_company(database, company_id);
     }
-    let sql = if role == "admin" {
-        if company_id.is_some() {
-            format!("{SELECTION} WHERE p.company_id = ?1 ORDER BY p.name")
-        } else {
-            format!("{SELECTION} ORDER BY p.name")
-        }
-    } else if company_id.is_some() {
-        format!(
-            "{SELECTION} JOIN suplex_memberships m ON m.company_id = p.company_id WHERE m.user_id = ?1 AND p.company_id = ?2 ORDER BY p.name"
-        )
+    let mut statement = if role == "admin" {
+        database
+            .connection()
+            .prepare(&format!("{SELECTION} ORDER BY p.name"))?
     } else {
-        format!(
+        database.connection().prepare(&format!(
             "{SELECTION} JOIN suplex_memberships m ON m.company_id = p.company_id WHERE m.user_id = ?1 ORDER BY p.name"
-        )
+        ))?
     };
-    let mut statement = database.connection().prepare(&sql)?;
-    let rows = match (role == "admin", company_id) {
-        (true, Some(company_id)) => statement
-            .query_map([company_id], stored)?
-            .collect::<rusqlite::Result<Vec<_>>>()?,
-        (true, None) => statement
-            .query_map([], stored)?
-            .collect::<rusqlite::Result<Vec<_>>>()?,
-        (false, Some(company_id)) => statement
-            .query_map(params![actor_user_id, company_id], stored)?
-            .collect::<rusqlite::Result<Vec<_>>>()?,
-        (false, None) => statement
-            .query_map([actor_user_id], stored)?
-            .collect::<rusqlite::Result<Vec<_>>>()?,
-    };
+    let rows = if role == "admin" {
+        statement.query_map([], stored)?
+    } else {
+        statement.query_map([actor_user_id], stored)?
+    }
+    .collect::<rusqlite::Result<Vec<_>>>()?;
+    rows.into_iter().map(public_project).collect()
+}
+
+/// One company's projects in the order of the project list, for the list and
+/// the sync feed. The caller authorizes.
+pub(crate) fn list_company(
+    database: &SuplexDatabase,
+    company_id: &str,
+) -> DatabaseResult<Vec<Project>> {
+    let mut statement = database.connection().prepare(&format!(
+        "{SELECTION} WHERE p.company_id = ?1 ORDER BY p.name"
+    ))?;
+    let rows = statement
+        .query_map([company_id], stored)?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
     rows.into_iter().map(public_project).collect()
 }
 

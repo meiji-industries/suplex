@@ -191,7 +191,7 @@ fn legacy_worker_assignment(prompt: &str) -> Option<TaskWorkerAssignment> {
 }
 
 /// `host` derives terminal ids for host terminals instead of stored Herdr panes.
-fn activity_document(
+pub(crate) fn activity_document(
     rows: &RootObservationRows,
     task_id: &str,
     host: Option<&HostTerminals>,
@@ -250,7 +250,7 @@ fn activity_document(
     }
 }
 
-fn execution_document(
+pub(crate) fn execution_document(
     rows: &RootObservationRows,
     database_path: &std::path::Path,
 ) -> Result<TaskExecutionResponse, Box<dyn Error>> {

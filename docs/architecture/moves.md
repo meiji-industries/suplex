@@ -231,7 +231,8 @@ and add the task settings columns.
 
 Activity and the Board read moves through `useShellRuns` in
 [`move-runs.ts`](../../src/frontend/features/moves/lib/move-runs.ts), one
-polled query keyed `["moves", user, company]`. `useRunActions` performs Stop
+query keyed `["moves", user, company]`. The [sync feed](sync.md) pushes every
+move into it while its socket is open; otherwise it polls. `useRunActions` performs Stop
 and Archive and refreshes that query. `runsInTerminal` is the one place that
 decides whether a runner has a terminal.
 

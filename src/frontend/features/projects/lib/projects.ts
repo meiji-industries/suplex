@@ -6,7 +6,7 @@ import { listProjects } from "./project-api.js";
 
 export const projectsKey = (userId: string | undefined, companyId: string | undefined) => ["projects", userId, companyId] as const;
 
-/** The company's projects. The sync socket reports a change, and this query reads the projects again. */
+/** The company's projects. The sync socket pushes them when one changes. Without the socket, they poll. */
 export function useProjects(companyId: string | undefined): UseQueryResult<ProjectResponse[]> {
   const user = useOptionalCompanyContext()?.user;
   return useQuery({

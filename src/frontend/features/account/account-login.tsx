@@ -116,7 +116,7 @@ export function AccountLoginView({ preview = false, previewState }: { preview?: 
                 <h1 className="text-2xl font-normal tracking-tight">{waiting.email ? "Check your email" : "Continue in the browser"}</h1>
                 {waiting.email ? <p className="text-sm leading-relaxed text-muted-foreground">Suplex sent a login link to <span className="break-words text-foreground">{waiting.email}</span>. Open it to continue.</p> : <p className="text-sm leading-relaxed text-muted-foreground">Suplex will continue after you log in.</p>}
               </div>
-              <div className="flex min-h-9 items-center justify-center gap-2 text-muted-foreground"><Spinner />{waiting.url ? <Button variant="link" render={<a href={waiting.url} target="_blank" rel="noreferrer" />}>Open the browser</Button> : null}</div>
+              <div className="flex min-h-9 items-center justify-center gap-2 text-muted-foreground"><Spinner />{waiting.url ? <Button variant="link" nativeButton={false} render={<a href={waiting.url} target="_blank" rel="noreferrer" />}>Open the browser</Button> : null}</div>
               <Button variant="outline" onClick={cancel}>Cancel</Button>
             </div>
           ) : emailForm ? (

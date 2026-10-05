@@ -15,7 +15,7 @@ export function UpdateNotice(): ReactElement | null {
     <div data-update-notice data-update-state={notice.kind} role="status" aria-live="polite" className="flex min-h-9 items-center gap-2 border-b px-4 py-1 lg:px-6">
       <span className="min-w-0 flex-1 text-xs">{notice.message}</span>
       {notice.kind !== "progress" && updateState.update?.canRestart ? <Button type="button" size="xs" onClick={() => void updateState.restart()} disabled={updateState.requesting}>Restart Suplex</Button> : null}
-      <Button render={<a href={withCompany("/health#updates", companyId)} />} variant="link" size="xs">Open settings</Button>
+      <Button nativeButton={false} render={<a href={withCompany("/health#updates", companyId)} />} variant="link" size="xs">Open settings</Button>
     </div>
   );
 }

@@ -62,7 +62,7 @@ export function AccessView(): ReactElement {
       </SettingRow>
       <SettingRow label="HTTPS address" description="Tailscale provides HTTPS automatically. For a local network, configure an HTTPS reverse proxy."><Input aria-label="HTTPS address" placeholder="https://suplex.example.com" value={externalOrigin} onChange={(event) => setOrigin(event.target.value)} /></SettingRow>
       <SettingRow label="Save access settings"><Button size="sm" disabled={busy} onClick={() => void save()}>Save</Button></SettingRow>
-      {httpsOrigin ? <SettingRow label="HTTPS access" ><Button render={<a href={httpsOrigin} target="_blank" rel="noreferrer">Open HTTPS address</a>} variant="outline" size="sm" /></SettingRow> : null}
+      {httpsOrigin ? <SettingRow label="HTTPS access" ><Button nativeButton={false} render={<a href={httpsOrigin} target="_blank" rel="noreferrer">Open HTTPS address</a>} variant="outline" size="sm" /></SettingRow> : null}
     </SettingsSection>
     {error ? <Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert> : null}
   </SettingsContent></SettingsLayout>;

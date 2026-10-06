@@ -56,7 +56,14 @@ fn git(manifest: &Path, args: &[&str]) -> Option<String> {
 fn main() {
     let manifest = PathBuf::from(env::var("CARGO_MANIFEST_DIR").expect("Cargo manifest directory"));
     let migrations = embedded_files(&manifest.join("../migrations"), Some("sql"));
-    let frontend = embedded_files(&manifest.join("../dist/web"), None);
+    println!("cargo:rerun-if-env-changed=SUPLEX_DEV_EMBED_FRONTEND");
+    let embed_frontend = env::var("PROFILE").as_deref() == Ok("release")
+        || env::var("SUPLEX_DEV_EMBED_FRONTEND").as_deref() != Ok("0");
+    let frontend = if embed_frontend {
+        embedded_files(&manifest.join("../dist/web"), None)
+    } else {
+        String::new()
+    };
     if env::var("PROFILE").as_deref() == Ok("release") {
         for asset in ["suplex-ui.js", "suplex-ui.css"] {
             assert!(

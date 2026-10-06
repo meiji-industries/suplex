@@ -58,6 +58,23 @@ concrete cause. Transient failures can retry; missing executables, expired
 credentials, and missing repository access need their respective repairs.
 After an uncertain write, observe the repository before repeating it.
 
+GitHub rate-limit responses establish a shared cooldown for clients with the
+same API origin and credential in each process. REST and GraphQL primary limits
+are separate; secondary limits pause both. This includes rate-limit errors in
+HTTP 200 GraphQL responses. Suplex honors `Retry-After` and exhausted-quota reset
+headers. Without a usable deadline, cooldowns increase from one minute to a
+maximum of fifteen minutes. No observation request is sent during the cooldown,
+and one request probes recovery when it expires. Writes such as merges still
+reach GitHub, which gives the authoritative answer. The host logs entry and recovery once
+per cooldown instead of repeating warnings for each task. Restart discards the
+process-local cooldown; a new GitHub response reestablishes it.
+
+The dedicated minute poller refreshes delivered pull requests in batches.
+It skips missed ticks instead of replaying refreshes after suspension or a slow read.
+Individual task recovery sweeps do not repeat that batch read. GitHub cooldowns
+do not stop native task recovery or cleanup, change task authorization, or
+substitute stored observations for authoritative delivery evidence.
+
 Checks, review records, command output, and published artifacts help explain the
 work. Their existence does not imply a mandatory client-facing evidence packet
 or a second completion receipt. [Recovery](recovery.md) describes the same

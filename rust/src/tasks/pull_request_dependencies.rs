@@ -128,6 +128,7 @@ pub(crate) async fn refresh_with(
             .await;
         let observed = match observed {
             Ok(observed) => observed,
+            Err(error) if error.code == "provider-rate-limited" => return Err(error.into()),
             Err(error) => {
                 eprintln!(
                     "Pull request prerequisite observation will be retried for {task_id}: {error}"

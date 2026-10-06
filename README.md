@@ -109,9 +109,16 @@ that variable, so a different absolute path in every checkout causes misses.
 The compiler cache uses sccache's machine-wide configuration and defaults to
 a 10 GiB limit. Run `sccache --show-stats` to inspect hits and storage.
 Development and test builds keep backtrace line numbers but omit full debugger
-data and incremental artifacts to reduce disk use. The first build with these
-settings warms the cache; new worktrees still link their own binaries.
+data. Rustc keeps incremental artifacts in each checkout for faster rebuilds
+after edits. The wrapper sends incremental compilations directly to rustc and
+uses sccache for eligible dependencies. The first build warms these caches;
+new worktrees still link their own binaries.
 Check the wrapper with `mise run test:sccache-wrapper`.
+
+The Vite development stack sets `SUPLEX_DEV_EMBED_FRONTEND=0` so changes to
+`dist/web` do not trigger Rust rebuilds. Other builds embed the frontend by
+default, and release builds always embed it. Migrations remain embedded in
+every build.
 
 Loopback and tailnet requests receive the Operator administrator session.
 An empty development database receives a company, native profiles, and a project

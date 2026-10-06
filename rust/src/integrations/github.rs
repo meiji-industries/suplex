@@ -402,6 +402,7 @@ pub struct Access {
     client: Octocrab,
     token: Option<String>,
     source: CredentialSource,
+    request_identity: String,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -604,6 +605,11 @@ impl Access {
         }
         Ok(Self {
             client: builder.build()?,
+            request_identity: format!(
+                "{}:{}",
+                url::Url::parse(base_uri)?.origin().ascii_serialization(),
+                crate::shared::hash::sha256_hex(token.as_deref().unwrap_or_default())
+            ),
             token,
             source: CredentialSource::None,
         })
@@ -615,6 +621,10 @@ impl Access {
 
     pub(crate) fn client(&self) -> &Octocrab {
         &self.client
+    }
+
+    pub(crate) fn request_identity(&self) -> &str {
+        &self.request_identity
     }
 
     pub fn source(&self) -> CredentialSource {

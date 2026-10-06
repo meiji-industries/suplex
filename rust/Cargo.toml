@@ -49,8 +49,8 @@ elkrs = "0.1.1"
 
 [profile.dev]
 debug = "line-tables-only"
-# sccache cannot cache incremental compilations; avoid per-worktree incremental data.
-incremental = false
+# Keep local edit/rebuild cycles incremental; the wrapper caches eligible dependencies.
+incremental = true
 
 [lints.clippy]
 too_many_arguments = "deny"

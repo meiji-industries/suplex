@@ -378,6 +378,52 @@ async fn operations(fixture: &Fixture) -> (DeliveryOperations, Shared) {
     )
 }
 
+#[tokio::test]
+async fn delivered_task_recovery_leaves_pull_request_reads_to_the_batch_poller() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let fixture = fixture("pull_request_ready");
+    let database = SuplexDatabase::open(&fixture.database_path, OpenMode::ReadWrite).unwrap();
+    let pull = json!({"repository":"owner/repo","number":7,"url":"https://github.com/owner/repo/pull/7","headSha":"a".repeat(40),"state":"open","mergedAt":null});
+    database.connection().execute("UPDATE suplex_task_controls SET status='delivered', pull_request_json=?1 WHERE task_id=?2", rusqlite::params![pull.to_string(), fixture.task_id]).unwrap();
+    drop(database);
+    let calls = Arc::new(AtomicUsize::new(0));
+    let counted = calls.clone();
+    let app = Router::new().route("/graphql", post(move || {
+        counted.fetch_add(1, Ordering::SeqCst);
+        async { Json(json!({"data":{"p0":{"pullRequest":{"number":7,"url":"https://github.com/owner/repo/pull/7","headRefOid":"a".repeat(40),"state":"MERGED","mergedAt":"2026-10-05T02:32:47Z"}}}})) }
+    }));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let origin = format!("http://{}", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let github = Github::new(Access::for_api(&origin, None).unwrap());
+    let operations = DeliveryOperations::with_github(
+        &fixture.database_path,
+        &fixture.base.join("artifacts"),
+        Github::new(Access::for_api(&origin, None).unwrap()),
+    );
+    for _ in 0..3 {
+        operations
+            .observe_host_task(&fixture.task_id)
+            .await
+            .unwrap();
+    }
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+    super::completed_pull_requests::refresh(&fixture.database_path, Some(&github))
+        .await
+        .unwrap();
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    let control = control(&fixture);
+    assert_eq!(control.status, crate::tasks::control::TaskStatus::Delivered);
+    assert_eq!(control.pull_request.unwrap().state.as_str(), "merged");
+    operations
+        .observe_host_task(&fixture.task_id)
+        .await
+        .unwrap();
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    server.abort();
+    std::fs::remove_dir_all(fixture.base).unwrap();
+}
+
 async fn reviewed(operations: &DeliveryOperations, root: &RootIdentity) -> (String, ReviewRange) {
     let diff = operations
         .execute(

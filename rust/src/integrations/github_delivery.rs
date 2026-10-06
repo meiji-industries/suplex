@@ -3,7 +3,13 @@
 //! GitHub is observed through `octocrab`; Git through `git2`.
 
 use crate::shared::time::rfc3339_millis;
-use std::{error::Error, fmt, path::Path, sync::LazyLock, time::Duration};
+use std::{
+    error::Error,
+    fmt,
+    path::Path,
+    sync::{Arc, LazyLock},
+    time::Duration,
+};
 
 use chrono::{DateTime, Utc};
 use git2::{PushOptions, Repository};
@@ -13,6 +19,7 @@ use serde_json::{Value, json};
 
 use super::{
     github::Access,
+    github_rate_limit::{RateLimits, Resource},
     provider_http::{lenient, optional_metadata, present_string},
 };
 use crate::{
@@ -848,8 +855,99 @@ const OBSERVATION_QUERY: &str = "query($owner:String!,$name:String!,$number:Int!
 
 struct Reply {
     status: u16,
-    reset: Option<i64>,
+    etag: String,
     body: String,
+}
+
+/// Read both REST diagnostics and GraphQL error envelopes. Rate-limit errors
+/// can use HTTP 200; successful partial GraphQL data must remain available.
+fn rate_limit_details(
+    status: u16,
+    graphql: bool,
+    headers: &axum::http::HeaderMap,
+    value: &Value,
+    now: DateTime<Utc>,
+) -> Option<(Resource, Option<DateTime<Utc>>, String)> {
+    let message = value["message"].as_str().unwrap_or_default();
+    let graph_error = graphql
+        .then(|| value["errors"].as_array())
+        .flatten()
+        .and_then(|errors| {
+            errors.iter().find(|error| {
+                error["type"] == "RATE_LIMITED"
+                    || error["extensions"]["code"] == "RATE_LIMITED"
+                    || RATE_LIMIT.is_match(error["message"].as_str().unwrap_or_default())
+            })
+        });
+    let remaining = headers
+        .get("x-ratelimit-remaining")
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse::<u64>().ok());
+    if status != 429
+        && !(status == 403 && (remaining == Some(0) || RATE_LIMIT.is_match(message)))
+        && graph_error.is_none()
+    {
+        return None;
+    }
+    let summary = redact_summary(
+        graph_error
+            .and_then(|error| error["message"].as_str())
+            .unwrap_or(message),
+    );
+    let summary = if summary.is_empty() {
+        "GitHub limited requests".to_owned()
+    } else {
+        summary
+    };
+    let after = headers
+        .get("retry-after")
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| {
+            value
+                .parse::<i64>()
+                .ok()
+                .filter(|seconds| *seconds >= 0)
+                .and_then(chrono::Duration::try_seconds)
+                .and_then(|duration| now.checked_add_signed(duration))
+                .or_else(|| {
+                    DateTime::parse_from_rfc2822(value)
+                        .ok()
+                        .map(|time| time.with_timezone(&Utc))
+                })
+        })
+        .filter(|time| *time > now);
+    // A rate-limit response can omit the remaining count. Keep its explicit
+    // reset deadline; a positive remaining count identifies a secondary limit.
+    let reset = (remaining.is_none() || remaining == Some(0))
+        .then(|| headers.get("x-ratelimit-reset"))
+        .flatten()
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse().ok())
+        .and_then(|seconds| DateTime::from_timestamp(seconds, 0))
+        .filter(|time| *time > now);
+    let scope = if (remaining == Some(0) || (remaining.is_none() && reset.is_some()))
+        && !summary.to_lowercase().contains("secondary")
+        && !summary.to_lowercase().contains("abuse")
+    {
+        if graphql {
+            Resource::Graphql
+        } else {
+            Resource::Rest
+        }
+    } else {
+        Resource::Secondary
+    };
+    Some((scope, after.into_iter().chain(reset).max(), summary))
+}
+
+/// Caller logging is reserved for other failures; the shared cooldown reports
+/// its own entry and recovery once, regardless of the number of observers.
+pub(crate) fn is_rate_limited(error: &(dyn Error + 'static)) -> bool {
+    error
+        .downcast_ref::<GithubFailure>()
+        .is_some_and(|failure| {
+            failure.code == "provider-rate-limited" && failure.retry_at.is_some()
+        })
 }
 
 /// How `api` treats a 404 and other statuses the caller handles itself.
@@ -892,12 +990,14 @@ fn diagnostic(body: &str) -> String {
 
 pub struct Github {
     access: Access,
+    rate_limits: Arc<RateLimits>,
     pub retry_pauses: Vec<Duration>,
 }
 
 impl Github {
     pub fn new(access: Access) -> Self {
         Self {
+            rate_limits: RateLimits::shared(access.request_identity()),
             access,
             retry_pauses: vec![Duration::from_secs(2), Duration::from_secs(6)],
         }
@@ -917,9 +1017,27 @@ impl Github {
     }
 
     pub async fn same_repository(&self, left: &str, right: &str) -> GithubResult<bool> {
-        crate::projects::connection::same_repository(&self.access, left, right)
-            .await
-            .map_err(|error| failure("provider-unavailable", redact_summary(&error.to_string())))
+        #[derive(Deserialize)]
+        struct Identity {
+            id: u64,
+        }
+        let mut identities = Vec::new();
+        for repository in [left, right] {
+            let repository = normalize_repository(repository)?;
+            let identity: Identity = decode_response(
+                &self
+                    .response_body(
+                        "GET",
+                        &repo_route(&repository, &[]),
+                        None,
+                        "repository identity",
+                    )
+                    .await?,
+                "GitHub repository identity is malformed",
+            )?;
+            identities.push(identity.id);
+        }
+        Ok(identities[0] == identities[1])
     }
 
     pub fn token(&self) -> Option<&str> {
@@ -933,12 +1051,37 @@ impl Github {
         body: Option<&Value>,
         operation: &str,
     ) -> GithubResult<Reply> {
+        self.send_with_headers(method, path, body, operation, None)
+            .await
+    }
+
+    async fn send_with_headers(
+        &self,
+        method: &str,
+        path: &str,
+        body: Option<&Value>,
+        operation: &str,
+        headers: Option<axum::http::HeaderMap>,
+    ) -> GithubResult<Reply> {
+        let graphql = path == "/graphql";
+        // Observation waits out a cooldown. A user or agent write still reaches
+        // GitHub: the authoritative answer, not a local cooldown, decides it.
+        let permit = if graphql || method == "GET" {
+            let resource = if graphql {
+                Resource::Graphql
+            } else {
+                Resource::Rest
+            };
+            Some(self.rate_limits.acquire(resource, Utc::now())?)
+        } else {
+            None
+        };
         let client = self.access.client();
         let response = match method {
             "POST" => client._post(path, body).await,
             "PATCH" => client._patch(path, body).await,
             "PUT" => client._put(path, body).await,
-            _ => client._get(path).await,
+            _ => client._get_with_headers(path, headers).await,
         }
         .map_err(|error| {
             failure(
@@ -947,22 +1090,45 @@ impl Github {
             )
         })?;
         let status = response.status().as_u16();
-        let reset = response
-            .headers()
-            .get("x-ratelimit-reset")
+        let headers = response.headers().clone();
+        let etag = headers
+            .get(axum::http::header::ETAG)
             .and_then(|value| value.to_str().ok())
-            .and_then(|value| value.parse().ok());
+            .unwrap_or_default()
+            .to_owned();
         let body = client.body_to_string(response).await.map_err(|error| {
             failure(
                 "provider-unavailable",
                 redact_summary(&format!("{operation} failed: {error}")),
             )
         })?;
-        Ok(Reply {
-            status,
-            reset,
-            body,
-        })
+        let now = Utc::now();
+        let value: Value = serde_json::from_str(&body).unwrap_or(Value::Null);
+        if let Some((resource, deadline, summary)) =
+            rate_limit_details(status, graphql, &headers, &value, now)
+        {
+            let (error, started) = self.rate_limits.record(resource, deadline, summary, now);
+            if started {
+                eprintln!(
+                    "GitHub requests delayed by a rate limit; retry at {}",
+                    error.retry_at.as_deref().unwrap_or_default()
+                );
+            }
+            // The batch reader and typed GraphQL reader retain partial data.
+            let partial = (200..300).contains(&status)
+                && graphql
+                && value["data"]
+                    .as_object()
+                    .is_some_and(|data| data.values().any(|value| !value.is_null()));
+            if !partial {
+                return Err(error);
+            }
+        } else if permit
+            .is_some_and(|permit| permit.finish((200..300).contains(&status) || status == 304, now))
+        {
+            eprintln!("GitHub requests resumed after a rate limit");
+        }
+        Ok(Reply { status, etag, body })
     }
 
     /// One GitHub REST request with its HTTP status, for callers that own status handling.
@@ -994,26 +1160,13 @@ impl Github {
         if let Some(value) = etag.and_then(|etag| etag.parse().ok()) {
             headers.insert(axum::http::header::IF_NONE_MATCH, value);
         }
-        let client = self.access.client();
-        let response = client
-            ._get_with_headers(path, Some(headers))
-            .await
-            .map_err(|error| unavailable(&error))?;
-        let status = response.status().as_u16();
-        let next = response
-            .headers()
-            .get(axum::http::header::ETAG)
-            .and_then(|value| value.to_str().ok())
-            .unwrap_or_default()
-            .to_owned();
-        client
-            .body_to_string(response)
-            .await
-            .map_err(|error| unavailable(&error))?;
-        match status {
+        let reply = self
+            .send_with_headers("GET", path, None, operation, Some(headers))
+            .await?;
+        match reply.status {
             304 => Ok(None),
-            200..300 => Ok(Some(next)),
-            _ => Err(unavailable(&format!("HTTP {status}"))),
+            200..300 => Ok(Some(reply.etag)),
+            _ => Err(unavailable(&format!("HTTP {}", reply.status))),
         }
     }
 
@@ -1074,18 +1227,6 @@ impl Github {
                 diagnostic.clone()
             }
         };
-        if reply.status == 429 || (reply.status == 403 && RATE_LIMIT.is_match(&reply.body)) {
-            let retry_at = reply
-                .reset
-                .and_then(|reset| DateTime::from_timestamp(reset, 0))
-                .filter(|time| *time > Utc::now())
-                .map(rfc3339_millis);
-            return Err(GithubFailure {
-                code: "provider-rate-limited",
-                summary: or("GitHub limited requests".into()),
-                retry_at,
-            });
-        }
         if reply.status == 401 {
             return Err(failure(
                 "authentication-required",
@@ -2005,6 +2146,302 @@ pub fn push_normal(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rate_limit_headers_choose_the_later_deadline_and_ignore_invalid_dates() {
+        let now = DateTime::from_timestamp(1_800_000_000, 0).unwrap();
+        let body = &json!({"message":"API rate limit exceeded"});
+        let mut headers = axum::http::HeaderMap::new();
+        headers.insert("x-ratelimit-remaining", "0".parse().unwrap());
+        headers.insert(
+            "x-ratelimit-reset",
+            (now.timestamp() + 120).to_string().parse().unwrap(),
+        );
+        headers.insert("retry-after", "240".parse().unwrap());
+        let (scope, deadline, _) = rate_limit_details(403, false, &headers, body, now).unwrap();
+        assert_eq!(scope, Resource::Rest);
+        assert_eq!(deadline, Some(now + chrono::Duration::seconds(240)));
+        headers.insert("retry-after", "60".parse().unwrap());
+        assert_eq!(
+            rate_limit_details(403, false, &headers, body, now)
+                .unwrap()
+                .1,
+            Some(now + chrono::Duration::seconds(120))
+        );
+        headers.remove("x-ratelimit-remaining");
+        let (scope, deadline, _) = rate_limit_details(429, false, &headers, body, now).unwrap();
+        assert_eq!(scope, Resource::Rest);
+        assert_eq!(deadline, Some(now + chrono::Duration::seconds(120)));
+        // Malformed dates, negative values, and past resets
+        // must never panic or cause an immediate retry loop.
+        for after in ["broken", "-1", "9223372036854775807"] {
+            headers.insert("retry-after", after.parse().unwrap());
+            headers.insert("x-ratelimit-reset", "0".parse().unwrap());
+            assert_eq!(
+                rate_limit_details(403, false, &headers, body, now)
+                    .unwrap()
+                    .1,
+                None
+            );
+        }
+        let date = (now + chrono::Duration::seconds(300)).to_rfc2822();
+        headers.insert("retry-after", date.parse().unwrap());
+        assert_eq!(
+            rate_limit_details(429, true, &headers, body, now)
+                .unwrap()
+                .1,
+            Some(now + chrono::Duration::seconds(300))
+        );
+        assert!(
+            rate_limit_details(
+                403,
+                false,
+                &axum::http::HeaderMap::new(),
+                &json!({"message":"Resource not accessible by integration"}),
+                now
+            )
+            .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn primary_limits_keep_rest_and_other_credentials_available() {
+        use axum::{
+            Json, Router,
+            routing::{get, post},
+        };
+        use std::sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        };
+        let calls = Arc::new(AtomicUsize::new(0));
+        let counted = calls.clone();
+        let app = Router::new().route("/graphql", post(move || {
+            counted.fetch_add(1, Ordering::SeqCst);
+            async { ([("x-ratelimit-remaining", "0")], Json(json!({"data":null,"errors":[{"type":"RATE_LIMITED","message":"API rate limit exceeded"}]}))) }
+        })).route("/repos/owner/repo/branches/main", get(|| async { Json(json!({"commit":{"sha":"a".repeat(40)}})) }));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let origin = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let github = Github::new(Access::for_api(&origin, Some("one".into())).unwrap());
+        assert_eq!(
+            github
+                .pull_request_states(&[("owner/repo".into(), 7)])
+                .await
+                .unwrap_err()
+                .code,
+            "provider-rate-limited"
+        );
+        assert_eq!(
+            github.get_branch_head("owner/repo", "main").await.unwrap(),
+            Some("a".repeat(40))
+        );
+        let other = Github::new(Access::for_api(&origin, Some("two".into())).unwrap());
+        assert!(
+            other
+                .pull_request_states(&[("owner/repo".into(), 7)])
+                .await
+                .is_err()
+        );
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn partial_rate_limited_batches_keep_results_and_pause_later_requests() {
+        let (github, server) = fake_api(vec![], vec![("query", json!({
+            "data":{"p0":{"pullRequest":{"number":7,"url":"https://github.com/owner/repo/pull/7","headRefOid":"a".repeat(40),"state":"MERGED","mergedAt":"2026-09-10T02:32:47Z"}},"p1":null},
+            "errors":[{"type":"RATE_LIMITED","message":"API rate limit exceeded"}]
+        }))]).await;
+        let observed = github
+            .pull_request_states(&[("owner/repo".into(), 7), ("missing/repo".into(), 8)])
+            .await
+            .unwrap();
+        assert_eq!(observed.len(), 1);
+        assert_eq!(observed[0]["number"], 7);
+        assert_eq!(
+            github
+                .get_branch_head("owner/repo", "main")
+                .await
+                .unwrap_err()
+                .code,
+            "provider-rate-limited"
+        );
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn repository_identity_reads_compare_ids_through_the_shared_transport() {
+        let (github, server) = fake_api(
+            vec![
+                ("/repos/owner/old", 200, json!({"id":7})),
+                ("/repos/owner/renamed", 200, json!({"id":7})),
+                ("/repos/owner/other", 200, json!({"id":8})),
+            ],
+            vec![],
+        )
+        .await;
+        assert!(
+            github
+                .same_repository("owner/old", "owner/renamed")
+                .await
+                .unwrap()
+        );
+        assert!(
+            !github
+                .same_repository("owner/old", "owner/other")
+                .await
+                .unwrap()
+        );
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn conditional_reads_share_secondary_cooldowns_with_graphql() {
+        let (github, server) = fake_api(
+            vec![(
+                "/events",
+                429,
+                json!({"message":"secondary rate limit exceeded"}),
+            )],
+            vec![],
+        )
+        .await;
+        let first = github
+            .changed_since("/events", Some("etag"), "events")
+            .await
+            .unwrap_err();
+        let next = github
+            .pull_request_states(&[("owner/repo".into(), 7)])
+            .await
+            .unwrap_err();
+        assert_eq!(first.code, "provider-rate-limited");
+        assert_eq!(next, first);
+        assert_eq!(
+            github
+                .same_repository("owner/repo", "owner/other")
+                .await
+                .unwrap_err(),
+            first
+        );
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn rate_limits_stop_observation_requests_from_recreated_clients() {
+        use axum::{Json, Router};
+        use std::sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        };
+        for (status, body) in [
+            (
+                200,
+                json!({"data":null,"errors":[{"type":"RATE_LIMITED","message":"API rate limit already exceeded for user ID 566793."}]}),
+            ),
+            (429, json!({"message":"API rate limit exceeded"})),
+        ] {
+            let calls = Arc::new(AtomicUsize::new(0));
+            let counted = calls.clone();
+            let reset = Utc::now().timestamp() + 600;
+            let app = Router::new().fallback(move || {
+                counted.fetch_add(1, Ordering::SeqCst);
+                let body = body.clone();
+                async move {
+                    (
+                        axum::http::StatusCode::from_u16(status).unwrap(),
+                        [
+                            ("x-ratelimit-remaining", "0".to_owned()),
+                            ("x-ratelimit-reset", reset.to_string()),
+                        ],
+                        Json(body),
+                    )
+                }
+            });
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let origin = format!("http://{}", listener.local_addr().unwrap());
+            let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+            let github = Github::new(Access::for_api(&origin, Some("fixture".into())).unwrap());
+            let error = github
+                .observe_pull_request("owner/repo", "task", Some(7))
+                .await
+                .unwrap_err();
+            assert_eq!(error.code, "provider-rate-limited");
+            assert_eq!(
+                error.retry_at,
+                Some(rfc3339_millis(DateTime::from_timestamp(reset, 0).unwrap()))
+            );
+            drop(github);
+            for _ in 0..3 {
+                let github = Github::new(Access::for_api(&origin, Some("fixture".into())).unwrap());
+                assert_eq!(
+                    github
+                        .pull_request_states(&[("owner/repo".into(), 7)])
+                        .await
+                        .unwrap_err()
+                        .code,
+                    "provider-rate-limited"
+                );
+            }
+            assert_eq!(calls.load(Ordering::SeqCst), 1);
+            server.abort();
+        }
+    }
+
+    #[tokio::test]
+    async fn writes_reach_github_during_an_observation_cooldown() {
+        let (github, server) = fake_api(
+            vec![
+                (
+                    "/repos/owner/repo/branches/main",
+                    429,
+                    json!({"message":"API rate limit exceeded"}),
+                ),
+                (
+                    "/repos/owner/repo/pulls/7/merge",
+                    200,
+                    json!({"merged":true}),
+                ),
+            ],
+            vec![],
+        )
+        .await;
+        assert_eq!(
+            github
+                .get_branch_head("owner/repo", "main")
+                .await
+                .unwrap_err()
+                .code,
+            "provider-rate-limited"
+        );
+        let (status, _) = github
+            .raw("PUT", "/repos/owner/repo/pulls/7/merge", Some(&json!({})))
+            .await
+            .unwrap();
+        assert_eq!(status, 200);
+        assert_eq!(
+            github
+                .get_branch_head("owner/repo", "main")
+                .await
+                .unwrap_err()
+                .code,
+            "provider-rate-limited"
+        );
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn batch_graphql_rate_limits_keep_provider_diagnostics() {
+        let (github, server) = fake_api(vec![], vec![("query", json!({"errors":[{"type":"RATE_LIMITED","message":"API rate limit already exceeded for user ID 566793."}]}))]).await;
+        let error = github
+            .pull_request_states(&[("owner/repo".into(), 7)])
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, "provider-rate-limited");
+        assert!(error.summary.contains("rate limit already exceeded"));
+        assert!(error.retry_at.is_some());
+        server.abort();
+    }
 
     #[test]
     fn graphql_observation_reads_native_checks_and_preserves_missing_rollups() {

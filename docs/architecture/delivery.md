@@ -30,6 +30,15 @@ an unrelated approval. An advanced base branch is not by itself an authorization
 failure: review equivalence can establish whether the integrated change is still
 covered. Ordinary conflicts become repair work for the agents.
 
+A task created from a pull request or branch source works on its own local
+branch (`configuration.localBranch`) and publishes to the source's branch
+(`deliveryIntent.headBranch`), so its worktree never competes with another
+checkout of that branch. Delivery pushes the reviewed head by SHA to the
+published branch. When that branch has moved since the work started, the push
+is refused with the new head so the Coordinator can fetch, integrate, and review
+again. Starting such a task reads the pull request from GitHub first; a merged
+or closed pull request asks the human instead of building a worktree.
+
 For non-Standard workflows, recording verified completion reloads reviews,
 delegates, cancellation, and operation ownership in the same database transaction
 as the completion write. Git and network observations happen outside that short

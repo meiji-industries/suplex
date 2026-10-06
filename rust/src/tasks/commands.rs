@@ -1725,6 +1725,25 @@ mod tests {
     }
 
     #[test]
+    fn a_pull_request_source_keeps_a_private_local_branch_and_publishes_to_the_head_branch() {
+        let (filename, _database, _user, mut prepared) = command_fixture();
+        super::super::sources::apply(
+            &mut prepared,
+            super::super::sources::captured_pull_request_for_test(
+                7,
+                &"a".repeat(40),
+                &"b".repeat(40),
+            ),
+        )
+        .unwrap();
+        assert_eq!(prepared.configuration["localBranch"], "task-command");
+        assert_eq!(prepared.configuration["branch"], "feature");
+        assert_eq!(prepared.delivery_intent.head_branch, "feature");
+        assert_eq!(prepared.delivery_intent.pull_request_number, Some(7));
+        std::fs::remove_file(filename).unwrap();
+    }
+
+    #[test]
     fn branch_source_starts_without_claiming_a_pull_request() {
         let (filename, mut database, user, mut prepared) = command_fixture();
         prepared.configuration["source"] = json!({"kind":"branch","branch":"feature"});

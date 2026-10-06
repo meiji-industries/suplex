@@ -55,8 +55,18 @@ pub fn initial_coordinator_prompt(
         .and_then(|value| value.get("visualEvidence"))
         .and_then(Value::as_str)
         .unwrap_or("required");
+    let local_branch = context["configuration"]["localBranch"]
+        .as_str()
+        .filter(|local| *local != intent.head_branch)
+        .map(|local| {
+            format!(
+                "\nLocal branch: {local} (Suplex publishes it to {})",
+                intent.head_branch
+            )
+        })
+        .unwrap_or_default();
     let identity = format!(
-        "Objective: {}\nDelivery target: {}\nRepository: {}\nBranch: {}",
+        "Objective: {}\nDelivery target: {}\nRepository: {}\nBranch: {}{local_branch}",
         control.objective, control.delivery_target, intent.repository, intent.head_branch,
     );
     let instructions = match control.workflow {

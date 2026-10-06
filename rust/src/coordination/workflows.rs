@@ -559,7 +559,6 @@ pub fn workflow_ready_for_delivery(
 }
 
 pub struct LocalSourceFacts<'a> {
-    pub branch: Option<&'a str>,
     pub head_sha: Option<&'a str>,
     pub clean: bool,
 }
@@ -605,15 +604,6 @@ pub fn delivery_decision(
     let workflow = control.workflow;
     if workflow == Workflow::Standard {
         return Ok(());
-    }
-    let head_branch = control.delivery_intent.head_branch.as_str();
-    if let Some(branch) = local.branch
-        && branch != head_branch
-    {
-        return Err(DeliveryRefusal {
-            code: "head_diverged",
-            reason: format!("The worktree is on {branch}, not the task branch {head_branch}."),
-        });
     }
     if let Some(head) = local.head_sha
         && head != range.head_sha
@@ -864,11 +854,6 @@ mod tests {
         let mut control = TaskControlRow::fixture();
         control.workflow = Workflow::IndependentReview;
         control.delivery_intent.head_branch = "task".into();
-        let clean = LocalSourceFacts {
-            branch: Some("task"),
-            head_sha: Some(&range.head_sha),
-            clean: true,
-        };
         assert_eq!(
             delivery_decision(
                 &TaskControlRow::fixture(),
@@ -876,29 +861,12 @@ mod tests {
                 &[],
                 &range,
                 &LocalSourceFacts {
-                    branch: None,
                     head_sha: None,
                     clean: false
                 },
                 true
             ),
             Ok(())
-        );
-        assert_eq!(
-            delivery_decision(
-                &control,
-                &[],
-                &[],
-                &range,
-                &LocalSourceFacts {
-                    branch: Some("main"),
-                    ..clean
-                },
-                true
-            )
-            .unwrap_err()
-            .code,
-            "head_diverged"
         );
         let other = sha('c');
         let moved = delivery_decision(
@@ -907,7 +875,6 @@ mod tests {
             &[],
             &range,
             &LocalSourceFacts {
-                branch: Some("task"),
                 head_sha: Some(&other),
                 clean: true,
             },
@@ -926,7 +893,6 @@ mod tests {
                 &[],
                 &range,
                 &LocalSourceFacts {
-                    branch: Some("task"),
                     head_sha: Some(&range.head_sha),
                     clean: false
                 },
@@ -951,7 +917,6 @@ mod tests {
             &turns,
             &range,
             &LocalSourceFacts {
-                branch: Some("task"),
                 head_sha: Some(&range.head_sha),
                 clean: true,
             },
@@ -966,7 +931,6 @@ mod tests {
             )
         );
         let facts = LocalSourceFacts {
-            branch: Some("task"),
             head_sha: Some(&range.head_sha),
             clean: true,
         };

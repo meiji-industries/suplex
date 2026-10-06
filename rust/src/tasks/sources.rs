@@ -503,6 +503,9 @@ pub fn apply(prepared: &mut PreparedTask, created: CreationSource) -> serde_json
     let configuration = &mut prepared.configuration;
     configuration["source"] = created.selector.unwrap_or(Value::Null);
     if let Some(pinned) = &created.pinned {
+        // The task keeps its own local branch so its worktree never competes with
+        // another checkout of the published branch. `branch` stays the published name.
+        configuration["localBranch"] = configuration["branch"].clone();
         match pinned["kind"].as_str() {
             Some("pull_request") => {
                 configuration["branch"] = pinned["headBranch"].clone();

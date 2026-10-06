@@ -202,6 +202,20 @@ pub fn published_base_commit(
     Ok(published_sha)
 }
 
+/// Whether `head` descends from (or is) `other` in the worktree at `path`,
+/// fetching `other` by SHA from origin when it is not local yet.
+pub fn head_contains(
+    path: &Path,
+    head: &str,
+    other: &str,
+    github_token: Option<&str>,
+) -> WorktreeResult<bool> {
+    let repository = Repository::open(path)?;
+    let head = git2::Oid::from_str(head)?;
+    let other = published_base_commit(&repository, git2::Oid::from_str(other)?, github_token)?;
+    Ok(head == other || repository.graph_descendant_of(head, other)?)
+}
+
 pub(crate) fn token_audience_matches(raw: &str) -> bool {
     url::Url::parse(raw).is_ok_and(|url| {
         url.scheme() == "https"
@@ -690,8 +704,9 @@ pub async fn prepare_task_worktree(
         task_id: task_id.to_owned(),
         repository_path: required_path(configuration, "repositoryPath")?,
         worktree_root: required_path(configuration, "worktreeRoot")?,
-        branch: configuration["branch"]
+        branch: configuration["localBranch"]
             .as_str()
+            .or_else(|| configuration["branch"].as_str())
             .ok_or_else(|| crate::tasks::TaskError::internal("Task branch is missing"))?
             .to_owned(),
         starting_sha: configuration["startingSha"]

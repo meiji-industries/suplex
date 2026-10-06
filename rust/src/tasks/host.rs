@@ -180,13 +180,16 @@ async fn poll_periodically<F, Fut>(
     Fut: Future<Output = DatabaseResult<()>>,
 {
     let mut interval = tokio::time::interval(period);
+    // A slow provider or a suspended host must not replay missed refreshes.
+    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     loop {
         tokio::select! {
             result = shutdown.changed() => {
                 if result.is_err() || *shutdown.borrow() { break; }
             },
             _ = interval.tick() => {
-                if let Err(error) = refresh().await {
+                if let Err(error) = refresh().await
+                    && !crate::integrations::github_delivery::is_rate_limited(error.as_ref()) {
                     eprintln!("{subject} refresh will be retried: {error}");
                 }
             },
@@ -341,6 +344,7 @@ async fn sweep_task_once(
     {
         let prepared = async {
             if needs_worktree {
+                require_open_source_pull_request(database, task_id).await?;
                 let prepared = prepare_task_worktree(database_path, task_id).await?;
                 root_session_store::set_worktree(database, task_id, &prepared, Utc::now())?;
             }
@@ -395,6 +399,43 @@ async fn sweep_task_once(
         root_session_store::wake_idle_root(database, task_id, &prompt, Utc::now())?;
     }
     Ok(())
+}
+
+/// A task sourced from a pull request needs that pull request still open
+/// before Suplex builds a worktree for it. GitHub is read directly.
+async fn require_open_source_pull_request(
+    database: &mut SuplexDatabase,
+    task_id: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let Some((repository, number)) = source_pull_request(database, task_id)? else {
+        return Ok(());
+    };
+    let pull = crate::integrations::github_delivery::Github::load()
+        .await?
+        .get_pull_request(&repository, number)
+        .await?;
+    if pull.state == "open" {
+        return Ok(());
+    }
+    Err(format!(
+        "Pull request #{number} is {}. Cancel or archive this task, or create a new task from the current work",
+        pull.state
+    )
+    .into())
+}
+
+fn source_pull_request(
+    database: &SuplexDatabase,
+    task_id: &str,
+) -> DatabaseResult<Option<(String, u64)>> {
+    let rows = root_session_store::root_observation_rows(database, task_id)?;
+    let source = &rows.context["configuration"]["source"];
+    Ok(match (source["kind"].as_str(), source["number"].as_u64()) {
+        (Some("pull_request"), Some(number)) => {
+            Some((rows.control.delivery_intent.repository.clone(), number))
+        }
+        _ => None,
+    })
 }
 
 #[cfg(test)]

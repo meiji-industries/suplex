@@ -79,9 +79,7 @@ pub fn check_standard_local_completion(
     local: &LocalRevisionObservation,
 ) -> Result<(), DeliveryError> {
     standard_local_worktree_path(control)?;
-    if expected_head.is_none_or(|head| head != local.head_sha)
-        || control.delivery_intent.head_branch != local.branch
-    {
+    if expected_head.is_none_or(|head| head != local.head_sha) {
         return Err(DeliveryError::operation(
             "head_diverged",
             "Review the current worktree before completing the task",
@@ -180,7 +178,6 @@ pub fn complete_workflow_delivery(
             });
         }
         let facts = LocalSourceFacts {
-            branch: Some(&local.branch),
             head_sha: Some(&local.head_sha),
             clean: local.clean,
         };
@@ -340,7 +337,6 @@ fn short(sha: &str) -> &str {
 
 fn facts(local: &LocalRevisionObservation) -> LocalSourceFacts<'_> {
     LocalSourceFacts {
-        branch: Some(&local.branch),
         head_sha: Some(&local.head_sha),
         clean: local.clean,
     }
@@ -647,6 +643,21 @@ impl DeliveryOperations {
             return Ok(Value::Null);
         }
         self.observe_known_pull(&control, Adoption::default()).await
+    }
+
+    /// Recovery observes only this task. The host's minute poller owns
+    /// delivered pull request batches, independently of cleanup sweeps.
+    pub(super) async fn observe_host_task(&self, task_id: &str) -> DatabaseResult<()> {
+        let control = self.get(task_id)?;
+        match control.status {
+            TaskStatus::Active if control.workflow_state.delivery_wait.is_some() => {
+                self.observe_delivery_wait(task_id).await.map(|_| ())
+            }
+            TaskStatus::Active | TaskStatus::WaitingHuman => {
+                self.observe(task_id).await.map(|_| ())
+            }
+            _ => Ok(()),
+        }
     }
 
     /// TypeScript `observeDeliveryWait`: one persisted wait is consumed at most once.
@@ -1140,12 +1151,6 @@ impl DeliveryOperations {
         };
         let path = PathBuf::from(&worktree.path);
         let local = github_delivery::inspect_local_revision(&path).map_err(Box::new)?;
-        if control.delivery_intent.head_branch != local.branch {
-            return Err(delivery_failure(
-                "head_diverged",
-                "The worktree branch does not match this task intent",
-            ));
-        }
         self.set_worktree(control.task_id.as_str(), worktree, &local)?;
         Ok((path, local))
     }
@@ -1255,7 +1260,6 @@ impl DeliveryOperations {
             task_id,
             &range,
             &LocalSourceFacts {
-                branch: None,
                 head_sha: None,
                 clean: local.clean,
             },
@@ -1366,8 +1370,12 @@ impl DeliveryOperations {
         let pull = if push {
             Value::Null
         } else {
-            self.observe_pull(&refreshed, &repository, &local.branch)
-                .await?
+            self.observe_pull(
+                &refreshed,
+                &repository,
+                &refreshed.delivery_intent.head_branch,
+            )
+            .await?
         };
         if pull["state"] == "merged" {
             let number = pull["number"].as_u64().unwrap_or(0);
@@ -1397,7 +1405,7 @@ impl DeliveryOperations {
                     &recheck,
                     &refreshed,
                     &repository,
-                    &local.branch,
+                    &refreshed.delivery_intent.head_branch,
                     expected_head,
                     reviewed(),
                 )
@@ -1408,7 +1416,7 @@ impl DeliveryOperations {
                     &recheck,
                     &refreshed,
                     &repository,
-                    &local.branch,
+                    &refreshed.delivery_intent.head_branch,
                     expected_head,
                     reviewed(),
                 )
@@ -1684,7 +1692,20 @@ impl DeliveryOperations {
         let task_id = control.task_id.as_str();
         let trigger = self.inspect_trigger_policy(control, None, false).await?;
         let github = self.for_task(task_id).await?;
-        let remote_head = github.get_branch_head(repository, &local.branch).await?;
+        let branch = control.delivery_intent.head_branch.as_str();
+        let remote_head = github.get_branch_head(repository, branch).await?;
+        if let Some(remote_head) = remote_head.as_deref()
+            && remote_head != local.head_sha
+            && !Self::head_contains(control, local, remote_head, github.token()).await?
+        {
+            return Err(delivery_failure(
+                "head_diverged",
+                format!(
+                    "The published branch {branch} moved to {} since this work started. Fetch origin/{branch}, integrate it in the worktree, then inspect and review the delivery again.",
+                    short(remote_head)
+                ),
+            ));
+        }
         self.final_recheck(control, actual, recheck, false).await?;
         if remote_head.as_deref() == Some(local.head_sha.as_str()) {
             if control.delivery_target == DeliveryTarget::RemoteBranch {
@@ -1712,6 +1733,27 @@ impl DeliveryOperations {
         Ok(json!({"kind": "pushed", "headSha": observed}))
     }
 
+    /// Whether the worktree head already carries the published branch head.
+    /// The commit is fetched by SHA when it is not local yet.
+    async fn head_contains(
+        control: &TaskControlRow,
+        local: &LocalRevisionObservation,
+        remote_head: &str,
+        token: Option<&str>,
+    ) -> DatabaseResult<bool> {
+        let (path, head, remote, token) = (
+            PathBuf::from(required_worktree(control)?),
+            local.head_sha.clone(),
+            remote_head.to_owned(),
+            token.map(str::to_owned),
+        );
+        Ok(tokio::task::spawn_blocking(move || {
+            crate::tasks::worktree::head_contains(&path, &head, &remote, token.as_deref())
+                .unwrap_or(false)
+        })
+        .await?)
+    }
+
     /// Push the local head without force and confirm the remote branch now has it.
     async fn push_head(
         github: &ReleasePort<'_>,
@@ -1721,7 +1763,7 @@ impl DeliveryOperations {
     ) -> DatabaseResult<Option<String>> {
         let (path, branch, head, token) = (
             PathBuf::from(required_worktree(control)?),
-            local.branch.clone(),
+            control.delivery_intent.head_branch.clone(),
             local.head_sha.clone(),
             github.token().map(str::to_owned),
         );
@@ -1730,7 +1772,9 @@ impl DeliveryOperations {
         })
         .await?
         .map_err(Box::new)?;
-        let observed = github.get_branch_head(repository, &local.branch).await?;
+        let observed = github
+            .get_branch_head(repository, &control.delivery_intent.head_branch)
+            .await?;
         if observed.as_deref() != Some(local.head_sha.as_str()) {
             return Err(delivery_failure(
                 "head_diverged",
@@ -1785,18 +1829,12 @@ impl DeliveryOperations {
                 "GitHub did not return the pinned pull request",
             ));
         }
-        if control.delivery_intent.head_branch != local.branch {
-            return Err(delivery_failure(
-                "head_diverged",
-                "The worktree branch does not match this task intent",
-            ));
-        }
         let candidate = select_discovered_pull(
             control,
             github
                 .list_pull_requests(
                     repository,
-                    &local.branch,
+                    control.delivery_intent.head_branch.as_str(),
                     control.delivery_intent.base_branch.as_str(),
                 )
                 .await?,
@@ -1839,7 +1877,13 @@ impl DeliveryOperations {
         };
         let base = control.delivery_intent.base_branch.as_str();
         let created = github
-            .create_draft_pull_request(repository, &local.branch, base, title, body)
+            .create_draft_pull_request(
+                repository,
+                &control.delivery_intent.head_branch,
+                base,
+                title,
+                body,
+            )
             .await?;
         self.adopt_known_pull(control, &created, adopt).await
     }
@@ -1884,7 +1928,9 @@ impl DeliveryOperations {
         local: &LocalRevisionObservation,
     ) -> DatabaseResult<Value> {
         let task_id = control.task_id.as_str();
-        let observed = self.checks(control, repository, &local.branch).await?;
+        let observed = self
+            .checks(control, repository, &control.delivery_intent.head_branch)
+            .await?;
         let mut summary = Self::summary(&observed);
         if observed.head_sha.as_deref() != Some(local.head_sha.as_str()) {
             summary["note"] = json!(
@@ -2393,9 +2439,10 @@ fn valid_body(body: &str) -> bool {
     true
 }
 
-/// TypeScript `TaskHost.recoverOne` delivery observation: a delivered task
-/// refreshes its pull request, a waiting task re-observes its wait, and an
+/// TypeScript `TaskHost.recoverOne` delivery observation: a waiting task
+/// re-observes its wait, and an
 /// active task adopts out-of-band GitHub progress. Failures never stop recovery.
+/// Delivered pull requests are refreshed by the host's dedicated batch poller.
 pub async fn host_observation(database_path: &Path, artifact_root: &Path, task_id: &str) {
     let (database_path, artifact_root, task_id) = (
         database_path.to_owned(),
@@ -2405,26 +2452,19 @@ pub async fn host_observation(database_path: &Path, artifact_root: &Path, task_i
     let observed = tokio::task::spawn_blocking(move || {
         crate::shared::blocking::block_on(|| async {
             let operations = DeliveryOperations::new(&database_path, &artifact_root);
-            let control = operations
-                .get(&task_id)
-                .map_err(|error| format!("{task_id}: {error}"))?;
-            match control.status {
-                TaskStatus::Delivered => {
-                    super::completed_pull_requests::refresh(&database_path, None).await
-                }
-                TaskStatus::Active if control.workflow_state.delivery_wait.is_some() => {
-                    operations.observe_delivery_wait(&task_id).await.map(|_| ())
-                }
-                TaskStatus::Active | TaskStatus::WaitingHuman => {
-                    operations.observe(&task_id).await.map(|_| ())
-                }
-                _ => Ok(()),
-            }
-            .map_err(|error| format!("{task_id}: {error}"))
+            operations
+                .observe_host_task(&task_id)
+                .await
+                .map_err(|error| {
+                    (
+                        github_delivery::is_rate_limited(error.as_ref()),
+                        format!("{task_id}: {error}"),
+                    )
+                })
         })
     })
     .await;
-    if let Ok(Err(error)) = observed {
+    if let Ok(Err((false, error))) = observed {
         eprintln!("Delivery observation will be retried for {error}");
     }
 }
@@ -2514,13 +2554,11 @@ pub(crate) mod tests {
                 .code(),
             Some("head_diverged")
         );
-        let mut wrong_branch = local.clone();
-        wrong_branch.branch = "other".into();
+        let mut other_branch = local.clone();
+        other_branch.branch = "other".into();
         assert_eq!(
-            check_standard_local_completion(&control, Some("head-one"), &wrong_branch)
-                .unwrap_err()
-                .code(),
-            Some("head_diverged")
+            check_standard_local_completion(&control, Some("head-one"), &other_branch),
+            Ok(())
         );
         let mut wrong_target = control.clone();
         wrong_target.delivery_target = DeliveryTarget::PullRequestDraft;

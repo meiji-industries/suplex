@@ -60,7 +60,7 @@ export function useTaskExecutionQuery(taskId: string) {
   });
 }
 
-export function useTaskTimeline(taskId: string, refetchInterval?: number | false) {
+export function useTaskTimeline(taskId: string) {
   const { user, currentCompany } = useCompanyContext();
   return useQuery({
     queryKey: [...taskObservationKey(user?.id, currentCompany?.id, taskId), "timeline"],
@@ -68,7 +68,6 @@ export function useTaskTimeline(taskId: string, refetchInterval?: number | false
     enabled: Boolean(user && currentCompany),
     retry: false,
     ...syncedPolling(useSyncLive(), 5000),
-    ...(refetchInterval !== undefined ? { refetchInterval, staleTime: 0 } : {}),
   });
 }
 

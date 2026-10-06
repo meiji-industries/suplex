@@ -202,6 +202,27 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn list_and_full_response_include_the_first_native_execution_timestamp() {
+        let (directory, _, database, task_id) = fixture();
+        let before = serde_json::to_value(repository::list_active(&database, "company_media").unwrap()).unwrap();
+        assert!(before[0].get("startedAt").is_none());
+        for (message, millis) in [("later", 1_791_239_460_000.0), ("first", 1_791_239_400_000.0)] {
+            let mut usage = entry(message, 0.0);
+            usage.started_at = millis;
+            database.connection().execute(
+                "INSERT INTO suplex_task_usage (session_id,message_id,task_id,snapshot,observed_at) VALUES ('timing',?1,?2,?3,?4)",
+                rusqlite::params![message, task_id, serde_json::to_string(&usage).unwrap(), Utc::now().to_rfc3339()],
+            ).unwrap();
+        }
+        let rows = repository::list_active(&database, "company_media").unwrap();
+        let full = repository::task_response(&database, &task_id).unwrap().unwrap();
+        assert_eq!(rows[0], TaskListItem::from(full));
+        let row = serde_json::to_value(&rows[0]).unwrap();
+        assert_eq!(row["startedAt"], "2026-10-05T22:30:00.000Z");
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
     fn feed_publishes_writes_from_other_connections() {
         let (directory, path, mut database, first) = fixture();
         let feed = CompanyFeed::new(path.clone(), Arc::default());
@@ -232,6 +253,12 @@ pub(crate) mod tests {
         other
             .execute("UPDATE suplex_tasks SET title = 'Prerequisite' WHERE id = ?1", [&first])
             .unwrap();
+        let usage = entry("first-timing", 0.0);
+        other.execute(
+            "INSERT INTO suplex_task_usage (session_id,message_id,task_id,snapshot,observed_at) VALUES ('timing','first-timing',?1,?2,?3)",
+            rusqlite::params![first, serde_json::to_string(&usage).unwrap(), Utc::now().to_rfc3339()],
+        ).unwrap();
+        wait(&receiver, |tasks| tasks.iter().any(|task| task["id"] == first && task["startedAt"] == "1970-01-01T00:00:00.100Z"));
         // The title of a prerequisite is part of the task that waits on it.
         wait(&receiver, |tasks| {
             tasks

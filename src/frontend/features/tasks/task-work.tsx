@@ -99,7 +99,7 @@ export function TaskWork({ task, activity, onChange }: { task: Task; activity: T
   const conversationHint = task.archivedAt ? "Open the archived task before you send a message." : task.status === "backlog" ? "Start the task to work with Coordinator." : task.status === "queued" ? "You can send a message after Suplex starts the task." : task.status === "waiting_human" ? "Answer the current decision to continue with Coordinator." : task.status === "cancelled" ? "The task is cancelled." : "Coordinator replies will appear here.";
   return <Tabs value={tab} onValueChange={value => setTab(String(value))} data-task-work-tabs>
     <WorkflowPlan key={`workflow-plan-${task.id}`} task={task} activity={activity} />
-    <TaskActivityTimeline taskId={task.id} createdAt={task.createdAt} checksKey={checksKey} />
+    <TaskActivityTimeline task={task} taskId={task.id} createdAt={task.createdAt} checksKey={checksKey} />
     <div className="max-w-full border-b"><TabsList variant="line"><TabsTrigger value="chat">Chat</TabsTrigger><TabsTrigger value="activity">Activity <span className="text-xs text-muted-foreground">{activity.turns.length}</span></TabsTrigger><TabsTrigger value="diffs">Diffs{diffSummary?.available ? <span className="text-xs text-muted-foreground"> ({diffSummary.files})</span> : null}</TabsTrigger><TabsTrigger value="checks">Checks</TabsTrigger><TabsTrigger value="other">Other</TabsTrigger></TabsList></div>
     <TabsContent value="chat"><div className="grid min-w-0 gap-5 pt-3 pl-3" aria-label="Conversation">
       <RootPlan execution={execution} />

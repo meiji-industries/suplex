@@ -145,7 +145,7 @@ export const TaskSchema = z.object({
   wakeAt: z.string().nullable(),
   images: z.array(TaskImageSchema),
   artifacts: z.array(TaskImageSchema).optional(),
-  createdAt: z.string(), updatedAt: z.string(), statusChangedAt: z.string(), queuePriority: z.number().int().nonnegative(), archivedAt: z.string().nullable(),
+  startedAt: z.string().datetime().optional(), createdAt: z.string(), updatedAt: z.string(), statusChangedAt: z.string(), queuePriority: z.number().int().nonnegative(), archivedAt: z.string().nullable(),
 }).strict();
 
 export type Task = TaskResponse;

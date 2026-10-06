@@ -33,7 +33,7 @@ of every subscribed company and the stored values of every open task.
 
 | Value | Scope | Read again on | Frame field | Browser query key |
 | --- | --- | --- | --- | --- |
-| Active task list | Company | Commit | `tasks` and `removedTaskIds`, diffed by task id | `taskListKey(user, company)` |
+| Active task list, including each task's first recorded native execution timestamp | Company | Commit | `tasks` and `removedTaskIds`, diffed by task id | `taskListKey(user, company)` |
 | Moves, each with its last run | Company | Commit, or a last run's terminal opens or closes | `moves`, whole | `movesKey(user, company)` |
 | Task costs | Company | Change of the stored usage rows that the costs read. The recompute runs apart from the tail thread. | `costs`, whole | `taskCostsKey(user, company)` |
 | Projects | Company | Commit that changes a project of the company | `projects`, whole | `projectsKey(user, company)` |

@@ -1,10 +1,10 @@
 import { useEffect, useState } from "react";
 import { Info } from "lucide-react";
-import { taskTimelineSpan } from "./lib/task-timeline-span.js";
+import type { TaskListTask } from "../../contracts/task-responses.js";
 import { useTaskTimeline } from "./lib/task-queries.js";
 import { useSyncLive } from "../../shell/sync.js";
 import { checkRunLabel, checkRunName, checkRunStatus, useTaskChecks } from "./lib/task-checks.js";
-import { taskTimelineDuration } from "../timeline/lib/task-timeline-duration.js";
+import { taskElapsedDuration, taskTimelineDuration } from "../timeline/lib/task-timeline-duration.js";
 import { Alert, AlertDescription } from "../../components/ui/alert.js";
 import { ToolIcon } from "../../components/app/tool-icons.js";
 import { TimelineAgentLabel } from "../timeline/timeline-agent-label.js";
@@ -18,7 +18,7 @@ function timestamp(value: number): string {
   return new Date(value).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "medium" });
 }
 
-export function TaskActivityTimeline({ taskId, createdAt, checksKey }: { taskId: string; createdAt: string; checksKey?: string | null }) {
+export function TaskActivityTimeline({ taskId, createdAt, checksKey, task }: { taskId: string; createdAt: string; checksKey?: string | null; task?: Pick<TaskListTask, "startedAt" | "status" | "statusChangedAt"> }) {
   const query = useTaskTimeline(taskId);
   const live = useSyncLive();
   // Same refresh key as the Checks tab: both share one poll per task.
@@ -49,7 +49,9 @@ export function TaskActivityTimeline({ taskId, createdAt, checksKey }: { taskId:
   });
   const ciStart = ciRuns.reduce((first, entry) => Math.min(first, entry.start), Infinity);
   const ciEnd = ciRuns.reduce((last, entry) => Math.max(last, entry.end), -Infinity);
-  const { start, end } = taskTimelineSpan(snapshot?.activity ?? [], checks?.runs ?? [], createdAt, now, asOf);
+  const start = Math.min(ciStart, intervals.reduce((first, entry) => Math.min(first, entry.start), Infinity));
+  const end = Math.max(ciEnd, intervals.reduce((last, entry) => Math.max(last, entry.end), -Infinity));
+  const elapsed = task && (task.status === "active" || task.status === "delivered") ? taskElapsedDuration(task, now) : null;
   const worked = intervals.reduce((total, entry) => total + entry.end - entry.start, 0);
   const span = Math.max(1, end - start);
   const ticks = Array.from({ length: 5 }, (_, index) => start + span * index / 4);
@@ -66,7 +68,7 @@ export function TaskActivityTimeline({ taskId, createdAt, checksKey }: { taskId:
     {error ? <Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert> : null}
     {!intervals.length ? snapshot || error ? <Alert><Info /><AlertDescription>{snapshot ? "No agent time yet." : "Agent time is not available."}</AlertDescription></Alert> : <p className="text-xs text-muted-foreground">Loading timeline…</p> : <div className="overflow-x-auto dark:bg-[color-mix(in_oklch,_var(--background),_white_6%)] not-dark:bg-[color-mix(in_oklch,_var(--background),_black_3%)] rounded-tl-[var(--radius)] rounded-tr-[var(--radius)] rounded-br-[var(--radius)] rounded-bl-[var(--radius)] pt-[15px] pb-1" aria-label="Task timeline Gantt chart">
       <div className="grid min-w-[45rem] grid-cols-[13rem_minmax(32rem,1fr)_15px] text-xs [&>.contents:last-child>*]:border-b-0">
-        <div className="sticky left-0 z-20 truncate border-b border-border bg-background px-2 py-1 tabular-nums text-muted-foreground dark:bg-[color-mix(in_oklch,_var(--background),_white_6%)] not-dark:bg-[color-mix(in_oklch,_var(--background),_black_3%)] pl-[15px]" title="Total Coordinator and Worker execution time. Concurrent executions count separately. Elapsed span covers agent time and GitHub CI checks.">Worked for {taskTimelineDuration(worked)} during {taskTimelineDuration(end - start)}</div>
+        <div className="sticky left-0 z-20 truncate border-b border-border bg-background px-2 py-1 tabular-nums text-muted-foreground dark:bg-[color-mix(in_oklch,_var(--background),_white_6%)] not-dark:bg-[color-mix(in_oklch,_var(--background),_black_3%)] pl-[15px]" title="Total Coordinator and Worker execution time. Concurrent executions count separately. Elapsed span covers agent time and GitHub CI checks.">Worked for {taskTimelineDuration(worked)} during {taskTimelineDuration(elapsed ?? end - start)}</div>
         <div className="relative h-6 border-b border-border" data-task-time-axis>
           {ticks.map((tick, index) => <span key={index} className="absolute top-1 whitespace-nowrap text-muted-foreground" style={index === 4 ? { right: 0 } : { left: `${index * 25}%` }}>{new Date(tick).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit", ...(span < 300_000 ? { second: "2-digit" } : {}) })}</span>)}
         </div><div aria-hidden="true" className="border-b border-border" />

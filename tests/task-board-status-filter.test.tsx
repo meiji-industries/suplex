@@ -234,8 +234,9 @@ test("board durations use the timeline span, tick for Active, freeze for Deliver
   vi.useFakeTimers();
   vi.setSystemTime(new Date("2026-09-08T00:00:20.000Z"));
   window.history.replaceState(null, "", "/board?company=company-1");
-  const tasks = [task("active", "Live task", "active"), { ...task("delivered", "Done task", "delivered"), statusChangedAt: "2026-09-08T00:00:15.000Z" }, task("backlog", "Future task", "backlog")];
-  api.readJsonUnchecked.mockImplementation(async (path: string) => path.endsWith("/timeline") ? { unavailableSessions: 0, tasks: tasks.map(item => ({ id: item.id, projectId: item.projectId, issueKey: null, title: item.title, activity: [{ id: "turn", role: "root", agentId: "root", agentName: "Coordinator", avatarSeed: "root", status: "running", attempt: 1, startedAt: item.createdAt, finishedAt: null }] })) } : path.endsWith("/projects") ? { projects: [{ id: "project-1", name: "Suplex" }] } : { tasks: path.endsWith("/task-costs") ? [] : tasks });
+  const tasks = [{ ...task("active", "Live task", "active"), pullRequest: { repository: "owner/repo", number: 1, url: "https://github.com/owner/repo/pull/1", headSha: "a".repeat(40), state: "ready", mergedAt: null }, startedAt: "2026-09-08T00:00:00.000Z" }, { ...task("delivered", "Done task", "delivered"), startedAt: "2026-09-08T00:00:00.000Z", statusChangedAt: "2026-09-08T00:00:15.000Z" }, task("backlog", "Future task", "backlog")];
+  api.readJsonUnchecked.mockClear();
+  api.readJsonUnchecked.mockImplementation(async (path: string) => path.endsWith("/projects") ? { projects: [{ id: "project-1", name: "Suplex" }] } : { tasks: path.endsWith("/task-costs") ? [] : tasks });
   const container = document.createElement("div");
   document.body.append(container);
   const root = createRoot(container);
@@ -248,5 +249,6 @@ test("board durations use the timeline span, tick for Active, freeze for Deliver
     await act(async () => vi.advanceTimersByTimeAsync(2000));
     expect(duration("active")).toBe("22s");
     expect(duration("delivered")).toBe("15s");
+    expect(api.readJsonUnchecked.mock.calls.filter(([path]) => /\/(timeline|checks)$/.test(String(path)))).toEqual([]);
   } finally { await act(async () => root.unmount()); container.remove(); }
 });

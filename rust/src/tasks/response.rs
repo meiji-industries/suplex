@@ -54,6 +54,9 @@ pub struct TaskResponse {
     pub(super) created_at: String,
     pub(super) updated_at: String,
     status_changed_at: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    started_at: Option<String>,
     pub(super) archived_at: Option<String>,
 }
 
@@ -77,6 +80,9 @@ pub struct TaskListItem {
     created_at: String,
     updated_at: String,
     status_changed_at: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    started_at: Option<String>,
     archived_at: Option<String>,
 }
 
@@ -121,6 +127,7 @@ impl From<TaskResponse> for TaskListItem {
             created_at: task.created_at,
             updated_at: task.updated_at,
             status_changed_at: task.status_changed_at,
+            started_at: task.started_at,
             archived_at: task.archived_at,
         }
     }
@@ -483,6 +490,7 @@ struct TaskTimes {
     created_at: String,
     updated_at: String,
     status_changed_at: String,
+    started_at: Option<String>,
     archived_at: Option<String>,
 }
 
@@ -492,6 +500,7 @@ fn times_from_row(row: &Row<'_>) -> DatabaseResult<TaskTimes> {
         created_at: row.get("created_at")?,
         updated_at: row.get("updated_at")?,
         status_changed_at: row.get("status_changed_at")?,
+        started_at: row.get("started_at")?,
         archived_at: row.get("archived_at")?,
     })
 }
@@ -523,6 +532,7 @@ pub(crate) fn list_item_from_row(row: &Row<'_>) -> DatabaseResult<TaskListItem> 
         created_at: row.get("created_at")?,
         updated_at: row.get("updated_at")?,
         status_changed_at: row.get("status_changed_at")?,
+        started_at: row.get("started_at")?,
         archived_at: row.get("archived_at")?,
     })
 }
@@ -562,6 +572,7 @@ pub(crate) fn from_row(row: &Row<'_>) -> DatabaseResult<TaskResponse> {
         created_at: times.created_at,
         updated_at: times.updated_at,
         status_changed_at: times.status_changed_at,
+        started_at: times.started_at,
         archived_at: times.archived_at,
     })
 }
@@ -937,6 +948,7 @@ mod fixture_tests {
             artifacts: vec![],
             created_at: timestamp.into(),
             updated_at: timestamp.into(),
+            started_at: None,
             status_changed_at: timestamp.into(),
             queue_priority: 0,
             archived_at: None,

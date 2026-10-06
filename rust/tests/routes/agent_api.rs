@@ -455,7 +455,7 @@ pub(crate) mod tests {
                 .as_array()
                 .unwrap()
                 .len(),
-            9,
+            10,
             "answer_human_question needs the answer grant"
         );
         let (_, capabilities) = agent
@@ -927,6 +927,26 @@ pub(crate) mod tests {
         let (status, promoted) = agent.call_as(&credential, reqwest::Method::POST, &path, Some(command.clone())).await;
         assert_eq!((status, promoted["status"].as_str(), promoted["queuePriority"].as_i64()), (200, Some("queued"), Some(1)));
         assert_eq!(agent.call_as(&credential, reqwest::Method::POST, &path, Some(command)).await, (200, promoted));
+    }
+
+    #[tokio::test]
+    async fn paired_agent_force_starts_a_queued_task_past_the_project_limit() {
+        let agent = agent().await;
+        agent.server.state.with_database(|database| {
+            database.connection().execute("UPDATE suplex_projects SET task_concurrency = 0 WHERE id = 'project_api'", []).unwrap();
+        });
+        let task = agent.create("Held task", "force-start-001").await;
+        let id = task["id"].as_str().unwrap();
+        let path = format!("/api/agent/tasks/{id}/commands");
+        let (status, queued) = agent.call(reqwest::Method::POST, &path, Some(json!({"command":"start_task","revision":task["revision"],"idempotencyKey":"force-start-002"}))).await;
+        assert_eq!((status, queued["status"].as_str()), (200, Some("queued")));
+        assert!(queued["permittedCommands"].as_array().unwrap().contains(&json!("force_start")));
+        let (status, started) = agent.call(reqwest::Method::POST, &path, Some(json!({"command":"force_start","revision":queued["revision"],"idempotencyKey":"force-start-003"}))).await;
+        assert_eq!((status, started["status"].as_str()), (200, Some("active")), "{started}");
+        let (status, refused) = agent.call(reqwest::Method::POST, &path, Some(json!({"command":"force_start","revision":started["revision"],"idempotencyKey":"force-start-004"}))).await;
+        assert_eq!((status, refused["code"].as_str()), (409, Some("illegal_command")), "{refused}");
+        let audits: i64 = agent.server.state.with_database(|database| database.connection().query_row("SELECT COUNT(*) FROM suplex_audit_events WHERE actor_agent_id = ?1 AND action = 'task_force_started'", [&agent.agent_id], |row| row.get(0)).unwrap());
+        assert_eq!(audits, 1);
     }
 
     #[tokio::test]

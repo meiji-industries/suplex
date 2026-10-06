@@ -274,6 +274,7 @@
                           "update_task",
                           "start_task",
                           "move_to_front",
+                          "force_start",
                           "disarm_task",
                           "cancel_task",
                           "archive_task",
@@ -1526,6 +1527,7 @@
                             "enum": [
                               "start_task",
                               "move_to_front",
+                              "force_start",
                               "disarm_task",
                               "cancel_task",
                               "archive_task",
@@ -2503,6 +2505,7 @@
                         "enum": [
                           "start_task",
                           "move_to_front",
+                          "force_start",
                           "disarm_task",
                           "cancel_task",
                           "archive_task",
@@ -4510,6 +4513,7 @@
                         "enum": [
                           "start_task",
                           "move_to_front",
+                          "force_start",
                           "disarm_task",
                           "cancel_task",
                           "archive_task",
@@ -5756,6 +5760,7 @@
                         "enum": [
                           "start_task",
                           "move_to_front",
+                          "force_start",
                           "disarm_task",
                           "cancel_task",
                           "archive_task",
@@ -7280,6 +7285,7 @@
                             "enum": [
                               "start_task",
                               "move_to_front",
+                              "force_start",
                               "disarm_task",
                               "cancel_task",
                               "archive_task",
@@ -8045,6 +8051,7 @@
                     "enum": [
                       "start_task",
                       "move_to_front",
+                      "force_start",
                       "disarm_task",
                       "cancel_task",
                       "archive_task",
@@ -8411,6 +8418,7 @@
                         "enum": [
                           "start_task",
                           "move_to_front",
+                          "force_start",
                           "disarm_task",
                           "cancel_task",
                           "archive_task",

@@ -91,7 +91,7 @@ fn hmac(key: &str, message: &str) -> String {
     URL_SAFE_NO_PAD.encode(outer)
 }
 
-pub const TASK_COMMANDS: [&str; 10] = crate::http::contracts::typed::agent_api::TASK_COMMANDS;
+pub const TASK_COMMANDS: [&str; 11] = crate::http::contracts::typed::agent_api::TASK_COMMANDS;
 /// ponytail: one page of rows feeds upstream dependency lookup; page it if an agent ever owns more.
 const UPSTREAM_POOL: usize = 200;
 
@@ -250,6 +250,7 @@ fn permitted_commands(task: &response::TaskResponse, principal: &Principal) -> V
             ],
             TaskStatus::Queued => vec![
                 "move_to_front",
+                "force_start",
                 "disarm_task",
                 "cancel_task",
                 "archive_task",
@@ -2365,6 +2366,7 @@ fn command_audit(command: &str) -> &'static str {
     match command {
         "start_task" => "task_started",
         "move_to_front" => "task_moved_to_front",
+        "force_start" => "task_force_started",
         "disarm_task" => "task_disarmed",
         "cancel_task" => "task_cancelled",
         "archive_task" => "task_archived",
@@ -2381,6 +2383,7 @@ pub fn wakes_host(command: &str) -> bool {
     matches!(
         command,
         "start_task"
+            | "force_start"
             | "cancel_task"
             | "send_task_note"
             | "recheck_delivery_wait"
@@ -2634,6 +2637,22 @@ fn apply(
             if !repository::move_to_front(database, task_id, now)? {
                 return Err(fail(
                     "Only a queued task can move to the front",
+                    409,
+                    "illegal_command",
+                ));
+            }
+        }
+        "force_start" => {
+            if archive::in_progress(task_id) {
+                return Err(fail(
+                    "Archive cleanup is in progress",
+                    409,
+                    "illegal_command",
+                ));
+            }
+            if repository::force_start(database, task_id, now)?.is_none() {
+                return Err(fail(
+                    "Only a queued task can start anyway",
                     409,
                     "illegal_command",
                 ));

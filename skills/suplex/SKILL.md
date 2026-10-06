@@ -260,7 +260,7 @@ doubles its delay up to 60 seconds. Over MCP, pass `knownRevision` to
 `POST /api/agent/tasks/{taskId}/commands` with `command`, the task's current
 `revision`, an `idempotencyKey`, and `note` only for `send_task_note`.
 
-Commands: `start_task`, `move_to_front`, `disarm_task`, `cancel_task`, `archive_task`, `unarchive_task`,
+Commands: `start_task`, `move_to_front`, `force_start`, `disarm_task`, `cancel_task`, `archive_task`, `unarchive_task`,
 `duplicate_task`, `send_task_note`, `recheck_delivery_wait`. Send only what the
 task's `permittedCommands` lists.
 

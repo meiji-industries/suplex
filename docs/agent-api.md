@@ -139,6 +139,9 @@ promotion takes the front position. It keeps the task queued and does not
 bypass prerequisites or project and plan limits. Task reads include
 `queuePriority`; the Board and Tasks list show the same priority order.
 
+`force_start` starts a queued task now. It does not wait for prerequisites or
+for a project or plan slot. It is the Agent API form of **Start anyway**.
+
 ## Answering a Coordinator question
 
 An administrator can let an external agent answer questions on their behalf.

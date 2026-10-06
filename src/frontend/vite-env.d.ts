@@ -16,6 +16,8 @@ declare global {
     __SUPLEX_HEALTH__?: HealthSnapshot;
     /** Present only inside the Suplex desktop app. */
     suplexApp?: {
+      /** `macos`, `linux`, or `windows`; an older shell sends none and runs on macOS. */
+      platform?: string;
       accountCleared(): Promise<void>;
       openHostPicker(): Promise<void>;
       networkAccess(): Promise<DesktopNetworkAccess>;

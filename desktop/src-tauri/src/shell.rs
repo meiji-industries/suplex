@@ -1,6 +1,6 @@
 //! The desktop shell's state and orchestration: boot, host selection, the owned local host, network
 //! restarts, and the native checks behind every bridge call. It either supervises the bundled host on
-//! this Mac or shows a host somebody else runs, which it never starts, stops, or signals.
+//! this computer or shows a host somebody else runs, which it never starts, stops, or signals.
 
 use std::{
     collections::HashMap,
@@ -33,6 +33,7 @@ use crate::{
         Started,
     },
     paths::{Paths, RuntimePaths},
+    platform::{LOCAL_SUPPORTED, MACHINE},
     tailscale,
     targets::{
         self, classify_navigation, parse_target, NavigationDecision, Registry, SuplexTarget,
@@ -142,7 +143,7 @@ impl Ports for HostPorts {
             NetworkMode::All => ResolvedNetworkAccess::All,
             NetworkMode::Tailscale => {
                 let access =
-                    tailscale::resolve_access(&tailscale::COMMANDS, &tailscale::SystemRunner)
+                    tailscale::resolve_access(tailscale::COMMANDS, &tailscale::SystemRunner)
                         .await?;
                 ResolvedNetworkAccess::Tailscale {
                     hostname: access.hostname,
@@ -219,7 +220,7 @@ impl Ports for HostPorts {
             read_install_record(&self.paths.install_record())
                 .map_or(self.default_port, |record| record.port)
         });
-        match tailscale::serve_cli(&tailscale::COMMANDS, &tailscale::SystemRunner).await? {
+        match tailscale::serve_cli(tailscale::COMMANDS, &tailscale::SystemRunner).await? {
             None => Ok(()),
             Some(command) => {
                 tailscale::remove_serve_route(
@@ -448,6 +449,7 @@ impl<R: Runtime> Shell<R> {
                 .as_ref()
                 .map(|target| target.origin.clone()),
             local_host: self.local_origin(),
+            platform: crate::platform::NAME,
         }
     }
 
@@ -481,8 +483,12 @@ impl<R: Runtime> Shell<R> {
     // ----- views -----
 
     fn bridge(kind: ViewKind, origin: &str, target: Option<&str>) -> String {
-        let config =
-            serde_json::json!({ "kind": kind.prefix(), "origin": origin, "target": target });
+        let config = serde_json::json!({
+            "kind": kind.prefix(),
+            "origin": origin,
+            "platform": crate::platform::NAME,
+            "target": target,
+        });
         format!(
             "({})({config});",
             include_str!("../../src/bridge.js")
@@ -548,6 +554,7 @@ impl<R: Runtime> Shell<R> {
             origin: origin.clone(),
             bridge,
             data_store: window::data_store_for(&self.paths.user_data),
+            webview_data: self.paths.user_data.join("webview"),
         };
         match build_view(&self.app, self.weak.clone(), spec, bounds, focused) {
             Ok(window) => {
@@ -628,8 +635,8 @@ impl<R: Runtime> Shell<R> {
             let log = tail(&self.paths.server_log(), 200);
             self.go(BootEvent::Failed(BootFailure {
                 from: FailureSource::Starting,
-                title: "Start Suplex on this Mac".into(),
-                reason: "Suplex on this Mac stopped answering.".into(),
+                title: format!("Start Suplex on this {MACHINE}"),
+                reason: format!("Suplex on this {MACHINE} stopped answering."),
                 remedy: Some("Retry starts it again.".into()),
                 stage: None,
                 log,
@@ -887,7 +894,7 @@ impl<R: Runtime> Shell<R> {
             }
             Err(reason) => self.go(BootEvent::Failed(BootFailure {
                 from: FailureSource::Starting,
-                title: "Start Suplex on this Mac".into(),
+                title: format!("Start Suplex on this {MACHINE}"),
                 reason,
                 remedy: Some("Open the logs for the server's own words, then retry.".into()),
                 stage: None,
@@ -1210,9 +1217,7 @@ impl<R: Runtime> Shell<R> {
         let label_matches = view.label() == Some(webview_label);
         let origin_matches = match (&view, current_url) {
             (View::Host { origin, .. }, Some(url)) => url.origin().ascii_serialization() == *origin,
-            (View::Setup { .. } | View::Unavailable { .. }, Some(url)) => {
-                url.scheme() == "tauri" && url.host_str() == Some("localhost")
-            }
+            (View::Setup { .. } | View::Unavailable { .. }, Some(url)) => window::is_app_page(url),
             _ => false,
         };
         let kind_matches = matches!(
@@ -1403,14 +1408,14 @@ impl<R: Runtime> Shell<R> {
 
     // ----- account and lifecycle -----
 
-    /// This Mac's host was cleared, so the next launch starts at the choice screen. A remote clear leaves the local install alone.
+    /// This computer's host was cleared, so the next launch starts at the choice screen. A remote clear leaves the local install alone.
     pub async fn account_cleared(&self, label: &str) {
         if self.forget_local_install(label) {
             self.quit().await;
         }
     }
 
-    /// Removes the install record when `label` shows this Mac's host. False when `label` is not the shown host.
+    /// Removes the install record when `label` shows this computer's host. False when `label` is not the shown host.
     pub(crate) fn forget_local_install(&self, label: &str) -> bool {
         let Some((origin, _)) = self.host_capture(label) else {
             return false;
@@ -1501,6 +1506,10 @@ impl<R: Runtime> Shell<R> {
     }
 
     pub fn choose(&self, mode: Mode) {
+        // Windows has no bundled host; a raw `desktop_choose("local")` changes nothing.
+        if mode == Mode::Local && !LOCAL_SUPPORTED {
+            return;
+        }
         if mode == Mode::Local && self.local_installed() {
             self.spawn(|shell| Box::pin(async move { shell.select_local().await }));
         } else {
@@ -1593,7 +1602,10 @@ mod tests {
             Some("https://x.example/\"</script><img onerror=alert(1)>"),
         );
         assert!(script.contains("(config) => {"));
-        assert!(script.ends_with(r#"({"kind":"unavailable","origin":"tauri://localhost","target":"https://x.example/\"</script><img onerror=alert(1)>"});"#));
+        assert!(script.ends_with(&format!(
+            r#"({{"kind":"unavailable","origin":"{APP_ORIGIN}","platform":"{}","target":"https://x.example/\"</script><img onerror=alert(1)>"}});"#,
+            crate::platform::NAME
+        )));
     }
 
     #[test]

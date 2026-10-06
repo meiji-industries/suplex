@@ -1,7 +1,7 @@
 //! Raw IPC against the real capability files, app-command permissions, and runtime host grants, through
 //! Tauri's mock runtime. Proves which callers each command admits, independent of the injected bridge.
 
-use std::{collections::HashMap, sync::Arc, time::Duration};
+use std::{collections::HashMap, sync::Arc};
 
 use serde_json::{json, Value};
 use tauri::{
@@ -119,7 +119,10 @@ const NETWORK_COMMANDS: [(&str, &str); 3] = [
     ("app_save_network_access_preference", r#"{"mode":"all"}"#),
     ("app_restart_network_access", "{}"),
 ];
-const PLUGIN_COMMANDS: [&str; 6] = [
+// Windows and Linux also register the notification and clipboard plugins; no page gets their commands either.
+const PLUGIN_COMMANDS: [&str; 8] = [
+    "plugin:notification|notify",
+    "plugin:clipboard-manager|write_text",
     "plugin:updater|check",
     "plugin:updater|download_and_install",
     "plugin:dialog|message",
@@ -140,20 +143,36 @@ fn the_setup_page_reaches_setup_commands_and_nothing_else() {
         .show_page_for_test(ViewKind::Setup, "pages/choice.html", None)
         .unwrap();
     let setup = harness.window(&label);
-    let snapshot = invoke(&setup, "tauri://localhost", "desktop_snapshot", json!({})).unwrap();
+    let snapshot = invoke(
+        &setup,
+        crate::window::APP_ORIGIN,
+        "desktop_snapshot",
+        json!({}),
+    )
+    .unwrap();
     assert_eq!(snapshot["state"], "resolve");
     for (command, body) in NETWORK_COMMANDS
         .iter()
         .chain(&[("app_account_cleared", "{}"), ("unavailable_retry", "{}")])
     {
         assert!(
-            refused_by_acl(&invoke(&setup, "tauri://localhost", command, args(body))),
+            refused_by_acl(&invoke(
+                &setup,
+                crate::window::APP_ORIGIN,
+                command,
+                args(body)
+            )),
             "{command}"
         );
     }
     for command in PLUGIN_COMMANDS {
         assert!(
-            refused_by_acl(&invoke(&setup, "tauri://localhost", command, json!({}))),
+            refused_by_acl(&invoke(
+                &setup,
+                crate::window::APP_ORIGIN,
+                command,
+                json!({})
+            )),
             "{command}"
         );
     }
@@ -208,7 +227,7 @@ fn cross_origin_frames_other_ports_and_local_files_cannot_invoke_host_commands()
         "https://suplex.example:8443",
         "http://suplex.example",
         "https://sub.suplex.example",
-        "tauri://localhost",
+        crate::window::APP_ORIGIN,
         "file:///tmp/page.html",
     ] {
         for (command, body) in NETWORK_COMMANDS
@@ -287,20 +306,33 @@ fn the_remote_failure_page_can_retry_and_pick_a_host_but_nothing_else() {
         .unwrap();
     let page = harness.window(&label);
     assert_eq!(
-        invoke(&page, "tauri://localhost", "unavailable_retry", json!({})),
+        invoke(
+            &page,
+            crate::window::APP_ORIGIN,
+            "unavailable_retry",
+            json!({})
+        ),
         Ok(Value::Null)
     );
     for (command, body) in SETUP_COMMANDS.iter().chain(NETWORK_COMMANDS.iter()) {
         assert!(
-            refused_by_acl(&invoke(&page, "tauri://localhost", command, args(body))),
+            refused_by_acl(&invoke(
+                &page,
+                crate::window::APP_ORIGIN,
+                command,
+                args(body)
+            )),
             "{command}"
         );
     }
-    let stale = harness.lingering("setup-99", "tauri://localhost/pages/choice.html");
+    let stale = harness.lingering(
+        "setup-99",
+        &format!("{}/pages/choice.html", crate::window::APP_ORIGIN),
+    );
     assert_eq!(
         invoke(
             &stale,
-            "tauri://localhost",
+            crate::window::APP_ORIGIN,
             "desktop_choose",
             json!({ "mode": "local" })
         ),
@@ -310,6 +342,7 @@ fn the_remote_failure_page_can_retry_and_pick_a_host_but_nothing_else() {
 }
 
 /// The local host is the fixture runtime; its `/api/auth/me` answers from the session the request carries.
+#[cfg(unix)]
 fn local_harness(settings: Value) -> (Harness, WebviewWindow<MockRuntime>, String) {
     let harness = harness(&[]);
     std::fs::create_dir_all(harness.data.path().join("data")).unwrap();
@@ -330,6 +363,7 @@ fn local_harness(settings: Value) -> (Harness, WebviewWindow<MockRuntime>, Strin
     (harness, window, origin)
 }
 
+#[cfg(unix)] // runs the Python fixture host
 #[test]
 fn local_network_control_requires_the_host_to_answer_with_an_admin_session() {
     let (harness, window, origin) = local_harness(json!({}));
@@ -354,6 +388,7 @@ fn local_network_control_requires_the_host_to_answer_with_an_admin_session() {
     tauri::async_runtime::block_on(harness.shell.shutdown());
 }
 
+#[cfg(unix)] // runs the Python fixture host
 #[test]
 fn a_local_admin_session_manages_network_access() {
     let (harness, window, origin) = local_harness(json!({ "authDefaultRole": "admin" }));
@@ -381,6 +416,7 @@ fn a_local_admin_session_manages_network_access() {
     tauri::async_runtime::block_on(harness.shell.shutdown());
 }
 
+#[cfg(unix)] // runs the Python fixture host
 #[test]
 fn a_member_session_is_refused() {
     let (harness, window, origin) = local_harness(json!({ "authDefaultRole": "member" }));
@@ -397,6 +433,7 @@ fn a_member_session_is_refused() {
     tauri::async_runtime::block_on(harness.shell.shutdown());
 }
 
+#[cfg(unix)] // runs the Python fixture host
 #[test]
 fn navigation_during_admin_verification_invalidates_only_that_request() {
     let (harness, window, origin) =
@@ -405,7 +442,7 @@ fn navigation_during_admin_verification_invalidates_only_that_request() {
     let label = window.label().to_owned();
     let page = Url::parse(&format!("{origin}/tasks")).unwrap();
     let navigate = std::thread::spawn(move || {
-        std::thread::sleep(Duration::from_millis(200));
+        std::thread::sleep(std::time::Duration::from_millis(200));
         shell.page_loaded(&label, &page, true);
     });
     assert_eq!(
@@ -436,6 +473,7 @@ fn navigation_during_admin_verification_invalidates_only_that_request() {
     tauri::async_runtime::block_on(harness.shell.shutdown());
 }
 
+#[cfg(unix)] // runs the Python fixture host
 #[test]
 fn an_install_whose_record_cannot_be_saved_fails_instead_of_completing() {
     let harness = harness(&[]);
@@ -455,6 +493,7 @@ fn an_install_whose_record_cannot_be_saved_fails_instead_of_completing() {
     assert!(crate::boot::read_install_record(&harness.data.path().join("install.json")).is_some());
 }
 
+#[cfg(unix)] // runs the Python fixture host
 #[test]
 fn clearing_the_account_forgets_the_install_only_for_this_macs_host() {
     let (harness, local_window, _) = local_harness(json!({}));
@@ -484,6 +523,7 @@ fn clearing_the_account_forgets_the_install_only_for_this_macs_host() {
     tauri::async_runtime::block_on(harness.shell.shutdown());
 }
 
+#[cfg(unix)] // runs the Python fixture host
 #[test]
 fn a_network_restart_returns_to_the_page_unless_the_user_moved_on() {
     let (harness, _, origin) = local_harness(json!({}));
@@ -531,6 +571,7 @@ fn a_network_restart_returns_to_the_page_unless_the_user_moved_on() {
     tauri::async_runtime::block_on(shell.shutdown());
 }
 
+#[cfg(unix)] // runs the Python fixture host
 #[test]
 fn tray_stop_stops_only_the_owned_host_and_start_brings_it_back() {
     let (harness, _, origin) = local_harness(json!({}));
@@ -540,7 +581,7 @@ fn tray_stop_stops_only_the_owned_host_and_start_brings_it_back() {
     assert!(
         !tauri::async_runtime::block_on(crate::local_runtime::healthy(
             &origin,
-            Duration::from_secs(1)
+            std::time::Duration::from_secs(1)
         )),
         "the owned host stopped"
     );

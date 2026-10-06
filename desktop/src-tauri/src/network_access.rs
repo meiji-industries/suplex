@@ -63,7 +63,7 @@ pub enum StartError {
 }
 
 impl StartError {
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     pub fn message(&self) -> &str {
         match self {
             Self::Failed(message) | Self::CleanupRequired { message, .. } => message,

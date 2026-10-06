@@ -10,7 +10,8 @@
     "failure": { "from": "installing", "title": "Install Herdr terminals", "reason": "curl exited 22", "remedy": null, "stage": "herdr", "log": [] },
     "hosts": ["https://suplex.example"],
     "currentHost": "https://suplex.example",
-    "localHost": null
+    "localHost": null,
+    "platform": "linux"
   },
   "events": [
     { "name": "stages", "stages": [{ "name": "data", "title": "Prepare Suplex data" }], "from": 0 },

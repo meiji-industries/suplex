@@ -1,6 +1,7 @@
 // The desktop bridge. The shell injects this function into the main frame of each view it creates and
 // calls it with that view's configuration as JSON data:
-//   { "kind": "setup" | "unavailable" | "host", "origin": "<the view's exact origin>", "target": "<host shown by the failure page>" }
+//   { "kind": "setup" | "unavailable" | "host", "origin": "<the view's exact origin>", "platform": "macos" | "linux" | "windows",
+//     "target": "<host shown by the failure page>" }
 // Hiding or exposing these objects is a convenience only. The shell enforces command permissions per view
 // and origin, and checks the calling webview natively, so raw IPC from any other page or frame is refused.
 (config) => {
@@ -47,6 +48,7 @@
     });
   } else if (config.kind === "host") {
     window.suplexApp = Object.freeze({
+      platform: config.platform,
       accountCleared: () => done(invoke("app_account_cleared")),
       openHostPicker: () => done(invoke("app_open_host_picker")),
       networkAccess: () => invoke("app_network_access"),

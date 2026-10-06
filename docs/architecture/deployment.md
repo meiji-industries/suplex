@@ -104,6 +104,8 @@ The repository builds these forms of Suplex:
 | Distribution | Contents and execution | Client |
 | --- | --- | --- |
 | macOS desktop | Tauri 2 application (`desktop/src-tauri`, a Rust shell around the system WKWebView) with the native host binary and runtime manifest; Apple silicon and Intel builds; macOS 14 or later | The web client served by the selected host: its own bundled host in local mode, or another instance |
+| Linux desktop | The same Tauri shell around WebKitGTK, with the bundled host; deb and rpm for arm64 and x64; Ubuntu 22.04, Debian 12, Fedora 36, or later | As macOS desktop; "This computer" replaces "This Mac" |
+| Windows desktop | The same Tauri shell around WebView2, without a host; per-user NSIS installer for arm64 and x64; Windows 10 1809 or later | Another instance only: the host does not run on Windows |
 | Linux binary | Architecture-specific `suplex` executable in a versioned tarball, with checksum and download manifest; arm64 and x64 builds | Browser, or a remote desktop client on another machine |
 | Source checkout | Frontend build plus native Rust host, with development and supervised installation commands | Browser or desktop URL connection |
 
@@ -119,6 +121,17 @@ architecture-specific executable, not a universally static binary. Platform
 compatibility and authenticated provider execution still require verification
 on the destination host. Build scripts establish artifact support, not proof
 that a particular version has been published or installed successfully.
+
+The Linux and Windows desktop apps differ from the Mac app in these ways.
+They keep the native title bar and have no application menu; the tray menu
+holds the same actions. Their notifications have no click action, so the
+tray's **Check for updates** opens the update prompt. They have no
+**Start Suplex on Login** item. On Linux, the tray needs an AppIndicator
+extension on GNOME (Ubuntu includes one), the data folder is
+`~/.local/share/Suplex`, and Tailscale network access needs
+`sudo tailscale set --operator=$USER` once. On Windows the data folder is
+`%APPDATA%\Suplex`. Sources: [platform](../../desktop/src-tauri/src/platform.rs),
+[menu](../../desktop/src-tauri/src/menu.rs), and [paths](../../desktop/src-tauri/src/paths.rs).
 
 ## Process ownership and updates
 

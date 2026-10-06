@@ -150,8 +150,17 @@
   const status = document.getElementById("status");
   const next = document.getElementById("continue");
   const cards = document.getElementById("cards");
+  // The shell's platform: Windows has no local host, and the copy names a Mac only on macOS.
+  let platform = "macos";
+  const computer = () => (platform === "macos" ? "Mac" : "computer");
+  const applyPlatform = (name) => {
+    platform = name ?? "macos";
+    if (platform === "windows") modes.querySelector('input[name="mode"][value="local"]')?.closest("label")?.remove();
+    if (tailscale) show(tailscale);
+  };
   const refreshHosts = async () => {
     const snapshot = await window.suplexDesktop.snapshot();
+    applyPlatform(snapshot.platform);
     for (const card of cards.querySelectorAll(".saved")) card.remove();
     for (const origin of snapshot.hosts) {
       const target = new URL(origin);
@@ -293,10 +302,10 @@
   // One line for each Tailscale state, and the one action that moves it toward on.
   const describe = ({ state, tailnet }) => {
     switch (state) {
-      case "missing": return ["Tailscale is not installed on this Mac.", "Open the download page"];
-      case "not-running": return ["The Tailscale app is closed.", "Open Tailscale"];
+      case "missing": return [`Tailscale is not installed on this ${computer()}.`, "Open the download page"];
+      case "not-running": return platform === "linux" ? ["Tailscale is not running. Start the tailscaled service, then scan again.", ""] : ["The Tailscale app is closed.", "Open Tailscale"];
       case "signed-out": return ["You are not signed in to Tailscale.", "Sign in"];
-      case "approval": return ["An admin must approve this Mac in your tailnet.", "Open Tailscale"];
+      case "approval": return [`An admin must approve this ${computer()} in your tailnet.`, platform === "linux" ? "Open the admin console" : "Open Tailscale"];
       case "off": return [`Tailscale is off.${tailnet ? ` Tailnet: ${tailnet}.` : ""}`, "Start Tailscale"];
       case "starting": return ["Tailscale connects to your tailnet.", ""];
       default: return [tailnet ? `Tailnet: ${tailnet}` : "Tailscale is on.", ""];
@@ -365,7 +374,7 @@
   };
   scanButton.addEventListener("click", () => { void scan(); });
   action.addEventListener("click", async () => {
-    if (tailscale.state === "missing") { window.open("https://tailscale.com/download/mac"); return; }
+    if (tailscale.state === "missing") { window.open(`https://tailscale.com/download/${platform === "macos" ? "mac" : platform}`); return; }
     if (tailscale.state !== "off") { await window.suplexDesktop.openTailscale(); return; }
     action.disabled = true;
     const reason = await window.suplexDesktop.turnOnTailscale();

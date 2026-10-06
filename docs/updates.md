@@ -81,11 +81,13 @@ and `latest-tauri.json` with `no-cache`, after checking that every file they
 name is present. A retry after a partial publication accepts an object that is
 already live only when its public bytes equal the local file; it never
 overwrites a different object. `SUPLEX_PUBLISH_PHASE=files` or `manifest` runs
-one phase; the combined release runs all files for Mac and Linux before any
-manifest.
+one phase; the combined release runs all files for Mac, Linux, and Windows
+before any manifest.
 
 `mise run release:major`, `release:minor`, and `release:patch` run the release pipeline: verify a clean checkout, fetch the service account, bump the frontend, desktop, desktop shell crate, and native versions, sign and notarize the Mac builds, build Linux archives for both architectures,
-commit, tag, push, then publish. The Tauri app version comes from
+build the Linux and Windows desktop apps for both architectures (see below),
+commit, tag, push, then publish. A rerun after a failure keeps Linux and Windows
+desktop builds already signed from the same commit. The Tauri app version comes from
 `desktop/package.json`. The bump starts from the highest stable version
 in the checkout, local tags, and live `origin` tags. Remote lookup failures stop
 the release before version files change or builds start. The pipeline rechecks
@@ -159,8 +161,8 @@ A killed app leaves its host running. `suplex update` stops that host and does n
 assets and migrations. Each architecture produces a versioned tarball, SHA-256
 checksum file, and `latest-linux.yml` under `dist/linux/<arch>`.
 `mise run linux:publish` publishes them to `stable/linux/<arch>` using the
-configured release credentials. These are host binaries; there is no Linux
-desktop app.
+configured release credentials. These are host binaries for servers and
+terminals; the Linux desktop app below bundles the same host.
 
 The combined release publisher uploads immutable Mac and Linux artifacts before
 updating their download manifests. Linux's manifest describes the available
@@ -168,3 +170,46 @@ archive; it does not implement automatic replacement of a running binary.
 The host's Git-based checkout updater is a separate mechanism and must not be
 presented as an archive updater. Preserve installation data when replacing a
 binary, and verify the destination host separately from artifact publication.
+
+## Linux and Windows desktop apps
+
+`mise run desktop:dist:linux` builds the Linux desktop app for arm64 and x64 in
+Docker (`desktop/linux/Dockerfile`, Ubuntu 22.04): a deb and an rpm, each with
+the bundled host, under `desktop/release/linux-<arch>/`. Each deb is then
+installed and launched in a clean Ubuntu 22.04 container
+(`desktop/scripts/test-packaged-linux.sh`). The x64 build runs under emulation
+and takes longer. The packages run on Ubuntu 22.04, Debian 12, Fedora 36, and
+newer, and install the app as `/usr/bin/Suplex` with its resources in
+`/usr/lib/Suplex`. There is no AppImage: agents keep the bundled host's path,
+and an AppImage mounts at a new path on every launch.
+
+`mise run desktop:dist:windows` builds the Windows installer (NSIS, per-user,
+no administrator) for arm64 and x64 on the Windows build VM, and installs and
+launches each there. See [the build VM](../desktop/windows/README.md). The
+Windows app connects to Suplex hosts on other computers only; it has no local
+host, because the host does not run on Windows.
+
+Both builds read the same variables as the Mac build. Each platform has its
+own feed folder beside the Mac ones: `stable/linux/<arch>/` and
+`stable/windows/<arch>/`. With `SUPLEX_DESKTOP_UPDATE_URL` the app gets an
+`app-update.yml` for its folder. With the updater key pair the Mac signs each
+package (`desktop/scripts/finish-platform-release.sh`) and writes
+`latest-tauri.json`, with one entry per package type
+(`linux-<arch>-deb`, `linux-<arch>-rpm`, `windows-<arch>-nsis`). The private
+key never enters the container or the VM. `latest-linux-desktop.yml` and
+`latest-windows.yml` list the files for `suplex.sh/download`
+(`platform=linux-desktop-x64`, `linux-desktop-arm64`, `windows-x64`,
+`windows-arm64`).
+
+`scripts/publish-desktop-platform-release.sh` publishes one folder with the
+same immutable-file and manifest-last rules as the Mac publisher. The deb and
+rpm updates install through `pkexec`, so Linux asks for an administrator
+password. The release Authenticode signs the Windows app and installer with
+Azure Trusted Signing, from the `Azure Trusted Signing` item in the Suplex
+vault ([build VM](../desktop/windows/README.md#authenticode-signing)). A build
+without that item is unsigned, and Windows SmartScreen shows an unknown
+publisher.
+
+`mise run desktop:check:linux` and `desktop:check:windows` run the desktop
+shell's clippy and tests on each platform.
+

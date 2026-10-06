@@ -39,6 +39,22 @@ fn main() {
     if std::fs::read_to_string(&record).ok().as_deref() != Some(compiled.as_str()) {
         std::fs::write(&record, compiled).expect("write the compiled configuration record");
     }
-    tauri_build::try_build(tauri_build::Attributes::new().app_manifest(manifest))
-        .expect("tauri build configuration");
+    // Tauri links its Windows application manifest (Common Controls 6, which the dialogs need) into the app
+    // only, so test binaries could not start. The linker embeds the same manifest into every target instead.
+    let mut windows = tauri_build::WindowsAttributes::new();
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
+        let manifest =
+            std::path::Path::new(&std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR"))
+                .join("windows-app-manifest.xml");
+        println!("cargo:rerun-if-changed={}", manifest.display());
+        println!("cargo:rustc-link-arg=/MANIFEST:EMBED");
+        println!("cargo:rustc-link-arg=/MANIFESTINPUT:{}", manifest.display());
+        windows = tauri_build::WindowsAttributes::new_without_app_manifest();
+    }
+    tauri_build::try_build(
+        tauri_build::Attributes::new()
+            .app_manifest(manifest)
+            .windows_attributes(windows),
+    )
+    .expect("tauri build configuration");
 }

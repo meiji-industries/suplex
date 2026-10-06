@@ -138,7 +138,7 @@ pub async fn desktop_tailscale_status<R: Runtime>(
     shell: Shared<'_, R>,
 ) -> Result<TailscaleStatus, String> {
     require(&shell, &webview, ViewKind::Setup)?;
-    Ok(tailscale::status(&tailscale::COMMANDS, &tailscale::SystemRunner).await)
+    Ok(tailscale::status(tailscale::COMMANDS, &tailscale::SystemRunner).await)
 }
 
 #[tauri::command]
@@ -147,7 +147,7 @@ pub async fn desktop_turn_on_tailscale<R: Runtime>(
     shell: Shared<'_, R>,
 ) -> Result<Option<String>, String> {
     require(&shell, &webview, ViewKind::Setup)?;
-    Ok(tailscale::turn_on(&tailscale::COMMANDS, &tailscale::SystemRunner).await)
+    Ok(tailscale::turn_on(tailscale::COMMANDS, &tailscale::SystemRunner).await)
 }
 
 #[tauri::command]
@@ -156,10 +156,23 @@ pub async fn desktop_open_tailscale<R: Runtime>(
     shell: Shared<'_, R>,
 ) -> Result<(), String> {
     require(&shell, &webview, ViewKind::Setup)?;
+    #[cfg(target_os = "macos")]
     let _ = tokio::process::Command::new("/usr/bin/open")
         .args(["-b", "io.tailscale.ipn.macos"])
         .status()
         .await;
+    #[cfg(windows)]
+    {
+        let programs = std::env::var("ProgramFiles").unwrap_or_else(|_| r"C:\Program Files".into());
+        let app = std::path::Path::new(&programs).join(r"Tailscale\tailscale-ipn.exe");
+        if std::process::Command::new(app).spawn().is_err() {
+            shell
+                .open_external(&url::Url::parse("https://tailscale.com/download/windows").unwrap());
+        }
+    }
+    // Linux has no Tailscale app; machine approval happens in the admin console.
+    #[cfg(target_os = "linux")]
+    shell.open_external(&url::Url::parse("https://login.tailscale.com/admin/machines").unwrap());
     Ok(())
 }
 

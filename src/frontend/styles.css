@@ -196,13 +196,15 @@
 .suplex-desktop [data-slot="sidebar-wrapper"] { min-height: calc(100svh - 2rem); }
 
 /*
- * The desktop window draws its traffic lights over the page. Only the desktop app sets the
+ * The macOS desktop window draws its traffic lights over the page. Only the desktop app sets the
  * suplex-desktop class, so a browser keeps a zero inset. The main toolbar only needs the inset when
  * the sidebar is not beside it; the sidebar header keeps the whole traffic-light row above its own
  * content. Elements with data-tauri-drag-region="deep" move the window; their controls stay clickable.
  */
 .suplex-desktop { --titlebar-height: 2.375rem; --titlebar-x: 5rem; }
 .suplex-desktop.suplex-fullscreen { --titlebar-height: 0px; --titlebar-x: 0px; }
+/* Windows and Linux keep a native title bar above the page. */
+.suplex-desktop.suplex-native-titlebar { --titlebar-height: 0px; --titlebar-x: 0px; }
 .titlebar-top { padding-top: max(0.5rem, calc(var(--titlebar-height, 0px) - 0.625rem)); }
 .titlebar-inset { padding-left: var(--titlebar-x, 0px); }
 @media (min-width: 768px) {

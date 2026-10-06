@@ -124,7 +124,11 @@ pub struct InstallRecord {
     pub port: u16,
 }
 
+/// Windows has no bundled host, so it never has a local install; every caller goes through here.
 pub fn read_install_record(file: &Path) -> Option<InstallRecord> {
+    if !crate::platform::LOCAL_SUPPORTED {
+        return None;
+    }
     serde_json::from_str(&std::fs::read_to_string(file).ok()?).ok()
 }
 
@@ -346,6 +350,17 @@ mod tests {
         assert_eq!(runtime_stamp(&fixture.join("missing")), None);
     }
 
+    #[cfg(windows)]
+    #[test]
+    fn windows_never_reads_a_local_install() {
+        let directory = tempfile::tempdir().unwrap();
+        let file = directory.path().join("install.json");
+        write_install_record(&file, &record()).unwrap();
+        assert_eq!(read_install_record(&file), None);
+    }
+
+    // Windows has no local host: no install record, and no host environment.
+    #[cfg(unix)]
     #[test]
     fn the_install_record_round_trips_in_its_existing_format_and_rejects_anything_incomplete() {
         let directory = tempfile::tempdir().unwrap();
@@ -376,6 +391,8 @@ mod tests {
             .collect()
     }
 
+    // Windows has no local host: no install record, and no host environment.
+    #[cfg(unix)]
     #[test]
     fn the_local_runtime_environment_has_the_existing_meanings() {
         let environment = runtime_environment(

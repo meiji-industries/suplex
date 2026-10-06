@@ -171,6 +171,8 @@ pub struct ViewSpec {
     pub bridge: String,
     /// The web storage of this installation's data directory, as Chromium storage lived there before.
     pub data_store: [u8; 16],
+    /// The same isolation where WebView2 and WebKitGTK key storage by directory.
+    pub webview_data: PathBuf,
 }
 
 /// A stable 128-bit FNV-1a digest of the user data path, used as the WebKit data store identifier.
@@ -185,13 +187,27 @@ pub fn data_store_for(user_data: &Path) -> [u8; 16] {
 
 /// The shell's own bundled pages, served by the app protocol.
 pub fn app_page(path: &str) -> Url {
-    Url::parse("tauri://localhost/")
+    Url::parse(&format!("{APP_ORIGIN}/"))
         .unwrap()
         .join(path)
         .expect("a bundled page path")
 }
 
-pub const APP_ORIGIN: &str = "tauri://localhost";
+/// Bundled pages: `tauri://localhost` on macOS and Linux; WebView2 on Windows serves them from `http://tauri.localhost`.
+pub const APP_ORIGIN: &str = if cfg!(windows) {
+    "http://tauri.localhost"
+} else {
+    "tauri://localhost"
+};
+
+/// True for a URL on the shell's own bundled-page origin.
+pub fn is_app_page(url: &Url) -> bool {
+    if cfg!(windows) {
+        url.scheme() == "http" && url.host_str() == Some("tauri.localhost")
+    } else {
+        url.scheme() == "tauri" && url.host_str() == Some("localhost")
+    }
+}
 
 pub fn build_view<R: Runtime>(
     app: &tauri::AppHandle<R>,
@@ -225,12 +241,9 @@ pub fn build_view<R: Runtime>(
         .title("Suplex")
         .inner_size(bounds.width, bounds.height)
         .min_inner_size(MIN_WIDTH, MIN_HEIGHT)
-        .title_bar_style(tauri::TitleBarStyle::Overlay)
-        .hidden_title(true)
         .background_color(tauri::window::Color(10, 10, 10, 255))
         .focused(focus)
         .disable_drag_drop_handler()
-        .data_store_identifier(spec.data_store)
         .initialization_script(spec.bridge)
         .on_navigation(move |url| navigation_allowed(&navigation_shell, kind, &label, &origin, url))
         .on_new_window(move |url, _features| {
@@ -248,6 +261,19 @@ pub fn build_view<R: Runtime>(
                 );
             }
         });
+    // macOS draws the traffic lights over the page; Windows and Linux keep their native title bar.
+    #[cfg(target_os = "macos")]
+    {
+        builder = builder
+            .title_bar_style(tauri::TitleBarStyle::Overlay)
+            .hidden_title(true);
+    }
+    // WKWebView isolates storage by identifier; WebView2 and WebKitGTK by directory.
+    builder = if cfg!(target_os = "macos") {
+        builder.data_store_identifier(spec.data_store)
+    } else {
+        builder.data_directory(spec.webview_data.clone())
+    };
     if let (Some(x), Some(y)) = (bounds.x, bounds.y) {
         builder = builder.position(x, y);
     }
@@ -342,7 +368,7 @@ fn navigation_allowed<R: Runtime>(
     let Some(shell) = shell.upgrade() else {
         return false;
     };
-    if kind != ViewKind::Host && url.scheme() == "tauri" && url.host_str() == Some("localhost") {
+    if kind != ViewKind::Host && is_app_page(url) {
         // The setup form submits ?url=… to connect; the shell validates it and switches the window.
         if let Some(submitted) = url
             .query_pairs()
@@ -709,12 +735,23 @@ mod tests {
     fn app_pages_stay_on_the_app_origin() {
         assert_eq!(
             app_page("pages/choice.html?manage=1").as_str(),
-            "tauri://localhost/pages/choice.html?manage=1"
+            format!("{APP_ORIGIN}/pages/choice.html?manage=1")
         );
-        assert_eq!(
-            app_page("pages/choice.html").origin().ascii_serialization(),
-            "null",
-            "custom schemes have opaque origins; the label and scheme check guard them"
-        );
+        assert!(is_app_page(&app_page("pages/choice.html")));
+        assert!(!is_app_page(
+            &Url::parse("https://tauri.localhost/pages/choice.html").unwrap()
+        ));
+        if cfg!(windows) {
+            assert_eq!(
+                app_page("pages/choice.html").origin().ascii_serialization(),
+                APP_ORIGIN
+            );
+        } else {
+            assert_eq!(
+                app_page("pages/choice.html").origin().ascii_serialization(),
+                "null",
+                "custom schemes have opaque origins; the label and scheme check guard them"
+            );
+        }
     }
 }

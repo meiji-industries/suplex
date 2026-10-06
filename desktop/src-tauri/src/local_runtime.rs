@@ -98,10 +98,36 @@ fn origin(port: u16) -> String {
     format!("http://127.0.0.1:{port}")
 }
 
-fn signal_group(pid: i32, signal: libc::c_int) {
+#[derive(Clone, Copy)]
+pub(crate) enum Signal {
+    Term,
+    Kill,
+}
+
+/// Signals the process group our own child leads.
+#[cfg(unix)]
+pub(crate) fn signal_group(pid: i32, signal: Signal) {
+    let signal = match signal {
+        Signal::Term => libc::SIGTERM,
+        Signal::Kill => libc::SIGKILL,
+    };
     // SAFETY: a negative pid addresses the process group our own child leads; it never names another process.
     unsafe { libc::kill(-pid, signal) };
 }
+
+/// Windows has no process groups or TERM: end the child's process tree.
+#[cfg(windows)]
+pub(crate) fn signal_group(pid: i32, _signal: Signal) {
+    use std::os::windows::process::CommandExt;
+    let _ = std::process::Command::new("taskkill")
+        .args(["/T", "/F", "/PID", &pid.to_string()])
+        .creation_flags(CREATE_NO_WINDOW)
+        .output();
+}
+
+/// Keeps a console program started by the GUI shell from opening a console window.
+#[cfg(windows)]
+pub(crate) const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 /// The host child this shell spawned. Its pid is a live process-group leader until `exited` reports.
 struct OwnedChild {
@@ -119,13 +145,13 @@ impl OwnedChild {
     /// TERM to the group, a bounded wait, KILL only if the leader is still alive, then reap and close the log.
     async fn stop(mut self, timeout: Duration) {
         if self.exit_code().is_none() {
-            signal_group(self.pid, libc::SIGTERM);
+            signal_group(self.pid, Signal::Term);
             let mut exited = self.exited.clone();
             let ended = tokio::time::timeout(timeout, exited.wait_for(Option::is_some))
                 .await
                 .is_ok();
             if !ended {
-                signal_group(self.pid, libc::SIGKILL);
+                signal_group(self.pid, Signal::Kill);
             }
         }
         self.finish().await;
@@ -133,7 +159,7 @@ impl OwnedChild {
 
     async fn kill(mut self) {
         if self.exit_code().is_none() {
-            signal_group(self.pid, libc::SIGKILL);
+            signal_group(self.pid, Signal::Kill);
         }
         self.finish().await;
     }
@@ -172,7 +198,7 @@ impl LocalHost {
         }
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     pub async fn owns_child(&self) -> bool {
         self.child.lock().await.is_some()
     }
@@ -291,7 +317,8 @@ impl LocalHost {
             .open(logs.join("server.log"))
             .map_err(|error| error.to_string())?;
         let second = log.try_clone().map_err(|error| error.to_string())?;
-        let mut child = tokio::process::Command::new(&self.runtime.binary)
+        let mut command = tokio::process::Command::new(&self.runtime.binary);
+        command
             .args(["start", "--foreground"])
             .current_dir(&self.runtime.directory)
             .env_clear()
@@ -301,18 +328,18 @@ impl LocalHost {
                 &self.base,
                 access,
             ))
-            .process_group(0)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
-            .kill_on_drop(false)
-            .spawn()
-            .map_err(|error| {
-                format!(
-                    "Suplex could not start {}: {error}",
-                    self.runtime.binary.display()
-                )
-            })?;
+            .kill_on_drop(false);
+        #[cfg(unix)]
+        command.process_group(0);
+        let mut child = command.spawn().map_err(|error| {
+            format!(
+                "Suplex could not start {}: {error}",
+                self.runtime.binary.display()
+            )
+        })?;
         let pid = child
             .id()
             .ok_or("The Suplex server exited before it started.")? as i32;
@@ -354,7 +381,8 @@ impl LocalHost {
     }
 }
 
-#[cfg(test)]
+// The tests spawn a Python fixture host and signal it with libc.
+#[cfg(all(test, unix))]
 mod tests {
     use std::{sync::Arc, time::Instant};
 

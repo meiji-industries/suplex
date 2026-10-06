@@ -3,6 +3,7 @@ import { useEffect, type ReactElement } from "react";
 
 import { Button } from "../components/ui/button.js";
 import { getSystemHealthLevel, useSystemHealth } from "../components/app/system-health.js";
+import { thisComputer } from "./desktop-platform.js";
 
 export function DesktopHostBar(): ReactElement | null {
   const health = useSystemHealth();
@@ -12,7 +13,7 @@ export function DesktopHostBar(): ReactElement | null {
 
   const host = window.location.host;
   const local = ["localhost", "127.0.0.1", "[::1]"].includes(window.location.hostname);
-  const label = local ? "This Mac" : host;
+  const label = local ? thisComputer() : host;
   const level = getSystemHealthLevel(health.snapshot, health.freshness);
   const status = health.freshness === "stale" || level === "red" || !health.snapshot ? "Not available" : level === "green" ? "Ready" : "Needs attention";
 

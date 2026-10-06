@@ -13,6 +13,7 @@ use tauri::{
 use crate::{
     contracts::NetworkMode,
     network_access::ActiveNetworkAccess,
+    platform::{LOCAL_SUPPORTED, MACHINE},
     shell::{Shell, View},
 };
 
@@ -70,7 +71,7 @@ fn network_items<R: Runtime>(shell: &Shell<R>) -> Items<R> {
         check(
             app,
             "network:local",
-            "This Mac only",
+            &format!("This {MACHINE} only"),
             enabled,
             state.preference == NetworkMode::Local,
         ),
@@ -107,17 +108,18 @@ fn network_items<R: Runtime>(shell: &Shell<R>) -> Items<R> {
     items
 }
 
-/// "This Mac" first, then each remembered host, with the shown one checked.
+/// "This Mac" (or "This computer") first where a local host runs, then each remembered host, with the shown one checked.
 fn host_items<R: Runtime>(shell: &Shell<R>, include_local: bool) -> Items<R> {
     let app = &shell.app;
     let local = shell.local_origin();
     let shown = shell.view().origin().map(str::to_owned);
     let mut items: Items<R> = Vec::new();
+    let include_local = include_local && LOCAL_SUPPORTED;
     if include_local {
         items.push(check(
             app,
             "host-local",
-            "This Mac",
+            &format!("This {MACHINE}"),
             true,
             local.is_some() && shown == local,
         ));
@@ -154,11 +156,8 @@ fn status<R: Runtime>(shell: &Shell<R>) -> &'static str {
     }
 }
 
-pub fn rebuild<R: Runtime>(shell: &Shell<R>) {
-    if cfg!(test) {
-        // Native menus need the macOS main thread, which Tauri's mock runtime does not provide.
-        return;
-    }
+/// The macOS application menu.
+fn set_app_menu<R: Runtime>(shell: &Shell<R>) {
     let app = &shell.app;
     let network = network_items(shell);
     let network_menu =
@@ -241,6 +240,18 @@ pub fn rebuild<R: Runtime>(shell: &Shell<R>) {
     )
     .expect("menu");
     let _ = app.set_menu(menu);
+}
+
+pub fn rebuild<R: Runtime>(shell: &Shell<R>) {
+    if cfg!(test) {
+        // Native menus need the macOS main thread, which Tauri's mock runtime does not provide.
+        return;
+    }
+    // Windows and Linux would show this as a menu bar in every window; there the tray is the only native menu.
+    if cfg!(target_os = "macos") {
+        set_app_menu(shell);
+    }
+    let app = &shell.app;
 
     let Some(tray) = app.tray_by_id(TRAY) else {
         return;
@@ -258,35 +269,47 @@ pub fn rebuild<R: Runtime>(shell: &Shell<R>) {
         separator(app),
         item(app, "manage-hosts", "Manage Suplex hosts…", true),
         separator(app),
-        Box::new(tray_network) as Box<dyn IsMenuItem<R>>,
-        separator(app),
-        item(app, "status", status(shell), false),
-        separator(app),
-        item(
-            app,
-            "start",
-            "Start Suplex",
-            shell.local_installed() && local.is_none() && !state.busy,
-        ),
-        item(
-            app,
-            "stop",
-            "Stop Suplex",
-            local.is_some() && owned && !state.busy,
-        ),
-        separator(app),
-        check(
-            app,
-            "login",
-            if packaged {
-                "Start Suplex on Login"
-            } else {
-                "Start Suplex on Login (installed app only)"
-            },
-            packaged,
-            packaged && login::enabled(),
-        ),
-        separator(app),
+    ]);
+    // Windows has no local host to start, stop, or expose.
+    if LOCAL_SUPPORTED {
+        items.extend([
+            Box::new(tray_network) as Box<dyn IsMenuItem<R>>,
+            separator(app),
+            item(app, "status", status(shell), false),
+            separator(app),
+            item(
+                app,
+                "start",
+                "Start Suplex",
+                shell.local_installed() && local.is_none() && !state.busy,
+            ),
+            item(
+                app,
+                "stop",
+                "Stop Suplex",
+                local.is_some() && owned && !state.busy,
+            ),
+            separator(app),
+        ]);
+    }
+    // Login items use the macOS service for this app bundle; Windows and Linux have none yet.
+    if cfg!(target_os = "macos") {
+        items.extend([
+            check(
+                app,
+                "login",
+                if packaged {
+                    "Start Suplex on Login"
+                } else {
+                    "Start Suplex on Login (installed app only)"
+                },
+                packaged,
+                packaged && login::enabled(),
+            ),
+            separator(app),
+        ]);
+    }
+    items.extend([
         item(app, "logs", "Open Logs", true),
         item(app, "check-updates", "Check for updates", true),
         separator(app),
@@ -298,10 +321,15 @@ pub fn rebuild<R: Runtime>(shell: &Shell<R>) {
 }
 
 pub fn create_tray<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
-    let icon = Image::from_bytes(include_bytes!("../../src/statusTemplate@2x.png"))?;
+    // The template image is black and only macOS tints it; Windows and Linux panels need the colored app icon.
+    let icon = if cfg!(target_os = "macos") {
+        Image::from_bytes(include_bytes!("../../src/statusTemplate@2x.png"))?
+    } else {
+        Image::from_bytes(include_bytes!("../icons/32x32.png"))?
+    };
     TrayIconBuilder::with_id(TRAY)
         .icon(icon)
-        .icon_as_template(true)
+        .icon_as_template(cfg!(target_os = "macos"))
         .tooltip("Suplex")
         .show_menu_on_left_click(true)
         .build(app)?;

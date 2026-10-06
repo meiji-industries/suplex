@@ -108,7 +108,7 @@ impl<P: Ports> DesktopUpdater<P> {
                     .dialog(Dialog {
                         kind: Kind::Info,
                         message: "Desktop app updates are not configured.".into(),
-                        detail: Some("This build has no update feed or signing key. Install a new Suplex.app build to update the desktop app.".into()),
+                        detail: Some("This build has no update feed or signing key. Install a new Suplex build to update the desktop app.".into()),
                         buttons: vec!["Continue"],
                     })
                     .await;
@@ -332,6 +332,11 @@ impl<R: tauri::Runtime> Ports for TauriPorts<R> {
             .unwrap()
             .take()
             .ok_or("The downloaded update is no longer available.")?;
+        // The Windows installer ends this process, so nothing after `install` runs there. Windows owns no host.
+        #[cfg(windows)]
+        if let Some(shell) = self.shell.upgrade() {
+            shell.shutdown().await;
+        }
         // Replace the bundle first: if that fails, the owned host keeps running and nothing is lost.
         tauri::async_runtime::spawn_blocking(move || update.install(bytes))
             .await

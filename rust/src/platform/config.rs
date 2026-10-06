@@ -283,8 +283,14 @@ fn service_url(
     }
 }
 
+/// The desktop app's data folder: the Electron-era folder on macOS, the XDG data default on Linux.
 fn desktop_configuration(home: &Path) -> PathBuf {
-    home.join("Library/Application Support/Suplex/suplex.env")
+    let directory = if cfg!(target_os = "macos") {
+        "Library/Application Support/Suplex"
+    } else {
+        ".local/share/Suplex"
+    };
+    home.join(directory).join("suplex.env")
 }
 
 fn valid_installation_id(id: &str) -> bool {
@@ -387,7 +393,7 @@ mod tests {
     fn configuration_prefers_explicit_then_local_then_desktop() {
         let base = std::env::temp_dir().join(format!("suplex-config-{}", uuid::Uuid::new_v4()));
         let (current, home) = (base.join("project"), base.join("home"));
-        let desktop = home.join("Library/Application Support/Suplex");
+        let desktop = desktop_configuration(&home).parent().unwrap().to_path_buf();
         fs::create_dir_all(&current).unwrap();
         let local = current.join(".suplex/suplex.env");
         assert_eq!(

@@ -1,15 +1,22 @@
 #!/bin/sh
+# Builds the host binary the desktop app bundles, for this OS and SUPLEX_DESKTOP_ARCH, into desktop/runtime.
+# SUPLEX_SKIP_WEB_BUILD=1 reuses dist/web: the Linux container has no node_modules and gets it built by the Mac.
 set -eu
 cd "$(dirname "$0")/.."
 
 arch="${SUPLEX_DESKTOP_ARCH:-arm64}"
-case "$arch" in
-  arm64) target=aarch64-apple-darwin; machine=arm64 ;;
-  x64) target=x86_64-apple-darwin; machine=x86_64 ;;
-  *) echo "SUPLEX_DESKTOP_ARCH must be arm64 or x64, not $arch" >&2; exit 1 ;;
+case "$(uname -s):$arch" in
+  Darwin:arm64) target=aarch64-apple-darwin; machine=arm64 ;;
+  Darwin:x64) target=x86_64-apple-darwin; machine=x86_64 ;;
+  Linux:arm64) target=aarch64-unknown-linux-gnu; machine=aarch64 ;;
+  Linux:x64) target=x86_64-unknown-linux-gnu; machine=x86-64 ;;
+  *) echo "SUPLEX_DESKTOP_ARCH must be arm64 or x64 on macOS or Linux, not $arch on $(uname -s)" >&2; exit 1 ;;
 esac
 
-pnpm exec vite build
+if [ -z "${SUPLEX_SKIP_WEB_BUILD:-}" ]; then
+  pnpm exec vite build
+fi
+[ -f dist/web/suplex-ui.js ] || { echo "dist/web is not built; run pnpm exec vite build first" >&2; exit 1; }
 unset RUSTUP_TOOLCHAIN
 (cd rust && cargo build --release --target "$target" --bin suplex)
 

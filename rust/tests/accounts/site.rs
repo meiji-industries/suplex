@@ -35,6 +35,40 @@ mod tests {
                 format!("{}/stable/linux/x64/suplex-1.2.3-x64.tar.gz", f.stub)
             )
         );
+        f.answer(
+            "GET /stable/linux/x64/latest-linux-desktop.yml",
+            200,
+            "version: 1.2.3\nfiles:\n  - url: Suplex-1.2.3-linux-x64.deb\n  - url: Suplex-1.2.3-linux-x64.rpm\n",
+        );
+        assert_eq!(
+            location(&f, "/download?platform=linux-desktop-x64", &[]).await,
+            (
+                302,
+                format!("{}/stable/linux/x64/Suplex-1.2.3-linux-x64.deb", f.stub)
+            )
+        );
+        assert_eq!(
+            location(&f, "/download?platform=linux-desktop-x64&format=rpm", &[]).await,
+            (
+                302,
+                format!("{}/stable/linux/x64/Suplex-1.2.3-linux-x64.rpm", f.stub)
+            )
+        );
+        f.answer(
+            "GET /stable/windows/arm64/latest-windows.yml",
+            200,
+            "version: 1.2.3\nfiles:\n  - url: Suplex-1.2.3-windows-arm64-setup.exe\n",
+        );
+        assert_eq!(
+            location(&f, "/download?platform=windows-arm64", &[]).await,
+            (
+                302,
+                format!(
+                    "{}/stable/windows/arm64/Suplex-1.2.3-windows-arm64-setup.exe",
+                    f.stub
+                )
+            )
+        );
 
         let unknown = f.get("/download?platform=windows", &[]).await;
         assert_eq!(unknown.status(), 404);

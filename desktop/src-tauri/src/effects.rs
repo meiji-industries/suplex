@@ -27,13 +27,18 @@ impl<R: Runtime> Effects<R> {
         };
         #[cfg(not(feature = "native-test"))]
         {
-            let home = std::env::var_os("HOME")
-                .map(PathBuf::from)
-                .unwrap_or_else(|| paths.user_data.clone());
-            Self {
-                app,
-                downloads: home.join("Desktop"),
-            }
+            // macOS keeps the Electron shell's Desktop; Windows and Linux use the Downloads folder.
+            let downloads = if cfg!(target_os = "macos") {
+                std::env::var_os("HOME")
+                    .map(|home| PathBuf::from(home).join("Desktop"))
+                    .unwrap_or_else(|| paths.user_data.join("Desktop"))
+            } else {
+                use tauri::Manager;
+                app.path()
+                    .download_dir()
+                    .unwrap_or_else(|_| paths.user_data.clone())
+            };
+            Self { app, downloads }
         }
     }
 
@@ -49,7 +54,7 @@ impl<R: Runtime> Effects<R> {
         }
     }
 
-    /// Page downloads land on the Desktop, as in the Electron shell.
+    /// Page downloads land on the Desktop on macOS, as in the Electron shell, and in Downloads elsewhere.
     pub fn download_directory(&self) -> PathBuf {
         self.downloads.clone()
     }
@@ -78,7 +83,18 @@ impl<R: Runtime> Effects<R> {
     pub fn copy(&self, text: String) {
         #[cfg(feature = "native-test")]
         return self.record(serde_json::json!({ "effect": "copy", "text": text }));
-        #[cfg(not(feature = "native-test"))]
+        #[cfg(all(not(feature = "native-test"), not(target_os = "macos")))]
+        {
+            use tauri::Manager;
+            // `try_state`: an app built without the plugin, such as a test app, copies nothing instead of panicking.
+            if let Some(clipboard) = self
+                .app
+                .try_state::<tauri_plugin_clipboard_manager::Clipboard<R>>()
+            {
+                let _ = clipboard.write_text(text);
+            }
+        }
+        #[cfg(all(not(feature = "native-test"), target_os = "macos"))]
         std::thread::spawn(move || {
             use std::io::Write;
             if let Ok(mut child) = std::process::Command::new("/usr/bin/pbcopy")
@@ -161,5 +177,23 @@ impl<R: Runtime> Effects<R> {
         }
         #[cfg(all(not(feature = "native-test"), target_os = "macos"))]
         crate::notifications::post(crate::updater::TITLE, &message, clicked);
+        #[cfg(all(not(feature = "native-test"), not(target_os = "macos")))]
+        {
+            use tauri::Manager;
+            // Windows and Linux notifications report no click. The tray's Check for updates reaches the same prompt.
+            drop(clicked);
+            if let Some(notifications) = self
+                .app
+                .try_state::<tauri_plugin_notification::Notification<R>>()
+            {
+                let _ = notifications
+                    .builder()
+                    .title(crate::updater::TITLE)
+                    .body(format!(
+                        "{message} To continue, open the Suplex tray menu and select Check for updates."
+                    ))
+                    .show();
+            }
+        }
     }
 }

@@ -28,6 +28,10 @@ fn feed(platform: &str) -> Option<(&'static str, &'static str, &'static [&'stati
         "macos-x64" => ("mac/x64", "latest-mac.yml", &["dmg", "zip"]),
         "linux-arm64" => ("linux/arm64", "latest-linux.yml", &["tar.gz"]),
         "linux-x64" => ("linux/x64", "latest-linux.yml", &["tar.gz"]),
+        "linux-desktop-arm64" => ("linux/arm64", "latest-linux-desktop.yml", &["deb", "rpm"]),
+        "linux-desktop-x64" => ("linux/x64", "latest-linux-desktop.yml", &["deb", "rpm"]),
+        "windows-x64" => ("windows/x64", "latest-windows.yml", &["exe"]),
+        "windows-arm64" => ("windows/arm64", "latest-windows.yml", &["exe"]),
         _ => return None,
     })
 }

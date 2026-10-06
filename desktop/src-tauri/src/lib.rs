@@ -14,6 +14,7 @@ mod network_access;
 #[cfg(all(not(feature = "native-test"), target_os = "macos"))]
 mod notifications;
 mod paths;
+mod platform;
 mod shell;
 mod tailscale;
 mod targets;
@@ -88,79 +89,85 @@ pub fn run() {
         }))
         .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_updater::Builder::new().build())
-        .setup(move |app| {
-            let resources = app.path().resource_dir().unwrap_or_default();
-            let shell = Shell::new(app.handle().clone(), argv, environment, &resources);
-            app.manage(shell.clone());
-            let ports = updater::TauriPorts::new(
-                app.handle().clone(),
-                Arc::downgrade(&shell),
-                updater::packaged_feed(&resources),
-            );
-            let configured = ports.configured();
-            if !configured {
-                eprintln!("Suplex desktop updates are not configured in this build.");
-            }
-            app.manage(Arc::new(DesktopUpdater::new(ports, configured)));
-            menu::create_tray(app.handle())?;
-            let menu_shell = shell.clone();
-            app.on_menu_event(move |_app, event| menu::handle(&menu_shell, &event));
-            {
-                use tauri_plugin_deep_link::DeepLinkExt;
-                // suplex:// brings Suplex to the front. Only a company invitation (suplex://join?url=https://...)
-                // is read, and it switches to that host; other links carry nothing.
-                let link_shell = shell.clone();
-                app.deep_link().on_open_url(move |event| {
-                    let shell = link_shell.clone();
-                    let invitation = event
-                        .urls()
-                        .iter()
-                        .find_map(|url| targets::invitation_target(url.as_str()));
-                    tauri::async_runtime::spawn(async move {
-                        shell.open().await;
-                        if let Some(target) = invitation {
-                            shell.switch_to(target).await;
-                        }
-                    });
-                });
-            }
-            let signal_shell = shell.clone();
-            tauri::async_runtime::spawn(async move {
-                use tokio::signal::unix::{signal, SignalKind};
-                let (Ok(mut terminate), Ok(mut interrupt)) = (
-                    signal(SignalKind::terminate()),
-                    signal(SignalKind::interrupt()),
-                ) else {
-                    return;
-                };
-                tokio::select! {
-                    _ = terminate.recv() => {}
-                    _ = interrupt.recv() => {}
-                }
-                signal_shell.quit().await;
-            });
-            #[cfg(feature = "native-test")]
-            native_test::start(&shell);
-            let start_shell = shell.clone();
-            tauri::async_runtime::spawn(async move {
-                start_shell.network.load_preference().await;
-                start_shell.rebuild_menu();
-                start_shell.open().await;
-                let invitation = start_shell
-                    .argv
+        .plugin(tauri_plugin_updater::Builder::new().build());
+    #[cfg(not(target_os = "macos"))]
+    let builder = builder
+        .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_clipboard_manager::init());
+    let builder = builder.setup(move |app| {
+        let resources = app.path().resource_dir().unwrap_or_default();
+        let shell = Shell::new(app.handle().clone(), argv, environment, &resources);
+        app.manage(shell.clone());
+        let ports = updater::TauriPorts::new(
+            app.handle().clone(),
+            Arc::downgrade(&shell),
+            updater::packaged_feed(&resources),
+        );
+        let configured = ports.configured();
+        if !configured {
+            eprintln!("Suplex desktop updates are not configured in this build.");
+        }
+        app.manage(Arc::new(DesktopUpdater::new(ports, configured)));
+        menu::create_tray(app.handle())?;
+        let menu_shell = shell.clone();
+        app.on_menu_event(move |_app, event| menu::handle(&menu_shell, &event));
+        {
+            use tauri_plugin_deep_link::DeepLinkExt;
+            // suplex:// brings Suplex to the front. Only a company invitation (suplex://join?url=https://...)
+            // is read, and it switches to that host; other links carry nothing.
+            let link_shell = shell.clone();
+            app.deep_link().on_open_url(move |event| {
+                let shell = link_shell.clone();
+                let invitation = event
+                    .urls()
                     .iter()
-                    .find_map(|value| targets::invitation_target(value));
-                if let Some(target) = invitation {
-                    start_shell.switch_to(target).await;
-                }
-                loop {
-                    check_for_updates(&start_shell, false).await;
-                    tokio::time::sleep(UPDATE_INTERVAL).await;
-                }
+                    .find_map(|url| targets::invitation_target(url.as_str()));
+                tauri::async_runtime::spawn(async move {
+                    shell.open().await;
+                    if let Some(target) = invitation {
+                        shell.switch_to(target).await;
+                    }
+                });
             });
-            Ok(())
+        }
+        #[cfg(unix)]
+        let signal_shell = shell.clone();
+        #[cfg(unix)]
+        tauri::async_runtime::spawn(async move {
+            use tokio::signal::unix::{signal, SignalKind};
+            let (Ok(mut terminate), Ok(mut interrupt)) = (
+                signal(SignalKind::terminate()),
+                signal(SignalKind::interrupt()),
+            ) else {
+                return;
+            };
+            tokio::select! {
+                _ = terminate.recv() => {}
+                _ = interrupt.recv() => {}
+            }
+            signal_shell.quit().await;
         });
+        #[cfg(feature = "native-test")]
+        native_test::start(&shell);
+        let start_shell = shell.clone();
+        tauri::async_runtime::spawn(async move {
+            start_shell.network.load_preference().await;
+            start_shell.rebuild_menu();
+            start_shell.open().await;
+            let invitation = start_shell
+                .argv
+                .iter()
+                .find_map(|value| targets::invitation_target(value));
+            if let Some(target) = invitation {
+                start_shell.switch_to(target).await;
+            }
+            loop {
+                check_for_updates(&start_shell, false).await;
+                tokio::time::sleep(UPDATE_INTERVAL).await;
+            }
+        });
+        Ok(())
+    });
     let app = configure(builder)
         .build(context())
         .expect("Suplex could not start its window system");
@@ -177,6 +184,7 @@ pub fn run() {
                 tauri::async_runtime::spawn(async move { shell.exit(code).await });
             }
         }
+        #[cfg(target_os = "macos")]
         RunEvent::Reopen { .. } => {
             if let Some(shell) = shell_of(app) {
                 tauri::async_runtime::spawn(async move { shell.open().await });

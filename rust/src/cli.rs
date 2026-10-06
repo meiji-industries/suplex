@@ -141,6 +141,18 @@ async fn update(arguments: &[String]) -> CliResult {
 fn desktop() -> CliResult {
     let installation = Installation::load()?;
     let url = format!("http://localhost:{}", installation.port);
+    if !cfg!(target_os = "macos") {
+        // The Linux packages install the app as /usr/bin/Suplex; a running app receives the URL.
+        std::process::Command::new("Suplex")
+            .arg(format!("--url={url}"))
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .map_err(|error| format!("Suplex did not open: {error}"))?;
+        println!("Suplex opened at {url}");
+        return Ok(0);
+    }
     let output = std::process::Command::new("open")
         .args(["-na", "Suplex", "--args", &format!("--url={url}")])
         .output()?;

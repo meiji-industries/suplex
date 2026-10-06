@@ -1,5 +1,6 @@
-//! Where the desktop shell keeps its files. Production reads the existing Electron-era layout in
-//! `~/Library/Application Support/Suplex` in place; Tauri's identifier-derived directory is never used.
+//! Where the desktop shell keeps its files. macOS reads the existing Electron-era layout in
+//! `~/Library/Application Support/Suplex` in place; Linux uses `~/.local/share/Suplex` and Windows
+//! `%APPDATA%\Suplex`. Tauri's identifier-derived directory is never used.
 
 use std::{
     collections::HashMap,
@@ -18,7 +19,7 @@ impl Paths {
     pub fn from_environment(environment: &HashMap<String, String>) -> Self {
         let user_data = match environment.get("SUPLEX_DESKTOP_USER_DATA") {
             Some(value) if !value.is_empty() => PathBuf::from(value),
-            _ => home(environment).join("Library/Application Support/Suplex"),
+            _ => default_user_data(environment),
         };
         Self { user_data }
     }
@@ -68,17 +69,34 @@ impl RuntimePaths {
     }
 }
 
+/// macOS keeps the Electron-era folder. Linux uses the XDG data default; the `suplex` CLI looks there
+/// too, so neither reads `XDG_DATA_HOME`. Windows uses roaming AppData.
+fn default_user_data(environment: &HashMap<String, String>) -> PathBuf {
+    if cfg!(target_os = "macos") {
+        home(environment).join("Library/Application Support/Suplex")
+    } else if cfg!(windows) {
+        environment
+            .get("APPDATA")
+            .filter(|value| !value.is_empty())
+            .map(PathBuf::from)
+            .unwrap_or_else(|| home(environment).join("AppData").join("Roaming"))
+            .join("Suplex")
+    } else {
+        home(environment).join(".local/share/Suplex")
+    }
+}
+
+/// `HOME`, or `USERPROFILE` on Windows, where `HOME` is usually unset.
 pub fn home(environment: &HashMap<String, String>) -> PathBuf {
-    environment
-        .get("HOME")
-        .filter(|value| !value.is_empty())
+    ["HOME", "USERPROFILE"]
+        .iter()
+        .find_map(|key| environment.get(*key).filter(|value| !value.is_empty()))
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("/"))
 }
 
 /// Writes through a sibling staging file and a rename, so a crash never leaves half a file.
 pub fn write_atomic(path: &Path, contents: &[u8]) -> io::Result<()> {
-    use std::os::unix::fs::OpenOptionsExt;
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
@@ -90,12 +108,11 @@ pub fn write_atomic(path: &Path, contents: &[u8]) -> io::Result<()> {
     ));
     {
         use std::io::Write;
-        let mut file = std::fs::OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .mode(0o600)
-            .open(&staged)?;
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create(true).truncate(true);
+        #[cfg(unix)]
+        std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+        let mut file = options.open(&staged)?;
         file.write_all(contents)?;
         file.sync_all()?;
     }
@@ -113,6 +130,7 @@ mod tests {
             .collect()
     }
 
+    #[cfg(target_os = "macos")]
     #[test]
     fn production_uses_the_existing_application_support_directory() {
         let paths = Paths::from_environment(&env(&[("HOME", "/Users/ada")]));
@@ -127,6 +145,34 @@ mod tests {
         assert_eq!(
             paths.server_log(),
             PathBuf::from("/Users/ada/Library/Application Support/Suplex/logs/server.log")
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_uses_the_xdg_data_default() {
+        let paths = Paths::from_environment(&env(&[("HOME", "/home/ada")]));
+        assert_eq!(
+            paths.user_data,
+            PathBuf::from("/home/ada/.local/share/Suplex")
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_uses_roaming_app_data() {
+        let paths = Paths::from_environment(&env(&[
+            ("USERPROFILE", r"C:\Users\ada"),
+            ("APPDATA", r"C:\Users\ada\AppData\Roaming"),
+        ]));
+        assert_eq!(
+            paths.user_data,
+            PathBuf::from(r"C:\Users\ada\AppData\Roaming\Suplex")
+        );
+        let without = Paths::from_environment(&env(&[("USERPROFILE", r"C:\Users\ada")]));
+        assert_eq!(
+            without.user_data,
+            PathBuf::from(r"C:\Users\ada\AppData\Roaming\Suplex")
         );
     }
 

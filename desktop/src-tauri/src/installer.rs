@@ -21,6 +21,7 @@ use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
 use crate::{
     boot::runtime_environment,
     contracts::{InstallEvent, InstallStage},
+    local_runtime::{signal_group, Signal},
     network_access::ResolvedNetworkAccess,
     paths::RuntimePaths,
 };
@@ -43,8 +44,7 @@ impl InstallCancel {
     pub fn cancel(&self) {
         self.cancelled.store(true, Ordering::SeqCst);
         if let Some(pid) = *self.active.lock().unwrap() {
-            // SAFETY: kill(2) with a negative pid signals the group led by our own child.
-            unsafe { libc::kill(-pid, libc::SIGTERM) };
+            signal_group(pid, Signal::Term);
         }
     }
     fn is_cancelled(&self) -> bool {
@@ -92,17 +92,19 @@ impl Installer {
             &self.base,
             &ResolvedNetworkAccess::Local,
         );
-        let spawned = tokio::process::Command::new(&self.runtime.binary)
+        let mut command = tokio::process::Command::new(&self.runtime.binary);
+        command
             .args(args)
             .current_dir(&self.runtime.directory)
             .env_clear()
             .envs(environment)
-            .process_group(0)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
-            .kill_on_drop(false)
-            .spawn();
+            .kill_on_drop(false);
+        #[cfg(unix)]
+        command.process_group(0);
+        let spawned = command.spawn();
         let mut child = match spawned {
             Ok(child) => child,
             Err(error) => {
@@ -117,8 +119,7 @@ impl Installer {
         *self.cancel.active.lock().unwrap() = pid;
         // A cancel that arrived while this child was spawning saw no pid to signal.
         if let (true, Some(pid)) = (self.cancel.is_cancelled(), pid) {
-            // SAFETY: kill(2) with a negative pid signals the group led by our own child.
-            unsafe { libc::kill(-pid, libc::SIGTERM) };
+            signal_group(pid, Signal::Term);
         }
         let mut stdout = child.stdout.take().expect("piped stdout");
         let stdout_task = tokio::spawn(async move {
@@ -286,7 +287,8 @@ pub(crate) fn fixture_runtime() -> RuntimePaths {
     }
 }
 
-#[cfg(test)]
+// The tests run the Python fixture host and cancel it by process group.
+#[cfg(all(test, unix))]
 mod tests {
     use std::{path::Path, time::Duration};
 

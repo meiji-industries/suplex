@@ -10,11 +10,12 @@ import { Input } from "../../components/ui/input.js";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../components/ui/select.js";
 import { withCompany } from "../../lib/api.js";
 import { useCompanyContext } from "../../shell/company-context.js";
+import { thisComputer } from "../../shell/desktop-platform.js";
 import { SettingRow, SettingsContent, SettingsLayout, SettingsSection } from "../settings/settings-layout.js";
 import { readAccess, saveAccess } from "./access-api.js";
 
 type NetworkState = Awaited<ReturnType<NonNullable<typeof window.suplexApp>["networkAccess"]>>;
-const networkModeLabels = { local: "This Mac only", tailscale: "Tailscale", all: "Local network" } as const;
+const networkModeLabels = { local: `${thisComputer()} only`, tailscale: "Tailscale", all: "Local network" } as const;
 
 export function AccessView(): ReactElement {
   const { user, currentCompany } = useCompanyContext();
@@ -54,9 +55,9 @@ export function AccessView(): ReactElement {
   };
   return <SettingsLayout title="Remote Access" companyId={companyId} backHref={withCompany("/", companyId)} activeHref={withCompany("/admin/access", companyId)}><SettingsContent width="wide" title="Remote Access" description="Members must connect over Tailscale or the same local network. Remote access requires HTTPS and a Suplex account.">
     <SettingsSection title="Remote access">
-      <SettingRow label="Network access" description={network.managed ? network.pending ? network.active === null ? "Suplex is stopped. Start Suplex to apply this setting." : `Active mode: ${networkModeLabels[network.active]}.` : "The desktop app manages this host." : "Open this page from this Mac in the desktop app to change the network."}>
+      <SettingRow label="Network access" description={network.managed ? network.pending ? network.active === null ? "Suplex is stopped. Start Suplex to apply this setting." : `Active mode: ${networkModeLabels[network.active]}.` : "The desktop app manages this host." : `Open this page from ${thisComputer().toLowerCase()} in the desktop app to change the network.`}>
         <div className="flex flex-wrap items-center justify-end gap-2">
-          <Select disabled={!network.managed || network.busy} value={network.managed ? network.preference : serverNetworkMode ?? "local"} onValueChange={(value) => { if (!window.suplexApp || (value !== "local" && value !== "tailscale" && value !== "all")) return; setError(""); void window.suplexApp.saveNetworkAccessPreference(value).then(setNetwork).catch((reason: unknown) => setError(reason instanceof Error ? reason.message : "Suplex could not save the desktop network setting.")); }}><SelectTrigger aria-label="Network access"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="local">This Mac only</SelectItem><SelectItem value="tailscale">Tailscale</SelectItem><SelectItem value="all">Local network</SelectItem></SelectContent></Select>
+          <Select disabled={!network.managed || network.busy} value={network.managed ? network.preference : serverNetworkMode ?? "local"} onValueChange={(value) => { if (!window.suplexApp || (value !== "local" && value !== "tailscale" && value !== "all")) return; setError(""); void window.suplexApp.saveNetworkAccessPreference(value).then(setNetwork).catch((reason: unknown) => setError(reason instanceof Error ? reason.message : "Suplex could not save the desktop network setting.")); }}><SelectTrigger aria-label="Network access"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="local">{networkModeLabels.local}</SelectItem><SelectItem value="tailscale">Tailscale</SelectItem><SelectItem value="all">Local network</SelectItem></SelectContent></Select>
           {network.managed && network.pending ? <><Badge variant="amber"><CircleAlert />Restart required</Badge>{network.active !== null ? <Button size="sm" disabled={network.busy} onClick={() => void restartNetwork()}>Restart</Button> : null}</> : null}
         </div>
       </SettingRow>

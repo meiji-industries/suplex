@@ -1,19 +1,32 @@
-//! Tailscale on this Mac: live status, MagicDNS discovery, and removal of only the Serve route
+//! Tailscale on this computer: live status, MagicDNS discovery, and removal of only the Serve route
 //! that points at the shell-owned host. Every answer comes from a fresh CLI call; nothing is cached.
 
 use std::{future::Future, time::Duration};
 
 use serde_json::Value;
 
-use crate::contracts::{TailnetMachine, TailscaleState, TailscaleStatus};
+use crate::{
+    contracts::{TailnetMachine, TailscaleState, TailscaleStatus},
+    platform::MACHINE,
+};
 
-/// A GUI app does not inherit the shell's PATH, so the App Store bundle and Homebrew locations are tried too.
-pub const COMMANDS: [&str; 4] = [
+/// A GUI app does not inherit the shell's PATH, so the usual install locations are tried first:
+/// on macOS the App Store bundle and Homebrew.
+#[cfg(target_os = "macos")]
+pub const COMMANDS: &[&str] = &[
     "/Applications/Tailscale.app/Contents/MacOS/Tailscale",
     "/opt/homebrew/bin/tailscale",
     "/usr/local/bin/tailscale",
     "tailscale",
 ];
+#[cfg(target_os = "linux")]
+pub const COMMANDS: &[&str] = &[
+    "/usr/bin/tailscale",
+    "/usr/local/bin/tailscale",
+    "tailscale",
+];
+#[cfg(windows)]
+pub const COMMANDS: &[&str] = &[r"C:\Program Files\Tailscale\tailscale.exe", "tailscale"];
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum RunError {
@@ -40,12 +53,15 @@ impl Runner for SystemRunner {
         args: &[&str],
         timeout: Duration,
     ) -> Result<String, RunError> {
-        let child = tokio::process::Command::new(command)
+        let mut child = tokio::process::Command::new(command);
+        child
             .args(args)
             .env("TAILSCALE_BE_CLI", "1")
             .stdin(std::process::Stdio::null())
-            .kill_on_drop(true)
-            .output();
+            .kill_on_drop(true);
+        #[cfg(windows)]
+        child.creation_flags(crate::local_runtime::CREATE_NO_WINDOW);
+        let child = child.output();
         match tokio::time::timeout(timeout, child).await {
             Err(_) => Err(RunError::Failed(format!(
                 "{command} did not answer within {} seconds.",
@@ -82,7 +98,7 @@ fn self_hostname(raw: &str) -> Option<String> {
         .then(|| hostname.to_owned())
 }
 
-/// The working executable and this Mac's current MagicDNS name, from one fresh status response.
+/// The working executable and this computer's current MagicDNS name, from one fresh status response.
 pub async fn resolve_access(
     commands: &[&str],
     runner: &impl Runner,
@@ -107,13 +123,13 @@ pub async fn resolve_access(
         }
     }
     Err(if installed {
-        "Tailscale is not connected. Open Tailscale, connect this Mac, and retry.".into()
+        format!("Tailscale is not connected. Open Tailscale, connect this {MACHINE}, and retry.")
     } else {
-        "Tailscale is not installed. Install Tailscale, connect this Mac, and retry.".into()
+        format!("Tailscale is not installed. Install Tailscale, connect this {MACHINE}, and retry.")
     })
 }
 
-/// The first CLI that can report live Serve status, whether or not this Mac is connected.
+/// The first CLI that can report live Serve status, whether or not this computer is connected.
 /// `Ok(None)`: no Tailscale CLI exists, so no Serve route can exist.
 /// `Err`: a CLI exists but its Serve status cannot be read, so exposure is unknown.
 pub async fn serve_cli(commands: &[&str], runner: &impl Runner) -> Result<Option<String>, String> {
@@ -298,7 +314,7 @@ pub async fn status(commands: &[&str], runner: &impl Runner) -> TailscaleStatus 
 /// A bare `tailscale up` brings the network online without changing settings; any flag makes it a
 /// settings change, so the process timeout stands in for `--timeout`. Returns why it failed, or `None`.
 pub async fn turn_on(commands: &[&str], runner: &impl Runner) -> Option<String> {
-    let mut reason = "Tailscale is not installed on this Mac.".to_owned();
+    let mut reason = format!("Tailscale is not installed on this {MACHINE}.");
     for command in commands {
         match runner.run(command, &["up"], Duration::from_secs(25)).await {
             Ok(_) => return None,
@@ -316,7 +332,8 @@ pub async fn turn_on(commands: &[&str], runner: &impl Runner) -> Option<String> 
     Some(reason)
 }
 
-#[cfg(test)]
+// The tests stand in for the Tailscale CLI with shell scripts.
+#[cfg(all(test, unix))]
 mod tests {
     use std::{os::unix::fs::PermissionsExt, sync::Mutex};
 
@@ -670,7 +687,7 @@ mod tests {
             turn_on(&["/nonexistent/tailscale"], &SystemRunner)
                 .await
                 .as_deref(),
-            Some("Tailscale is not installed on this Mac.")
+            Some(format!("Tailscale is not installed on this {MACHINE}.").as_str())
         );
     }
 }

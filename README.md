@@ -140,6 +140,15 @@ Homebrew, a GitHub account, and Tailscale are optional. Install and connect
 Tailscale only if you select **Tailscale** under **Network access**. See the
 [Desktop app](#desktop-app) section below.
 
+On Linux, install the deb or rpm from
+`https://suplex.sh/download?platform=linux-desktop-x64&format=deb` (or `rpm`, or
+`linux-desktop-arm64`), for example `sudo apt install ./Suplex-<version>-linux-x64.deb`.
+It works like the Mac app, keeps its data in `~/.local/share/Suplex`, and needs
+Git installed first. On Windows, run the installer from
+`https://suplex.sh/download?platform=windows-x64` (or `windows-arm64`). The
+Windows app connects to a Suplex host on another computer; it cannot run one
+itself.
+
 To run Suplex on a host from a checkout instead:
 
 ```sh

@@ -89,6 +89,8 @@ pub struct DesktopSnapshot {
     pub hosts: Vec<String>,
     pub current_host: Option<String>,
     pub local_host: Option<String>,
+    /// `macos`, `linux`, or `windows`: the setup pages offer a local host only where one runs.
+    pub platform: &'static str,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -223,6 +225,7 @@ mod tests {
                 hosts: vec!["https://suplex.example".into()],
                 current_host: Some("https://suplex.example".into()),
                 local_host: None,
+                platform: "linux",
             },
         );
         check(

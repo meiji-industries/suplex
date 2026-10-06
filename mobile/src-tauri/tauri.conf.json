@@ -1,0 +1,48 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Suplex",
+  "version": "../package.json",
+  "identifier": "sh.suplex.mobile",
+  "build": {
+    "frontendDist": "../src"
+  },
+  "app": {
+    "withGlobalTauri": false,
+    "windows": [],
+    "security": {
+      "csp": "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src ipc: http://ipc.localhost https:; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'",
+      "capabilities": [
+        "picker"
+      ]
+    }
+  },
+  "bundle": {
+    "active": true,
+    "icon": [
+      "../../desktop/src-tauri/icons/32x32.png",
+      "../../desktop/src-tauri/icons/128x128.png",
+      "../../desktop/src-tauri/icons/128x128@2x.png",
+      "../../desktop/src-tauri/icons/icon.icns",
+      "../../desktop/src-tauri/icons/icon.png"
+    ],
+    "iOS": {
+      "developmentTeam": "6KY6743H52"
+    }
+  },
+  "plugins": {
+    "deep-link": {
+      "mobile": [
+        {
+          "scheme": [
+            "suplex"
+          ]
+        }
+      ],
+      "desktop": {
+        "schemes": [
+          "suplex"
+        ]
+      }
+    }
+  }
+}

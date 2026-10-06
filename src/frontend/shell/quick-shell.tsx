@@ -3,6 +3,7 @@ import { lazy, Suspense, useEffect, useRef, useState, type PointerEvent, type Re
 import { SquareTerminal } from "lucide-react";
 import suplexMark from "../assets/suplex-mark.svg?inline";
 import { useOptionalCompanyContext } from "./company-context.js";
+import { useIsMobile } from "../lib/hooks/use-mobile.js";
 import { PhosphorIcon, phosphorGlow } from "../components/app/phosphor-icon.js";
 
 const PaneTerminal = lazy(() => import("../features/tasks/task-chat/live-pane-terminal.js").then(module => ({ default: module.PaneTerminal })));
@@ -31,8 +32,13 @@ const isToggleKey = (event: KeyboardEvent): boolean => event.ctrlKey && !event.m
 /**
  * A Quake console: the person's host shell drops from the top of the window.
  * Closing it only hides the view; the shell keeps running on the host.
+ * A phone has no quick shell.
  */
 export function QuickShell(): ReactElement | null {
+  return useIsMobile() ? null : <QuickShellView />;
+}
+
+function QuickShellView(): ReactElement | null {
   const admin = useOptionalCompanyContext()?.user?.role === "admin";
   const [open, setOpen] = useState(false);
   const [mounted, setMounted] = useState(false);

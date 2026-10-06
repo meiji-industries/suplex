@@ -7,7 +7,7 @@ import { registerApiFailureCapture } from "../lib/analytics-capture.js";
 export type BrowserAnalyticsContext = {
   companyId?: string;
   companyPlan?: "free" | "pro" | null;
-  platform: "desktop" | "browser";
+  platform: "desktop" | "mobile" | "browser";
 };
 
 const staticSegments = new Set(["access", "admin", "agents", "analytics", "api", "api-mcp", "auth", "backups", "billing", "board", "companies", "environment", "health", "moves", "notice", "onboarding", "profile", "projects", "providers", "settings", "setup", "tasks", "telemetry", "templates", "terminal", "timeline", "today", "triggers", "workflows"]);

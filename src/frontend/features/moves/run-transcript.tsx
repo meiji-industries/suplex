@@ -6,9 +6,14 @@ import { useEffect, useRef, useState, type ReactElement } from "react";
 import { EmptyState } from "../../components/app/empty-state.js";
 import { terminalTheme } from "../tasks/task-chat/live-pane-terminal.js";
 import { getMoveRunTranscript } from "./lib/move-api.js";
+import { useIsMobile } from "../../lib/hooks/use-mobile.js";
 
-/** The run's terminal as it was when its process ended, read only. */
-export function RunTranscript({ runId, label }: { runId: string; label: string }): ReactElement {
+/** The run's terminal as it was when its process ended, read only. A phone shows no terminal. */
+export function RunTranscript(props: { runId: string; label: string }): ReactElement | null {
+  return useIsMobile() ? null : <RunTranscriptView {...props} />;
+}
+
+function RunTranscriptView({ runId, label }: { runId: string; label: string }): ReactElement {
   const hostRef = useRef<HTMLDivElement>(null);
   const [missing, setMissing] = useState(false);
   useEffect(() => {

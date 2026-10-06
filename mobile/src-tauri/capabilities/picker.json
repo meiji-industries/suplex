@@ -1,0 +1,8 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "picker",
+  "description": "The bundled host picker can read the saved host and connect to a host. Remote host pages get only the runtime capability that connect adds.",
+  "local": true,
+  "windows": ["main"],
+  "permissions": ["allow-connect", "allow-saved-host"]
+}

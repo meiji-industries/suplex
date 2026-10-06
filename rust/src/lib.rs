@@ -17,3 +17,4 @@ pub mod sync;
 pub mod tasks;
 pub mod telemetry;
 pub mod terminals;
+pub mod web_push;

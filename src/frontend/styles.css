@@ -190,10 +190,10 @@
   }
 }
 
-.suplex-desktop { --desktop-status-height: 2rem; }
-.suplex-desktop body { padding-bottom: 2rem; }
-.suplex-desktop [data-slot="sidebar-container"] { height: calc(100svh - 2rem); bottom: 2rem; }
-.suplex-desktop [data-slot="sidebar-wrapper"] { min-height: calc(100svh - 2rem); }
+.suplex-desktop, .suplex-mobile { --desktop-status-height: 2rem; }
+:is(.suplex-desktop, .suplex-mobile) body { padding-bottom: 2rem; }
+:is(.suplex-desktop, .suplex-mobile) [data-slot="sidebar-container"] { height: calc(100svh - 2rem); bottom: 2rem; }
+:is(.suplex-desktop, .suplex-mobile) [data-slot="sidebar-wrapper"] { min-height: calc(100svh - 2rem); }
 
 /*
  * The macOS desktop window draws its traffic lights over the page. Only the desktop app sets the

@@ -2,8 +2,8 @@ import { execFileSync } from "node:child_process";
 import { readFile, writeFile } from "node:fs/promises";
 
 const git = (...args) => execFileSync("git", args, { encoding: "utf8" });
-// desktop/package.json also sets the Tauri app version: tauri.conf.json reads it.
-const files = ["package.json", "desktop/package.json"];
+// desktop/package.json and mobile/package.json also set the Tauri app versions: each tauri.conf.json reads its own.
+const files = ["package.json", "desktop/package.json", "mobile/package.json"];
 const rustFiles = [
   { file: "rust/Cargo.toml", name: "suplex" },
   { file: "rust/Cargo.lock", name: "suplex" },

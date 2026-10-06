@@ -15,6 +15,8 @@ desktop/runtime/
 desktop/.build/
 desktop/src-tauri/target/
 desktop/src-tauri/gen/
+mobile/src-tauri/target/
+mobile/src-tauri/gen/schemas/
 # Tauri migration logs, isolated profiles, and fixtures stay local; the Markdown records are committed.
 .context/tauri-migration/*
 !.context/tauri-migration/*.md

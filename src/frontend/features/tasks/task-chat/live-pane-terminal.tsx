@@ -8,6 +8,7 @@ import "@xterm/xterm/css/xterm.css";
 import { type JSX, useEffect, useRef, useState } from "react";
 import { ArrowDownToLine } from "lucide-react";
 import { Button } from "../../../components/ui/button.js";
+import { useIsMobile } from "../../../lib/hooks/use-mobile.js";
 
 export type TerminalStatus = "connecting" | "live" | "reconnecting" | "taken_over" | "ended";
 
@@ -76,12 +77,18 @@ export function terminalTheme(host: HTMLElement): ITheme {
   return { background: color("--background"), foreground: color("--foreground"), cursor: color("--foreground"), cursorAccent: color("--background"), selectionBackground: color("--muted") };
 }
 
-export function LivePaneTerminal({ taskId, role, paneId }: { taskId: string; role: "root" | "worker" | "shell"; paneId: string | null }): JSX.Element {
+export function LivePaneTerminal({ taskId, role, paneId }: { taskId: string; role: "root" | "worker" | "shell"; paneId: string | null }): JSX.Element | null {
   return <PaneTerminal path={`/api/tasks/${encodeURIComponent(taskId)}/pane/${encodeURIComponent(role)}/terminal`} interactive={role === "shell"} paneId={paneId} label={`Live pane output for ${role}`} />;
 }
 
-/** `onEnded` replaces the ended notice: the owner closes the terminal instead. */
-export function PaneTerminal({ path, interactive, paneId, label, onEnded }: { path: string; interactive: boolean; paneId: string | null; label: string; onEnded?: () => void }): JSX.Element {
+type PaneTerminalProps = { path: string; interactive: boolean; paneId: string | null; label: string; onEnded?: () => void };
+
+/** `onEnded` replaces the ended notice: the owner closes the terminal instead. A phone shows no terminal. */
+export function PaneTerminal(props: PaneTerminalProps): JSX.Element | null {
+  return useIsMobile() ? null : <PaneTerminalView {...props} />;
+}
+
+function PaneTerminalView({ path, interactive, paneId, label, onEnded }: PaneTerminalProps): JSX.Element {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const viewportRef = useRef<HTMLDivElement | null>(null);
   const socketRef = useRef<WebSocket | null>(null);

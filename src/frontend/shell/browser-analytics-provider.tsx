@@ -11,7 +11,7 @@ export function BrowserAnalytics(): ReactElement | null {
     updateBrowserAnalyticsContext({
       ...(currentCompany ? { companyId: currentCompany.id } : {}),
       ...(currentCompany?.plan !== undefined ? { companyPlan: currentCompany.plan } : {}),
-      platform: window.suplexApp ? "desktop" : "browser",
+      platform: window.suplexApp ? "desktop" : window.suplexMobile ? "mobile" : "browser",
     });
   }, [currentCompany]);
 

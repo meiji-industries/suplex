@@ -42,7 +42,7 @@ const legacyUncheckedReads = [
 ];
 
 export default tseslint.config({
-  ignores: ["dist/**", "src/frontend/contracts/generated/**", "node_modules/**", ".context/**", ".suplex/**", ".suplex/**", ".scratch/**", "coverage/**", "rust/target/**", "desktop/**"],
+  ignores: ["dist/**", "src/frontend/contracts/generated/**", "node_modules/**", ".context/**", ".suplex/**", ".suplex/**", ".scratch/**", "coverage/**", "rust/target/**", "desktop/**", "mobile/src-tauri/target/**", "mobile/src-tauri/gen/**"],
 }, {
   files: ["src/frontend/**/*.{ts,tsx}", "tests/**/*.{ts,tsx}"],
   plugins: { "@typescript-eslint": tseslint.plugin },

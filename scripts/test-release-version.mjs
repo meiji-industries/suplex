@@ -9,7 +9,7 @@ const scratch = mkdtempSync(join(tmpdir(), "suplex-release-"));
 const checkout = join(scratch, "checkout");
 const remote = join(scratch, "remote.git");
 const git = (...args) => execFileSync("git", args, { cwd: checkout, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
-const files = ["package.json", "desktop/package.json", "rust/Cargo.toml", "rust/Cargo.lock", "desktop/src-tauri/Cargo.toml", "desktop/src-tauri/Cargo.lock"];
+const files = ["package.json", "desktop/package.json", "mobile/package.json", "rust/Cargo.toml", "rust/Cargo.lock", "desktop/src-tauri/Cargo.toml", "desktop/src-tauri/Cargo.lock"];
 const contents = () => files.map(file => readFileSync(join(checkout, file), "utf8"));
 const crateName = file => file.startsWith("desktop/src-tauri/") ? "suplex-desktop" : "suplex";
 const setVersion = version => {
@@ -35,6 +35,7 @@ const failsWithoutWrites = (mode, bump, message) => {
 
 try {
   mkdirSync(join(checkout, "desktop", "src-tauri"), { recursive: true });
+  mkdirSync(join(checkout, "mobile"));
   mkdirSync(join(checkout, "rust"));
   git("init", "--initial-branch=main");
   git("config", "user.name", "Release test");

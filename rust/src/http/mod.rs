@@ -52,6 +52,7 @@ pub mod routes {
     pub mod profiles;
     pub mod projects;
     pub mod provider_login;
+    pub mod pwa;
     pub mod quick_shell;
     pub mod sync;
     pub mod task_agents;
@@ -65,6 +66,7 @@ pub mod routes {
     pub mod tasks;
     pub mod today;
     pub mod update;
+    pub mod web_push;
     pub mod workflows;
 }
 pub mod session;
@@ -226,6 +228,7 @@ pub fn router(state: AppState) -> Router {
         .merge(routes::profiles::router())
         .merge(routes::projects::router())
         .merge(routes::provider_login::router())
+        .merge(routes::pwa::router())
         .merge(routes::task_agents::router())
         .merge(routes::task_artifacts::router())
         .merge(routes::task_reads::router())
@@ -239,6 +242,7 @@ pub fn router(state: AppState) -> Router {
         .merge(routes::sync::router())
         .merge(routes::tasks::router())
         .merge(routes::today::router())
+        .merge(routes::web_push::router())
         .merge(routes::workflows::router())
         .merge(routes::update::router())
         .route("/auth", get(auth_page))

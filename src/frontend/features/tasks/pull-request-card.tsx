@@ -53,11 +53,11 @@ export function TaskPullRequestCard({ task, onChange }: { task: Task; onChange: 
   const continueDelivery = (deliveryTarget: "pull_request_ready" | "merged") => perform(() => continueTaskDelivery(task.id, deliveryTarget));
   const showActions = continuing || canPublish || canMerge || canFixCi;
   return <div data-active-pull-request className="rounded-md border">
-    <div className="flex min-w-0 items-center gap-3 p-3">
-      {pullRequest ? <a href={pullRequest.url} target="_blank" rel="noreferrer" className="flex min-w-0 flex-1 items-center gap-3 hover:underline">
+    <div className="flex min-w-0 flex-wrap items-center gap-3 p-3">
+      {pullRequest ? <a href={pullRequest.url} target="_blank" rel="noreferrer" className="flex min-w-48 flex-1 items-center gap-3 hover:underline">
         {merged ? <GitMerge className="size-5 shrink-0 text-violet-500" /> : <GitPullRequest className="size-5 shrink-0 text-emerald-500" />}
         <span className="min-w-0 flex-1"><span className="block truncate text-sm font-medium">{task.title}</span><span className="text-xs text-muted-foreground">{task.configuration.repository} #{pullRequest.number}</span></span>
-      </a> : <><GitPullRequest className="size-5 shrink-0" /><span className="min-w-0 flex-1 truncate text-sm font-medium">{task.title}</span></>}
+      </a> : <><GitPullRequest className="size-5 shrink-0" /><span className="min-w-40 flex-1 truncate text-sm font-medium">{task.title}</span></>}
       {pullRequest && state !== "Open" ? <Badge variant="secondary">{state}</Badge> : null}
       {canFixCi ? <Button size="sm" disabled={pending} onClick={() => void perform(() => addTaskNote(task.id, "Fix the failing pull request checks."))}>Fix CI</Button> : null}
       {canPublish ? <Button size="sm" variant={canFixCi ? "outline" : "default"} disabled={pending} onClick={() => void continueDelivery("pull_request_ready")}>Publish for review</Button> : null}

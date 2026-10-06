@@ -75,6 +75,7 @@ pub fn spawn_task_host(
         finished_rx,
     };
     crate::tasks::analytics::collector::spawn(database_path.clone(), shutdown_rx.clone());
+    crate::web_push::spawn(database_path.clone(), shutdown_rx.clone());
     let poller_host = handle.clone();
     crate::integrations::github_triggers::spawn_poller(
         database_path.clone(),
@@ -170,7 +171,7 @@ fn close_retired_terminals(database: &SuplexDatabase, host_terminals: &HostTermi
     }
 }
 
-async fn poll_periodically<F, Fut>(
+pub(crate) async fn poll_periodically<F, Fut>(
     period: Duration,
     mut shutdown: watch::Receiver<bool>,
     subject: &'static str,

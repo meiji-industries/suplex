@@ -10,6 +10,7 @@ import { Input } from "../components/ui/input.js";
 import { NewButton } from "../components/ui/new-button.js";
 import { Sidebar, SidebarContent, SidebarFooter, SidebarGroup, SidebarGroupContent, SidebarHeader, SidebarMenu, SidebarMenuButton, SidebarMenuItem, SidebarTrigger, useSidebar } from "../components/ui/sidebar.js";
 import { companySettingsPath, withCompany } from "../lib/api.js";
+import { useIsMobile } from "../lib/hooks/use-mobile.js";
 import { navigate } from "./navigation-state.js";
 import { useExperiments } from "./experiments-api.js";
 import { useOptionalCompanyContext } from "./company-context.js";
@@ -53,8 +54,9 @@ function CreateActions({ close }: { close?: () => void }): ReactElement {
   const context = useOptionalCompanyContext();
   const company = context?.currentCompany;
   const hasProjects = useHasProjects(company?.id);
+  const mobile = useIsMobile();
   return (
-    <div className="flex gap-2 p-2"><NewButton className="flex-1 text-base p-5" disabled={company?.status !== "active"} onClick={() => { close?.(); requestNewTask(); }}>{hasProjects === false ? "Add project" : "New task"}</NewButton>{context?.user?.role === "admin" ? <Button variant="outline" size="icon-lg" aria-label="Quick shell" title="Quick shell (Ctrl+`)" onClick={() => { close?.(); toggleQuickShell(); }}><PhosphorTerminalIcon /></Button> : null}</div>
+    <div className="flex gap-2 p-2"><NewButton className="flex-1 text-base p-5" disabled={company?.status !== "active"} onClick={() => { close?.(); requestNewTask(); }}>{hasProjects === false ? "Add project" : "New task"}</NewButton>{context?.user?.role === "admin" && !mobile ? <Button variant="outline" size="icon-lg" aria-label="Quick shell" title="Quick shell (Ctrl+`)" onClick={() => { close?.(); toggleQuickShell(); }}><PhosphorTerminalIcon /></Button> : null}</div>
   );
 }
 

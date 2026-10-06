@@ -25,6 +25,8 @@ declare global {
       restartNetworkAccess(): Promise<DesktopNetworkAccess>;
       onNetworkAccessChange(listener: (state: DesktopNetworkAccess) => void): () => void;
     };
+    /** Present only inside the Suplex iOS and Android apps. */
+    suplexMobile?: { openHostPicker(): Promise<void> };
   __SUPLEX_VIEW__?: "auth" | "account-login" | "oauth-consent" | "admin" | "projects" | "tasks" | "board" | "timeline" | "company-settings" | "setup";
   }
 }

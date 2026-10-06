@@ -34,6 +34,7 @@ import { supportsDeliveryTarget } from "./lib/delivery-target-capabilities.js";
 import type { NewTaskDraft } from "./lib/duplicate-task-prefill.js";
 import { listProjects } from "../projects/lib/project-api.js";
 import { useDictation } from "./use-dictation.js";
+import { useIsMobile } from "../../lib/hooks/use-mobile.js";
 import { cn } from "../../lib/utils.js";
 import { PhosphorIcon, recordingCaret } from "../../components/app/phosphor-icon.js";
 
@@ -97,6 +98,8 @@ export function NewTaskDialog({ open, onOpenChange, companyId, onCreated, initia
   const [error, setError] = useState("");
   const descriptionField = useRef<HTMLTextAreaElement>(null);
   const dictation = useDictation(descriptionField, setDescription, setError);
+  // A phone stacks the task options, so every option shows without a hidden scroll.
+  const stackOptions = useIsMobile();
   const stopDictation = dictation.stop;
   useEffect(() => { if (!open) stopDictation(); }, [open, stopDictation]);
   // Project settings problems that stop task creation; the alert links to the settings that fix them.
@@ -285,7 +288,7 @@ export function NewTaskDialog({ open, onOpenChange, companyId, onCreated, initia
           {dictation.supported ? <Button type="button" variant="outline" size="icon-sm" aria-label={dictation.listening ? "Stop dictation" : "Start dictation"} title={dictation.listening ? "Stop dictation" : "Start dictation"} aria-pressed={dictation.listening} disabled={busy} onClick={dictation.toggle}>{dictation.listening ? <PhosphorIcon icon={Square} color="red" filled /> : <Mic />}</Button> : null}
           {editing ? null : <InlineAttachmentPicker compact attachments={images.map((image, index) => ({ id: String(index), filename: image.filename, previewUrl: `data:${image.mimeType};base64,${image.base64}` }))} onSelect={addImages} disabled={busy || readingImages} />}
           <div className="max-w-full overflow-x-auto p-1 -m-1">
-          <ButtonGroup aria-label="Task options">
+          <ButtonGroup aria-label="Task options" orientation={stackOptions ? "vertical" : "horizontal"}>
           <TaskOptionFilter prefix={editing ? "Run" : <DropdownMenu>
             <DropdownMenuTrigger render={<Button type="button" variant="outline" size="sm" aria-label="Task start mode" disabled={busy} />}>{startImmediately ? <Play aria-hidden="true" className="size-[11px]" /> : <Inbox aria-hidden="true" className="size-[11px]" />}{startImmediately ? "Run" : "Backlog"}</DropdownMenuTrigger>
             <DropdownMenuContent align="start"><DropdownMenuRadioGroup value={startImmediately ? "start" : "backlog"} onValueChange={value => setStartImmediately(value === "start")}><DropdownMenuRadioItem value="start"><Play aria-hidden="true" className="size-[11px]" />Run</DropdownMenuRadioItem><DropdownMenuRadioItem value="backlog"><Inbox aria-hidden="true" className="size-[11px]" />Backlog</DropdownMenuRadioItem></DropdownMenuRadioGroup></DropdownMenuContent>

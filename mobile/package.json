@@ -1,0 +1,20 @@
+{
+  "name": "suplex-mobile",
+  "productName": "Suplex",
+  "private": true,
+  "version": "1.5.0",
+  "scripts": {
+    "tauri": "tauri",
+    "typecheck": "env -u RUSTUP_TOOLCHAIN cargo check --manifest-path src-tauri/Cargo.toml --all-targets",
+    "test": "env -u RUSTUP_TOOLCHAIN cargo test --manifest-path src-tauri/Cargo.toml",
+    "ios:init": "tauri ios init",
+    "ios:dev": "tauri ios dev",
+    "ios:build": "tauri ios build",
+    "android:init": "tauri android init",
+    "android:dev": "tauri android dev",
+    "android:build": "tauri android build"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "2.12.1"
+  }
+}

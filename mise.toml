@@ -279,7 +279,7 @@ run = '''
 version="$(node -p "require('./package.json').version")"
 if [[ "$(git rev-parse -q --verify "refs/tags/v$version^{commit}")" == "$(git rev-parse HEAD)" ]]; then
   echo "Resuming release v$version (already tagged)"
-elif ! git diff --quiet -- package.json desktop/package.json rust/Cargo.toml rust/Cargo.lock desktop/src-tauri/Cargo.toml desktop/src-tauri/Cargo.lock; then
+elif ! git diff --quiet -- package.json desktop/package.json mobile/package.json rust/Cargo.toml rust/Cargo.lock desktop/src-tauri/Cargo.toml desktop/src-tauri/Cargo.lock; then
   node scripts/release-version.mjs check-tag
   echo "Resuming release v$version"
 else
@@ -292,16 +292,17 @@ description = "Verify the checkout, Docker, and the Windows build VM are ready f
 run = '''
 git --no-pager diff --check
 # Version files may be dirty from an earlier failed run; _release:bump resumes that version.
-[[ -z "$(git status --porcelain -- . ':!package.json' ':!desktop/package.json' ':!rust/Cargo.toml' ':!rust/Cargo.lock' ':!desktop/src-tauri/Cargo.toml' ':!desktop/src-tauri/Cargo.lock')" ]] || { echo "Commit or remove working-tree changes before releasing." >&2; exit 1; }
+[[ -z "$(git status --porcelain -- . ':!package.json' ':!desktop/package.json' ':!mobile/package.json' ':!rust/Cargo.toml' ':!rust/Cargo.lock' ':!desktop/src-tauri/Cargo.toml' ':!desktop/src-tauri/Cargo.lock')" ]] || { echo "Commit or remove working-tree changes before releasing." >&2; exit 1; }
 docker info >/dev/null 2>&1 || { echo "Start Docker before releasing; the Linux build runs in Docker." >&2; exit 1; }
 bash -c 'source desktop/windows/vm.sh; [ -f "$(vm_setting VMX_PATH)" ]' || { echo "Set up the Windows build VM before releasing; see desktop/windows/README.md." >&2; exit 1; }
 node --input-type=module <<'NODE'
 import { readFileSync } from "node:fs";
 const version = JSON.parse(readFileSync("package.json", "utf8")).version;
 const desktop = JSON.parse(readFileSync("desktop/package.json", "utf8")).version;
+const mobile = JSON.parse(readFileSync("mobile/package.json", "utf8")).version;
 const native = [["rust/Cargo.toml", "suplex"], ["rust/Cargo.lock", "suplex"], ["desktop/src-tauri/Cargo.toml", "suplex-desktop"], ["desktop/src-tauri/Cargo.lock", "suplex-desktop"]]
   .every(([file, name]) => readFileSync(file, "utf8").includes(`name = "${name}"\nversion = "${version}"`));
-if (desktop !== version || !native) throw new Error("Desktop, frontend, and native versions must match before release.");
+if (desktop !== version || mobile !== version || !native) throw new Error("Desktop, frontend, and native versions must match before release.");
 NODE
 '''
 [tasks."_release:commit"]
@@ -312,7 +313,7 @@ version="$(node -p "require('./package.json').version")"
 # A rerun after a failed publish finds the tag on HEAD already; only push again.
 if [[ "$(git rev-parse -q --verify "refs/tags/v$version^{commit}")" != "$(git rev-parse HEAD)" ]]; then
   node scripts/release-version.mjs check-tag
-  git add package.json desktop/package.json rust/Cargo.toml rust/Cargo.lock desktop/src-tauri/Cargo.toml desktop/src-tauri/Cargo.lock
+  git add package.json desktop/package.json mobile/package.json rust/Cargo.toml rust/Cargo.lock desktop/src-tauri/Cargo.toml desktop/src-tauri/Cargo.lock
   git commit -m "release: v$version"
   git tag "v$version"
 fi

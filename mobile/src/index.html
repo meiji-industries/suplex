@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Suplex</title>
+<link rel="stylesheet" href="picker.css">
+</head>
+<body>
+<main>
+  <h1>Select a Suplex host</h1>
+  <form id="picker" novalidate>
+    <label for="host">Host address</label>
+    <div class="input-group"><input id="host" name="host" type="url" inputmode="url" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="https://studio.tail1234.ts.net" required></div>
+    <p>Your phone must reach the host. If the host uses Tailscale, start Tailscale on this phone.</p>
+    <p id="error" role="alert"></p>
+    <div class="actions"><button id="connect" class="primary" type="submit">Continue</button></div>
+  </form>
+</main>
+<script src="picker.js"></script>
+</body>
+</html>

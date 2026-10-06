@@ -40,6 +40,8 @@ thiserror = "2.0.21"
 ts-rs = { version = "12.0.1", features = ["indexmap-impl", "serde-compat", "no-serde-warnings"] }
 indexmap = { version = "2.14.2", features = ["serde"] }
 vt100 = "0.16.2"
+jwt-simple = { version = "0.12", default-features = false, features = ["pure-rust"] }
+web-push = { version = "0.11", default-features = false }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 security-framework-sys = "2.17"

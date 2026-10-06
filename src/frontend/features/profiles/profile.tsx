@@ -12,6 +12,7 @@ import { useEffect, useState, type ReactElement } from "react";
 import { LoadingState } from "../../components/app/loading-state.js";
 import type { AccountResponse } from "../../contracts/generated/AccountResponse.js";
 import { getAccount, logoutAccount } from "../account/lib/account-api.js";
+import { WebPushSetting } from "./web-push-setting.js";
 
 export function ProfileView(): ReactElement {
   const { user, currentCompany, loading, updateProfile } = useCompanyContext();
@@ -59,6 +60,7 @@ export function ProfileView(): ReactElement {
           <SelectContent>{taskAgentExpiryOptions.map(option => <SelectItem key={option.value} value={String(option.value)}>{option.label}</SelectItem>)}</SelectContent>
         </Select>
       </SettingRow>
+      <WebPushSetting />
       {account?.configured && account.account ? <SettingRow label="Suplex account">
         <Button type="button" variant="destructive" size="sm" onClick={() => void logout()}>Log out</Button>
       </SettingRow> : null}

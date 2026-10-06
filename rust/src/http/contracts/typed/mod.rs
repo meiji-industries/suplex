@@ -23,6 +23,7 @@ pub mod task_answers;
 pub mod task_templates;
 pub mod tasks;
 pub mod today;
+pub mod web_push;
 pub mod workflows;
 
 #[derive(Debug)]

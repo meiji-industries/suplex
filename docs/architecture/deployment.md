@@ -91,6 +91,9 @@ target; use the HTTPS exposure for that client. An HTTPS URL passing desktop
 validation does not by itself establish a supported public-server deployment.
 See [installation and access](../../README.md#set-up-an-installation).
 
+A phone connects only to a remote HTTPS host. It never runs a host. The
+iOS and Android shells accept no plain HTTP.
+
 The desktop Navigate menu remembers instance URLs and lets you switch between
 them. Switching changes the instance you view; it does not move tasks, merge
 databases, or synchronize credentials. Each instance retains its own state.
@@ -108,6 +111,8 @@ The repository builds these forms of Suplex:
 | Windows desktop | The same Tauri shell around WebView2, without a host; per-user NSIS installer for arm64 and x64; Windows 10 1809 or later | Another instance only: the host does not run on Windows |
 | Linux binary | Architecture-specific `suplex` executable in a versioned tarball, with checksum and download manifest; arm64 and x64 builds | Browser, or a remote desktop client on another machine |
 | Source checkout | Frontend build plus native Rust host, with development and supervised installation commands | Browser or desktop URL connection |
+| iOS and Android shells | Tauri 2.12.1 app in `mobile/` with one webview that shows a remote host. It installs and runs no host and receives no push. | A remote HTTPS host only |
+| Installable web app | Every host serves `/manifest.webmanifest`, its icons, and the `/sw.js` push service worker. Installation needs HTTPS or loopback. | A phone or computer browser that adds Suplex to its Home Screen or app list |
 
 The release binary embeds the built frontend assets and SQL migrations. A
 standalone host does not need a separate frontend server or a desktop shell to

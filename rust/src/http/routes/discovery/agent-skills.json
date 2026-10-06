@@ -3,7 +3,7 @@
   "skills": [
     {
       "name": "suplex",
-      "summary": "Work with Suplex tasks as a paired agent: discover capabilities, projects, workflows, and templates; create backlog tasks idempotently; update backlog and queued tasks; set their prerequisites; poll them; and send lifecycle commands.",
+      "summary": "Work with Suplex tasks as a paired agent: discover capabilities, projects, workflows, and templates; create backlog tasks idempotently; update backlog and queued tasks; set their prerequisites; poll them; send lifecycle commands; and, with an administrator's Move grant, manage and run saved Moves.",
       "source": "skills/suplex",
       "instructions": "skills/suplex/SKILL.md",
       "install": "docs/agent-skill.md",
@@ -24,7 +24,18 @@
             "suplex_create_task",
             "suplex_update_task",
             "suplex_set_task_dependencies",
-            "suplex_command_task"
+            "suplex_command_task",
+            "suplex_list_moves",
+            "suplex_get_move",
+            "suplex_create_move",
+            "suplex_update_move",
+            "suplex_delete_move",
+            "suplex_start_move",
+            "suplex_list_move_runs",
+            "suplex_get_move_run",
+            "suplex_get_move_run_transcript",
+            "suplex_stop_move_run",
+            "suplex_archive_move_run"
           ],
           "description": "The remote MCP endpoint uses browser sign-in and explicit project approval.",
           "documentation": "docs/agent-mcp.md"
@@ -45,7 +56,18 @@
             "suplex_create_task",
             "suplex_update_task",
             "suplex_set_task_dependencies",
-            "suplex_command_task"
+            "suplex_command_task",
+            "suplex_list_moves",
+            "suplex_get_move",
+            "suplex_create_move",
+            "suplex_update_move",
+            "suplex_delete_move",
+            "suplex_start_move",
+            "suplex_list_move_runs",
+            "suplex_get_move_run",
+            "suplex_get_move_run_transcript",
+            "suplex_stop_move_run",
+            "suplex_archive_move_run"
           ],
           "description": "An advanced local bridge that uses a paired-agent credential.",
           "documentation": "docs/agent-mcp.md"

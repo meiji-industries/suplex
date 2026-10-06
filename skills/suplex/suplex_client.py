@@ -164,9 +164,12 @@ class SuplexClient:
         payload["idempotencyKey"] = key or idempotency_key(project_id, payload)
         return self.call("POST", "/api/agent/tasks", payload)
 
-    def set_dependencies(self, task_id: str, depends_on: list[str]) -> dict:
+    def set_dependencies(self, task_id: str, depends_on: list[str], blocked_by_pull_requests: list[dict] | None = None, **extra) -> dict:
         """Replace the prerequisites (Blocked by) of a task with the complete set given."""
-        return self.call("PUT", f"/api/agent/tasks/{urllib.parse.quote(task_id)}/dependencies", {"dependsOn": depends_on})
+        payload = {"dependsOn": depends_on, **extra}
+        if blocked_by_pull_requests is not None:
+            payload["blockedByPullRequests"] = blocked_by_pull_requests
+        return self.call("PUT", f"/api/agent/tasks/{urllib.parse.quote(task_id)}/dependencies", payload)
 
     def command_task(self, task_id: str, command: str, revision: str, note: str | None = None, key: str | None = None) -> dict:
         """Apply one lifecycle command. revision must be the task's current revision."""
@@ -192,6 +195,50 @@ class SuplexClient:
             delay = min(delay * 2, 60)
             task = self.get_task(task_id)
         return task
+
+    # Moves. Served only when an administrator granted this agent Move access.
+
+    def list_moves(self, project_id: str) -> dict:
+        return self.call("GET", f"/api/agent/moves?{urllib.parse.urlencode({'projectId': project_id})}")
+
+    def get_move(self, move_id: str) -> dict:
+        return self.call("GET", f"/api/agent/moves/{urllib.parse.quote(move_id)}")
+
+    def create_move(self, project_id: str, name: str, prompt: str, runner: str, confirm: bool = True, key: str | None = None, **extra) -> dict:
+        """Create a saved Move. runner is prompt, script, pull_request_tasks, or task."""
+        payload = {"projectId": project_id, "name": name, "prompt": prompt, "runner": runner, "confirm": confirm, **extra}
+        payload["idempotencyKey"] = key or idempotency_key(f"move:{project_id}", payload)
+        return self.call("POST", "/api/agent/moves", payload)
+
+    def update_move(self, move_id: str, updated_at: str, **fields) -> dict:
+        """Replace a Move. fields is the complete Move body; updated_at must be the Move's current updatedAt."""
+        return self.call("PUT", f"/api/agent/moves/{urllib.parse.quote(move_id)}", {**fields, "updatedAt": updated_at})
+
+    def delete_move(self, move_id: str, updated_at: str) -> None:
+        """Delete a Move and its run records. updated_at must be the Move's current updatedAt."""
+        self.call("DELETE", f"/api/agent/moves/{urllib.parse.quote(move_id)}?{urllib.parse.urlencode({'updatedAt': updated_at})}", expect=(204,))
+
+    def start_move(self, move_id: str, inputs: dict | None = None, excluded_pull_requests: list[int] | None = None, key: str | None = None) -> dict:
+        """Start a Move run. Same inputs retried reuse the same idempotency key."""
+        payload = {"inputs": inputs or {}, "excludedPullRequests": excluded_pull_requests or []}
+        payload["idempotencyKey"] = key or idempotency_key(f"move-run:{move_id}", payload)
+        return self.call("POST", f"/api/agent/moves/{urllib.parse.quote(move_id)}/runs", payload)
+
+    def list_move_runs(self, move_id: str) -> dict:
+        return self.call("GET", f"/api/agent/moves/{urllib.parse.quote(move_id)}/runs")
+
+    def get_move_run(self, run_id: str) -> dict:
+        return self.call("GET", f"/api/agent/move-runs/{urllib.parse.quote(run_id)}")
+
+    def get_move_run_transcript(self, run_id: str) -> dict:
+        return self.call("GET", f"/api/agent/move-runs/{urllib.parse.quote(run_id)}/transcript")
+
+    def stop_move_run(self, run_id: str) -> None:
+        """Stop a live run by closing its terminal."""
+        self.call("DELETE", f"/api/agent/move-runs/{urllib.parse.quote(run_id)}/terminal", expect=(204,))
+
+    def archive_move_run(self, run_id: str) -> None:
+        self.call("POST", f"/api/agent/move-runs/{urllib.parse.quote(run_id)}/archive", expect=(204,))
 
 
 def _self_check() -> None:

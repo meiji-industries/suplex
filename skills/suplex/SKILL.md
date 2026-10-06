@@ -37,7 +37,7 @@ identity = client.whoami()
 - A task you create stays in `backlog` unless you send `"queue": true`. Queue
   a task or send `start_task` only when the person you work for explicitly
   asks to start it. A queued task starts by itself when its prerequisites are
-  complete; `disarm_task` returns it to the manual backlog.
+  complete; `disarm_task` returns it to the backlog.
 - Never approve, release, merge, cancel, archive, or make any other
   consequential commitment unless Suplex reports the command as permitted **and**
   the requesting person approved that exact action. `start_task`,
@@ -152,8 +152,8 @@ project and check for one that already covers the request:
 existing = client.list_tasks(projectId=project_id, limit=50)["tasks"]
 ```
 
-Useful filters: `status` (`backlog`, `active`, `waiting_human`, `cancelled`,
-`delivered`), `archived`, `attention`, `blocker`, `updatedSince`, and `filter`
+Useful filters: `status` (`backlog`, `queued`, `active`, `waiting_human`,
+`cancelled`, `delivered`), `archived`, `attention`, `blocker`, `updatedSince`, and `filter`
 (`stale_delivery`, `conflicting_pull_request`, `failed_checks`,
 `pending_review`, `blocked_by_dependency`, `not_integrated`). If a matching
 task exists, report it instead of creating another.
@@ -193,32 +193,38 @@ The created task reports the applied `workflow` object, `templateId`, and
 
 ## Prerequisites (Blocked by)
 
-`dependsOn` lists the task IDs a task waits for. Suplex shows them as
-**Blocked by**. Set them at creation with `dependsOn`, or replace the whole set
+`dependsOn` lists the task IDs a task waits for, and `blockedByPullRequests`
+lists GitHub pull requests (`[{"number": 42}]`) that must merge first. Suplex
+shows both as **Blocked by**. Set them at creation, or replace the whole set
 later with `PUT /api/agent/tasks/{taskId}/dependencies` (MCP:
 `suplex_set_task_dependencies`, client: `client.set_dependencies(task_id,
-[...])`). Send the complete set: an omitted ID is removed, and `[]` removes
-every prerequisite.
+[...])`). Send the complete set: an omitted ID or number is removed, and `[]`
+removes every prerequisite. `"dryRun": true` validates a create or a
+replacement and returns the projected result without writing anything.
 
 ```python
-task = client.set_dependencies(task_id, [first_id, second_id])
+task = client.set_dependencies(task_id, [first_id, second_id], blocked_by_pull_requests=[{"number": 42}])
 ```
 
 Each prerequisite must be a task in a granted project.
 Suplex rejects a self-reference or a cycle with `422 task_unavailable`, and an
-unavailable task with `404`; the current set stays unchanged. Unknown fields,
-such as `blockedByTaskId`, fail with `400 request_invalid`.
+unavailable task with `422 dependency_not_found`; the current set stays
+unchanged. Unknown fields, such as `blockedByTaskId`, fail with
+`400 request_invalid`.
 
 Every read reports the same stored set: `dependsOn` has the IDs and
 `blockedBy` has `id`, `title`, and `status` for each prerequisite.
 
 ## Queued tasks
 
-A queued task is a backlog task that Suplex starts by itself when every
-prerequisite is complete. It has no sessions or turns until then. Queue it at
-creation with `"queue": true`, or send `start_task` to a manual backlog task.
-`start_task` starts the task now only when every prerequisite is complete; it
-never bypasses one. `disarm_task` returns a queued task to the manual backlog.
+A queued task has status `queued`. Suplex starts it by itself when every
+prerequisite is complete and a project or plan slot is free. It has no sessions
+or turns until then. Queue it at creation with `"queue": true`, or send
+`start_task` to a backlog task. `start_task` never bypasses a prerequisite.
+`disarm_task` returns a queued task to the backlog. `force_start` starts a
+queued task now, without waiting for prerequisites or a project slot; it is
+**Start anyway**. Send it only when the person you work for asked for that
+exact action.
 
 To prioritize a queued task in a granted project, read its current `revision`
 and send `move_to_front` through `suplex_command_task` or `client.command_task`.
@@ -236,14 +242,15 @@ if "move_to_front" in task["permittedCommands"]:
     client.command_task(task_id, "move_to_front", task["revision"])
 ```
 
-Every read reports `queue`: `startIntent` (`manual` or `queued`), `state`
-(`backlog`, `queued`, `running`, `needs_attention`, `delivered`, `cancelled`),
-and `waitingOn`, one entry per incomplete prerequisite with `id`, `title`,
-`status`, `queued`, `deliveryTarget`, `reason`, and `summary`. `queued` is true
-when the prerequisite is a queued backlog task that starts by itself. A
-prerequisite is complete when it is delivered at its own delivery target; the
-`merged` target also needs the merged pull request that Suplex observed from
-GitHub. Act on the `summary`:
+Every read reports `status` and `queue`: `projectConcurrencyLimited` and
+`planConcurrencyLimited` (the project task limit or the plan's running-task
+limit holds the task back), and `waitingOn`, one entry per incomplete
+prerequisite with `kind` (`task` or `pull_request`), `id`, `title`, `status`,
+`deliveryTarget`, `reason`, and `summary`; a `pull_request` entry adds
+`number`, `state`, and `url`. A task prerequisite is complete when it is
+delivered at its own delivery target; the pull request targets also need the
+merged pull request that Suplex observed from GitHub. A pull request
+prerequisite is complete when that pull request merges. Act on the `summary`:
 for example, a `prerequisite_cancelled` reason means remove that prerequisite
 or disarm the task.
 
@@ -285,7 +292,9 @@ Failures worth handling:
 ## Updating a task
 
 `PATCH /api/agent/tasks/{taskId}` (MCP `suplex_update_task`) changes a task in
-the backlog or the queue. Send the current `revision`, an `idempotencyKey`,
+the backlog or the queue. An active or delivered task accepts only a later
+`deliveryTarget`, sent alone: the Coordinator continues toward it, and a
+delivered task reopens. Send the current `revision`, an `idempotencyKey`,
 and only the fields to change: `title`, `description`, `workflowId`,
 `rootProfileId`, `workerProfileId`, `advisorProfileIds`, `deliveryTarget`,
 `runProjectTests`, or `visualEvidence`. An omitted field keeps its value. The
@@ -305,7 +314,8 @@ task = client.get_task(task_id)
 task = client.update_task(task_id, task["revision"], advisorProfileIds={"rater": profile_id})
 ```
 
-Other states return `409 illegal_command`. A rejected profile or workflow
+Any other change to an active, delivered, or cancelled task returns
+`409 illegal_command`. A rejected profile or workflow
 returns `422` with `field`, `value`, and `reason`, and keeps the revision.
 
 ## Reading approval, blocked, waiting_human, and stale answers
@@ -332,6 +342,47 @@ returns `422` with `field`, `value`, and `reason`, and keeps the revision.
   command is a different thing: it means your copy of the task is old.
 - **`blockedBy` / `blocked_by_dependency`**: the task waits on other tasks.
   Report the blocking tasks; do not cancel or force anything.
+
+## Moves
+
+Moves are saved, reusable actions in a project: a `prompt` for an agent, a
+`script`, `pull_request_tasks`, or a `task`. They are available only when an
+administrator granted this agent Move access **and** the agent holds a grant to
+the Move's project. Check `capabilities.read.moves` from `suplex_capabilities`
+first; without the grant every Move route returns a non-enumerating `404`.
+Do not ask for the grant yourself; tell the person you work for.
+
+Routes (MCP tool, client method):
+
+- `GET /api/agent/moves?projectId=…` (`suplex_list_moves`, `client.list_moves`) and
+  `GET /api/agent/moves/{moveId}` (`suplex_get_move`, `client.get_move`).
+- `POST /api/agent/moves` (`suplex_create_move`, `client.create_move`) with
+  `projectId`, `name`, `prompt`, `runner`, `confirm`, and an `idempotencyKey`.
+  Optional: `profileId`, `workflow`, `deliveryTarget`, `runProjectTests`,
+  `visualEvidence`. The same idempotency rule as task creation applies.
+- `PUT /api/agent/moves/{moveId}` (`suplex_update_move`, `client.update_move`)
+  sends the complete Move body plus the Move's current `updatedAt`.
+  `DELETE /api/agent/moves/{moveId}?updatedAt=…` (`suplex_delete_move`,
+  `client.delete_move`) also needs `updatedAt`. A stale `updatedAt` is
+  rejected: read the Move again and retry. **Deleting a Move deletes its run
+  records.**
+- `POST /api/agent/moves/{moveId}/runs` (`suplex_start_move`,
+  `client.start_move`) with `inputs`, `excludedPullRequests`, and an
+  `idempotencyKey`; `GET …/runs` lists runs. `GET /api/agent/move-runs/{runId}`
+  and `…/transcript` read a run. `DELETE …/terminal` stops a live run
+  (`suplex_stop_move_run`). `POST …/archive` archives it
+  (`suplex_archive_move_run`).
+
+```python
+run = client.start_move(move_id, inputs={"branch": "main"})
+transcript = client.get_move_run_transcript(run["id"])
+```
+
+Starting a Move executes work. `confirm: true` makes the Suplex UI ask a person
+before a start; the API does not enforce it, so you must. Start, stop, delete,
+or archive only when the person you work for asked for that exact action. A `prompt` Move may need a person at its
+interactive terminal; neither transport offers remote terminal interaction, so
+report a run that waits on a terminal instead of trying to drive it.
 
 ## Reporting back
 

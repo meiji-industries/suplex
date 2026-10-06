@@ -34,9 +34,14 @@ mod tests {
     }
 
     async fn close_code(client: &mut LiveClient) -> u16 {
-        let (opcode, payload) = client.frame().await;
-        assert_eq!(opcode, 8);
-        u16::from_be_bytes(payload[..2].try_into().unwrap())
+        loop {
+            let (opcode, payload) = client.frame().await;
+            if opcode == 8 {
+                return u16::from_be_bytes(payload[..2].try_into().unwrap());
+            }
+            assert_eq!(opcode, 1);
+            assert_eq!(serde_json::from_slice::<Value>(&payload).unwrap()["type"], "changes");
+        }
     }
 
     const SYNC: &str = "/api/companies/company_media/sync";

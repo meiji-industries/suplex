@@ -461,9 +461,9 @@ pub(crate) mod tests {
         let (_, capabilities) = agent
             .call(reqwest::Method::GET, "/api/agent/capabilities", None)
             .await;
-        assert_eq!(capabilities, super::capabilities(true, false));
+        assert_eq!(capabilities, super::capabilities(true, false, false));
         assert_eq!(
-            super::capabilities(false, false)["unavailableCommands"],
+            super::capabilities(false, false, false)["unavailableCommands"],
             json!([
                 "answer_human_question",
                 "deliver_task",
@@ -537,6 +537,125 @@ pub(crate) mod tests {
             (status, invalid["code"].as_str()),
             (400, Some("request_invalid"))
         );
+    }
+
+    fn task_move(name: &str, key: &str) -> Value {
+        json!({
+            "projectId": "project_api", "name": name, "prompt": "Do the task",
+            "runner": "task", "workflow": "standard", "deliveryTarget": "local_worktree",
+            "runProjectTests": true, "visualEvidence": "off", "confirm": false, "idempotencyKey": key
+        })
+    }
+
+    fn grant_moves(agent: &Agent) {
+        agent.server.state.with_database(|database| {
+            database.connection().execute(
+                "UPDATE suplex_external_agents SET moves_granted_at = ?1 WHERE id = ?2",
+                params![Utc::now().to_rfc3339(), agent.agent_id],
+            ).unwrap();
+        });
+    }
+
+    #[tokio::test]
+    async fn agent_move_access_follows_live_grants_and_conceals_other_companies() {
+        let agent = agent().await;
+        grant_moves(&agent);
+        let (status, ours) = agent.call(reqwest::Method::POST, "/api/agent/moves", Some(task_move("Our move", "move-access-1"))).await;
+        assert_eq!(status, 201, "{ours}");
+        let move_id = ours["id"].as_str().unwrap();
+        let own_run = agent.call(reqwest::Method::POST, &format!("/api/agent/moves/{move_id}/runs"), Some(json!({"inputs":{},"excludedPullRequests":[],"idempotencyKey":"move-access-run"}))).await.1;
+        let run_id = own_run["id"].as_str().unwrap();
+
+        agent.server.state.with_database(|database| {
+            database.connection().execute("DELETE FROM suplex_external_agent_project_grants WHERE agent_id = ?1 AND project_id = 'project_api'", [&agent.agent_id]).unwrap();
+        });
+        assert_eq!(agent.call(reqwest::Method::GET, "/api/agent/moves?projectId=project_api", None).await.0, 404);
+        assert_eq!(agent.call(reqwest::Method::GET, &format!("/api/agent/moves/{move_id}"), None).await.0, 404);
+        agent.server.state.with_database(|database| {
+            database.connection().execute("INSERT INTO suplex_external_agent_project_grants (agent_id, company_id, project_id, created_at) VALUES (?1, 'company_api', 'project_api', ?2)", params![agent.agent_id, Utc::now().to_rfc3339()]).unwrap();
+            let now = Utc::now().to_rfc3339();
+            database.connection().execute("INSERT INTO suplex_companies (id, name, status, created_at) VALUES ('company_other_move', 'Other move company', 'active', ?1)", [&now]).unwrap();
+            database.connection().execute("INSERT INTO suplex_projects (id, company_id, name, repository_path, worktree_root, repository_identity, base_branch, setup_command, verification_command, root_profile_id, worker_profile_id, agent_task_policy_json, created_at, updated_at) VALUES ('project_other_move', 'company_other_move', 'Other', '/tmp/missing', '/tmp/missing-worktrees', 'other/repo', 'main', '', '', 'profile_native_root', 'profile_native_worker', '{}', ?1, ?1)", [&now]).unwrap();
+            database.connection().execute("INSERT INTO suplex_moves (id, company_id, project_id, name, prompt, runner, confirm, workflow, delivery_target, run_project_tests, visual_evidence, created_at, updated_at) VALUES ('move_other', 'company_other_move', 'project_other_move', 'Other move', 'Other', 'task', 0, 'standard', 'local_worktree', 1, 'off', ?1, ?1)", [&now]).unwrap();
+            database.connection().execute("INSERT INTO suplex_move_runs (id, move_id, company_id, project_id, move_name, runner, prompt, inputs_json, excluded_pull_requests_json, outcomes_json, started_at, idempotency_key) VALUES ('run_other', 'move_other', 'company_other_move', 'project_other_move', 'Other move', 'task', 'Other', '{}', '[]', '[]', ?1, 'other-run')", [&now]).unwrap();
+        });
+        let update = task_move("Other move", "unused").as_object().unwrap().clone();
+        let mut update = Value::Object(update); update["updatedAt"] = json!(ours["updatedAt"]);
+        let start = Some(json!({"inputs":{},"excludedPullRequests":[],"idempotencyKey":"concealed-start"}));
+        let cases = [
+            (reqwest::Method::GET, "/api/agent/moves/move_other".to_owned(), None, "/api/agent/moves/move_missing".to_owned()),
+            (reqwest::Method::PUT, "/api/agent/moves/move_other".to_owned(), Some(update), "/api/agent/moves/move_missing".to_owned()),
+            (reqwest::Method::DELETE, format!("/api/agent/moves/move_other?updatedAt={}", ours["updatedAt"].as_str().unwrap()), None, format!("/api/agent/moves/move_missing?updatedAt={}", ours["updatedAt"].as_str().unwrap())),
+            (reqwest::Method::POST, "/api/agent/moves/move_other/runs".to_owned(), start.clone(), "/api/agent/moves/move_missing/runs".to_owned()),
+            (reqwest::Method::GET, "/api/agent/moves/move_other/runs".to_owned(), None, "/api/agent/moves/move_missing/runs".to_owned()),
+            (reqwest::Method::GET, "/api/agent/move-runs/run_other".to_owned(), None, "/api/agent/move-runs/run_missing".to_owned()),
+            (reqwest::Method::GET, "/api/agent/move-runs/run_other/transcript".to_owned(), None, "/api/agent/move-runs/run_missing/transcript".to_owned()),
+            (reqwest::Method::DELETE, "/api/agent/move-runs/run_other/terminal".to_owned(), None, "/api/agent/move-runs/run_missing/terminal".to_owned()),
+            (reqwest::Method::POST, "/api/agent/move-runs/run_other/archive".to_owned(), None, "/api/agent/move-runs/run_missing/archive".to_owned()),
+        ];
+        for (method, other, body, missing) in cases {
+            assert_eq!(agent.call(method.clone(), &other, body.clone()).await, agent.call(method, &missing, body).await, "{other}");
+        }
+        assert_eq!(agent.call(reqwest::Method::GET, &format!("/api/agent/move-runs/{run_id}"), None).await.0, 200);
+    }
+
+    #[tokio::test]
+    async fn agent_move_start_is_idempotent_and_reserved() {
+        let agent = agent().await;
+        grant_moves(&agent);
+        let (_, created) = agent.call(reqwest::Method::POST, "/api/agent/moves", Some(task_move("Idempotent move", "move-start-1"))).await;
+        let id = created["id"].as_str().unwrap();
+        let url = format!("/api/agent/moves/{id}/runs");
+        let request = json!({"inputs":{},"excludedPullRequests":[],"idempotencyKey":"start-once"});
+        let (first_status, first) = agent.call(reqwest::Method::POST, &url, Some(request.clone())).await;
+        let (replay_status, replay) = agent.call(reqwest::Method::POST, &url, Some(request.clone())).await;
+        assert_eq!((first_status, replay_status, replay["id"].clone()), (201, 200, first["id"].clone()));
+        let counts = |key: &str| agent.server.state.with_database(|database| database.connection().query_row("SELECT (SELECT COUNT(*) FROM suplex_move_runs WHERE move_id = ?1 AND idempotency_key = ?2), (SELECT COUNT(*) FROM suplex_tasks WHERE idempotency_key = ?3)", params![id, key, format!("move:{id}:{key}:task")], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?))).unwrap());
+        assert_eq!(counts("start-once"), (1, 1));
+        let different = json!({"inputs":{"different":"body"},"excludedPullRequests":[],"idempotencyKey":"start-once"});
+        assert_eq!(agent.call(reqwest::Method::POST, &url, Some(different)).await.0, 409);
+        let concurrent = json!({"inputs":{},"excludedPullRequests":[],"idempotencyKey":"start-concurrent"});
+        let (left, right) = tokio::join!(agent.call(reqwest::Method::POST, &url, Some(concurrent.clone())), agent.call(reqwest::Method::POST, &url, Some(concurrent)));
+        assert_eq!((left.0, right.0), (201, 200));
+        assert_eq!(left.1["id"], right.1["id"]);
+        assert_eq!(counts("start-concurrent"), (1, 1));
+
+        let script = json!({"projectId":"project_api","name":"Broken script","prompt":"echo broken","runner":"script","confirm":false,"idempotencyKey":"broken-script"});
+        let (_, script) = agent.call(reqwest::Method::POST, "/api/agent/moves", Some(script)).await;
+        agent.server.state.with_database(|database| database.connection().execute("UPDATE suplex_projects SET repository_path = '/definitely/not/a/repository' WHERE id = 'project_api'", []).unwrap());
+        let broken_url = format!("/api/agent/moves/{}/runs", script["id"].as_str().unwrap());
+        let broken = json!({"inputs":{},"excludedPullRequests":[],"idempotencyKey":"reservation-failure"});
+        let one = agent.call(reqwest::Method::POST, &broken_url, Some(broken.clone())).await;
+        let two = agent.call(reqwest::Method::POST, &broken_url, Some(broken)).await;
+        assert!(one.0 >= 400 && two.0 >= 400, "{one:?} {two:?}");
+        assert_eq!(agent.server.state.with_database(|database| database.connection().query_row("SELECT COUNT(*) FROM suplex_move_runs WHERE idempotency_key = 'reservation-failure'", [], |r| r.get::<_, i64>(0)).unwrap()), 0);
+    }
+
+    #[tokio::test]
+    async fn agent_started_task_moves_use_the_agent_task_path() {
+        let agent = agent().await;
+        grant_moves(&agent);
+        agent.server.state.with_database(|database| database.connection().execute("UPDATE suplex_projects SET task_concurrency = 0 WHERE id = 'project_api'", []).unwrap());
+        let mut body = task_move("Agent path", "agent-path-move");
+        body["deliveryTarget"] = json!("remote_branch");
+        let (created_status, move_value) = agent.call(reqwest::Method::POST, "/api/agent/moves", Some(body)).await;
+        assert_eq!(created_status, 201, "{move_value}");
+        let move_id = move_value["id"].as_str().unwrap();
+        let (status, run) = agent.call(reqwest::Method::POST, &format!("/api/agent/moves/{move_id}/runs"), Some(json!({"inputs":{},"excludedPullRequests":[],"idempotencyKey":"agent-path-run"}))).await;
+        assert_eq!(status, 201, "{run}");
+        let task_id = run["outcomes"][0]["taskId"].as_str().unwrap();
+        let stored = agent.server.state.with_database(|database| database.connection().query_row("SELECT c.status, c.workflow, c.delivery_target, t.creator_agent_id, r.started_by_external_agent_id, r.started_by_user_id FROM suplex_tasks t JOIN suplex_task_controls c ON c.task_id = t.id JOIN suplex_move_runs r ON r.id = ?2 WHERE t.id = ?1", params![task_id, run["id"].as_str().unwrap()], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, Option<String>>(3)?, r.get::<_, Option<String>>(4)?, r.get::<_, Option<String>>(5)?))).unwrap());
+        assert_eq!(stored, ("queued".into(), "standard".into(), "remote_branch".into(), Some(agent.agent_id.clone()), Some(agent.agent_id.clone()), None));
+        let (_, runs) = agent.call(reqwest::Method::GET, &format!("/api/agent/moves/{move_id}/runs"), None).await;
+        assert_eq!(runs["runs"][0]["startedBy"], "AgentApi Bot");
+        let direct_target = agent.call(reqwest::Method::POST, "/api/agent/tasks", Some(json!({"projectId":"project_api","title":"Explicit target","deliveryTarget":"remote_branch","queue":true,"idempotencyKey":"direct-explicit-target"}))).await;
+        assert_eq!(direct_target.0, 201, "{}", direct_target.1);
+        assert_eq!(direct_target.1["deliveryTarget"], "remote_branch");
+        agent.server.state.with_database(|database| database.connection().execute("UPDATE suplex_projects SET repository_identity = NULL WHERE id = 'project_api'", []).unwrap());
+        let direct = agent.call(reqwest::Method::POST, "/api/agent/tasks", Some(json!({"projectId":"project_api","title":"Denied","idempotencyKey":"direct-denied"}))).await.1;
+        let (_, denied) = agent.call(reqwest::Method::POST, &format!("/api/agent/moves/{move_id}/runs"), Some(json!({"inputs":{},"excludedPullRequests":[],"idempotencyKey":"agent-path-denied"}))).await;
+        assert_eq!(denied["outcomes"][0]["kind"], "failed");
+        assert_eq!(denied["outcomes"][0]["reason"], direct["error"]);
     }
 
     #[tokio::test]
@@ -1697,7 +1816,7 @@ pub(crate) mod tests {
         let (_, capabilities) = agent
             .call(reqwest::Method::GET, "/api/agent/capabilities", None)
             .await;
-        assert_eq!(capabilities, super::capabilities(true, false));
+        assert_eq!(capabilities, super::capabilities(true, false, false));
         assert!(capabilities["unavailableCommands"]
             .as_array()
             .unwrap()
@@ -1750,7 +1869,7 @@ pub(crate) mod tests {
         let (_, capabilities) = agent
             .call(reqwest::Method::GET, "/api/agent/capabilities", None)
             .await;
-        assert_eq!(capabilities, super::capabilities(true, true));
+        assert_eq!(capabilities, super::capabilities(true, true, false));
         assert!(capabilities["autonomousCommands"]
             .as_array()
             .unwrap()
@@ -1960,7 +2079,7 @@ pub(crate) mod tests {
         );
         grant_answers(server, &oauth_agent, true).await;
         let capabilities = rpc("tools/call", tool("suplex_capabilities", json!({}))).await;
-        assert_eq!(capabilities["body"], super::capabilities(true, true));
+        assert_eq!(capabilities["body"], super::capabilities(true, true, false));
         // The grant adds answer_human_question to permittedCommands, so the revision moves.
         let read = rpc("tools/call", tool("suplex_get_task", json!({"taskId": task_id}))).await;
         let mut answer = answer;

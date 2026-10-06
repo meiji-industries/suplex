@@ -2,7 +2,7 @@
 
 use std::collections::BTreeMap;
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use super::{
@@ -14,7 +14,7 @@ use crate::{
     tasks::{control::DeliveryTarget, response::VisualEvidence},
 };
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MoveBody {
     pub project_id: String,
@@ -51,7 +51,7 @@ impl Contract for MoveBody {
     }
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MoveRunBody {
     pub inputs: BTreeMap<String, String>,

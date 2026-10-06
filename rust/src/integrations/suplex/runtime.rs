@@ -15,6 +15,7 @@ use serde_json::{Map, Value, json};
 use crate::{
     http::{AppState, routes::agent_api as routes},
     identity::external_agents::Principal,
+    moves,
     tasks::agent_api::{self, Creation},
 };
 
@@ -44,7 +45,11 @@ impl SuplexMcpRuntime {
             )),
             "suplex_capabilities" => Ok((
                 200,
-                routes::capabilities(self.agent_delivery, principal.answer_grant.is_some()),
+                routes::capabilities(
+                    self.agent_delivery,
+                    principal.answer_grant.is_some(),
+                    principal.moves_grant,
+                ),
             )),
             "suplex_list_workflows" => {
                 let project_id = super::project_arguments(args)?;
@@ -148,6 +153,86 @@ impl SuplexMcpRuntime {
                     self.wake(&task_id);
                 }
                 Ok((200, task))
+            }
+            "suplex_list_moves" => {
+                let project_id = super::project_arguments(args)?;
+                Ok((
+                    200,
+                    json!(state.with_database(|db| moves::agent_list(
+                        db,
+                        principal,
+                        &project_id
+                    ))?),
+                ))
+            }
+            "suplex_get_move" => {
+                let id = super::move_id_arguments(args)?;
+                Ok((
+                    200,
+                    json!(state.with_database(|db| moves::agent_get(db, principal, &id))?),
+                ))
+            }
+            "suplex_create_move" => {
+                let (body, key) = super::move_create_arguments(args)?;
+                let (created, value) =
+                    state.with_database(|db| moves::agent_create(db, principal, body, &key))?;
+                Ok((if created { 201 } else { 200 }, json!(value)))
+            }
+            "suplex_update_move" => {
+                let (id, body, updated) = super::move_update_arguments(args)?;
+                Ok((
+                    200,
+                    json!(state.with_database(|db| moves::agent_update(
+                        db, principal, &id, body, &updated
+                    ))?),
+                ))
+            }
+            "suplex_delete_move" => {
+                let (id, updated) = super::move_delete_arguments(args)?;
+                state.with_database(|db| moves::agent_delete(db, principal, &id, &updated))?;
+                Ok((204, Value::Null))
+            }
+            "suplex_start_move" => {
+                let (id, body) = super::move_run_arguments(args)?;
+                let (created, mut run) =
+                    moves::start(state, moves::RunActor::Agent(principal), &id, body).await?;
+                run.live = state
+                    .host_terminals
+                    .contains(&moves::shell::terminal_id(&run.id));
+                Ok((if created { 201 } else { 200 }, json!(run)))
+            }
+            "suplex_list_move_runs" => {
+                let id = super::move_id_arguments(args)?;
+                Ok((
+                    200,
+                    json!(state.with_database(|db| moves::agent_runs(db, principal, &id))?),
+                ))
+            }
+            "suplex_get_move_run" => {
+                let id = super::run_id_arguments(args)?;
+                Ok((
+                    200,
+                    json!(state.with_database(|db| moves::agent_run(db, principal, &id))?),
+                ))
+            }
+            "suplex_get_move_run_transcript" => {
+                let id = super::run_id_arguments(args)?;
+                Ok((
+                    200,
+                    json!(state.with_database(|db| moves::agent_transcript(db, principal, &id))?),
+                ))
+            }
+            "suplex_stop_move_run" => {
+                let id = super::run_id_arguments(args)?;
+                state.with_database(|db| moves::agent_stop(db, principal, &id))?;
+                state.host_terminals.close(&moves::shell::terminal_id(&id));
+                Ok((204, Value::Null))
+            }
+            "suplex_archive_move_run" => {
+                let id = super::run_id_arguments(args)?;
+                state.with_database(|db| moves::agent_archive(db, principal, &id))?;
+                state.host_terminals.close(&moves::shell::terminal_id(&id));
+                Ok((204, Value::Null))
             }
             _ => Err(format!("Suplex MCP tool is unsupported: {name}").into()),
         }
@@ -282,6 +367,78 @@ mod tests {
                 .unwrap()
                 .starts_with("agent_")
         );
+        let oauth_agent_id = whoami["result"]["structuredContent"]["body"]["agent"]["id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        // OAuth has its own paired principal.  Grant that principal, rather
+        // than the bridge fixture, and prove the next tool call observes it.
+        agent.server.state.with_database(|database| {
+            database.connection().execute(
+                "UPDATE suplex_external_agents SET moves_granted_at = '2026-10-05T00:00:00.000Z' WHERE id = ?1",
+                [&oauth_agent_id],
+            ).unwrap();
+        });
+        let oauth_move = rpc("tools/call", json!({"name":"suplex_create_move","arguments":{
+            "projectId":"project_api","name":"OAuth move","prompt":"Build it","runner":"task","workflow":"standard","deliveryTarget":"local_worktree","confirm":false,"idempotencyKey":"oauth-move-1"
+        }})).await;
+        assert_eq!(
+            oauth_move["result"]["structuredContent"]["status"], 201,
+            "{oauth_move}"
+        );
+        let oauth_move_id = oauth_move["result"]["structuredContent"]["body"]["id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let oauth_run = rpc("tools/call", json!({"name":"suplex_start_move","arguments":{"moveId":oauth_move_id,"idempotencyKey":"oauth-run-1","inputs":{},"excludedPullRequests":[]}})).await;
+        assert_eq!(
+            oauth_run["result"]["structuredContent"]["status"], 201,
+            "{oauth_run}"
+        );
+        let oauth_run_id = oauth_run["result"]["structuredContent"]["body"]["id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        for (name, args, status) in [
+            ("suplex_get_move", json!({"moveId":oauth_move_id}), 200),
+            ("suplex_list_moves", json!({"projectId":"project_api"}), 200),
+            (
+                "suplex_list_move_runs",
+                json!({"moveId":oauth_move_id}),
+                200,
+            ),
+            ("suplex_get_move_run", json!({"runId":oauth_run_id}), 200),
+            (
+                "suplex_get_move_run_transcript",
+                json!({"runId":oauth_run_id}),
+                404,
+            ),
+            ("suplex_stop_move_run", json!({"runId":oauth_run_id}), 204),
+            (
+                "suplex_archive_move_run",
+                json!({"runId":oauth_run_id}),
+                204,
+            ),
+        ] {
+            let result = rpc("tools/call", json!({"name":name,"arguments":args})).await;
+            assert_eq!(
+                result["result"]["structuredContent"]["status"], status,
+                "{result}"
+            );
+        }
+        let updated = rpc("tools/call", json!({"name":"suplex_update_move","arguments":{
+            "moveId":oauth_move_id,"updatedAt":oauth_move["result"]["structuredContent"]["body"]["updatedAt"],
+            "projectId":"project_api","name":"OAuth move updated","prompt":"Build it","runner":"task","workflow":"standard","deliveryTarget":"local_worktree","confirm":false
+        }})).await;
+        assert_eq!(
+            updated["result"]["structuredContent"]["status"], 200,
+            "{updated}"
+        );
+        let deleted = rpc("tools/call", json!({"name":"suplex_delete_move","arguments":{"moveId":oauth_move_id,"updatedAt":updated["result"]["structuredContent"]["body"]["updatedAt"]}})).await;
+        assert_eq!(
+            deleted["result"]["structuredContent"]["status"], 204,
+            "{deleted}"
+        );
 
         let foreign = agent
             .create("Created by another agent", "foreign-task-001")
@@ -367,7 +524,7 @@ mod tests {
         .await;
         assert_eq!(
             capabilities["result"]["structuredContent"]["body"],
-            crate::http::routes::agent_api::capabilities(true, false)
+            crate::http::routes::agent_api::capabilities(true, false, true)
         );
     }
 }

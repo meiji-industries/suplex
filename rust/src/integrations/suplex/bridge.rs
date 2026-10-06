@@ -258,6 +258,119 @@ impl Bridge {
                 )
                 .await
             }
+            "suplex_list_moves" => {
+                let project_id = super::project_arguments(args).map_err(invalid)?;
+                self.request(
+                    Method::GET,
+                    &format!("/api/agent/moves?{}", query(&[("projectId", project_id)])),
+                    None,
+                    &[],
+                )
+                .await
+            }
+            "suplex_get_move" => {
+                let id = super::move_id_arguments(args).map_err(invalid)?;
+                self.request(
+                    Method::GET,
+                    &format!("/api/agent/moves/{}", encode(&id)),
+                    None,
+                    &[],
+                )
+                .await
+            }
+            "suplex_create_move" => {
+                let (body, key) = super::move_create_arguments(args).map_err(invalid)?;
+                let mut value = serde_json::to_value(body).map_err(|e| e.to_string())?;
+                value["idempotencyKey"] = json!(key);
+                self.request(Method::POST, "/api/agent/moves", Some(value), &[])
+                    .await
+            }
+            "suplex_update_move" => {
+                let (id, body, updated) = super::move_update_arguments(args).map_err(invalid)?;
+                let mut value = serde_json::to_value(body).map_err(|e| e.to_string())?;
+                value["updatedAt"] = json!(updated);
+                self.request(
+                    Method::PUT,
+                    &format!("/api/agent/moves/{}", encode(&id)),
+                    Some(value),
+                    &[],
+                )
+                .await
+            }
+            "suplex_delete_move" => {
+                let (id, updated) = super::move_delete_arguments(args).map_err(invalid)?;
+                self.request(
+                    Method::DELETE,
+                    &format!(
+                        "/api/agent/moves/{}?{}",
+                        encode(&id),
+                        query(&[("updatedAt", updated)])
+                    ),
+                    None,
+                    &[],
+                )
+                .await
+            }
+            "suplex_start_move" => {
+                let (id, body) = super::move_run_arguments(args).map_err(invalid)?;
+                self.request(
+                    Method::POST,
+                    &format!("/api/agent/moves/{}/runs", encode(&id)),
+                    Some(serde_json::to_value(body).map_err(|e| e.to_string())?),
+                    &[],
+                )
+                .await
+            }
+            "suplex_list_move_runs" => {
+                let id = super::move_id_arguments(args).map_err(invalid)?;
+                self.request(
+                    Method::GET,
+                    &format!("/api/agent/moves/{}/runs", encode(&id)),
+                    None,
+                    &[],
+                )
+                .await
+            }
+            "suplex_get_move_run" => {
+                let id = super::run_id_arguments(args).map_err(invalid)?;
+                self.request(
+                    Method::GET,
+                    &format!("/api/agent/move-runs/{}", encode(&id)),
+                    None,
+                    &[],
+                )
+                .await
+            }
+            "suplex_get_move_run_transcript" => {
+                let id = super::run_id_arguments(args).map_err(invalid)?;
+                self.request(
+                    Method::GET,
+                    &format!("/api/agent/move-runs/{}/transcript", encode(&id)),
+                    None,
+                    &[],
+                )
+                .await
+            }
+            "suplex_stop_move_run" => {
+                let id = super::run_id_arguments(args).map_err(invalid)?;
+                self.request(
+                    Method::DELETE,
+                    &format!("/api/agent/move-runs/{}/terminal", encode(&id)),
+                    None,
+                    &[],
+                )
+                .await
+            }
+            "suplex_archive_move_run" => {
+                let id = super::run_id_arguments(args).map_err(invalid)?;
+                self.request(
+                    Method::POST,
+                    &format!("/api/agent/move-runs/{}/archive", encode(&id)),
+                    None,
+                    &[],
+                )
+                .await
+            }
             _ => Err(format!("Suplex MCP tool is unsupported: {name}")),
         }
     }
@@ -525,6 +638,130 @@ mod tests {
         assert_eq!(
             bridge.redact(&format!("token {credential} leaked")),
             "token [redacted credential] leaked"
+        );
+    }
+
+    /// Move tools travel through the stdio bridge exactly as their HTTP Agent
+    /// API routes do.  Keep this sequence small but complete: it catches a
+    /// missing bridge case as well as lifecycle drift between the two paths.
+    #[tokio::test]
+    async fn bridge_drives_the_complete_move_lifecycle_with_live_grants() {
+        let agent = agent().await;
+        let bridge = Bridge::new(Settings {
+            base_url: agent.server.base.clone(),
+            credential: agent.credential.clone(),
+        });
+        let call = async |name: &str, args: Value| {
+            let (status, body) = bridge.call(name, &arguments(args)).await.unwrap();
+            json!({"status": status, "body": body})
+        };
+        // The credential is valid but Move authority is absent until the
+        // persisted grant is changed.  This must conceal the resource.
+        assert_eq!(
+            call("suplex_list_moves", json!({"projectId": "project_api"})).await["status"],
+            404
+        );
+        agent.server.state.with_database(|database| {
+            database
+                .connection()
+                .execute(
+                    "UPDATE suplex_external_agents SET moves_granted_at = ?1 WHERE id = ?2",
+                    rusqlite::params![crate::shared::time::now_millis_rfc3339(), agent.agent_id],
+                )
+                .unwrap();
+        });
+        let created = call("suplex_create_move", json!({
+            "projectId":"project_api", "name":"Bridge move", "prompt":"Build it",
+            "runner":"task", "workflow":"standard", "deliveryTarget":"local_worktree", "confirm":false, "idempotencyKey":"bridge-move-create-1"
+        })).await;
+        assert_eq!(created["status"], 201, "{created}");
+        let move_id = created["body"]["id"].as_str().unwrap().to_owned();
+        let replay = call("suplex_create_move", json!({
+            "projectId":"project_api", "name":"Bridge move", "prompt":"Build it",
+            "runner":"task", "workflow":"standard", "deliveryTarget":"local_worktree", "confirm":false, "idempotencyKey":"bridge-move-create-1"
+        })).await;
+        assert_eq!(
+            (replay["status"].as_u64(), replay["body"]["id"].as_str()),
+            (Some(200), Some(move_id.as_str()))
+        );
+        assert_eq!(call("suplex_create_move", json!({
+            "projectId":"project_api", "name":"Different bridge move", "prompt":"Build it",
+            "runner":"task", "workflow":"standard", "deliveryTarget":"local_worktree", "confirm":false, "idempotencyKey":"bridge-move-create-1"
+        })).await["status"], 409);
+        assert_eq!(
+            call("suplex_list_moves", json!({"projectId":"project_api"})).await["status"],
+            200
+        );
+        assert_eq!(
+            call("suplex_get_move", json!({"moveId":move_id})).await["status"],
+            200
+        );
+        let updated_at = created["body"]["updatedAt"].as_str().unwrap().to_owned();
+        let stale = call("suplex_update_move", json!({
+            "moveId":move_id, "updatedAt":"stale", "projectId":"project_api",
+            "name":"Stale", "prompt":"Build it", "runner":"task", "workflow":"standard", "deliveryTarget":"local_worktree", "confirm":false
+        })).await;
+        assert_eq!(stale["status"], 412);
+        let updated = call("suplex_update_move", json!({
+            "moveId":move_id, "updatedAt":updated_at, "projectId":"project_api",
+            "name":"Bridge move updated", "prompt":"Build it", "runner":"task", "workflow":"standard", "deliveryTarget":"local_worktree", "confirm":false
+        })).await;
+        assert_eq!(updated["status"], 200, "{updated}");
+        let stale_delete = call(
+            "suplex_delete_move",
+            json!({"moveId":move_id, "updatedAt":updated_at}),
+        )
+        .await;
+        assert_eq!(stale_delete["status"], 412);
+        assert_eq!(
+            call("suplex_get_move", json!({"moveId":move_id})).await["body"]["name"],
+            "Bridge move updated"
+        );
+        let run = call("suplex_start_move", json!({"moveId":move_id, "idempotencyKey":"bridge-move-run-1", "inputs":{}, "excludedPullRequests":[]})).await;
+        assert_eq!(run["status"], 201, "{run}");
+        let run_id = run["body"]["id"].as_str().unwrap().to_owned();
+        assert_eq!(
+            call("suplex_list_move_runs", json!({"moveId":move_id})).await["status"],
+            200
+        );
+        assert_eq!(
+            call("suplex_get_move_run", json!({"runId":run_id})).await["status"],
+            200
+        );
+        // Task runs have no terminal transcript; it is still the same concealed
+        // missing-transcript response exposed by the Agent API.
+        assert_eq!(
+            call("suplex_get_move_run_transcript", json!({"runId":run_id})).await["status"],
+            404
+        );
+        assert_eq!(
+            call("suplex_stop_move_run", json!({"runId":run_id})).await["status"],
+            204
+        );
+        assert_eq!(
+            call("suplex_archive_move_run", json!({"runId":run_id})).await["status"],
+            204
+        );
+        assert_eq!(
+            call(
+                "suplex_delete_move",
+                json!({"moveId":move_id, "updatedAt":updated["body"]["updatedAt"]})
+            )
+            .await["status"],
+            204
+        );
+        agent.server.state.with_database(|database| {
+            database
+                .connection()
+                .execute(
+                    "UPDATE suplex_external_agents SET moves_granted_at = NULL WHERE id = ?1",
+                    [&agent.agent_id],
+                )
+                .unwrap();
+        });
+        assert_eq!(
+            call("suplex_get_move", json!({"moveId":move_id})).await["status"],
+            404
         );
     }
 

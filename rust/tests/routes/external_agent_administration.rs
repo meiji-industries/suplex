@@ -318,4 +318,25 @@ pub(crate) mod tests {
         assert_eq!(invalid["error"], "Invalid request");
         assert!(invalid.get("code").is_none());
     }
+
+    #[tokio::test]
+    async fn administrators_toggle_moves_grants_for_paired_agents() {
+        let server = server(None).await;
+        let admin = Some(server.admin_cookie.as_str());
+        let (_, created) = server.send(reqwest::Method::POST, "/api/admin/external-agents", admin, Some(json!({"name":"Move agent","companyId":"company_api","projectIds":["project_api"]}))).await;
+        assert!(created["agent"]["movesGrantedAt"].is_null());
+        let id = created["agent"]["id"].as_str().unwrap();
+        let (_, paired) = server.send(reqwest::Method::POST, "/api/agent/pairing/exchange", None, Some(json!({"pairingCode":created["pairingCode"],"profileId":"moves"}))).await;
+        let bearer = format!("Bearer {}", paired["credential"].as_str().unwrap());
+        let headers = [("authorization", bearer.as_str())];
+        assert_eq!(server.request(reqwest::Method::GET, "/api/agent/moves?projectId=project_api", &headers, None).await.status(), 404);
+        let (status, granted) = server.send(reqwest::Method::PUT, &format!("/api/admin/external-agents/{id}/moves-grant"), admin, Some(json!({"granted":true}))).await;
+        assert_eq!(status, 200); assert!(granted["agent"]["movesGrantedAt"].is_string()); assert!(granted["agent"]["movesGrantedByUserId"].is_string());
+        assert_eq!(server.request(reqwest::Method::GET, "/api/agent/moves?projectId=project_api", &headers, None).await.status(), 200);
+        let me: Value = server.request(reqwest::Method::GET, "/api/agent/me", &headers, None).await.json().await.unwrap(); assert_eq!(me["capabilities"]["moves"], true);
+        let (status, revoked) = server.send(reqwest::Method::PUT, &format!("/api/admin/external-agents/{id}/moves-grant"), admin, Some(json!({"granted":false}))).await;
+        assert_eq!(status, 200); assert!(revoked["agent"]["movesGrantedAt"].is_null()); assert!(revoked["agent"]["movesGrantedByUserId"].is_null());
+        assert_eq!(server.request(reqwest::Method::GET, "/api/agent/moves?projectId=project_api", &headers, None).await.status(), 404);
+        assert_eq!(server.send(reqwest::Method::PUT, &format!("/api/admin/external-agents/{id}/moves-grant"), Some(server.member_cookie.as_str()), Some(json!({"granted":true}))).await.0, 404);
+    }
 }

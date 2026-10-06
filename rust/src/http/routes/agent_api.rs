@@ -12,7 +12,7 @@ use axum::{
     extract::{DefaultBodyLimit, Path, RawQuery, State, rejection::BytesRejection},
     http::{HeaderMap, StatusCode, header},
     response::{IntoResponse, Response},
-    routing::{get, post, put},
+    routing::{delete, get, post, put},
 };
 use chrono::Utc;
 use serde_json::{Value, json};
@@ -24,6 +24,7 @@ use crate::{
         contracts::typed::{self, Contract, ContractResult, agent_api as contracts},
     },
     identity::external_agents::{self, Principal},
+    moves,
     shared::js_json,
     tasks::{agent_api, images::MAX_TASK_REQUEST_BYTES},
 };
@@ -46,6 +47,15 @@ static OPENAPI: LazyLock<String> = LazyLock::new(|| {
     )
 });
 
+macro_rules! attempt {
+    ($value:expr) => {
+        match $value {
+            Ok(value) => value,
+            Err(response) => return *response,
+        }
+    };
+}
+
 /// Agent delivery uses the host artifact store.
 pub(crate) fn delivery(state: &AppState) -> Option<AgentDelivery> {
     let root = state.artifact_root.clone()?;
@@ -55,11 +65,26 @@ pub(crate) fn delivery(state: &AppState) -> Option<AgentDelivery> {
 
 /// `agentApiCapabilities`: the reported surface is the registered surface.
 /// Answers appear only for an agent that holds the answer grant.
-pub fn capabilities(agent_delivery: bool, answers: bool) -> Value {
+pub fn capabilities(agent_delivery: bool, answers: bool, moves_grant: bool) -> Value {
     let mut autonomous = vec!["create_backlog_task", "create_queued_task", "update_task"];
     autonomous.extend(agent_api::task_commands(answers));
     if agent_delivery {
         autonomous.extend(DELIVERY_COMMANDS);
+    }
+    if moves_grant {
+        autonomous.extend([
+            "list_moves",
+            "get_move",
+            "create_move",
+            "update_move",
+            "delete_move",
+            "start_move",
+            "list_move_runs",
+            "get_move_run",
+            "get_move_run_transcript",
+            "stop_move_run",
+            "archive_move_run",
+        ]);
     }
     let mut unavailable = Vec::new();
     if !answers {
@@ -77,7 +102,7 @@ pub fn capabilities(agent_delivery: bool, answers: bool) -> Value {
     json!({
         "apiVersion": "v1",
         "capabilities": {
-            "read": {"task": true, "workflows": true, "templates": true},
+            "read": {"task": true, "workflows": true, "templates": true, "moves": moves_grant},
             "create": {"backlogTask": true, "queuedTask": true, "deliveryTargets": ["local_worktree", "remote_branch", "pull_request_draft", "pull_request_ready", "merged"]},
             "taskControl": true, "delivery": agent_delivery, "merge": agent_delivery, "humanDecisions": answers,
         },
@@ -97,6 +122,31 @@ pub fn router() -> Router<AppState> {
             .route(&format!("{prefix}/capabilities"), get(capabilities_route))
             .route(&format!("{prefix}/workflows"), get(workflows))
             .route(&format!("{prefix}/templates"), get(templates))
+            .route(
+                &format!("{prefix}/moves"),
+                get(list_moves).post(create_move),
+            )
+            .route(
+                &format!("{prefix}/moves/{{move_id}}"),
+                get(get_move).put(update_move).delete(delete_move),
+            )
+            .route(
+                &format!("{prefix}/moves/{{move_id}}/runs"),
+                get(list_move_runs).post(start_move),
+            )
+            .route(&format!("{prefix}/move-runs/{{run_id}}"), get(get_move_run))
+            .route(
+                &format!("{prefix}/move-runs/{{run_id}}/transcript"),
+                get(get_move_run_transcript),
+            )
+            .route(
+                &format!("{prefix}/move-runs/{{run_id}}/terminal"),
+                delete(stop_move_run),
+            )
+            .route(
+                &format!("{prefix}/move-runs/{{run_id}}/archive"),
+                post(archive_move_run),
+            )
             .route(
                 &format!("{prefix}/tasks"),
                 get(list)
@@ -142,6 +192,272 @@ pub fn router() -> Router<AppState> {
             );
     }
     router
+}
+
+async fn list_moves(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    RawQuery(query): RawQuery,
+) -> Response {
+    let principal = match bearer(&state, &headers, true) {
+        Ok(value) => value,
+        Err(response) => return *response,
+    };
+    let query = match validated(
+        contracts::ProjectDiscoveryQuery::parse(Some(&contracts::query_object(query.as_deref()))),
+        true,
+    ) {
+        Ok(value) => value,
+        Err(response) => return *response,
+    };
+    respond(
+        state.with_database(|database| {
+            moves::agent_list(database, &principal, &query.project_id).map(|value| json!(value))
+        }),
+        StatusCode::OK,
+        true,
+    )
+}
+async fn get_move(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(move_id): Path<String>,
+) -> Response {
+    let principal = match bearer(&state, &headers, true) {
+        Ok(value) => value,
+        Err(response) => return *response,
+    };
+    respond(
+        state.with_database(|database| {
+            moves::agent_get(database, &principal, &move_id).map(|value| json!(value))
+        }),
+        StatusCode::OK,
+        true,
+    )
+}
+async fn list_move_runs(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(move_id): Path<String>,
+) -> Response {
+    let principal = match bearer(&state, &headers, true) {
+        Ok(value) => value,
+        Err(response) => return *response,
+    };
+    respond(
+        state.with_database(|database| {
+            moves::agent_runs(database, &principal, &move_id).map(|value| json!(value))
+        }),
+        StatusCode::OK,
+        true,
+    )
+}
+async fn get_move_run(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(run_id): Path<String>,
+) -> Response {
+    let principal = match bearer(&state, &headers, true) {
+        Ok(value) => value,
+        Err(response) => return *response,
+    };
+    respond(
+        state.with_database(|database| {
+            moves::agent_run(database, &principal, &run_id).map(|value| json!(value))
+        }),
+        StatusCode::OK,
+        true,
+    )
+}
+async fn get_move_run_transcript(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(run_id): Path<String>,
+) -> Response {
+    let principal = match bearer(&state, &headers, true) {
+        Ok(value) => value,
+        Err(response) => return *response,
+    };
+    respond(
+        state.with_database(|database| {
+            moves::agent_transcript(database, &principal, &run_id).map(|value| json!(value))
+        }),
+        StatusCode::OK,
+        true,
+    )
+}
+
+fn move_body(value: &Value) -> Result<(moves::MoveBody, String, Option<String>), Box<Response>> {
+    let object = value
+        .as_object()
+        .ok_or_else(|| Box::new(agent_api_runtime::validation(vec![], true)))?;
+    let key = object
+        .get("idempotencyKey")
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+        .map(str::to_owned);
+    let updated = object
+        .get("updatedAt")
+        .and_then(Value::as_str)
+        .map(str::to_owned);
+    let mut body = object.clone();
+    body.remove("idempotencyKey");
+    body.remove("updatedAt");
+    let parsed =
+        moves::MoveBody::parse(Some(&Value::Object(body))).map_err(|failure| match failure {
+            typed::ContractFailure::Issues(findings) => {
+                Box::new(agent_api_runtime::validation(findings, true))
+            }
+            _ => Box::new(agent_api_runtime::failure("contract failed".into(), true)),
+        })?;
+    Ok((parsed, key.unwrap_or_default(), updated))
+}
+
+async fn create_move(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    body: Result<Bytes, BytesRejection>,
+) -> Response {
+    let body = attempt!(parsed_body(&headers, body, true));
+    let principal = attempt!(bearer(&state, &headers, true));
+    let Some(body) = body else {
+        return agent_api_runtime::validation(vec![], true);
+    };
+    let (move_body, key, _) = attempt!(move_body(&body));
+    if key.is_empty() {
+        return agent_api_runtime::validation(vec![], true);
+    }
+    let result =
+        state.with_database(|database| moves::agent_create(database, &principal, move_body, &key));
+    match result {
+        Ok((created, value)) => no_store(
+            if created {
+                StatusCode::CREATED
+            } else {
+                StatusCode::OK
+            },
+            &json!(value),
+        ),
+        Err(error) => agent_api_runtime::failure(error, true),
+    }
+}
+
+async fn update_move(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(move_id): Path<String>,
+    body: Result<Bytes, BytesRejection>,
+) -> Response {
+    let body = attempt!(parsed_body(&headers, body, true));
+    let principal = attempt!(bearer(&state, &headers, true));
+    let Some(body) = body else {
+        return agent_api_runtime::validation(vec![], true);
+    };
+    let (move_body, _, updated) = attempt!(move_body(&body));
+    let Some(updated) = updated else {
+        return agent_api_runtime::validation(vec![], true);
+    };
+    respond(
+        state.with_database(|database| {
+            moves::agent_update(database, &principal, &move_id, move_body, &updated)
+                .map(|v| json!(v))
+        }),
+        StatusCode::OK,
+        true,
+    )
+}
+
+async fn delete_move(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(move_id): Path<String>,
+    RawQuery(query): RawQuery,
+) -> Response {
+    let principal = attempt!(bearer(&state, &headers, true));
+    let updated = contracts::query_object(query.as_deref())
+        .get("updatedAt")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_owned();
+    if updated.is_empty() {
+        return agent_api_runtime::validation(vec![], true);
+    }
+    respond(
+        state.with_database(|database| {
+            moves::agent_delete(database, &principal, &move_id, &updated).map(|_| json!({}))
+        }),
+        StatusCode::NO_CONTENT,
+        true,
+    )
+}
+
+async fn start_move(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(move_id): Path<String>,
+    body: Result<Bytes, BytesRejection>,
+) -> Response {
+    let body = attempt!(parsed_body(&headers, body, true));
+    let principal = attempt!(bearer(&state, &headers, true));
+    let request = attempt!(validated(moves::MoveRunBody::parse(body.as_ref()), true));
+    match moves::start(
+        &state,
+        moves::RunActor::Agent(&principal),
+        &move_id,
+        request,
+    )
+    .await
+    {
+        Ok((created, mut run)) => {
+            run.live = state
+                .host_terminals
+                .contains(&moves::shell::terminal_id(&run.id));
+            no_store(
+                if created {
+                    StatusCode::CREATED
+                } else {
+                    StatusCode::OK
+                },
+                &json!(run),
+            )
+        }
+        Err(error) => agent_api_runtime::failure(error, true),
+    }
+}
+async fn stop_move_run(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(run_id): Path<String>,
+) -> Response {
+    let principal = attempt!(bearer(&state, &headers, true));
+    let result = state.with_database(|database| moves::agent_stop(database, &principal, &run_id));
+    match result {
+        Ok(_) => {
+            state
+                .host_terminals
+                .close(&moves::shell::terminal_id(&run_id));
+            StatusCode::NO_CONTENT.into_response()
+        }
+        Err(error) => agent_api_runtime::failure(error, true),
+    }
+}
+async fn archive_move_run(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(run_id): Path<String>,
+) -> Response {
+    let principal = attempt!(bearer(&state, &headers, true));
+    let result =
+        state.with_database(|database| moves::agent_archive(database, &principal, &run_id));
+    match result {
+        Ok(()) => {
+            state
+                .host_terminals
+                .close(&moves::shell::terminal_id(&run_id));
+            StatusCode::NO_CONTENT.into_response()
+        }
+        Err(error) => agent_api_runtime::failure(error, true),
+    }
 }
 
 type Rejection = Box<Response>;
@@ -230,15 +546,6 @@ fn wake(state: &AppState, task_id: &str) {
     }
 }
 
-macro_rules! attempt {
-    ($value:expr) => {
-        match $value {
-            Ok(value) => value,
-            Err(response) => return *response,
-        }
-    };
-}
-
 async fn me(State(state): State<AppState>, headers: HeaderMap) -> Response {
     let principal = attempt!(bearer(&state, &headers, false));
     respond(
@@ -265,7 +572,11 @@ async fn capabilities_route(State(state): State<AppState>, headers: HeaderMap) -
     let principal = attempt!(bearer(&state, &headers, true));
     no_store(
         StatusCode::OK,
-        &capabilities(delivery(&state).is_some(), principal.answer_grant.is_some()),
+        &capabilities(
+            delivery(&state).is_some(),
+            principal.answer_grant.is_some(),
+            principal.moves_grant,
+        ),
     )
 }
 

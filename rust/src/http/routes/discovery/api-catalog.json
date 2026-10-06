@@ -91,6 +91,9 @@
       "authentication": "agent credential",
       "description": "List tasks in the agent's currently granted projects. Filter by pull request number, source branch, or title substring. HTTP defaults to the full view; MCP suplex_list_tasks defaults to summary and accepts view=full."
     },
+    {"path":"/api/agent/moves","method":"GET","authentication":"agent credential","description":"List Moves in a project currently granted to an agent with the Move grant."},
+    {"path":"/api/agent/moves","method":"POST","authentication":"agent credential","description":"Create a Move idempotently."},
+    {"path":"/api/agent/moves/{moveId}/runs","method":"POST","authentication":"agent credential","description":"Start a Move idempotently. Prompt terminals remain interactive locally; no remote terminal interaction is provided."},
     {
       "path": "/api/agent/tasks",
       "method": "POST",

@@ -18,12 +18,274 @@ use crate::{
     coordination::{workflow_records::normalize_workflow_input, workflows::Workflow},
     http::{AppState, contracts::typed::Contract, contracts::typed::tasks::TaskCreateBody},
     identity::companies,
+    identity::external_agents::Principal,
     platform::database::SuplexDatabase,
     projects::service::{self as projects, Project},
-    shared::{ids::random_hex_id, time::now_millis_rfc3339},
-    tasks::{TaskError, control::DeliveryTarget, creation, response::VisualEvidence},
+    shared::{hash::sha256_hex, ids::random_hex_id, time::now_millis_rfc3339},
+    tasks::{TaskError, agent_api, control::DeliveryTarget, creation, response::VisualEvidence},
     terminals::host::HostTerminals,
 };
+
+/// The principal which admitted a Move run. Keeping this explicit prevents an
+/// agent start from silently taking the browser/user creation path.
+#[derive(Clone, Copy)]
+pub enum RunActor<'a> {
+    User(&'a str),
+    Agent(&'a Principal),
+}
+
+impl<'a> RunActor<'a> {
+    fn request_identity(self) -> Value {
+        match self {
+            Self::User(user_id) => json!({"user": user_id}),
+            Self::Agent(principal) => json!({"agent": principal.agent_id}),
+        }
+    }
+
+    fn user_id(self) -> Option<&'a str> {
+        match self {
+            Self::User(id) => Some(id),
+            Self::Agent(_) => None,
+        }
+    }
+
+    fn agent(self) -> Option<&'a Principal> {
+        match self {
+            Self::User(_) => None,
+            Self::Agent(principal) => Some(principal),
+        }
+    }
+}
+
+fn agent_not_found() -> Box<dyn Error> {
+    TaskError::Agent {
+        status: 404,
+        code: "resource_not_found",
+        message: "Not found".into(),
+        details: Map::new(),
+    }
+    .into()
+}
+
+fn agent_failure(status: u16, code: &'static str, message: impl Into<String>) -> Box<dyn Error> {
+    TaskError::Agent {
+        status,
+        code,
+        message: message.into(),
+        details: Map::new(),
+    }
+    .into()
+}
+
+/// Checks the persisted grant rather than trusting an MCP session snapshot.
+fn agent_scope(
+    database: &SuplexDatabase,
+    principal: &Principal,
+    company_id: &str,
+    project_id: &str,
+) -> Result<(), Box<dyn Error>> {
+    let permitted: bool = database.connection().query_row(
+        "SELECT EXISTS(SELECT 1 FROM suplex_external_agents a JOIN suplex_external_agent_project_grants g ON g.agent_id = a.id AND g.company_id = a.company_id WHERE a.id = ?1 AND a.company_id = ?2 AND a.status = 'paired' AND a.revoked_at IS NULL AND a.moves_granted_at IS NOT NULL AND g.project_id = ?3)",
+        params![principal.agent_id, company_id, project_id], |row| row.get(0),
+    )?;
+    if permitted {
+        Ok(())
+    } else {
+        Err(agent_not_found())
+    }
+}
+
+fn agent_stored(
+    database: &SuplexDatabase,
+    principal: &Principal,
+    move_id: &str,
+) -> Result<StoredMove, Box<dyn Error>> {
+    let stored = database
+        .connection()
+        .query_row(
+            &format!("{MOVE_COLUMNS} WHERE id = ?1"),
+            [move_id],
+            stored_move,
+        )
+        .optional()?
+        .ok_or_else(agent_not_found)?;
+    agent_scope(database, principal, &stored.company_id, &stored.project_id)?;
+    Ok(stored)
+}
+
+pub fn agent_list(
+    database: &SuplexDatabase,
+    principal: &Principal,
+    project_id: &str,
+) -> Result<MovesResponse, Box<dyn Error>> {
+    agent_scope(database, principal, &principal.company_id, project_id)?;
+    let mut statement = database.connection().prepare(&format!(
+        "{MOVE_COLUMNS} WHERE company_id = ?1 AND project_id = ?2 ORDER BY name COLLATE NOCASE, id"
+    ))?;
+    let rows = statement
+        .query_map(params![principal.company_id, project_id], stored_move)?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(MovesResponse {
+        moves: rows
+            .into_iter()
+            .map(|row| response(database, row))
+            .collect::<Result<_, _>>()?,
+    })
+}
+
+pub fn agent_get(
+    database: &SuplexDatabase,
+    principal: &Principal,
+    move_id: &str,
+) -> Result<MoveResponse, Box<dyn Error>> {
+    response(database, agent_stored(database, principal, move_id)?)
+}
+
+/// Agent creation is idempotent per agent.  The hash includes the agent, so a
+/// key cannot be replayed by another principal.
+pub fn agent_create(
+    database: &mut SuplexDatabase,
+    principal: &Principal,
+    body: MoveBody,
+    idempotency_key: &str,
+) -> Result<(bool, MoveResponse), Box<dyn Error>> {
+    agent_scope(database, principal, &principal.company_id, &body.project_id)?;
+    let project = projects::get_in_company(database, &principal.company_id, &body.project_id)?;
+    let body = checked_body(database, &project, body)?;
+    let hash = sha256_hex(crate::shared::js_json::stringify(
+        &json!({"agent": principal.agent_id, "body": serde_json::to_value(&body)?}),
+    ));
+    let id = random_hex_id("move")?;
+    let stamp = now_millis_rfc3339();
+    let replay = database.transaction(false, |database| {
+        agent_scope(database, principal, &principal.company_id, &body.project_id)?;
+        let existing: Option<(String, String)> = database.connection().query_row(
+            "SELECT id, request_hash FROM suplex_moves WHERE created_by_external_agent_id = ?1 AND idempotency_key = ?2",
+            params![principal.agent_id, idempotency_key], |r| Ok((r.get(0)?, r.get(1)?))
+        ).optional()?;
+        if let Some((existing, stored_hash)) = existing {
+            if stored_hash == hash { return Ok(Some(existing)); }
+            return Err(agent_failure(409, "idempotency_conflict", "This idempotency key belongs to a different request"));
+        }
+        name_taken(database, &body.project_id, &body.name, "")?;
+        database.connection().execute(
+            "INSERT INTO suplex_moves (id, company_id, project_id, name, prompt, runner, profile_id, confirm, workflow, delivery_target, run_project_tests, visual_evidence, created_by_external_agent_id, idempotency_key, request_hash, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?16)",
+            params![id, principal.company_id, body.project_id, body.name, body.prompt, body.runner, body.profile_id, body.confirm, body.workflow.unwrap_or(Workflow::Standard), body.delivery_target.unwrap_or(DeliveryTarget::PullRequestReady), body.run_project_tests, body.visual_evidence, principal.agent_id, idempotency_key, hash, stamp]
+        )?;
+        Ok(None)
+    })?;
+    let move_id = replay.clone().unwrap_or(id);
+    Ok((replay.is_none(), agent_get(database, principal, &move_id)?))
+}
+
+pub fn agent_update(
+    database: &mut SuplexDatabase,
+    principal: &Principal,
+    move_id: &str,
+    body: MoveBody,
+    updated_at: &str,
+) -> Result<MoveResponse, Box<dyn Error>> {
+    let stored = agent_stored(database, principal, move_id)?;
+    agent_scope(database, principal, &principal.company_id, &body.project_id)?;
+    let project = projects::get_in_company(database, &principal.company_id, &body.project_id)?;
+    let body = checked_body(database, &project, body)?;
+    database.transaction(false, |database| {
+        agent_scope(database, principal, &stored.company_id, &stored.project_id)?;
+        agent_scope(database, principal, &principal.company_id, &body.project_id)?;
+        name_taken(database, &body.project_id, &body.name, move_id)?;
+        let changed = database.connection().execute("UPDATE suplex_moves SET project_id=?1,name=?2,prompt=?3,runner=?4,profile_id=?5,confirm=?6,workflow=?7,delivery_target=?8,run_project_tests=?9,visual_evidence=?10,updated_at=?11 WHERE id=?12 AND updated_at=?13", params![body.project_id,body.name,body.prompt,body.runner,body.profile_id,body.confirm,body.workflow.unwrap_or(Workflow::Standard),body.delivery_target.unwrap_or(DeliveryTarget::PullRequestReady),body.run_project_tests,body.visual_evidence,now_millis_rfc3339(),move_id,updated_at])?;
+        if changed == 0 { return Err(agent_failure(412, "revision_stale", "Move revision is stale")); }
+        Ok(())
+    })?;
+    agent_get(database, principal, move_id)
+}
+
+pub fn agent_delete(
+    database: &mut SuplexDatabase,
+    principal: &Principal,
+    move_id: &str,
+    updated_at: &str,
+) -> Result<(), Box<dyn Error>> {
+    let stored = agent_stored(database, principal, move_id)?;
+    database.transaction(false, |database| {
+        agent_scope(database, principal, &stored.company_id, &stored.project_id)?;
+        let changed = database.connection().execute(
+            "DELETE FROM suplex_moves WHERE id = ?1 AND updated_at = ?2",
+            params![move_id, updated_at],
+        )?;
+        if changed == 0 {
+            return Err(agent_failure(
+                412,
+                "revision_stale",
+                "Move revision is stale",
+            ));
+        }
+        Ok(())
+    })
+}
+pub fn agent_runs(
+    database: &SuplexDatabase,
+    principal: &Principal,
+    move_id: &str,
+) -> Result<MoveRunsResponse, Box<dyn Error>> {
+    agent_stored(database, principal, move_id)?;
+    Ok(MoveRunsResponse {
+        runs: runs_of(database, move_id, 50)?,
+    })
+}
+pub fn agent_run(
+    database: &SuplexDatabase,
+    principal: &Principal,
+    run_id: &str,
+) -> Result<MoveRunResponse, Box<dyn Error>> {
+    let run = database
+        .connection()
+        .query_row(&format!("{RUN_COLUMNS} WHERE r.id = ?1"), [run_id], run_row)
+        .optional()?
+        .map(run_response)
+        .transpose()?
+        .ok_or_else(agent_not_found)?;
+    agent_stored(database, principal, &run.move_id)?;
+    Ok(run)
+}
+pub fn agent_transcript(
+    database: &SuplexDatabase,
+    principal: &Principal,
+    run_id: &str,
+) -> Result<MoveRunTranscript, Box<dyn Error>> {
+    agent_run(database, principal, run_id)?;
+    let stored: Option<String> = database.connection().query_row(
+        "SELECT transcript_json FROM suplex_move_runs WHERE id = ?1",
+        [run_id],
+        |row| row.get(0),
+    )?;
+    Ok(serde_json::from_str(&stored.ok_or_else(agent_not_found)?)?)
+}
+
+/// Shared Agent API stop operation. Authorization is checked against live
+/// grants before the host terminal is touched.
+pub fn agent_stop(
+    database: &SuplexDatabase,
+    principal: &Principal,
+    run_id: &str,
+) -> Result<(), Box<dyn Error>> {
+    agent_run(database, principal, run_id).map(|_| ())
+}
+
+/// Archive one run once. The caller closes its terminal only after this live
+/// authorization and persistence operation succeeds.
+pub fn agent_archive(
+    database: &SuplexDatabase,
+    principal: &Principal,
+    run_id: &str,
+) -> Result<(), Box<dyn Error>> {
+    agent_run(database, principal, run_id)?;
+    database.connection().execute(
+        "UPDATE suplex_move_runs SET archived_at = ?1 WHERE id = ?2 AND archived_at IS NULL",
+        params![now_millis_rfc3339(), run_id],
+    )?;
+    Ok(())
+}
 
 pub use prompt::MoveInput;
 
@@ -161,7 +423,7 @@ fn stored_move(row: &Row<'_>) -> rusqlite::Result<StoredMove> {
     })
 }
 
-const RUN_COLUMNS: &str = "SELECT r.id, r.move_id, r.move_name, r.runner, r.prompt, r.inputs_json, r.excluded_pull_requests_json, r.outcomes_json, u.display_name, r.started_by_user_id, r.started_at FROM suplex_move_runs r LEFT JOIN suplex_users u ON u.id = r.started_by_user_id";
+const RUN_COLUMNS: &str = "SELECT r.id, r.move_id, r.move_name, r.runner, r.prompt, r.inputs_json, r.excluded_pull_requests_json, r.outcomes_json, COALESCE(u.display_name, a.name), COALESCE(r.started_by_user_id, r.started_by_external_agent_id), r.started_at FROM suplex_move_runs r LEFT JOIN suplex_users u ON u.id = r.started_by_user_id LEFT JOIN suplex_agents a ON a.id = r.started_by_external_agent_id";
 
 type RunRow = (
     String,
@@ -417,7 +679,7 @@ pub fn create(
     database.transaction(false, |database| {
         name_taken(database, &body.project_id, &body.name, "")?;
         database.connection().execute(
-            "INSERT INTO suplex_moves (id, company_id, project_id, name, prompt, runner, profile_id, confirm, workflow, delivery_target, run_project_tests, visual_evidence, created_by_user_id, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?14)",
+            "INSERT INTO suplex_moves (id, company_id, project_id, name, prompt, runner, profile_id, confirm, workflow, delivery_target, run_project_tests, visual_evidence, created_by_user_id, idempotency_key, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?1, ?14, ?14)",
             params![id, company_id, body.project_id, body.name, body.prompt, body.runner, body.profile_id, body.confirm, body.workflow.unwrap_or(Workflow::Standard), body.delivery_target.unwrap_or(DeliveryTarget::PullRequestReady), body.run_project_tests, body.visual_evidence, user_id, stamp],
         )?;
         Ok(())
@@ -542,11 +804,11 @@ fn open_pull_requests(sources: &Value) -> Result<Vec<OpenPullRequest>, Box<dyn E
         .collect())
 }
 
-/// Create one task through the browser creation path and its authorization.
+/// Create one task through the authority which admitted the Move run.
 async fn create_task(
     state: &AppState,
     company_id: &str,
-    user_id: &str,
+    actor: RunActor<'_>,
     mut fields: Map<String, Value>,
     outcome: &mut MoveOutcome,
 ) {
@@ -562,22 +824,65 @@ async fn create_task(
             return;
         }
     };
-    match creation::create_browser(
-        state.clone(),
-        company_id.to_owned(),
-        user_id.to_owned(),
-        request,
-    )
-    .await
-    {
-        Ok((_, task)) => {
-            outcome.task_id = serde_json::to_value(&task)
-                .ok()
-                .and_then(|task| task["id"].as_str().map(str::to_owned));
+    let result: Result<Value, Box<dyn Error>> = match actor {
+        RunActor::User(user_id) => creation::create_browser(
+            state.clone(),
+            company_id.to_owned(),
+            user_id.to_owned(),
+            request,
+        )
+        .await
+        .map_err(|error| Box::new(error) as Box<dyn Error>)
+        .and_then(|(_, task)| serde_json::to_value(task).map_err(Into::into)),
+        RunActor::Agent(principal) => {
+            // The browser request has `startImmediately` and a workflow engine,
+            // whereas the Agent API deliberately accepts `queue` and a workflow
+            // record.  Build its contract directly: serialising the browser
+            // body leaks those browser-only keys into `extra`, which the Agent
+            // API correctly rejects.
+            let raw = crate::http::contracts::typed::agent_api::TaskCreateBody {
+                project_id: request.project_id.clone(),
+                title: request.title.clone(),
+                description: Some(request.description.clone()),
+                idempotency_key: request.idempotency_key.clone(),
+                depends_on: Some(request.depends_on.clone()),
+                blocked_by_pull_requests: Some(request.blocked_by_pull_requests.clone()),
+                queue: Some(true),
+                images: request.images.clone(),
+                source: request.source.clone(),
+                workflow_id: Some(format!("workflow_native_{}", request.workflow.as_str())),
+                template_id: None,
+                root_profile_id: request.root_profile_id.clone(),
+                worker_profile_id: request.worker_profile_id.clone(),
+                advisor_profile_ids: request.advisor_profile_ids.clone(),
+                delivery_target: Some(request.delivery_target),
+                run_project_tests: Some(request.run_project_tests),
+                visual_evidence: Some(request.visual_evidence.clone()),
+                dry_run: None,
+                extra: Map::new(),
+            };
+            match agent_api::create(state, principal, &raw, None).await {
+                Ok(agent_api::Creation::Task { id, active, .. }) => {
+                    if active && let Some(host) = &state.task_host {
+                        host.wake(id.clone());
+                    }
+                    Ok::<Value, Box<dyn Error>>(json!({"id": id}))
+                }
+                Ok(agent_api::Creation::DryRun(_)) => Err(Box::new(TaskError::new(
+                    "Move task creation unexpectedly dry-ran",
+                    500,
+                ))),
+                Err(error) => Err(error),
+            }
+        }
+    };
+    match result {
+        Ok(task) => {
+            outcome.task_id = task["id"].as_str().map(str::to_owned);
         }
         Err(failure) => {
             outcome.kind = MoveOutcomeKind::Failed;
-            outcome.reason = Some(failure.message);
+            outcome.reason = Some(failure.to_string());
         }
     }
 }
@@ -587,24 +892,64 @@ async fn create_task(
 /// a partial failure create only the missing tasks.
 pub async fn start(
     state: &AppState,
-    user_id: &str,
+    actor: RunActor<'_>,
     move_id: &str,
     body: MoveRunBody,
 ) -> Result<(bool, MoveRunResponse), Box<dyn Error>> {
+    let request_hash = sha256_hex(crate::shared::js_json::stringify(
+        &json!({"actor": actor.request_identity(), "inputs": body.inputs, "excluded": body.excluded_pull_requests}),
+    ));
     let (stored, project, replay) = state.with_database(|database| {
-        let (stored, project) = accessible(database, user_id, move_id)?;
+        let (stored, project) = match actor {
+            RunActor::User(user_id) => accessible(database, user_id, move_id)?,
+            RunActor::Agent(principal) => {
+                let stored = agent_stored(database, principal, move_id)?;
+                let project =
+                    projects::get_in_company(database, &stored.company_id, &stored.project_id)?;
+                (stored, project)
+            }
+        };
         let replay = existing_run(database, move_id, &body.idempotency_key)?;
         Ok::<_, Box<dyn Error>>((stored, project, replay))
     })?;
     if let Some(run) = replay {
+        let hash: Option<String> = state.with_database(|database| {
+            database.connection().query_row(
+                "SELECT request_hash FROM suplex_move_runs WHERE id=?1",
+                [&run.id],
+                |row| row.get(0),
+            )
+        })?;
+        if hash.as_deref().is_some_and(|hash| hash != request_hash) {
+            return Err(agent_failure(
+                409,
+                "idempotency_conflict",
+                "This idempotency key belongs to a different request",
+            ));
+        }
         return Ok((false, run));
     }
     let resolved = prompt::resolve(&prompt::inputs(&stored.prompt), &body.inputs)
         .map_err(|message| TaskError::new(message, 422))?;
     let rendered = prompt::render(&stored.prompt, &resolved);
     let run_id = random_hex_id("moverun")?;
+    // A reserved row survives a crash after admission. Errors before an effect
+    // release it below so the caller can safely retry the same key.
+    let reserved = state.with_database(|database| database.transaction(false, |database| {
+        if let Some(existing) = existing_run(database, move_id, &body.idempotency_key)? {
+            let stored_hash: Option<String> = database.connection().query_row("SELECT request_hash FROM suplex_move_runs WHERE id=?1", [&existing.id], |r| r.get(0))?;
+            if stored_hash.as_deref().is_none_or(|hash| hash == request_hash) { return Ok(Some(existing)); }
+            return Err(agent_failure(409, "idempotency_conflict", "This idempotency key belongs to a different request"));
+        }
+        database.connection().execute("INSERT INTO suplex_move_runs (id, move_id, company_id, project_id, move_name, runner, prompt, inputs_json, excluded_pull_requests_json, outcomes_json, started_by_user_id, started_by_external_agent_id, started_at, idempotency_key, request_hash) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,'[]',?10,?11,?12,?13,?14)", params![run_id, move_id, stored.company_id, stored.project_id, stored.name, stored.runner, rendered, serde_json::to_string(&resolved)?, serde_json::to_string(&body.excluded_pull_requests)?, actor.user_id(), actor.agent().map(|p| &p.agent_id), now_millis_rfc3339(), body.idempotency_key, request_hash])?;
+        Ok(None)
+    }))?;
+    if let Some(run) = reserved {
+        return Ok((false, run));
+    }
     let task_key = |suffix: &str| format!("move:{move_id}:{}:{suffix}", body.idempotency_key);
-    let outcomes = match stored.runner {
+    let outcomes = async {
+        Ok::<_, Box<dyn Error>>(match stored.runner {
         MoveRunner::Prompt | MoveRunner::Script => {
             let command = if stored.runner == MoveRunner::Script {
                 shell::script(&rendered)
@@ -677,7 +1022,7 @@ pub async fn start(
                     fields["description"] = json!(rendered);
                 }
                 let fields = fields.as_object().cloned().unwrap_or_default();
-                create_task(state, &stored.company_id, user_id, fields, outcome).await;
+                create_task(state, &stored.company_id, actor, fields, outcome).await;
             }
             outcomes
         }
@@ -700,21 +1045,31 @@ pub async fn start(
                 fields["description"] = json!(rendered);
             }
             let fields = fields.as_object().cloned().unwrap_or_default();
-            create_task(state, &stored.company_id, user_id, fields, &mut outcome).await;
+            create_task(state, &stored.company_id, actor, fields, &mut outcome).await;
             vec![outcome]
+        }
+        })
+    }
+    .await;
+    let outcomes = match outcomes {
+        Ok(outcomes) => outcomes,
+        Err(error) => {
+            // No task outcome or terminal was recorded, so no effect escaped the
+            // reservation. Delete only this still-empty row; a crash leaves it
+            // durable for replay protection.
+            state.with_database(|database| {
+                database.connection().execute(
+                    "DELETE FROM suplex_move_runs WHERE id = ?1 AND outcomes_json = '[]'",
+                    [&run_id],
+                )
+            })?;
+            return Err(error);
         }
     };
     state.with_database(|database| {
-        if let Some(run) = existing_run(database, move_id, &body.idempotency_key)? {
-            return Ok((false, run));
-        }
         database.connection().execute(
-            "INSERT INTO suplex_move_runs (id, move_id, company_id, project_id, move_name, runner, prompt, inputs_json, excluded_pull_requests_json, outcomes_json, started_by_user_id, started_at, idempotency_key) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
-            params![
-                run_id, move_id, stored.company_id, stored.project_id, stored.name, stored.runner,
-                rendered, serde_json::to_string(&resolved)?, serde_json::to_string(&body.excluded_pull_requests)?,
-                serde_json::to_string(&outcomes)?, user_id, now_millis_rfc3339(), body.idempotency_key,
-            ],
+            "UPDATE suplex_move_runs SET outcomes_json=?1 WHERE id=?2",
+            params![serde_json::to_string(&outcomes)?, run_id],
         )?;
         let run = existing_run(database, move_id, &body.idempotency_key)?
             .ok_or("the recorded run disappeared")?;

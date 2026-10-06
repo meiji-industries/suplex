@@ -561,8 +561,9 @@ pub fn identity(database: &SuplexDatabase, principal: &Principal) -> DatabaseRes
     )?;
     Ok(json!({
         "agent": {"id": principal.agent_id, "name": name, "profileId": principal.profile_id},
-        "capabilities": {"taskDiscovery": true, "taskRead": true, "taskCreate": true, "humanAnswers": principal.answer_grant.is_some(), "taskCommands": task_commands(principal.answer_grant.is_some())},
+        "capabilities": {"taskDiscovery": true, "taskRead": true, "taskCreate": true, "humanAnswers": principal.answer_grant.is_some(), "moves": principal.moves_grant, "taskCommands": task_commands(principal.answer_grant.is_some())},
         "answerGrant": principal.answer_grant.as_ref().map(|grant| json!({"userId": grant.user_id, "userName": grant.user_name})),
+        "movesGrant": principal.moves_grant,
         "projects": projects_json,
     }))
 }

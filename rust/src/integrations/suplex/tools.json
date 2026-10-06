@@ -655,5 +655,16 @@
       ],
       "additionalProperties": false
     }
-  }
+  },
+  {"name":"suplex_list_moves","description":"List saved Moves for a granted project.","inputSchema":{"type":"object","properties":{"projectId":{"type":"string","minLength":1}},"required":["projectId"],"additionalProperties":false}},
+  {"name":"suplex_get_move","description":"Read one saved Move.","inputSchema":{"type":"object","properties":{"moveId":{"type":"string","minLength":1}},"required":["moveId"],"additionalProperties":false}},
+  {"name":"suplex_create_move","description":"Create a saved Move idempotently.","inputSchema":{"type":"object","properties":{"projectId":{"type":"string"},"name":{"type":"string"},"prompt":{"type":"string"},"runner":{"type":"string"},"confirm":{"type":"boolean"},"idempotencyKey":{"type":"string"}},"required":["projectId","name","prompt","runner","confirm","idempotencyKey"],"additionalProperties":true}},
+  {"name":"suplex_update_move","description":"Update a Move at its current revision.","inputSchema":{"type":"object","properties":{"moveId":{"type":"string"},"updatedAt":{"type":"string"}},"required":["moveId","updatedAt"],"additionalProperties":true}},
+  {"name":"suplex_delete_move","description":"Delete a Move at its current revision. Deleting a Move deletes its run records.","inputSchema":{"type":"object","properties":{"moveId":{"type":"string"},"updatedAt":{"type":"string"}},"required":["moveId","updatedAt"],"additionalProperties":false}},
+  {"name":"suplex_start_move","description":"Start a Move idempotently.","inputSchema":{"type":"object","properties":{"moveId":{"type":"string"},"inputs":{"type":"object"},"excludedPullRequests":{"type":"array"},"idempotencyKey":{"type":"string"}},"required":["moveId","inputs","excludedPullRequests","idempotencyKey"],"additionalProperties":false}},
+  {"name":"suplex_list_move_runs","description":"List runs of a Move.","inputSchema":{"type":"object","properties":{"moveId":{"type":"string"}},"required":["moveId"],"additionalProperties":false}},
+  {"name":"suplex_get_move_run","description":"Read one Move run.","inputSchema":{"type":"object","properties":{"runId":{"type":"string"}},"required":["runId"],"additionalProperties":false}},
+  {"name":"suplex_get_move_run_transcript","description":"Read a Move run transcript.","inputSchema":{"type":"object","properties":{"runId":{"type":"string"}},"required":["runId"],"additionalProperties":false}},
+  {"name":"suplex_stop_move_run","description":"Stop a live Move run.","inputSchema":{"type":"object","properties":{"runId":{"type":"string"}},"required":["runId"],"additionalProperties":false}},
+  {"name":"suplex_archive_move_run","description":"Archive a Move run.","inputSchema":{"type":"object","properties":{"runId":{"type":"string"}},"required":["runId"],"additionalProperties":false}}
 ]

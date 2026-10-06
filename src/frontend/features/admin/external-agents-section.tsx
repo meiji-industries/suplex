@@ -45,6 +45,7 @@ export function ExternalAgentsSection({
   onEditProjects,
   onEditAvatar,
   onSetAnswerGrant,
+  onSetMovesGrant,
   onRevokeAgent,
   onClearPendingAction,
 }: {
@@ -57,6 +58,7 @@ export function ExternalAgentsSection({
   onEditProjects: (agent: ApiExternalAgent) => void;
   onEditAvatar: (agent: ApiExternalAgent) => void;
   onSetAnswerGrant: (agent: ApiExternalAgent, granted: boolean) => Promise<void>;
+  onSetMovesGrant: (agent: ApiExternalAgent, granted: boolean) => Promise<void>;
   onRevokeAgent: (agent: ApiExternalAgent) => Promise<void>;
   onClearPendingAction: () => void;
 }): ReactElement {
@@ -78,6 +80,7 @@ export function ExternalAgentsSection({
         >
           {agents.map((agent) => {
             const action = `externalAgent:revoke:${agent.id}`;
+            const movesGrantedAt = agent.movesGrantedAt;
             return (
               <SettingsTableRow
                 aria-label={`External agent ${agent.name}`}
@@ -190,6 +193,12 @@ export function ExternalAgentsSection({
                           }
                         >
                           May answer questions on my behalf
+                        </DropdownMenuCheckboxItem>
+                        <DropdownMenuCheckboxItem
+                          checked={movesGrantedAt !== null && movesGrantedAt !== undefined}
+                          onCheckedChange={(checked) => void onSetMovesGrant(agent, checked)}
+                        >
+                          Manage and run Moves
                         </DropdownMenuCheckboxItem>
                         <DropdownMenuItem
                           variant="destructive"

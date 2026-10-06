@@ -12,6 +12,11 @@ export function setExternalAgentAnswerGrant(agentId: string, granted: boolean): 
   return readJsonUnchecked<ExternalAgentResult>(`${agentPath(agentId)}/answer-grant`, { method: "PUT", body: JSON.stringify({ granted }) });
 }
 
+/** Let the agent manage and run Moves, or stop it. */
+export function setExternalAgentMovesGrant(agentId: string, granted: boolean): Promise<ExternalAgentResult> {
+  return readJsonUnchecked<ExternalAgentResult>(`${agentPath(agentId)}/moves-grant`, { method: "PUT", body: JSON.stringify({ granted }) });
+}
+
 /** Revocation answers 204 with no body. */
 export async function revokeExternalAgent(agentId: string): Promise<void> {
   await readJson(`${agentPath(agentId)}/revoke`, { method: "POST", body: "{}" });

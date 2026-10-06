@@ -193,11 +193,12 @@ async fn start(
         Ok(value) => value,
         Err(response) => return *response,
     };
-    let mut response = match moves::start(&state, &user_id, &move_id, body).await {
-        Ok((true, run)) => (StatusCode::CREATED, Json(observed(&state, run))).into_response(),
-        Ok((false, run)) => Json(observed(&state, run)).into_response(),
-        Err(error) => ApiError::response(error),
-    };
+    let mut response =
+        match moves::start(&state, moves::RunActor::User(&user_id), &move_id, body).await {
+            Ok((true, run)) => (StatusCode::CREATED, Json(observed(&state, run))).into_response(),
+            Ok((false, run)) => Json(observed(&state, run)).into_response(),
+            Err(error) => ApiError::response(error),
+        };
     auth::append_cookies(&mut response, cookies);
     response
 }

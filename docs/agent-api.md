@@ -11,6 +11,17 @@ The bearer credential and persisted project grants authorize every request.
 one agent, or changed during credential rotation without changing access. The
 identity projection returns it as `null` when it is absent.
 
+## Moves
+
+Moves are available only when an administrator grants the agent Move access and
+the agent currently has a grant to the Move's project. The runtime exposes list,
+read, create, update, delete, start, run inspection, transcript, stop, and
+archive routes under `/api/agent/moves` and `/api/agent/move-runs` (with the
+same `/api/hermes` aliases). Create and start use idempotency keys; update and
+delete require the current `updatedAt`. Deleting a Move deletes its run records.
+Prompt Moves can require a person at their interactive terminal. The Agent API
+does not expose remote terminal interaction.
+
 ## Compatibility paths
 
 The canonical paths are `/api/agent/*` and `/api/admin/external-agents/*`.

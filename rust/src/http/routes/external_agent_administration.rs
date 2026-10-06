@@ -44,6 +44,10 @@ pub fn router() -> Router<AppState> {
                 &format!("{prefix}/{{agent_id}}/answer-grant"),
                 put(set_answer_grant),
             )
+            .route(
+                &format!("{prefix}/{{agent_id}}/moves-grant"),
+                put(set_moves_grant),
+            )
             .route(&format!("{prefix}/{{agent_id}}/rotate"), post(rotate))
             .route(&format!("{prefix}/{{agent_id}}/revoke"), post(revoke));
     }
@@ -140,6 +144,19 @@ async fn set_answer_grant(
     respond(&state, &headers, "PUT", |database, user| {
         let agent =
             external_agents::set_answer_grant(database, user, &id, request.granted, Utc::now())?;
+        Ok(Json(external_agents::AdminAgentResult { agent }).into_response())
+    })
+}
+
+async fn set_moves_grant(
+    State(state): State<AppState>,
+    ValidPath(AgentIdParams { agent_id: id }): AgentPath,
+    headers: HeaderMap,
+    Valid(request): Valid<AdminAnswerGrantBody>,
+) -> Response {
+    respond(&state, &headers, "PUT", |database, user| {
+        let agent =
+            external_agents::set_moves_grant(database, user, &id, request.granted, Utc::now())?;
         Ok(Json(external_agents::AdminAgentResult { agent }).into_response())
     })
 }

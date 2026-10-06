@@ -954,6 +954,37 @@
         }
       }
     },
+    "/api/agent/moves": {
+      "get": { "operationId": "listAgentMoves", "summary": "List Moves in a granted project", "security": [{"AgentApiBearer": []}], "parameters": [{"name":"projectId","in":"query","required":true,"schema":{"type":"string"}}], "responses": {"200":{"description":"Moves","content":{"application/json":{"schema":{"type":"object"}}}},"404":{"description":"Not found"}} },
+      "post": { "operationId": "createAgentMove", "summary": "Create a Move", "security": [{"AgentApiBearer": []}], "requestBody":{"required":true,"content":{"application/json":{"schema":{"type":"object","required":["projectId","name","prompt","runner","idempotencyKey"]}}}}, "responses": {"201":{"description":"Created"},"200":{"description":"Idempotent replay"},"409":{"description":"Idempotency conflict"},"404":{"description":"Not found"}} }
+    },
+    "/api/agent/moves/{moveId}": {
+      "parameters": [{"name":"moveId","in":"path","required":true,"schema":{"type":"string"}}],
+      "get": { "operationId": "getAgentMove", "summary": "Read a Move", "security": [{"AgentApiBearer": []}], "responses": {"200":{"description":"Move","content":{"application/json":{"schema":{"type":"object"}}}},"404":{"description":"Not found"}} },
+      "put": { "operationId": "updateAgentMove", "summary": "Update a Move", "security": [{"AgentApiBearer": []}], "requestBody":{"required":true,"content":{"application/json":{"schema":{"type":"object","required":["updatedAt"]}}}}, "responses": {"200":{"description":"Move"},"412":{"description":"Stale revision"},"404":{"description":"Not found"}} },
+      "delete": { "operationId": "deleteAgentMove", "summary": "Delete a Move", "security": [{"AgentApiBearer": []}], "parameters": [{"name":"updatedAt","in":"query","required":true,"schema":{"type":"string"}}], "responses": {"204":{"description":"Deleted"},"412":{"description":"Stale revision"},"404":{"description":"Not found"}} }
+    },
+    "/api/agent/moves/{moveId}/runs": {
+      "parameters": [{"name":"moveId","in":"path","required":true,"schema":{"type":"string"}}],
+      "get": { "operationId": "listAgentMoveRuns", "summary": "List Move runs", "security": [{"AgentApiBearer": []}], "responses": {"200":{"description":"Runs"},"404":{"description":"Not found"}} },
+      "post": { "operationId": "startAgentMove", "summary": "Start a Move", "security": [{"AgentApiBearer": []}], "requestBody":{"required":true,"content":{"application/json":{"schema":{"type":"object","required":["idempotencyKey"]}}}}, "responses": {"201":{"description":"Started"},"200":{"description":"Idempotent replay"},"409":{"description":"Idempotency conflict"},"404":{"description":"Not found"}} }
+    },
+    "/api/agent/move-runs/{runId}": {
+      "parameters": [{"name":"runId","in":"path","required":true,"schema":{"type":"string"}}],
+      "get": { "operationId": "getAgentMoveRun", "summary": "Read a Move run", "security": [{"AgentApiBearer": []}], "responses": {"200":{"description":"Run"},"404":{"description":"Not found"}} }
+    },
+    "/api/agent/move-runs/{runId}/transcript": {
+      "parameters": [{"name":"runId","in":"path","required":true,"schema":{"type":"string"}}],
+      "get": { "operationId": "getAgentMoveRunTranscript", "summary": "Read a Move run transcript", "security": [{"AgentApiBearer": []}], "responses": {"200":{"description":"Transcript"},"404":{"description":"Not found"}} }
+    },
+    "/api/agent/move-runs/{runId}/terminal": {
+      "parameters": [{"name":"runId","in":"path","required":true,"schema":{"type":"string"}}],
+      "delete": { "operationId": "stopAgentMoveRun", "summary": "Stop a Move run terminal", "security": [{"AgentApiBearer": []}], "responses": {"204":{"description":"Stopped"},"404":{"description":"Not found"}} }
+    },
+    "/api/agent/move-runs/{runId}/archive": {
+      "parameters": [{"name":"runId","in":"path","required":true,"schema":{"type":"string"}}],
+      "post": { "operationId": "archiveAgentMoveRun", "summary": "Archive a Move run", "security": [{"AgentApiBearer": []}], "responses": {"204":{"description":"Archived"},"404":{"description":"Not found"}} }
+    },
     "/api/agent/tasks": {
       "post": {
         "operationId": "createAgentApiBacklogTask",

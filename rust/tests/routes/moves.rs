@@ -329,6 +329,12 @@ mod tests {
         let run: Value = started.json().await.unwrap();
         assert_eq!(run["outcomes"].as_array().unwrap().len(), 1, "{run}");
         assert_eq!(run["outcomes"][0]["kind"], "created", "{run}");
+        let attribution = state.with_database(|database| database.connection().query_row(
+            "SELECT started_by_user_id, started_by_external_agent_id FROM suplex_move_runs WHERE id = ?1",
+            [run["id"].as_str().unwrap()], |row| Ok((row.get::<_, Option<String>>(0)?, row.get::<_, Option<String>>(1)?))
+        ).unwrap());
+        assert_eq!(attribution, (Some(admin.user.id.clone()), None));
+        assert_eq!(run["startedBy"], admin.user.display_name);
         let task_id = run["outcomes"][0]["taskId"].as_str().unwrap();
         let task: Value = send(reqwest::Method::GET, &format!("/api/tasks/{task_id}"), None)
             .await

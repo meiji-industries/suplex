@@ -6,4 +6,4 @@ export type ExternalAgentResponse = { id: string, kind: "external", name: string
 /**
  * The administrator who let this agent answer questions, when granted.
  */
-answerGrantedByUserId: string | null, answerGrantedAt: string | null, createdAt: string, updatedAt: string, };
+answerGrantedByUserId: string | null, answerGrantedAt: string | null, movesGrantedByUserId: string | null, movesGrantedAt: string | null, createdAt: string, updatedAt: string, };

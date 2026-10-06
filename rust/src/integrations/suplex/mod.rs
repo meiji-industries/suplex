@@ -15,6 +15,7 @@ use crate::http::contracts::typed::{
         self, GetTaskTool, TaskCommandBody, TaskDependenciesBody, TaskTool, TaskUpdateBody,
     },
 };
+use crate::moves::{MoveBody, MoveRunBody};
 
 /// Canonical tool names, descriptions, and input schemas for both transports.
 pub static TOOLS: LazyLock<Vec<Tool>> = LazyLock::new(|| {
@@ -109,6 +110,59 @@ pub fn create_arguments(
     parsed(fields)
 }
 
+fn string_field(fields: &Map<String, Value>, name: &str) -> Result<String, InvalidArguments> {
+    fields
+        .get(name)
+        .and_then(Value::as_str)
+        .filter(|v| !v.is_empty())
+        .map(str::to_owned)
+        .ok_or_else(|| {
+            InvalidArguments(vec![
+                json!({"path": format!(".{name}"), "code": "required"}),
+            ])
+        })
+}
+pub fn move_id_arguments(fields: &Map<String, Value>) -> Result<String, InvalidArguments> {
+    string_field(fields, "moveId")
+}
+pub fn run_id_arguments(fields: &Map<String, Value>) -> Result<String, InvalidArguments> {
+    string_field(fields, "runId")
+}
+pub fn move_create_arguments(
+    fields: &Map<String, Value>,
+) -> Result<(MoveBody, String), InvalidArguments> {
+    let key = string_field(fields, "idempotencyKey")?;
+    let mut body = fields.clone();
+    body.remove("idempotencyKey");
+    parsed::<MoveBody>(&body).map(|body| (body, key))
+}
+pub fn move_update_arguments(
+    fields: &Map<String, Value>,
+) -> Result<(String, MoveBody, String), InvalidArguments> {
+    let id = move_id_arguments(fields)?;
+    let updated = string_field(fields, "updatedAt")?;
+    let mut body = fields.clone();
+    body.remove("moveId");
+    body.remove("updatedAt");
+    parsed::<MoveBody>(&body).map(|body| (id, body, updated))
+}
+pub fn move_delete_arguments(
+    fields: &Map<String, Value>,
+) -> Result<(String, String), InvalidArguments> {
+    Ok((
+        move_id_arguments(fields)?,
+        string_field(fields, "updatedAt")?,
+    ))
+}
+pub fn move_run_arguments(
+    fields: &Map<String, Value>,
+) -> Result<(String, MoveRunBody), InvalidArguments> {
+    let id = move_id_arguments(fields)?;
+    let mut body = fields.clone();
+    body.remove("moveId");
+    parsed::<MoveRunBody>(&body).map(|body| (id, body))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -132,7 +186,18 @@ mod tests {
                 "suplex_create_task",
                 "suplex_update_task",
                 "suplex_set_task_dependencies",
-                "suplex_command_task"
+                "suplex_command_task",
+                "suplex_list_moves",
+                "suplex_get_move",
+                "suplex_create_move",
+                "suplex_update_move",
+                "suplex_delete_move",
+                "suplex_start_move",
+                "suplex_list_move_runs",
+                "suplex_get_move_run",
+                "suplex_get_move_run_transcript",
+                "suplex_stop_move_run",
+                "suplex_archive_move_run"
             ]
         );
         let command = tool("suplex_command_task").unwrap();

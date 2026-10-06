@@ -18,7 +18,11 @@ Two transports, same API:
   `suplex_whoami`, `suplex_capabilities`, `suplex_list_workflows`,
   `suplex_list_templates`, `suplex_list_tasks`, `suplex_get_task`,
   `suplex_get_task_delivery`, `suplex_create_task`, `suplex_update_task`,
-  `suplex_set_task_dependencies`, `suplex_command_task`.
+  `suplex_set_task_dependencies`, `suplex_command_task`, `suplex_list_moves`,
+  `suplex_get_move`, `suplex_create_move`, `suplex_update_move`,
+  `suplex_delete_move`, `suplex_start_move`, `suplex_list_move_runs`,
+  `suplex_get_move_run`, `suplex_get_move_run_transcript`,
+  `suplex_stop_move_run`, `suplex_archive_move_run`.
 - **Otherwise use `suplex_client.py`** in this directory. It is standard
   library only and speaks the same routes.
 

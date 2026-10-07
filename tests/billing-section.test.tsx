@@ -69,7 +69,7 @@ test("Free shows usage against each limit and starts the trial without a tab", a
   const text = container.textContent ?? "";
   expect(text).toContain("Free plan");
   for (const usage of ["1 / 1", "2 / 3", "12 / 50"]) expect(text).toContain(usage);
-  expect(text).toContain("Pro is free for 30 days.");
+  expect(text).toContain("No credit card is necessary.");
   expect(button(container, "Open billing")).toBeUndefined();
   await act(async () => button(container, "Start the 30-day trial")!.click());
   expect(posts("/api/billing/trial")).toHaveLength(1);

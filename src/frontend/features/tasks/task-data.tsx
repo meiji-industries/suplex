@@ -174,7 +174,7 @@ export async function updateTaskCache(client: QueryClient, userId: string, task:
     title: task.title, status: task.status,
     configuration: { repository: task.configuration.repository, branch: task.configuration.branch },
     pullRequest: task.pullRequest, humanQuestion: task.humanQuestion && { text: task.humanQuestion.text },
-    blockedBy: task.blockedBy, dependsOn: task.dependsOn,
+    blockedBy: task.blockedBy, queue: task.queue, dependsOn: task.dependsOn,
     ...(task.startedAt !== undefined ? { startedAt: task.startedAt } : {}),
     createdAt: task.createdAt, updatedAt: task.updatedAt, statusChangedAt: task.statusChangedAt, queuePriority: task.queuePriority, archivedAt: task.archivedAt,
   };

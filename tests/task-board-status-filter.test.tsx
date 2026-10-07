@@ -130,6 +130,11 @@ test("the board keeps queued and backlog tasks in separate columns and filters",
 
 test("Free with 3 running tasks shows the plan limit card at the top of Active, and Pro does not", async () => {
   const tasks = [task("task-1", "One", "active"), task("task-2", "Two", "active"), task("task-3", "Three", "waiting_human"), task("task-4", "Four", "queued"), task("task-5", "Five", "queued")];
+  for (const queued of tasks.filter(task => task.status === "queued")) queued.queue.planConcurrencyLimited = true;
+  tasks.push(
+    { ...task("task-6", "Project-limited", "queued"), queue: { planConcurrencyLimited: true, projectConcurrencyLimited: true, waitingOn: [] } },
+    { ...task("task-7", "Dependency-blocked", "queued"), queue: { planConcurrencyLimited: true, projectConcurrencyLimited: false, waitingOn: [{ kind: "task", id: "task-1", title: "One", status: "active", deliveryTarget: "pull_request_draft", reason: "prerequisite_running", summary: "One is running." }] } },
+  );
   api.readJsonUnchecked.mockImplementation(async (path: string) => path === "/api/billing" ? { trialAvailable: true } : path.includes("/projects") ? { projects: [] } : { tasks: path.endsWith("/task-costs") ? [] : tasks });
   const render = async (plan: string): Promise<string | null | undefined> => {
     api.company.plan = plan;
@@ -150,6 +155,8 @@ test("Free with 3 running tasks shows the plan limit card at the top of Active, 
   try {
     expect(await render("free")).toBe("2 tasks are ready. 3 slots are full.Free runs 3 tasks at a time. Pro runs the full queue at the same time.Start all 2 with a free trialNo credit card is necessary. -> /billing?company=company-1");
     expect(await render("pro")).toBeNull();
+    for (const queued of tasks.filter(task => task.id === "task-4" || task.id === "task-5")) queued.queue.planConcurrencyLimited = false;
+    expect(await render("free")).toBeNull();
   } finally { api.company.plan = "pro"; }
 });
 

@@ -677,6 +677,9 @@ pub fn task_response(
 const TASK_LIST_SELECT: &str = concat!(
     r#"SELECT t.id AS id, t.company_id AS company_id, t.project_id AS project_id, t.issue_number, cpy.issue_code, t.title, c.status AS status, c.queue_priority, json_extract(t.configuration_json, '$.repository') AS repository, json_extract(t.configuration_json, '$.branch') AS branch, c.pull_request_json, CASE WHEN c.human_question_id IS NOT NULL THEN c.human_question END AS question_text, t.created_at, CASE WHEN julianday(t.updated_at) >= julianday(COALESCE(c.updated_at, t.updated_at)) THEN t.updated_at ELSE c.updated_at END AS updated_at, c.status_changed_at, t.archived_at,
     "#,
+    "EXISTS(SELECT 1 FROM suplex_projects p WHERE p.id = t.project_id AND p.task_concurrency IS NOT NULL AND p.task_concurrency <= (SELECT COUNT(*) FROM suplex_tasks s JOIN suplex_task_controls sc ON sc.task_id = s.id WHERE s.project_id = t.project_id AND s.archived_at IS NULL AND sc.status IN ('active', 'waiting_human'))) AS project_concurrency_limited, ",
+    crate::running_limited_sql!(),
+    " AS plan_concurrency_limited, ",
     task_started_at_sql!(),
     task_dependencies_sql!(),
     r#"

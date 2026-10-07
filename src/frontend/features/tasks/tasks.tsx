@@ -96,8 +96,8 @@ export function TasksView({ mode = "list" }: { mode?: "list" | "board" }): React
       ...boardRuns.map(({ move, run }) => ({ at: run.startedAt, card: <BoardRunCard key={run.id} move={move} run={run} project={project(move.projectId)} /> })),
     ].sort((left, right) => right.at.localeCompare(left.at)).map(item => item.card);
   };
-  // Free's running-task limit holds the queue. A task that waits for you keeps its slot.
-  const planHeld = !archived && currentCompany?.plan === "free" && tasks.filter(task => task.status === "active" || task.status === "waiting_human").length >= FREE_RUNNING_TASKS ? tasks.filter(task => task.status === "queued").length : 0;
+  // Count tasks that Pro can start without waiting for a project slot or dependency.
+  const planHeld = !archived && currentCompany?.plan === "free" ? tasks.filter(task => task.status === "queued" && task.queue.planConcurrencyLimited && !task.queue.projectConcurrencyLimited && task.queue.waitingOn.length === 0).length : 0;
   const hasFilters = Boolean(query.trim() || status !== "all" || projectId !== "all" || boardStatus !== "all" || boardShow !== "all" || archived);
   const groups = ["backlog", "queued", "active", "waiting_human", "delivered", "cancelled"] as const;
   // The list puts work that needs you first; the board keeps the left-to-right flow.

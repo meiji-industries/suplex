@@ -76,6 +76,7 @@ pub struct TaskListItem {
     pull_request: Option<PullRequestReference>,
     human_question: Option<TaskListQuestion>,
     blocked_by: Vec<TaskBlockedBy>,
+    queue: TaskQueue,
     depends_on: Vec<String>,
     created_at: String,
     updated_at: String,
@@ -123,6 +124,7 @@ impl From<TaskResponse> for TaskListItem {
             pull_request: task.pull_request,
             human_question,
             blocked_by: task.blocked_by,
+            queue: task.queue,
             depends_on: task.depends_on,
             created_at: task.created_at,
             updated_at: task.updated_at,
@@ -147,7 +149,7 @@ pub(super) struct PublicWorkflowState {
     plan_approval: Option<PlanApproval>,
 }
 
-#[derive(Debug, Serialize, TS)]
+#[derive(Debug, Clone, PartialEq, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub(super) struct TaskQueue {
     project_concurrency_limited: bool,
@@ -507,17 +509,15 @@ fn times_from_row(row: &Row<'_>) -> DatabaseResult<TaskTimes> {
 
 /// A row of the repository's list select.
 pub(crate) fn list_item_from_row(row: &Row<'_>) -> DatabaseResult<TaskListItem> {
-    let (depends_on, blocked_by, _) = dependency_projection(
-        serde_json::from_str(&row.get::<_, String>("dependencies")?)?,
-        serde_json::from_str(&row.get::<_, String>("pr_dependencies")?)?,
-    )?;
+    let status = row.get("status")?;
+    let (depends_on, blocked_by, queue) = dependencies_from_row(row, status)?;
     Ok(TaskListItem {
         id: row.get("id")?,
         company_id: row.get("company_id")?,
         project_id: row.get("project_id")?,
         issue_key: issue_key(row)?,
         title: row.get("title")?,
-        status: row.get("status")?,
+        status,
         queue_priority: row.get("queue_priority")?,
         configuration: TaskListConfiguration {
             repository: row.get("repository")?,
@@ -528,6 +528,7 @@ pub(crate) fn list_item_from_row(row: &Row<'_>) -> DatabaseResult<TaskListItem> 
             .get::<_, Option<String>>("question_text")?
             .map(|text| TaskListQuestion { text }),
         blocked_by,
+        queue,
         depends_on,
         created_at: row.get("created_at")?,
         updated_at: row.get("updated_at")?,
@@ -655,7 +656,7 @@ pub struct TaskBlockedBy {
 }
 
 /// One prerequisite a backlog or queued task waits on.
-#[derive(Debug, Clone, Serialize, TS)]
+#[derive(Debug, Clone, PartialEq, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct TaskQueueWait {
     pub kind: DependencyKind,

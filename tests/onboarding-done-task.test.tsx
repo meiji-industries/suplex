@@ -195,7 +195,7 @@ test("Pro starts the trial without a checkout tab when the account has one", asy
   document.body.append(container);
   const root = createRoot(container);
   await act(async () => root.render(<OnboardingView />));
-  expect(container.textContent).toContain("Pro is free for 30 days.");
+  expect(container.textContent).toContain("No credit card is necessary.");
   await act(async () => button(container, "Continue").click());
   expect(startTrial).toHaveBeenCalledOnce();
   expect(startCheckout).not.toHaveBeenCalled();

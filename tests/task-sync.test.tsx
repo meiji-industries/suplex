@@ -43,7 +43,7 @@ class FakeWebSocket {
 function row(id: string, title = id, updatedAt = "2026-09-08T00:00:00.000Z"): TaskListTask {
   return {
     id, companyId: "company-a", projectId: "project", issueKey: null, title, status: "backlog", configuration: { repository: "owner/repo", branch: id },
-    pullRequest: null, humanQuestion: null, blockedBy: [], dependsOn: [], createdAt: "2026-09-08T00:00:00.000Z", updatedAt, statusChangedAt: "2026-09-08T00:00:00.000Z", queuePriority: 0, archivedAt: null,
+    pullRequest: null, humanQuestion: null, blockedBy: [], queue: { planConcurrencyLimited: false, projectConcurrencyLimited: false, waitingOn: [] }, dependsOn: [], createdAt: "2026-09-08T00:00:00.000Z", updatedAt, statusChangedAt: "2026-09-08T00:00:00.000Z", queuePriority: 0, archivedAt: null,
   };
 }
 

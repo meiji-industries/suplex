@@ -190,8 +190,17 @@ pub(crate) mod tests {
                 rusqlite::params![second, Utc::now().to_rfc3339()],
             )
             .unwrap();
+        connection
+            .execute("UPDATE suplex_task_controls SET status = 'queued' WHERE task_id = ?1", [&second])
+            .unwrap();
+        connection
+            .execute("UPDATE suplex_projects SET task_concurrency = 1 WHERE id = 'project_media'", [])
+            .unwrap();
         let listed = repository::list_active(&database, "company_media").unwrap();
         assert_eq!(listed.len(), 2);
+        let queued = serde_json::to_value(listed.iter().find(|row| row.id == second).unwrap()).unwrap();
+        assert_eq!(queued["queue"]["projectConcurrencyLimited"], true);
+        assert_eq!(queued["queue"]["waitingOn"].as_array().unwrap().len(), 2);
         for row in listed {
             let full = repository::task_response(&database, &row.id)
                 .unwrap()

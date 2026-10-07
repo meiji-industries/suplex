@@ -1,4 +1,4 @@
-//! suplex.sh: `/download`, `/install.sh`, `/install.ps1`, `/terms`, `/privacy`, and a
+//! suplex.sh: `/download`, `/install.sh`, `/install.ps1`, `/terms`, `/privacy`, `/support`, and a
 //! redirect to the website at getsuplex.ai, a Framer site, for every other
 //! path. The pages are compiled in; nothing is read from disk.
 
@@ -20,6 +20,7 @@ const INSTALL_SCRIPT: &str = include_str!("../../../src/web/public/install.sh");
 const WINDOWS_INSTALL_SCRIPT: &str = include_str!("../../../src/web/public/install.ps1");
 const TERMS_PAGE: &str = include_str!("legal/terms.html");
 const PRIVACY_PAGE: &str = include_str!("legal/privacy.html");
+const SUPPORT_PAGE: &str = include_str!("legal/support.html");
 
 /// The release feed directory, its manifest, and its formats. The first
 /// format is the default download.
@@ -190,6 +191,7 @@ pub fn router(accounts: Accounts) -> Router {
         )
         .route("/terms", get(|| async { Html(TERMS_PAGE) }))
         .route("/privacy", get(|| async { Html(PRIVACY_PAGE) }))
+        .route("/support", get(|| async { Html(SUPPORT_PAGE) }))
         .fallback(website)
         .with_state(accounts)
 }

@@ -1,7 +1,8 @@
-# Only rust/, migrations/, and install.sh (compiled in) go into the hosted image.
+# Only rust/, migrations/, and the install scripts (compiled in) go into the hosted image.
 *
 !rust
 !migrations
 !scripts/shared-resource-command.py
 !src/web/public/install.sh
+!src/web/public/install.ps1
 rust/target

@@ -332,6 +332,13 @@ run = "RELEASE_BUMP=minor mise run _release:run"
 [tasks."release:patch"]
 description = "Bump, sign, notarize, commit, tag, push, and publish the next patch release: the Mac, Linux, and Windows desktop apps and the Linux CLI"
 run = "RELEASE_BUMP=patch mise run _release:run"
+[tasks."release:mobile"]
+description = "Build the iOS and Android apps from the latest release tag, sign them, submit iOS for App Review, and release Android on the Google Play internal track (SUPLEX_MOBILE_PLATFORMS=ios or android limits the platforms; SUPLEX_PLAY_TRACK picks another Play track); store credentials come from the 1Password Suplex vault"
+run = '''
+source scripts/onepassword.sh
+onepassword_setup_service_account
+op run --env-file mobile/release.env -- bash scripts/release-mobile.sh
+'''
 [tasks."desktop:open"]
 description = "Open the installed Suplex.app at this checkout's native development stack"
 run = "pnpm exec tsx scripts/dev.ts --desktop"

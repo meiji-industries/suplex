@@ -98,6 +98,27 @@ replaces an existing tag. The manifests are published last.
 Run `node scripts/test-release-version.mjs` to check version selection and tag
 collisions with temporary Git repositories.
 
+`mise run release:mobile` ships the iOS and Android shells in `mobile/` at the
+latest `v*` tag. It checks out the tag in a reusable worktree under
+`~/.cache/suplex/mobile-release`, then:
+
+- builds and signs the iOS app with the App Store Connect API key, uploads it,
+  waits until Apple processes the build, and submits it for App Review
+  (`scripts/submit-app-store.mjs`). The script moves the editable App Store
+  version to the tag's version, attaches the build, and sets the update notes
+  from `SUPLEX_APP_STORE_WHATS_NEW` (default "Fixes and improvements.");
+- builds the Android App Bundle, signs it with the Play upload key, and releases
+  it on the Play track in `SUPLEX_PLAY_TRACK` (default `internal`).
+
+The signed `.ipa` and `.aab` stay in `mobile/release/<tag>`. Credentials come
+from the "Mobile store release" item in the 1Password Suplex vault through
+`mobile/release.env`. Without a Play service account, the task signs the bundle
+and stops before the upload; Google Play requires the first bundle to be
+uploaded by hand in the Play Console. The App Store version and the Android
+version code come from the tag (1.6.1 is version code 1006001), so one tag can
+be uploaded to each store only once. `SUPLEX_MOBILE_PLATFORMS=ios` or `android`
+ships one platform.
+
 The Electron app is not updated in place to the Tauri app. An installed Electron
 Suplex.app is replaced by `install.sh`, `suplex update`, or a new download, and
 keeps its data directory.

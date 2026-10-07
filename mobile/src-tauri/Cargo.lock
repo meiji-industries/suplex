@@ -630,7 +630,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d045de693cb712d0b22c6a64be5b953f67b3ce00ab5ad3dd5d8b441886ab8e1a"
 dependencies = [
  "quote",
- "syn 3.0.6",
+ "syn 2.0.119",
 ]
 
 [[package]]
@@ -3311,8 +3311,7 @@ dependencies = [
 [[package]]
 name = "swift-rs"
 version = "1.0.8"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e45c444e496845d3f2a351146bff59aae4975b2280238df1dfaa0c7d1846f38e"
+source = "git+https://github.com/Brendonovich/swift-rs?rev=3788d3d2bae8e7a863b3e281a59477438e12c632#3788d3d2bae8e7a863b3e281a59477438e12c632"
 dependencies = [
  "base64 0.21.7",
  "serde",

@@ -5,8 +5,8 @@ WORKDIR /suplex
 COPY rust rust
 COPY migrations migrations
 COPY scripts/shared-resource-command.py scripts/
-# Compiled into the binary and served at /install.sh.
-COPY src/web/public/install.sh src/web/public/
+# Compiled into the binary and served at /install.sh and /install.ps1.
+COPY src/web/public/install.sh src/web/public/install.ps1 src/web/public/
 # The hosted service serves no app UI. A release build only checks that these entry files exist.
 RUN mkdir -p dist/web && touch dist/web/suplex-ui.js dist/web/suplex-ui.css
 # Use the image's toolchain instead of letting rust-toolchain.toml install clippy and rustfmt on every build.

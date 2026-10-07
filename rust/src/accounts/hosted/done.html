@@ -101,9 +101,13 @@
       <a href="suplex://auth/done">Open Suplex</a>
     </main>
     <script>
-      // A login that started in a web browser continues there.
-      if (new URLSearchParams(location.search).get("client") === "web") document.querySelector("a").remove();
-      else location.replace("suplex://auth/done");
+      // A login that started in a web browser continues in the Suplex tab that opened this one.
+      if (new URLSearchParams(location.search).get("client") === "web") {
+        document.querySelector("a").remove();
+        document.querySelector("p").textContent = "Suplex continues in the other tab. If this tab stays open, close it.";
+        // Suplex closes this tab when it sees the login. This is a backup; the browser can refuse it.
+        window.close();
+      } else location.replace("suplex://auth/done");
     </script>
   </body>
 </html>

@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent, type ReactElement } from "react";
+import { useEffect, useRef, useState, type FormEvent, type RefObject, type ReactElement } from "react";
 
 import suplexWordmark from "../../assets/suplex-wordmark.svg?inline";
 import accountBackground from "../../assets/account-background.png?inline";
@@ -12,6 +12,8 @@ import { getAccount, pollAccountLogin, startAccountLogin, type AccountProvider }
 const POLL_MS = 2_000;
 const POLL_LIMIT_MS = 15 * 60 * 1000;
 const FAILURE_LIMIT = 15;
+/** One named tab: "Open the browser" reuses the login tab when it is still open. */
+const LOGIN_WINDOW = "suplex-login";
 
 type Waiting = { attemptId: string; url?: string | undefined; email?: string | undefined };
 
@@ -36,6 +38,13 @@ function completedLoginPath(): string {
   return company ? `/?company=${encodeURIComponent(company)}` : "/";
 }
 
+/** Closes the login tab that this view opened. A blocked popup, a closed tab, or a browser refusal is not an error. */
+function closeLoginWindow(loginWindow: RefObject<Window | null>): void {
+  const opened = loginWindow.current;
+  loginWindow.current = null;
+  try { if (opened && !opened.closed) opened.close(); } catch { /* The tab tells the user to close it. */ }
+}
+
 export function AccountLoginView({ preview = false, previewState }: { preview?: boolean; previewState?: "browser" | "email" | undefined }): ReactElement {
   const [canManage, setCanManage] = useState<boolean>();
   const [emailForm, setEmailForm] = useState(false);
@@ -44,6 +53,12 @@ export function AccountLoginView({ preview = false, previewState }: { preview?: 
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [recovery] = useState(recoveryToken);
+  // The login tab keeps its opener, so this view can close it after the login. A blocked popup gives `null`.
+  const loginWindow = useRef<Window | null>(null);
+
+  const openLogin = (url: string): void => { loginWindow.current = window.open(url, LOGIN_WINDOW); };
+
+  useEffect(() => () => closeLoginWindow(loginWindow), []);
 
   useEffect(() => {
     if (preview) { setCanManage(true); return; }
@@ -67,7 +82,7 @@ export function AccountLoginView({ preview = false, previewState }: { preview?: 
       try {
         const { status } = await pollAccountLogin(waiting.attemptId);
         failures = 0;
-        if (status === "complete") { window.location.assign(recovery ? "/" : completedLoginPath()); return; }
+        if (status === "complete") { closeLoginWindow(loginWindow); window.location.assign(recovery ? "/" : completedLoginPath()); return; }
         if (status === "expired") { setWaiting(undefined); setError("The login expired. Retry."); return; }
       } catch (failure) {
         if (failure instanceof ApiError && failure.statusCode === 403) { setWaiting(undefined); setError(failure.message); return; }
@@ -86,7 +101,7 @@ export function AccountLoginView({ preview = false, previewState }: { preview?: 
     setError("");
     try {
       const attempt = await startAccountLogin(provider, address, recovery);
-      if (attempt.url) window.open(attempt.url, "_blank", "noopener");
+      if (attempt.url) openLogin(attempt.url);
       setWaiting({ attemptId: attempt.attemptId, url: attempt.url, email: address });
     } catch (failure) {
       setError(failure instanceof ApiError && failure.statusCode === 403 ? failure.message : failureMessage(failure));
@@ -100,7 +115,7 @@ export function AccountLoginView({ preview = false, previewState }: { preview?: 
     void start("email", email.trim());
   };
 
-  const cancel = (): void => { setWaiting(undefined); setEmailForm(false); setError(""); };
+  const cancel = (): void => { closeLoginWindow(loginWindow); setWaiting(undefined); setEmailForm(false); setError(""); };
 
   return (
     <main className="dark flex min-h-dvh flex-col items-center justify-center gap-8 bg-[#080808] pt-8 pb-[calc(var(--desktop-status-height,0px)+2rem)] text-foreground md:grid md:grid-cols-[minmax(0,1fr)_minmax(0,2fr)] md:gap-0 md:pt-0 md:pb-[var(--desktop-status-height,0px)]">
@@ -116,7 +131,7 @@ export function AccountLoginView({ preview = false, previewState }: { preview?: 
                 <h1 className="text-2xl font-normal tracking-tight">{waiting.email ? "Check your email" : "Continue in the browser"}</h1>
                 {waiting.email ? <p className="text-sm leading-relaxed text-muted-foreground">Suplex sent a login link to <span className="break-words text-foreground">{waiting.email}</span>. Open it to continue.</p> : <p className="text-sm leading-relaxed text-muted-foreground">Suplex will continue after you log in.</p>}
               </div>
-              <div className="flex min-h-9 items-center justify-center gap-2 text-muted-foreground"><Spinner />{waiting.url ? <Button variant="link" nativeButton={false} render={<a href={waiting.url} target="_blank" rel="noreferrer" />}>Open the browser</Button> : null}</div>
+              <div className="flex min-h-9 items-center justify-center gap-2 text-muted-foreground"><Spinner />{waiting.url ? <Button variant="link" nativeButton={false} render={<a href={waiting.url} target={LOGIN_WINDOW} onClick={(event) => { event.preventDefault(); if (waiting.url) openLogin(waiting.url); }} />}>Open the browser</Button> : null}</div>
               <Button variant="outline" onClick={cancel}>Cancel</Button>
             </div>
           ) : emailForm ? (

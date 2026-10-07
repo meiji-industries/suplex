@@ -5,6 +5,8 @@ import { Badge } from "../../components/ui/badge.js";
 import { Checkbox } from "../../components/ui/checkbox.js";
 import { Button } from "../../components/ui/button.js";
 import { Input } from "../../components/ui/input.js";
+import { Card, CardContent } from "../../components/ui/card.js";
+import { Markdown } from "../../components/app/markdown.js";
 import { roundSuggestedBudget, taskLimitQuestion } from "./lib/task-limit-presentation.js";
 import type { TaskLimitDecision } from "../../contracts/task-limits.js";
 
@@ -34,6 +36,8 @@ export function TaskQuestion({ question, busy, onAnswer, onLimitDecision }: { qu
   const choices = question.options.map(choice => ({ ...choice, value: `${choice.label}: ${choice.description}` }));
   const items = [{ name: "answer", required: true, choices, input: { label: "Other", placeholder: "Write another answer" } }];
   const valid = answered && (!question.requiresCommandCleanup || commandsStopped);
+  const [prompt = "", ...rest] = question.text.split(/\n\s*\n/);
+  const body = rest.join("\n\n").trim();
   return <section aria-label="Question"><Questionnaire aria-label="Answer necessary" items={items} onSubmit={async event => {
     event.preventDefault();
     if (busy || !valid) return;
@@ -42,7 +46,8 @@ export function TaskQuestion({ question, busy, onAnswer, onLimitDecision }: { qu
   }}>
     <QuestionnaireItem name="answer" required disabled={busy} onStatusChange={status => setAnswered(status === "answered")}>
       <QuestionnaireTitle>Answer necessary</QuestionnaireTitle>
-      <QuestionnaireDescription>{question.text.split("\n").flatMap((line, index) => index ? [<br key={index} />, line] : [line])}</QuestionnaireDescription>
+      <QuestionnaireDescription>{prompt.split("\n").flatMap((line, index) => index ? [<br key={index} />, line] : [line])}</QuestionnaireDescription>
+      {body ? <Card size="sm"><CardContent><Markdown source={body} /></CardContent></Card> : null}
       <QuestionnaireChoices>
         {choices.map(choice => <QuestionnaireChoice key={choice.value} value={choice.value}><span>{choice.label} {choice.recommended ? <Badge variant="secondary">Recommended</Badge> : null}</span><QuestionnaireChoiceDescription>{choice.description}</QuestionnaireChoiceDescription></QuestionnaireChoice>)}
         <label className="grid gap-2"><span>Other</span><QuestionnaireInput aria-label="Answer" placeholder="Write another answer" /></label>

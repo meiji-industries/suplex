@@ -1,8 +1,11 @@
-# Only rust/, migrations/, and the install scripts (compiled in) go into the hosted image.
+# Only rust/, migrations/, and the files compiled in go into the hosted image.
 *
 !rust
 !migrations
 !scripts/shared-resource-command.py
 !src/web/public/install.sh
 !src/web/public/install.ps1
+!src/frontend/assets/suplex-wordmark.svg
+!src/frontend/assets/account-background.png
+!src/frontend/fonts/InterTight-Variable.woff2
 rust/target

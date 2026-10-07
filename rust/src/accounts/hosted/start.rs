@@ -9,7 +9,7 @@
 use axum::{
     Form, Router,
     extract::{Query, State},
-    http::{HeaderMap, StatusCode},
+    http::{HeaderMap, StatusCode, header},
     response::{Html, IntoResponse, Response},
     routing::{get, post},
 };
@@ -19,12 +19,19 @@ use super::{Accounts, store};
 use crate::{
     accounts::wire::{AuthAttemptBody, AuthEmailBody, LoginClient, challenge, random_token},
     billing::wire::HostedPlan,
-    shared::page,
 };
 
 pub const SITE_INSTALLATION: &str = "suplex.sh";
 
-const DOWNLOADS: &str = "<div class=\"actions\"><a class=\"primary\" href=\"/download?platform=macos-arm64\">Download for macOS</a><a href=\"/download?platform=macos-x64\">macOS Intel</a><a href=\"/download?platform=linux-x64\">Linux x64</a><a href=\"/download?platform=linux-arm64\">Linux Arm64</a></div>";
+/// The app's login layout, so the website and the app look the same.
+const TEMPLATE: &str = include_str!("start.html");
+const WORDMARK: &str = include_str!("../../../../src/frontend/assets/suplex-wordmark.svg");
+const BACKGROUND: &[u8] = include_bytes!("../../../../src/frontend/assets/account-background.png");
+const FONT: &[u8] = include_bytes!("../../../../src/frontend/fonts/InterTight-Variable.woff2");
+
+const DOWNLOADS: &str = "<div class=\"stack\"><a class=\"button primary\" href=\"/download?platform=macos-arm64\">Download for macOS</a><a class=\"button outline\" href=\"/download?platform=macos-x64\">Download for macOS Intel</a><a class=\"button outline\" href=\"/download?platform=linux-x64\">Download for Linux x64</a><a class=\"button outline\" href=\"/download?platform=linux-arm64\">Download for Linux Arm64</a></div>";
+const TERMS: &str = "<p class=\"terms\">When you continue, you agree to the <a href=\"/terms\" target=\"_blank\" rel=\"noreferrer\">Terms of Service</a> and <a href=\"/privacy\" target=\"_blank\" rel=\"noreferrer\">Privacy Policy</a>.</p>";
+const RETRY: &str = "<a class=\"button primary\" href=\"/start?plan=pro\">Retry</a>";
 
 fn escape(value: &str) -> String {
     value
@@ -35,14 +42,26 @@ fn escape(value: &str) -> String {
         .replace('\'', "&#39;")
 }
 
-fn html(status: StatusCode, heading: &str, body: &str) -> Response {
-    (status, Html(page::render(heading, body))).into_response()
+/// Both arguments are HTML: escape untrusted values first.
+fn html(status: StatusCode, title: &str, content: &str) -> Response {
+    let (head, foot) = TEMPLATE
+        .split_once("{content}")
+        .expect("start template has a content slot");
+    let page = format!("{}{content}{foot}", head.replace("{title}", title));
+    (status, Html(page)).into_response()
+}
+
+/// A heading and a message, as the app shows a waiting state.
+fn message(heading: &str, text: &str, actions: &str) -> String {
+    format!("<div class=\"stack center\"><h1>{heading}</h1><p>{text}</p></div>{actions}")
 }
 
 #[derive(Deserialize)]
 struct StartQuery {
     plan: Option<String>,
     visitor: Option<String>,
+    /// `email` shows the email form, as Continue with email does in the app.
+    with: Option<String>,
 }
 
 async fn start(
@@ -51,13 +70,13 @@ async fn start(
     headers: HeaderMap,
 ) -> Response {
     let mut response = if query.plan.as_deref() == Some("pro") {
-        trial_login(&accounts)
+        trial_login(&accounts, query.with.as_deref() == Some("email"))
     } else {
         html(
             StatusCode::OK,
             "Start Suplex for free",
             &format!(
-                "<p>Free includes 1 company, 2 projects, 3 tasks at a time, and 50 tasks each month. No credit card is necessary.</p><p>Download Suplex, then log in with your Suplex account.</p>{DOWNLOADS}<p><a href=\"/start?plan=pro\">Start a 30-day Pro trial</a></p>"
+                "<p class=\"center\">Free includes 1 company, 2 projects, 3 tasks at a time, and 50 tasks each month. No credit card is necessary.</p>{DOWNLOADS}<p class=\"center\">Download Suplex, then log in with your Suplex account. Want more? <a href=\"/start?plan=pro\">Start a 30-day Pro trial</a>.</p>"
             ),
         )
     };
@@ -70,7 +89,7 @@ async fn start(
     response
 }
 
-fn trial_login(accounts: &Accounts) -> Response {
+fn trial_login(accounts: &Accounts, email_form: bool) -> Response {
     let attempt = random_token().ok().and_then(|verifier| {
         accounts
             .create_attempt(&AuthAttemptBody {
@@ -84,18 +103,23 @@ fn trial_login(accounts: &Accounts) -> Response {
         return html(
             StatusCode::SERVICE_UNAVAILABLE,
             "Log in is not available",
-            &format!(
-                "<p>Suplex cannot start the trial now. Download Suplex, then start the trial in Settings &gt; Billing.</p>{DOWNLOADS}"
+            &message(
+                "Log in is not available",
+                "Suplex cannot start the trial now. Download Suplex, then start the trial in Settings &gt; Billing.",
+                DOWNLOADS,
             ),
         );
     };
-    html(
-        StatusCode::OK,
-        "Start your Pro trial",
-        &format!(
-            "<p>Pro is free for 30 days. No credit card is necessary. Log in with your Suplex account to start the trial.</p><div class=\"actions\"><a class=\"primary\" href=\"/auth/start?attempt={attempt}&amp;provider=google\">Continue with Google</a><a href=\"/auth/start?attempt={attempt}&amp;provider=github\">Continue with GitHub</a></div><form class=\"actions\" method=\"post\" action=\"/start/email\"><input type=\"hidden\" name=\"attempt\" value=\"{attempt}\"><input type=\"email\" name=\"email\" required autocomplete=\"email\" placeholder=\"you@example.com\" aria-label=\"Email address\"><button type=\"submit\">Send a login link</button></form>"
-        ),
-    )
+    let content = if email_form {
+        format!(
+            "<form class=\"stack\" method=\"post\" action=\"/start/email\"><input type=\"hidden\" name=\"attempt\" value=\"{attempt}\"><input type=\"email\" name=\"email\" required autofocus autocomplete=\"email\" placeholder=\"Email address\" aria-label=\"Email address\"><button class=\"button primary\" type=\"submit\">Continue</button><a class=\"button ghost\" href=\"/start?plan=pro\">Cancel</a></form>"
+        )
+    } else {
+        format!(
+            "<div class=\"stack\"><p class=\"note center\">Pro is free for 30 days. No credit card is necessary. Log in to start the trial.</p><a class=\"button primary\" href=\"/auth/start?attempt={attempt}&amp;provider=google\">Continue with Google</a><a class=\"button outline\" href=\"/auth/start?attempt={attempt}&amp;provider=github\">Continue with GitHub</a><a class=\"button outline\" href=\"/start?plan=pro&amp;with=email\">Continue with email</a></div>{TERMS}"
+        )
+    };
+    html(StatusCode::OK, "Start your Pro trial", &content)
 }
 
 #[derive(Deserialize)]
@@ -113,15 +137,23 @@ async fn email(State(accounts): State<Accounts>, Form(form): Form<EmailForm>) ->
         Ok(()) => html(
             StatusCode::OK,
             "Check your email",
-            &format!(
-                "<p>Suplex sent a login link to {}. Open the link to start the trial.</p>",
-                escape(body.email.trim())
+            &message(
+                "Check your email",
+                &format!(
+                    "Suplex sent a login link to <strong>{}</strong>. Open it to start the trial.",
+                    escape(body.email.trim())
+                ),
+                "<a class=\"button outline\" href=\"/start?plan=pro\">Cancel</a>",
             ),
         ),
         Err(error) => html(
             StatusCode::from_u16(error.status).unwrap_or(StatusCode::BAD_REQUEST),
             "Suplex did not send the link",
-            "<p>The login attempt expired, or Suplex limits login emails. Retry later.</p><div class=\"actions\"><a class=\"primary\" href=\"/start?plan=pro\">Retry</a></div>",
+            &message(
+                "Suplex did not send the link",
+                "The login attempt expired, or Suplex limits login emails. Retry later.",
+                RETRY,
+            ),
         ),
     }
 }
@@ -151,10 +183,14 @@ async fn done(State(accounts): State<Accounts>, Query(query): Query<DoneQuery>) 
         return html(
             StatusCode::NOT_FOUND,
             "The login expired",
-            "<p>Log in again to start the trial.</p><div class=\"actions\"><a class=\"primary\" href=\"/start?plan=pro\">Retry</a></div>",
+            &message(
+                "The login expired",
+                "Log in again to start the trial.",
+                RETRY,
+            ),
         );
     };
-    let email = escape(&account.email);
+    let email = format!("<strong>{}</strong>", escape(&account.email));
     let hosted = &accounts.hosted;
     let plan = match hosted.billing_for_user(&account.id) {
         Ok(mut billing) => match hosted.start_trial(&mut billing).await {
@@ -163,7 +199,7 @@ async fn done(State(accounts): State<Accounts>, Query(query): Query<DoneQuery>) 
         },
         Err(error) => Err(error),
     };
-    let (heading, message) = match plan {
+    let (heading, text) = match plan {
         Ok(HostedPlan { state, .. }) if state.active => {
             let until = state
                 .access_until
@@ -194,11 +230,18 @@ async fn done(State(accounts): State<Accounts>, Query(query): Query<DoneQuery>) 
             ),
         ),
     };
-    html(
-        StatusCode::OK,
-        heading,
-        &format!("<p>{message}</p>{DOWNLOADS}"),
+    html(StatusCode::OK, heading, &message(heading, &text, DOWNLOADS))
+}
+
+fn asset(content_type: &'static str, bytes: &'static [u8]) -> Response {
+    (
+        [
+            (header::CONTENT_TYPE, content_type),
+            (header::CACHE_CONTROL, "public, max-age=86400"),
+        ],
+        bytes,
     )
+        .into_response()
 }
 
 pub fn router(accounts: Accounts) -> Router {
@@ -207,6 +250,18 @@ pub fn router(accounts: Accounts) -> Router {
         .route("/start/email", post(email))
         .route("/start/done", get(done))
         .layer(axum::middleware::map_response(super::server::private))
+        .route(
+            "/start/wordmark.svg",
+            get(|| async { asset("image/svg+xml", WORDMARK.as_bytes()) }),
+        )
+        .route(
+            "/start/background.png",
+            get(|| async { asset("image/png", BACKGROUND) }),
+        )
+        .route(
+            "/start/inter-tight.woff2",
+            get(|| async { asset("font/woff2", FONT) }),
+        )
         .with_state(accounts)
 }
 

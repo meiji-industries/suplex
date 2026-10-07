@@ -21,6 +21,15 @@ mod tests {
         let html = page.text().await.unwrap();
         assert!(html.contains("/download?platform=macos-arm64"));
         assert!(html.contains("50 tasks each month"));
+        // The page reuses the app login view's wordmark, art, and font.
+        for (path, kind) in [
+            ("/start/wordmark.svg", "image/svg+xml"),
+            ("/start/background.png", "image/png"),
+            ("/start/inter-tight.woff2", "font/woff2"),
+        ] {
+            let asset = f.get(path, &[]).await;
+            assert_eq!((asset.status().as_u16(), asset.headers()["content-type"].to_str().unwrap()), (200, kind));
+        }
     }
 
     #[tokio::test]
@@ -29,7 +38,11 @@ mod tests {
         let page = f.get("/start?plan=pro", &[]).await;
         assert_eq!(page.status(), 200);
         assert_eq!(page.headers()["cache-control"], "no-store");
-        let attempt = attempt_in(&page.text().await.unwrap());
+        let html = page.text().await.unwrap();
+        assert!(html.contains("Continue with email"));
+        let attempt = attempt_in(&html);
+        let email_form = f.get("/start?plan=pro&with=email", &[]).await.text().await.unwrap();
+        assert!(email_form.contains("action=\"/start/email\""));
 
         let finished = f.sign_in(&attempt, "google", None).await;
         assert_eq!(finished.status(), 303);

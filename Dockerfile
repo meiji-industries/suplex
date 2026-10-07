@@ -7,6 +7,9 @@ COPY migrations migrations
 COPY scripts/shared-resource-command.py scripts/
 # Compiled into the binary and served at /install.sh and /install.ps1.
 COPY src/web/public/install.sh src/web/public/install.ps1 src/web/public/
+# The suplex.sh/start pages reuse the app login view's wordmark, art, and font.
+COPY src/frontend/assets/suplex-wordmark.svg src/frontend/assets/account-background.png src/frontend/assets/
+COPY src/frontend/fonts/InterTight-Variable.woff2 src/frontend/fonts/
 # The hosted service serves no app UI. A release build only checks that these entry files exist.
 RUN mkdir -p dist/web && touch dist/web/suplex-ui.js dist/web/suplex-ui.css
 # Use the image's toolchain instead of letting rust-toolchain.toml install clippy and rustfmt on every build.

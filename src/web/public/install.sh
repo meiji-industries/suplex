@@ -144,7 +144,7 @@ install_linux() {
 
     status "Install complete. Run 'suplex help' for the command line."
     [ -n "${SUPLEX_NO_START:-}" ] && exit 0
-    serve_web "${XDG_DATA_HOME:-$HOME/.local/share}/suplex"
+    serve_web "${XDG_DATA_HOME:-$HOME/.local/share}/Suplex"
 }
 
 # Opens the URL in a browser when this computer has one; a server without a display prints it instead.

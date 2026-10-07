@@ -7,14 +7,17 @@ use axum::{
     extract::{RawQuery, State},
     http::{HeaderMap, StatusCode, header},
     response::{IntoResponse, Response},
-    routing::get,
+    routing::{get, post},
 };
 use chrono::Utc;
 use serde_json::Value;
 
 use crate::http::{
     AppState,
-    contracts::typed::{agent_api::query_object, system::HealthQuery},
+    contracts::typed::{
+        agent_api::query_object,
+        system::{HealthQuery, HerdrInstallResponse},
+    },
     session,
     validation::valid,
 };
@@ -24,7 +27,34 @@ use super::auth;
 pub use crate::platform::health::snapshot;
 
 pub fn router() -> Router<AppState> {
-    Router::new().route("/api/health", get(health))
+    Router::new()
+        .route("/api/health", get(health))
+        .route("/api/health/herdr/install", post(install_herdr))
+}
+
+/// Installs Herdr when it is absent and starts its server, as an admin.
+async fn install_herdr(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    let (_, cookies) = match crate::http::access::authorize_profile(&state, &headers, "POST", true)
+    {
+        Ok(value) => value,
+        Err(response) => return *response,
+    };
+    // The installer runs blocking commands, so it leaves the async workers free.
+    let handle = tokio::runtime::Handle::current();
+    let outcome = tokio::task::spawn_blocking(move || {
+        handle.block_on(crate::platform::install::herdr())
+    })
+    .await
+    .ok()
+    .and_then(|outcome| serde_json::from_value::<HerdrInstallResponse>(outcome).ok())
+    .unwrap_or_else(|| HerdrInstallResponse {
+        ok: false,
+        reason: "The Herdr installer did not finish.".into(),
+        remedy: Some("Open Terminal, run herdr, then try again.".into()),
+    });
+    let mut response = Json(outcome).into_response();
+    auth::append_cookies(&mut response, cookies);
+    response
 }
 
 fn query(raw: Option<&str>) -> Result<HealthQuery, Box<Response>> {

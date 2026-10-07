@@ -374,9 +374,14 @@ pub async fn ensure(
         let cloned =
             tokio::task::spawn_blocking(move || clone(&github, &url, &target, token.as_deref()))
                 .await;
-        let renamed =
-            matches!(cloned, Ok(Ok(()))) && fs::rename(&temporary, repository_path).is_ok();
-        if !renamed {
+        let reason = match &cloned {
+            Ok(Ok(())) => fs::rename(&temporary, repository_path)
+                .err()
+                .map(|error| format!("the clone could not be moved into place: {error}")),
+            Ok(Err(error)) => Some(command_failure(error.message())),
+            Err(_) => Some("the clone did not finish".to_owned()),
+        };
+        if let Some(reason) = reason {
             let _ = fs::remove_dir_all(&temporary);
             return Err(failure(
                 "Repository provisioning failed",
@@ -384,7 +389,9 @@ pub async fn ensure(
                 finding(
                     "repository-unavailable",
                     "repositoryUrl",
-                    "Git could not clone the repository with the host's current credentials",
+                    format!(
+                        "Git could not clone the repository with the host's current credentials: {reason}"
+                    ),
                 ),
             ));
         }

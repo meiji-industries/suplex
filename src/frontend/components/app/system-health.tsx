@@ -18,6 +18,8 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, Di
 import { StatusLight } from "./status-light.js";
 import { SidebarMenuButton } from "../ui/sidebar.js";
 import { GithubDeviceSignIn } from "./github-device-sign-in.js";
+import { Spinner } from "../ui/spinner.js";
+import { installHerdr } from "../../features/settings/lib/herdr-install-api.js";
 
 export type { HealthContextSelector } from "../../lib/health-refresh.js";
 export type HealthFreshness = "checking" | "current" | "stale";
@@ -140,6 +142,32 @@ export function SystemHealthAlert(): ReactElement | null {
   );
 }
 
+/** One click installs Herdr on the host when it is absent and starts its server, then checks the host again. */
+export function HerdrInstallButton(): ReactElement {
+  const { refresh } = useSystemHealth();
+  const [pending, setPending] = useState(false);
+  const [failure, setFailure] = useState<{ reason: string; remedy?: string | undefined }>();
+  const install = async (): Promise<void> => {
+    setPending(true);
+    setFailure(undefined);
+    try {
+      const result = await installHerdr();
+      if (result.ok) await refresh();
+      else setFailure({ reason: result.reason, remedy: result.remedy });
+    } catch (reason) {
+      setFailure({ reason: reason instanceof Error ? reason.message : "Suplex could not install Herdr." });
+    } finally {
+      setPending(false);
+    }
+  };
+  return (
+    <div className="space-y-2">
+      <Button size="sm" disabled={pending} onClick={() => void install()}>{pending ? <Spinner /> : <SquareTerminal />}{pending ? "Installing Herdr" : "Install and start Herdr"}</Button>
+      {failure ? <p role="status" className="text-xs text-destructive">{failure.reason}{failure.remedy ? ` ${failure.remedy}` : ""}</p> : null}
+    </div>
+  );
+}
+
 const diskSize = (bytes: number): string => bytes >= 1024 ** 4 ? `${(bytes / 1024 ** 4).toFixed(2)} TB` : `${(bytes / 1024 ** 3).toFixed(2)} GB`;
 
 /** The fact a healthy check proved, such as a version or account, so the badge says more than "Healthy". */
@@ -229,6 +257,7 @@ export function HealthRow({ check, compact = false, flush = false }: { check: He
         {disk.length > 0 ? <DiskSpaceUsage roots={disk} minFreeBytes={typeof check.details.minFreeBytes === "number" ? check.details.minFreeBytes : 0} /> : <p className="mb-3 text-xs text-muted-foreground">{check.summary}</p>}
         {check.remedy === "Open the Tailscale app and sign in" ? <Alert><Network /><AlertTitle>Sign in to Tailscale on the host</AlertTitle><AlertDescription>Open the Tailscale app and sign in. Then check the host again.</AlertDescription></Alert> : check.remedy && check.remedyKind === "link" ? <div className="space-y-2 rounded-md border bg-background p-3"><p className="text-xs font-medium">Open the instructions</p><p className="text-xs text-muted-foreground">Install instructions are on the official page. Then check again.</p><Button size="xs" variant="outline" nativeButton={false} render={<a href={check.remedy} target="_blank" rel="noreferrer" />}>Open the instructions</Button></div> : check.remedy ? <div className="space-y-2 rounded-md border bg-background p-3"><p className="text-xs font-medium">Run on the Suplex host</p><p className="text-xs text-muted-foreground">Open the Terminal on the host. Run this command, then check again.</p><div className="flex flex-wrap items-center gap-2"><code className="min-w-0 flex-1 break-all text-xs">{check.remedy}</code><Button size="xs" variant="outline" aria-label="Copy the command" onClick={async () => { setCopyState(await copyToClipboard(check.remedy ?? "", "Copied the repair command to clipboard") ? "copied" : "failed"); }}>{copyState === "copied" ? <Check /> : <Copy />}{copyState === "copied" ? "Copied" : "Copy"}</Button></div>{copyState === "failed" ? <p role="status" className="text-xs text-destructive">Suplex cannot copy the command. Select the command and copy it manually.</p> : null}</div> : null}
         {check.id === "gh-auth" && check.details.method === "device" && check.status !== "healthy" && user?.role === "admin" ? <GithubDeviceSignIn onConnected={() => refresh()} /> : null}
+        {check.id === "herdr-readiness" && check.status === "unhealthy" && user?.role === "admin" ? <div className="mt-3"><HerdrInstallButton /></div> : null}
         {disk.length === 0 ? <HealthTechnicalDetails check={check} /> : null}
       </Collapsible.Panel>
     </Collapsible.Root>

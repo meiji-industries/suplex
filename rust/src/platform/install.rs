@@ -230,7 +230,9 @@ async fn developer_tools() -> Value {
         "Finish the macOS developer tools dialog, then try again.",
     )
 }
-async fn herdr() -> Value {
+/// Installs Herdr when it is absent, then starts its server. Shared by
+/// `suplex install` and the one-click repair in the browser.
+pub async fn herdr() -> Value {
     let installed = command("herdr", &["--version"]).is_ok_and(|output| output.status.success());
     if !installed {
         let script =

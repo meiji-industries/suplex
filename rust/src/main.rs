@@ -11,6 +11,7 @@ use tokio::net::TcpListener;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    suplex::platform::user_path::extend();
     let command = std::env::args().skip(1).collect::<Vec<_>>();
     if command == ["github-store-credential"] {
         suplex::integrations::github::use_installation(&Installation::load()?.database);

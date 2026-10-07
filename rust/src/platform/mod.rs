@@ -42,3 +42,4 @@ impl From<PlatformError> for PublicFailure {
         }
     }
 }
+pub mod user_path;

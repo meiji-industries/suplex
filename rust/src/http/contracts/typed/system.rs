@@ -94,6 +94,18 @@ impl Contract for HealthQuery {
     }
 }
 
+/// The outcome of the one-click Herdr install and start.
+#[derive(Debug, Serialize, Deserialize, ts_rs::TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct HerdrInstallResponse {
+    pub ok: bool,
+    pub reason: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub remedy: Option<String>,
+}
+
 /// Host-wide experiments that change what every signed-in user sees.
 #[derive(Debug, Serialize, ts_rs::TS)]
 #[serde(rename_all = "camelCase")]

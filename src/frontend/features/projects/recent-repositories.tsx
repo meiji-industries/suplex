@@ -7,7 +7,7 @@ import { Avatar, AvatarFallback, AvatarImage } from "../../components/ui/avatar.
 import { Spinner } from "../../components/ui/spinner.js";
 import type { RecentRepository } from "../../contracts/generated/RecentRepository.js";
 import { GithubDeviceSignIn } from "../../components/app/github-device-sign-in.js";
-import { hasApiFinding } from "../../lib/api.js";
+import { ApiError, hasApiFinding } from "../../lib/api.js";
 import { relativeTime, type ApiProject } from "../../shell/view-shared.js";
 import { createProject, listRecentRepositories } from "./lib/project-api.js";
 import { Plus } from "lucide-react";
@@ -116,7 +116,7 @@ export function RecentRepositories({ companyId, projects, canSignInToGitHub, onC
     } catch (reason) {
       if (generation.current !== token) return;
       if (hasApiFinding(reason, "github-auth-unavailable")) setGithubAuthRequired(true);
-      else setError(reason instanceof Error ? reason.message : `Suplex could not add ${each.repository}.`);
+      else setError(reason instanceof ApiError && reason.findings?.length ? reason.findings.map(finding => finding.message).join(" ") : reason instanceof Error ? reason.message : `Suplex could not add ${each.repository}.`);
       setAdding(current => current.filter(name => name !== each.repository));
       return;
     }

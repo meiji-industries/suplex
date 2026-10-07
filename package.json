@@ -1,6 +1,6 @@
 {
   "name": "suplex",
-  "version": "1.6.0",
+  "version": "1.6.1",
   "private": true,
   "type": "module",
   "packageManager": "pnpm@11.22.0",

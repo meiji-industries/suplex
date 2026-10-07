@@ -27,6 +27,23 @@ struct Registry {
     ready: bool,
 }
 
+pub fn require_non_root_host() -> io::Result<()> {
+    #[cfg(target_os = "linux")]
+    refuse_root(unsafe { libc::geteuid() })?;
+    Ok(())
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn refuse_root(effective_uid: u32) -> io::Result<()> {
+    if effective_uid == 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "Suplex cannot run as root. Start Suplex as a dedicated non-root user. See https://github.com/meiji-industries/suplex/blob/main/README.md#linux-host.",
+        ));
+    }
+    Ok(())
+}
+
 fn registry_path(installation: &Installation) -> std::path::PathBuf {
     installation.runtime.join("owned-processes.json")
 }
@@ -363,6 +380,7 @@ async fn stop_child(child: &mut tokio::process::Child) {
     }
 }
 pub async fn run_foreground() -> Result<(), Box<dyn std::error::Error>> {
+    require_non_root_host()?;
     let installation = Installation::load()?;
     register_foreground(&installation)?;
     let result = supervise(&installation).await;
@@ -434,6 +452,7 @@ async fn supervise(installation: &Installation) -> Result<(), Box<dyn std::error
 }
 
 pub fn start(installation: &Installation) -> Result<u32, Box<dyn std::error::Error>> {
+    require_non_root_host()?;
     if let Some(existing) = read(&registry_path(installation)).ok().flatten()
         && matches(&existing.process)
     {
@@ -556,6 +575,15 @@ pub fn stop(installation: &Installation) -> Result<serde_json::Value, Box<dyn st
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn host_refuses_only_effective_root() {
+        let error = refuse_root(0).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+        assert!(error.to_string().contains("dedicated non-root user"));
+        assert!(error.to_string().contains("README.md#linux-host"));
+        assert!(refuse_root(1000).is_ok());
+    }
+
     #[test]
     fn serve_cleanup_removes_only_the_matching_root_handler() {
         assert_eq!(

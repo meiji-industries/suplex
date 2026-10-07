@@ -60,6 +60,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if command.first().map(String::as_str) == Some("hosted") {
         std::process::exit(suplex::hosted::main(&command[1..]).await);
     }
+    if matches!(
+        command.first().map(String::as_str),
+        Some("serve" | "start" | "up" | "restart")
+    ) {
+        suplex::platform::supervisor::require_non_root_host()?;
+    }
     match command.first().map(String::as_str) {
         None => {
             print!("{}", suplex::cli::HELP);

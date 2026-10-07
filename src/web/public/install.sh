@@ -9,6 +9,10 @@
 main() {
 set -eu
 
+if [ "$(uname -s)" = Linux ] && [ "$(id -u)" = 0 ]; then
+    error "Suplex cannot run as root. Start Suplex as a dedicated non-root user. See https://github.com/meiji-industries/suplex/blob/main/README.md#linux-host."
+fi
+
 cat >&2 <<'BANNER'
   _______ ___ ___ _______ ___     _______  ___ ___
  |   _   |   Y   |   _   |   |   |   _   |(   Y   )

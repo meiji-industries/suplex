@@ -660,14 +660,22 @@ fn complete_root_if_terminal(
         Utc::now(),
     )?;
     if completed && observation.state == PromptState::Error {
-        let reason = if observation.reason.is_empty() {
+        let reason = if observation.reason.is_empty()
+            || observation.reason == "native_startup_failed" && !text.is_empty()
+        {
             text.as_str()
         } else {
             observation.reason
         };
-        let question = format!(
-            "The agent stopped the Coordinator turn (error). {reason} Can you resolve the failure and continue?"
-        );
+        let question = if observation.reason == "native_startup_failed" {
+            format!(
+                "Suplex could not start the Coordinator. {reason}. Resolve the problem, then answer to retry."
+            )
+        } else {
+            format!(
+                "The agent stopped the Coordinator turn (error). {reason} Can you resolve the failure and continue?"
+            )
+        };
         root_session_store::ask_human_for_root(
             database,
             &session.task_id,
@@ -720,7 +728,7 @@ fn complete_worker_if_terminal(
         }),
     )?;
     let terminal_observation = terminal_observation(observation, native, &text, &directory, turn)?;
-    finish_delegate_turn(
+    let completed = finish_delegate_turn(
         database,
         database_path,
         TerminalDelegateTurn {
@@ -732,7 +740,29 @@ fn complete_worker_if_terminal(
             text: &text,
             base: serde_json::to_value(&terminal_observation)?,
         },
-    )
+    )?;
+    if completed && observation.reason == "native_startup_failed" {
+        let agent = if launch.workflow.advisor.is_some() {
+            "Advisor"
+        } else {
+            "Worker"
+        };
+        let reason = if text.is_empty() {
+            observation.reason
+        } else {
+            &text
+        };
+        root_session_store::ask_human(
+            database,
+            &session.task_id,
+            &format!(
+                "Suplex could not start the {agent}. {reason}. Resolve the problem, then answer to retry."
+            ),
+            &serde_json::json!([]),
+            Utc::now(),
+        )?;
+    }
+    Ok(completed)
 }
 
 enum LaunchPlan<'a> {

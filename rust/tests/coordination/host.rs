@@ -1740,6 +1740,161 @@ mod host_tests {
         fs::remove_dir_all(base).unwrap();
     }
 
+    #[tokio::test]
+    async fn launch_failures_ask_on_the_task_and_answer_retries() {
+        for worker in [false, true] {
+            for exits_at_launch in [false, true] {
+                let (base, database_path, task_id) = fixture_task();
+                let worktree = base.join("worktree");
+                fs::create_dir(&worktree).unwrap();
+                let repo = git2::Repository::init(&worktree).unwrap();
+                let tree = repo
+                    .find_tree(repo.index().unwrap().write_tree().unwrap())
+                    .unwrap();
+                let signature = git2::Signature::now("Fixture", "fixture@example.invalid").unwrap();
+                let head = repo
+                    .commit(Some("HEAD"), &signature, &signature, "fixture", &tree, &[])
+                    .unwrap()
+                    .to_string();
+                let root = {
+                    let mut database =
+                        SuplexDatabase::open(&database_path, OpenMode::ReadWrite).unwrap();
+                    database.connection().execute(
+                        "UPDATE suplex_task_controls SET status = 'active', worktree_json = ?1 WHERE task_id = ?2",
+                        rusqlite::params![serde_json::json!({"path":worktree,"branch":"task-usage","baseSha":head,"headSha":head,"dirty":false}).to_string(), task_id],
+                    ).unwrap();
+                    let root = root_controller::prepare_root(&mut database, &task_id).unwrap();
+                    if worker {
+                        database.connection().execute("UPDATE suplex_task_turns SET status = 'completed' WHERE session_id = ?1", [&root.id]).unwrap();
+                        root_session_store::launch_standard_worker(
+                            &mut database,
+                            &root,
+                            "Implement the fixture",
+                            "Worker prompt",
+                            Some(&serde_json::json!({"kind":"worker","purpose":"implementation"})),
+                            Utc::now(),
+                        )
+                        .unwrap();
+                    }
+                    root
+                };
+                let codex = base.join("codex");
+                let environment = HashMap::from([("PATH".into(), "/usr/bin:/bin".into())]);
+                if exits_at_launch {
+                    fs::write(
+                        &codex,
+                        "#!/bin/sh\necho 'agent refused root privileges' >&2\nexit 1\n",
+                    )
+                    .unwrap();
+                    fs::set_permissions(&codex, fs::Permissions::from_mode(0o700)).unwrap();
+                    // Recovery can complete a fast process before it returns. Capture the turn first.
+                    let database =
+                        SuplexDatabase::open(&database_path, OpenMode::ReadOnly).unwrap();
+                    let session = if worker {
+                        root_session_store::current_worker(&database, &task_id)
+                            .unwrap()
+                            .unwrap()
+                    } else {
+                        root.clone()
+                    };
+                    let turn = root_session_store::pending_turns(&database, &session.id)
+                        .unwrap()
+                        .remove(0);
+                    drop(database);
+                    if worker {
+                        recover_prepared_worker(
+                            &database_path,
+                            &base,
+                            &task_id,
+                            Some(&codex),
+                            &environment,
+                        )
+                        .await
+                        .unwrap();
+                    } else {
+                        recover_prepared_root(
+                            &database_path,
+                            &base,
+                            &task_id,
+                            Some(&codex),
+                            &environment,
+                        )
+                        .await
+                        .unwrap();
+                    }
+                    let directory =
+                        session_reader::session_directory(&database_path, &session.id).unwrap();
+                    let exit = crate::runtimes::headless::turn_file(&directory, &turn.id, "exit");
+                    for _ in 0..400 {
+                        if exit.exists() {
+                            break;
+                        }
+                        tokio::time::sleep(Duration::from_millis(50)).await;
+                    }
+                    assert!(exit.exists());
+                }
+                sweep_task(&database_path, &base, &task_id, Some(&codex), &environment)
+                    .await
+                    .unwrap();
+                {
+                    let mut database =
+                        SuplexDatabase::open(&database_path, OpenMode::ReadWrite).unwrap();
+                    let control = root_session_store::task_control(&database, &task_id)
+                        .unwrap()
+                        .unwrap();
+                    assert_eq!(control.status, TaskStatus::WaitingHuman);
+                    let question = control.human_question.unwrap();
+                    assert!(question.contains(if worker { "Worker" } else { "Coordinator" }));
+                    assert!(question.contains(if exits_at_launch {
+                        "agent refused root privileges"
+                    } else {
+                        "Codex CLI executable cannot be executed"
+                    }));
+                    assert!(!due_task_ids(&database).unwrap().contains(&task_id));
+                    root_session_store::answer_human(
+                        &mut database,
+                        &task_id,
+                        control.human_question_id.as_deref().unwrap(),
+                        "Resolved. Retry.",
+                        false,
+                        None,
+                        Utc::now(),
+                    )
+                    .unwrap();
+                }
+                fs::write(&codex, "#!/bin/sh\ncat >/dev/null\nprintf '%s\\n' '{\"type\":\"thread.started\",\"thread_id\":\"retry-thread\"}' '{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":0,\"cached_input_tokens\":0,\"cache_write_input_tokens\":0,\"output_tokens\":0,\"reasoning_output_tokens\":0}}'\n").unwrap();
+                fs::set_permissions(&codex, fs::Permissions::from_mode(0o700)).unwrap();
+                sweep_task(&database_path, &base, &task_id, Some(&codex), &environment)
+                    .await
+                    .unwrap();
+                let database = SuplexDatabase::open(&database_path, OpenMode::ReadOnly).unwrap();
+                let control = root_session_store::task_control(&database, &task_id)
+                    .unwrap()
+                    .unwrap();
+                assert_eq!(control.status, TaskStatus::Active);
+                assert!(control.human_question.is_none());
+                let turn_id: String = database.connection().query_row(
+                    "SELECT id FROM suplex_task_turns WHERE session_id = ?1 AND dispatch_attempt_json IS NOT NULL ORDER BY rowid DESC LIMIT 1",
+                    [&root.id], |row| row.get(0),
+                ).unwrap();
+                drop(database);
+                let directory =
+                    session_reader::session_directory(&database_path, &root.id).unwrap();
+                {
+                    let exit = crate::runtimes::headless::turn_file(&directory, &turn_id, "exit");
+                    for _ in 0..400 {
+                        if exit.exists() {
+                            break;
+                        }
+                        tokio::time::sleep(Duration::from_millis(50)).await;
+                    }
+                    assert!(exit.exists());
+                }
+                fs::remove_dir_all(base).unwrap();
+            }
+        }
+    }
+
     /// One Rust sweep records the Worker result and dispatches the Root wake.
     #[tokio::test]
     async fn sweep_dispatches_the_root_wake_from_a_worker_result() {
@@ -2439,7 +2594,7 @@ mod host_tests {
         assert_eq!(failed.status, TaskStatus::WaitingHuman);
         assert_eq!(
             failed.human_question.as_deref().unwrap(),
-            "The agent stopped the Coordinator turn (error). native_startup_failed Can you resolve the failure and continue?"
+            "Suplex could not start the Coordinator. native_startup_failed. Resolve the problem, then answer to retry."
         );
         drop(database);
         let mut worktree_child = std::process::Command::new("/bin/sleep")

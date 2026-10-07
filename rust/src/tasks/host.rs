@@ -377,22 +377,47 @@ async fn sweep_task_once(
             }
         }
     }
-    recover_prepared_worker(
-        database_path,
-        artifact_root,
-        task_id,
-        executable,
-        inherited_environment,
-    )
-    .await?;
-    recover_prepared_root(
-        database_path,
-        artifact_root,
-        task_id,
-        executable,
-        inherited_environment,
-    )
-    .await?;
+    for coordinator in [false, true] {
+        let recovered = if coordinator {
+            recover_prepared_root(
+                database_path,
+                artifact_root,
+                task_id,
+                executable,
+                inherited_environment,
+            )
+            .await
+        } else {
+            recover_prepared_worker(
+                database_path,
+                artifact_root,
+                task_id,
+                executable,
+                inherited_environment,
+            )
+            .await
+        };
+        if let Err(error) = recovered {
+            let agent = if coordinator { "Coordinator" } else { "Worker" };
+            root_session_store::ask_human(
+                database,
+                task_id,
+                &format!(
+                    "Suplex could not start the {agent}. {error}. Resolve the problem, then answer to retry."
+                ),
+                &serde_json::json!([]),
+                Utc::now(),
+            )?;
+            return Ok(());
+        }
+        if root_session_store::root_observation_rows(database, task_id)?
+            .control
+            .status
+            != TaskStatus::Active
+        {
+            return Ok(());
+        }
+    }
     {
         let rows = root_session_store::root_observation_rows(database, task_id)?;
         let prompt = root_session_store::with_current_dependency_status(

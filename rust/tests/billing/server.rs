@@ -84,14 +84,16 @@ mod tests {
         let response = f.post_raw("/v1/accounts", "text/plain", "{}").await;
         assert_eq!(response, (415, json!({"error": "Invalid request"})));
         // The RevenueCat secret is checked before the body is read.
-        let response = f
-            .send(
-                Method::POST,
-                "/webhooks/revenuecat",
-                &[("authorization", "wrong")],
-                Some(&oversized),
-            )
-            .await;
+        // Call the handler directly: an early HTTP rejection can reset the socket during upload.
+        let response = revenuecat_webhook(
+            State(f.hosted.clone()),
+            Request::builder()
+                .header("authorization", "wrong")
+                .body(axum::body::Body::from(oversized.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap_err();
         assert_eq!(response.status(), 401);
     }
 

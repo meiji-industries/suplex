@@ -159,7 +159,22 @@ async fn issues(
             .await
     };
     let response = match found.await {
-        Ok(issues) => axum::Json(json!({"issues": issues})).into_response(),
+        Ok(mut issues) => {
+            if let Err(error) = state.with_database(|database| {
+                for issue in &mut issues {
+                    let (Some(kind), Some(id)) = (issue["kind"].as_str(), issue["id"].as_str())
+                    else {
+                        continue;
+                    };
+                    let owner = crate::tasks::repository::issue_owner(database, kind, id)?;
+                    issue["usedBy"] = serde_json::to_value(owner)?;
+                }
+                Ok(())
+            }) {
+                return with_cookies(ApiError::response(error), cookies);
+            }
+            axum::Json(json!({"issues": issues})).into_response()
+        }
         Err(error) => ApiError::response(error.to_string().into()),
     };
     with_cookies(response, cookies)

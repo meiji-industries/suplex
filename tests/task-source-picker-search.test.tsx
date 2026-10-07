@@ -82,7 +82,7 @@ test("task source search accepts keyboard input without menu typeahead taking fo
 
 test("issue selection reads the configured Jira tracker and returns its association", async () => {
   api.readJsonUnchecked.mockImplementation(async (url: string) => {
-    if (url.includes("/issues?query=")) return { issues: [{ kind: "jira", site: "https://client.atlassian.net", id: "42", key: "APP-42", title: "Fix the picker", url: "https://client.atlassian.net/browse/APP-42" }] };
+    if (url.includes("/issues?query=")) return { issues: [{ kind: "jira", site: "https://client.atlassian.net", id: "42", key: "APP-42", title: "Fix the picker", url: "https://client.atlassian.net/browse/APP-42", usedBy: null }] };
     return { available: true, sources: [] };
   });
   const container = document.createElement("div");
@@ -186,7 +186,7 @@ test("issue results keep tracker matches that do not contain the query", async (
   root.unmount();
 });
 
-test("a pull request that a task already uses opens that task instead of selecting it", async () => {
+test("a pull request that a task already uses is disabled", async () => {
   api.readJsonUnchecked.mockResolvedValue({ available: true, sources: [
     { kind: "pull_request", number: 42, title: "Fix picker search", body: "", author: "octo", headBranch: "fix/search", baseBranch: "main", isDraft: false, usedBy: { taskId: "task-7", title: "Search repair", status: "active" } },
   ] });
@@ -194,13 +194,34 @@ test("a pull request that a task already uses opens that task instead of selecti
   document.body.append(container);
   const root = createRoot(container);
   const onSelect = vi.fn();
-  const onOpenTask = vi.fn();
-  act(() => { root.render(<TaskSourcePicker projectId="project-1" onSelect={onSelect} onClear={() => undefined} onOpenTask={onOpenTask} />); });
+  act(() => { root.render(<TaskSourcePicker projectId="project-1" onSelect={onSelect} onClear={() => undefined} />); });
   await act(async () => { container.querySelector<HTMLButtonElement>('[aria-label="New from source"]')!.click(); });
   await flush();
   expect(document.body.textContent).toContain("Open task: Search repair");
-  await act(async () => { document.querySelector<HTMLElement>('[role="menuitem"]')!.click(); });
-  expect(onOpenTask).toHaveBeenCalledWith("task-7");
+  const row = document.querySelector<HTMLElement>('[role="menuitem"]')!;
+  expect(row.getAttribute("aria-disabled")).toBe("true");
+  await act(async () => { row.click(); });
+  expect(onSelect).not.toHaveBeenCalled();
+  root.unmount();
+});
+
+test("an issue that a task already uses is disabled", async () => {
+  api.readJsonUnchecked.mockImplementation(async (url: string) => url.includes("/issues?query=")
+    ? { issues: [{ kind: "jira", site: "https://client.atlassian.net", id: "42", key: "APP-42", title: "Fix the picker", url: "https://client.atlassian.net/browse/APP-42", usedBy: { taskId: "task-7", title: "Search repair", status: "backlog" } }] }
+    : { available: true, sources: [] });
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  const onSelect = vi.fn();
+  act(() => { root.render(<TaskSourcePicker projectId="project-1" onSelect={onSelect} onClear={() => undefined} />); });
+  await act(async () => { container.querySelector<HTMLButtonElement>('[aria-label="New from source"]')!.click(); });
+  await flush();
+  await act(async () => { Array.from(document.querySelectorAll<HTMLButtonElement>("button")).find(button => button.textContent === "Issues")!.click(); });
+  await flush();
+  const row = document.querySelector<HTMLElement>('[role="menuitem"]')!;
+  expect(row.textContent).toContain("Open task: Search repair");
+  expect(row.getAttribute("aria-disabled")).toBe("true");
+  await act(async () => { row.click(); });
   expect(onSelect).not.toHaveBeenCalled();
   root.unmount();
 });

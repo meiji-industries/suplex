@@ -149,13 +149,25 @@ pub(crate) fn prerequisites_complete(
     Ok(!waiting)
 }
 
-/// An open task that already works on a pull request.
+/// An open task that already works on a source.
 #[derive(Clone, Debug, serde::Serialize)]
 pub struct PullRequestOwner {
     #[serde(rename = "taskId")]
     pub task_id: String,
     pub title: String,
     pub status: String,
+}
+
+pub(crate) fn issue_owner(
+    database: &SuplexDatabase,
+    kind: &str,
+    id: &str,
+) -> DatabaseResult<Option<PullRequestOwner>> {
+    Ok(database.connection().query_row(
+        "SELECT t.id, t.title, c.status FROM suplex_tasks t JOIN suplex_task_controls c ON c.task_id = t.id WHERE t.archived_at IS NULL AND c.status IN ('backlog','queued','active','waiting_human') AND json_extract(t.issue_json, '$.kind') = ?1 AND json_extract(t.issue_json, '$.id') = ?2 ORDER BY t.created_at LIMIT 1",
+        params![kind, id],
+        |row| Ok(PullRequestOwner { task_id: row.get(0)?, title: row.get(1)?, status: row.get(2)? }),
+    ).optional()?)
 }
 
 /// Find the open task other than `task_id` that owns pull request `number`.

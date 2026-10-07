@@ -9,7 +9,7 @@ import { IssuePicker } from "../src/frontend/features/tasks/issue-picker.js";
 test("issue autocomplete queries the tracker and selects a qualified issue", async () => {
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
   const issue = { kind: "github", repository: "client/repo", number: 420, id: "500", key: "#420", title: "Remote search result", url: "https://github.com/client/repo/issues/420" };
-  api.readJsonUnchecked.mockResolvedValue({ issues: [issue] });
+  api.readJsonUnchecked.mockResolvedValue({ issues: [{ ...issue, usedBy: null }] });
   const container = document.createElement("div");
   document.body.append(container);
   const root = createRoot(container);
@@ -28,5 +28,24 @@ test("issue autocomplete queries the tracker and selects a qualified issue", asy
     const result = Array.from(document.querySelectorAll<HTMLButtonElement>("button")).find(button => button.textContent?.includes("Remote search result"))!;
     await act(async () => { result.click(); });
     expect(onChange).toHaveBeenCalledWith(issue);
+  } finally { await act(async () => { root.unmount(); }); container.remove(); }
+});
+
+test("issue autocomplete disables issues owned by an open task", async () => {
+  Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+  api.readJsonUnchecked.mockResolvedValue({ issues: [{ kind: "github", repository: "client/repo", number: 420, id: "500", key: "#420", title: "Remote search result", url: "https://github.com/client/repo/issues/420", usedBy: { taskId: "task-7", title: "Search repair", status: "active" } }] });
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  const onChange = vi.fn();
+  try {
+    await act(async () => { root.render(<IssuePicker projectId="project" issue={null} onChange={onChange} />); });
+    await act(async () => { container.querySelector<HTMLButtonElement>('[aria-label="Select issue"]')!.click(); });
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 250)); });
+    const result = Array.from(document.querySelectorAll<HTMLButtonElement>("button")).find(button => button.textContent?.includes("Remote search result"))!;
+    expect(result.disabled).toBe(true);
+    expect(result.textContent).toContain("Open task: Search repair");
+    await act(async () => { result.click(); });
+    expect(onChange).not.toHaveBeenCalled();
   } finally { await act(async () => { root.unmount(); }); container.remove(); }
 });

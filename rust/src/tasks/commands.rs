@@ -1801,6 +1801,70 @@ mod tests {
     }
 
     #[test]
+    fn issue_owner_matches_identity_and_only_unarchived_open_tasks() {
+        let (filename, mut database, _, mut prepared) = command_fixture();
+        prepared.issue = Some(
+            json!({"kind":"github","repository":"owner/repo","number":12,"id":"123","key":"#12","title":"Issue","url":"https://github.com/owner/repo/issues/12"}),
+        );
+        let task = repository::create(&mut database, &prepared, Utc::now())
+            .unwrap()
+            .task;
+        for status in [
+            "backlog",
+            "queued",
+            "active",
+            "waiting_human",
+            "cancelled",
+            "delivered",
+        ] {
+            database.connection().execute(
+                "UPDATE suplex_task_controls SET status = ?1, human_question = CASE WHEN ?1 = 'waiting_human' THEN 'Continue?' END, human_question_id = CASE WHEN ?1 = 'waiting_human' THEN 'question' END WHERE task_id = ?2",
+                params![status, task.id],
+            ).unwrap();
+            let owner = repository::issue_owner(&database, "github", "123").unwrap();
+            if matches!(status, "cancelled" | "delivered") {
+                assert!(owner.is_none(), "{status} tasks do not own issues");
+            } else {
+                assert_eq!(
+                    serde_json::to_value(owner).unwrap(),
+                    json!({"taskId":task.id,"title":task.title,"status":status})
+                );
+            }
+            assert!(
+                repository::issue_owner(&database, "jira", "123")
+                    .unwrap()
+                    .is_none()
+            );
+            assert!(
+                repository::issue_owner(&database, "github", "456")
+                    .unwrap()
+                    .is_none()
+            );
+        }
+        database
+            .connection()
+            .execute(
+                "UPDATE suplex_task_controls SET status = 'backlog' WHERE task_id = ?1",
+                [&task.id],
+            )
+            .unwrap();
+        database
+            .connection()
+            .execute(
+                "UPDATE suplex_tasks SET archived_at = ?1 WHERE id = ?2",
+                params![rfc3339_millis(Utc::now()), task.id],
+            )
+            .unwrap();
+        assert!(
+            repository::issue_owner(&database, "github", "123")
+                .unwrap()
+                .is_none()
+        );
+        drop(database);
+        std::fs::remove_file(filename).unwrap();
+    }
+
+    #[test]
     fn pull_request_owner_follows_repository_rename_aliases() {
         let (filename, mut database, user, mut prepared) = command_fixture();
         let now = rfc3339_millis(Utc::now());

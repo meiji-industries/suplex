@@ -146,6 +146,7 @@ Three paths replace the app:
 | In-app updater | `desktop/src-tauri/src/updater.rs` | **Restart Suplex** in the app |
 | `suplex update` | `rust/src/platform/app_update.rs`, see [the CLI](architecture/cli.md#updates) | A terminal |
 | `install.sh` | `src/web/public/install.sh`, compiled into `suplex hosted serve` and served at `https://suplex.sh/install.sh` | `curl -fsSL https://suplex.sh/install.sh \| sh` |
+| `install.ps1` (Windows) | `src/web/public/install.ps1`, served at `https://suplex.sh/install.ps1`. It installs for the current user, checks the Authenticode signer, and stops a running app first; the Windows app owns no host | `irm https://suplex.sh/install.ps1 \| iex` in PowerShell |
 
 `suplex update` and `install.sh` stop the app with the same sequence:
 

@@ -26,8 +26,20 @@ New-Item -ItemType Directory -Path "$scratch\site", "$scratch\app" | Out-Null
 $listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, 0)
 $listener.Start(); $port = $listener.LocalEndpoint.Port; $listener.Stop()
 $server = Start-Process -FilePath python -ArgumentList "-m", "http.server", $port, "--bind", "127.0.0.1" -WorkingDirectory "$scratch\site" -RedirectStandardError "$scratch\http.log" -PassThru -WindowStyle Hidden
-$env:SUPLEX_DESKTOP_USER_DATA = "$scratch\app"
-$shell = Start-Process -FilePath $app -ArgumentList "--url", "http://127.0.0.1:$port/packaged" -PassThru
+# A window needs a desktop. An SSH command runs in session 0; with a user signed in at the console, WebView2
+# there fails with "Invalid window handle", so the app starts in that user's session through a scheduled task.
+# With nobody signed in, it starts directly.
+$console = (Get-CimInstance Win32_ComputerSystem).UserName
+if ($console) {
+  $command = "set ""SUPLEX_DESKTOP_USER_DATA=$scratch\app"" && ""$app"" --url http://127.0.0.1:$port/packaged"
+  $action = New-ScheduledTaskAction -Execute "cmd.exe" -Argument "/c $command"
+  $principal = New-ScheduledTaskPrincipal -UserId $console -LogonType Interactive
+  Register-ScheduledTask -TaskName SuplexPackagedLaunch -Action $action -Principal $principal -Force | Out-Null
+  Start-ScheduledTask -TaskName SuplexPackagedLaunch
+} else {
+  $env:SUPLEX_DESKTOP_USER_DATA = "$scratch\app"
+  Start-Process -FilePath $app -ArgumentList "--url", "http://127.0.0.1:$port/packaged" | Out-Null
+}
 $loaded = $false
 for ($i = 0; $i -lt 60 -and -not $loaded; $i++) {
   Start-Sleep -Seconds 1
@@ -36,7 +48,8 @@ for ($i = 0; $i -lt 60 -and -not $loaded; $i++) {
 Check "app loads the requested host page" $loaded
 $targets = if (Test-Path "$scratch\app\desktop.json") { Get-Content "$scratch\app\desktop.json" -Raw } else { "" }
 Check "app remembers only the origin" ($targets -match [regex]::Escape("""targets"":[""http://127.0.0.1:$port/""]"))
-Stop-Process -Id $shell.Id -Force -ErrorAction SilentlyContinue
+Get-Process Suplex -ErrorAction SilentlyContinue | Stop-Process -Force
+if ($console) { Unregister-ScheduledTask -TaskName SuplexPackagedLaunch -Confirm:$false -ErrorAction SilentlyContinue }
 Stop-Process -Id $server.Id -Force -ErrorAction SilentlyContinue
 if ($failures -gt 0) { "$failures packaged check(s) failed"; exit 1 }
 "Packaged checks passed"

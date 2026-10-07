@@ -11,7 +11,10 @@ vmrun="/Applications/VMware Fusion.app/Contents/Library/vmrun"
 
 vm_setting() { grep "^$1=" "$vm_config" 2>/dev/null | cut -d= -f2-; }
 
-vm_ssh_options=(-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=10 -i "$vm_key")
+# A guest that accepts the connection and then stops answering ends the session within a minute
+# instead of hanging the build. Long builds stay connected: the keepalives get answers.
+vm_ssh_options=(-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=10
+  -o ServerAliveInterval=15 -o ServerAliveCountMax=4 -i "$vm_key")
 
 vmrun_command() {
   local password
@@ -48,7 +51,8 @@ vm_start() {
     perl -MPOSIX -e 'setsid(); exec @ARGV' -- bash -c "source '${BASH_SOURCE[0]}'; vmrun_command start \"\$1\" nogui" _ "$vmx" </dev/null >/dev/null 2>&1
   fi
   local waited=0
-  until vm_ip="$(vm_address "$vmx")" && [ -n "$vm_ip" ] && vm_ssh "echo ok" >/dev/null 2>&1; do
+  # perl's alarm bounds a login that hangs before any keepalive runs.
+  until vm_ip="$(vm_address "$vmx")" && [ -n "$vm_ip" ] && perl -e 'alarm 30; exec @ARGV' ssh "${vm_ssh_options[@]}" "$(vm_setting GUEST_USER)@$vm_ip" "echo ok" >/dev/null 2>&1; do
     waited=$((waited + 5))
     [ "$waited" -le 300 ] || { echo "The Windows build VM did not answer SSH within 5 minutes." >&2; return 1; }
     sleep 5

@@ -1,4 +1,4 @@
-//! suplex.sh: `/download`, `/install.sh`, `/terms`, `/privacy`, and a
+//! suplex.sh: `/download`, `/install.sh`, `/install.ps1`, `/terms`, `/privacy`, and a
 //! redirect to the website at getsuplex.ai, a Framer site, for every other
 //! path. The pages are compiled in; nothing is read from disk.
 
@@ -17,6 +17,7 @@ use crate::accounts::hosted::{Accounts, VISITOR_COOKIE, valid_visitor};
 
 const WEBSITE: &str = "https://getsuplex.ai/";
 const INSTALL_SCRIPT: &str = include_str!("../../../src/web/public/install.sh");
+const WINDOWS_INSTALL_SCRIPT: &str = include_str!("../../../src/web/public/install.ps1");
 const TERMS_PAGE: &str = include_str!("legal/terms.html");
 const PRIVACY_PAGE: &str = include_str!("legal/privacy.html");
 
@@ -94,7 +95,7 @@ async fn download(
     let source = headers
         .get(header::USER_AGENT)
         .and_then(|value| value.to_str().ok())
-        .is_some_and(|agent| agent.starts_with("curl/"));
+        .is_some_and(|agent| agent.starts_with("curl/") || agent.contains("PowerShell/"));
     let tracked = accounts.hosted.query(|db| {
         accounts.track(
             db,
@@ -142,13 +143,13 @@ pub fn remember_visitor(
     }
 }
 
-async fn install_script() -> Response {
+fn script(text: &'static str) -> Response {
     (
         [
             (header::CONTENT_TYPE, "text/plain; charset=utf-8"),
             (header::CACHE_CONTROL, "public, max-age=300"),
         ],
-        INSTALL_SCRIPT,
+        text,
     )
         .into_response()
 }
@@ -182,7 +183,11 @@ pub async fn redirect_www(State(origin): State<String>, request: Request, next: 
 pub fn router(accounts: Accounts) -> Router {
     Router::new()
         .route("/download", get(download))
-        .route("/install.sh", get(install_script))
+        .route("/install.sh", get(|| async { script(INSTALL_SCRIPT) }))
+        .route(
+            "/install.ps1",
+            get(|| async { script(WINDOWS_INSTALL_SCRIPT) }),
+        )
         .route("/terms", get(|| async { Html(TERMS_PAGE) }))
         .route("/privacy", get(|| async { Html(PRIVACY_PAGE) }))
         .fallback(website)

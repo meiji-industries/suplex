@@ -147,6 +147,13 @@ mod tests {
             "text/plain; charset=utf-8"
         );
         assert!(script.text().await.unwrap().starts_with("#!/bin/sh"));
+        let windows = f.get("/install.ps1", &[]).await;
+        assert_eq!(windows.status(), 200);
+        assert_eq!(
+            windows.headers()["content-type"],
+            "text/plain; charset=utf-8"
+        );
+        assert!(windows.text().await.unwrap().contains("function Install-Suplex"));
         assert_eq!(
             location(&f, "/", &[]).await,
             (302, "https://getsuplex.ai/".to_owned())

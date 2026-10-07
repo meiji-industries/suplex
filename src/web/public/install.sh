@@ -33,6 +33,7 @@ trap 'rm -rf "$TEMP_DIR"' EXIT
 case "$(uname -s)" in
     Darwin) install_macos ;;
     Linux) install_linux ;;
+    MINGW*|MSYS*|CYGWIN*) error "On Windows, run this in PowerShell instead: irm https://suplex.sh/install.ps1 | iex" ;;
     *) error "Suplex installs on macOS and Linux only." ;;
 esac
 }

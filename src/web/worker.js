@@ -6,7 +6,7 @@ export default {
 			if (response.status === 302) ctx.waitUntil(track(request, env, url));
 			return response;
 		}
-		if (url.pathname === "/install.sh") return env.ASSETS.fetch(request);
+		if (url.pathname === "/install.sh" || url.pathname === "/install.ps1") return env.ASSETS.fetch(request);
 		// The website is a Framer site on its own domain.
 		return Response.redirect("https://getsuplex.ai/", 302);
 	},
@@ -24,7 +24,7 @@ async function track(request, env, url) {
 			$process_person_profile: false,
 			$geoip_disable: true,
 			platform: url.searchParams.get("platform") ?? "macos-arm64",
-			source: request.headers.get("user-agent")?.startsWith("curl/") ? "install_script" : "browser",
+			source: /^curl\/|PowerShell\//.test(request.headers.get("user-agent") ?? "") ? "install_script" : "browser",
 		},
 	};
 	await fetch("https://us.i.posthog.com/batch/", {
@@ -40,6 +40,10 @@ const feeds = {
 	"macos-x64": { url: "https://downloads.meiji.industries/stable/mac/x64/", manifest: "latest-mac.yml", formats: ["dmg", "zip"] },
 	"linux-arm64": { url: "https://downloads.meiji.industries/stable/linux/arm64/", manifest: "latest-linux.yml", formats: ["tar.gz"] },
 	"linux-x64": { url: "https://downloads.meiji.industries/stable/linux/x64/", manifest: "latest-linux.yml", formats: ["tar.gz"] },
+	"linux-desktop-arm64": { url: "https://downloads.meiji.industries/stable/linux/arm64/", manifest: "latest-linux-desktop.yml", formats: ["deb", "rpm"] },
+	"linux-desktop-x64": { url: "https://downloads.meiji.industries/stable/linux/x64/", manifest: "latest-linux-desktop.yml", formats: ["deb", "rpm"] },
+	"windows-arm64": { url: "https://downloads.meiji.industries/stable/windows/arm64/", manifest: "latest-windows.yml", formats: ["exe"] },
+	"windows-x64": { url: "https://downloads.meiji.industries/stable/windows/x64/", manifest: "latest-windows.yml", formats: ["exe"] },
 };
 
 // Redirects to the file named in the live release manifest, so the link follows each release.

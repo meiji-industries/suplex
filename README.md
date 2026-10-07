@@ -144,10 +144,15 @@ On Linux, install the deb or rpm from
 `https://suplex.sh/download?platform=linux-desktop-x64&format=deb` (or `rpm`, or
 `linux-desktop-arm64`), for example `sudo apt install ./Suplex-<version>-linux-x64.deb`.
 It works like the Mac app, keeps its data in `~/.local/share/Suplex`, and needs
-Git installed first. On Windows, run the installer from
-`https://suplex.sh/download?platform=windows-x64` (or `windows-arm64`). The
-Windows app connects to a Suplex host on another computer; it cannot run one
-itself.
+Git installed first. On Windows, run this in PowerShell, or download the installer from
+`https://suplex.sh/download?platform=windows-x64` (or `windows-arm64`):
+
+```powershell
+irm https://suplex.sh/install.ps1 | iex
+```
+
+The Windows app connects to a Suplex host on another computer; it cannot run
+one itself.
 
 To run Suplex on a host from a checkout instead:
 

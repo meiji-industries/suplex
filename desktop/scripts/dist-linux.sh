@@ -39,9 +39,11 @@ NODE
 
 unset RUSTUP_TOOLCHAIN
 export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$desktop/src-tauri/target}"
+bundle="$CARGO_TARGET_DIR/$target/release/bundle"
+# The target dir is a persistent Docker volume; Tauri leaves earlier versions' packages in it.
+rm -rf "$bundle"
 tauri build --ci --target "$target" --bundles deb,rpm --config "$work/tauri.json"
 
-bundle="$CARGO_TARGET_DIR/$target/release/bundle"
 [ "$(ls "$bundle"/deb/*.deb | wc -l)" -eq 1 ] && [ "$(ls "$bundle"/rpm/*.rpm | wc -l)" -eq 1 ] || { echo "Expected one deb and one rpm in $bundle" >&2; exit 1; }
 cp "$bundle"/deb/*.deb "$release/Suplex-$version-linux-$arch.deb"
 cp "$bundle"/rpm/*.rpm "$release/Suplex-$version-linux-$arch.rpm"

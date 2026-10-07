@@ -42,8 +42,8 @@ export function ProjectCards({ projects, agents, onAdd }: { projects: readonly A
             <CardHeader><CardTitle><span className="flex min-w-0 items-center gap-2"><ProjectIcon project={project} /><span className="truncate">{project.name}</span></span></CardTitle></CardHeader>
             <CardContent>
             <div className="min-w-0">
-              <div className="flex min-w-0 flex-wrap items-center gap-1.5 font-medium text-[14px] leading-[20px]" title={project.repository}>{project.repository ? <ToolIcon tool="gh-auth" /> : null}<span className="min-w-0 truncate">{project.repository ?? "Repository unavailable"}</span><Badge variant="outline">{project.baseBranch}</Badge></div>
-              <div className="truncate text-muted-foreground text-[13px] leading-[18px]" title={project.repositoryPath}>{project.repositoryPath}</div>
+              <div className="flex min-w-0 flex-wrap items-center gap-1.5 font-medium text-sm" title={project.repository}>{project.repository ? <ToolIcon tool="gh-auth" /> : null}<span className="min-w-0 truncate">{project.repository ?? "Repository unavailable"}</span><Badge variant="outline">{project.baseBranch}</Badge></div>
+              <div className="truncate text-muted-foreground text-sm" title={project.repositoryPath}>{project.repositoryPath}</div>
             </div>
             <ProjectDefaultAgents project={project} agents={agents} />
             </CardContent>

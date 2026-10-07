@@ -77,7 +77,7 @@ export function CompanySwitcher(): ReactElement {
       <SidebarMenu><SidebarMenuItem><DropdownMenu>
         <DropdownMenuTrigger aria-label="Switch company" title="Switch company" render={<SidebarMenuButton className="data-[slot=sidebar-menu-button]:p-1.5! h-14" />}>
           {currentCompany ? <EntityAvatar kind="company" id={currentCompany.id} name={currentCompany.name} seed={currentCompany.name} size="sm" /> : <CircleGauge className="size-5!" />}
-          <span className="min-w-0 flex-1 truncate text-base font-semibold">{label}</span>
+          <span className="min-w-0 flex-1 truncate text-sm font-semibold">{label}</span>
           <PlanBadge plan={currentCompany?.plan} />
         </DropdownMenuTrigger>
         <DropdownMenuContent className="w-64" align="start">

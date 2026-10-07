@@ -120,7 +120,7 @@ function MoveRow({ move, project, tasks, onStart, onDelete }: { move: MoveRespon
   const lastRun = move.lastRun;
   return <DataListRow data-move-row>
     <a className="col-span-full row-start-1 grid min-w-0 grid-cols-subgrid items-center focus-visible:outline-2 focus-visible:outline-ring" href={withCompany(`/moves/${move.id}`, move.companyId)}>
-      <span className="flex min-w-0 items-center gap-2.5"><Zap aria-hidden="true" className={`size-3.5 shrink-0 ${lastRun?.live ? "text-primary motion-safe:animate-pulse" : "text-muted-foreground"}`} /><span className="truncate text-base text-foreground not-dark:font-medium">{move.name}</span></span>
+      <span className="flex min-w-0 items-center gap-2.5"><Zap aria-hidden="true" className={`size-3.5 shrink-0 ${lastRun?.live ? "text-primary motion-safe:animate-pulse" : "text-muted-foreground"}`} /><span className="truncate text-foreground not-dark:font-medium">{move.name}</span></span>
       <span className="hidden min-w-0 items-center gap-2 text-muted-foreground lg:flex"><ProjectLabel project={project} fallback="Not available" /></span>
       <span className="hidden text-muted-foreground lg:block">{runnerLabels[move.runner]}</span>
       <span className="hidden lg:flex">{lastRun ? <RunStatus run={lastRun} tasks={tasks} /> : <span className="text-muted-foreground">—</span>}</span>

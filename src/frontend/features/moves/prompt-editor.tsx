@@ -17,9 +17,9 @@ function highlighted(prompt: string): ReactNode[] {
 
 /** A shell script field, styled as a terminal: a highlighted copy sits under a transparent textarea of the same text. */
 export function ScriptEditor({ value, onChange, placeholder, disabled, label }: { value: string; onChange: (value: string) => void; placeholder: string; disabled: boolean; label: string }): ReactElement {
-  const shared = "whitespace-pre-wrap break-words py-2.5 pr-3 pl-8 font-mono text-[13px] leading-6";
+  const shared = "whitespace-pre-wrap break-words py-2.5 pr-3 pl-8 font-mono text-sm leading-6";
   return <div className="dark relative grid min-h-32 rounded-md border border-zinc-800 bg-zinc-950 text-zinc-100">
-    <span aria-hidden="true" className="pointer-events-none absolute top-2.5 left-3 font-mono text-[13px] leading-6 text-emerald-400 select-none">$</span>
+    <span aria-hidden="true" className="pointer-events-none absolute top-2.5 left-3 font-mono text-sm leading-6 text-emerald-400 select-none">$</span>
     <pre aria-hidden="true" className={cn(shared, "col-start-1 row-start-1 m-0 text-zinc-100")}>{highlighted(value)}{"\n"}</pre>
     <textarea
       aria-label={label}

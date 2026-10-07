@@ -23,7 +23,7 @@ export function TaskDeliveryProperty({ task, onChange }: { task: Task; onChange:
     finally { setPending(false); }
   };
   return <div className="space-y-1.5">
-    <dt className="text-muted-foreground text-[14px] dark:text-[#d1d1d1]">Delivery</dt>
+    <dt className="text-muted-foreground text-sm dark:text-[#d1d1d1]">Delivery</dt>
     <dd>{editable
       ? <Select value={task.deliveryTarget} disabled={pending} onValueChange={value => void change(value)}>
         <SelectTrigger size="sm" aria-label="Delivery target"><SelectValue>{label}</SelectValue></SelectTrigger>

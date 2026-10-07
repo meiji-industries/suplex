@@ -155,7 +155,7 @@ export function WorkflowSettingsView(): ReactElement {
               </CardAction>
             </CardHeader>
             <CardContent>
-              {workflow.description ? <p className="text-muted-foreground text-[14px] leading-[20px]">{workflow.description}</p> : null}
+              {workflow.description ? <p className="text-muted-foreground text-sm">{workflow.description}</p> : null}
               <WorkflowIllustration workflow={workflow.engine} delivery={workflow.engine === REPAIR ? "Merged pull request" : deliveryLabel(workflow.deliveryTarget)} />
               <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 text-xs text-muted-foreground">
                 {workflow.name !== workflowDefinition(workflow.engine).name ? <span>Built-in workflow <span className="text-foreground">{workflowDefinition(workflow.engine).name}</span></span> : null}

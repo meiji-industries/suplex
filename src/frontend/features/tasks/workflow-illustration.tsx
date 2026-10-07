@@ -23,7 +23,7 @@ const tones: Record<Tone, string> = {
 };
 
 function Label({ x, y, children, caption }: { x: number; y: number; children: ReactNode; caption?: string | undefined }) {
-  return <g textAnchor="middle" className="fill-foreground text-[13px] font-medium">
+  return <g textAnchor="middle" className="fill-foreground text-sm font-medium">
     <text x={x} y={y}>{children}</text>
     {caption ? <text x={x} y={y + 16} className="fill-muted-foreground text-xs font-normal">{caption}</text> : null}
   </g>;

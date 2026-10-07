@@ -366,7 +366,7 @@ function StepperTitle({ children, className }: React.ComponentProps<"h3">) {
     <h3
       data-slot="stepper-title"
       data-state={state}
-      className={cn("leading-none font-medium text-[16px]", className)}
+      className={cn("leading-none font-medium text-sm", className)}
     >
       {children}
     </h3>

@@ -43,7 +43,7 @@ export function SettingsDataTable({ label, columns, className, minWidth, childre
     <div className={cn("overflow-x-auto", className)}>
       <table aria-label={label} className="w-full table-fixed border-separate border-spacing-0 text-left" style={{ minWidth: width }}>
         <colgroup>{columns.map((column) => <col key={column.key} style={column.width ? { width: column.width } : undefined} />)}</colgroup>
-        <thead><tr className="h-9 font-medium text-muted-foreground text-[14px] dark:text-[#d1d1d1]">{columns.map((column) => <th className={cn("border-b px-3 font-medium", column.align === "center" && "text-center")} key={column.key} scope="col">{column.label}</th>)}</tr></thead>
+        <thead><tr className="h-9 font-medium text-muted-foreground text-sm dark:text-[#d1d1d1]">{columns.map((column) => <th className={cn("border-b px-3 font-medium", column.align === "center" && "text-center")} key={column.key} scope="col">{column.label}</th>)}</tr></thead>
         {children}
       </table>
     </div>

@@ -71,7 +71,7 @@ export function TaskAgent({ task, role, onChange, onActivityChange }: {
     } catch (cause) { setError(cause instanceof Error ? cause.message : `Suplex could not save the ${label}.`); }
     finally { setBusy(false); }
   };
-  return <div className="space-y-1.5"><dt className="text-muted-foreground text-[14px] dark:text-[#d1d1d1]">{label}</dt><dd>
+  return <div className="space-y-1.5"><dt className="text-muted-foreground text-sm dark:text-[#d1d1d1]">{label}</dt><dd>
     {eligible ? <Button type="button" size="sm" variant="ghost" disabled={busy} onClick={() => void openDialog()} aria-label={`Select ${label}`}><EntityAvatar kind="agent" id={profile.profileId} name={label} size="xs" /><span className="min-w-0 text-left"><span className="block truncate" title={`${profile.model} · ${profile.provider}`}>{profile.model}</span><span className="block text-xs text-muted-foreground">{profile.provider} · {profile.reasoningLevel}</span></span></Button>
       : <span className="flex items-center gap-2"><EntityAvatar kind="agent" id={profile.profileId} name={label} size="xs" /><span className="min-w-0"><span className="block truncate">{profile.model}</span><span className="block text-xs text-muted-foreground">{profile.provider} · {profile.reasoningLevel}</span></span></span>}
   </dd><Dialog open={open} onOpenChange={value => { if (!busy) setOpen(value); }}><DialogContent><DialogHeader><DialogTitle>Select {label}</DialogTitle></DialogHeader>

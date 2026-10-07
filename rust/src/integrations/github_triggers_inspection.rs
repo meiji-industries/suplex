@@ -302,10 +302,10 @@ pub async fn observe_repository(github: &Github, name: &str) -> GithubResult<Rep
     })
 }
 
-pub async fn validate_label(github: &Github, name: &str, label: &str) -> GithubResult<()> {
+pub async fn validate_label(github: &Github, name: &str, label: &str) -> GithubResult<bool> {
     label_valid(label)?;
-    let value = github
-        .get_json(
+    let Some(value) = github
+        .get_optional_json(
             &format!(
                 "/repos/{}/labels/{}",
                 repository(name)?,
@@ -313,11 +313,47 @@ pub async fn validate_label(github: &Github, name: &str, label: &str) -> GithubR
             ),
             "repository label validation",
         )
-        .await?;
+        .await?
+    else {
+        return Ok(false);
+    };
     match value.get("name").and_then(Value::as_str) {
-        Some(found) if !found.is_empty() && found == label => Ok(()),
+        Some(found) if !found.is_empty() && found == label => Ok(true),
         _ => Err(invalid("repository label")),
     }
+}
+
+pub async fn list_repository_labels(
+    github: &Github,
+    name: &str,
+) -> GithubResult<Vec<crate::http::contracts::typed::github_triggers::GithubRepositoryLabel>> {
+    let repo = repository(name)?;
+    let mut labels = Vec::new();
+    for page in 1.. {
+        let value = github
+            .get_json(
+                &format!("/repos/{repo}/labels?per_page=100&page={page}"),
+                "repository label enumeration",
+            )
+            .await?;
+        let rows: Vec<crate::http::contracts::typed::github_triggers::GithubRepositoryLabel> =
+            serde_json::from_value(value).map_err(|_| invalid("repository labels"))?;
+        if rows.len() > 100
+            || rows.iter().any(|label| {
+                label_valid(&label.name).is_err()
+                    || label.color.len() != 6
+                    || !label.color.bytes().all(|byte| byte.is_ascii_hexdigit())
+            })
+        {
+            return Err(invalid("repository labels"));
+        }
+        let last = rows.len() < 100;
+        labels.extend(rows);
+        if last {
+            break;
+        }
+    }
+    Ok(labels)
 }
 
 crate::shared::wire_enum! {

@@ -14,8 +14,8 @@ use crate::{
     http::{
         AppState,
         contracts::typed::github_triggers::{
-            GithubTriggerCompanyParams, GithubTriggerCreate, GithubTriggerParams,
-            GithubTriggerPatch,
+            GithubLabelsParams, GithubTriggerCompanyParams, GithubTriggerCreate,
+            GithubTriggerParams, GithubTriggerPatch,
         },
         validation::{Valid, ValidPath},
     },
@@ -29,6 +29,10 @@ use super::{auth, profiles::authorize};
 
 pub fn router() -> Router<AppState> {
     Router::new()
+        .route(
+            "/api/companies/{company_id}/projects/{project_id}/github-labels",
+            get(labels),
+        )
         .route(
             "/api/companies/{company_id}/github-triggers",
             get(list).post(create),
@@ -159,5 +163,26 @@ async fn activity(
     };
     let result = triggers::activity(&state, &user_id, &company_id, &rule_id)
         .map(|activity| json!({"activity": activity}));
+    respond(result, StatusCode::OK, cookies)
+}
+
+async fn labels(
+    State(state): State<AppState>,
+    ValidPath(GithubLabelsParams {
+        company_id,
+        project_id,
+    }): ValidPath<GithubLabelsParams>,
+    headers: HeaderMap,
+) -> Response {
+    let (user_id, cookies) = match authorize(&state, &headers, "GET", false) {
+        Ok(value) => value,
+        Err(response) => return *response,
+    };
+    let result = async {
+        let github = github().await?;
+        let labels = triggers::labels(&state, &github, &user_id, &company_id, &project_id).await?;
+        Ok(serde_json::to_value(labels)?)
+    }
+    .await;
     respond(result, StatusCode::OK, cookies)
 }

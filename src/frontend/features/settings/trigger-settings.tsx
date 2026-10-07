@@ -18,7 +18,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from ".
 import { Textarea } from "../../components/ui/textarea.js";
 import { taskDeliveryTargetOptions } from "../tasks/task-delivery-target.js";
 import { LoadingState } from "../../components/app/loading-state.js";
-import { listProjects } from "../projects/lib/project-api.js";
+import type { GithubLabelsResponse } from "../../contracts/generated/GithubLabelsResponse.js";
+import { listGithubLabels, listProjects } from "../projects/lib/project-api.js";
 
 const sortOrderOptions: Array<{ value: GithubTriggerSortOrder; label: string }> = [
   { value: "created_asc", label: "Oldest created first" },
@@ -61,6 +62,21 @@ export function TriggerSettingsView(): ReactElement {
   const [archiveTarget, setArchiveTarget] = useState<GithubTriggerRule | null>(null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const labelProjectId = editor.kind === "closed" ? "" : editor.draft.projectId;
+  const [labelResult, setLabelResult] = useState<{ projectId: string; response: GithubLabelsResponse | null } | null>(null);
+  useEffect(() => {
+    if (!companyId || !labelProjectId) return;
+    let closed = false;
+    void listGithubLabels(companyId, labelProjectId).then(
+      (response) => { if (!closed) setLabelResult({ projectId: labelProjectId, response }); },
+      () => { if (!closed) setLabelResult({ projectId: labelProjectId, response: null }); },
+    );
+    return () => { closed = true; };
+  }, [companyId, labelProjectId]);
+  const loadedLabels = labelResult?.projectId === labelProjectId ? labelResult : null;
+  const labelNames = loadedLabels?.response?.labels.map((label) => label.name) ?? [];
+  if (editor.kind === "edit" && editor.rule.projectId === labelProjectId && !labelNames.includes(editor.rule.label)) labelNames.unshift(editor.rule.label);
+
 
   const reload = async (): Promise<GithubTriggerRule[]> => {
     const [ruleResult, projectResult, workflowResult] = await Promise.all([
@@ -162,8 +178,8 @@ export function TriggerSettingsView(): ReactElement {
       {draft ? <form className="max-h-[70dvh] overflow-y-auto" onSubmit={(event) => { event.preventDefault(); void save(); }}><FieldGroup>
         {error ? <Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert> : null}
         <Field><FieldLabel htmlFor="trigger-name">Name</FieldLabel><Input id="trigger-name" autoFocus disabled={busy} value={draft.name} onChange={(event) => updateDraft({ name: event.target.value })} required /></Field>
-        <Field><FieldLabel htmlFor="trigger-project">Project</FieldLabel><Select disabled={busy || Boolean(editor.kind === "edit" && editor.rule.enabled)} value={draft.projectId} onValueChange={(value) => updateDraft({ projectId: value ?? "" })}><SelectTrigger id="trigger-project"><SelectValue placeholder="Select a project" /></SelectTrigger><SelectContent>{projects.filter((project) => project.repository).map((project) => <SelectItem key={project.id} value={project.id}>{project.name}</SelectItem>)}</SelectContent></Select>{editor.kind === "edit" && editor.rule.enabled ? <p className="text-xs text-muted-foreground">Disable the rule before you change the project.</p> : null}</Field>
-        <Field><FieldLabel htmlFor="trigger-label">Pull request label</FieldLabel><Input id="trigger-label" disabled={busy} value={draft.label} onChange={(event) => updateDraft({ label: event.target.value })} required /></Field>
+        <Field><FieldLabel htmlFor="trigger-project">Project</FieldLabel><Select disabled={busy || Boolean(editor.kind === "edit" && editor.rule.enabled)} value={draft.projectId} onValueChange={(value) => updateDraft({ projectId: value ?? "", label: editor.kind === "edit" && value === editor.rule.projectId ? editor.rule.label : "" })}><SelectTrigger id="trigger-project"><SelectValue placeholder="Select a project" /></SelectTrigger><SelectContent>{projects.filter((project) => project.repository).map((project) => <SelectItem key={project.id} value={project.id}>{project.name}</SelectItem>)}</SelectContent></Select>{editor.kind === "edit" && editor.rule.enabled ? <p className="text-xs text-muted-foreground">Disable the rule before you change the project.</p> : null}</Field>
+        <Field><FieldLabel htmlFor="trigger-label">Pull request label</FieldLabel><Select name="label" required disabled={busy || !draft.projectId} value={draft.label || null} onValueChange={(value) => updateDraft({ label: value ?? "" })}><SelectTrigger id="trigger-label"><SelectValue placeholder="Select a label" /></SelectTrigger><SelectContent>{labelNames.map((label) => <SelectItem key={label} value={label}>{label}</SelectItem>)}</SelectContent></Select>{loadedLabels && !loadedLabels.response ? <p className="text-xs text-muted-foreground">Suplex cannot load the repository labels.</p> : loadedLabels?.response?.labels.length === 0 ? <p className="text-xs text-muted-foreground">The GitHub repository has no labels.</p> : null}</Field>
         <Field><FieldLabel htmlFor="trigger-sort-order">Sort by</FieldLabel><Select disabled={busy} value={draft.sortOrder} onValueChange={(value) => updateDraft({ sortOrder: value as Draft["sortOrder"] })}><SelectTrigger id="trigger-sort-order"><SelectValue /></SelectTrigger><SelectContent>{sortOrderOptions.map((option) => <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>)}</SelectContent></Select></Field>
         <Field><FieldLabel htmlFor="trigger-workflow">Workflow</FieldLabel><Select disabled={busy} value={draft.workflowId} onValueChange={(value) => { const workflow = workflows.find((candidate) => candidate.id === value); updateDraft({ workflowId: value ?? "", deliveryTarget: workflow?.engine === "refine_pull_request" ? "merged" : workflow?.deliveryTarget ?? "pull_request_draft" }); }}><SelectTrigger id="trigger-workflow"><SelectValue placeholder="Select a workflow" /></SelectTrigger><SelectContent>{workflows.map((workflow) => <SelectItem key={workflow.id} value={workflow.id}>{workflow.name}</SelectItem>)}</SelectContent></Select></Field>
         <Field><FieldLabel htmlFor="trigger-delivery">Delivery</FieldLabel><Select disabled={busy || selectedWorkflow?.engine === "refine_pull_request"} value={draft.deliveryTarget} onValueChange={(value) => updateDraft({ deliveryTarget: value as Draft["deliveryTarget"] })}><SelectTrigger id="trigger-delivery"><SelectValue /></SelectTrigger><SelectContent>{taskDeliveryTargetOptions.map((option) => <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>)}</SelectContent></Select></Field>

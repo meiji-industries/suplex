@@ -1,6 +1,7 @@
 import { readJsonUnchecked } from "../../../lib/api.js";
 import type { ProjectResponse } from "../../../contracts/projects.js";
 import type { ProjectIntegration } from "../../../contracts/project-integration.js";
+import type { GithubLabelsResponse } from "../../../contracts/generated/GithubLabelsResponse.js";
 import type { RecentRepositories } from "../../../contracts/generated/RecentRepositories.js";
 
 const companyPath = (companyId: string, suffix: string): string =>
@@ -20,4 +21,8 @@ export function createProject(companyId: string, body: ProjectCreate): Promise<P
 /** Accessible repositories, newest pushed first. */
 export function listRecentRepositories(companyId: string, page = 1): Promise<RecentRepositories> {
   return readJsonUnchecked<RecentRepositories>(companyPath(companyId, `/recent-repositories?page=${page}`));
+}
+
+export function listGithubLabels(companyId: string, projectId: string): Promise<GithubLabelsResponse> {
+  return readJsonUnchecked<GithubLabelsResponse>(companyPath(companyId, `/projects/${encodeURIComponent(projectId)}/github-labels`));
 }

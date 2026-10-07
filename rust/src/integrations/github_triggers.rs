@@ -617,7 +617,12 @@ async fn provider(
     label: &str,
 ) -> Result<(i64, String), Failure> {
     let binding = observe_repository(github, repository).await?;
-    validate_label(github, &binding.full_name, label).await?;
+    if !validate_label(github, &binding.full_name, label).await? {
+        return Err(public(
+            "The label does not exist on the GitHub repository.",
+            422,
+        ));
+    }
     Ok((binding.id, binding.full_name))
 }
 
@@ -689,6 +694,39 @@ pub fn list<D: Db>(database: &D, user_id: &str, company_id: &str) -> Result<Vec<
         admin(database, user_id, company_id)?;
         list_rules(database, company_id)
     })
+}
+
+pub async fn labels<D: Db>(
+    database: &D,
+    github: &Github,
+    user_id: &str,
+    company_id: &str,
+    project_id: &str,
+) -> Result<crate::http::contracts::typed::github_triggers::GithubLabelsResponse, Failure> {
+    let repository = db(database, |database| {
+        admin(database, user_id, company_id)?;
+        let project = projects::get(database, user_id, project_id)?;
+        if project.company_id != company_id {
+            return Err(ProjectError::new("Not found", 404, vec![]).into());
+        }
+        if project.integration.as_ref().is_some_and(|integration| {
+            !matches!(integration.repository, RepositoryConnection::Github)
+        }) {
+            return Err(local_failure(
+                "The project does not use a GitHub repository.",
+                422,
+            ));
+        }
+        project
+            .repository
+            .ok_or_else(|| local_failure("Project repository is not configured", 422))
+    })?;
+    Ok(
+        crate::http::contracts::typed::github_triggers::GithubLabelsResponse {
+            labels: super::github_triggers_inspection::list_repository_labels(github, &repository)
+                .await?,
+        },
+    )
 }
 
 pub fn activity<D: Db>(
@@ -2407,13 +2445,72 @@ mod tests {
     #[tokio::test]
     async fn routes_create_disabled_rules_check_without_tasks_and_scope_access() {
         let f = fixture();
-        let (_, base, server) = fake_github(replies(&[])).await;
+        let replies = replies(&[]);
+        let first_page = (0..100).map(|index| json!({"name": format!("label-{index}"), "color": "abcdef", "description": null})).collect::<Vec<_>>();
+        replies.lock().unwrap().insert(
+            "/repos/owner/repo/labels?per_page=100&page=1".into(),
+            (200, json!(first_page)),
+        );
+        replies.lock().unwrap().insert(
+            "/repos/owner/repo/labels?per_page=100&page=2".into(),
+            (
+                200,
+                json!([{"name": "ready", "color": "123456", "description": "Run the workflow"}]),
+            ),
+        );
+        let (_, base, server) = fake_github(replies).await;
         *crate::http::routes::github_triggers::TEST_GITHUB_API
             .lock()
             .unwrap() = Some(base);
         let app = crate::http::router(f.state.clone());
         let cookie = Some(f.cookie.as_str());
         let payload = json!({"projectId":"p","name":" Ready ","label":"ready","workflowId":"workflow_native_standard","deliveryTarget":"pull_request_draft","protectedPaths":["src/"],"sortOrder":"labeled_asc"});
+        let mut missing = payload.clone();
+        missing["label"] = json!("missing");
+        let (status, _, body) = call(
+            &app,
+            "POST",
+            "/api/companies/c/github-triggers",
+            cookie,
+            Some(missing),
+        )
+        .await;
+        assert_eq!(
+            (status, json_body(&body)["error"].clone()),
+            (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                json!("The label does not exist on the GitHub repository.")
+            )
+        );
+        let labels_path = "/api/companies/c/projects/p/github-labels";
+        let (status, _, body) = call(&app, "GET", labels_path, cookie, None).await;
+        let labels = json_body(&body);
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(labels["labels"].as_array().unwrap().len(), 101);
+        assert_eq!(
+            labels["labels"][0],
+            json!({"name": "label-0", "color": "abcdef", "description": null})
+        );
+        assert_eq!(
+            labels["labels"][100],
+            json!({"name": "ready", "color": "123456", "description": "Run the workflow"})
+        );
+        assert_eq!(
+            call(&app, "GET", labels_path, None, None).await.0,
+            StatusCode::UNAUTHORIZED
+        );
+        assert_eq!(
+            call(
+                &app,
+                "GET",
+                "/api/companies/other/projects/p/github-labels",
+                cookie,
+                None
+            )
+            .await
+            .0,
+            StatusCode::NOT_FOUND
+        );
         let (status, _, body) = call(
             &app,
             "POST",
@@ -2446,6 +2543,22 @@ mod tests {
             )
         );
         let id = created["id"].as_str().unwrap().to_owned();
+        let (status, _, body) = call(
+            &app,
+            "PATCH",
+            &format!("/api/companies/c/github-triggers/{id}"),
+            cookie,
+            Some(json!({"label": "missing", "expectedRevision": 1})),
+        )
+        .await;
+        assert_eq!(
+            (status, json_body(&body)["error"].clone()),
+            (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                json!("The label does not exist on the GitHub repository.")
+            )
+        );
+
         let (status, _, body) = call(
             &app,
             "POST",
@@ -2577,6 +2690,18 @@ mod tests {
                 StatusCode::FORBIDDEN,
                 json!("Administrator access required")
             )
+        );
+        assert_eq!(
+            call(
+                &app,
+                "GET",
+                labels_path,
+                Some(&format!("sid_v1={member}")),
+                None
+            )
+            .await
+            .0,
+            StatusCode::FORBIDDEN
         );
         *crate::http::routes::github_triggers::TEST_GITHUB_API
             .lock()

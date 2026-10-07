@@ -1175,6 +1175,30 @@ impl Github {
         self.value("GET", path, None, operation).await
     }
 
+    pub(crate) async fn get_optional_json(
+        &self,
+        path: &str,
+        operation: &str,
+    ) -> GithubResult<Option<Value>> {
+        match self
+            .api(
+                "GET",
+                path,
+                None,
+                operation,
+                StatusHandling {
+                    allow_not_found: true,
+                    ..StatusHandling::default()
+                },
+            )
+            .await?
+        {
+            Api::NotFound => Ok(None),
+            Api::Json(body) => parse_json(&body).map(Some),
+            Api::Accepted { .. } => unreachable!("no accepted statuses"),
+        }
+    }
+
     /// TypeScript `api`: one GitHub request with the source's failure classes.
     async fn api(
         &self,

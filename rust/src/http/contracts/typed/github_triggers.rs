@@ -107,3 +107,29 @@ impl Contract for GithubTriggerCompanyParams {
         params(input, &["companyId"], (1, 128))
     }
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GithubLabelsParams {
+    pub company_id: String,
+    pub project_id: String,
+}
+
+impl Contract for GithubLabelsParams {
+    fn schema(input: Option<&Value>) -> ContractResult<Value> {
+        params(input, &["companyId", "projectId"], (1, 128))
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ts_rs::TS)]
+pub struct GithubRepositoryLabel {
+    pub name: String,
+    pub color: String,
+    pub description: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, ts_rs::TS)]
+#[ts(export)]
+pub struct GithubLabelsResponse {
+    pub labels: Vec<GithubRepositoryLabel>,
+}

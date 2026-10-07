@@ -1,61 +1,48 @@
-import { archiveTask, isArchiveConfirmation } from "./lib/task-api.js";
-import { useEffect, useState, type ReactElement } from "react";
+import { closeArchiveReview, confirmArchiveReview, startTaskArchive, useArchiveReview, type ArchiveTarget } from "./lib/background-archive.js";
+import type { ReactElement } from "react";
 import type { Task } from "../../contracts/tasks.js";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "../../components/ui/alert-dialog.js";
 import { ScrollArea } from "../../components/ui/scroll-area.js";
 
-type ArchiveConfirmation = { kind: "confirm" } | { kind: "discard"; dirtyFileCount: number; dirtyFilePaths: string[] };
-
-export function ArchiveTaskDialog({ task, open, onOpenChange, onArchived, onError }: {
-  task: Pick<Task, "id">;
+/** Confirms an archive, closes, and leaves the request to run in the background. */
+export function ArchiveTaskDialog({ task, open, onOpenChange, onArchived }: {
+  task: ArchiveTarget;
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onArchived: (task: Task) => void;
-  onError: (error: string) => void;
 }): ReactElement {
-  const [confirmation, setConfirmation] = useState<ArchiveConfirmation | null>(null);
-  const [busy, setBusy] = useState(false);
-  const current = open ? confirmation ?? { kind: "confirm" as const } : null;
-
-  useEffect(() => {
-    setConfirmation(open ? { kind: "confirm" } : null);
-  }, [open]);
-
-  const confirmArchive = async (): Promise<void> => {
-    if (busy || !current) return;
-    setBusy(true);
-    onError("");
-    try {
-      const result = await archiveTask(task.id, current.kind === "discard");
-      if (isArchiveConfirmation(result)) {
-        setConfirmation({ kind: "discard", dirtyFileCount: result.dirtyFileCount, dirtyFilePaths: result.dirtyFilePaths });
-        return;
-      }
-      setConfirmation(null);
-      onOpenChange(false);
-      onArchived(result);
-    } catch (error) {
-      setConfirmation(null);
-      onOpenChange(false);
-      onError(error instanceof Error ? error.message : "The task could not be archived.");
-    } finally {
-      setBusy(false);
-    }
+  const confirmArchive = (): void => {
+    onOpenChange(false);
+    startTaskArchive({ id: task.id, ...(task.title ? { title: task.title } : {}) }, { onArchived });
   };
-
-  return <AlertDialog open={current !== null} onOpenChange={nextOpen => { if (!nextOpen && !busy) { setConfirmation(null); onOpenChange(false); } }}>
+  return <AlertDialog open={open} onOpenChange={onOpenChange}>
     <AlertDialogContent><AlertDialogHeader>
-      <AlertDialogTitle>{current?.kind === "discard" ? `Discard ${current.dirtyFileCount} uncommitted ${current.dirtyFileCount === 1 ? "change" : "changes"} and archive?` : "Archive task?"}</AlertDialogTitle>
-      <AlertDialogDescription>{current?.kind === "discard" ? "These uncommitted changes will be deleted. Suplex keeps the branch, commits, and task history." : "Suplex removes the local worktree and hides the task. Suplex keeps the branch, commits, and task history."}</AlertDialogDescription>
+      <AlertDialogTitle>Archive task?</AlertDialogTitle>
+      <AlertDialogDescription>Suplex removes the local worktree and hides the task. Suplex keeps the branch, commits, and task history.</AlertDialogDescription>
     </AlertDialogHeader>
-    {current?.kind === "discard" ? <ScrollArea aria-label="Uncommitted files" className="max-h-64">
-      <ul className="space-y-1 pr-3 text-xs" role="list">
-        {current.dirtyFilePaths.map(path => <li className="break-all font-mono" key={path}>{path}</li>)}
-      </ul>
-    </ScrollArea> : null}
     <AlertDialogFooter>
-      <AlertDialogCancel disabled={busy}>Cancel</AlertDialogCancel>
-      <AlertDialogAction disabled={busy} onClick={() => void confirmArchive()}>{busy ? "Archiving…" : current?.kind === "discard" ? "Discard changes and archive" : "Archive task"}</AlertDialogAction>
+      <AlertDialogCancel>Cancel</AlertDialogCancel>
+      <AlertDialogAction onClick={confirmArchive}>Archive task</AlertDialogAction>
+    </AlertDialogFooter></AlertDialogContent>
+  </AlertDialog>;
+}
+
+/** Shows the uncommitted changes of a background archive. The app mounts it once, so it works after the page that started the archive is gone. */
+export function ArchiveReviewDialog(): ReactElement {
+  const review = useArchiveReview();
+  return <AlertDialog open={review !== null} onOpenChange={nextOpen => { if (!nextOpen) closeArchiveReview(); }}>
+    <AlertDialogContent><AlertDialogHeader>
+      <AlertDialogTitle>{review ? `Discard ${review.dirtyFileCount} uncommitted ${review.dirtyFileCount === 1 ? "change" : "changes"} and archive?` : "Archive task?"}</AlertDialogTitle>
+      <AlertDialogDescription>These uncommitted changes will be deleted. Suplex keeps the branch, commits, and task history.</AlertDialogDescription>
+    </AlertDialogHeader>
+    <ScrollArea aria-label="Uncommitted files" className="max-h-64">
+      <ul className="space-y-1 pr-3 text-xs" role="list">
+        {review?.dirtyFilePaths.map(path => <li className="break-all font-mono" key={path}>{path}</li>)}
+      </ul>
+    </ScrollArea>
+    <AlertDialogFooter>
+      <AlertDialogCancel>Cancel</AlertDialogCancel>
+      <AlertDialogAction onClick={() => { if (review) confirmArchiveReview(review); }}>Discard changes and archive</AlertDialogAction>
     </AlertDialogFooter></AlertDialogContent>
   </AlertDialog>;
 }

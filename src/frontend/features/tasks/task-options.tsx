@@ -48,7 +48,12 @@ export function TaskOptions({ task, onChange, onError }: { task: Task; onChange:
     {!terminal ? <DropdownMenuItem disabled={busy} onClick={() => void act("cancel")}><Square />Cancel task</DropdownMenuItem> : null}
      {terminal || task.status === "backlog" || task.status === "queued" ? <DropdownMenuItem disabled={busy} onClick={() => task.archivedAt ? void act("unarchive") : setArchiveOpen(true)}>{task.archivedAt ? <ArchiveRestore /> : <Archive />}{task.archivedAt ? "Open from archive" : "Archive task"}</DropdownMenuItem> : null}
    </DropdownMenuContent></DropdownMenu>
-      <ArchiveTaskDialog task={task} open={archiveOpen} onOpenChange={setArchiveOpen} onArchived={archived => { onChange(archived); navigate(withCompany("/tasks", task.companyId)); }} onError={onError} />
+      <ArchiveTaskDialog task={task} open={archiveOpen} onOpenChange={setArchiveOpen} onArchived={archived => {
+        onChange(archived);
+        // The archive can finish after you leave this task. Move to the list only from the archived task page.
+        const list = window.location.pathname === `/board/${task.id}` ? "/board" : window.location.pathname === `/tasks/${task.id}` ? "/tasks" : null;
+        if (list) navigate(withCompany(list, task.companyId));
+      }} />
       <Dialog open={renameOpen} onOpenChange={open => { if (!busy) setRenameOpen(open); }}><DialogContent showCloseButton={false}><DialogHeader><DialogTitle>Rename task</DialogTitle></DialogHeader><form className="grid gap-6" onSubmit={event => { event.preventDefault(); void rename(); }}><Input aria-label="Task title" autoFocus disabled={busy} value={title} onChange={event => setTitle(event.target.value)} required /><DialogFooter><Button type="button" variant="outline" disabled={busy} onClick={() => setRenameOpen(false)}>Cancel</Button><Button type="submit" disabled={busy}>{busy ? "Renaming…" : "Rename"}</Button></DialogFooter></form></DialogContent></Dialog>
       {draft ? <NewTaskDialog open onOpenChange={open => { if (!open) setDraft(null); }} companyId={task.companyId} initialDraft={draft} onCreated={created => { setDraft(null); navigate(withCompany(`/tasks/${created.id}`, created.companyId)); }} /> : null}</>;
 }

@@ -7,7 +7,7 @@ import { nativeBrowser } from "./helpers/native-browser.js";
 
 const run = promisify(execFile);
 
-test("archive confirms dirty cleanup and returns to tasks", { timeout: 45_000 }, async () => {
+test("archive runs in the background, confirms dirty cleanup, and returns to tasks", { timeout: 45_000 }, async () => {
   const f = await nativeBrowser();
   const git = async (...args: string[]) => (await run("git", ["-C", f.project.repositoryPath, ...args])).stdout.trim();
   try {
@@ -26,7 +26,10 @@ test("archive confirms dirty cleanup and returns to tasks", { timeout: 45_000 },
     await f.page.getByRole("button", { name: "Task options" }).click();
     await f.page.getByRole("menuitem", { name: "Archive task", exact: true }).click();
     const dialog = f.page.getByRole("alertdialog");
+    const dirtyToast = f.page.locator("[data-sonner-toast]").filter({ hasText: '"Archive example" has 1 uncommitted change' });
     await dialog.getByRole("button", { name: "Archive task", exact: true }).click();
+    await dialog.waitFor({ state: "hidden" });
+    await dirtyToast.getByRole("button", { name: "Review", exact: true }).click();
     await dialog.getByRole("heading", { name: "Discard 1 uncommitted change and archive?" }).waitFor();
     await dialog.getByLabel("Uncommitted files").getByText(dirtyFilePath, { exact: true }).waitFor();
     expect((await f.api("GET", `/api/tasks/${task.id}`)).body).toMatchObject({ archivedAt: null });
@@ -38,8 +41,11 @@ test("archive confirms dirty cleanup and returns to tasks", { timeout: 45_000 },
     await f.page.getByRole("button", { name: "Task options" }).click();
     await f.page.getByRole("menuitem", { name: "Archive task", exact: true }).click();
     await dialog.getByRole("button", { name: "Archive task", exact: true }).click();
+    await dirtyToast.getByRole("button", { name: "Review", exact: true }).click();
     await dialog.getByRole("heading", { name: "Discard 1 uncommitted change and archive?" }).waitFor();
     await dialog.getByRole("button", { name: "Discard changes and archive", exact: true }).click();
+    await dialog.waitFor({ state: "hidden" });
+    await f.page.locator("[data-sonner-toast]").filter({ hasText: 'Suplex archived "Archive example"' }).waitFor();
     await f.page.waitForURL(url => url.pathname === "/tasks");
     expect((await f.api("GET", `/api/tasks/${task.id}`)).body).not.toMatchObject({ archivedAt: null });
     await expect(access(worktree)).rejects.toThrow();

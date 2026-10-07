@@ -2,7 +2,7 @@
   "name": "suplex-mobile",
   "productName": "Suplex",
   "private": true,
-  "version": "1.5.0",
+  "version": "1.6.0",
   "scripts": {
     "tauri": "tauri",
     "typecheck": "env -u RUSTUP_TOOLCHAIN cargo check --manifest-path src-tauri/Cargo.toml --all-targets",

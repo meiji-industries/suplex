@@ -127,7 +127,7 @@ export function useSystemHealth(): SystemHealthContextValue {
 
 export function SystemHealthAlert(): ReactElement | null {
   const health = useContext(SystemHealthContext);
-  const failed = health?.snapshot?.checks.find(check => (isOwnedHealthCheck(check.id) || window.location.pathname !== "/setup" && isRequiredHealthCheck(check.id)) && check.status === "unhealthy");
+  const failed = health?.snapshot?.checks.find(check => (isOwnedHealthCheck(check.id) || !["/setup", "/onboarding"].includes(window.location.pathname) && isRequiredHealthCheck(check.id)) && check.status === "unhealthy");
   if (!failed) return null;
   return (
     <div data-system-health-alert className="border-b px-4 py-3 lg:px-6">

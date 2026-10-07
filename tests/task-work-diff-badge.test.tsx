@@ -22,7 +22,7 @@ const task = {
   dependsOn: [], createdAt: "2026-09-08T00:00:00.000Z", updatedAt: "2026-09-08T00:00:00.000Z", statusChangedAt: "2026-09-08T00:00:00.000Z", queuePriority: 0, archivedAt: null,
 } satisfies Task;
 
-const activity = { sessions: [], turns: [], shellPaneId: null } satisfies TaskActivity;
+const activity = { sessions: [], turns: [], setup: { state: "none", exitStatus: null }, shellPaneId: null } satisfies TaskActivity;
 
 function serve(summary: { available: boolean; files: number } | Error) {
   api.readJsonUnchecked.mockImplementation(async (url: string) => {

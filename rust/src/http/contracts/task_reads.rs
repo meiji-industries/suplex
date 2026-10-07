@@ -125,12 +125,14 @@ pub struct TaskAgent {
 #[derive(Serialize, TS)]
 #[ts(export)]
 pub struct TaskAgentsResponse {
+    pub setup: crate::tasks::preparation::TaskSetup,
     pub agents: Vec<TaskAgent>,
 }
 
 #[derive(Clone, PartialEq, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct TaskAgents {
+    pub setup: crate::tasks::preparation::TaskSetup,
     pub task_id: String,
     pub agents: Vec<TaskAgent>,
 }
@@ -141,10 +143,18 @@ pub struct TaskAgentsBatchResponse {
     pub tasks: Vec<TaskAgents>,
 }
 
+#[derive(serde::Serialize, ts_rs::TS)]
+#[ts(export)]
+pub struct TaskSetupLogResponse {
+    pub setup: crate::tasks::preparation::TaskSetup,
+    pub output: String,
+}
+
 #[derive(Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export)]
 pub struct TaskActivityResponse {
+    pub setup: crate::tasks::preparation::TaskSetup,
     pub sessions: Vec<TaskActivitySession>,
     pub turns: Vec<TaskActivityTurn>,
     pub shell_pane_id: Option<String>,

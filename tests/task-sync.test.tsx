@@ -219,7 +219,7 @@ test("a company change closes the socket, sends no stale watch, and ignores late
   expect(sockets()[1]?.sent).toEqual([{ type: "watch", agentTaskIds: ["c"], openTaskId: null }]);
   expect(first?.sent).toHaveLength(1);
   await emit(first, { type: "snapshot", tasks: [row("a", "Company A")], moves: [], costs: [] });
-  await emit(first, { type: "agents", tasks: [{ taskId: "c", agents: [agent("working")] }] });
+  await emit(first, { type: "agents", tasks: [{ taskId: "c", setup: { state: "none", exitStatus: null }, agents: [agent("working")] }] });
   expect(titles()).toEqual(["c"]);
   expect(agentRows).toEqual([]);
 });
@@ -266,13 +266,13 @@ function detail(title: string, updatedAt = "2026-09-08T00:00:00.000Z", changes: 
 }
 function agent(status: string) { return { id: "agent-1", role: "root", advisorRole: null, label: "Coordinator", paneId: null, status, statusChangedAt: null }; }
 const cost = (value: number) => ({ id: "a", cost: value, partial: false, subsidized: false, unpriced: false });
-const activity = (shellPaneId: string) => ({ sessions: [], turns: [], shellPaneId });
+const activity = (shellPaneId: string) => ({ sessions: [], turns: [], setup: { state: "none" as const, exitStatus: null }, shellPaneId });
 const pullRequest = (headSha: string) => ({ repository: "owner/repo", number: 1, url: "https://github.com/owner/repo/pull/1", headSha, state: "open", mergedAt: null }) satisfies Task["pullRequest"];
 
 let served: { task: Task; agent: string; shell: string; cost: number };
 function body(url: string): unknown {
   if (url.endsWith("/api/tasks/a")) return served.task;
-  if (url.includes("/task-agents?")) return { tasks: [{ taskId: "a", agents: [agent(served.agent)] }] };
+  if (url.includes("/task-agents?")) return { tasks: [{ taskId: "a", setup: { state: "none", exitStatus: null }, agents: [agent(served.agent)] }] };
   if (url.endsWith("/task-costs")) return { tasks: [cost(served.cost)] };
   if (url.endsWith("/activity")) return activity(served.shell);
   if (url.endsWith("/execution")) return { sessions: [] };
@@ -319,7 +319,7 @@ test("agent, open task, and cost frames reach the components and stop their poll
   expect(sockets()[0]?.sent).toEqual([watch(["a"])]);
 
   await emit(sockets()[0], { type: "snapshot", tasks: listed, moves: [], costs: [cost(2)] });
-  await emit(sockets()[0], { type: "agents", tasks: [{ taskId: "a", agents: [agent("idle")] }] });
+  await emit(sockets()[0], { type: "agents", tasks: [{ taskId: "a", setup: { state: "none", exitStatus: null }, agents: [agent("idle")] }] });
   await emit(sockets()[0], { type: "openTask", taskId: "a", task: detail("Pushed", "2026-09-09T00:00:00.000Z"), activity: activity("pushed"), execution: { sessions: [] }, timeline: { tasks: [], unavailableSessions: 2 } });
   expect(seen).toEqual({ title: "Pushed", agent: "idle", shell: "pushed", unavailable: 2, cost: 2 });
   await emit(sockets()[0], { type: "changes", tasks: [], removedTaskIds: [], costs: [cost(3)] });
@@ -357,7 +357,7 @@ test("a read in flight does not replace a pushed value", async () => {
   await renderPage(url => slow.some(suffix => url.endsWith(suffix)) ? new Promise<Response>(resolve => pending.push(() => resolve(respond(url)))) : Promise.resolve(respond(url)));
   const socket = sockets()[0];
   await emit(socket, { type: "snapshot", tasks: listed, moves: [], costs: [cost(2)] });
-  await emit(socket, { type: "agents", tasks: [{ taskId: "a", agents: [agent("idle")] }] });
+  await emit(socket, { type: "agents", tasks: [{ taskId: "a", setup: { state: "none", exitStatus: null }, agents: [agent("idle")] }] });
   await emit(socket, { type: "openTask", taskId: "a", task: detail("Pushed"), activity: activity("pushed") });
   expect(pending).toHaveLength(4);
   await act(async () => { for (const release of pending) release(); });

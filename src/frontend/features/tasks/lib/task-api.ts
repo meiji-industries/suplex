@@ -1,3 +1,4 @@
+import type { TaskSetupLogResponse } from "../../../contracts/generated/TaskSetupLogResponse.js";
 import { readJsonUnchecked } from "../../../lib/api.js";
 import type { Task, TaskInput } from "../../../contracts/tasks.js";
 import type { TaskListTask } from "../../../contracts/task-responses.js";
@@ -162,4 +163,8 @@ export async function readTaskDiff(taskId: string, signal: AbortSignal): Promise
   const result = await readJsonUnchecked<TaskDiffResponse>(taskPath(taskId, "/diff"), { signal });
   TaskDiffResponseSchema.parse(result);
   return result;
+}
+
+export function readTaskSetupLog(taskId: string, signal: AbortSignal): Promise<TaskSetupLogResponse> {
+  return readJsonUnchecked<TaskSetupLogResponse>(taskPath(taskId, "/setup/log"), { signal });
 }

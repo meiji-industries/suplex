@@ -3,15 +3,16 @@
 //! setup command in the task worktree under the shared resource lock.
 
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     io,
     os::unix::{fs::DirBuilderExt, process::ExitStatusExt},
     path::{Path, PathBuf},
     process::Stdio,
-    sync::LazyLock,
+    sync::{LazyLock, Mutex},
     time::Duration,
 };
 
+use crate::http::contracts::task_reads::TaskSetupLogResponse;
 use regex::Regex;
 use rusqlite::OptionalExtension;
 use serde_json::{Value, json};
@@ -48,6 +49,84 @@ pub fn task_preparation_directory(database_path: &Path, task_id: &str) -> io::Re
         .unwrap_or(Path::new("."))
         .join("runtime/task-preparation")
         .join(task_id))
+}
+
+crate::shared::wire_enum! {
+    pub enum SetupState {
+        None = "none",
+        Running = "running",
+        Succeeded = "succeeded",
+        Failed = "failed",
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize, ts_rs::TS)]
+#[serde(rename_all = "camelCase")]
+pub struct TaskSetup {
+    pub state: SetupState,
+    pub exit_status: Option<String>,
+}
+
+static RUNNING_SETUPS: LazyLock<Mutex<HashSet<PathBuf>>> =
+    LazyLock::new(|| Mutex::new(HashSet::new()));
+
+struct RunningSetup(PathBuf);
+impl Drop for RunningSetup {
+    fn drop(&mut self) {
+        RUNNING_SETUPS.lock().expect("setup lock").remove(&self.0);
+    }
+}
+
+/// Display observations only. Completion is recorded by the setup runner.
+pub fn read_setup(database_path: &Path, task_id: &str) -> io::Result<TaskSetup> {
+    let directory = task_preparation_directory(database_path, task_id)?;
+    if RUNNING_SETUPS
+        .lock()
+        .expect("setup lock")
+        .contains(&directory)
+    {
+        return Ok(TaskSetup {
+            state: SetupState::Running,
+            exit_status: None,
+        });
+    }
+    if !directory.join("setup.log").try_exists()? {
+        return Ok(TaskSetup {
+            state: SetupState::None,
+            exit_status: None,
+        });
+    }
+    if let Some(text) = crate::shared::fs::read_optional(&directory.join("setup-result.json"))? {
+        return serde_json::from_str(&text).map_err(io::Error::other);
+    }
+    // Logs from hosts predating setup-result.json retain their original outcome.
+    let context =
+        crate::shared::fs::read_optional(&directory.join("context.md"))?.unwrap_or_default();
+    let status = context.lines().find_map(|line| {
+        line.strip_prefix("Configured setup exited ")?
+            .split_once(". Full output:")
+            .map(|(status, _)| status.to_owned())
+    });
+    Ok(TaskSetup {
+        state: if status.as_deref() == Some("0") {
+            SetupState::Succeeded
+        } else {
+            SetupState::Failed
+        },
+        exit_status: Some(status.unwrap_or_else(|| "not recorded".into())),
+    })
+}
+
+pub fn read_setup_log(database_path: &Path, task_id: &str) -> io::Result<TaskSetupLogResponse> {
+    let directory = task_preparation_directory(database_path, task_id)?;
+    // Read completion first so a final response always includes the final output.
+    let setup = read_setup(database_path, task_id)?;
+    let output = match std::fs::read(directory.join("setup.log")) {
+        Ok(bytes) => String::from_utf8_lossy(&bytes).into_owned(),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => String::new(),
+        Err(error) => return Err(error),
+    };
+    Ok(TaskSetupLogResponse { setup, output })
 }
 
 /// Inherited tooling variables without secrets, then the project's own values.
@@ -231,7 +310,53 @@ pub async fn prepare_project_workspace(input: Preparation<'_>) -> io::Result<()>
     }
     if !input.setup_command.trim().is_empty() {
         let log = directory.join("setup.log");
-        match run_setup(&input, &log).await {
+        crate::shared::fs::write_private(
+            &directory.join("context.md"),
+            context.join("\n\n").as_bytes(),
+        )?;
+        RUNNING_SETUPS
+            .lock()
+            .expect("setup lock")
+            .insert(directory.clone());
+        let _running = RunningSetup(directory.clone());
+        let result_path = directory.join("setup-result.json");
+        if result_path.try_exists()? {
+            std::fs::remove_file(&result_path)?;
+        }
+        crate::shared::fs::write_private(&log, b"")?;
+        let result = run_setup(&input, &log).await;
+        if let Ok(outcome) = &result
+            && !outcome.stderr.is_empty()
+        {
+            use std::io::Write;
+            std::fs::OpenOptions::new()
+                .append(true)
+                .open(&log)?
+                .write_all(outcome.stderr.as_bytes())?;
+        }
+        let setup = match &result {
+            Ok(outcome) => TaskSetup {
+                state: if outcome.success {
+                    SetupState::Succeeded
+                } else {
+                    SetupState::Failed
+                },
+                exit_status: Some(outcome.status.clone()),
+            },
+            Err(error) => {
+                use std::io::Write;
+                writeln!(
+                    std::fs::OpenOptions::new().append(true).open(&log)?,
+                    "Setup could not finish: {error}"
+                )?;
+                TaskSetup {
+                    state: SetupState::Failed,
+                    exit_status: Some("not recorded".into()),
+                }
+            }
+        };
+        crate::shared::fs::write_private(&result_path, &serde_json::to_vec(&setup)?)?;
+        match result {
             Ok(outcome) => {
                 context.push(format!(
                     "Configured setup exited {}. Full output: {}.",
@@ -435,6 +560,74 @@ mod tests {
         assert!(context.contains("Configured setup exited 7"));
         assert!(context.contains("Delegate a bounded repair"));
         assert!(context.contains("fixture-failure"));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn setup_observation_reads_live_completion_and_restart_logs() {
+        let root =
+            std::env::temp_dir().join(format!("suplex-setup-observation-{}", uuid::Uuid::new_v4()));
+        let worktree = root.join("worktree");
+        std::fs::create_dir_all(&worktree).unwrap();
+        let database = root.join("suplex.sqlite");
+        assert_eq!(
+            read_setup(&database, "task").unwrap().state,
+            SetupState::None
+        );
+        let directory = task_preparation_directory(&database, "task").unwrap();
+        let execution = json!({});
+        let preparation = prepare_project_workspace(Preparation {
+            database_path: &database,
+            task_id: "task",
+            directory: &worktree,
+            execution: &execution,
+            setup_command: "printf first; sleep 0.1; printf last; exit 7",
+            excluded_environment_keys: &[],
+        });
+        let observe = async {
+            for _ in 0..100 {
+                if directory.join("setup.log").exists() {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+            assert_eq!(
+                read_setup(&database, "task").unwrap().state,
+                SetupState::Running
+            );
+        };
+        let (result, _) = tokio::join!(preparation, observe);
+        result.unwrap();
+        let log = read_setup_log(&database, "task").unwrap();
+        assert_eq!(log.setup.state, SetupState::Failed);
+        assert_eq!(log.setup.exit_status.as_deref(), Some("7"));
+        assert_eq!(log.output, "firstlast");
+        prepare_project_workspace(Preparation {
+            database_path: &database,
+            task_id: "task",
+            directory: &worktree,
+            execution: &execution,
+            setup_command: "printf success",
+            excluded_environment_keys: &[],
+        })
+        .await
+        .unwrap();
+        assert_eq!(
+            read_setup(&database, "task").unwrap().state,
+            SetupState::Succeeded
+        );
+        // Both completion and legacy context survive without an in-memory process.
+        std::fs::remove_file(directory.join("setup-result.json")).unwrap();
+        assert_eq!(
+            read_setup(&database, "task").unwrap().state,
+            SetupState::Succeeded
+        );
+        std::fs::remove_file(directory.join("context.md")).unwrap();
+        assert_eq!(
+            read_setup(&database, "task").unwrap().state,
+            SetupState::Failed
+        );
+        assert_eq!(read_setup_log(&database, "task").unwrap().output, "success");
         std::fs::remove_dir_all(root).unwrap();
     }
 

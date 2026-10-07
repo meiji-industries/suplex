@@ -6,6 +6,7 @@ import { Avatar, AvatarFallback, AvatarGroup } from "../../../components/ui/avat
 import { EntityAvatar } from "../../../components/app/entity-avatar.js";
 import { ProviderIcon, providerIcons } from "../../../components/app/provider-icons.js";
 import { roleLabel } from "../workflow-presentation.js";
+import { SetupLog } from "./setup-log.js";
 import { SessionHistory } from "./session-history.js";
 import { sessionHistoryLabels } from "./session-history-state.js";
 
@@ -34,12 +35,13 @@ function saveHeight(height: number): void {
 }
 
 export function LivePaneDock({ taskId, activity }: { taskId: string; activity: TaskActivity }) {
+  const setup = activity.setup.state !== "none";
   const sessions = activity.sessions.filter(session => session.nativeSessionId || (session.current && session.paneId));
   const shell = activity.shellPaneId || sessions.some(session => session.current) ? { id: shellTabId } : null;
   const [selectedSessionId, setSelectedSessionId] = useState<string>();
   const [view, setView] = useState<AgentOutputView>("live");
   const selected = sessions.find(session => session.id === selectedSessionId) ?? sessions.find(session => session.current && session.kind === "worker") ?? sessions.find(session => session.current) ?? sessions.at(-1);
-  const selectedTab = selectedSessionId === shellTabId && shell ? shellTabId : selected?.id ?? (shell ? shellTabId : undefined);
+  const selectedTab = selectedSessionId === "setup" && setup ? "setup" : selectedSessionId === shellTabId && shell ? shellTabId : selected?.id ?? (setup ? "setup" : shell ? shellTabId : undefined);
   const labels = sessionHistoryLabels(sessions);
   const [height, setHeight] = useState(readHeight);
   const resize = useRef<{ originY: number; height: number } | null>(null);
@@ -75,13 +77,14 @@ export function LivePaneDock({ taskId, activity }: { taskId: string; activity: T
         <div className="min-w-0 flex-1 overflow-x-auto">
           <TabsList variant="line" className="h-9 gap-0 rounded-none p-0">
             {shell ? <TabsTrigger value={shellTabId} className={sessionTabClassName}><SquareTerminal className="size-3.5" /><span className="max-w-40 truncate">Shell</span></TabsTrigger> : null}
+            {setup ? <TabsTrigger value="setup" className={sessionTabClassName}><SquareTerminal className="size-3.5" /><span className="max-w-40 truncate">Setup</span></TabsTrigger> : null}
             {sessions.map(session => {
               const label = labels.get(session.id) ?? roleLabel(session);
               return <TabsTrigger key={session.id} value={session.id} className={sessionTabClassName} aria-label={label}><SessionAvatars profileId={session.profileId} label={label} {...(session.harness ? { harness: session.harness } : {})} /><span className="max-w-40 truncate">{label}</span></TabsTrigger>;
             })}
           </TabsList>
         </div>
-        {selectedTab !== shellTabId && selected ? <div className="flex shrink-0 items-center border-l border-border px-1" aria-label="Session output">
+        {selectedTab !== "setup" && selectedTab !== shellTabId && selected ? <div className="flex shrink-0 items-center border-l border-border px-1" aria-label="Session output">
           <button type="button" className="h-7 rounded-sm px-2 text-xs text-muted-foreground hover:text-foreground aria-pressed:bg-background aria-pressed:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring" aria-pressed={view === "live" || !selected.current || !selected.paneId} onClick={() => setView("live")}>Live</button>
           <button type="button" className="h-7 rounded-sm px-2 text-xs text-muted-foreground hover:text-foreground aria-pressed:bg-background aria-pressed:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50" aria-pressed={view === "mirror" && selected.current && !!selected.paneId} disabled={!selected.current || !selected.paneId} onClick={() => setView("mirror")}>Mirror</button>
         </div> : null}
@@ -89,6 +92,7 @@ export function LivePaneDock({ taskId, activity }: { taskId: string; activity: T
       {shell ? <TabsContent className="mt-0 flex min-h-0 min-w-0 overflow-hidden" value={shellTabId}>
         <Suspense fallback={null}><LivePaneTerminal taskId={taskId} role="shell" paneId={activity.shellPaneId} /></Suspense>
       </TabsContent> : null}
+      {setup ? <TabsContent value="setup" className="mt-0 flex min-h-0 min-w-0 overflow-hidden"><SetupLog key={taskId} taskId={taskId} setup={activity.setup} /></TabsContent> : null}
       {sessions.map(session => <TabsContent key={session.id} className="mt-0 flex min-h-0 min-w-0 overflow-hidden" value={session.id}>
         {view === "mirror" && session.current && session.paneId
           ? <Suspense fallback={null}><LivePaneTerminal taskId={taskId} role={session.kind} paneId={session.paneId} /></Suspense>

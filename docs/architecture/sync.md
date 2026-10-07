@@ -39,7 +39,7 @@ of every subscribed company and the stored values of every open task.
 | Projects | Company | Commit that changes a project of the company | `projects`, whole | `projectsKey(user, company)` |
 | Agents of watched tasks | Watch | Each observer pass (1 s) | `agents`, one entry per changed task | Each `["task-agents", user, company, ids]` batch that holds the task |
 | Open task | Watch | Commit | `openTask.task` | `taskObservationKey(...)` + `"task"` |
-| Open task activity | Watch | Commit, or its task Shell opens or closes | `openTask.activity` | `+ "activity"` |
+| Open task activity | Watch | Commit, its task Shell opens or closes, or setup state changes | `openTask.activity` | `+ "activity"` |
 | Open task execution and timeline | Watch | Every second observer pass (2 s) | `openTask.execution`, `openTask.timeline` | `+ "execution"`, `+ "timeline"` |
 
 Each pushed value is the body of its HTTP endpoint; the route tests compare
@@ -60,6 +60,7 @@ remaining id sends nothing.
 
 | Request | Interval | Why it is not pushed |
 | --- | --- | --- |
+| Task setup log | 1 s while setup runs or a read fails | Reads the setup log from the preparation directory. Stops after the runner records completion. |
 | [Checks](../../src/frontend/features/tasks/lib/task-checks.ts) | 15 s while a run is pending or the read failed, else 60 s. Read again when the pull request number, state, or head SHA of the task changes. | The route reads GitHub at request time. |
 | [Diff summary and patch](../../src/frontend/features/tasks/lib/task-queries.ts) | 5 s, or 60 s while the socket is live. Read again when a pushed task or execution changes, at most one time in 5 s. | The route reads the worktree; the feed has no worktree signal. |
 | [A move run that is not the last run](../../src/frontend/features/moves/move-run.tsx) | 3 s | The feed carries only each move's last run. |

@@ -315,7 +315,16 @@ fn tail(path: &Path, terminals: &HostTerminals, subscriptions: &Arc<Mutex<Subscr
                     let task = subscriptions.tasks.get(&id)?;
                     // The Shell terminal registry is in memory, so no commit
                     // reports that the task Shell opened or closed.
-                    let stale = !task.database_read
+                    let setup_changed = crate::tasks::preparation::read_setup(path, &id)
+                        .ok()
+                        .is_some_and(|setup| {
+                            task.open
+                                .activity
+                                .as_ref()
+                                .is_none_or(|activity| activity.setup != setup)
+                        });
+                    let stale = setup_changed
+                        || !task.database_read
                         || task.shell_live != terminals.contains(&crate::terminals::shell_id(&id));
                     Some((id, stale, task.open.clone()))
                 })
@@ -343,13 +352,14 @@ fn tail(path: &Path, terminals: &HostTerminals, subscriptions: &Arc<Mutex<Subscr
                         let task = repository::task_response(database, &id).ok().flatten();
                         let activity = root_session_store::root_observation_rows(database, &id)
                             .ok()
-                            .map(|rows| {
+                            .and_then(|rows| {
                                 task_reads::activity_document(
                                     database,
                                     &rows,
                                     &id,
                                     host.then_some(terminals),
                                 )
+                                .ok()
                             });
                         let task = kept_json(previous.task, task);
                         let activity = kept_json(previous.activity, activity);
@@ -445,7 +455,7 @@ fn observe(path: &Path, subscriptions: &Mutex<Subscriptions>) {
                 .map(|(id, previous)| {
                     let next = task_agents::saved_task(database, &id)
                         .ok()
-                        .map(|task| task_agents::agents(&task, path, host));
+                        .and_then(|task| task_agents::agents(&task, path, host).ok());
                     let next = match (previous, next) {
                         (Some(previous), Some(next)) if *previous == next => Some(previous),
                         (previous, next) => next.map(Arc::new).or(previous),

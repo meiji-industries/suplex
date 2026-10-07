@@ -20,7 +20,10 @@ export type TaskListTask = TaskListItem;
 
 export const TaskHarnessKindSchema = HarnessKindSchema;
 
+export const TaskSetupSchema = z.object({ state: z.enum(["none", "running", "succeeded", "failed"]), exitStatus: z.string().nullable() });
+
 export const TaskActivityResponseSchema = z.object({
+  setup: TaskSetupSchema,
   sessions: z.array(z.object({ id: z.string(), kind: TaskSessionKindSchema, advisorRole: AdvisorRoleSchema.nullable(), label: z.string(), profileId: z.string(), harness: TaskHarnessKindSchema.optional(), generation: z.number(), nativeSessionId: z.string().nullable(), paneId: z.string().nullable(), current: z.boolean(), replacement: WorkerReplacementSchema.nullable().optional() })),
   turns: z.array(z.object({ id: z.string(), sessionId: z.string(), prompt: z.string(), status: TaskTurnStatusSchema, promptedAt: z.string().datetime().nullable(), completedAt: z.string().datetime().nullable(), result: z.string().nullable(), assignment: z.object({ mode: z.enum(["planned", "direct"]), purpose: z.enum(["implementation", "verification"]), plan: z.string().nullable(), acceptanceCriteria: z.array(z.string()), instruction: z.string() }).nullable() })),
   shellPaneId: z.string().nullable(),
@@ -32,9 +35,9 @@ export const TaskDiffSummaryResponseSchema = z.object({ available: z.boolean(), 
 
 export const TaskAgentStatusSchema = z.enum(["queued", "working", "retrying", "idle", "waiting_human", "stopped", "unknown"]);
 
-export const TaskAgentsResponseSchema = z.object({ agents: z.array(z.object({ id: z.string(), role: TaskSessionKindSchema, advisorRole: AdvisorRoleSchema.nullable().optional(), label: z.string().optional(), paneId: z.string().nullable(), status: TaskAgentStatusSchema, statusChangedAt: z.string().datetime().nullable() })) });
+export const TaskAgentsResponseSchema = z.object({ setup: TaskSetupSchema, agents: z.array(z.object({ id: z.string(), role: TaskSessionKindSchema, advisorRole: AdvisorRoleSchema.nullable().optional(), label: z.string().optional(), paneId: z.string().nullable(), status: TaskAgentStatusSchema, statusChangedAt: z.string().datetime().nullable() })) });
 
-export const TaskAgentsBatchResponseSchema = z.object({ tasks: z.array(z.object({ taskId: z.string(), agents: TaskAgentsResponseSchema.shape.agents })) });
+export const TaskAgentsBatchResponseSchema = z.object({ tasks: z.array(z.object({ taskId: z.string(), setup: TaskSetupSchema, agents: TaskAgentsResponseSchema.shape.agents })) });
 
 export const TaskChecksResponseSchema = z.object({
   available: z.boolean(),

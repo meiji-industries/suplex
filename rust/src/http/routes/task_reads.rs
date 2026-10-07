@@ -51,6 +51,10 @@ pub fn router() -> Router<AppState> {
             "/api/tasks/{task_id}/activity",
             get(activity).layer(CompressionLayer::new()),
         )
+        .route(
+            "/api/tasks/{task_id}/setup/log",
+            get(setup_log).layer(CompressionLayer::new()),
+        )
         .route("/api/tasks/{task_id}/execution", get(execution))
         .route("/api/tasks/{task_id}/diff", get(diff))
         .route("/api/tasks/{task_id}/diff/summary", get(diff_summary))
@@ -210,7 +214,7 @@ pub(crate) fn activity_document(
     rows: &RootObservationRows,
     task_id: &str,
     host: Option<&HostTerminals>,
-) -> TaskActivityResponse {
+) -> Result<TaskActivityResponse, Box<dyn Error>> {
     let sessions = rows
         .sessions
         .iter()
@@ -254,7 +258,17 @@ pub(crate) fn activity_document(
             note_agent_name: note_agent_name(database, &turn.prompt_text),
         })
         .collect::<Vec<_>>();
-    TaskActivityResponse {
+    Ok(TaskActivityResponse {
+        setup: crate::tasks::preparation::read_setup(
+            PathBuf::from(
+                database
+                    .connection()
+                    .path()
+                    .ok_or("Task database has no file path")?,
+            )
+            .as_path(),
+            task_id,
+        )?,
         sessions,
         turns,
         shell_pane_id: terminals::shell_pane(
@@ -263,7 +277,7 @@ pub(crate) fn activity_document(
             rows.control.worktree_path(),
             rows.control.shell_pane_id.as_ref(),
         ),
-    }
+    })
 }
 
 pub(crate) fn execution_document(
@@ -342,6 +356,33 @@ pub(crate) fn execution_document(
     Ok(TaskExecutionResponse { sessions })
 }
 
+async fn setup_log(
+    State(state): State<AppState>,
+    ValidPath(TaskIdParams { task_id }): ValidPath<TaskIdParams>,
+    headers: HeaderMap,
+) -> Response {
+    let (user_id, cookies) = match authorize(&state, &headers) {
+        Ok(value) => value,
+        Err(response) => return *response,
+    };
+    let path = match state.with_database(|database| read_task(database, &user_id, &task_id)) {
+        Ok((_, path)) => path,
+        Err(error) => return respond::<()>(Err(error), cookies),
+    };
+    let read_id = task_id.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        crate::tasks::preparation::read_setup_log(&path, &read_id)
+    })
+    .await;
+    let result = result
+        .map_err(|error| Box::new(error) as Box<dyn Error>)
+        .and_then(|result| result.map_err(|error| Box::new(error) as Box<dyn Error>));
+    let result = state
+        .with_database(|database| read_task(database, &user_id, &task_id))
+        .and(result);
+    respond(result, cookies)
+}
+
 async fn activity(
     State(state): State<AppState>,
     ValidPath(TaskIdParams { task_id }): ValidPath<TaskIdParams>,
@@ -353,12 +394,12 @@ async fn activity(
     };
     let result = state.with_database(|database| -> Result<TaskActivityResponse, Box<dyn Error>> {
         let (rows, _) = read_task(database, &user_id, &task_id)?;
-        Ok(activity_document(
+        activity_document(
             database,
             &rows,
             &task_id,
             terminals::host_enabled(database).then_some(&*state.host_terminals),
-        ))
+        )
     });
     respond(result, cookies)
 }

@@ -30,7 +30,7 @@ import { showWorktreeMenu, TaskWorktreeMenu } from "./task-worktree-menu.js";
 import { workflowDefinition } from "./workflow-presentation.js";
 import { copyToClipboard } from "../../lib/clipboard.js";
 
-const emptyActivity: TaskActivity = { sessions: [], turns: [], shellPaneId: null };
+const emptyActivity: TaskActivity = { setup: { state: "none", exitStatus: null }, sessions: [], turns: [], shellPaneId: null };
 
 function CopyValue({ label, value, children }: { label: string; value: string; children: ReactElement }): ReactElement {
   const [copied, setCopied] = useState(false);

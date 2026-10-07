@@ -160,7 +160,11 @@ fn iso_timestamp(value: f64) -> Option<String> {
 }
 
 /// `host` derives terminal ids for host terminals instead of stored Herdr panes.
-pub(crate) fn agents(task: &AgentTask, database_path: &std::path::Path, host: bool) -> TaskAgents {
+pub(crate) fn agents(
+    task: &AgentTask,
+    database_path: &std::path::Path,
+    host: bool,
+) -> std::io::Result<TaskAgents> {
     let agents = task
         .rows
         .sessions
@@ -207,10 +211,11 @@ pub(crate) fn agents(task: &AgentTask, database_path: &std::path::Path, host: bo
             }
         })
         .collect();
-    TaskAgents {
+    Ok(TaskAgents {
+        setup: crate::tasks::preparation::read_setup(database_path, &task.id)?,
         task_id: task.id.clone(),
         agents,
-    }
+    })
 }
 
 fn database_path(database: &SuplexDatabase) -> Result<PathBuf, Box<dyn Error>> {
@@ -241,14 +246,17 @@ async fn task_agents(
         Ok(value) => value,
         Err(error) => return respond::<()>(Err(error), cookies),
     };
-    let result = match tokio::task::spawn_blocking(move || TaskAgentsResponse {
-        agents: agents(&task_snapshot, &database_path, host).agents,
+    let result = match tokio::task::spawn_blocking(move || {
+        agents(&task_snapshot, &database_path, host).map(|result| TaskAgentsResponse {
+            agents: result.agents,
+            setup: result.setup,
+        })
     })
     .await
     {
         Ok(value) => state
             .with_database(|database| task(database, &user_id, &task_id))
-            .map(|_| value),
+            .and_then(|_| value.map_err(|error| Box::new(error) as Box<dyn Error>)),
         Err(error) => Err(Box::new(error) as Box<dyn Error>),
     };
     respond(result, cookies)
@@ -282,11 +290,12 @@ async fn company_task_agents(
         tasks
             .iter()
             .map(|task| agents(task, &database_path, host))
-            .collect::<Vec<_>>()
+            .collect::<std::io::Result<Vec<_>>>()
     })
     .await
     {
-        Ok(value) => value,
+        Ok(Ok(value)) => value,
+        Ok(Err(error)) => return respond::<()>(Err(Box::new(error)), cookies),
         Err(error) => return respond::<()>(Err(Box::new(error)), cookies),
     };
     let result = state

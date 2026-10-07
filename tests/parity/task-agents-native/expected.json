@@ -20,7 +20,11 @@
                 "status": "unknown",
                 "statusChangedAt": null
               }
-            ]
+            ],
+            "setup": {
+              "state": "none",
+              "exitStatus": null
+            }
           },
           {
             "taskId": "task_c3cf1a285a254fdf88bf2cd93b0d66a7",
@@ -34,7 +38,11 @@
                 "status": "idle",
                 "statusChangedAt": "2026-09-25T12:34:56.000Z"
               }
-            ]
+            ],
+            "setup": {
+              "state": "none",
+              "exitStatus": null
+            }
           },
           {
             "taskId": "task_db685ad6da4d48309e3f7cce3127578b",
@@ -48,7 +56,11 @@
                 "status": "queued",
                 "statusChangedAt": null
               }
-            ]
+            ],
+            "setup": {
+              "state": "none",
+              "exitStatus": null
+            }
           }
         ]
       },
@@ -67,7 +79,11 @@
             "status": "unknown",
             "statusChangedAt": null
           }
-        ]
+        ],
+        "setup": {
+          "state": "none",
+          "exitStatus": null
+        }
       },
       "cacheControl": "private, no-store"
     },
@@ -84,7 +100,11 @@
             "status": "idle",
             "statusChangedAt": "2026-09-25T12:34:56.000Z"
           }
-        ]
+        ],
+        "setup": {
+          "state": "none",
+          "exitStatus": null
+        }
       },
       "cacheControl": "private, no-store"
     },
@@ -141,7 +161,11 @@
                 "status": "unknown",
                 "statusChangedAt": null
               }
-            ]
+            ],
+            "setup": {
+              "state": "none",
+              "exitStatus": null
+            }
           },
           {
             "taskId": "task_db685ad6da4d48309e3f7cce3127578b",
@@ -155,7 +179,11 @@
                 "status": "queued",
                 "statusChangedAt": null
               }
-            ]
+            ],
+            "setup": {
+              "state": "none",
+              "exitStatus": null
+            }
           }
         ]
       },
@@ -174,7 +202,11 @@
             "status": "unknown",
             "statusChangedAt": null
           }
-        ]
+        ],
+        "setup": {
+          "state": "none",
+          "exitStatus": null
+        }
       },
       "cacheControl": "private, no-store"
     }

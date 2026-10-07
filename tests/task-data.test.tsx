@@ -148,7 +148,7 @@ test("agent batches keep the previous result across an id change in the same sco
   vi.stubGlobal("fetch", vi.fn(async (url: string) => {
     if (url.includes("/tasks?")) return new Response(JSON.stringify({ tasks: [task("a"), task("b")] }));
     if (!url.includes("/task-agents?")) throw new Error(`Unexpected request: ${url}`);
-    if (++batchCalls === 1) return new Response(JSON.stringify({ tasks: [{ taskId: "a", agents: [agent] }] }));
+    if (++batchCalls === 1) return new Response(JSON.stringify({ tasks: [{ taskId: "a", setup: { state: "none", exitStatus: null }, agents: [agent] }] }));
     return new Promise<Response>(resolve => { release = resolve; });
   }));
   const render = (ids: string[]) => root.render(<QueryClientProvider client={client}><Agents ids={ids} /></QueryClientProvider>);
@@ -156,7 +156,7 @@ test("agent batches keep the previous result across an id change in the same sco
   expect(container.textContent).toContain("working");
   await act(async () => render(["a", "b"]));
   expect(container.textContent).toContain("working");
-  await act(async () => release?.(new Response(JSON.stringify({ tasks: [{ taskId: "a", agents: [{ ...agent, status: "idle" }] }] }))));
+  await act(async () => release?.(new Response(JSON.stringify({ tasks: [{ taskId: "a", setup: { state: "none", exitStatus: null }, agents: [{ ...agent, status: "idle" }] }] }))));
   expect(container.textContent).toContain("idle");
   expect(container.textContent).not.toContain("working");
   scope.companyId = "company-b";
@@ -170,8 +170,8 @@ test("agent placeholders survive membership changes but clear on a user change",
   let release: ((response: Response) => void) | undefined;
   vi.stubGlobal("fetch", () => new Promise<Response>(resolve => { release = resolve; }));
   const batch = (includeB: boolean) => new Response(JSON.stringify({ tasks: [
-    { taskId: "a", agents: [{ id: "agent-a", role: "root", paneId: null, status: "working", statusChangedAt: null }] },
-    ...(includeB ? [{ taskId: "b", agents: [{ id: "agent-b", role: "worker", paneId: null, status: "retrying", statusChangedAt: null }] }] : []),
+    { taskId: "a", setup: { state: "none", exitStatus: null }, agents: [{ id: "agent-a", role: "root", paneId: null, status: "working", statusChangedAt: null }] },
+    ...(includeB ? [{ taskId: "b", setup: { state: "none", exitStatus: null }, agents: [{ id: "agent-b", role: "worker", paneId: null, status: "retrying", statusChangedAt: null }] }] : []),
   ] }));
   const render = (ids: string[]) => root.render(<QueryClientProvider client={client}><Agents ids={ids} /></QueryClientProvider>);
   await act(async () => render(["a"]));

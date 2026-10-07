@@ -30,7 +30,11 @@
           "assignment": null
         }
       ],
-      "shellPaneId": null
+      "shellPaneId": null,
+      "setup": {
+        "state": "none",
+        "exitStatus": null
+      }
     },
     "cacheControl": "private, no-store"
   },

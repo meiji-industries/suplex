@@ -396,7 +396,7 @@ pub(crate) mod tests {
                 &task_agents::saved_task(&database, &task_id).unwrap(),
                 &path,
                 false
-            ))
+            ).unwrap())
             .unwrap()
         );
         assert_eq!(first.agents[0].agents[0].status, TaskAgentStatus::Queued);
@@ -406,7 +406,7 @@ pub(crate) mod tests {
         );
         assert_eq!(
             value(&first.open.activity),
-            serde_json::to_value(task_reads::activity_document(&database, &rows, &task_id, None)).unwrap()
+            serde_json::to_value(task_reads::activity_document(&database, &rows, &task_id, None).unwrap()).unwrap()
         );
         assert_eq!(
             value(&first.open.execution),
@@ -452,6 +452,45 @@ pub(crate) mod tests {
             stopped.agents[0].agents[0].status_changed_at.as_deref(),
             Some("2026-01-01T00:00:00.000Z")
         );
+        let preparation =
+            crate::tasks::preparation::task_preparation_directory(&path, &task_id).unwrap();
+        fs::create_dir_all(&preparation).unwrap();
+        fs::write(preparation.join("setup.log"), "setup failed").unwrap();
+        fs::write(
+            preparation.join("setup-result.json"),
+            r#"{"state":"failed","exitStatus":"7"}"#,
+        )
+        .unwrap();
+        let setup_changed = wait_watched(&receiver, |watched| {
+            watched.open.activity.as_ref().is_some_and(|activity| {
+                activity.setup.state == crate::tasks::preparation::SetupState::Failed
+            })
+        });
+        assert_eq!(
+            setup_changed
+                .open
+                .activity
+                .as_ref()
+                .unwrap()
+                .setup
+                .exit_status
+                .as_deref(),
+            Some("7")
+        );
+        let setup_changed = wait_watched(&receiver, |watched| {
+            watched.agents[0].setup.state == crate::tasks::preparation::SetupState::Failed
+        });
+        assert_eq!(
+            setup_changed.agents[0].setup.exit_status.as_deref(),
+            Some("7")
+        );
+        fs::remove_dir_all(preparation).unwrap();
+        wait_watched(&receiver, |watched| {
+            watched.open.activity.as_ref().is_some_and(|activity| {
+                activity.setup.state == crate::tasks::preparation::SetupState::None
+            })
+        });
+
         drop(receiver);
         fs::remove_dir_all(directory).unwrap();
     }

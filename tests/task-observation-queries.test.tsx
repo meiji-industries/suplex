@@ -34,7 +34,7 @@ afterEach(async () => {
   vi.useRealTimers(); vi.unstubAllGlobals(); vi.restoreAllMocks();
 });
 
-const activity = (shellPaneId: string | null = null) => ({ sessions: [], turns: [], shellPaneId });
+const activity = (shellPaneId: string | null = null) => ({ sessions: [], turns: [], setup: { state: "none" as const, exitStatus: null }, shellPaneId });
 function Activity({ id }: { id: string }) {
   const query = useTaskActivity(id);
   return <div>{query.data?.shellPaneId}{query.error?.message}</div>;

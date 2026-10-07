@@ -186,6 +186,7 @@ mod tests {
         let path = database.clone();
         let agents = tokio::task::spawn_blocking(move || agents(&task, &path, false))
             .await
+            .unwrap()
             .unwrap();
         assert_eq!(agents.agents[0].status, TaskAgentStatus::Working);
         std::fs::remove_dir_all(root).unwrap();

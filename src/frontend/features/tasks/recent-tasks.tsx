@@ -67,7 +67,7 @@ function RecentTasksContent({ close, costs }: { close?: () => void; costs: Retur
         </span>
       </a>} isActive={window.location.pathname === `/tasks/${task.id}`} tooltip={`${task.title}${task.blockedBy.length ? ` · ${blockedByLabel(task.blockedBy)}` : ""}`} />
       {task.pullRequest ? <RecentPullRequest taskId={task.id} title={task.title} number={task.pullRequest.number} state={task.pullRequest.state} headSha={task.pullRequest.headSha} status={task.status} archivedAt={task.archivedAt} onArchived={cacheTask} /> : null}
-      <RecentTaskAgents agents={(agents.data?.find(row => row.taskId === task.id)?.agents ?? []).map(agent => agents.isError ? { ...agent, status: "unknown" } : agent)} />
+      <RecentTaskAgents setup={agents.data?.find(row => row.taskId === task.id)?.setup} agents={(agents.data?.find(row => row.taskId === task.id)?.agents ?? []).map(agent => agents.isError ? { ...agent, status: "unknown" } : agent)} />
     </SidebarMenuItem>;
   })}</SidebarMenu></SidebarGroupContent></SidebarGroup>;
 }

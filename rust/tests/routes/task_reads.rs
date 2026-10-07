@@ -18,7 +18,7 @@ mod tests {
         )*};
     }
 
-    task_path!(activity, execution, diff_summary, diff);
+    task_path!(activity, execution, diff_summary, diff, setup_log);
     use crate::http::session;
     use crate::{
         platform::database::{OpenMode, SuplexDatabase},
@@ -83,7 +83,10 @@ mod tests {
             },
         );
         let mut headers = HeaderMap::new();
-        headers.insert(crate::http::session::VERIFIED_HTTPS_HEADER, "1".parse().unwrap());
+        headers.insert(
+            crate::http::session::VERIFIED_HTTPS_HEADER,
+            "1".parse().unwrap(),
+        );
         headers.insert("host", HeaderValue::from_static("suplex.example.test:4113"));
         assert_eq!(
             activity(State(state.clone()), Path("".into()), headers.clone())
@@ -111,6 +114,27 @@ mod tests {
             .unwrap(),
             json!({"available":false,"patch":"","truncated":false})
         );
+        let preparation =
+            crate::tasks::preparation::task_preparation_directory(&database_path, &task.id)
+                .unwrap();
+        fs::create_dir_all(&preparation).unwrap();
+        fs::write(preparation.join("setup.log"), "setup error output").unwrap();
+        fs::write(
+            preparation.join("setup-result.json"),
+            r#"{"state":"failed","exitStatus":"7"}"#,
+        )
+        .unwrap();
+        let setup_response =
+            setup_log(State(state.clone()), Path(task.id.clone()), headers.clone()).await;
+        assert_eq!(setup_response.status(), StatusCode::OK);
+        let setup_document: Value = serde_json::from_slice(
+            &to_bytes(setup_response.into_body(), usize::MAX)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(setup_document["output"], "setup error output");
+        assert_eq!(setup_document["setup"]["exitStatus"], "7");
         let activity_response =
             activity(State(state.clone()), Path(task.id.clone()), headers.clone()).await;
         assert_eq!(activity_response.status(), StatusCode::OK);
@@ -122,6 +146,20 @@ mod tests {
             .await
             .unwrap();
         let document: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(
+            document["setup"],
+            json!({"state":"failed","exitStatus":"7"})
+        );
+        let agents = state.with_database(|database| {
+            super::super::task_agents::saved_task(database, &task.id).unwrap()
+        });
+        assert_eq!(
+            super::super::task_agents::agents(&agents, &database_path, false)
+                .unwrap()
+                .setup
+                .state,
+            crate::tasks::preparation::SetupState::Failed
+        );
         assert_eq!(document["sessions"][0]["id"], root_session.id);
         assert_eq!(document["sessions"][0]["profileId"], "profile_root");
         assert_eq!(document["sessions"][0]["harness"], "codex");
@@ -689,7 +727,9 @@ mod tests {
             runtime.join("turn-msg_ui_read.jsonl"),
         )
         .unwrap();
-        let token = crate::http::routes::auth::tests::verified_session(&database, &user_id, Utc::now()).unwrap();
+        let token =
+            crate::http::routes::auth::tests::verified_session(&database, &user_id, Utc::now())
+                .unwrap();
         let state = AppState::new(
             database,
             session::SessionConfig {
@@ -699,7 +739,10 @@ mod tests {
             },
         );
         let mut headers = HeaderMap::new();
-        headers.insert(crate::http::session::VERIFIED_HTTPS_HEADER, "1".parse().unwrap());
+        headers.insert(
+            crate::http::session::VERIFIED_HTTPS_HEADER,
+            "1".parse().unwrap(),
+        );
         headers.insert("host", HeaderValue::from_static("127.0.0.1:4111"));
         headers.insert(
             "cookie",
@@ -765,8 +808,14 @@ mod tests {
         // Continuation, Advisor, and legacy turns carry no Worker assignment.
         assert_eq!(worker_assignment(None), None);
         assert_eq!(worker_assignment(Some(&Value::Null)), None);
-        assert_eq!(worker_assignment(Some(&json!({"kind":"advisor","role":"rater"}))), None);
-        assert_eq!(worker_assignment(Some(&json!({"kind":"worker","plan":"Old"}))), None);
+        assert_eq!(
+            worker_assignment(Some(&json!({"kind":"advisor","role":"rater"}))),
+            None
+        );
+        assert_eq!(
+            worker_assignment(Some(&json!({"kind":"worker","plan":"Old"}))),
+            None
+        );
     }
 
     #[test]

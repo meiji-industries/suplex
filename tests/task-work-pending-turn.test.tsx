@@ -26,7 +26,7 @@ const done = { id: "turn-1", sessionId: "session-1", prompt: "Start", status: "c
 const note = { id: "turn-2", sessionId: "session-1", prompt: "Human note:\nPlease continue", promptedAt: "2026-09-08T00:01:00.000Z", completedAt: null, result: null, assignment: null } as const;
 
 function activityWith(turn: TaskActivity["turns"][number]): TaskActivity {
-  return { sessions: [session], turns: [done, turn], shellPaneId: null } satisfies TaskActivity;
+  return { sessions: [session], turns: [done, turn], setup: { state: "none", exitStatus: null }, shellPaneId: null } satisfies TaskActivity;
 }
 
 const cleanups: Array<() => void> = [];
@@ -76,7 +76,7 @@ test("the conversation shows a busy row while the Coordinator turn is queued or 
 
 test("a delivered task with no messages shows the default hint", async () => {
   const view = mount({ ...task, status: "delivered" });
-  await view.render({ sessions: [], turns: [], shellPaneId: null });
+  await view.render({ sessions: [], turns: [], setup: { state: "none", exitStatus: null }, shellPaneId: null });
   expect(view.container.textContent).not.toContain("resume this task");
   expect(view.container.textContent).toContain("Coordinator replies will appear here.");
 });
@@ -88,7 +88,7 @@ test("the conversation shows each Worker assignment once, with the plan, criteri
   const continuation = { ...done, id: "turn-4", sessionId: "worker-1", prompt: "Fix the lint error", result: JSON.stringify({ text: "Fixed" }), assignment: null } satisfies TaskActivity["turns"][number];
   const check = { ...done, id: "turn-5", sessionId: "worker-2", prompt: "Check", result: null, assignment: { mode: "direct", purpose: "verification", plan: null, acceptanceCriteria: [], instruction: "Run pnpm check" } } satisfies TaskActivity["turns"][number];
   const view = mount();
-  await view.render({ sessions: [session, worker, checker], turns: [done, delegation, continuation, check], shellPaneId: null });
+  await view.render({ sessions: [session, worker, checker], turns: [done, delegation, continuation, check], setup: { state: "none", exitStatus: null }, shellPaneId: null });
 
   const assignments = Array.from(view.container.querySelectorAll<HTMLElement>("[data-worker-assignment]"));
   expect(assignments.map(item => item.dataset.workerAssignment)).toEqual(["implementation", "verification"]);

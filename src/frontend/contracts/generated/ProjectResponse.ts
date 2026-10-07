@@ -3,8 +3,9 @@ import type { ProjectAgentTaskPolicy } from "./ProjectAgentTaskPolicy.js";
 import type { ProjectExecution } from "./ProjectExecution.js";
 import type { ProjectIntegration } from "./ProjectIntegration.js";
 import type { ProjectProviderPolicy } from "./ProjectProviderPolicy.js";
+import type { RepositorySettings } from "./RepositorySettings.js";
 
-export type ProjectResponse = { altProfileId: string, integration?: ProjectIntegration, execution?: ProjectExecution, id: string, companyId: string, name: string, repositoryPath: string, worktreeRoot: string, repository?: string, baseBranch: string, setupCommand: string, verificationCommand: string, rootProfileId: string, workerProfileId: string, agentTaskPolicy: ProjectAgentTaskPolicy, providerPolicy: ProjectProviderPolicy | null, 
+export type ProjectResponse = { repositorySettings: RepositorySettings | null, altProfileId: string, integration?: ProjectIntegration, execution?: ProjectExecution, id: string, companyId: string, name: string, repositoryPath: string, worktreeRoot: string, repository?: string, baseBranch: string, setupCommand: string, verificationCommand: string, rootProfileId: string, workerProfileId: string, agentTaskPolicy: ProjectAgentTaskPolicy, providerPolicy: ProjectProviderPolicy | null, 
 /**
  * The most tasks that run at one time; `None` means no limit.
  */

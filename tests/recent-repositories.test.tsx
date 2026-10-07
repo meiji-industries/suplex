@@ -49,7 +49,7 @@ test("an excluded-only page still offers more and a failure retries the same pag
   const project: ProjectResponse = {
     id: "project-1", companyId: "company-1", name: "Existing", repository: "acme/existing", repositoryPath: "/repo", worktreeRoot: "/worktrees", baseBranch: "main", setupCommand: "", verificationCommand: "", rootProfileId: "root", workerProfileId: "worker", altProfileId: "root",
     agentTaskPolicy: { workflowIds: ["standard"], defaultWorkflowId: "standard", templateIds: [], rootProfileIds: ["root"], workerProfileIds: ["worker"], advisorProfileIds: { reviewer: [], planner_a: [], planner_b: [], rater: [] }, deliveryTarget: "pull_request_draft", runProjectTests: true, visualEvidence: "off" },
-    providerPolicy: null, taskConcurrency: null, createdAt: "", updatedAt: "",
+    repositorySettings: null, providerPolicy: null, taskConcurrency: null, createdAt: "", updatedAt: "",
   };
   projectApi.listRecentRepositories.mockResolvedValueOnce({ repositories: [repository("acme/existing")], nextPage: 2 })
     .mockRejectedValueOnce(new Error("network"))

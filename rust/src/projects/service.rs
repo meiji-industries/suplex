@@ -1,4 +1,5 @@
-use super::{git, provisioning};
+use super::repository_settings::{RepositorySettings, RepositorySettingsField};
+use super::{git, provisioning, repository_settings};
 use crate::http::{AppState, contracts::typed::projects::RepositoryConnection};
 use crate::identity::IdentityError;
 use crate::projects::ProjectError;
@@ -42,6 +43,7 @@ fn project_id() -> DatabaseResult<String> {
 /// integration, execution, provider policy, and response contracts.
 #[derive(Clone, Debug)]
 pub struct Project {
+    pub repository_settings: Option<RepositorySettings>,
     pub integration: Option<ProjectIntegration>,
     pub execution: Option<ProjectExecution>,
     pub id: String,
@@ -65,6 +67,7 @@ pub struct Project {
 
 pub fn response_project(project: &Project) -> ProjectResponse {
     ProjectResponse {
+        repository_settings: project.repository_settings.clone(),
         integration: project.integration.clone(),
         execution: project.execution.clone(),
         id: project.id.clone(),
@@ -371,7 +374,8 @@ fn public_project(stored: StoredProject) -> DatabaseResult<Project> {
             ) as Box<dyn Error>
         })?
     };
-    Ok(Project {
+    let mut project = Project {
+        repository_settings: None,
         integration: parse_optional(
             stored.integration_json,
             project_contracts::parse_integration,
@@ -397,7 +401,9 @@ fn public_project(stored: StoredProject) -> DatabaseResult<Project> {
         task_concurrency: stored.task_concurrency,
         created_at: stored.created_at,
         updated_at: stored.updated_at,
-    })
+    };
+    repository_settings::overlay(&mut project);
+    Ok(project)
 }
 
 fn active_role(database: &SuplexDatabase, actor_user_id: &str) -> DatabaseResult<String> {
@@ -894,6 +900,7 @@ pub fn update_local(
             let Some(stored) = stored.filter(|row| row.company_id == company_id) else {
                 return Err(failure("Not found", 404, vec![]));
             };
+            reject_repository_replacement(&stored.repository_path, body)?;
             database.connection().execute(
                 "UPDATE suplex_projects SET name = ?1, repository_path = ?2, worktree_root = ?3, repository_identity = ?4, base_branch = ?5, setup_command = ?6, verification_command = ?7, root_profile_id = ?8, worker_profile_id = ?9, agent_task_policy_json = ?10, updated_at = ?11 WHERE id = ?12",
                 params![prepared.name, prepared.repository_path.to_string_lossy(), prepared.worktree_root.to_string_lossy(), prepared.repository, prepared.base_branch, prepared.setup_command, prepared.verification_command, root, worker, json_text(&policy)?, stamp, project_id],
@@ -1144,6 +1151,70 @@ pub async fn validate_patched_repository(
     )
 }
 
+fn reject_repository_settings(
+    repository_path: &str,
+    changes: &[(RepositorySettingsField, bool)],
+) -> DatabaseResult<()> {
+    let Some((settings, _)) = repository_settings::read(repository_path) else {
+        return Ok(());
+    };
+    let message = "The repository settings file provides this value. Edit .suplex/settings.toml in the repository.";
+    let findings = changes
+        .iter()
+        .filter(|(field, present)| *present && settings.fields.contains(field))
+        .map(|(field, _)| {
+            let name = match field {
+                RepositorySettingsField::SetupCommand => "setupCommand",
+                RepositorySettingsField::VerificationCommand => "verificationCommand",
+                RepositorySettingsField::TaskConcurrency => "taskConcurrency",
+                RepositorySettingsField::Instructions => "execution.instructions",
+            };
+            finding("repository-settings", name, message)
+        })
+        .collect::<Vec<_>>();
+    if findings.is_empty() {
+        Ok(())
+    } else {
+        Err(failure(message, 422, findings))
+    }
+}
+
+fn reject_repository_replacement(
+    repository_path: &str,
+    body: &LocalProjectCreate,
+) -> DatabaseResult<()> {
+    reject_repository_settings(
+        repository_path,
+        &[
+            (RepositorySettingsField::SetupCommand, true),
+            (RepositorySettingsField::VerificationCommand, true),
+            (
+                RepositorySettingsField::Instructions,
+                body.execution.is_some(),
+            ),
+        ],
+    )
+}
+
+fn reject_repository_patch(repository_path: &str, patch: &ProjectPatch) -> DatabaseResult<()> {
+    use RepositorySettingsField::*;
+    reject_repository_settings(
+        repository_path,
+        &[
+            (SetupCommand, patch.setup_command.is_some()),
+            (VerificationCommand, patch.verification_command.is_some()),
+            (TaskConcurrency, patch.task_concurrency.is_some()),
+            (
+                Instructions,
+                patch
+                    .execution
+                    .as_ref()
+                    .is_some_and(|execution| execution.contains_key("instructions")),
+            ),
+        ],
+    )
+}
+
 /// TypeScript `patchProject` after its repository checks: write only the
 /// fields the caller sent.
 pub fn apply_patch(
@@ -1165,6 +1236,7 @@ pub fn apply_patch(
             else {
                 return Err(failure("Not found", 404, vec![]));
             };
+            reject_repository_patch(&stored.repository_path, patch)?;
             let update = |column: &str, value: Option<String>| -> DatabaseResult<()> {
                 database.connection().execute(
                     &format!("UPDATE suplex_projects SET {column} = ?1 WHERE id = ?2"),
@@ -1684,6 +1756,7 @@ pub async fn replace_project(
     existing: &Project,
     body: &project_contracts::LocalProjectCreate,
 ) -> DatabaseResult<Project> {
+    reject_repository_replacement(&existing.repository_path, body)?;
     let integration = body.integration.as_ref().or(existing.integration.as_ref());
     let input = git::LocalProjectInput {
         name: &body.name,
@@ -1721,6 +1794,7 @@ pub async fn patch_project(
     existing: &Project,
     patch: &project_contracts::ProjectPatch,
 ) -> DatabaseResult<Project> {
+    reject_repository_patch(&existing.repository_path, patch)?;
     let plan = plan_patch(existing, patch);
     let mut findings = plan.findings;
     let mut paths = (
@@ -1761,6 +1835,28 @@ mod tests {
     use crate::platform::database::OpenMode;
 
     use super::*;
+
+    #[test]
+    fn repository_settings_reject_full_replacement_without_a_cached_observation() {
+        let root = std::env::temp_dir().join(random_hex_id("repository_replacement").unwrap());
+        std::fs::create_dir_all(root.join(".suplex")).unwrap();
+        std::fs::write(
+            root.join(repository_settings::PATH),
+            "[scripts]\nsetup = 'install'",
+        )
+        .unwrap();
+        let ProjectCreateBody::Local(body) = local_configuration(json!({})) else {
+            panic!("expected local configuration");
+        };
+        let error = reject_repository_replacement(root.to_str().unwrap(), &body).unwrap_err();
+        let error = error.downcast_ref::<ProjectError>().unwrap();
+        assert_eq!(error.status(), 422);
+        assert_eq!(error.findings()[0].code, "repository-settings");
+        assert_eq!(error.findings()[0].field, "setupCommand");
+        std::fs::remove_file(root.join(repository_settings::PATH)).unwrap();
+        assert!(reject_repository_replacement(root.to_str().unwrap(), &body).is_ok());
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     #[tokio::test]
     async fn bitbucket_repository_validation_uses_provider_identity_and_reports_access_failures() {

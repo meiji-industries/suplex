@@ -1470,6 +1470,188 @@ mod tests {
     }
 
     #[test]
+    fn repository_settings_overlay_reject_writes_snapshot_and_govern_live_admission() {
+        let (filename, mut database, user_id, prepared) = command_fixture();
+        let now = Utc::now();
+        let root = filename.with_extension("repository");
+        std::fs::create_dir_all(root.join(".suplex")).unwrap();
+        database
+            .connection()
+            .execute(
+                "UPDATE suplex_projects SET repository_path = ?1 WHERE id = 'command_project'",
+                [root.to_str().unwrap()],
+            )
+            .unwrap();
+        let stale = service::get(&database, &user_id, "command_project").unwrap();
+        assert!(
+            service::response_project(&stale)
+                .repository_settings
+                .is_none()
+        );
+        std::fs::write(root.join(crate::projects::repository_settings::PATH),
+            "[scripts]\nsetup = 'install'\nverify = 'check'\n[tasks]\nconcurrency = 1\n[agent]\ninstructions = 'Use repository conventions'").unwrap();
+        let project = service::get(&database, &user_id, "command_project").unwrap();
+        let response = serde_json::to_value(service::response_project(&project)).unwrap();
+        assert_eq!(response["setupCommand"], "install");
+        assert_eq!(response["verificationCommand"], "check");
+        assert_eq!(response["taskConcurrency"], 1);
+        assert_eq!(
+            response["execution"]["instructions"],
+            "Use repository conventions"
+        );
+        assert_eq!(
+            response["repositorySettings"]["fields"],
+            json!([
+                "setup_command",
+                "verification_command",
+                "task_concurrency",
+                "instructions"
+            ])
+        );
+        for body in [
+            json!({"setupCommand":"other"}),
+            json!({"verificationCommand":"other"}),
+            json!({"taskConcurrency":null}),
+            json!({"execution":{"instructions":"other"}}),
+        ] {
+            let patch = serde_json::from_value(body).unwrap();
+            // Even a pre-file observation cannot authorize editing repository fields.
+            let error = service::apply_patch(
+                &mut database,
+                &user_id,
+                &stale,
+                &patch,
+                (&stale.repository_path, &stale.worktree_root),
+                now,
+            )
+            .unwrap_err();
+            let error = error
+                .downcast_ref::<crate::projects::ProjectError>()
+                .unwrap();
+            assert_eq!(error.status(), 422);
+            assert_eq!(error.findings()[0].code, "repository-settings");
+        }
+        let patch = serde_json::from_value(
+            json!({"name":"Renamed", "execution":{"skillDirectories":["skills"]}}),
+        )
+        .unwrap();
+        let patched = service::apply_patch(
+            &mut database,
+            &user_id,
+            &stale,
+            &patch,
+            (&stale.repository_path, &stale.worktree_root),
+            now,
+        )
+        .unwrap();
+        assert_eq!(patched.name, "Renamed");
+        assert_eq!(
+            patched.execution.as_ref().unwrap().skill_directories,
+            vec!["skills"]
+        );
+        let stored: (String, String, Option<i64>) = database.connection().query_row(
+            "SELECT setup_command, verification_command, task_concurrency FROM suplex_projects WHERE id = 'command_project'", [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        ).unwrap();
+        assert_eq!(stored, (String::new(), String::new(), None));
+        let input: TaskCreateBody = serde_json::from_value(json!({"projectId":"command_project", "title":"Repository task", "description":"", "idempotencyKey":"repository-task"})).unwrap();
+        let profiles = select_local_profiles(&database, &project, &input).unwrap();
+        let snapshot = prepare_local_user_task(
+            "command_company",
+            &user_id,
+            &project,
+            &input,
+            profiles,
+            "head",
+            now,
+        )
+        .unwrap();
+        assert_eq!(snapshot.configuration["setupCommand"], "install");
+        assert_eq!(snapshot.configuration["verificationCommand"], "check");
+        assert_eq!(
+            snapshot.configuration["execution"]["instructions"],
+            "Use repository conventions"
+        );
+        let first = repository::create(
+            &mut database,
+            &PreparedTask {
+                start_queued: true,
+                ..snapshot
+            },
+            now,
+        )
+        .unwrap()
+        .task;
+        assert_eq!(first.status, TaskStatus::Active);
+        let second = repository::create(
+            &mut database,
+            &PreparedTask {
+                start_queued: true,
+                ..another(&prepared, "repository-second")
+            },
+            now,
+        )
+        .unwrap()
+        .task;
+        assert_eq!(second.status, TaskStatus::Queued);
+        assert_eq!(
+            serde_json::to_value(
+                repository::task_response(&database, &second.id)
+                    .unwrap()
+                    .unwrap()
+            )
+            .unwrap()["queue"]["projectConcurrencyLimited"],
+            true
+        );
+        std::fs::write(
+            root.join(crate::projects::repository_settings::PATH),
+            "[tasks]\nconcurrency = 2",
+        )
+        .unwrap();
+        assert_eq!(
+            serde_json::to_value(
+                repository::task_response(&database, &second.id)
+                    .unwrap()
+                    .unwrap()
+            )
+            .unwrap()["queue"]["projectConcurrencyLimited"],
+            false
+        );
+        assert!(repository::admit_queued(&mut database, &second.id, now).unwrap());
+        std::fs::write(
+            root.join(crate::projects::repository_settings::PATH),
+            "[scripts]\nsetup = 'must not apply'\n[tasks]\nconcurrency = 0",
+        )
+        .unwrap();
+        let invalid = service::get(&database, &user_id, "command_project").unwrap();
+        assert_eq!(invalid.setup_command, "");
+        assert!(invalid.task_concurrency.is_none());
+        assert!(
+            invalid
+                .repository_settings
+                .as_ref()
+                .unwrap()
+                .error
+                .is_some()
+        );
+        assert!(
+            invalid
+                .repository_settings
+                .as_ref()
+                .unwrap()
+                .fields
+                .is_empty()
+        );
+        std::fs::remove_file(root.join(crate::projects::repository_settings::PATH)).unwrap();
+        let missing = service::get(&database, &user_id, "command_project").unwrap();
+        assert!(missing.repository_settings.is_none());
+        assert_eq!(missing.execution.unwrap().instructions, "");
+        std::fs::remove_dir_all(root).unwrap();
+        drop(database);
+        std::fs::remove_file(filename).unwrap();
+    }
+
+    #[test]
     fn advisors_inherit_project_defaults_and_capture_explicit_overrides() {
         let (filename, mut database, user_id, _) = command_fixture();
         let project = service::get(&database, &user_id, "command_project").unwrap();

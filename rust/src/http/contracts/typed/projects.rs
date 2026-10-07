@@ -94,7 +94,7 @@ pub struct McpServer {
     pub transport: McpTransport,
     pub grants: McpGrants,
 }
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ProjectExecution {
     #[serde(default)]
@@ -202,6 +202,7 @@ pub enum ProjectCreateBody {
 #[serde(rename_all = "camelCase")]
 #[ts(export)]
 pub struct ProjectResponse {
+    pub repository_settings: Option<crate::projects::repository_settings::RepositorySettings>,
     pub alt_profile_id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[ts(optional)]

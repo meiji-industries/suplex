@@ -24,6 +24,7 @@ rmcp = { version = "=3.4.1", default-features = false, features = ["server", "ma
 rusqlite = { version = "0.40.2", default-features = false, features = ["backup", "bundled"] }
 serde = { version = "1", features = ["derive"] }
 ryu-js = "1.0.3"
+toml = { version = "1", features = ["serde"] }
 serde_json = { version = "1", features = ["preserve_order"] }
 sha2 = "0.10"
 hmac = "0.12"

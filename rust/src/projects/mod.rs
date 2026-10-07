@@ -3,6 +3,7 @@ use ts_rs::TS;
 pub mod connection;
 pub mod git;
 pub mod provisioning;
+pub mod repository_settings;
 pub mod service;
 
 use crate::shared::PublicFailure;

@@ -25,7 +25,7 @@ test("public responses strip extra keys while mutation requests reject them", ()
   const task: unknown = JSON.parse(frozen.body);
   const parsed = TaskResponseSchema.parse(task);
   expect(TaskResponseSchema.parse({ ...parsed, extra: "future" })).toEqual(parsed);
-  const project = ProjectResponseSchema.parse({ id: "p", companyId: "c", name: "Project", repositoryPath: "/repo", worktreeRoot: "/worktrees", repository: "owner/repo", baseBranch: "main", setupCommand: "", verificationCommand: "", rootProfileId: "root", workerProfileId: "worker", taskConcurrency: null, createdAt: "now", updatedAt: "now" });
+  const project = ProjectResponseSchema.parse({ id: "p", companyId: "c", name: "Project", repositoryPath: "/repo", worktreeRoot: "/worktrees", repository: "owner/repo", baseBranch: "main", setupCommand: "", verificationCommand: "", rootProfileId: "root", workerProfileId: "worker", taskConcurrency: null, repositorySettings: null, createdAt: "now", updatedAt: "now" });
   expect(ProjectResponseSchema.parse({ ...project, extra: "future" })).toEqual(project);
   const profile = ProfileResponseSchema.parse({ id: "root", name: "Root", role: "root", avatarSeed: "a".repeat(32), provider: "codex", model: "gpt-6-sol", reasoningLevel: "medium", serviceTier: "priority", providerInstanceId: null, archivedAt: null, createdAt: "now", updatedAt: "now" });
   expect(ProfileResponseSchema.parse({ ...profile, extra: "future" })).toEqual(profile);

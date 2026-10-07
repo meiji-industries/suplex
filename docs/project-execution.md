@@ -13,6 +13,40 @@ again. A successful native session is retained across restart. Failed setup
 is supplied to the Coordinator as repair work, with a path to full output.
 Setup does not inherit provider tokens or routing overrides.
 
+## Repository settings
+
+Add `.suplex/settings.toml` at the root of the project's repository checkout
+(`repositoryPath`) to provide repository-owned execution settings:
+
+```toml
+[scripts]
+setup = "pnpm install"
+verify = "pnpm check"
+
+[tasks]
+concurrency = 1
+
+[agent]
+instructions = """
+Use the project conventions.
+Run the verification command before reporting completed work.
+"""
+```
+
+Every key is optional. Unknown keys are ignored. Concurrency must be a whole
+number of 1 or more. Present values override stored project values, including
+empty command or instruction strings. Suplex reads the file each time it loads
+the project and when it admits queued tasks. It does not save a copy in SQLite.
+Task creation snapshots the effective commands and instructions. Existing tasks
+keep their snapshots; concurrency changes apply to subsequent admissions.
+
+The project response includes `repositorySettings` with the file path, the
+provided fields, and an optional error. Without the file, this value is null.
+The Execution section disables provided fields. PATCH and PUT requests that
+include those fields return 422 with finding code `repository-settings`.
+Edit the file to change them. A malformed file applies no overrides and shows
+an error in the Execution section. Stored values remain in effect.
+
 ## Project and credential boundaries
 
 A company groups projects and controls application access. A project selects its

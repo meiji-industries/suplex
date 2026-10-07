@@ -721,6 +721,7 @@ mod tests {
         assert_eq!(rows[0]["subject"], "Feature subject");
         assert_eq!(rows[0]["author"], "Fixture");
         let project = Project {
+            repository_settings: None,
             integration: None,
             execution: None,
             id: "project".into(),

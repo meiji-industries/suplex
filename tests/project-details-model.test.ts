@@ -1,7 +1,7 @@
 import { expect, test } from "vitest";
 
 import type { ApiProfile } from "../src/frontend/shell/view-shared.js";
-import { agentsDraftFindings, agentsProjectPatch, executionDraftFindings, executionProjectPatch, generalProjectPatch, type AgentsDraft, type ExecutionDraft } from "../src/frontend/features/projects/project-details-model.js";
+import { agentsDraftFindings, agentsProjectPatch, executionDraftFindings, executionProjectPatch, repositoryProvides, generalProjectPatch, type AgentsDraft, type ExecutionDraft } from "../src/frontend/features/projects/project-details-model.js";
 import type { ProjectProviderPolicy } from "../src/frontend/contracts/provider-policy.js";
 
 const profiles: ApiProfile[] = [
@@ -83,4 +83,16 @@ test("Execution saves task concurrency as a number, or null when empty", () => {
   for (const invalid of ["0", "-1", "1.5", "two"]) {
     expect(executionDraftFindings({ ...saved, taskConcurrency: invalid })).toEqual([{ field: "taskConcurrency", message: "Write a whole number of 1 or more." }]);
   }
+});
+
+test("repository fields disable editing and stay out of execution patches", () => {
+  const saved: ExecutionDraft = { setupCommand: "install", verificationCommand: "check", instructions: "Build", skillDirectories: "", taskConcurrency: "1" };
+  const settings = { path: ".suplex/settings.toml", fields: ["setup_command", "verification_command", "task_concurrency", "instructions"] as const, error: null };
+  const repositorySettings = { ...settings, fields: [...settings.fields] };
+  for (const field of settings.fields) expect(repositoryProvides(repositorySettings, field)).toBe(true);
+  expect(repositoryProvides(null, "instructions")).toBe(false);
+  expect(repositoryProvides({ ...repositorySettings, fields: [], error: "Invalid TOML" }, "setup_command")).toBe(false);
+  const changed = { setupCommand: "other", verificationCommand: "other", instructions: "other", skillDirectories: "skills", taskConcurrency: "2" };
+  expect(executionProjectPatch(saved, changed, repositorySettings)).toEqual({ execution: { skillDirectories: ["skills"] } });
+  expect(executionProjectPatch(saved, changed, { ...repositorySettings, fields: ["setup_command"] })).toEqual({ verificationCommand: "other", taskConcurrency: 2, execution: { instructions: "other", skillDirectories: ["skills"] } });
 });

@@ -61,6 +61,7 @@ export const ProjectPatchBodySchema = ProjectBodySchema.partial().extend({
 }).strict().refine((value) => Object.keys(value).length > 0, "Provide at least one project field");
 
 export const ProjectResponseSchema = ProjectBodySchema.extend({
+  repositorySettings: z.object({ path: z.literal(".suplex/settings.toml"), fields: z.array(z.enum(["setup_command", "verification_command", "task_concurrency", "instructions"])), error: z.string().nullable() }).nullable(),
   id: z.string(), companyId: z.string(), repository: z.string().optional(), taskConcurrency: z.number().int().min(1).nullable(), createdAt: z.string(), updatedAt: z.string(),
 }).strip();
 

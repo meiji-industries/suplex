@@ -1,3 +1,5 @@
+import type { RepositorySettings } from "../../contracts/generated/RepositorySettings.js";
+import type { RepositorySettingsField } from "../../contracts/generated/RepositorySettingsField.js";
 import type { ProjectExecution } from "../../contracts/project-execution.js";
 import type { ProjectIntegration } from "../../contracts/project-integration.js";
 import { isProfileAllowed } from "./lib/provider-policy.js";
@@ -79,16 +81,20 @@ export function agentsDraftFindings(draft: AgentsDraft, profiles: readonly Pick<
   });
 }
 
-export function executionProjectPatch(saved: ExecutionDraft, draft: ExecutionDraft): ProjectPatchBody {
+export function repositoryProvides(settings: RepositorySettings | null | undefined, field: RepositorySettingsField): boolean {
+  return settings?.fields.includes(field) ?? false;
+}
+
+export function executionProjectPatch(saved: ExecutionDraft, draft: ExecutionDraft, settings?: RepositorySettings | null): ProjectPatchBody {
   const execution: NonNullable<ProjectPatchBody["execution"]> = {
-    ...(draft.instructions !== saved.instructions ? { instructions: draft.instructions } : {}),
+    ...(!repositoryProvides(settings, "instructions") && draft.instructions !== saved.instructions ? { instructions: draft.instructions } : {}),
     ...(draft.skillDirectories !== saved.skillDirectories ? { skillDirectories: draft.skillDirectories.split("\n").map((path) => path.trim()).filter(Boolean) } : {}),
   };
   return {
-    ...(draft.setupCommand !== saved.setupCommand ? { setupCommand: draft.setupCommand } : {}),
-    ...(draft.verificationCommand !== saved.verificationCommand ? { verificationCommand: draft.verificationCommand } : {}),
+    ...(!repositoryProvides(settings, "setup_command") && draft.setupCommand !== saved.setupCommand ? { setupCommand: draft.setupCommand } : {}),
+    ...(!repositoryProvides(settings, "verification_command") && draft.verificationCommand !== saved.verificationCommand ? { verificationCommand: draft.verificationCommand } : {}),
     ...(Object.keys(execution).length > 0 ? { execution } : {}),
-    ...(draft.taskConcurrency.trim() !== saved.taskConcurrency ? { taskConcurrency: draft.taskConcurrency.trim() === "" ? null : Number(draft.taskConcurrency) } : {}),
+    ...(!repositoryProvides(settings, "task_concurrency") && draft.taskConcurrency.trim() !== saved.taskConcurrency ? { taskConcurrency: draft.taskConcurrency.trim() === "" ? null : Number(draft.taskConcurrency) } : {}),
   };
 }
 

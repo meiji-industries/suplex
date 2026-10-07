@@ -4,7 +4,8 @@ mod host_tests {
     use crate::runtimes::task_harness::{NativeTimeline, UsageEntry};
     use crate::shared::time::rfc3339_millis;
     use crate::tasks::host::{
-        due_task_ids, scheduled_task_ids, sweep_task, sweep_task_with_herdr,
+        due_task_ids, scheduled_task_ids, settle_source_pull_request, sweep_task,
+        sweep_task_with_herdr,
     };
     use crate::tasks::limits::replace_observed_usage;
     use crate::tasks::limits::{
@@ -640,6 +641,35 @@ mod host_tests {
             "a failed sweep is due again at once"
         );
         assert!(due.contains(&other));
+        fs::remove_dir_all(base).unwrap();
+    }
+
+    /// A pull request merged while its sourced task waited in the queue is
+    /// delivered work: the task completes as an external merge instead of
+    /// asking a person. A closed, unmerged pull request still asks.
+    #[test]
+    fn a_source_pull_request_merged_before_preparation_delivers_the_task() {
+        let (base, database_path, task_id) = fixture_task();
+        let mut database = SuplexDatabase::open(&database_path, OpenMode::ReadWrite).unwrap();
+        database.connection().execute(
+            "UPDATE suplex_task_controls SET status = 'active', wake_at = NULL WHERE task_id = ?1",
+            [&task_id],
+        ).unwrap();
+        assert!(settle_source_pull_request(&mut database, &task_id, 2041, "open").unwrap());
+        assert!(settle_source_pull_request(&mut database, &task_id, 2041, "closed").is_err());
+        assert!(!settle_source_pull_request(&mut database, &task_id, 2041, "merged").unwrap());
+        let control = root_session_store::task_control(&database, &task_id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(control.status, TaskStatus::Delivered);
+        assert!(control.human_question.is_none());
+        let completion = control.workflow_state.completion.unwrap();
+        assert_eq!(
+            completion.kind,
+            crate::coordination::workflows::CompletionKind::ExternalMerge
+        );
+        assert_eq!(completion.pull_request_number, Some(2041));
+        drop(database);
         fs::remove_dir_all(base).unwrap();
     }
 

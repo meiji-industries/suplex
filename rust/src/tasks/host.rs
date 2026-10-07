@@ -345,7 +345,9 @@ async fn sweep_task_once(
     {
         let prepared = async {
             if needs_worktree {
-                require_open_source_pull_request(database, task_id).await?;
+                if !require_open_source_pull_request(database, task_id).await? {
+                    return Ok(false);
+                }
                 let prepared = prepare_task_worktree(database_path, task_id).await?;
                 root_session_store::set_worktree(database, task_id, &prepared, Utc::now())?;
             }
@@ -403,26 +405,49 @@ async fn sweep_task_once(
 }
 
 /// A task sourced from a pull request needs that pull request still open
-/// before Suplex builds a worktree for it. GitHub is read directly.
+/// before Suplex builds a worktree for it. GitHub is read directly. A pull
+/// request someone merged while the task waited is delivered work, so the
+/// task completes as an external merge and `false` stops preparation.
 async fn require_open_source_pull_request(
     database: &mut SuplexDatabase,
     task_id: &str,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> Result<bool, Box<dyn std::error::Error>> {
     let Some((repository, number)) = source_pull_request(database, task_id)? else {
-        return Ok(());
+        return Ok(true);
     };
     let pull = crate::integrations::github_delivery::Github::load()
         .await?
         .get_pull_request(&repository, number)
         .await?;
-    if pull.state == "open" {
-        return Ok(());
+    settle_source_pull_request(database, task_id, number, &pull.state)
+}
+
+pub(crate) fn settle_source_pull_request(
+    database: &mut SuplexDatabase,
+    task_id: &str,
+    number: u64,
+    state: &str,
+) -> Result<bool, Box<dyn std::error::Error>> {
+    use crate::coordination::workflows::{Completion, CompletionKind};
+    match state {
+        "open" => Ok(true),
+        "merged" => {
+            let mut workflow = root_session_store::workflow_state(database, task_id)?;
+            workflow.completion = Some(Completion {
+                kind: CompletionKind::ExternalMerge,
+                reviewed_head: None,
+                pull_request_number: Some(number),
+                observed_at: crate::shared::time::now_millis_rfc3339(),
+            });
+            root_session_store::write_workflow_state(database, task_id, &workflow, Utc::now())?;
+            root_session_store::mark_delivered(database, task_id, Utc::now())?;
+            Ok(false)
+        }
+        _ => Err(format!(
+            "Pull request #{number} is {state}. Cancel or archive this task, or create a new task from the current work"
+        )
+        .into()),
     }
-    Err(format!(
-        "Pull request #{number} is {}. Cancel or archive this task, or create a new task from the current work",
-        pull.state
-    )
-    .into())
 }
 
 fn source_pull_request(

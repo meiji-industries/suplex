@@ -148,7 +148,7 @@ test("Free with 3 running tasks shows the plan limit card at the top of Active, 
     return text && `${text} -> ${href}`;
   };
   try {
-    expect(await render("free")).toBe("2 tasks are ready. 3 slots are full.Free runs 3 tasks at a time. Pro runs the full queue at the same time.Start all 2 with a free trialPro is free for 30 days. No credit card is necessary. -> /billing?company=company-1");
+    expect(await render("free")).toBe("2 tasks are ready. 3 slots are full.Free runs 3 tasks at a time. Pro runs the full queue at the same time.Start all 2 with a free trialNo credit card is necessary. -> /billing?company=company-1");
     expect(await render("pro")).toBeNull();
   } finally { api.company.plan = "pro"; }
 });

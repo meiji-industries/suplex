@@ -45,7 +45,7 @@ export function OnboardingPlanPicker({ value, onChange, projectCount, trialAvail
       </div>
     </RadioGroup>
     <p className="text-xs text-muted-foreground">
-      {value === "free" ? "No credit card is necessary." : trialAvailable ? "Pro is free for 30 days. No credit card is necessary." : projectCount >= 3 ? "Pro is necessary for 3 or more projects." : "Taxes are additional."}
+      {value === "free" ? "No credit card is necessary." : trialAvailable ? "No credit card is necessary." : projectCount >= 3 ? "Pro is necessary for 3 or more projects." : "Taxes are additional."}
     </p>
   </div>;
 }

@@ -119,7 +119,7 @@ function PlanLimitCard({ queued, billingHref }: { queued: number; billingHref: s
   useEffect(() => { if (billingHref) void getBillingSummary().then(summary => setTrial(summary.trialAvailable), () => undefined); }, [billingHref]);
   return <li className="min-w-0"><Card highlighted size="sm" data-plan-limit-card>
     <CardHeader><CardTitle>{queued === 1 ? "1 task is ready." : `${queued} tasks are ready.`} {FREE_RUNNING_TASKS} slots are full.</CardTitle><CardDescription>Free runs {FREE_RUNNING_TASKS} tasks at a time. Pro runs the full queue at the same time.</CardDescription></CardHeader>
-    {billingHref ? <CardContent><Button size="sm" nativeButton={false} render={<a href={billingHref} />}><Zap />{trial ? `Start ${queued === 1 ? "it" : `all ${queued}`} with a free trial` : `Go Pro and start ${queued === 1 ? "it" : `all ${queued}`}`}</Button>{trial ? <p className="text-xs text-muted-foreground">Pro is free for 30 days. No credit card is necessary.</p> : null}</CardContent> : null}
+    {billingHref ? <CardContent><Button size="sm" nativeButton={false} render={<a href={billingHref} />}><Zap />{trial ? `Start ${queued === 1 ? "it" : `all ${queued}`} with a free trial` : `Go Pro and start ${queued === 1 ? "it" : `all ${queued}`}`}</Button>{trial ? <p className="text-xs text-muted-foreground">No credit card is necessary.</p> : null}</CardContent> : null}
   </Card></li>;
 }
 

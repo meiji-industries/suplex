@@ -195,7 +195,7 @@ export function BillingSection(): ReactElement {
       </SettingsSection>
       {canUpgrade ? (
         <SettingsSection>
-          <SettingRow label="Upgrade to Pro" description={summary.trialAvailable ? `Pro is free for 30 days. No credit card is necessary. Then ${formatUsd(PRO_MONTHLY_AMOUNT)} each month. Taxes are additional.` : `${formatUsd(PRO_MONTHLY_AMOUNT)} each month. Taxes are additional.`}>
+          <SettingRow label="Upgrade to Pro" description={summary.trialAvailable ? `No credit card is necessary. Then ${formatUsd(PRO_MONTHLY_AMOUNT)} each month. Taxes are additional.` : `${formatUsd(PRO_MONTHLY_AMOUNT)} each month. Taxes are additional.`}>
             <div className="flex flex-wrap items-center justify-end gap-2">
               {summary.trialAvailable ? <Button size="sm" onClick={() => void trial()} disabled={busy !== ""}>{busy === "trial" ? <Spinner /> : null}Start the 30-day trial</Button> : null}
               <Button size="sm" variant={summary.trialAvailable ? "outline" : "default"} onClick={() => void checkout()} disabled={busy !== ""}>{busy === "checkout" ? <Spinner /> : null}Select Pro</Button>

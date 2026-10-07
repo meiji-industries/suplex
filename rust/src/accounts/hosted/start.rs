@@ -116,7 +116,7 @@ fn trial_login(accounts: &Accounts, email_form: bool) -> Response {
         )
     } else {
         format!(
-            "<div class=\"stack\"><p class=\"note center\">Pro is free for 30 days. No credit card is necessary. Log in to start the trial.</p><a class=\"button primary\" href=\"/auth/start?attempt={attempt}&amp;provider=google\">Continue with Google</a><a class=\"button outline\" href=\"/auth/start?attempt={attempt}&amp;provider=github\">Continue with GitHub</a><a class=\"button outline\" href=\"/start?plan=pro&amp;with=email\">Continue with email</a></div>{TERMS}"
+            "<div class=\"stack\"><p class=\"note center\">No credit card is necessary. Log in to start the trial.</p><a class=\"button primary\" href=\"/auth/start?attempt={attempt}&amp;provider=google\">Continue with Google</a><a class=\"button outline\" href=\"/auth/start?attempt={attempt}&amp;provider=github\">Continue with GitHub</a><a class=\"button outline\" href=\"/start?plan=pro&amp;with=email\">Continue with email</a></div>{TERMS}"
         )
     };
     html(StatusCode::OK, "Start your Pro trial", &content)

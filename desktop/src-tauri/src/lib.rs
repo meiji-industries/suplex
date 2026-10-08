@@ -156,6 +156,14 @@ pub fn run() {
         });
         #[cfg(feature = "native-test")]
         native_test::start(&shell);
+        // Checks for updates at launch, without waiting for the host to open.
+        let update_shell = shell.clone();
+        tauri::async_runtime::spawn(async move {
+            loop {
+                check_for_updates(&update_shell, false).await;
+                tokio::time::sleep(UPDATE_INTERVAL).await;
+            }
+        });
         let start_shell = shell.clone();
         tauri::async_runtime::spawn(async move {
             start_shell.network.load_preference().await;
@@ -167,10 +175,6 @@ pub fn run() {
                 .find_map(|value| targets::invitation_target(value));
             if let Some(target) = invitation {
                 start_shell.switch_to(target).await;
-            }
-            loop {
-                check_for_updates(&start_shell, false).await;
-                tokio::time::sleep(UPDATE_INTERVAL).await;
             }
         });
         Ok(())

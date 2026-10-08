@@ -11,6 +11,14 @@ type DesktopNetworkAccess = { managed: false } | {
   httpsUrl: string | null;
 };
 
+/** `Status` in `desktop/src-tauri/src/updater.rs`. */
+export type DesktopUpdateStatus =
+  | { phase: "idle" }
+  | { phase: "checking" }
+  | { phase: "available"; version: string }
+  | { phase: "downloading"; version: string; received: number; total: number | null }
+  | { phase: "ready"; version: string };
+
 declare global {
   interface Window {
     __SUPLEX_HEALTH__?: HealthSnapshot;
@@ -18,12 +26,18 @@ declare global {
     suplexApp?: {
       /** `macos`, `linux`, or `windows`; an older shell sends none and runs on macOS. */
       platform?: string;
+      /** The installed desktop app version; an older shell sends none. */
+      version?: string;
       accountCleared(): Promise<void>;
       openHostPicker(): Promise<void>;
       networkAccess(): Promise<DesktopNetworkAccess>;
       saveNetworkAccessPreference(mode: DesktopNetworkAccessMode): Promise<DesktopNetworkAccess>;
       restartNetworkAccess(): Promise<DesktopNetworkAccess>;
       onNetworkAccessChange(listener: (state: DesktopNetworkAccess) => void): () => void;
+      /** Absent in an older shell. */
+      updateStatus?(): Promise<DesktopUpdateStatus>;
+      checkForUpdates?(): Promise<void>;
+      onUpdateChange?(listener: (status: DesktopUpdateStatus) => void): () => void;
     };
     /** Present only inside the Suplex iOS and Android apps. */
     suplexMobile?: { openHostPicker(): Promise<void> };

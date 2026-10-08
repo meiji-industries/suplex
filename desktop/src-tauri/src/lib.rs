@@ -56,6 +56,8 @@ pub fn configure<R: Runtime>(builder: tauri::Builder<R>) -> tauri::Builder<R> {
         app_network_access,
         app_save_network_access_preference,
         app_restart_network_access,
+        app_update_status,
+        app_check_for_updates,
     ])
 }
 
@@ -66,9 +68,14 @@ pub fn context<R: Runtime>() -> tauri::Context<R> {
     tauri::generate_context!()
 }
 
+pub(crate) fn updater_of<R: Runtime>(app: &tauri::AppHandle<R>) -> Option<Arc<Updater<R>>> {
+    app.try_state::<Arc<Updater<R>>>()
+        .map(|updater| updater.inner().clone())
+}
+
 pub(crate) async fn check_for_updates<R: Runtime>(shell: &Shell<R>, manual: bool) {
-    if let Some(updater) = shell.app.try_state::<Arc<Updater<R>>>() {
-        updater.inner().clone().check(manual).await;
+    if let Some(updater) = updater_of(&shell.app) {
+        updater.check(manual).await;
     }
 }
 

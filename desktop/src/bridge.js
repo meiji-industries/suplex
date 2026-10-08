@@ -49,12 +49,17 @@
   } else if (config.kind === "host") {
     window.suplexApp = Object.freeze({
       platform: config.platform,
+      version: config.version,
       accountCleared: () => done(invoke("app_account_cleared")),
       openHostPicker: () => done(invoke("app_open_host_picker")),
       networkAccess: () => invoke("app_network_access"),
       saveNetworkAccessPreference: (mode) => invoke("app_save_network_access_preference", { mode }),
       restartNetworkAccess: () => invoke("app_restart_network_access"),
-      onNetworkAccessChange: (listener) => subscribe(listener),
+      // Events carrying `update` are the updater's; everything else is a network access snapshot.
+      onNetworkAccessChange: (listener) => subscribe((payload) => { if (!payload.update) listener(payload); }),
+      updateStatus: () => invoke("app_update_status"),
+      checkForUpdates: () => done(invoke("app_check_for_updates")),
+      onUpdateChange: (listener) => subscribe((payload) => { if (payload.update) listener(payload.update); }),
     });
   }
 }

@@ -248,6 +248,28 @@ pub fn app_open_host_picker<R: Runtime>(
     Ok(())
 }
 
+/// The update status for a page that just loaded; later changes arrive as bridge events.
+#[tauri::command]
+pub fn app_update_status<R: Runtime>(
+    webview: Webview<R>,
+    shell: Shared<'_, R>,
+) -> Result<crate::updater::Status, String> {
+    require(&shell, &webview, ViewKind::Host)?;
+    Ok(crate::updater_of(&shell.app)
+        .map_or(crate::updater::Status::Idle, |updater| updater.status()))
+}
+
+/// The same manual check the menu's "Check for updates" runs.
+#[tauri::command]
+pub async fn app_check_for_updates<R: Runtime>(
+    webview: Webview<R>,
+    shell: Shared<'_, R>,
+) -> Result<(), String> {
+    require(&shell, &webview, ViewKind::Host)?;
+    crate::check_for_updates(&shell, true).await;
+    Ok(())
+}
+
 #[tauri::command]
 pub async fn app_network_access<R: Runtime>(
     webview: Webview<R>,

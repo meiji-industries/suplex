@@ -482,12 +482,13 @@ impl<R: Runtime> Shell<R> {
 
     // ----- views -----
 
-    fn bridge(kind: ViewKind, origin: &str, target: Option<&str>) -> String {
+    fn bridge(kind: ViewKind, origin: &str, target: Option<&str>, version: &str) -> String {
         let config = serde_json::json!({
             "kind": kind.prefix(),
             "origin": origin,
             "platform": crate::platform::NAME,
             "target": target,
+            "version": version,
         });
         format!(
             "({})({config});",
@@ -525,6 +526,8 @@ impl<R: Runtime> Shell<R> {
                 .permission("allow-app-network-access")
                 .permission("allow-app-save-network-access-preference")
                 .permission("allow-app-restart-network-access")
+                .permission("allow-app-update-status")
+                .permission("allow-app-check-for-updates")
                 .permission("core:window:allow-start-dragging")
                 .permission("core:window:allow-internal-toggle-maximize");
             if let Err(error) = self.app.add_capability(capability) {
@@ -546,6 +549,7 @@ impl<R: Runtime> Shell<R> {
             kind,
             &origin,
             target.as_ref().map(|target| target.origin.as_str()),
+            &self.app.package_info().version.to_string(),
         );
         let spec = ViewSpec {
             kind,
@@ -800,6 +804,13 @@ impl<R: Runtime> Shell<R> {
         }
         if let View::Setup { label } = self.view() {
             self.dispatch(&label, &event);
+        }
+    }
+
+    /// Shows the desktop update status in the host page, when one is open.
+    pub fn show_update_status(&self, status: &crate::updater::Status) {
+        if let View::Host { label, .. } = self.view() {
+            self.dispatch(&label, &serde_json::json!({ "update": status }));
         }
     }
 
@@ -1600,10 +1611,11 @@ mod tests {
             ViewKind::Unavailable,
             APP_ORIGIN,
             Some("https://x.example/\"</script><img onerror=alert(1)>"),
+            "1.0.0",
         );
         assert!(script.contains("(config) => {"));
         assert!(script.ends_with(&format!(
-            r#"({{"kind":"unavailable","origin":"{APP_ORIGIN}","platform":"{}","target":"https://x.example/\"</script><img onerror=alert(1)>"}});"#,
+            r#"({{"kind":"unavailable","origin":"{APP_ORIGIN}","platform":"{}","target":"https://x.example/\"</script><img onerror=alert(1)>","version":"1.0.0"}});"#,
             crate::platform::NAME
         )));
     }

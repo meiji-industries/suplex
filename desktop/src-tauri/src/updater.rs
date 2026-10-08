@@ -50,15 +50,40 @@ pub enum Followup {
     OfferRestart(UpdateInfo),
 }
 
+/// What the host page's status bar shows, pushed on every change. The page decides nothing from it.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(tag = "phase", rename_all = "camelCase")]
+pub enum Status {
+    Idle,
+    Checking,
+    Available {
+        version: String,
+    },
+    Downloading {
+        version: String,
+        received: u64,
+        total: Option<u64>,
+    },
+    Ready {
+        version: String,
+    },
+}
+
 pub trait Ports: Send + Sync {
     fn check(&self) -> impl Future<Output = Result<Option<UpdateInfo>, String>> + Send;
-    /// Downloads and verifies the last checked update, keeping it for a later install.
-    fn download(&self) -> impl Future<Output = Result<(), String>> + Send;
+    /// Downloads and verifies the last checked update, keeping it for a later install. `progress`
+    /// receives the bytes received so far and the total when the feed reports one.
+    fn download(
+        &self,
+        progress: impl Fn(u64, Option<u64>) + Send + Sync,
+    ) -> impl Future<Output = Result<(), String>> + Send;
     /// Installs the downloaded update, shuts down the owned host through the normal lifecycle, and relaunches.
     fn install_and_restart(&self) -> impl Future<Output = Result<(), String>> + Send;
     /// Shows a dialog attached to a visible window and returns the chosen button index.
     fn dialog(&self, dialog: Dialog) -> impl Future<Output = usize> + Send;
     fn notify(&self, message: String, followup: Followup);
+    /// Shows the update status in the host page.
+    fn status(&self, status: Status);
 }
 
 #[derive(Default)]
@@ -71,6 +96,8 @@ struct State {
     announced: Option<String>,
     /// A finished download waiting for the user to restart.
     downloaded: Option<UpdateInfo>,
+    /// The version the last check found, until it is downloaded.
+    available: Option<UpdateInfo>,
 }
 
 pub struct DesktopUpdater<P: Ports> {
@@ -88,6 +115,37 @@ impl<P: Ports> DesktopUpdater<P> {
         }
     }
 
+    /// The status from state alone. A running download reports its own progress, so a page that
+    /// loads mid-download sees `Downloading` with no bytes until the next chunk.
+    pub fn status(&self) -> Status {
+        let state = self.state.lock().unwrap();
+        if state.checking {
+            Status::Checking
+        } else if let Some(info) = &state.downloaded {
+            Status::Ready {
+                version: info.version.clone(),
+            }
+        } else if let Some(info) = &state.available {
+            if state.downloading {
+                Status::Downloading {
+                    version: info.version.clone(),
+                    received: 0,
+                    total: None,
+                }
+            } else {
+                Status::Available {
+                    version: info.version.clone(),
+                }
+            }
+        } else {
+            Status::Idle
+        }
+    }
+
+    fn push_status(&self) {
+        self.ports.status(self.status());
+    }
+
     pub async fn check(&self, manual: bool) {
         let downloaded = {
             let mut state = self.state.lock().unwrap();
@@ -102,6 +160,7 @@ impl<P: Ports> DesktopUpdater<P> {
         if let (true, Some(info)) = (manual, downloaded) {
             return self.offer_restart(info).await;
         }
+        self.push_status();
         if !self.configured {
             if manual {
                 self.ports
@@ -116,7 +175,14 @@ impl<P: Ports> DesktopUpdater<P> {
             return;
         }
         let result = self.ports.check().await;
-        self.state.lock().unwrap().checking = false;
+        {
+            let mut state = self.state.lock().unwrap();
+            state.checking = false;
+            if let Ok(found) = &result {
+                state.available = found.clone();
+            }
+        }
+        self.push_status();
         match result {
             Err(error) if manual => self.show_error(Failure::Check, error).await,
             Err(error) => eprintln!("Suplex could not check the desktop app update: {error}"),
@@ -176,15 +242,25 @@ impl<P: Ports> DesktopUpdater<P> {
             .await;
         if answer == 0 {
             self.state.lock().unwrap().downloading = true;
-            let result = self.ports.download().await;
+            let progress = |received, total| {
+                self.ports.status(Status::Downloading {
+                    version: info.version.clone(),
+                    received,
+                    total,
+                })
+            };
+            progress(0, None);
+            let result = self.ports.download(progress).await;
             {
                 let mut state = self.state.lock().unwrap();
                 state.downloading = false;
                 state.offering = false;
                 if result.is_ok() {
                     state.downloaded = Some(info.clone());
+                    state.available = None;
                 }
             }
+            self.push_status();
             return match result {
                 Ok(()) => self.ports.notify(
                     format!("Suplex desktop app {} was downloaded.", info.version),
@@ -221,6 +297,7 @@ impl<P: Ports> DesktopUpdater<P> {
         if let Err(error) = self.ports.install_and_restart().await {
             // The installed app is unchanged; a new download is needed to try again.
             self.state.lock().unwrap().downloaded = None;
+            self.push_status();
             self.show_error(Failure::Install, error).await;
         }
     }
@@ -309,7 +386,10 @@ impl<R: tauri::Runtime> Ports for TauriPorts<R> {
         Ok(info)
     }
 
-    async fn download(&self) -> Result<(), String> {
+    async fn download(
+        &self,
+        progress: impl Fn(u64, Option<u64>) + Send + Sync,
+    ) -> Result<(), String> {
         let update = self
             .checked
             .lock()
@@ -317,8 +397,21 @@ impl<R: tauri::Runtime> Ports for TauriPorts<R> {
             .take()
             .ok_or("Check for updates again.")?;
         // The plugin verifies the Tauri updater signature before returning the bytes.
+        let mut received = 0u64;
+        let mut reported = u64::MAX;
         let bytes = update
-            .download(|_, _| {}, || {})
+            .download(
+                |chunk, total| {
+                    received += chunk as u64;
+                    // One report per percent, or per 256 KiB when the feed sends no length.
+                    let step = total.map_or(received >> 18, |total| received * 100 / total.max(1));
+                    if step != reported {
+                        reported = step;
+                        progress(received, total);
+                    }
+                },
+                || {},
+            )
             .await
             .map_err(|error| error.to_string())?;
         *self.downloaded.lock().unwrap() = Some((update, bytes));
@@ -393,6 +486,12 @@ impl<R: tauri::Runtime> Ports for TauriPorts<R> {
             }
         });
     }
+
+    fn status(&self, status: Status) {
+        if let Some(shell) = self.shell.upgrade() {
+            shell.show_update_status(&status);
+        }
+    }
 }
 
 #[cfg(test)]
@@ -410,6 +509,7 @@ mod tests {
         dialogs: Mutex<Vec<Dialog>>,
         notifications: Mutex<Vec<(String, Followup)>>,
         calls: Mutex<Vec<&'static str>>,
+        statuses: Mutex<Vec<Status>>,
         hold_dialog: Option<Arc<tokio::sync::Notify>>,
     }
 
@@ -418,8 +518,12 @@ mod tests {
             self.calls.lock().unwrap().push("check");
             self.checks.lock().unwrap().pop().unwrap_or(Ok(None))
         }
-        async fn download(&self) -> Result<(), String> {
+        async fn download(
+            &self,
+            progress: impl Fn(u64, Option<u64>) + Send + Sync,
+        ) -> Result<(), String> {
             self.calls.lock().unwrap().push("download");
+            progress(512, Some(1024));
             self.downloads.lock().unwrap().pop().unwrap_or(Ok(()))
         }
         async fn install_and_restart(&self) -> Result<(), String> {
@@ -436,6 +540,37 @@ mod tests {
         fn notify(&self, message: String, followup: Followup) {
             self.notifications.lock().unwrap().push((message, followup));
         }
+        fn status(&self, status: Status) {
+            self.statuses.lock().unwrap().push(status);
+        }
+    }
+
+    #[tokio::test]
+    async fn the_host_page_sees_each_phase_of_a_download() {
+        let fake = Arc::new(Fake::default());
+        fake.checks.lock().unwrap().push(Ok(Some(version("1.2.3"))));
+        let updater = subject(&fake);
+        updater.check(true).await;
+        let v = || "1.2.3".to_string();
+        assert_eq!(
+            *fake.statuses.lock().unwrap(),
+            [
+                Status::Checking,
+                Status::Available { version: v() },
+                Status::Downloading {
+                    version: v(),
+                    received: 0,
+                    total: None
+                },
+                Status::Downloading {
+                    version: v(),
+                    received: 512,
+                    total: Some(1024)
+                },
+                Status::Ready { version: v() },
+            ]
+        );
+        assert_eq!(updater.status(), Status::Ready { version: v() });
     }
 
     fn version(value: &str) -> UpdateInfo {

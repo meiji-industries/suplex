@@ -17,6 +17,9 @@ test("the host bar appears only in the desktop app and uses the host health", ()
   vi.stubGlobal("window", { location: { host: "127.0.0.1:4111", hostname: "127.0.0.1" }, suplexApp: { openHostPicker: async () => undefined } });
   expect(render()).toContain("This Mac");
   expect(render()).toContain("Ready");
+  expect(render()).not.toContain("Installed version");
+  vi.stubGlobal("window", { location: { host: "127.0.0.1:4111", hostname: "127.0.0.1" }, suplexApp: { version: "1.6.1", openHostPicker: async () => undefined } });
+  expect(render()).toContain("Installed version 1.6.1");
   vi.stubGlobal("window", { location: { host: "studio.tail1234.ts.net", hostname: "studio.tail1234.ts.net" }, suplexMobile: { openHostPicker: async () => undefined } });
   expect(render()).toContain("studio.tail1234.ts.net");
   expect(render()).not.toContain("Ready");

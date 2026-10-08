@@ -119,6 +119,8 @@ const NETWORK_COMMANDS: [(&str, &str); 3] = [
     ("app_save_network_access_preference", r#"{"mode":"all"}"#),
     ("app_restart_network_access", "{}"),
 ];
+const UPDATE_COMMANDS: [(&str, &str); 2] =
+    [("app_update_status", "{}"), ("app_check_for_updates", "{}")];
 // Windows and Linux also register the notification and clipboard plugins; no page gets their commands either.
 const PLUGIN_COMMANDS: [&str; 8] = [
     "plugin:notification|notify",
@@ -153,6 +155,7 @@ fn the_setup_page_reaches_setup_commands_and_nothing_else() {
     assert_eq!(snapshot["state"], "resolve");
     for (command, body) in NETWORK_COMMANDS
         .iter()
+        .chain(UPDATE_COMMANDS.iter())
         .chain(&[("app_account_cleared", "{}"), ("unavailable_retry", "{}")])
     {
         assert!(
@@ -191,6 +194,16 @@ fn a_remote_host_reaches_only_its_narrow_bridge_on_its_exact_origin() {
             "a remote selection is never managed: {command}"
         );
     }
+    assert_eq!(
+        invoke(
+            &host,
+            "https://suplex.example",
+            "app_update_status",
+            json!({})
+        ),
+        Ok(json!({ "phase": "idle" })),
+        "a test shell manages no updater"
+    );
     for (command, body) in SETUP_COMMANDS.iter().chain(&[("unavailable_retry", "{}")]) {
         assert!(
             refused_by_acl(&invoke(
@@ -232,6 +245,7 @@ fn cross_origin_frames_other_ports_and_local_files_cannot_invoke_host_commands()
     ] {
         for (command, body) in NETWORK_COMMANDS
             .iter()
+            .chain(UPDATE_COMMANDS.iter())
             .chain(&[
                 ("app_open_host_picker", "{}"),
                 ("app_account_cleared", "{}"),
@@ -261,10 +275,14 @@ fn a_retired_host_view_keeps_no_authority_after_another_host_is_selected() {
         .show_host_for_test(&parse_target("https://other.example").unwrap())
         .unwrap();
     assert_ne!(first, second, "every selection gets a fresh label");
-    for (command, body) in NETWORK_COMMANDS.iter().chain(&[
-        ("app_open_host_picker", "{}"),
-        ("app_account_cleared", "{}"),
-    ]) {
+    for (command, body) in NETWORK_COMMANDS
+        .iter()
+        .chain(UPDATE_COMMANDS.iter())
+        .chain(&[
+            ("app_open_host_picker", "{}"),
+            ("app_account_cleared", "{}"),
+        ])
+    {
         assert_eq!(
             invoke(&retired, "https://suplex.example", command, args(body)),
             Err(json!(DENIED)),

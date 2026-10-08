@@ -56,7 +56,7 @@ function CreateActions({ close }: { close?: () => void }): ReactElement {
   const hasProjects = useHasProjects(company?.id);
   const mobile = useIsMobile();
   return (
-    <div className="flex gap-2 p-2"><NewButton className="flex-1" disabled={company?.status !== "active"} onClick={() => { close?.(); requestNewTask(); }}>{hasProjects === false ? "Add project" : "New task"}</NewButton>{context?.user?.role === "admin" && !mobile ? <Button variant="outline" size="icon-lg" aria-label="Quick shell" title="Quick shell (Ctrl+`)" onClick={() => { close?.(); toggleQuickShell(); }}><PhosphorTerminalIcon /></Button> : null}</div>
+    <div className="flex gap-2 p-2"><NewButton className="flex-1" disabled={company?.status !== "active"} onClick={() => { close?.(); requestNewTask(); }}>{hasProjects === false ? "Add project" : "New task"}</NewButton>{context?.user?.role === "admin" && !mobile ? <Button variant="outline" size="icon-sm" aria-label="Quick shell" title="Quick shell (Ctrl+`)" onClick={() => { close?.(); toggleQuickShell(); }}><PhosphorTerminalIcon /></Button> : null}</div>
   );
 }
 

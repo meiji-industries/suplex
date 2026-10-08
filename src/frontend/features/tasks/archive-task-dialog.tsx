@@ -13,7 +13,7 @@ export function ArchiveTaskDialog({ task, open, onOpenChange, onArchived }: {
 }): ReactElement {
   const confirmArchive = (): void => {
     onOpenChange(false);
-    startTaskArchive({ id: task.id, ...(task.title ? { title: task.title } : {}) }, { onArchived });
+    startTaskArchive({ id: task.id, ...(task.title ? { title: task.title } : {}), issueKey: task.issueKey ?? null }, { onArchived });
   };
   return <AlertDialog open={open} onOpenChange={onOpenChange}>
     <AlertDialogContent><AlertDialogHeader>

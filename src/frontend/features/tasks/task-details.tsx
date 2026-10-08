@@ -113,13 +113,12 @@ export function TaskDetailsPage({ task, project, onChange, backHref, titleAction
           {readError ? <Alert variant="destructive"><AlertDescription>{readError}</AlertDescription></Alert> : null}
           <Markdown source={task.description} />
           {task.images.length ? <ul className="flex flex-wrap gap-2" aria-label="Task images">{task.images.map(item => <li key={item.artifactId}><button type="button" className="size-16 overflow-hidden rounded-field border bg-muted/30 focus-visible:outline" aria-label={`Open ${item.filename}`} onClick={() => setImage(item)}><img className="size-full object-cover" src={`/api/tasks/${task.id}/images/${item.artifactId}`} alt={item.filename} /></button></li>)}</ul> : null}
-          {task.status !== "active" || task.pullRequest || task.humanQuestion ? <div data-task-current className="-mx-4 px-4 py-3 sm:-mx-6 sm:px-6 lg:-mx-10 lg:px-10"><div className="mx-auto max-w-4xl space-y-3">
+          {task.workflow !== "standard" ? <WorkflowHistory task={task} activity={activity} /> : null}
+          <TaskWork task={task} activity={activity} onChange={onChange} current={task.status !== "active" || task.pullRequest || task.humanQuestion ? <div data-task-current className="-mx-4 px-4 py-3 sm:-mx-6 sm:px-6 lg:-mx-10 lg:px-10"><div className="mx-auto max-w-4xl space-y-3">
             {task.pullRequest || task.status === "delivered" && ["pull_request_draft", "pull_request_ready", "merged"].includes(task.deliveryTarget) ? <TaskPullRequestCard task={task} onChange={onChange} /> : task.status === "active" ? null : ["backlog", "queued"].includes(task.status) ? <TaskQueueStatus task={task} editable={editable} busy={busy} onEdit={() => setEdit(editTaskDraft(task))} onAction={action => void act(action)} /> : <p className="text-xs text-muted-foreground">{task.status === "delivered" ? "The delivery target is complete." : task.status === "cancelled" ? "The task is cancelled." : "Coordinator needs your answer."}</p>}
             {task.pullRequest && ["backlog", "queued"].includes(task.status) && task.queue.waitingOn.length ? <TaskQueueWaits task={task} /> : null}
             {task.humanQuestion ? <TaskQuestion key={task.humanQuestion.id} question={task.humanQuestion} busy={busy} onAnswer={answer => act("answer", { questionId: task.humanQuestion?.id, ...answer })} onLimitDecision={limitDecision => act("answer", { questionId: task.humanQuestion?.id, limitDecision })} /> : null}
-          </div></div> : null}
-          {task.workflow !== "standard" ? <WorkflowHistory task={task} activity={activity} /> : null}
-          <TaskWork task={task} activity={activity} onChange={onChange} />
+          </div></div> : null} />
         </div></div>
       </div>
       <aside aria-label="Task properties" className="min-w-0 border-t px-4 py-5 lg:border-l lg:border-t-0">

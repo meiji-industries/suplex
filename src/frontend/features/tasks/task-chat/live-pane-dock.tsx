@@ -7,6 +7,7 @@ import { EntityAvatar } from "../../../components/app/entity-avatar.js";
 import { ProviderIcon, providerIcons } from "../../../components/app/provider-icons.js";
 import { roleLabel } from "../workflow-presentation.js";
 import { SetupLog } from "./setup-log.js";
+import suplexMark from "../../../assets/suplex-mark.svg?inline";
 import { SessionHistory } from "./session-history.js";
 import { sessionHistoryLabels } from "./session-history-state.js";
 
@@ -77,7 +78,7 @@ export function LivePaneDock({ taskId, activity }: { taskId: string; activity: T
         <div className="min-w-0 flex-1 overflow-x-auto">
           <TabsList variant="line" className="h-9 gap-0 rounded-none p-0">
             {shell ? <TabsTrigger value={shellTabId} className={sessionTabClassName}><SquareTerminal className="size-3.5" /><span className="max-w-40 truncate">Shell</span></TabsTrigger> : null}
-            {setup ? <TabsTrigger value="setup" className={sessionTabClassName}><SquareTerminal className="size-3.5" /><span className="max-w-40 truncate">Setup</span></TabsTrigger> : null}
+            {setup ? <TabsTrigger value="setup" className={sessionTabClassName}><img src={suplexMark} alt="" className="size-4" /><span className="max-w-40 truncate">Setup</span></TabsTrigger> : null}
             {sessions.map(session => {
               const label = labels.get(session.id) ?? roleLabel(session);
               return <TabsTrigger key={session.id} value={session.id} className={sessionTabClassName} aria-label={label}><SessionAvatars profileId={session.profileId} label={label} {...(session.harness ? { harness: session.harness } : {})} /><span className="max-w-40 truncate">{label}</span></TabsTrigger>;

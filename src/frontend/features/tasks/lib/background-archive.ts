@@ -3,7 +3,7 @@ import { toast, type ExternalToast } from "sonner";
 import type { Task } from "../../../contracts/tasks.js";
 import { archiveTask, isArchiveConfirmation } from "./task-api.js";
 
-export type ArchiveTarget = { id: string; title?: string };
+export type ArchiveTarget = { id: string; title?: string; issueKey?: string | null };
 export type ArchiveReview = { task: ArchiveTarget; dirtyFileCount: number; dirtyFilePaths: string[]; onArchived?: (task: Task) => void };
 
 // Archive requests belong to the tab, not to the dialog or page that started them.
@@ -36,7 +36,8 @@ export function startTaskArchive(task: ArchiveTarget, { discardDirty = false, on
   if (archiving.has(task.id)) return false;
   archiving.add(task.id);
   if (review?.task.id === task.id) setReview(null);
-  toast.loading(`Archive of ${taskName(task)} is in progress`, toastOptions(task.id));
+  // The loading toast shows a spinner.
+  toast.loading(`Archiving ${task.issueKey ?? taskName(task)}`, toastOptions(task.id));
   void runArchive(task, discardDirty, onArchived).finally(() => archiving.delete(task.id));
   return true;
 }

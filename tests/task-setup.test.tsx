@@ -36,7 +36,7 @@ test("setup appears before a session, updates output, and keeps the failed log",
   const { container, render } = await mount(running);
   expect(container.querySelector('[role="tab"]')?.textContent).toBe("Setup");
   expect(container.querySelector("pre")?.textContent).toBe("dump starts\n");
-  expect(container.querySelector('[data-setup-state="running"]')?.textContent).toBe("Setup runs.");
+  expect(container.querySelector('[data-setup-state="running"]')?.textContent).toBe("Setup · Working");
   await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
   expect(container.querySelector("pre")?.textContent).toBe("dump starts\ndump failed\n");
   expect(container.querySelector('[role="status"]')?.textContent).toBe("Setup failed with exit status 7.");
@@ -44,11 +44,11 @@ test("setup appears before a session, updates output, and keeps the failed log",
   await act(async () => { await vi.advanceTimersByTimeAsync(5000); });
   expect(readTaskSetupLog).toHaveBeenCalledTimes(reads);
   await render(failed);
-  expect(container.querySelector('[data-setup-state="failed"]')?.textContent).toBe("Setup failed with exit status 7.");
+  expect(container.querySelector("[data-setup-state]")).toBeNull();
   expect(container.querySelector("pre")?.textContent).toContain("dump failed");
 });
 
-test("completed setup loads from disk, follows Shell, and shows success on the card", async () => {
+test("completed setup loads from disk, follows Shell, and leaves the card", async () => {
   const setup: TaskSetup = { state: "succeeded", exitStatus: "0" };
   vi.mocked(readTaskSetupLog).mockResolvedValue({ setup, output: "setup finished\n" });
   const { container } = await mount(setup, "shell");
@@ -56,7 +56,7 @@ test("completed setup loads from disk, follows Shell, and shows success on the c
   expect(tabs.map(tab => tab.textContent)).toEqual(["Shell", "Setup"]);
   await act(async () => { tabs[1]!.click(); });
   expect(container.querySelector("pre")?.textContent).toBe("setup finished\n");
-  expect(container.querySelector('[data-setup-state="succeeded"]')?.textContent).toBe("Setup succeeded.");
+  expect(container.querySelector("[data-setup-state]")).toBeNull();
 });
 
 test("no setup and no sessions leave the dock and card empty", async () => {

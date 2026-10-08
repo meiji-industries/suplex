@@ -55,11 +55,11 @@ const button = (name: string) => Array.from(document.querySelectorAll("button"))
 test("the dialog closes before the archive request settles and the toast becomes a success", async () => {
   const onOpenChange = vi.fn();
   const onArchived = vi.fn();
-  await act(async () => root.render(<ArchiveTaskDialog task={{ id: "close-fast", title: "Close fast" }} open onOpenChange={onOpenChange} onArchived={onArchived} />));
+  await act(async () => root.render(<ArchiveTaskDialog task={{ id: "close-fast", title: "Close fast", issueKey: "MEI-26" }} open onOpenChange={onOpenChange} onArchived={onArchived} />));
   await act(async () => button("Archive task")!.click());
   expect(onOpenChange).toHaveBeenCalledWith(false);
   expect(archiveTask).toHaveBeenCalledExactlyOnceWith("close-fast", false);
-  expect(toast.loading).toHaveBeenCalledWith('Archive of "Close fast" is in progress', expect.objectContaining({ id: archiveToastId("close-fast") }));
+  expect(toast.loading).toHaveBeenCalledWith('Archiving MEI-26', expect.objectContaining({ id: archiveToastId("close-fast") }));
   expect(onArchived).not.toHaveBeenCalled();
 
   // The component that started the archive is gone before the server answers.

@@ -25,7 +25,7 @@ export function canQuickArchive(color: PullRequestColor, status: Task["status"],
 
 const colors = { purple: "text-purple-500", red: "text-red-500", yellow: "text-yellow-500", green: "text-green-500", grey: "text-muted-foreground" };
 
-export function RecentPullRequest({ taskId, title, number, state, headSha, status, archivedAt, onArchived }: { taskId: string; title: string; number: number; state: string; headSha: string; status: Task["status"]; archivedAt: Task["archivedAt"]; onArchived: (task: Task) => void }) {
+export function RecentPullRequest({ taskId, title, issueKey, number, state, headSha, status, archivedAt, onArchived }: { taskId: string; title: string; issueKey: string | null; number: number; state: string; headSha: string; status: Task["status"]; archivedAt: Task["archivedAt"]; onArchived: (task: Task) => void }) {
   const { checks } = useTaskChecks(state === "merged" ? null : taskId, `${number}:${state}:${headSha}`);
   const [archiveOpen, setArchiveOpen] = useState(false);
   const color = pullRequestColor(state, checks);
@@ -33,7 +33,7 @@ export function RecentPullRequest({ taskId, title, number, state, headSha, statu
   const canArchive = canQuickArchive(color, status, archivedAt);
   if (canArchive) return <>
     <SidebarMenuAction data-recent-pull-request={state} data-pr-color={color} className="group/pr-action" render={<button type="button" aria-label="Archive task" title="Archive task"><span className="relative size-4 text-purple-500" aria-hidden="true"><GitPullRequest data-pr-icon="pull-request" className="absolute inset-0 size-4 transition-opacity group-hover/pr-action:opacity-0 group-focus/pr-action:opacity-0" /><Archive data-pr-icon="archive" className="absolute inset-0 size-4 opacity-0 transition-opacity group-hover/pr-action:opacity-100 group-focus/pr-action:opacity-100" /></span></button>} onClick={() => setArchiveOpen(true)} />
-    <ArchiveTaskDialog task={{ id: taskId, title }} open={archiveOpen} onOpenChange={setArchiveOpen} onArchived={onArchived} />
+    <ArchiveTaskDialog task={{ id: taskId, title, issueKey }} open={archiveOpen} onOpenChange={setArchiveOpen} onArchived={onArchived} />
   </>;
   return <SidebarMenuAction render={<span data-recent-pull-request={state} data-pr-color={color} title={label}><GitPullRequest aria-label={label} className={`size-4 ${colors[color]}`} /></span>} />;
 }

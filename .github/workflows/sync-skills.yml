@@ -1,11 +1,11 @@
 name: Sync skills
 
-# Publishes skills/ to the public meiji-industries/suplex-skills repository,
+# Publishes apps/server/skills/ to the public meiji-industries/suplex-skills repository,
 # which `npx skills add` installs from.
 on:
   push:
     branches: [main]
-    paths: ['skills/**']
+    paths: ['apps/server/skills/**']
   workflow_dispatch:
 
 permissions:
@@ -29,7 +29,7 @@ jobs:
           path: public
       - name: Copy and push the skills
         run: |
-          rsync --archive --delete --exclude __pycache__ skills/ public/skills/
+          rsync --archive --delete --exclude __pycache__ apps/server/skills/ public/skills/
           cd public
           git add --all skills
           if git diff --cached --quiet; then exit 0; fi

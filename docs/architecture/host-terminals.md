@@ -3,12 +3,12 @@
 For contributors who change a terminal that the Suplex host runs, this page
 explains the registry, the kinds of host terminal, how a browser connects, and
 the quick shell. Sources:
-[registry and tests](../../rust/src/terminals/host.rs),
-[terminal bindings](../../rust/src/terminals/mod.rs),
-[WebSocket bridge](../../rust/src/http/routes/task_pane.rs),
-[quick shell route and tests](../../rust/src/http/routes/quick_shell.rs),
-[browser terminal](../../src/frontend/features/tasks/task-chat/live-pane-terminal.tsx), and
-[quick shell console](../../src/frontend/shell/quick-shell.tsx).
+[registry and tests](../../apps/server/src/terminals/host.rs),
+[terminal bindings](../../apps/server/src/terminals/mod.rs),
+[WebSocket bridge](../../apps/server/src/http/routes/task_pane.rs),
+[quick shell route and tests](../../apps/server/src/http/routes/quick_shell.rs),
+[browser terminal](../../apps/web/features/tasks/task-chat/live-pane-terminal.tsx), and
+[quick shell console](../../apps/web/shell/quick-shell.tsx).
 Herdr panes are a separate transport; see [Herdr](herdr.md).
 
 ## The registry

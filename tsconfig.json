@@ -3,8 +3,6 @@
     "target": "ES2022",
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
-    "baseUrl": ".",
-    "paths": { "@/*": ["src/frontend/*"] },
     "lib": ["ES2023", "DOM"],
     "jsx": "react-jsx",
     "strict": true,
@@ -21,6 +19,7 @@
     "skipLibCheck": true,
     "noEmit": true
   },
-  "include": ["src/frontend/**/*.ts", "src/frontend/**/*.tsx", "scripts/**/*.ts", "tests/**/*.ts", "tests/**/*.tsx"],
-  "exclude": ["node_modules", "dist"]
+  // Root tests type-check the apps/web files they import; vite-env.d.ts gives those files their ambient types.
+  "include": ["apps/web/vite-env.d.ts", "scripts/**/*.ts", "tests/**/*.ts", "tests/**/*.tsx"],
+  "exclude": ["node_modules"]
 }

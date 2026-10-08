@@ -2,19 +2,19 @@ import { execFileSync } from "node:child_process";
 import { readFile, writeFile } from "node:fs/promises";
 
 const git = (...args) => execFileSync("git", args, { encoding: "utf8" });
-// desktop/package.json and mobile/package.json also set the Tauri app versions: each tauri.conf.json reads its own.
-const files = ["package.json", "desktop/package.json", "mobile/package.json"];
+// apps/desktop/package.json and apps/mobile/package.json also set the Tauri app versions: each tauri.conf.json reads its own.
+const files = ["package.json", "apps/desktop/package.json", "apps/mobile/package.json"];
+// The workspace Cargo.lock holds both crates; one entry per file keeps its rewrite to a single write.
 const rustFiles = [
-  { file: "rust/Cargo.toml", name: "suplex" },
-  { file: "rust/Cargo.lock", name: "suplex" },
-  { file: "desktop/src-tauri/Cargo.toml", name: "suplex-desktop" },
-  { file: "desktop/src-tauri/Cargo.lock", name: "suplex-desktop" },
+  { file: "apps/server/Cargo.toml", names: ["suplex"] },
+  { file: "apps/desktop/src-tauri/Cargo.toml", names: ["suplex-desktop"] },
+  { file: "Cargo.lock", names: ["suplex", "suplex-desktop"] },
 ];
 const packages = await Promise.all(files.map(async (file) => ({ file, value: JSON.parse(await readFile(file, "utf8")) })));
-const rustPackages = await Promise.all(rustFiles.map(async ({ file, name }) => ({ file, name, text: await readFile(file, "utf8") })));
+const rustPackages = await Promise.all(rustFiles.map(async ({ file, names }) => ({ file, names, text: await readFile(file, "utf8") })));
 const current = packages[0].value.version;
 const crate = (name, version) => `name = "${name}"\nversion = "${version}"`;
-if (!packages.every(({ value }) => value.version === current) || !rustPackages.every(({ name, text }) => text.includes(crate(name, current)))) {
+if (!packages.every(({ value }) => value.version === current) || !rustPackages.every(({ names, text }) => names.every(name => text.includes(crate(name, current))))) {
   throw new Error("Desktop, frontend, and native versions must match before release.");
 }
 
@@ -43,6 +43,6 @@ if (mode === "check-tag") {
     : process.env.RELEASE_BUMP === "patch" ? `${major}.${minor}.${patch + 1}`
     : (() => { throw new Error("RELEASE_BUMP must be major, minor, or patch."); })();
   await Promise.all(packages.map(({ file, value }) => writeFile(file, `${JSON.stringify({ ...value, version: next }, null, 2)}\n`)));
-  await Promise.all(rustPackages.map(({ file, name, text }) => writeFile(file, text.replace(crate(name, current), crate(name, next)))));
+  await Promise.all(rustPackages.map(({ file, names, text }) => writeFile(file, names.reduce((result, name) => result.replace(crate(name, current), crate(name, next)), text))));
   console.log(`${current} -> ${next}`);
 }

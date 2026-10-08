@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { taskDeliveryTargetOptions } from "../src/frontend/features/tasks/task-delivery-target.js";
+import { taskDeliveryTargetOptions } from "../apps/web/features/tasks/task-delivery-target.js";
 import { nativeBrowser } from "./helpers/native-browser.js";
 
 const workflows = ["standard", "direct_build", "independent_review", "competing_plans", "refine_pull_request"] as const;

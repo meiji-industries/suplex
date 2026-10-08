@@ -60,8 +60,8 @@ separately. For example, a project can allow one dedicated Claude instance while
 leaving its allowed system-provider list empty. This prevents Suplex from
 selecting the host's general provider login for that project. Dedicated instances
 support Claude Code; the same credential-directory isolation is not implemented
-for every provider. See [profile eligibility](../rust/src/profiles/agent_profiles.rs)
-and [task profile selection](../rust/src/tasks/commands.rs).
+for every provider. See [profile eligibility](../apps/server/src/profiles/agent_profiles.rs)
+and [task profile selection](../apps/server/src/tasks/commands.rs).
 
 Model authentication, Git transport, repository APIs, issue trackers, and MCP
 servers have separate access paths. A successful model sign-in does not prove

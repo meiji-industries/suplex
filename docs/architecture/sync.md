@@ -3,16 +3,16 @@
 For maintainers who change what the browser shows without a reload, this page
 explains the company sync socket: what the host observes, what it pushes, and
 how the browser falls back to HTTP polling. Sources:
-[feed](../../rust/src/sync.rs),
-[socket route](../../rust/src/http/routes/sync.rs),
-[wire types](../../rust/src/http/contracts/task_reads.rs),
-[socket client](../../src/frontend/features/tasks/lib/task-sync-api.ts),
-[cache writes](../../src/frontend/features/tasks/task-data.tsx),
-[query timing](../../src/frontend/shell/sync.ts), and
-[task queries](../../src/frontend/features/tasks/lib/task-queries.ts).
-The [feed tests](../../rust/tests/sync/feed.rs),
-[route tests](../../rust/tests/routes/sync.rs), and
-[browser tests](../../tests/task-sync.test.tsx) pin the behavior below.
+[feed](../../apps/server/src/sync.rs),
+[socket route](../../apps/server/src/http/routes/sync.rs),
+[wire types](../../apps/server/src/http/contracts/task_reads.rs),
+[socket client](../../apps/web/features/tasks/lib/task-sync-api.ts),
+[cache writes](../../apps/web/features/tasks/task-data.tsx),
+[query timing](../../apps/web/shell/sync.ts), and
+[task queries](../../apps/web/features/tasks/lib/task-queries.ts).
+The [feed tests](../../apps/server/tests/sync/feed.rs),
+[route tests](../../apps/server/tests/routes/sync.rs), and
+[browser tests](../../apps/web/tests/task-sync.test.tsx) pin the behavior below.
 
 ## What the feed observes
 
@@ -61,11 +61,11 @@ remaining id sends nothing.
 | Request | Interval | Why it is not pushed |
 | --- | --- | --- |
 | Task setup log | 1 s while setup runs or a read fails | Reads the setup log from the preparation directory. Stops after the runner records completion. |
-| [Checks](../../src/frontend/features/tasks/lib/task-checks.ts) | 15 s while a run is pending or the read failed, else 60 s. Read again when the pull request number, state, or head SHA of the task changes. | The route reads GitHub at request time. |
-| [Diff summary and patch](../../src/frontend/features/tasks/lib/task-queries.ts) | 5 s, or 60 s while the socket is live. Read again when a pushed task or execution changes, at most one time in 5 s. | The route reads the worktree; the feed has no worktree signal. |
-| [A move run that is not the last run](../../src/frontend/features/moves/move-run.tsx) | 3 s | The feed carries only each move's last run. |
-| [Archived task list](../../src/frontend/features/tasks/tasks.tsx) | 3 s, or 60 s while live. Read again when a task enters or leaves the active list. | The feed publishes active tasks only. |
-| [Today](../../src/frontend/features/today/today.tsx), [Analytics](../../src/frontend/features/analytics/analytics.tsx), and [Timeline](../../src/frontend/features/timeline/timeline.tsx) pages | 30 s, 30 s, and 60 s, with or without the socket | The feed publishes no value for these pages. |
+| [Checks](../../apps/web/features/tasks/lib/task-checks.ts) | 15 s while a run is pending or the read failed, else 60 s. Read again when the pull request number, state, or head SHA of the task changes. | The route reads GitHub at request time. |
+| [Diff summary and patch](../../apps/web/features/tasks/lib/task-queries.ts) | 5 s, or 60 s while the socket is live. Read again when a pushed task or execution changes, at most one time in 5 s. | The route reads the worktree; the feed has no worktree signal. |
+| [A move run that is not the last run](../../apps/web/features/moves/move-run.tsx) | 3 s | The feed carries only each move's last run. |
+| [Archived task list](../../apps/web/features/tasks/tasks.tsx) | 3 s, or 60 s while live. Read again when a task enters or leaves the active list. | The feed publishes active tasks only. |
+| [Today](../../apps/web/features/today/today.tsx), [Analytics](../../apps/web/features/analytics/analytics.tsx), and [Timeline](../../apps/web/features/timeline/timeline.tsx) pages | 30 s, 30 s, and 60 s, with or without the socket | The feed publishes no value for these pages. |
 
 ## Frames
 
@@ -89,7 +89,7 @@ changes that arrive before the browser has a list are ignored; the HTTP read or
 the next snapshot fills the list.
 
 The browser opens the socket on every page except admin, profile, and company
-settings ([`showRecentTasks`](../../src/frontend/features/tasks/lib/task-list.ts)).
+settings ([`showRecentTasks`](../../apps/web/features/tasks/lib/task-list.ts)).
 A pushed value cancels an HTTP read of the same key that is in flight, so an
 older read cannot replace it. A command response and a pushed task resolve by
 `updatedAt`; the newer one stays. A pushed execution change reads the diff
@@ -117,9 +117,9 @@ describes.
 
 1. **Reader.** Add a `pub(crate)` read without a user beside the HTTP read in
    the owning domain module, documented "for the sync feed. The caller
-   authorizes.", such as [`list_active`](../../rust/src/tasks/repository.rs),
-   [`list_company`](../../rust/src/moves/mod.rs), or
-   [`company_analytics`](../../rust/src/tasks/analytics/mod.rs). The HTTP route
+   authorizes.", such as [`list_active`](../../apps/server/src/tasks/repository.rs),
+   [`list_company`](../../apps/server/src/moves/mod.rs), or
+   [`company_analytics`](../../apps/server/src/tasks/analytics/mod.rs). The HTTP route
    keeps its own access check. The socket checks company access at upgrade and
    on each heartbeat, and checks watched ids in `start_watch`.
 2. **Publish.** For a company value, read it in `publish`, add an `Arc` field
@@ -136,7 +136,7 @@ describes.
 4. **Wire.** Add the field to `SyncMessage` with the response type of its HTTP
    endpoint. An optional field uses `skip_serializing_if = "Option::is_none"`
    and `#[ts(optional)]`. `cargo test` writes
-   [`SyncMessage.ts`](../../src/frontend/contracts/generated/SyncMessage.ts);
+   [`SyncMessage.ts`](../../apps/web/contracts/generated/SyncMessage.ts);
    commit it.
 5. **Browser.** In `TaskDataProvider`, `push` the value into the query key that
    the HTTP query for the same value uses, and give that query

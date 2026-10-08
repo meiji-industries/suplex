@@ -2,9 +2,9 @@ import { readFileSync, readdirSync } from "node:fs";
 import { dirname, resolve, sep } from "node:path";
 import ts from "typescript";
 import { expect, test } from "vitest";
-import { TaskInputSchema } from "../src/frontend/contracts/tasks.js";
-import { ProjectBodySchema } from "../src/frontend/contracts/projects.js";
-import { AgentProfileInputSchema } from "../src/frontend/contracts/profiles.js";
+import { TaskInputSchema } from "../apps/web/contracts/tasks.js";
+import { ProjectBodySchema } from "../apps/web/contracts/projects.js";
+import { AgentProfileInputSchema } from "../apps/web/contracts/profiles.js";
 
 test("task and project configuration have no phase, mirror gate, or harness capacity fields", () => {
   expect(Object.keys(TaskInputSchema.shape)).not.toEqual(expect.arrayContaining(["expectedRevision"]));
@@ -13,9 +13,10 @@ test("task and project configuration have no phase, mirror gate, or harness capa
 });
 
 test("TypeScript application source is confined to the browser", () => {
-  expect(readdirSync("src")).toEqual(["frontend", "web"]);
-  const frontend = resolve("src/frontend") + sep;
-  const paths = readdirSync("src/frontend", { recursive: true, encoding: "utf8" }).filter(path => /\.[jt]sx?$/.test(path));
+  const frontend = resolve("apps/web") + sep;
+  const paths = readdirSync("apps/web", { recursive: true, encoding: "utf8" })
+    // Tooling configs, tests, dependencies, and build output run in Node or are not application source.
+    .filter(path => /\.[jt]sx?$/.test(path) && !/^(?:node_modules|dist|tests)[\\/]|^[^\\/]+\.config\.ts$/.test(path));
   for (const path of paths) {
     const owner = resolve(frontend, path);
     const source = ts.createSourceFile(owner, readFileSync(owner, "utf8"), ts.ScriptTarget.Latest, false);
@@ -30,7 +31,7 @@ test("TypeScript application source is confined to the browser", () => {
 });
 
 test("native task UI has Coordinator, Worker, and workflow Advisors without the old role selectors", () => {
-  const source = readFileSync("src/frontend/features/tasks/new-task-dialog.tsx", "utf8");
+  const source = readFileSync("apps/web/features/tasks/new-task-dialog.tsx", "utf8");
   expect(source).toContain('role="root"');
   expect(source).toContain('role="worker"');
   expect(source).toContain("startImmediately");

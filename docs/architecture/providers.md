@@ -2,10 +2,10 @@
 
 For maintainers adding or diagnosing an agent provider, this page explains native execution and its display limits.
 
-[TaskHarness](../../rust/src/runtimes/task_harness.rs) supplies session setup,
+[TaskHarness](../../apps/server/src/runtimes/task_harness.rs) supplies session setup,
 dispatch, observation, recovery, and stop behavior. Its read-only session reader
 provides history, execution detail, and usage. The
-[registry](../../rust/src/runtimes/task_harness_registry.rs) selects by profile
+[registry](../../apps/server/src/runtimes/task_harness_registry.rs) selects by profile
 provider. The host consumes a common prompt observation, including admission,
 result state, running processes, unsettled tools, and whether retry is safe.
 The Live history reader includes native reasoning for Claude Code, Codex CLI,
@@ -28,13 +28,13 @@ The runtime does not require a model warm-up turn merely to open a log
 viewer. Devin can read an old warm-up export when recovering session identity;
 that compatibility read is not a current warm-up workflow.
 
-Provider code lives under [runtimes](../../rust/src/runtimes/). Shared headless
+Provider code lives under [runtimes](../../apps/server/src/runtimes/). Shared headless
 execution records process identity and per-turn files; recovery uses the native
 result and process observations rather than treating a wrapper exit alone as
 proof that every tool finished.
 
 Headless processes need the host's executable path and tool configuration.
-[Claude dispatch](../../rust/src/runtimes/claude_code/task_runtime.rs) starts with
+[Claude dispatch](../../apps/server/src/runtimes/claude_code/task_runtime.rs) starts with
 the inherited environment, applies the Worker Git guard where needed, then
 adds task and project settings. A dedicated Claude login keeps general host
 settings such as `PATH` and `HOME` but removes inherited Claude credentials

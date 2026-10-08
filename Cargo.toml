@@ -1,0 +1,23 @@
+[workspace]
+resolver = "3"
+members = ["apps/server", "apps/desktop/src-tauri", "apps/mobile/src-tauri", "apps/bootstrap"]
+default-members = ["apps/server"]
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = "1"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+url = "2"
+libc = "0.2"
+base64 = "0.22"
+
+[profile.dev]
+debug = "line-tables-only"
+# Keep local edit/rebuild cycles incremental; the wrapper caches eligible dependencies.
+incremental = true
+
+# Xcode 27 hides swift-rs's runtime exports, so the iOS link fails (Brendonovich/swift-rs#81).
+# Pinned to the fix in Brendonovich/swift-rs#82; drop this once a swift-rs release includes it.
+[patch.crates-io]
+swift-rs = { git = "https://github.com/Brendonovich/swift-rs", rev = "3788d3d2bae8e7a863b3e281a59477438e12c632" }

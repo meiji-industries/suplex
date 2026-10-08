@@ -58,7 +58,7 @@ verification locks only coordinate commands using the same wrapper and key.
 | Unimplemented ideas and their tradeoffs | [Proposals](../proposals.md) |
 
 Tests alongside the runtime, display, bridge, archive, and delivery modules,
-plus [host integration tests](../../rust/tests/coordination/host.rs), are the
+plus [host integration tests](../../apps/server/tests/coordination/host.rs), are the
 starting points for changes. A source review or fixture test does not establish
 live provider access, actual Herdr compatibility, or packaged-app behavior.
 

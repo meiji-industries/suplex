@@ -6,10 +6,10 @@ their own accounts and receive access through company invitations.
 
 ## Hosted service
 
-`suplex hosted serve` (`rust/src/hosted/`) is one process on the Fly app
+`suplex hosted serve` (`apps/server/src/hosted/`) is one process on the Fly app
 `suplex-production` at `https://suplex.sh`. It serves billing
-([billing](billing.md)), accounts (`rust/src/accounts/hosted/`), and the
-suplex.sh site (`rust/src/hosted/site.rs`) from one router. Every absolute URL
+([billing](billing.md)), accounts (`apps/server/src/accounts/hosted/`), and the
+suplex.sh site (`apps/server/src/hosted/site.rs`) from one router. Every absolute URL
 it builds (Stripe return pages, OAuth callbacks, magic links) uses
 `BILLING_PUBLIC_ORIGIN`.
 
@@ -18,12 +18,12 @@ it builds (Stripe return pages, OAuth callbacks, magic links) uses
 | `suplex.sh` | The origin. |
 | `www.suplex.sh` | 301 to `BILLING_PUBLIC_ORIGIN` with the same path and query. |
 
-The site serves `/download`, `/install.sh`, `/terms`, `/privacy`, and a 302 to
-`https://getsuplex.ai/` for every other path, as the Cloudflare Worker in
-`src/web/worker.js` did. Its pages are compiled into the binary: `/install.sh`
-is `include_str!` of `src/web/public/install.sh` (`text/plain`,
-`max-age=300`), and `/terms` and `/privacy` are placeholders until the Terms of
-Service and Privacy Policy pages land.
+The site serves `/download`, `/install.sh`, `/install.ps1`, `/terms`,
+`/privacy`, `/support`, and a 302 to `https://getsuplex.ai/` for every other
+path. Its pages are compiled into the binary from `apps/server/src/hosted`:
+`/install.sh` and `/install.ps1` are `include_str!` of `install.sh` and
+`install.ps1` (`text/plain`, `max-age=300`), and the other pages come from
+`legal/`.
 
 ### Login
 
@@ -49,7 +49,7 @@ account for every provider. Emails are stored in lowercase. Google must report
 `email_verified`; GitHub uses the primary verified address, or else any
 verified address. Without one, the login fails with `email_unverified`.
 
-The wire types are in `rust/src/accounts/wire.rs`.
+The wire types are in `apps/server/src/accounts/wire.rs`.
 
 | Endpoint | Behavior |
 | --- | --- |
@@ -63,7 +63,7 @@ The wire types are in `rust/src/accounts/wire.rs`.
 | `POST /auth/email/verify` | Consumes the link once, completes the attempt, 303 to `/auth/done`. |
 | `GET /auth/done` | Static: "You are signed in. Return to Suplex." |
 | `GET /account/delete` | Account deletion, linked from Settings > Profile (App Store guideline 5.1.1(v)). The person logs in with an attempt for the installation `suplex.sh-delete`; the callback goes to `GET /account/delete/confirm?attempt=`, and `POST` there deletes the account, its tokens and attempts, and the invitations it sent. Billing records stay. A subscription that renews must be cancelled first; if Suplex cannot read the subscription, the page asks for a retry. |
-| `GET /download?platform=&format=&visitor=` | 302 to the file in the live release manifest, as `src/web/worker.js` did. Unknown platform or format is 404; a missing manifest or file is 502. |
+| `GET /download?platform=&format=&visitor=` | 302 to the file in the live release manifest. Unknown platform or format is 404; a missing manifest or file is 502. |
 
 Browser routes answer failures with a page, never with JSON. Auth routes have a
 64 KiB body limit and send `Cache-Control: no-store` and
@@ -77,7 +77,7 @@ billing, and the site keep working.
 ### Tables
 
 The service creates these tables in `BILLING_DATABASE_PATH` at startup
-(`rust/src/accounts/hosted/schema.sql`). Only token hashes are stored. The
+(`apps/server/src/accounts/hosted/schema.sql`). Only token hashes are stored. The
 account token is minted at poll time, so no plaintext token rests in SQLite.
 
 | Table | Rows |
@@ -118,7 +118,7 @@ startup.
 
 ### Deploy
 
-`mise run deploy_production` builds `Dockerfile` on Fly's remote builder
+`mise run hosted:deploy` builds `apps/server/Dockerfile` on Fly's remote builder
 and deploys this checkout to `suplex-production`, including `/terms` and
 `/privacy`. It waits for Fly's deployment checks. `fly.toml` sets
 `BILLING_PUBLIC_ORIGIN=https://suplex.sh`. Set the account secrets once:
@@ -130,7 +130,7 @@ fly secrets set --app suplex-production \
   RESEND_API_KEY=... ACCOUNT_EMAIL_FROM='Suplex <login@suplex.sh>'
 ```
 
-Locally, `mise run billing:tunnel` and `mise run billing:dev` run the service
+Locally, `mise run hosted:tunnel` and `mise run hosted:dev` run the service
 on `127.0.0.1:4212` behind `https://billing-sandbox.example.com`, with the
 sandbox values from `scripts/billing-dev.env`.
 
@@ -209,14 +209,14 @@ the app never asks for a login.
 These steps need a person with access to Cloudflare, Fly, Google Cloud,
 GitHub, Resend, Stripe, RevenueCat, 1Password, and Framer.
 
-1. Deploy with `mise run deploy_production` before setting account secrets, and do steps 2 and
+1. Deploy with `mise run hosted:deploy` before setting account secrets, and do steps 2 and
    3 right after it: Checkout and portal return URLs now point at `suplex.sh`.
    Through `https://suplex-production.fly.dev`, check that `/health`
    answers, `/auth/start` answers 503 `account_unavailable`, and `/install.sh`
    returns the script.
 2. In Cloudflare, remove the `suplex.sh` and `www.suplex.sh` custom domains from
    the `suplex-web` Worker, and disconnect its CI/CD from this repository.
-3. Run `mise run billing:dns`. It points `suplex.sh` and `www.suplex.sh` at
+3. Run `mise run hosted:dns`. It points `suplex.sh` and `www.suplex.sh` at
    the Fly app, adds missing Fly certificates, and checks
    them. Then check `curl -I https://suplex.sh/install.sh`,
    `curl -I 'https://suplex.sh/download?platform=macos-arm64'`, and
@@ -229,14 +229,11 @@ GitHub, Resend, Stripe, RevenueCat, 1Password, and Framer.
    domain and API key as described in Provider setup.
 7. Store the six account values in the Suplex 1Password vault: production
    values for Fly, and sandbox values as fields of the `.env.development` item
-   that `scripts/billing-dev.env` reads. `mise run billing:dev` fails until the
+   that `scripts/billing-dev.env` reads. `mise run hosted:dev` fails until the
    sandbox fields exist.
 8. Run the `fly secrets set` command in Deploy. Fly restarts the machine.
-9. Paste the updated `integrations/posthog/framer-attribution.js` into Framer.
+9. Paste the updated `apps/server/src/hosted/framer-attribution.js` into Framer.
    In a private browser, check that a download link gets `?visitor=` only
    after you accept analytics.
-10. Move `install.sh`, `terms.html`, and `privacy.html` under
-    `rust/src/hosted`, point the `include_str!` calls in `site.rs` at them, and
-    delete `src/web` (the Worker, `wrangler.jsonc`, and its package files).
-    Disconnect the Worker's Cloudflare CI if step 2 did not, and archive the
-    `meiji-industries/suplex-web` repository.
+10. Disconnect the `suplex-web` Worker's Cloudflare CI if step 2 did not, and
+    archive the `meiji-industries/suplex-web` repository.

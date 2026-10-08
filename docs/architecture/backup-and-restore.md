@@ -2,10 +2,10 @@
 
 For contributors and operators, this page describes which state a Suplex
 backup can recover and how its two restore paths differ. Sources:
-[backup service](../../rust/src/platform/backup.rs),
-[administrator routes](../../rust/src/http/routes/admin_platform.rs),
-[CLI handoff](../../rust/src/cli.rs), and
-[Backups settings](../../src/frontend/features/settings/backup-settings.tsx).
+[backup service](../../apps/server/src/platform/backup.rs),
+[administrator routes](../../apps/server/src/http/routes/admin_platform.rs),
+[CLI handoff](../../apps/server/src/cli.rs), and
+[Backups settings](../../apps/web/features/settings/backup-settings.tsx).
 
 ## What the archive contains
 

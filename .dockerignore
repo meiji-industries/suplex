@@ -1,11 +1,14 @@
-# Only rust/, migrations/, and the files compiled in go into the hosted image.
+# Only the workspace manifests, apps/server/ (with its migrations and install scripts), and the files compiled in go into the hosted image.
 *
-!rust
-!migrations
+!Cargo.toml
+!Cargo.lock
+!rust-toolchain.toml
+!apps/desktop/src-tauri/Cargo.toml
+!apps/mobile/src-tauri/Cargo.toml
+!apps/bootstrap/Cargo.toml
+!apps/server
 !scripts/shared-resource-command.py
-!src/web/public/install.sh
-!src/web/public/install.ps1
-!src/frontend/assets/suplex-wordmark.svg
-!src/frontend/assets/account-background.png
-!src/frontend/fonts/InterTight-Variable.woff2
-rust/target
+!apps/web/assets/suplex-wordmark.svg
+!apps/web/assets/account-background.png
+!apps/web/fonts/InterTight-Variable.woff2
+target

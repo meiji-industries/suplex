@@ -8,7 +8,7 @@ The frontend and protocol tests use the running Rust server. These backend test 
 | `backup-integrity.test.ts` | `platform::backup::tests`: artifact round trip, checksums, unsafe paths, truncated archive, missing entry, unsupported version, existing destination refusal, valid archive succeeds after failures. |
 | `backup-api.test.ts` | `http::routes::admin_platform::tests::administrators_create_list_download_and_restore_backups` covers list/create/download, in-place restore, preserved current session, invalid upload and unsafe/missing names. `platform::backup::tests::cross_host_restore_preserves_live_session_by_username` checks different user IDs on the two hosts with the same username and real hashed session. |
 
-New regression checks live in `rust/tests/platform/backup.rs`, included in the native module's test context. Backup verification: seven native backup tests pass. Identity verification: 20 tests pass. HTTP route verification: 68 tests pass. The OAuth SDK test passes against Rust, and all seven browser files pass (11 tests).
+New regression checks live in `apps/server/tests/platform/backup.rs`, included in the native module's test context. Backup verification: seven native backup tests pass. Identity verification: 20 tests pass. HTTP route verification: 68 tests pass. The OAuth SDK test passes against Rust, and all seven browser files pass (11 tests).
 
 | TypeScript test file | Native coverage |
 | --- | --- |

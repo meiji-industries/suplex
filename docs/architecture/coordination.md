@@ -2,10 +2,10 @@
 
 For maintainers following a task from intake to delivery, this page explains
 captured intent, role handoffs, and continuation. Sources:
-[task creation](../../rust/src/tasks/creation.rs),
-[task commands](../../rust/src/tasks/commands.rs),
-[coordination](../../rust/src/coordination/root_controller.rs), and
-[session persistence](../../rust/src/coordination/root_session_store.rs).
+[task creation](../../apps/server/src/tasks/creation.rs),
+[task commands](../../apps/server/src/tasks/commands.rs),
+[coordination](../../apps/server/src/coordination/root_controller.rs), and
+[session persistence](../../apps/server/src/coordination/root_session_store.rs).
 
 ## Captured intent and live observations
 

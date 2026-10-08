@@ -2,10 +2,10 @@
 
 For maintainers diagnosing terminal behavior, this page explains display
 attachment, browser transport, and cleanup. Sources:
-[task display](../../rust/src/runtimes/task_display.rs),
-[pane routes](../../rust/src/http/routes/task_pane.rs),
-[terminal bridge](../../rust/src/integrations/herdr_bridge.rs), and
-[display cleanup](../../rust/src/tasks/archive/displays.rs).
+[task display](../../apps/server/src/runtimes/task_display.rs),
+[pane routes](../../apps/server/src/http/routes/task_pane.rs),
+[terminal bridge](../../apps/server/src/integrations/herdr_bridge.rs), and
+[display cleanup](../../apps/server/src/tasks/archive/displays.rs).
 
 ## Execution and display
 
@@ -73,7 +73,7 @@ see [unresolved work](unknowns.md). Worktree cleanup has separate
 Git/data-preservation decisions.
 
 The [Herdr operations guide](../herdr-integration.md) covers readiness and sidebar
-configuration; [HERDR.md](../../HERDR.md) covers contributor use of Herdr. Neither
+configuration; [the Herdr workflow guide](../herdr.md) covers contributor use of Herdr. Neither
 makes terminal state authoritative for task completion.
 
 [Architecture index](README.md)

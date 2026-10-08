@@ -14,7 +14,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { nativeBrowser } from "../helpers/native-browser.js";
 import { runCommand } from "../helpers/run-command.js";
-import { TaskSchema } from "../../src/frontend/contracts/tasks.js";
+import { TaskSchema } from "../../apps/web/contracts/tasks.js";
 
 const journeyStartedAt = performance.now();
 const model = process.env.SUPLEX_REAL_CODEX_MODEL ?? "gpt-6-sol";

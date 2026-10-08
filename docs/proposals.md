@@ -7,10 +7,10 @@ owns product claims. [Architecture coverage](architecture/coverage.md) identifie
 the historical sources; [unresolved work](architecture/unknowns.md) lists specific
 verification gaps and other ideas.
 
-The relevant implementation anchors are [prompt composition](../rust/src/coordination/root_prompts.rs),
-[workflow policy](../rust/src/coordination/workflows.rs),
-[GitHub triggers](../rust/src/integrations/github_triggers.rs), and
-[native session history](../src/frontend/features/tasks/task-chat/session-history.tsx).
+The relevant implementation anchors are [prompt composition](../apps/server/src/coordination/root_prompts.rs),
+[workflow policy](../apps/server/src/coordination/workflows.rs),
+[GitHub triggers](../apps/server/src/integrations/github_triggers.rs), and
+[native session history](../apps/web/features/tasks/task-chat/session-history.tsx).
 
 ## Editable prompt guidance
 

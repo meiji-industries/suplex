@@ -7,7 +7,7 @@ import { join, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { promisify } from "node:util";
 import { chromium, webkit } from "playwright";
-import { TaskSchema } from "../../src/frontend/contracts/tasks.js";
+import { TaskSchema } from "../../apps/web/contracts/tasks.js";
 
 const git = promisify(execFile);
 
@@ -23,8 +23,8 @@ async function loopbackPort(): Promise<number> {
 type FixtureOptions = { providerMode?: "isolated" | "inherited" };
 
 async function startRustServer(root: string, port: number, options: FixtureOptions): Promise<() => Promise<void>> {
-  const executable = resolve(process.env.SUPLEX_BIN ?? "rust/target/debug/suplex");
-  const assets = resolve(process.env.SUPLEX_ASSETS_DIR ?? "dist/web");
+  const executable = resolve(process.env.SUPLEX_BIN ?? "target/debug/suplex");
+  const assets = resolve(process.env.SUPLEX_ASSETS_DIR ?? "apps/web/dist");
   await stat(executable);
   await stat(join(assets, "suplex-ui.js"));
   const isolated = options.providerMode !== "inherited";

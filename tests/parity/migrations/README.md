@@ -4,7 +4,7 @@ Captured from the TypeScript engine at revision `6bb0a43f` on 2026-09-26.
 These are synthetic test databases, not user data. Keep the inputs immutable;
 native tests copy them before migrating. The source SQL in `migrations/` is unchanged.
 
-`rust/tests/platform/migrations.rs` preserves the runner and data guarantees from
+`apps/server/tests/platform/migrations.rs` preserves the runner and data guarantees from
 `tests/migrations.test.ts`, `tests/native-cutover-migration.test.ts`, and
 `tests/task-queued-migration.test.ts`. Six standalone SQL transformation cases
 remain in `tests/migrations.test.ts` and use Node's built-in SQLite.

@@ -2,12 +2,10 @@
 set -eu
 cd "$(dirname "$0")/.."
 case "${1:-}" in
-  start|up|restart|serve) pnpm exec vite build ;;
+  start|up|restart|serve) pnpm --filter suplex-web build ;;
 esac
-cd rust
 unset RUSTUP_TOOLCHAIN
-cargo build --quiet --bin suplex
+cargo build --quiet -p suplex --bin suplex
 binary="${CARGO_TARGET_DIR:-$PWD/target}/debug/suplex"
 case "$binary" in /*) ;; *) binary="$PWD/$binary" ;; esac
-cd ..
 exec "$binary" "$@"

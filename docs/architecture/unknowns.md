@@ -34,10 +34,10 @@ conversation, candidate-worktree, and trigger proposals with their tradeoffs.
   owner. Project policies restrict selection. Review the label before claiming
   per-company account isolation; see [settings scope](settings-and-limits.md).
 
-- **Archive after display failure.** The [display cleanup](../../rust/src/tasks/archive/displays.rs)
+- **Archive after display failure.** The [display cleanup](../../apps/server/src/tasks/archive/displays.rs)
   path tolerates missing/reassigned panes and retryable discovery failures, but
   other discovery and cleanup errors can propagate through
-  [archive operations](../../rust/src/tasks/archive/operations.rs) and interrupt
+  [archive operations](../../apps/server/src/tasks/archive/operations.rs) and interrupt
   archive. The no-mirror-gates rule still requires uncertain display ownership
   to leave the pane alone without blocking the task action. Review the failing
   operation and distinguish display-only errors from actual data-loss risks;
@@ -45,8 +45,8 @@ conversation, candidate-worktree, and trigger proposals with their tradeoffs.
 
 - **Consistent check rendering.** The Checks tab still derives status, names,
   and labels independently in
-  [task-check-results](../../src/frontend/features/tasks/task-check-results.tsx).
-  The PR card uses [shared helpers](../../src/frontend/features/tasks/lib/task-checks.ts).
+  [task-check-results](../../apps/web/features/tasks/task-check-results.tsx).
+  The PR card uses [shared helpers](../../apps/web/features/tasks/lib/task-checks.ts).
   The September 14 cleanup was not fully carried through. Reuse those helpers
   when changing the tab; verify workflow prefixes, duration, skipped, and neutral
   states with a focused component check.

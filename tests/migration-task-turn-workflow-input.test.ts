@@ -11,7 +11,7 @@ test("task turn workflow input migration backfills each turn from its session", 
     database.prepare("INSERT INTO suplex_task_sessions (id, workflow_input_json) VALUES (?, ?), (?, ?), ('without-input', NULL)").run("advisor", first, "worker", second);
     database.exec("INSERT INTO suplex_task_turns (id, session_id) VALUES ('advisor-turn', 'advisor'), ('worker-turn', 'worker'), ('empty-turn', 'without-input')");
 
-    const migration = await readFile(new URL("../migrations/20260908024429009_task_turn_workflow_input.sql", import.meta.url), "utf8");
+    const migration = await readFile(new URL("../apps/server/migrations/20260908024429009_task_turn_workflow_input.sql", import.meta.url), "utf8");
     for (const statement of migration.split("--> statement-breakpoint").map(value => value.trim()).filter(Boolean)) database.exec(statement);
 
     expect(database.prepare("SELECT id, workflow_input_json AS workflowInput FROM suplex_task_turns ORDER BY id").all()).toEqual([

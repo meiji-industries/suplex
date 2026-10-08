@@ -20,7 +20,7 @@ test("migration 0020 accepts an interrupted intent whose reserved task was never
       INSERT INTO suplex_projects VALUES ('project', 'company');
       INSERT INTO suplex_task_creation_intents VALUES ('intent', 'company', 'project', 'task-not-inserted', 'workflow', '[]', 'staging', NULL, '2026-08-11T00:00:00.000Z');
     `);
-    const migration = await readFile(new URL("../migrations/20260811055140_durable_task_projection_provenance.sql", import.meta.url), "utf8");
+    const migration = await readFile(new URL("../apps/server/migrations/20260811055140_durable_task_projection_provenance.sql", import.meta.url), "utf8");
     for (const statement of migration.split("--> statement-breakpoint").map((value) => value.trim()).filter(Boolean)) database.exec(statement);
     expect(database.prepare("SELECT artifact_manifest_json, error_code FROM suplex_task_creation_intents WHERE id = 'intent'").get()).toEqual({ artifact_manifest_json: "[]", error_code: "legacy-artifact-manifest-unknown" });
   } finally {

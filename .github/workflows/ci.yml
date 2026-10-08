@@ -66,8 +66,8 @@ jobs:
         continue-on-error: true
         uses: useblacksmith/stickydisk@v1
         with:
-          key: ${{ github.repository }}-rust-job-target-${{ hashFiles('rust/rust-toolchain.toml') }}-${{ runner.arch }}
-          path: ${{ github.workspace }}/rust/target
+          key: ${{ github.repository }}-rust-job-target-${{ hashFiles('rust-toolchain.toml') }}-${{ runner.arch }}
+          path: ${{ github.workspace }}/target
           commit: on-change
       - name: Install cargo-nextest
         uses: taiki-e/install-action@v2
@@ -81,21 +81,22 @@ jobs:
           cache-dependency-path: pnpm-lock.yaml
       - run: pnpm install --frozen-lockfile
       - run: pnpm exec tsx scripts/rust-route-coverage.ts
-      - run: pnpm exec vite build
-      - run: cargo fmt --manifest-path rust/Cargo.toml --check
-      - run: cargo clippy --manifest-path rust/Cargo.toml --all-targets -- -D warnings
-      # The crate has no doctests, which nextest does not run.
-      - run: cargo nextest run --manifest-path rust/Cargo.toml --all-targets --profile ci
+      - run: pnpm --filter suplex-web build
+      # Name packages explicitly: --workspace would unify features with the Tauri crates and build them here.
+      - run: cargo fmt -p suplex -p suplex-bootstrap --check
+      - run: cargo clippy -p suplex -p suplex-bootstrap --all-targets -- -D warnings
+      # The crates have no doctests, which nextest does not run.
+      - run: cargo nextest run -p suplex -p suplex-bootstrap --all-targets --profile ci
       - name: Generated TypeScript contracts are committed
-        run: git diff --exit-code -- src/frontend/contracts/generated
+        run: git diff --exit-code -- apps/web/contracts/generated
       - name: Enforce persistent target size limit
         if: ${{ always() && steps.rust-target.outcome == 'success' }}
         run: |
-          target_size_kib="$(du -sk rust/target | cut -f1)"
+          target_size_kib="$(du -sk target | cut -f1)"
           echo "Persistent target size: ${target_size_kib} KiB"
           if (( target_size_kib > TARGET_CACHE_MAX_KIB )); then
             cargo install cargo-sweep --version 0.8.0 --locked
-            cargo sweep --maxsize "${TARGET_CACHE_MAX_SIZE}" rust
+            cargo sweep --maxsize "${TARGET_CACHE_MAX_SIZE}" .
           fi
 
   test:
@@ -105,7 +106,7 @@ jobs:
     env:
       CI: "true"
       TEST_WORKERS: ${{ inputs.workers || '8' }}
-      SUPLEX_BIN: ${{ github.workspace }}/rust/target/debug/suplex
+      SUPLEX_BIN: ${{ github.workspace }}/target/debug/suplex
       TARGET_CACHE_MAX_KIB: 12582912
       TARGET_CACHE_MAX_SIZE: 12GB
     steps:
@@ -127,8 +128,8 @@ jobs:
         continue-on-error: true
         uses: useblacksmith/stickydisk@v1
         with:
-          key: ${{ github.repository }}-test-job-target-${{ hashFiles('rust/rust-toolchain.toml') }}-${{ runner.arch }}
-          path: ${{ github.workspace }}/rust/target
+          key: ${{ github.repository }}-test-job-target-${{ hashFiles('rust-toolchain.toml') }}-${{ runner.arch }}
+          path: ${{ github.workspace }}/target
           commit: on-change
 
       - uses: pnpm/action-setup@v4
@@ -174,11 +175,14 @@ jobs:
         run: |
           pnpm lint
           pnpm typecheck
-          pnpm exec vite build
-          cargo build --manifest-path rust/Cargo.toml --bin suplex --features github-test-endpoint
+          pnpm --filter suplex-web build
+          cargo build --manifest-path apps/server/Cargo.toml --bin suplex --features github-test-endpoint
 
-      - name: Frontend and protocol tests
+      - name: Cross-app tests
         run: pnpm exec vitest run --project unit --maxWorkers "$TEST_WORKERS" --reporter=default --reporter=junit --outputFile=test-results/unit-integration.xml
+
+      - name: Web client tests
+        run: pnpm --filter suplex-web test --maxWorkers "$TEST_WORKERS" --reporter=default --reporter=junit --outputFile="$PWD/test-results/web-unit.xml"
 
       - name: Browser tests
         run: pnpm exec vitest run --config vitest.browser.config.ts --maxWorkers "$TEST_WORKERS" --reporter=default --reporter=junit --outputFile=test-results/browser.xml
@@ -199,11 +203,11 @@ jobs:
       - name: Enforce persistent target size limit
         if: ${{ always() && steps.rust-target.outcome == 'success' }}
         run: |
-          target_size_kib="$(du -sk rust/target | cut -f1)"
+          target_size_kib="$(du -sk target | cut -f1)"
           echo "Persistent target size: ${target_size_kib} KiB"
           if (( target_size_kib > TARGET_CACHE_MAX_KIB )); then
             cargo install cargo-sweep --version 0.8.0 --locked
-            cargo sweep --maxsize "${TARGET_CACHE_MAX_SIZE}" rust
+            cargo sweep --maxsize "${TARGET_CACHE_MAX_SIZE}" .
           fi
 
   desktop-linux:
@@ -223,10 +227,10 @@ jobs:
       - name: Cache Cargo registry and dependencies
         uses: Swatinem/rust-cache@v2
         with:
-          workspaces: desktop/src-tauri -> target
+          workspaces: . -> target
           cache-on-failure: true
-      - run: cargo clippy --manifest-path desktop/src-tauri/Cargo.toml --all-targets -- -D warnings
-      - run: cargo test --manifest-path desktop/src-tauri/Cargo.toml --all-targets
+      - run: cargo clippy --manifest-path apps/desktop/src-tauri/Cargo.toml --all-targets -- -D warnings
+      - run: cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --all-targets
 
   desktop:
     name: Desktop shell (macOS)
@@ -249,9 +253,7 @@ jobs:
       - name: Cache Cargo registry and dependencies
         uses: Swatinem/rust-cache@v2
         with:
-          workspaces: |
-            desktop/src-tauri -> target
-            rust -> target
+          workspaces: . -> target
           cache-on-failure: true
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v6
@@ -260,19 +262,19 @@ jobs:
           cache: pnpm
           cache-dependency-path: pnpm-lock.yaml
       - run: pnpm install --frozen-lockfile
-      - run: cargo fmt --manifest-path desktop/src-tauri/Cargo.toml --check
-      - run: cargo clippy --manifest-path desktop/src-tauri/Cargo.toml --all-targets -- -D warnings
-      - run: cargo clippy --manifest-path desktop/src-tauri/Cargo.toml --all-targets --features native-test -- -D warnings
+      - run: cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml --check
+      - run: cargo clippy --manifest-path apps/desktop/src-tauri/Cargo.toml --all-targets -- -D warnings
+      - run: cargo clippy --manifest-path apps/desktop/src-tauri/Cargo.toml --all-targets --features native-test -- -D warnings
       - name: Shell behavior and IPC authorization tests
         run: pnpm desktop:test
       - name: Build the web client and debug host for the native smoke tests
         run: |
-          pnpm exec vite build
-          cargo build --manifest-path rust/Cargo.toml --bin suplex
-      # Locally the smoke build keeps its own target directory; in CI, sharing the shell's reuses its compiled dependencies.
+          pnpm --filter suplex-web build
+          cargo build --manifest-path apps/server/Cargo.toml --bin suplex
+      # Locally the smoke build keeps its own target directory; in CI, sharing the workspace's reuses its compiled dependencies.
       - name: Native WKWebView smoke tests
         env:
-          SUPLEX_NATIVE_TARGET_DIR: ${{ github.workspace }}/desktop/src-tauri/target
+          SUPLEX_NATIVE_TARGET_DIR: ${{ github.workspace }}/target
         run: pnpm desktop:test:native
       # Packaging is four release builds (about 40 minutes), so it runs on main and manual runs, not on every PR.
       # A temporary updater key and a test feed exercise both update manifests; production keys stay in the release path.

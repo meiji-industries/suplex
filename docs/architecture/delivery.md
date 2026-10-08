@@ -2,9 +2,9 @@
 
 For maintainers tracing how work reaches a repository, this page explains
 Suplex's delivery decisions and how they accommodate manual intervention.
-Sources: [delivery operations](../../rust/src/delivery/operations.rs),
-[GitHub observations](../../rust/src/integrations/github_delivery.rs), and
-[workflow policy](../../rust/src/coordination/workflows.rs).
+Sources: [delivery operations](../../apps/server/src/delivery/operations.rs),
+[GitHub observations](../../apps/server/src/integrations/github_delivery.rs), and
+[workflow policy](../../apps/server/src/coordination/workflows.rs).
 
 ## Intent and observed work
 

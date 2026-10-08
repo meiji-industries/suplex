@@ -2,11 +2,11 @@
 
 For contributors and operators, this page explains how the `suplex` command
 finds an installation and what each command owns. Sources:
-[entry point](../../rust/src/main.rs),
-[commands](../../rust/src/cli.rs),
-[installation configuration](../../rust/src/platform/config.rs),
-[process supervisor](../../rust/src/platform/supervisor.rs), and
-[desktop updater](../../desktop/src-tauri/src/updater.rs).
+[entry point](../../apps/server/src/main.rs),
+[commands](../../apps/server/src/cli.rs),
+[installation configuration](../../apps/server/src/platform/config.rs),
+[process supervisor](../../apps/server/src/platform/supervisor.rs), and
+[desktop updater](../../apps/desktop/src-tauri/src/updater.rs).
 
 ## One binary, many roles
 
@@ -69,7 +69,7 @@ hides the detail fields. Color is used only when stdout is a terminal and
 `NO_COLOR` is unset. The exit status is 1 when any check fails.
 
 Database, storage, integration, and agent checks come from the same
-[health snapshot](../../rust/src/platform/health.rs) as the web health page.
+[health snapshot](../../apps/server/src/platform/health.rs) as the web health page.
 Of those, only the database, artifact root, Git, and Herdr checks can fail;
 the others warn. The schema, reference, and task control checks can also fail. Read-only mode skips the database write probe and reports that writes are
 not tested, so a healthy schema is not reported as a failure.

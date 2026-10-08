@@ -4,7 +4,7 @@ import { resolve } from "node:path";
 import { DatabaseSync as Database } from "node:sqlite";
 import { expect, test } from "vitest";
 
-const folder = resolve(process.cwd(), "migrations");
+const folder = resolve(process.cwd(), "apps/server/migrations");
 const migrations = readdirSync(folder).filter((name) => name.endsWith(".sql")).sort();
 const migration = migrations.find((name) => name.includes("herdr_execution_substrate"))!;
 

@@ -9,13 +9,16 @@ const scratch = mkdtempSync(join(tmpdir(), "suplex-release-"));
 const checkout = join(scratch, "checkout");
 const remote = join(scratch, "remote.git");
 const git = (...args) => execFileSync("git", args, { cwd: checkout, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
-const files = ["package.json", "desktop/package.json", "mobile/package.json", "rust/Cargo.toml", "rust/Cargo.lock", "desktop/src-tauri/Cargo.toml", "desktop/src-tauri/Cargo.lock"];
+const files = ["package.json", "apps/desktop/package.json", "apps/mobile/package.json", "apps/server/Cargo.toml", "apps/desktop/src-tauri/Cargo.toml", "Cargo.lock"];
 const contents = () => files.map(file => readFileSync(join(checkout, file), "utf8"));
-const crateName = file => file.startsWith("desktop/src-tauri/") ? "suplex-desktop" : "suplex";
+const crate = (name, version) => `name = "${name}"\nversion = "${version}"\n`;
+// The workspace Cargo.lock holds both crates.
+const lock = (version, desktop = version) => `[[package]]\n${crate("suplex", version)}\n[[package]]\n${crate("suplex-desktop", desktop)}`;
 const setVersion = version => {
   for (const file of files) writeFileSync(join(checkout, file), file.endsWith(".json")
     ? `${JSON.stringify({ name: "suplex", version })}\n`
-    : `name = "${crateName(file)}"\nversion = "${version}"\n`);
+    : file === "Cargo.lock" ? lock(version)
+    : crate(file.startsWith("apps/desktop/src-tauri/") ? "suplex-desktop" : "suplex", version));
 };
 const run = (mode, bump = "minor") => spawnSync(process.execPath, [script, mode], {
   cwd: checkout, encoding: "utf8", env: { ...process.env, RELEASE_BUMP: bump },
@@ -24,6 +27,7 @@ const bumpTo = (bump, expected) => {
   const result = run("bump", bump);
   assert.equal(result.status, 0, result.stderr);
   for (const text of contents()) assert.ok(text.includes(expected), text);
+  assert.equal(readFileSync(join(checkout, "Cargo.lock"), "utf8"), lock(expected));
 };
 const failsWithoutWrites = (mode, bump, message) => {
   const before = contents();
@@ -34,9 +38,7 @@ const failsWithoutWrites = (mode, bump, message) => {
 };
 
 try {
-  mkdirSync(join(checkout, "desktop", "src-tauri"), { recursive: true });
-  mkdirSync(join(checkout, "mobile"));
-  mkdirSync(join(checkout, "rust"));
+  for (const directory of ["apps/desktop/src-tauri", "apps/mobile", "apps/server"]) mkdirSync(join(checkout, directory), { recursive: true });
   git("init", "--initial-branch=main");
   git("config", "user.name", "Release test");
   git("config", "user.email", "release@example.com");
@@ -62,10 +64,10 @@ try {
   failsWithoutWrites("check-tag", "minor", /Tag v0.10.0 already exists/);
   setVersion("1.0.1");
   assert.equal(run("check-tag").status, 0);
-  writeFileSync(join(checkout, "desktop/package.json"), '{"version":"0.1.0"}\n');
+  writeFileSync(join(checkout, "apps/desktop/package.json"), '{"version":"0.1.0"}\n');
   failsWithoutWrites("bump", "minor", /versions must match/);
   setVersion("1.0.1");
-  writeFileSync(join(checkout, "desktop/src-tauri/Cargo.lock"), 'name = "suplex-desktop"\nversion = "1.0.0"\n');
+  writeFileSync(join(checkout, "Cargo.lock"), lock("1.0.1", "1.0.0"));
   failsWithoutWrites("bump", "minor", /versions must match/);
   setVersion("1.0.1");
   git("remote", "set-url", "origin", join(scratch, "missing.git"));

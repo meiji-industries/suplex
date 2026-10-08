@@ -2,10 +2,10 @@
 
 For contributors coordinating several tasks, this page explains file isolation
 and the conditions that release queued work. Sources:
-[worktrees](../../rust/src/tasks/worktree.rs),
-[task dependencies](../../rust/src/tasks/dependencies.rs),
-[queue admission](../../rust/src/tasks/repository.rs), and
-[PR prerequisite observation](../../rust/src/tasks/pull_request_dependencies.rs).
+[worktrees](../../apps/server/src/tasks/worktree.rs),
+[task dependencies](../../apps/server/src/tasks/dependencies.rs),
+[queue admission](../../apps/server/src/tasks/repository.rs), and
+[PR prerequisite observation](../../apps/server/src/tasks/pull_request_dependencies.rs).
 
 ## Separate working trees
 
@@ -54,8 +54,8 @@ and its unfinished task prerequisites then no longer hold native dispatch. The
 Coordinator prompt states that the user started the task early. The plan's
 running-task limit and pull request ownership still reject Start anyway, and
 turn and budget limits still apply
-([`force_start`](../../rust/src/tasks/repository.rs),
-[`dispatch_blocked`](../../rust/src/tasks/dependencies.rs)).
+([`force_start`](../../apps/server/src/tasks/repository.rs),
+[`dispatch_blocked`](../../apps/server/src/tasks/dependencies.rs)).
 
 The scheduler takes promoted queued tasks first, then other queued tasks by
 queue time. Moving a task to the front changes its order in the Board and Tasks

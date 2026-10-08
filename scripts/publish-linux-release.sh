@@ -29,7 +29,7 @@ version="$(node -p "require('./package.json').version")"
 tarball="$release_dir/suplex-$version-linux-$arch.tar.gz"
 manifest="$release_dir/latest-linux.yml"
 for artifact in "$tarball" "$tarball.sha256" "$manifest"; do
-  [[ -e "$artifact" ]] || { echo "Missing $artifact; run mise run linux:dist" >&2; exit 1; }
+  [[ -e "$artifact" ]] || { echo "Missing $artifact; run mise run server:dist:linux" >&2; exit 1; }
 done
 (cd "$release_dir" && shasum -a 256 -c "$(basename "$tarball").sha256")
 grep -qx "version: $version" "$manifest" || { echo "$manifest is not for $version" >&2; exit 1; }

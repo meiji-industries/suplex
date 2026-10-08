@@ -18,7 +18,7 @@ fi
 : "${SUPLEX_DESKTOP_UPDATE_URL:?Set SUPLEX_DESKTOP_UPDATE_URL}"
 
 arch="${SUPLEX_DESKTOP_ARCH:-arm64}"
-release_dir="desktop/release/$arch"
+release_dir="apps/desktop/release/$arch"
 prefix="stable/mac/$arch"
 # release.env holds the Apple silicon feed; each architecture publishes to its own folder beside it.
 base_url="$(printf %s "${SUPLEX_DESKTOP_UPDATE_URL%/}" | sed -E "s#/mac/arm64\$#/mac/$arch#")"
@@ -28,7 +28,7 @@ case "$base_url" in
   *) echo "SUPLEX_DESKTOP_UPDATE_URL must end in /$prefix/" >&2; exit 1 ;;
 esac
 
-version="$(node -p "require('./desktop/package.json').version")"
+version="$(node -p "require('./apps/desktop/package.json').version")"
 app="$release_dir/Suplex.app"
 zip="$release_dir/Suplex-$version-$arch-mac.zip"
 dmg="$release_dir/Suplex-$version-$arch.dmg"

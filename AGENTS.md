@@ -57,7 +57,7 @@ special-case bypass for each symptom.
 
 For visible sub-agent pane delegation and its verification rules, read
 `docs/agents/subagents-in-herdr-panes.md`.
-For the local Herdr workflow and helper scripts, read `HERDR.md`.
+For the local Herdr workflow and helper scripts, read `docs/herdr.md`.
 
 ## Product UI
 
@@ -72,12 +72,12 @@ Before implementing or modifying UI, read:
 Canonical UI stack:
 
 - Tailwind CSS v4 for layout
-- shadcn and ReUI components in `src/frontend/components/ui`
+- shadcn and ReUI components in `apps/web/components/ui`
 - Base UI primitives
 - Lucide icons
 
 Prefer an existing shadcn or ReUI component and use it as shipped. Add missing
-components through the registries configured in `components.json`. Keep their
+components through the registries configured in `apps/web/components.json`. Keep their
 default visual styling: do not edit component styles or override them at call
 sites with `className`, `style`, or Tailwind utilities. Use Tailwind only for
 page-level layout and necessary sizing around components.
@@ -99,6 +99,8 @@ or a full browser-suite run.
 Browser tests are expensive. Keep the automated suite to essential happy paths:
 session setup, project creation, and creating, starting, answering, editing,
 cancelling, and archiving tasks.
+Web unit tests live in `apps/web/tests`. Cross-app tests (interop, parity,
+migrations, browser) live in `tests/`.
 
 - Use unit or integration tests for validation, failure modes, state permutations,
   and authoritative-state checks, including the no-mirror-gates cases above.
@@ -143,17 +145,33 @@ Need a change? Create a new migration.
 
 ## Where new code goes
 
-- Task HTTP contracts and routes belong in `rust/src/http/contracts` and `rust/src/http/routes/tasks.rs`. Task authorization and commands belong in `rust/src/tasks/commands.rs`; metadata belongs in `rust/src/tasks/repository.rs`.
-- Durable task intent and prompt ownership belong in `rust/src/coordination/root_session_store.rs`. `rust/src/coordination/root_controller.rs` coordinates Coordinator and Worker through `rust/src/runtimes/task_harness.rs`.
-- Provider runtimes live under `rust/src/runtimes`; `task_harness_registry.rs` selects by profile provider. Read-only native observation belongs in the runtime's session reader.
-- `rust/src/delivery/operations.rs` observes Git and GitHub before delivery operations. Native and external evidence must not depend on a second progress receipt.
-- The hosted process (`suplex hosted serve`: billing, accounts, and the `suplex.sh` site) starts in `rust/src/hosted`. Hosted account flows live in `rust/src/accounts/hosted`; the private host's account client and link live in `rust/src/accounts/mod.rs`, with the shared wire in `rust/src/accounts/wire.rs`. The `suplex.sh` Astro site lives in `src/web`. The login view lives in `src/frontend/features/account`.
-- Keep backend code in its Rust domain module. Keep domain-neutral utilities in `rust/src/shared`. Keep browser wire contracts in `src/frontend/contracts`, feature-owned frontend code under `src/frontend/features`, and global application behavior under `src/frontend/shell`.
-- Values the browser receives without polling come from the company sync feed in `rust/src/sync.rs`, sent by `rust/src/http/routes/sync.rs` as `SyncMessage` frames. Read `docs/architecture/sync.md` before you add a pushed value. A pushed value is a display observation; never gate a command on it.
+Each directory in `apps/` is one program that Suplex ships:
+
+- `apps/server`: the `suplex` crate. It holds the host, `suplex hosted serve`, the MCP bridges, and the CLI.
+- `apps/web`: the React client, the `suplex-web` pnpm package. Its own `package.json`, `vite.config.ts`, `tsconfig.json`, and `vitest.config.ts` build and test it; `pnpm --filter suplex-web build` writes `apps/web/dist`, which the `suplex` crate embeds. Web unit tests go in `apps/web/tests`.
+- `apps/desktop` and `apps/mobile`: the Tauri shells. Each crate is in its `src-tauri`.
+- `apps/bootstrap`: the `suplex-bootstrap` VM wizard. It embeds the scripts in `vm/` into its binary.
+
+`apps/desktop`, `apps/mobile`, and `apps/bootstrap` never depend on the `suplex` crate.
+
+The root `package.json` holds workspace scripts and the tooling for `scripts/` and lint. The root `tests/` holds cross-app tests: browser, interop, parity, migration, and repository guardrail tests.
+
+When a second app needs the same code, move that code into a crate or package in `packages/`.
+Each Rust crate is a member of the root Cargo workspace. Declare a dependency in
+`[workspace.dependencies]` when more than one crate uses it. Run cargo with
+`-p <crate>`, never with `--workspace`: that unifies features with the Tauri crates.
+
+- Task HTTP contracts and routes belong in `apps/server/src/http/contracts` and `apps/server/src/http/routes/tasks.rs`. Task authorization and commands belong in `apps/server/src/tasks/commands.rs`; metadata belongs in `apps/server/src/tasks/repository.rs`.
+- Durable task intent and prompt ownership belong in `apps/server/src/coordination/root_session_store.rs`. `apps/server/src/coordination/root_controller.rs` coordinates Coordinator and Worker through `apps/server/src/runtimes/task_harness.rs`.
+- Provider runtimes live under `apps/server/src/runtimes`; `task_harness_registry.rs` selects by profile provider. Read-only native observation belongs in the runtime's session reader.
+- `apps/server/src/delivery/operations.rs` observes Git and GitHub before delivery operations. Native and external evidence must not depend on a second progress receipt.
+- The hosted process (`suplex hosted serve`: billing, accounts, and the `suplex.sh` site) starts in `apps/server/src/hosted`. Hosted account flows live in `apps/server/src/accounts/hosted`; the private host's account client and link live in `apps/server/src/accounts/mod.rs`, with the shared wire in `apps/server/src/accounts/wire.rs`. The login view lives in `apps/web/features/account`.
+- Keep backend code in its Rust domain module. Keep domain-neutral utilities in `apps/server/src/shared`. Keep browser wire contracts in `apps/web/contracts`, feature-owned frontend code under `apps/web/features`, and global application behavior under `apps/web/shell`.
+- Values the browser receives without polling come from the company sync feed in `apps/server/src/sync.rs`, sent by `apps/server/src/http/routes/sync.rs` as `SyncMessage` frames. Read `docs/architecture/sync.md` before you add a pushed value. A pushed value is a display observation; never gate a command on it.
 - There is no phase engine or Temporal. Preserve admitted native messages across restart instead of replaying them. Delete dead code when you find it.
-- HTTP response structs use concrete Rust types. Use `serde_json::Value` only for a payload Suplex stores without interpreting it, such as raw Advisor output, and mark that field `#[ts(type = "unknown")]`. Model every fixed string vocabulary with `wire_enum!` from `rust/src/shared/mod.rs`. Deserialize stored JSON into its Rust type before reading it.
-- Browser types for a server response come from `src/frontend/contracts/generated`, written by `ts-rs` when `cargo test` runs. Add `#[derive(ts_rs::TS)]` to a response type and `#[ts(export)]` to the root type. Dependencies export automatically. Commit the generated files. CI fails on drift. Never edit a generated file. Zod schemas under `src/frontend/contracts` validate requests and serve as test-side checks of server output. Do not hand-write a response type.
-- Each endpoint's fetch lives in a feature `*-api.ts` module, such as `src/frontend/features/tasks/lib/task-api.ts`, as one function typed to the generated response. `readJsonUnchecked<T>()` in `src/frontend/lib/api.ts` casts JSON to `T` without checking it. Call it only inside such a module. ESLint rejects the call anywhere else; files in `legacyUncheckedReads` in `eslint.config.ts` predate the rule. Remove a file from that list when you move its calls. Do not add files.
+- HTTP response structs use concrete Rust types. Use `serde_json::Value` only for a payload Suplex stores without interpreting it, such as raw Advisor output, and mark that field `#[ts(type = "unknown")]`. Model every fixed string vocabulary with `wire_enum!` from `apps/server/src/shared/mod.rs`. Deserialize stored JSON into its Rust type before reading it.
+- Browser types for a server response come from `apps/web/contracts/generated`, written by `ts-rs` when `cargo test` runs. Add `#[derive(ts_rs::TS)]` to a response type and `#[ts(export)]` to the root type. Dependencies export automatically. Commit the generated files. CI fails on drift. Never edit a generated file. Zod schemas under `apps/web/contracts` validate requests and serve as test-side checks of server output. Do not hand-write a response type.
+- Each endpoint's fetch lives in a feature `*-api.ts` module, such as `apps/web/features/tasks/lib/task-api.ts`, as one function typed to the generated response. `readJsonUnchecked<T>()` in `apps/web/lib/api.ts` casts JSON to `T` without checking it. Call it only inside such a module. ESLint rejects the call anywhere else; files in `legacyUncheckedReads` in `eslint.config.ts` predate the rule. Remove a file from that list when you move its calls. Do not add files.
 
 ## Agent skills
 
@@ -161,7 +179,7 @@ Need a change? Create a new migration.
 
 Public discovery artifacts, the paired-agent runtime, and the operator handoff:
 `docs/agents/machine-discovery.md`. Serve new public artifacts from
-`rust/src/http/routes/discovery.rs`. Keep them free of task and company data.
+`apps/server/src/http/routes/discovery.rs`. Keep them free of task and company data.
 
 ### Issue tracker
 

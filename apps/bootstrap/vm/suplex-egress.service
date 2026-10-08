@@ -1,0 +1,18 @@
+[Unit]
+Description=Force all egress through the Tailscale exit node
+DefaultDependencies=no
+After=network-pre.target
+Before=network.target tailscaled.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/sbin/nft -f /etc/suplex-egress.nft
+# Docker subnets (10.200.0.0/15) stay on the main table; the exit node's table has a default route that would
+# otherwise send replies to containers into the tunnel.
+ExecStart=/bin/sh -c 'ip rule show pref 5000 | grep -q 10.200.0.0/15 || ip rule add to 10.200.0.0/15 lookup main pref 5000'
+ExecStop=/usr/sbin/nft delete table inet egress
+ExecStop=-/sbin/ip rule del to 10.200.0.0/15 lookup main pref 5000
+
+[Install]
+WantedBy=multi-user.target

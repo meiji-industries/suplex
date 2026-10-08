@@ -21,9 +21,9 @@ export SUPLEX_DESKTOP_ARCH="${SUPLEX_DESKTOP_ARCH:-$arch}"
 echo "Building Suplex.app ($SUPLEX_DESKTOP_ARCH) at $(git rev-parse --short HEAD)"
 pnpm run desktop:dist
 
-built="$(find "desktop/release/$SUPLEX_DESKTOP_ARCH" -maxdepth 2 -name Suplex.app -type d | head -n 1)"
+built="$(find "apps/desktop/release/$SUPLEX_DESKTOP_ARCH" -maxdepth 2 -name Suplex.app -type d | head -n 1)"
 if [ -z "$built" ]; then
-  echo "desktop:dist produced no Suplex.app under desktop/release/$SUPLEX_DESKTOP_ARCH" >&2
+  echo "desktop:dist produced no Suplex.app under apps/desktop/release/$SUPLEX_DESKTOP_ARCH" >&2
   exit 1
 fi
 

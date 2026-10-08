@@ -2,11 +2,11 @@
 
 For contributors and operators changing configuration, this page explains what
 a setting affects and how resource limits differ from readiness observations.
-Sources: [Settings navigation](../../src/frontend/features/settings/settings-nav.ts),
-[environment settings](../../rust/src/platform/environment_settings.rs),
-[task admission limits](../../rust/src/tasks/limits.rs),
-[workflow storage](../../rust/src/coordination/workflow_records.rs), and
-[provider login instances](../../rust/src/profiles/provider_instances.rs).
+Sources: [Settings navigation](../../apps/web/features/settings/settings-nav.ts),
+[environment settings](../../apps/server/src/platform/environment_settings.rs),
+[task admission limits](../../apps/server/src/tasks/limits.rs),
+[workflow storage](../../apps/server/src/coordination/workflow_records.rs), and
+[provider login instances](../../apps/server/src/profiles/provider_instances.rs).
 
 ## Scope comes from the setting, not the sidebar
 

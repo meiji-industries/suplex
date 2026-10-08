@@ -152,7 +152,7 @@ The integration prepares a local conversion event and an optional data-layer
 handoff. It installs no advertising pixel. See the
 [Framer setup](posthog.md#install-on-framer) for the supported consent interface.
 
-The `suplex.sh/download` route ([`rust/src/hosted/site.rs`](../rust/src/hosted/site.rs)) sends `download_started` for download
+The `suplex.sh/download` route ([`apps/server/src/hosted/site.rs`](../apps/server/src/hosted/site.rs)) sends `download_started` for download
 requests from the install script and website. Properties are `platform`
 (`macos-arm64`, `macos-x64`, `linux-arm64`, or `linux-x64`), `source`
 (`install_script` or `browser`), and `$lib` (`suplex-web`). Each request uses a

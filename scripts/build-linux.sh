@@ -15,7 +15,7 @@ esac
 version="$(node -p "require('./package.json').version")"
 out="dist/linux/$arch"
 tarball="suplex-$version-linux-$arch.tar.gz"
-pnpm exec vite build
+pnpm --filter suplex-web build
 rm -rf "$out"
 mkdir -p "$out"
 
@@ -24,9 +24,9 @@ common="$(git rev-parse --path-format=absolute --git-common-dir)"
 docker run --rm --platform "$platform" \
   -v "$PWD:$PWD" -v "$common:$common:ro" \
   -v "suplex-linux-target-$arch:/target" -v "suplex-linux-cargo-$arch:/usr/local/cargo/registry" \
-  -w "$PWD/rust" -e CARGO_TARGET_DIR=/target -e RUSTUP_TOOLCHAIN=1.93.1 -e SUPLEX_POSTHOG_KEY \
+  -w "$PWD" -e CARGO_TARGET_DIR=/target -e RUSTUP_TOOLCHAIN=1.93.1 -e SUPLEX_POSTHOG_KEY \
   rust:1.93.1-bullseye \
-  sh -c "git config --global --add safe.directory '*' && cargo build --release --locked --bin suplex && cp /target/release/suplex '$PWD/$out/suplex'"
+  sh -c "git config --global --add safe.directory '*' && cargo build --release --locked -p suplex --bin suplex && cp /target/release/suplex '$PWD/$out/suplex'"
 
 file "$out/suplex" | grep -q "$( [ "$arch" = arm64 ] && echo aarch64 || echo x86-64 )" || { echo "$out/suplex is not a Linux $arch binary: $(file -b "$out/suplex")" >&2; exit 1; }
 COPYFILE_DISABLE=1 tar --no-xattrs --no-mac-metadata -C "$out" -czf "$out/$tarball" suplex

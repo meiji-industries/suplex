@@ -4,20 +4,18 @@ dist/
 .suplex/
 # Legacy development installation; never commit it.
 .suplex-rust/
-rust/target/
+/target/
 .scratch/
 .audit/
 logs/
 playwright-report/
 test-results/
-desktop/release/
-desktop/runtime/
-desktop/.build/
-desktop/src-tauri/target/
-desktop/src-tauri/gen/
-mobile/src-tauri/target/
-mobile/release/
-mobile/src-tauri/gen/schemas/
+apps/desktop/release/
+apps/desktop/runtime/
+apps/desktop/.build/
+apps/desktop/src-tauri/gen/
+apps/mobile/release/
+apps/mobile/src-tauri/gen/schemas/
 # Tauri migration logs, isolated profiles, and fixtures stay local; the Markdown records are committed.
 .context/tauri-migration/*
 !.context/tauri-migration/*.md
@@ -32,3 +30,5 @@ mobile/src-tauri/gen/schemas/
 /.opencode/bun.lock
 /.opencode/bun.lockb
 __pycache__/
+apps/bootstrap/.env
+vm.env

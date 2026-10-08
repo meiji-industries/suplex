@@ -7,7 +7,7 @@ Supersedes the OpenRouter provider decision, ADR 0007 (available in Git history)
 
 A profile's provider names the tool that runs a turn: `opencode`, `claude-code`,
 `devin`, or `codex`. Each owns its executable, sign-in, native session identity,
-and result format. The [runtime registry](../../rust/src/runtimes/task_harness_registry.rs)
+and result format. The [runtime registry](../../apps/server/src/runtimes/task_harness_registry.rs)
 selects the implementation.
 
 OpenCode model IDs include their vendor, such as `openai/gpt-5.6-sol`. That

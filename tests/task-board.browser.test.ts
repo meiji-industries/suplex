@@ -1,6 +1,6 @@
 import { expect, test } from "vitest";
-import { TaskSchema } from "../src/frontend/contracts/tasks.js";
-import { AgentProfileSchema } from "../src/frontend/contracts/profiles.js";
+import { TaskSchema } from "../apps/web/contracts/tasks.js";
+import { AgentProfileSchema } from "../apps/web/contracts/profiles.js";
 import { nativeBrowser } from "./helpers/native-browser.js";
 
 test.each([1280, 390])("tasks can be created, started and viewed on the board at %ipx", { timeout: 90_000 }, async width => {

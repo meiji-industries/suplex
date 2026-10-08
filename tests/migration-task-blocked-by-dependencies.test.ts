@@ -24,7 +24,7 @@ test("Blocked by references become dependency edges without losing or duplicatin
     edge.run("overlap", "a");
     edge.run("distinct", "c");
 
-    const migration = await readFile(new URL("../migrations/20260918164301166_consolidate_task_blocked_by_into_dependencies.sql", import.meta.url), "utf8");
+    const migration = await readFile(new URL("../apps/server/migrations/20260918164301166_consolidate_task_blocked_by_into_dependencies.sql", import.meta.url), "utf8");
     for (const statement of migration.split("--> statement-breakpoint").map(value => value.trim()).filter(Boolean)) database.exec(statement);
 
     expect(database.prepare("SELECT task_id AS taskId, depends_on_task_id AS dependsOn FROM suplex_task_dependencies ORDER BY task_id, depends_on_task_id").all()).toEqual([

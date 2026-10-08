@@ -60,8 +60,8 @@ hero copy such as `Truthful readiness.` or explanatory paragraphs.
 ## Component vocabulary
 
 Build the product language in reusable components under
-`src/frontend/components/ui` and, as the product grows, application primitives
-under `src/frontend/components/app`:
+`apps/web/components/ui` and, as the product grows, application primitives
+under `apps/web/components/app`:
 
 - `AppSidebar`
 - `SidebarItem`

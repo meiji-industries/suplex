@@ -23,7 +23,7 @@ const environment: NodeJS.ProcessEnv = {
   SUPLEX_FRONTEND_DEV_URL: `http://127.0.0.1:${port + 1}`,
 };
 delete environment.RUSTUP_TOOLCHAIN;
-const binary = resolve(root, "rust", process.env.CARGO_TARGET_DIR ?? "target", "debug/suplex");
+const binary = resolve(root, process.env.CARGO_TARGET_DIR ?? "target", "debug/suplex");
 
 function completed(child: ChildProcess): Promise<number> {
   return new Promise((accept, reject) => {
@@ -33,7 +33,7 @@ function completed(child: ChildProcess): Promise<number> {
 }
 
 async function build(): Promise<void> {
-  const code = await completed(spawn("cargo", ["build", "--bin", "suplex"], { cwd: `${root}/rust`, env: environment, stdio: "inherit" }));
+  const code = await completed(spawn("cargo", ["build", "--bin", "suplex"], { cwd: `${root}/apps/server`, env: environment, stdio: "inherit" }));
   if (code !== 0) throw new Error(`Rust build failed (${code}).`);
   if (process.env.SUPLEX_CODESIGN_IDENTITY) {
     const signed = await completed(spawn("codesign", ["--force", "--sign", process.env.SUPLEX_CODESIGN_IDENTITY, binary], { stdio: "inherit" }));
@@ -47,7 +47,7 @@ if (command === "--stop" || command === "--desktop" || command === "--migrate") 
   process.exit(await completed(spawn(binary, [command.slice(2)], { cwd: root, env: environment, stdio: "inherit" })));
 }
 const vite = await createServer({
-  root,
+  root: `${root}/apps/web`,
   appType: "custom",
   // Tailscale Serve can forward https://<machine>.ts.net:<port + 1> to Vite for remote development.
   server: { host: "127.0.0.1", port: port + 1, strictPort: true, allowedHosts: [".ts.net"], cors: { origin: /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\]|[\w-]+\.[\w-]+\.ts\.net)(?::\d+)?$/ } },
@@ -86,7 +86,7 @@ async function restart(): Promise<void> {
   }
 }
 
-const watchers = process.argv.includes("--watch") ? ["rust/src", "migrations"].map(path => watch(resolve(root, path), { recursive: true }, () => { void restart(); })) : [];
+const watchers = process.argv.includes("--watch") ? ["apps/server/src", "apps/server/migrations"].map(path => watch(resolve(root, path), { recursive: true }, () => { void restart(); })) : [];
 async function close(code: number): Promise<void> {
   if (closing) return;
   closing = true;

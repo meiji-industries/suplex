@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Uploads desktop/release/<platform>-<arch> (scripts/build-desktop-linux.sh or build-desktop-windows.sh) to R2
+# Uploads apps/desktop/release/<platform>-<arch> (scripts/build-desktop-linux.sh or build-desktop-windows.sh) to R2
 # beside the Mac releases: SUPLEX_DESKTOP_PLATFORM=linux|windows and SUPLEX_DESKTOP_ARCH=arm64|x64.
 # SUPLEX_PUBLISH_PHASE: files uploads the release files, manifest points both feeds at them, all (default) does both.
 # SUPLEX_PUBLISH_DRY_RUN=1 performs every local check and prints the uploads without credentials or network writes.
@@ -21,8 +21,8 @@ fi
 
 platform="${SUPLEX_DESKTOP_PLATFORM:?Set SUPLEX_DESKTOP_PLATFORM to linux or windows}"
 arch="${SUPLEX_DESKTOP_ARCH:?Set SUPLEX_DESKTOP_ARCH to arm64 or x64}"
-version="$(node -p "require('./desktop/package.json').version")"
-release_dir="desktop/release/$platform-$arch"
+version="$(node -p "require('./apps/desktop/package.json').version")"
+release_dir="apps/desktop/release/$platform-$arch"
 prefix="stable/$platform/$arch"
 # release.env holds the Apple silicon feed (.../stable/mac/arm64/); each platform publishes to its own folder beside it.
 base_url="$(printf %s "${SUPLEX_DESKTOP_UPDATE_URL%/}" | sed -E "s#/mac/arm64\$#/$platform/$arch#")"

@@ -28,10 +28,10 @@ jobs:
       - name: Cache Cargo registry and dependencies
         uses: Swatinem/rust-cache@v2
         with:
-          workspaces: mobile/src-tauri -> target
+          workspaces: . -> target
           cache-on-failure: true
-      - run: cargo fmt --manifest-path mobile/src-tauri/Cargo.toml --check
-      - run: cargo clippy --manifest-path mobile/src-tauri/Cargo.toml --all-targets -- -D warnings
-      - run: cargo clippy --manifest-path mobile/src-tauri/Cargo.toml --lib --target aarch64-apple-ios -- -D warnings
+      - run: cargo fmt --manifest-path apps/mobile/src-tauri/Cargo.toml --check
+      - run: cargo clippy --manifest-path apps/mobile/src-tauri/Cargo.toml --all-targets -- -D warnings
+      - run: cargo clippy --manifest-path apps/mobile/src-tauri/Cargo.toml --lib --target aarch64-apple-ios -- -D warnings
       - name: Host and navigation policy tests
-        run: cargo test --manifest-path mobile/src-tauri/Cargo.toml
+        run: cargo test --manifest-path apps/mobile/src-tauri/Cargo.toml

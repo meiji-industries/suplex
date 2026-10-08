@@ -1,6 +1,6 @@
 #!/bin/sh
 # Points suplex.sh and www.suplex.sh at the Fly app suplex-production with DNS-only A and AAAA records.
-# Run through `mise run billing:dns`, which reads CF_DNS_ACCOUNT_ID and CF_DNS_API_TOKEN from 1Password.
+# Run through `mise run hosted:dns`, which reads CF_DNS_ACCOUNT_ID and CF_DNS_API_TOKEN from 1Password.
 set -eu
 api=https://api.cloudflare.com/client/v4
 cf() { curl -fsS -H "Authorization: Bearer $CF_DNS_API_TOKEN" -H "Content-Type: application/json" "$@"; }

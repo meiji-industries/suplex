@@ -1,6 +1,6 @@
-# ts-rs export settings. The root location applies whether cargo runs from
-# the repository root (CI uses --manifest-path) or from rust/ (mise tasks).
+# ts-rs export settings. The root location applies wherever cargo runs in
+# the workspace (the repository root or a member directory such as apps/server/).
 [env]
-TS_RS_EXPORT_DIR = { value = "src/frontend/contracts/generated", relative = true }
+TS_RS_EXPORT_DIR = { value = "apps/web/contracts/generated", relative = true }
 TS_RS_LARGE_INT = "number"
 TS_RS_IMPORT_EXTENSION = "js"

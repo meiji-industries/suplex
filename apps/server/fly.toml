@@ -1,0 +1,36 @@
+# The hosted service at https://suplex.sh: billing, accounts, and the site.
+# Deploy with `mise run hosted:deploy` from the repository root (the Docker context). Provider secrets are Fly secrets; see
+# "Running the hosted service" in docs/billing.md and "Deploy" in docs/accounts.md.
+app = "suplex-production"
+primary_region = "yyz"
+
+[env]
+  BILLING_PUBLIC_ORIGIN = "https://suplex.sh"
+  BILLING_ENVIRONMENT = "production"
+  BILLING_BIND_ADDRESS = "0.0.0.0"
+  BILLING_PORT = "8080"
+  BILLING_DATABASE_PATH = "/data/billing.sqlite"
+
+# One machine: the SQLite database lives on this volume.
+[mounts]
+  source = "billing_data"
+  destination = "/data"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  # The event processor runs every 30 seconds, so the machine stays up.
+  auto_stop_machines = "off"
+  auto_start_machines = true
+  min_machines_running = 1
+
+[[http_service.checks]]
+  grace_period = "10s"
+  interval = "30s"
+  timeout = "5s"
+  method = "GET"
+  path = "/health"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"

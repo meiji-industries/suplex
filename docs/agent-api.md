@@ -316,4 +316,4 @@ returns a single-use, expiring receipt bound to that task and agent. Merge
 consumes the receipt and rechecks eligibility. This is an API authorization
 exchange, not a universal human approval step in every task workflow. Human
 question answers remain unavailable to paired agents. See
-[the delivery implementation](../rust/src/delivery/agent_delivery.rs).
+[the delivery implementation](../apps/server/src/delivery/agent_delivery.rs).

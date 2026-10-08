@@ -6,7 +6,7 @@ test.each([
   { file: "20260928151155776_rename_review_and_repair.sql", id: "workflow_native_refine_pull_request", before: "Pull request repair", after: "Review and repair" },
   { file: "20260928151659229_rename_plan_and_build.sql", id: "workflow_native_standard", before: "Standard", after: "Plan and build" },
 ])("$after renames the default without replacing custom names", ({ file, id, before, after }) => {
-  const sql = readFileSync(new URL(`../migrations/${file}`, import.meta.url), "utf8");
+  const sql = readFileSync(new URL(`../apps/server/migrations/${file}`, import.meta.url), "utf8");
   const database = new DatabaseSync(":memory:");
   try {
     database.exec("CREATE TABLE suplex_workflows (id TEXT PRIMARY KEY, name TEXT UNIQUE)");
@@ -26,7 +26,7 @@ test.each([
 });
 
 test("double plans and double reviews preserve custom names", () => {
-  const sql = readFileSync(new URL("../migrations/20260928150834180_rename_double_plans_and_reviews.sql", import.meta.url), "utf8");
+  const sql = readFileSync(new URL("../apps/server/migrations/20260928150834180_rename_double_plans_and_reviews.sql", import.meta.url), "utf8");
   const database = new DatabaseSync(":memory:");
   try {
     database.exec("CREATE TABLE suplex_workflows (id TEXT PRIMARY KEY, name TEXT UNIQUE); INSERT INTO suplex_workflows VALUES ('workflow_native_competing_plans', 'Extra plan'), ('workflow_native_independent_review', 'Extra review')");
@@ -40,7 +40,7 @@ test("double plans and double reviews preserve custom names", () => {
 });
 
 test("simple task and extra plan rename only the matching built-in presets", () => {
-  const sql = readFileSync(new URL("../migrations/20260928150652933_rename_simple_task_and_extra_plan.sql", import.meta.url), "utf8");
+  const sql = readFileSync(new URL("../apps/server/migrations/20260928150652933_rename_simple_task_and_extra_plan.sql", import.meta.url), "utf8");
   const database = new DatabaseSync(":memory:");
   try {
     database.exec("CREATE TABLE suplex_workflows (id TEXT PRIMARY KEY, name TEXT UNIQUE)");
@@ -58,7 +58,7 @@ test("simple task and extra plan rename only the matching built-in presets", () 
 });
 
 test("workflow names update defaults while preserving custom names and collisions", () => {
-  const sql = readFileSync(new URL("../migrations/20260928145859109_rename_build_and_review_workflows.sql", import.meta.url), "utf8");
+  const sql = readFileSync(new URL("../apps/server/migrations/20260928145859109_rename_build_and_review_workflows.sql", import.meta.url), "utf8");
   const database = new DatabaseSync(":memory:");
   try {
     database.exec("CREATE TABLE suplex_workflows (id TEXT PRIMARY KEY, name TEXT UNIQUE)");

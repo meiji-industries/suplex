@@ -1,0 +1,16 @@
+[Unit]
+Description=Herdr headless server for the suplex user
+After=network-online.target
+
+[Service]
+User=suplex
+Group=suplex
+WorkingDirectory=/home/suplex
+Environment=HOME=/home/suplex
+Environment=PATH=/home/suplex/.local/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=/home/suplex/.local/bin/herdr server
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

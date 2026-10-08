@@ -39,7 +39,7 @@ const register = (method: string, path: string) => rust.push({
   method,
   pattern: new RegExp(`^${path.replace(/\{\*[^}]+\}/g, "\0").replace(/\{[^}]+\}/g, "\u0001").replace(/[.*+?^$()|[\]\\]/g, "\\$&").replace(/\u0001/g, "[^/]+").replace(/\0/g, ".*")}$`),
 });
-const rustFiles = readdirSync("rust/src/http", { recursive: true, encoding: "utf8" }).filter(file => file.endsWith(".rs")).map(file => join("rust/src/http", file));
+const rustFiles = readdirSync("apps/server/src/http", { recursive: true, encoding: "utf8" }).filter(file => file.endsWith(".rs")).map(file => join("apps/server/src/http", file));
 for (const file of rustFiles) {
   const source = readFileSync(file, "utf8").split("#[cfg(test)]")[0]!;
   for (const [, method, path] of source.matchAll(/\(\s*Method::([A-Z]+),\s*"([^"]+)"/g)) register(method!, path!);

@@ -1,0 +1,35 @@
+import { describe, expect, it } from "vitest";
+
+import { recentActivity, recentTasks } from "../features/tasks/recent-tasks.js";
+import { showRecentTasks } from "../features/tasks/lib/task-list.js";
+
+describe("recentTasks", () => {
+  it("returns the ten most recently status-changed tasks first", () => {
+    const tasks = [1, 12, 2, 11, 3, 10, 4, 9, 5, 8, 6, 7].map((id) => ({ id: String(id), status: "backlog" as const, statusChangedAt: `2026-08-13T00:00:${String(id).padStart(2, "0")}.000Z`, updatedAt: `2026-08-13T00:01:${String(13 - id).padStart(2, "0")}.000Z` }));
+
+    expect(recentTasks(tasks).map((task) => task.id)).toEqual(["12", "11", "10", "9", "8", "7", "6", "5", "4", "3"]);
+  });
+
+  it("omits cancelled tasks before limiting the list", () => {
+    const tasks = Array.from({ length: 12 }, (_, index) => index + 1).map((id) => ({ id: String(id), status: id === 12 ? "cancelled" as const : "backlog" as const, statusChangedAt: `2026-08-13T00:00:${String(id).padStart(2, "0")}.000Z` }));
+
+    expect(recentTasks(tasks).map((task) => task.id)).toEqual(["11", "10", "9", "8", "7", "6", "5", "4", "3", "2"]);
+  });
+
+  it("interleaves move runs with tasks by time and keeps ten", () => {
+    const tasks = Array.from({ length: 10 }, (_, index) => ({ id: String(index), status: "backlog" as const, statusChangedAt: `2026-08-13T00:00:${String(index * 2).padStart(2, "0")}.000Z` }));
+    const runs = [{ id: "run", startedAt: "2026-08-13T00:00:17.000Z" }];
+
+    expect(recentActivity(tasks, runs).map((item) => item.task?.id ?? item.run?.id)).toEqual(["9", "run", "8", "7", "6", "5", "4", "3", "2", "1"]);
+  });
+
+  it("hides only in settings", () => {
+    expect(showRecentTasks("/tasks")).toBe(true);
+    expect(showRecentTasks("/board")).toBe(true);
+    expect(showRecentTasks("/projects")).toBe(true);
+    expect(showRecentTasks("/profile")).toBe(false);
+    expect(showRecentTasks("/admin/profiles")).toBe(false);
+    expect(showRecentTasks("/companies/company-a/settings")).toBe(false);
+  });
+
+});

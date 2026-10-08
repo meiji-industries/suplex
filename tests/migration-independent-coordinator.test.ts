@@ -3,12 +3,12 @@ import { DatabaseSync } from "node:sqlite";
 import { expect, test } from "vitest";
 
 const migration = ["20260928153003373_seed_independent_coordinator.sql", "20260928153056880_rename_alt_coordinator.sql"]
-  .map(file => readFileSync(new URL(`../migrations/${file}`, import.meta.url), "utf8")).join("\n");
+  .map(file => readFileSync(new URL(`../apps/server/migrations/${file}`, import.meta.url), "utf8")).join("\n");
 
 test("seeds a distinct advisor and preserves custom assignments and profile settings", () => {
   const database = new DatabaseSync(":memory:");
   try {
-    database.exec(readFileSync(new URL("../migrations/20260907152227784_workflow_records.sql", import.meta.url), "utf8"));
+    database.exec(readFileSync(new URL("../apps/server/migrations/20260907152227784_workflow_records.sql", import.meta.url), "utf8"));
     database.exec(`CREATE TABLE suplex_profiles (id TEXT PRIMARY KEY, name TEXT UNIQUE, role TEXT, avatar_seed TEXT, provider TEXT, model TEXT, reasoning_level TEXT, service_tier TEXT, provider_instance_id TEXT, archived_at TEXT, created_at TEXT, updated_at TEXT);
       INSERT INTO suplex_profiles VALUES ('profile_native_root', 'Smart Coordinator', 'root', 'original', 'codex', 'configured-model', 'high', 'priority', 'my-login', NULL, 'before', 'before');
       UPDATE suplex_workflows SET configuration_json = '{"deliveryTarget":"branch","advisorProfileIds":{"planner_a":"custom-planner","planner_b":"profile_native_root"}}' WHERE engine = 'competing_plans';`);
@@ -36,10 +36,10 @@ test("projects inherit Alt Coordinator without overriding provider restrictions 
       INSERT INTO suplex_profiles VALUES ('profile_native_independent', 'root', NULL, 'codex', NULL);
       CREATE TABLE suplex_projects (id TEXT, root_profile_id TEXT, provider_policy_json TEXT);
       INSERT INTO suplex_projects VALUES ('unrestricted', 'root', NULL), ('restricted', 'root', '{"allowedProviders":["claude-code"],"allowedInstanceIds":[]}'), ('allowed', 'root', '{"allowedProviders":["codex"],"allowedInstanceIds":[]}');`);
-    database.exec(readFileSync(new URL("../migrations/20260907152227784_workflow_records.sql", import.meta.url), "utf8"));
+    database.exec(readFileSync(new URL("../apps/server/migrations/20260907152227784_workflow_records.sql", import.meta.url), "utf8"));
     database.exec(`UPDATE suplex_workflows SET configuration_json = '{"advisorProfileIds":{"reviewer":"profile_native_independent"}}' WHERE engine = 'independent_review';
       UPDATE suplex_workflows SET configuration_json = '{"advisorProfileIds":{"rater":"custom"}}' WHERE engine = 'refine_pull_request';`);
-    database.exec(readFileSync(new URL("../migrations/20260928155244245_project_alt_coordinator_default.sql", import.meta.url), "utf8"));
+    database.exec(readFileSync(new URL("../apps/server/migrations/20260928155244245_project_alt_coordinator_default.sql", import.meta.url), "utf8"));
     expect(database.prepare("SELECT id, alt_profile_id FROM suplex_projects ORDER BY id").all()).toEqual([
       { id: "allowed", alt_profile_id: "profile_native_independent" },
       { id: "restricted", alt_profile_id: "root" },
@@ -55,7 +55,7 @@ test("coordinator avatar swap changes only the original default seeds", () => {
   try {
     database.exec(`CREATE TABLE suplex_profiles (id TEXT PRIMARY KEY, avatar_seed TEXT);
       INSERT INTO suplex_profiles VALUES ('profile_native_root', '00000000000000000000000000000001'), ('profile_native_independent', '00000000000000000000000000000003');`);
-    const sql = readFileSync(new URL("../migrations/20260928160550554_swap_coordinator_avatars.sql", import.meta.url), "utf8");
+    const sql = readFileSync(new URL("../apps/server/migrations/20260928160550554_swap_coordinator_avatars.sql", import.meta.url), "utf8");
     database.exec(sql);
     const seeds = () => database.prepare("SELECT avatar_seed FROM suplex_profiles ORDER BY id").all().map(row => row.avatar_seed);
     expect(seeds()).toEqual(["00000000000000000000000000000001", "00000000000000000000000000000003"]);

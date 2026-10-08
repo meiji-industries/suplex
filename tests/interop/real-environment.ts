@@ -18,7 +18,7 @@ import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { nativeBrowser } from "../helpers/native-browser.js";
 import { runCommand } from "../helpers/run-command.js";
-import { TaskSchema } from "../../src/frontend/contracts/tasks.js";
+import { TaskSchema } from "../../apps/web/contracts/tasks.js";
 
 type Provider = "codex" | "claude-code" | "opencode" | "devin";
 const phase = process.env.SUPLEX_REAL_PHASE ?? "providers";

@@ -14,7 +14,7 @@ A host bundled in Suplex.app updates only when the desktop app is replaced. Its 
 
 ## Desktop app updates
 
-The Tauri shell (`desktop/src-tauri/src/updater.rs`) checks for, downloads, and
+The Tauri shell (`apps/desktop/src-tauri/src/updater.rs`) checks for, downloads, and
 installs desktop app updates in Rust with the official Tauri updater plugin. No
 page, bundled or remote, receives an updater command.
 
@@ -27,12 +27,12 @@ describe the same signed app:
 | File | Readers | Contents |
 | --- | --- | --- |
 | `latest-tauri.json` | The app's updater | A Tauri static manifest: `version`, `notes`, `pub_date`, and one `platforms` entry (`darwin-aarch64` or `darwin-x86_64`) with the immutable HTTPS URL of `Suplex-<version>-<arch>.app.tar.gz` and its updater signature |
-| `latest-mac.yml` | `suplex update` (`rust/src/platform/app_update.rs`) and the download handlers in `rust/src/hosted/site.rs` and `src/web/worker.js`; `install.sh` downloads through `/download` and does not read it | `version`, `path`, and `sha512` of the ZIP, and a `files` list with the ZIP and the DMG. The name and format are the ones the Electron app published; only the fields these readers use are written. |
+| `latest-mac.yml` | `suplex update` (`apps/server/src/platform/app_update.rs`) and the download handler in `apps/server/src/hosted/site.rs`; `install.sh` downloads through `/download` and does not read it | `version`, `path`, and `sha512` of the ZIP, and a `files` list with the ZIP and the DMG. The name and format are the ones the Electron app published; only the fields these readers use are written. |
 
 The release files are `Suplex-<version>-<arch>-mac.zip`,
 `Suplex-<version>-<arch>.dmg`, `Suplex-<version>-<arch>.app.tar.gz`, and its
 `.sig`. There are no blockmaps. `pnpm desktop:dist` writes them, with both
-manifests, to `desktop/release/<arch>/`. Hashes come from the final ZIP, and the
+manifests, to `apps/desktop/release/<arch>/`. Hashes come from the final ZIP, and the
 updater archive and signature are copied from the Tauri bundler without change.
 
 `SUPLEX_DESKTOP_UPDATE_URL` is the HTTPS feed base for Apple silicon
@@ -54,12 +54,12 @@ signature.
 
 | Input | Used by | Source |
 | --- | --- | --- |
-| `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD`, `APPLE_TEAM_ID` | Notarization | 1Password, `desktop/signing.env` |
+| `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD`, `APPLE_TEAM_ID` | Notarization | 1Password, `apps/desktop/signing.env` |
 | Developer ID Application certificate | `codesign` (`APPLE_SIGNING_IDENTITY`, default `Developer ID Application`) | The login keychain |
-| `SUPLEX_DESKTOP_UPDATE_URL` | Both feeds | 1Password, `desktop/signing.env` |
-| `TAURI_SIGNING_PRIVATE_KEY`, `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`, `SUPLEX_DESKTOP_UPDATER_PUBKEY` | The updater archive signature and the app's public key | 1Password, `desktop/signing.env`. The public key is also tracked in `desktop/updater-production.pub`; a signed release stops when the two differ. Losing the private key strands every installed app on its version. |
+| `SUPLEX_DESKTOP_UPDATE_URL` | Both feeds | 1Password, `apps/desktop/signing.env` |
+| `TAURI_SIGNING_PRIVATE_KEY`, `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`, `SUPLEX_DESKTOP_UPDATER_PUBKEY` | The updater archive signature and the app's public key | 1Password, `apps/desktop/signing.env`. The public key is also tracked in `apps/desktop/updater-production.pub`; a signed release stops when the two differ. Losing the private key strands every installed app on its version. |
 
-`mise run desktop:dist:signed` runs `desktop/scripts/dist-signed.sh` for each
+`mise run desktop:dist:signed` runs `apps/desktop/scripts/dist-signed.sh` for each
 architecture. It stops with the list of missing inputs when any of these is
 absent. It signs the bundled host with the hardened runtime, builds and
 notarizes the app with the Tauri bundler, notarizes and staples the DMG, and
@@ -88,7 +88,7 @@ before any manifest.
 build the Linux and Windows desktop apps for both architectures (see below),
 commit, tag, push, then publish. A rerun after a failure keeps Linux and Windows
 desktop builds already signed from the same commit. The Tauri app version comes from
-`desktop/package.json`. The bump starts from the highest stable version
+`apps/desktop/package.json`. The bump starts from the highest stable version
 in the checkout, local tags, and live `origin` tags. Remote lookup failures stop
 the release before version files change or builds start. The pipeline rechecks
 that the tag is unused before committing, then pushes the branch and tag
@@ -98,7 +98,7 @@ replaces an existing tag. The manifests are published last.
 Run `node scripts/test-release-version.mjs` to check version selection and tag
 collisions with temporary Git repositories.
 
-`mise run release:mobile` ships the iOS and Android shells in `mobile/` at the
+`mise run mobile:release` ships the iOS and Android shells in `apps/mobile/` at the
 latest `v*` tag. It checks out the tag in a reusable worktree under
 `~/.cache/suplex/mobile-release`, then:
 
@@ -110,9 +110,9 @@ latest `v*` tag. It checks out the tag in a reusable worktree under
 - builds the Android App Bundle, signs it with the Play upload key, and releases
   it on the Play track in `SUPLEX_PLAY_TRACK` (default `internal`).
 
-The signed `.ipa` and `.aab` stay in `mobile/release/<tag>`. Credentials come
+The signed `.ipa` and `.aab` stay in `apps/mobile/release/<tag>`. Credentials come
 from the "Mobile store release" item in the 1Password Suplex vault through
-`mobile/release.env`. Without a Play service account, the task signs the bundle
+`apps/mobile/release.env`. Without a Play service account, the task signs the bundle
 and stops before the upload; Google Play requires the first bundle to be
 uploaded by hand in the Play Console. The App Store version and the Android
 version code come from the tag (1.6.1 is version code 1006001), so one tag can
@@ -149,7 +149,7 @@ pending download.
 
 Two rules keep the app replaceable. Both come from an incident: versions 1.2.0 and earlier opened the download dialog from the hourly check, and an app left open at release time could not be quit by `install.sh` or `suplex update`.
 
-1. **Attach every message box to a visible window.** Use `Effects::dialog` in `desktop/src-tauri/src/effects.rs`, which shows the window and attaches the dialog to it. A message box with no visible parent window blocks quitting while nobody can see it.
+1. **Attach every message box to a visible window.** Use `Effects::dialog` in `apps/desktop/src-tauri/src/effects.rs`, which shows the window and attaches the dialog to it. A message box with no visible parent window blocks quitting while nobody can see it.
 2. **Open a dialog only as the direct answer to a click.** An event that arrives later posts a notification, and a click on it opens the dialog. macOS refuses a quit request while any dialog is open.
 
 The Electron measurements behind these rules (Electron 44.2.0 on Darwin 25.5,
@@ -164,10 +164,10 @@ Three paths replace the app:
 
 | Path | Source | Starts from |
 | --- | --- | --- |
-| In-app updater | `desktop/src-tauri/src/updater.rs` | **Restart Suplex** in the app |
-| `suplex update` | `rust/src/platform/app_update.rs`, see [the CLI](architecture/cli.md#updates) | A terminal |
-| `install.sh` | `src/web/public/install.sh`, compiled into `suplex hosted serve` and served at `https://suplex.sh/install.sh` | `curl -fsSL https://suplex.sh/install.sh \| sh` |
-| `install.ps1` (Windows) | `src/web/public/install.ps1`, served at `https://suplex.sh/install.ps1`. It installs for the current user, checks the Authenticode signer, and stops a running app first; the Windows app owns no host | `irm https://suplex.sh/install.ps1 \| iex` in PowerShell |
+| In-app updater | `apps/desktop/src-tauri/src/updater.rs` | **Restart Suplex** in the app |
+| `suplex update` | `apps/server/src/platform/app_update.rs`, see [the CLI](architecture/cli.md#updates) | A terminal |
+| `install.sh` | `apps/server/src/hosted/install.sh`, compiled into `suplex hosted serve` and served at `https://suplex.sh/install.sh` | `curl -fsSL https://suplex.sh/install.sh \| sh` |
+| `install.ps1` (Windows) | `apps/server/src/hosted/install.ps1`, compiled into `suplex hosted serve` and served at `https://suplex.sh/install.ps1`. It installs for the current user, checks the Authenticode signer, and stops a running app first; the Windows app owns no host | `irm https://suplex.sh/install.ps1 \| iex` in PowerShell |
 
 `suplex update` and `install.sh` stop the app with the same sequence:
 
@@ -179,10 +179,10 @@ A killed app leaves its host running. `suplex update` stops that host and does n
 
 ## Linux binary distribution
 
-`mise run linux:dist` builds arm64 and x64 native binaries with embedded web
+`mise run server:dist:linux` builds arm64 and x64 native binaries with embedded web
 assets and migrations. Each architecture produces a versioned tarball, SHA-256
 checksum file, and `latest-linux.yml` under `dist/linux/<arch>`.
-`mise run linux:publish` publishes them to `stable/linux/<arch>` using the
+`mise run server:publish:linux` publishes them to `stable/linux/<arch>` using the
 configured release credentials. These are host binaries for servers and
 terminals; the Linux desktop app below bundles the same host.
 
@@ -196,10 +196,10 @@ binary, and verify the destination host separately from artifact publication.
 ## Linux and Windows desktop apps
 
 `mise run desktop:dist:linux` builds the Linux desktop app for arm64 and x64 in
-Docker (`desktop/linux/Dockerfile`, Ubuntu 22.04): a deb and an rpm, each with
-the bundled host, under `desktop/release/linux-<arch>/`. Each deb is then
+Docker (`apps/desktop/linux/Dockerfile`, Ubuntu 22.04): a deb and an rpm, each with
+the bundled host, under `apps/desktop/release/linux-<arch>/`. Each deb is then
 installed and launched in a clean Ubuntu 22.04 container
-(`desktop/scripts/test-packaged-linux.sh`). The x64 build runs under emulation
+(`apps/desktop/scripts/test-packaged-linux.sh`). The x64 build runs under emulation
 and takes longer. The packages run on Ubuntu 22.04, Debian 12, Fedora 36, and
 newer, and install the app as `/usr/bin/Suplex` with its resources in
 `/usr/lib/Suplex`. There is no AppImage: agents keep the bundled host's path,
@@ -207,7 +207,7 @@ and an AppImage mounts at a new path on every launch.
 
 `mise run desktop:dist:windows` builds the Windows installer (NSIS, per-user,
 no administrator) for arm64 and x64 on the Windows build VM, and installs and
-launches each there. See [the build VM](../desktop/windows/README.md). The
+launches each there. See [the build VM](../apps/desktop/windows/README.md). The
 Windows app connects to Suplex hosts on other computers only; it has no local
 host, because the host does not run on Windows.
 
@@ -215,7 +215,7 @@ Both builds read the same variables as the Mac build. Each platform has its
 own feed folder beside the Mac ones: `stable/linux/<arch>/` and
 `stable/windows/<arch>/`. With `SUPLEX_DESKTOP_UPDATE_URL` the app gets an
 `app-update.yml` for its folder. With the updater key pair the Mac signs each
-package (`desktop/scripts/finish-platform-release.sh`) and writes
+package (`apps/desktop/scripts/finish-platform-release.sh`) and writes
 `latest-tauri.json`, with one entry per package type
 (`linux-<arch>-deb`, `linux-<arch>-rpm`, `windows-<arch>-nsis`). The private
 key never enters the container or the VM. `latest-linux-desktop.yml` and
@@ -228,7 +228,7 @@ same immutable-file and manifest-last rules as the Mac publisher. The deb and
 rpm updates install through `pkexec`, so Linux asks for an administrator
 password. The release Authenticode signs the Windows app and installer with
 Azure Trusted Signing, from the `Azure Trusted Signing` item in the Suplex
-vault ([build VM](../desktop/windows/README.md#authenticode-signing)). A build
+vault ([build VM](../apps/desktop/windows/README.md#authenticode-signing)). A build
 without that item is unsigned, and Windows SmartScreen shows an unknown
 publisher.
 

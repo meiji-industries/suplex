@@ -98,7 +98,7 @@ money properties, so they cannot double count Stripe cash.
 
 ## Install on Framer
 
-`integrations/posthog/framer-attribution.js` is paste-ready Framer Custom Code
+`apps/server/src/hosted/framer-attribution.js` is paste-ready Framer Custom Code
 for the end of `<body>`. Its `phc_` token is a public, write-only project token,
 not a management secret. The snippet sends through `https://meta.suplex.sh` and
 uses `https://us.posthog.com` for PostHog UI links.

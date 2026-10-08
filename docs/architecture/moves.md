@@ -3,13 +3,13 @@
 For contributors who change Moves, this page explains what a move stores, how a
 run starts work, which system owns each fact, and where each part of the
 feature lives. Sources:
-[domain and tests](../../rust/src/moves/mod.rs),
-[terminal runners](../../rust/src/moves/shell.rs),
-[input rendering](../../rust/src/moves/prompt.rs),
-[request contracts](../../rust/src/http/contracts/typed/moves.rs),
-[HTTP routes](../../rust/src/http/routes/moves.rs),
-[route tests](../../rust/tests/routes/moves.rs), and the
-[Moves page](../../src/frontend/features/moves/moves.tsx).
+[domain and tests](../../apps/server/src/moves/mod.rs),
+[terminal runners](../../apps/server/src/moves/shell.rs),
+[input rendering](../../apps/server/src/moves/prompt.rs),
+[request contracts](../../apps/server/src/http/contracts/typed/moves.rs),
+[HTTP routes](../../apps/server/src/http/routes/moves.rs),
+[route tests](../../apps/server/tests/routes/moves.rs), and the
+[Moves page](../../apps/web/features/moves/moves.tsx).
 Terminal runs use the host terminal registry; see
 [host terminals](host-terminals.md).
 
@@ -74,7 +74,7 @@ avatar of the project's default Worker.
 ## Recommendations
 
 `POST /api/projects/{project_id}/move-recommendations`
-([`recommend.rs`](../../rust/src/moves/recommend.rs)) asks the project's
+([`recommend.rs`](../../apps/server/src/moves/recommend.rs)) asks the project's
 default Worker to read the repository once and propose moves. It saves
 nothing. The person imports the moves they want through the normal create
 route.
@@ -100,7 +100,7 @@ route.
   returns 502 with the last line of the agent's error output. A cancelled
   request ends the agent, because the child process dies with the request.
 
-In the browser, [`recommend-moves.tsx`](../../src/frontend/features/moves/recommend-moves.tsx)
+In the browser, [`recommend-moves.tsx`](../../apps/web/features/moves/recommend-moves.tsx)
 shows a spinner and rotating shimmer phrases while the agent reads, then a
 card for each move, all selected, with "Select none" and "Import N moves".
 Import creates the selected moves one at a time and reports any that fail. The
@@ -199,10 +199,10 @@ Deleting a move deletes its runs (the foreign key cascades).
 | `GET /moves`, `/moves/{move_id}`, `/moves/{move_id}/runs/{run_id}` | Browser pages. |
 
 Every route checks the session and the CSRF rule, then project access through
-the move. Browser types come from `src/frontend/contracts/generated`
+the move. Browser types come from `apps/web/contracts/generated`
 (`MoveResponse`, `MoveRunResponse`, `MoveRunsResponse`, `MovesResponse`,
 `MoveRunTranscript`, `MoveRunner`). Fetches live in
-[`move-api.ts`](../../src/frontend/features/moves/lib/move-api.ts).
+[`move-api.ts`](../../apps/web/features/moves/lib/move-api.ts).
 
 ## Storage
 
@@ -230,7 +230,7 @@ and add the task settings columns.
 | Board | `features/tasks/tasks.tsx` | Terminal runs are cards in Delivered, newest first with tasks. The "Tasks and moves" filter (`?show=`) selects tasks, moves, or both. |
 
 Activity and the Board read moves through `useShellRuns` in
-[`move-runs.ts`](../../src/frontend/features/moves/lib/move-runs.ts), one
+[`move-runs.ts`](../../apps/web/features/moves/lib/move-runs.ts), one
 query keyed `["moves", user, company]`. The [sync feed](sync.md) pushes every
 move into it while its socket is open; otherwise it polls. `useRunActions` performs Stop
 and Archive and refreshes that query. `runsInTerminal` is the one place that
@@ -238,9 +238,9 @@ decides whether a runner has a terminal.
 
 The Moves and Tasks lists share `ListToolbar`, `ViewTabs`, `FilterInput`,
 `DataList`, and `DataListRow` from
-[`data-list.tsx`](../../src/frontend/components/app/data-list.tsx), and
+[`data-list.tsx`](../../apps/web/components/app/data-list.tsx), and
 `ProjectSelect` from
-[`project-select.tsx`](../../src/frontend/components/app/project-select.tsx).
+[`project-select.tsx`](../../apps/web/components/app/project-select.tsx).
 
 ## Ownership and safety
 
@@ -259,9 +259,10 @@ permissions, as in your own shell.
 
 ## Development note
 
-The development data directory `.suplex` is inside the checkout. Vite ignores
-it (`vite.config.ts`). Otherwise a new run worktree adds files under the Vite
-root, Vite reloads the page, and the reload cancels the start request.
+The development data directory `.suplex` is inside the checkout. Vite does not
+watch it: the Vite root is `apps/web`, and `apps/web/vite.config.ts` also ignores
+`.suplex`. Otherwise a new run worktree adds files that Vite watches, Vite
+reloads the page, and the reload cancels the start request.
 
 ## Known limits
 

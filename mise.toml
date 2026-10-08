@@ -10,7 +10,7 @@ experimental = true
 activate_aggressive = true
 
 [env]
-# Keep Cargo's default per-checkout target; absolute CARGO_TARGET_DIR values
+# Keep Cargo's default per-checkout target (the workspace root's target/); absolute CARGO_TARGET_DIR values
 # enter sccache's Rust cache key and prevent dependency reuse across worktrees.
 RUSTC_WRAPPER = "{{config_root}}/scripts/sccache-wrapper.sh"
 NODE_ENV = "development"
@@ -18,6 +18,8 @@ SUPLEX_TAILSCALE_ADDRESS = "{{ exec(command='sh scripts/resolve-magicdns.sh') | 
 SUPLEX_TAILSCALE_EXPOSURE = "serve"
 SUPLEX_BIND_ADDRESS = "127.0.0.1"
 _.path = "./node_modules/.bin"
+
+# --- Root verbs ---
 
 [tasks.setup]
 description = "Install pinned tools and dependencies for development"
@@ -32,77 +34,8 @@ run = "pnpm run dev"
 description = "Run native Suplex with Rust rebuilds and Vite HMR"
 run = "pnpm run dev:watch"
 
-[tasks."dev:rust"]
-description = "Alias for the native development stack"
-run = "mise run dev"
-
-[tasks."server:dev"]
-description = "Alias for the native development stack"
-run = "mise run dev"
-
-[tasks."server:prod"]
-description = "Build the release binary and run it in the foreground on port 4111"
-run = '''
-set -e
-pnpm run build
-SUPLEX_PORT=4111 exec "${CARGO_TARGET_DIR:-rust/target}/release/suplex" start --foreground
-'''
-
-[tasks."build:rust"]
-description = "Build the native binary with frontend assets and migrations"
-run = "pnpm run build"
-
-[tasks."test:rust"]
-run = '''
-cd rust
-unset RUSTUP_TOOLCHAIN
-cargo nextest run --all-targets
-'''
-
-[tasks."test:sccache-wrapper"]
-description = "Check compiler-cache forwarding and the fallback without sccache"
-run = "sh scripts/test-sccache-wrapper.sh"
-
-[tasks."test:parity"]
-run = '''
-set -e
-pnpm exec tsx scripts/rust-route-coverage.ts
-cd rust
-unset RUSTUP_TOOLCHAIN
-cargo test --test contract_parity --test hash_bytes
-'''
-
-[tasks."test:journey:rust"]
-description = "Run the deterministic Codex and Claude Code browser journeys, including the local workflow phases, against the Rust backend"
-run = '''
-set -e
-[ -f dist/web/suplex-ui.js ] || pnpm exec vite build
-(cd rust && unset RUSTUP_TOOLCHAIN && cargo build --bin suplex --features github-test-endpoint)
-export SUPLEX_BIN="${CARGO_TARGET_DIR:-$PWD/rust/target}/debug/suplex"
-export SUPLEX_DETERMINISTIC_CODEX_RUN=1
-for phase in deliver deliver_pr answer restart cancel deliver_claude direct_build independent_review competing_plans refine_pull_request; do
-  SUPLEX_DETERMINISTIC_PHASE=$phase pnpm exec tsx tests/interop/real-codex-standard.ts
-done
-'''
-
-[tasks."test:interop:rust"]
-description = "Run the Rust interop scripts other than the Codex journey"
-run = '''
-set -e
-[ -f dist/web/suplex-ui.js ] || pnpm exec vite build
-(cd rust && unset RUSTUP_TOOLCHAIN && cargo build --bin suplex --features github-test-endpoint)
-export SUPLEX_BIN="${CARGO_TARGET_DIR:-$PWD/rust/target}/debug/suplex"
-for script in root-delivery-inspection root-image root-worker-evidence root-worker-replacement task-timeline; do
-  echo "[interop] $script" >&2
-  pnpm exec tsx --import ./tests/helpers/interop-deadline.ts tests/interop/$script.ts
-done
-'''
-
-[tasks.down]
-description = "Stop this checkout's owned native development processes"
-run = "pnpm exec tsx scripts/dev.ts --stop"
-
 [tasks."dev:status"]
+description = "Show the process that listens on this checkout's development port"
 run = '''
 port=${SUPLEX_PORT:-${CONDUCTOR_PORT:-14111}}
 lsof -nP -iTCP:$port -sTCP:LISTEN || echo "dev stack not running (port $port free)"
@@ -112,34 +45,127 @@ lsof -nP -iTCP:$port -sTCP:LISTEN || echo "dev stack not running (port $port fre
 description = "Stop owned native development processes, escalating if needed"
 run = "pnpm exec tsx scripts/dev.ts --stop"
 
-[tasks."billing:dev"]
+[tasks.down]
+description = "Stop this checkout's owned native development processes"
+run = "pnpm exec tsx scripts/dev.ts --stop"
+
+[tasks.build]
+description = "Build the native binary with frontend assets and migrations"
+run = "pnpm run build"
+
+[tasks.typecheck]
+description = "Typecheck the TypeScript code"
+run = "export PATH=\"$(dirname \"$(mise which node)\"):$PATH\" && pnpm run typecheck"
+
+[tasks.lint]
+description = "Run ESLint and clippy on the server crate"
+run = "export PATH=\"$(dirname \"$(mise which node)\"):$PATH\" && pnpm run lint && cargo clippy --manifest-path apps/server/Cargo.toml --all-targets -- -D warnings"
+
+[tasks.test]
+description = "Run the frontend unit tests against a fresh server build"
+run = "export PATH=\"$(dirname \"$(mise which node)\"):$PATH\" && pnpm run test"
+
+[tasks."test:browser"]
+description = "Run the browser tests against a fresh server build"
+run = "export PATH=\"$(dirname \"$(mise which node)\"):$PATH\" && pnpm run test:browser"
+
+[tasks."test:sccache-wrapper"]
+description = "Check compiler-cache forwarding and the fallback without sccache"
+run = "sh scripts/test-sccache-wrapper.sh"
+
+[tasks."db:migrate"]
+description = "Apply the database migrations to the development database"
+run = "pnpm exec tsx scripts/dev.ts --migrate"
+
+# --- server: the native host ---
+
+[tasks."server:prod"]
+description = "Build the release binary and run it in the foreground on port 4111"
+run = '''
+set -e
+pnpm run build
+SUPLEX_PORT=4111 exec "${CARGO_TARGET_DIR:-target}/release/suplex" start --foreground
+'''
+
+[tasks."server:test"]
+description = "Run the Rust server tests with cargo nextest"
+run = '''
+cd apps/server
+unset RUSTUP_TOOLCHAIN
+cargo nextest run --all-targets
+'''
+
+[tasks."server:test:parity"]
+description = "Check that the Rust server serves every frozen route and keeps the contract parity"
+run = '''
+set -e
+pnpm exec tsx scripts/rust-route-coverage.ts
+cd apps/server
+unset RUSTUP_TOOLCHAIN
+cargo test --test contract_parity --test hash_bytes
+'''
+
+[tasks."server:test:journey"]
+description = "Run the deterministic Codex and Claude Code browser journeys, including the local workflow phases, against the Rust backend"
+run = '''
+set -e
+[ -f apps/web/dist/suplex-ui.js ] || pnpm --filter suplex-web build
+(cd apps/server && unset RUSTUP_TOOLCHAIN && cargo build --bin suplex --features github-test-endpoint)
+export SUPLEX_BIN="${CARGO_TARGET_DIR:-$PWD/target}/debug/suplex"
+export SUPLEX_DETERMINISTIC_CODEX_RUN=1
+for phase in deliver deliver_pr answer restart cancel deliver_claude direct_build independent_review competing_plans refine_pull_request; do
+  SUPLEX_DETERMINISTIC_PHASE=$phase pnpm exec tsx tests/interop/real-codex-standard.ts
+done
+'''
+
+[tasks."server:test:interop"]
+description = "Run the Rust interop scripts other than the Codex journey"
+run = '''
+set -e
+[ -f apps/web/dist/suplex-ui.js ] || pnpm --filter suplex-web build
+(cd apps/server && unset RUSTUP_TOOLCHAIN && cargo build --bin suplex --features github-test-endpoint)
+export SUPLEX_BIN="${CARGO_TARGET_DIR:-$PWD/target}/debug/suplex"
+for script in root-delivery-inspection root-image root-worker-evidence root-worker-replacement task-timeline; do
+  echo "[interop] $script" >&2
+  pnpm exec tsx --import ./tests/helpers/interop-deadline.ts tests/interop/$script.ts
+done
+'''
+
+[tasks."server:dist:linux"]
+description = "Build the Linux suplex binary in Docker for arm64 and x64 and pack each under dist/linux/<arch>; the telemetry key comes from the 1Password Suplex vault"
+run = '''
+source scripts/onepassword.sh
+onepassword_setup_service_account
+for arch in arm64 x64; do
+  SUPLEX_LINUX_ARCH=$arch op run --env-file apps/desktop/signing.env -- sh scripts/build-linux.sh
+done
+'''
+
+[tasks."server:publish:linux"]
+description = "Publish the Linux suplex tarballs from dist/linux with R2 credentials from 1Password"
+run = '''
+source scripts/onepassword.sh
+onepassword_setup_service_account
+for arch in arm64 x64; do
+  SUPLEX_LINUX_ARCH=$arch op run --env-file apps/desktop/release.env -- bash scripts/publish-linux-release.sh
+done
+'''
+
+# --- hosted: billing, accounts, and suplex.sh ---
+
+[tasks."hosted:dev"]
 description = "Run the hosted service (billing, accounts, suplex.sh) from source against the provider sandboxes"
 run = '''
 source scripts/onepassword.sh
 onepassword_setup_service_account
-# `mise run billing:tunnel` routes https://billing-sandbox.example.com to this port.
+# `mise run hosted:tunnel` routes https://billing-sandbox.example.com to this port.
 # The sandbox has no head office address, which Stripe Tax needs.
 export STRIPE_AUTOMATIC_TAX=false BILLING_ENVIRONMENT=sandbox BILLING_PORT=4212 BILLING_PUBLIC_ORIGIN=https://billing-sandbox.example.com BILLING_DATABASE_PATH="$PWD/.suplex/billing.sqlite"
 mkdir -p .suplex
-op run --env-file scripts/billing-dev.env -- cargo run --manifest-path rust/Cargo.toml -- hosted serve
+op run --env-file scripts/billing-dev.env -- cargo run --manifest-path apps/server/Cargo.toml -- hosted serve
 '''
 
-[tasks.deploy_production]
-description = "Deploy the hosted service (billing, accounts, and suplex.sh) to Fly production"
-dir = "{{config_root}}"
-run = "fly deploy --config fly.toml --app suplex-production --remote-only"
-
-[tasks."billing:dns"]
-description = "Point suplex.sh and www.suplex.sh at suplex-production with Cloudflare DNS records"
-run = '''
-source scripts/onepassword.sh
-onepassword_setup_service_account
-export CF_DNS_ACCOUNT_ID="$(op read op://Suplex/4dhocwhz4orklgrt3mbvvdx4ay/CF_DNS_ACCOUNT_ID)"
-export CF_DNS_API_TOKEN="$(op read op://Suplex/4dhocwhz4orklgrt3mbvvdx4ay/CF_DNS_API_TOKEN)"
-sh scripts/billing-dns.sh
-'''
-
-[tasks."billing:tunnel"]
+[tasks."hosted:tunnel"]
 description = "Run the named Cloudflare Tunnel for the local billing service"
 run = '''
 source scripts/onepassword.sh
@@ -149,49 +175,256 @@ case "$token" in eyJ*) ;; *) echo "missing Cloudflare tunnel token in 1Password 
 exec cloudflared tunnel --no-autoupdate run --token "$token"
 '''
 
-[tasks."db:migrate"]
-run = "pnpm exec tsx scripts/dev.ts --migrate"
-[tasks.build]
-run = "pnpm run build"
-[tasks.typecheck]
-run = "export PATH=\"$(dirname \"$(mise which node)\"):$PATH\" && pnpm run typecheck"
-[tasks.lint]
-run = "export PATH=\"$(dirname \"$(mise which node)\"):$PATH\" && pnpm run lint && cargo clippy --manifest-path rust/Cargo.toml --all-targets -- -D warnings"
-[tasks.test]
-run = "export PATH=\"$(dirname \"$(mise which node)\"):$PATH\" && pnpm run test"
-[tasks.test-browser]
-run = "export PATH=\"$(dirname \"$(mise which node)\"):$PATH\" && pnpm run test:browser"
+[tasks."hosted:dns"]
+description = "Point suplex.sh and www.suplex.sh at suplex-production with Cloudflare DNS records"
+run = '''
+source scripts/onepassword.sh
+onepassword_setup_service_account
+export CF_DNS_ACCOUNT_ID="$(op read op://Suplex/4dhocwhz4orklgrt3mbvvdx4ay/CF_DNS_ACCOUNT_ID)"
+export CF_DNS_API_TOKEN="$(op read op://Suplex/4dhocwhz4orklgrt3mbvvdx4ay/CF_DNS_API_TOKEN)"
+sh scripts/billing-dns.sh
+'''
+
+[tasks."hosted:deploy"]
+description = "Deploy the hosted service (billing, accounts, and suplex.sh) to Fly production"
+dir = "{{config_root}}"
+run = "fly deploy . --config apps/server/fly.toml --dockerfile apps/server/Dockerfile --app suplex-production --remote-only"
+
+# --- desktop: the Tauri shell ---
 
 [tasks."desktop:dev"]
-description = "Run the Tauri shell against this checkout's dev stack (reused, or started and owned), rebuilding the shell on desktop/src-tauri edits"
+description = "Run the Tauri shell against this checkout's dev stack (reused, or started and owned), rebuilding the shell on apps/desktop/src-tauri edits"
 run = "pnpm run desktop:dev"
+
 [tasks."desktop:build"]
 description = "Build the Tauri shell binary in release mode, without packaging"
 run = "pnpm run desktop:build"
+
 [tasks."desktop:typecheck"]
 description = "cargo check the Tauri shell crate and its tests"
 run = "pnpm run desktop:typecheck"
+
 [tasks."desktop:test"]
 description = "Run the Tauri shell's Rust behavior and IPC authorization tests"
 run = "pnpm run desktop:test"
+
 [tasks."desktop:test:native"]
 description = "Run the macOS WKWebView smoke tests against the app built with the test-only driver"
 run = "pnpm run desktop:test:native"
+
 [tasks."desktop:dist"]
-description = "Bundle the host runtime, then package Suplex.app, DMG, and ZIP under desktop/release/<arch> (SUPLEX_DESKTOP_ARCH=arm64 or x64, default arm64; ad hoc signed unless APPLE_SIGNING_IDENTITY is set; update files only with SUPLEX_DESKTOP_UPDATE_URL and an updater key pair)"
+description = "Bundle the host runtime, then package Suplex.app, DMG, and ZIP under apps/desktop/release/<arch> (SUPLEX_DESKTOP_ARCH=arm64 or x64, default arm64; ad hoc signed unless APPLE_SIGNING_IDENTITY is set; update files only with SUPLEX_DESKTOP_UPDATE_URL and an updater key pair)"
 run = "pnpm run desktop:dist"
+
 [tasks."desktop:dist:linux"]
-description = "Build the Linux desktop app (deb and rpm with the bundled host) in Docker for arm64 and x64 under desktop/release/linux-<arch>, then install and launch each in a clean Ubuntu container (SUPLEX_LINUX_ARCHES limits the architectures; update files only with SUPLEX_DESKTOP_UPDATE_URL and an updater key pair)"
+description = "Build the Linux desktop app (deb and rpm with the bundled host) in Docker for arm64 and x64 under apps/desktop/release/linux-<arch>, then install and launch each in a clean Ubuntu container (SUPLEX_LINUX_ARCHES limits the architectures; update files only with SUPLEX_DESKTOP_UPDATE_URL and an updater key pair)"
 run = "sh scripts/build-desktop-linux.sh"
+
 [tasks."desktop:dist:windows"]
-description = "Build the Windows desktop installer on the Windows build VM for arm64 and x64 under desktop/release/windows-<arch>, then install and launch each on the VM (SUPLEX_WINDOWS_ARCHES limits the architectures; see desktop/windows/README.md)"
+description = "Build the Windows desktop installer on the Windows build VM for arm64 and x64 under apps/desktop/release/windows-<arch>, then install and launch each on the VM (SUPLEX_WINDOWS_ARCHES limits the architectures; see apps/desktop/windows/README.md)"
 run = "bash scripts/build-desktop-windows.sh"
+
 [tasks."desktop:check:linux"]
 description = "Run the desktop shell's clippy and tests on Linux in Docker"
 run = "sh scripts/build-desktop-linux.sh --check"
+
 [tasks."desktop:check:windows"]
 description = "Run the desktop shell's clippy and tests on the Windows build VM"
 run = "bash scripts/build-desktop-windows.sh --check"
+
+[tasks."desktop:verify:release"]
+description = "Check built release files locally: package structure, signatures, both update manifests, and a publisher dry run"
+run = "pnpm run desktop:verify:release"
+
+[tasks."desktop:install"]
+description = "Build Suplex.app from this checkout and replace /Applications/Suplex.app without a release: quit, swap, relaunch, then suplex doctor (refuses uncommitted changes unless SUPLEX_INSTALL_DIRTY=1)"
+run = "sh scripts/desktop-install.sh"
+
+[tasks."desktop:dist:signed"]
+description = "Bundle the host runtime, then package, sign, notarize, and staple the Apple silicon and Intel releases with both update feeds; Apple and updater credentials come from the 1Password Suplex vault"
+run = '''
+source scripts/onepassword.sh
+onepassword_setup_service_account
+for arch in arm64 x64; do
+  SUPLEX_DESKTOP_ARCH=$arch pnpm run desktop:dist:signed
+done
+shasum -a 256 apps/desktop/release/*/Suplex-*.dmg
+'''
+
+[tasks."desktop:publish"]
+description = "Publish the signed desktop release with R2 credentials from 1Password"
+run = '''
+source scripts/onepassword.sh
+onepassword_setup_service_account
+for arch in arm64 x64; do
+  SUPLEX_DESKTOP_ARCH=$arch op run --env-file apps/desktop/release.env -- pnpm run desktop:publish
+done
+'''
+
+[tasks."desktop:open"]
+description = "Open the installed Suplex.app at this checkout's native development stack"
+run = "pnpm exec tsx scripts/dev.ts --desktop"
+
+[tasks."desktop:pages"]
+description = "Serve the desktop setup pages for browser preview"
+run = '''
+echo "Preview: http://localhost:8123/install.html and http://localhost:8123/choice.html"
+exec python3 -m http.server 8123 --directory apps/desktop/src/pages
+'''
+
+# --- mobile: the iOS and Android shells ---
+
+[tasks."mobile:typecheck"]
+description = "cargo check the mobile shell crate and its tests"
+run = "pnpm --filter suplex-mobile typecheck"
+
+[tasks."mobile:test"]
+description = "Run the mobile shell's Rust tests"
+run = "pnpm --filter suplex-mobile test"
+
+[tasks."mobile:ios:dev"]
+description = "Run the iOS app in the simulator or on a connected device"
+run = "pnpm --filter suplex-mobile ios:dev"
+
+[tasks."mobile:ios:build"]
+description = "Build the iOS app"
+run = "pnpm --filter suplex-mobile ios:build"
+
+[tasks."mobile:android:dev"]
+description = "Run the Android app in the emulator or on a connected device"
+run = "pnpm --filter suplex-mobile android:dev"
+
+[tasks."mobile:android:build"]
+description = "Build the Android app"
+run = "pnpm --filter suplex-mobile android:build"
+
+[tasks."mobile:release"]
+description = "Build the iOS and Android apps from the latest release tag, sign them, submit iOS for App Review, and release Android on the Google Play internal track (SUPLEX_MOBILE_PLATFORMS=ios or android limits the platforms; SUPLEX_PLAY_TRACK picks another Play track); store credentials come from the 1Password Suplex vault"
+run = '''
+source scripts/onepassword.sh
+onepassword_setup_service_account
+op run --env-file apps/mobile/release.env -- bash scripts/release-mobile.sh
+'''
+
+# --- bootstrap: the cloud VM wizard in apps/bootstrap (it keeps vm.env and .env there) ---
+
+[tasks.bootstrap]
+description = "Interactive, idempotent: ask the essentials (remembered), create or converge the VM, print a login link"
+dir = "apps/bootstrap"
+run = "env -u RUSTUP_TOOLCHAIN cargo run -q -p suplex-bootstrap --release -- bootstrap"
+raw = true
+
+[tasks."bootstrap:up"]
+description = "Power on and wait for SSH over the tailnet"
+dir = "apps/bootstrap"
+run = "env -u RUSTUP_TOOLCHAIN cargo run -q -p suplex-bootstrap --release -- up"
+
+[tasks."bootstrap:down"]
+description = "Graceful shutdown. Most providers still bill a stopped server; `bootstrap:destroy` stops billing"
+dir = "apps/bootstrap"
+run = "env -u RUSTUP_TOOLCHAIN cargo run -q -p suplex-bootstrap --release -- down"
+
+[tasks."bootstrap:destroy"]
+description = "Delete the server. Stops billing. Loses the disk"
+dir = "apps/bootstrap"
+run = "env -u RUSTUP_TOOLCHAIN cargo run -q -p suplex-bootstrap --release -- destroy"
+raw = true
+
+[tasks."bootstrap:status"]
+description = "Show provider state, services, service user, exit node, egress IP, direct-interface block, and health"
+dir = "apps/bootstrap"
+run = "env -u RUSTUP_TOOLCHAIN cargo run -q -p suplex-bootstrap --release -- status"
+
+[tasks."bootstrap:ssh"]
+description = "Admin shell (root). `ssh suplex@<host>` is the agent user"
+dir = "apps/bootstrap"
+run = "env -u RUSTUP_TOOLCHAIN cargo run -q -p suplex-bootstrap --release -- ssh"
+raw = true
+
+[tasks."bootstrap:doctor"]
+description = "Run suplex doctor on the VM as the service user"
+dir = "apps/bootstrap"
+run = "env -u RUSTUP_TOOLCHAIN cargo run -q -p suplex-bootstrap --release -- doctor"
+
+[tasks."bootstrap:logs"]
+description = "Follow the Suplex service log on the VM"
+dir = "apps/bootstrap"
+run = "env -u RUSTUP_TOOLCHAIN cargo run -q -p suplex-bootstrap --release -- logs"
+raw = true
+
+[tasks."bootstrap:recover"]
+description = "Print a fresh one-time owner login link"
+dir = "apps/bootstrap"
+run = "env -u RUSTUP_TOOLCHAIN cargo run -q -p suplex-bootstrap --release -- recover"
+
+[tasks."bootstrap:install"]
+description = "Install or update the suplex binary, then restart the service"
+dir = "apps/bootstrap"
+run = "env -u RUSTUP_TOOLCHAIN cargo run -q -p suplex-bootstrap --release -- install-suplex"
+
+# --- release: public tasks, then the hidden steps they run ---
+
+[tasks."release:major"]
+description = "Bump, sign, notarize, commit, tag, push, and publish the next major release: the Mac, Linux, and Windows desktop apps and the Linux CLI"
+run = "RELEASE_BUMP=major mise run _release:run"
+
+[tasks."release:minor"]
+description = "Bump, sign, notarize, commit, tag, push, and publish the next minor release: the Mac, Linux, and Windows desktop apps and the Linux CLI"
+run = "RELEASE_BUMP=minor mise run _release:run"
+
+[tasks."release:patch"]
+description = "Bump, sign, notarize, commit, tag, push, and publish the next patch release: the Mac, Linux, and Windows desktop apps and the Linux CLI"
+run = "RELEASE_BUMP=patch mise run _release:run"
+
+[tasks."_release:run"]
+hide = true
+description = "Run the desktop and Linux release pipeline"
+run = "mise run _release:check && mise run _1password:setup && mise run _release:bump && mise run desktop:dist:signed && mise run server:dist:linux && mise run _release:desktop:platforms && mise run _release:commit && mise run _release:publish"
+
+[tasks."_release:check"]
+hide = true
+description = "Verify the checkout, Docker, and the Windows build VM are ready for a release"
+run = '''
+git --no-pager diff --check
+# Version files may be dirty from an earlier failed run; _release:bump resumes that version.
+[[ -z "$(git status --porcelain -- . ':!package.json' ':!apps/desktop/package.json' ':!apps/mobile/package.json' ':!apps/server/Cargo.toml' ':!apps/desktop/src-tauri/Cargo.toml' ':!Cargo.lock')" ]] || { echo "Commit or remove working-tree changes before releasing." >&2; exit 1; }
+docker info >/dev/null 2>&1 || { echo "Start Docker before releasing; the Linux build runs in Docker." >&2; exit 1; }
+bash -c 'source apps/desktop/windows/vm.sh; [ -f "$(vm_setting VMX_PATH)" ]' || { echo "Set up the Windows build VM before releasing; see apps/desktop/windows/README.md." >&2; exit 1; }
+node --input-type=module <<'NODE'
+import { readFileSync } from "node:fs";
+const version = JSON.parse(readFileSync("package.json", "utf8")).version;
+const desktop = JSON.parse(readFileSync("apps/desktop/package.json", "utf8")).version;
+const mobile = JSON.parse(readFileSync("apps/mobile/package.json", "utf8")).version;
+const native = [["apps/server/Cargo.toml", "suplex"], ["apps/desktop/src-tauri/Cargo.toml", "suplex-desktop"], ["Cargo.lock", "suplex"], ["Cargo.lock", "suplex-desktop"]]
+  .every(([file, name]) => readFileSync(file, "utf8").includes(`name = "${name}"\nversion = "${version}"`));
+if (desktop !== version || mobile !== version || !native) throw new Error("Desktop, frontend, and native versions must match before release.");
+NODE
+'''
+
+[tasks."_1password:setup"]
+hide = true
+description = "Fetch or verify the Suplex 1Password service account"
+run = '''
+source scripts/onepassword.sh
+onepassword_setup_service_account
+'''
+
+[tasks."_release:bump"]
+hide = true
+description = "Bump the release version, or resume the version of a failed release run"
+run = '''
+# Uncommitted version files, or HEAD already tagged with this version, mean an earlier release run failed; resume that version.
+version="$(node -p "require('./package.json').version")"
+if [[ "$(git rev-parse -q --verify "refs/tags/v$version^{commit}")" == "$(git rev-parse HEAD)" ]]; then
+  echo "Resuming release v$version (already tagged)"
+elif ! git diff --quiet -- package.json apps/desktop/package.json apps/mobile/package.json apps/server/Cargo.toml apps/desktop/src-tauri/Cargo.toml Cargo.lock; then
+  node scripts/release-version.mjs check-tag
+  echo "Resuming release v$version"
+else
+  node scripts/release-version.mjs bump
+fi
+'''
+
 [tasks."_release:desktop:platforms"]
 hide = true
 description = "Build the Linux and Windows desktop apps with the production update feed and updater key, reusing a release already built from this commit"
@@ -202,59 +435,25 @@ onepassword_setup_service_account
 for name in AZURE_TENANT_ID AZURE_CLIENT_ID AZURE_CLIENT_SECRET AZURE_SIGNING_ENDPOINT AZURE_SIGNING_ACCOUNT AZURE_CERTIFICATE_PROFILE; do
   value="$(op read "op://Suplex/Azure Trusted Signing/$name" 2>/dev/null)" && export "$name=$value"
 done
-SUPLEX_DESKTOP_REUSE=1 op run --env-file desktop/signing.env -- sh scripts/build-desktop-linux.sh
-SUPLEX_DESKTOP_REUSE=1 op run --env-file desktop/signing.env -- bash scripts/build-desktop-windows.sh
+SUPLEX_DESKTOP_REUSE=1 op run --env-file apps/desktop/signing.env -- sh scripts/build-desktop-linux.sh
+SUPLEX_DESKTOP_REUSE=1 op run --env-file apps/desktop/signing.env -- bash scripts/build-desktop-windows.sh
 '''
-[tasks."desktop:verify:release"]
-description = "Check built release files locally: package structure, signatures, both update manifests, and a publisher dry run"
-run = "pnpm run desktop:verify:release"
-[tasks."desktop:install"]
-description = "Build Suplex.app from this checkout and replace /Applications/Suplex.app without a release: quit, swap, relaunch, then suplex doctor (refuses uncommitted changes unless SUPLEX_INSTALL_DIRTY=1)"
-run = "sh scripts/desktop-install.sh"
-[tasks."desktop:dist:signed"]
-description = "Bundle the host runtime, then package, sign, notarize, and staple the Apple silicon and Intel releases with both update feeds; Apple and updater credentials come from the 1Password Suplex vault"
-run = '''
-source scripts/onepassword.sh
-onepassword_setup_service_account
-for arch in arm64 x64; do
-  SUPLEX_DESKTOP_ARCH=$arch pnpm run desktop:dist:signed
-done
-shasum -a 256 desktop/release/*/Suplex-*.dmg
-'''
-[tasks."_1password:setup"]
+
+[tasks."_release:commit"]
 hide = true
-description = "Fetch or verify the Suplex 1Password service account"
+description = "Commit, tag, and push the released desktop version"
 run = '''
-source scripts/onepassword.sh
-onepassword_setup_service_account
+version="$(node -p "require('./package.json').version")"
+# A rerun after a failed publish finds the tag on HEAD already; only push again.
+if [[ "$(git rev-parse -q --verify "refs/tags/v$version^{commit}")" != "$(git rev-parse HEAD)" ]]; then
+  node scripts/release-version.mjs check-tag
+  git add package.json apps/desktop/package.json apps/mobile/package.json apps/server/Cargo.toml apps/desktop/src-tauri/Cargo.toml Cargo.lock
+  git commit -m "release: v$version"
+  git tag "v$version"
+fi
+git push --atomic origin HEAD "refs/tags/v$version"
 '''
-[tasks."desktop:publish"]
-description = "Publish the signed desktop release with R2 credentials from 1Password"
-run = '''
-source scripts/onepassword.sh
-onepassword_setup_service_account
-for arch in arm64 x64; do
-  SUPLEX_DESKTOP_ARCH=$arch op run --env-file desktop/release.env -- pnpm run desktop:publish
-done
-'''
-[tasks."linux:dist"]
-description = "Build the Linux suplex binary in Docker for arm64 and x64 and pack each under dist/linux/<arch>; the telemetry key comes from the 1Password Suplex vault"
-run = '''
-source scripts/onepassword.sh
-onepassword_setup_service_account
-for arch in arm64 x64; do
-  SUPLEX_LINUX_ARCH=$arch op run --env-file desktop/signing.env -- sh scripts/build-linux.sh
-done
-'''
-[tasks."linux:publish"]
-description = "Publish the Linux suplex tarballs from dist/linux with R2 credentials from 1Password"
-run = '''
-source scripts/onepassword.sh
-onepassword_setup_service_account
-for arch in arm64 x64; do
-  SUPLEX_LINUX_ARCH=$arch op run --env-file desktop/release.env -- bash scripts/publish-linux-release.sh
-done
-'''
+
 [tasks."_release:publish"]
 hide = true
 description = "Upload the Mac, Linux, and Windows files for both architectures, then point every download and update feed at the new version"
@@ -264,87 +463,11 @@ onepassword_setup_service_account
 # Every file is uploaded before any feed changes, so a failed upload leaves the previous release live on all platforms.
 for phase in files manifest; do
   for arch in arm64 x64; do
-    SUPLEX_PUBLISH_PHASE=$phase SUPLEX_DESKTOP_ARCH=$arch op run --env-file desktop/release.env -- pnpm run desktop:publish
-    SUPLEX_PUBLISH_PHASE=$phase SUPLEX_LINUX_ARCH=$arch op run --env-file desktop/release.env -- bash scripts/publish-linux-release.sh
+    SUPLEX_PUBLISH_PHASE=$phase SUPLEX_DESKTOP_ARCH=$arch op run --env-file apps/desktop/release.env -- pnpm run desktop:publish
+    SUPLEX_PUBLISH_PHASE=$phase SUPLEX_LINUX_ARCH=$arch op run --env-file apps/desktop/release.env -- bash scripts/publish-linux-release.sh
     for platform in linux windows; do
-      SUPLEX_PUBLISH_PHASE=$phase SUPLEX_DESKTOP_PLATFORM=$platform SUPLEX_DESKTOP_ARCH=$arch op run --env-file desktop/release.env -- bash scripts/publish-desktop-platform-release.sh
+      SUPLEX_PUBLISH_PHASE=$phase SUPLEX_DESKTOP_PLATFORM=$platform SUPLEX_DESKTOP_ARCH=$arch op run --env-file apps/desktop/release.env -- bash scripts/publish-desktop-platform-release.sh
     done
   done
 done
-'''
-[tasks."_release:bump"]
-hide = true
-run = '''
-# Uncommitted version files, or HEAD already tagged with this version, mean an earlier release run failed; resume that version.
-version="$(node -p "require('./package.json').version")"
-if [[ "$(git rev-parse -q --verify "refs/tags/v$version^{commit}")" == "$(git rev-parse HEAD)" ]]; then
-  echo "Resuming release v$version (already tagged)"
-elif ! git diff --quiet -- package.json desktop/package.json mobile/package.json rust/Cargo.toml rust/Cargo.lock desktop/src-tauri/Cargo.toml desktop/src-tauri/Cargo.lock; then
-  node scripts/release-version.mjs check-tag
-  echo "Resuming release v$version"
-else
-  node scripts/release-version.mjs bump
-fi
-'''
-[tasks."_release:check"]
-hide = true
-description = "Verify the checkout, Docker, and the Windows build VM are ready for a release"
-run = '''
-git --no-pager diff --check
-# Version files may be dirty from an earlier failed run; _release:bump resumes that version.
-[[ -z "$(git status --porcelain -- . ':!package.json' ':!desktop/package.json' ':!mobile/package.json' ':!rust/Cargo.toml' ':!rust/Cargo.lock' ':!desktop/src-tauri/Cargo.toml' ':!desktop/src-tauri/Cargo.lock')" ]] || { echo "Commit or remove working-tree changes before releasing." >&2; exit 1; }
-docker info >/dev/null 2>&1 || { echo "Start Docker before releasing; the Linux build runs in Docker." >&2; exit 1; }
-bash -c 'source desktop/windows/vm.sh; [ -f "$(vm_setting VMX_PATH)" ]' || { echo "Set up the Windows build VM before releasing; see desktop/windows/README.md." >&2; exit 1; }
-node --input-type=module <<'NODE'
-import { readFileSync } from "node:fs";
-const version = JSON.parse(readFileSync("package.json", "utf8")).version;
-const desktop = JSON.parse(readFileSync("desktop/package.json", "utf8")).version;
-const mobile = JSON.parse(readFileSync("mobile/package.json", "utf8")).version;
-const native = [["rust/Cargo.toml", "suplex"], ["rust/Cargo.lock", "suplex"], ["desktop/src-tauri/Cargo.toml", "suplex-desktop"], ["desktop/src-tauri/Cargo.lock", "suplex-desktop"]]
-  .every(([file, name]) => readFileSync(file, "utf8").includes(`name = "${name}"\nversion = "${version}"`));
-if (desktop !== version || mobile !== version || !native) throw new Error("Desktop, frontend, and native versions must match before release.");
-NODE
-'''
-[tasks."_release:commit"]
-hide = true
-description = "Commit, tag, and push the released desktop version"
-run = '''
-version="$(node -p "require('./package.json').version")"
-# A rerun after a failed publish finds the tag on HEAD already; only push again.
-if [[ "$(git rev-parse -q --verify "refs/tags/v$version^{commit}")" != "$(git rev-parse HEAD)" ]]; then
-  node scripts/release-version.mjs check-tag
-  git add package.json desktop/package.json mobile/package.json rust/Cargo.toml rust/Cargo.lock desktop/src-tauri/Cargo.toml desktop/src-tauri/Cargo.lock
-  git commit -m "release: v$version"
-  git tag "v$version"
-fi
-git push --atomic origin HEAD "refs/tags/v$version"
-'''
-[tasks."_release:run"]
-hide = true
-description = "Run the desktop and Linux release pipeline"
-run = "mise run _release:check && mise run _1password:setup && mise run _release:bump && mise run desktop:dist:signed && mise run linux:dist && mise run _release:desktop:platforms && mise run _release:commit && mise run _release:publish"
-[tasks."release:major"]
-description = "Bump, sign, notarize, commit, tag, push, and publish the next major release: the Mac, Linux, and Windows desktop apps and the Linux CLI"
-run = "RELEASE_BUMP=major mise run _release:run"
-[tasks."release:minor"]
-description = "Bump, sign, notarize, commit, tag, push, and publish the next minor release: the Mac, Linux, and Windows desktop apps and the Linux CLI"
-run = "RELEASE_BUMP=minor mise run _release:run"
-[tasks."release:patch"]
-description = "Bump, sign, notarize, commit, tag, push, and publish the next patch release: the Mac, Linux, and Windows desktop apps and the Linux CLI"
-run = "RELEASE_BUMP=patch mise run _release:run"
-[tasks."release:mobile"]
-description = "Build the iOS and Android apps from the latest release tag, sign them, submit iOS for App Review, and release Android on the Google Play internal track (SUPLEX_MOBILE_PLATFORMS=ios or android limits the platforms; SUPLEX_PLAY_TRACK picks another Play track); store credentials come from the 1Password Suplex vault"
-run = '''
-source scripts/onepassword.sh
-onepassword_setup_service_account
-op run --env-file mobile/release.env -- bash scripts/release-mobile.sh
-'''
-[tasks."desktop:open"]
-description = "Open the installed Suplex.app at this checkout's native development stack"
-run = "pnpm exec tsx scripts/dev.ts --desktop"
-[tasks."desktop:pages"]
-description = "Serve the desktop setup pages for browser preview"
-run = '''
-echo "Preview: http://localhost:8123/install.html and http://localhost:8123/choice.html"
-exec python3 -m http.server 8123 --directory desktop/src/pages
 '''

@@ -13,7 +13,7 @@ export async function nativeRootBridge(fixture: Fixture, taskId: string) {
   fixture.database.prepare("INSERT INTO suplex_task_sessions (id,task_id,kind,generation,is_current,lifecycle,created_at,updated_at) VALUES (?,?,'root',1,1,'reserved',?,?)")
     .run(sessionId, taskId, now, now);
   const identity = { taskId, sessionId, generation: 1 };
-  const executable = resolve(process.env.SUPLEX_BIN ?? "rust/target/debug/suplex");
+  const executable = resolve(process.env.SUPLEX_BIN ?? "target/debug/suplex");
   const runtime = join(fixture.directory, "root-bridge", sessionId);
   await mkdir(runtime, { recursive: true, mode: 0o700 });
   const token = randomUUID();

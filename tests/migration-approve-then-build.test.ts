@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { expect, test } from "vitest";
 
-const migration = (file: string) => readFileSync(new URL(`../migrations/${file}`, import.meta.url), "utf8").split("--> statement-breakpoint").join("\n");
+const migration = (file: string) => readFileSync(new URL(`../apps/server/migrations/${file}`, import.meta.url), "utf8").split("--> statement-breakpoint").join("\n");
 
 test("approve then build rebuilds workflows without losing rows, custom names, or trigger rules", () => {
   const database = new DatabaseSync(":memory:");

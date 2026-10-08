@@ -1,0 +1,19 @@
+[Unit]
+Description=Suplex host
+After=network-online.target tailscaled.service herdr.service
+Wants=network-online.target herdr.service
+
+[Service]
+User=suplex
+Group=suplex
+WorkingDirectory=/home/suplex
+Environment=HOME=/home/suplex
+Environment=PATH=/home/suplex/.local/bin:/home/suplex/.local/share/mise/shims:/usr/local/bin:/usr/bin:/bin
+ExecStart=/usr/local/bin/suplex up --foreground
+Restart=always
+RestartSec=5
+NoNewPrivileges=yes
+ProtectSystem=full
+
+[Install]
+WantedBy=multi-user.target

@@ -2,7 +2,7 @@ import { readFile } from "node:fs/promises";
 import { Window as HappyWindow } from "happy-dom";
 import { expect, test, vi } from "vitest";
 
-const source = await readFile(new URL("../integrations/posthog/framer-attribution.js", import.meta.url), "utf8");
+const source = await readFile(new URL("../apps/server/src/hosted/framer-attribution.js", import.meta.url), "utf8");
 
 type AnalyticsWindow = Window & typeof globalThis & {
   SuplexAnalytics: { grantConsent(): void; denyConsent(): void; clearConsent(): void };

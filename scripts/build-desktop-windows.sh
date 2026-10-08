@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Builds the Windows desktop installer (NSIS, per-user) on the Windows build VM for each architecture in
-# SUPLEX_WINDOWS_ARCHES (default "arm64 x64") under desktop/release/windows-<arch>/, then finishes each folder
-# on this Mac with desktop/scripts/finish-platform-release.sh. Each installer is installed and launched on the
-# VM (desktop/windows/test-packaged.ps1); the Arm VM runs the x64 build under emulation. Windows runs no local
+# SUPLEX_WINDOWS_ARCHES (default "arm64 x64") under apps/desktop/release/windows-<arch>/, then finishes each folder
+# on this Mac with apps/desktop/scripts/finish-platform-release.sh. Each installer is installed and launched on the
+# VM (apps/desktop/windows/test-packaged.ps1); the Arm VM runs the x64 build under emulation. Windows runs no local
 # host, so nothing else is bundled. Never publishes. --check runs the shell's clippy and tests on the VM instead.
 #
 #   SUPLEX_DESKTOP_REUSE=1         keep a folder already signed from this commit (a release rerun)
@@ -13,14 +13,14 @@
 #   AZURE_TENANT_ID, AZURE_CLIENT_ID, AZURE_CLIENT_SECRET, AZURE_SIGNING_ENDPOINT, AZURE_SIGNING_ACCOUNT,
 #   AZURE_CERTIFICATE_PROFILE      Azure Trusted Signing; with all six the app and installer are Authenticode
 #                                  signed, otherwise Windows shows an unknown publisher
-# desktop/windows/README.md describes the VM.
+# apps/desktop/windows/README.md describes the VM.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 root="$PWD"
-source desktop/windows/vm.sh
+source apps/desktop/windows/vm.sh
 
 mode="${1:-build}"
-version="$(node -p "require('./desktop/package.json').version")"
+version="$(node -p "require('./apps/desktop/package.json').version")"
 if [ -n "${SUPLEX_DESKTOP_UPDATER_PUBKEY:-}" ] || [ -n "${TAURI_SIGNING_PRIVATE_KEY:-}" ]; then
   [ -n "${SUPLEX_DESKTOP_UPDATER_PUBKEY:-}" ] && [ -n "${TAURI_SIGNING_PRIVATE_KEY:-}" ] || { echo "Set both SUPLEX_DESKTOP_UPDATER_PUBKEY and TAURI_SIGNING_PRIVATE_KEY, or neither." >&2; exit 1; }
   [ -n "${SUPLEX_DESKTOP_UPDATE_URL:-}" ] || { echo "The Tauri updater needs SUPLEX_DESKTOP_UPDATE_URL." >&2; exit 1; }
@@ -32,19 +32,22 @@ trap 'rm -rf "$scratch"' EXIT
 vm_start
 
 # The shell sources and the few files its tests read: no host, node_modules, or build output.
+# Cargo also loads the workspace root and each member's manifest and entry files, so those come along.
 # Batch files need CRLF line endings.
 echo "Copying the desktop sources to the Windows build VM ($vm_ip)"
 COPYFILE_DISABLE=1 tar -C "$root" --no-xattrs \
-  --exclude=desktop/node_modules --exclude=desktop/release --exclude=desktop/.build --exclude=desktop/runtime \
-  --exclude=desktop/src-tauri/target --exclude=desktop/src-tauri/gen --exclude=desktop/linux \
-  -czf "$scratch/checkout.tar.gz" desktop \
-  package.json pnpm-workspace.yaml src/frontend/vite-env.d.ts rust/Cargo.toml scripts/bundle-runtime.sh
+  --exclude=apps/desktop/node_modules --exclude=apps/desktop/release --exclude=apps/desktop/.build --exclude=apps/desktop/runtime \
+  --exclude=apps/desktop/src-tauri/target --exclude=apps/desktop/src-tauri/gen --exclude=apps/desktop/linux \
+  -czf "$scratch/checkout.tar.gz" apps/desktop \
+  package.json pnpm-workspace.yaml apps/web/vite-env.d.ts apps/server/Cargo.toml scripts/bundle-runtime.sh \
+  Cargo.toml Cargo.lock apps/server/src/main.rs apps/mobile/src-tauri/Cargo.toml apps/mobile/src-tauri/src/lib.rs apps/mobile/src-tauri/src/main.rs \
+  apps/bootstrap/Cargo.toml apps/bootstrap/src/main.rs
 vm_put "$scratch/checkout.tar.gz" "S:/suplex/checkout.tar.gz"
 # cmd runs everything after `if exist ... &` inside the if, so each step stands alone. -m gives the files
 # the VM's current time: Cargo then rebuilds what changed even when the VM clock trails this Mac's.
 vm_ssh "(if exist S:\\suplex\\checkout rmdir /s /q S:\\suplex\\checkout) & mkdir S:\\suplex\\checkout & (if not exist S:\\suplex\\windows mkdir S:\\suplex\\windows) & tar -xzmf S:\\suplex\\checkout.tar.gz -C S:\\suplex\\checkout && del S:\\suplex\\checkout.tar.gz"
 for script in env.bat install-tools.bat build.bat check.bat sign.bat sign-task.ps1 sign-request.bat test-packaged.ps1; do
-  sed 's/$/\r/' "desktop/windows/$script" > "$scratch/$script"
+  sed 's/$/\r/' "apps/desktop/windows/$script" > "$scratch/$script"
   vm_put "$scratch/$script" "S:/suplex/windows/$script"
 done
 vm_ssh "S:\\suplex\\windows\\install-tools.bat"
@@ -84,9 +87,9 @@ for arch in ${SUPLEX_WINDOWS_ARCHES:-arm64 x64}; do
   feed=""
   [ -z "${SUPLEX_DESKTOP_UPDATE_URL:-}" ] || feed="$(printf %s "${SUPLEX_DESKTOP_UPDATE_URL%/}" | sed -E "s#/mac/arm64\$#/windows/$arch#")/"
   # A release rerun keeps a signed build of this same commit instead of building it again.
-  if [ -n "${SUPLEX_DESKTOP_REUSE:-}" ] && [ -f "desktop/release/windows-$arch/latest-tauri.json" ] \
-    && [ "$(cat "desktop/release/windows-$arch/.commit" 2>/dev/null)" = "$commit" ]; then
-    echo "desktop/release/windows-$arch is already built from $commit; skipping"
+  if [ -n "${SUPLEX_DESKTOP_REUSE:-}" ] && [ -f "apps/desktop/release/windows-$arch/latest-tauri.json" ] \
+    && [ "$(cat "apps/desktop/release/windows-$arch/.commit" 2>/dev/null)" = "$commit" ]; then
+    echo "apps/desktop/release/windows-$arch is already built from $commit; skipping"
     continue
   fi
   work="$scratch/windows-$arch"
@@ -102,15 +105,15 @@ const [file, resources, pubkey, signCommand] = process.argv.slice(2);
 const windows = signCommand ? { signCommand } : {};
 writeFileSync(file, JSON.stringify({ bundle: { resources: JSON.parse(resources), createUpdaterArtifacts: false, windows }, plugins: { updater: { pubkey } } }, null, 2));
 NODE
-  vm_ssh "mkdir S:\\suplex\\checkout\\desktop\\.build\\windows-$arch 2>nul" || true
-  for file in "$work"/*; do vm_put "$file" "S:/suplex/checkout/desktop/.build/windows-$arch/$(basename "$file")"; done
+  vm_ssh "mkdir S:\\suplex\\checkout\\apps\\desktop\\.build\\windows-$arch 2>nul" || true
+  for file in "$work"/*; do vm_put "$file" "S:/suplex/checkout/apps/desktop/.build/windows-$arch/$(basename "$file")"; done
 
   echo "Building the Windows $arch desktop app on the VM"
   vm_ssh "S:\\suplex\\windows\\build.bat $arch"
   bundle="S:/suplex/target/$target/release/bundle/nsis"
   installer="$(vm_ssh "dir /b S:\\suplex\\target\\$target\\release\\bundle\\nsis\\*_${version}_*-setup.exe" | tr -d '\r')"
   [ "$(printf '%s\n' "$installer" | grep -c .)" = 1 ] || { echo "Expected one installer in $bundle, found: $installer" >&2; exit 1; }
-  release="desktop/release/windows-$arch"
+  release="apps/desktop/release/windows-$arch"
   rm -rf "$release"
   mkdir -p "$release"
   vm_get "$bundle/$installer" "$release/Suplex-$version-windows-$arch-setup.exe"
@@ -124,5 +127,5 @@ NODE
   vm_put "$release/Suplex-$version-windows-$arch-setup.exe" "S:/suplex/test/setup.exe"
   vm_ssh "powershell -NoProfile -ExecutionPolicy Bypass -File S:\\suplex\\windows\\test-packaged.ps1 -Feed \"$feed\"${sign_command:+ -Signed}"
   printf '%s%s\n' "$(git rev-parse HEAD)" "$([ -z "$(git status --porcelain)" ] || echo -dirty)" > "$release/.commit"
-  SUPLEX_DESKTOP_PLATFORM=windows SUPLEX_DESKTOP_ARCH="$arch" SUPLEX_DESKTOP_FEED="$feed" sh desktop/scripts/finish-platform-release.sh
+  SUPLEX_DESKTOP_PLATFORM=windows SUPLEX_DESKTOP_ARCH="$arch" SUPLEX_DESKTOP_FEED="$feed" sh apps/desktop/scripts/finish-platform-release.sh
 done

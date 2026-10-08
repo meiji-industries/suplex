@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="dark">
+    <meta name="referrer" content="no-referrer">
+    <title>{title} · Suplex</title>
+    <style>
+      /* The app's login view (apps/web/features/account/account-login.tsx) in plain CSS. */
+      @font-face {
+        font-family: "Inter Tight";
+        font-style: normal;
+        font-weight: 100 900;
+        font-display: swap;
+        src: url("/start/inter-tight.woff2") format("woff2");
+      }
+      :root {
+        color-scheme: dark;
+        font-family: "Inter Tight", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        background: #080808;
+        color: oklch(0.985 0 0);
+        -webkit-font-smoothing: antialiased;
+      }
+      * { box-sizing: border-box; }
+      body { margin: 0; }
+      main { display: flex; min-height: 100dvh; flex-direction: column; align-items: center; justify-content: center; gap: 32px; padding: 32px 0; }
+      .art { position: relative; order: 2; width: 100%; max-width: 384px; aspect-ratio: 941 / 1257; overflow: hidden; }
+      .art img { position: absolute; top: 50%; left: 50%; width: 133.582%; max-width: none; height: auto; transform: translate(-50%, -50%) rotate(-90deg); }
+      .panel { order: 1; display: flex; flex-direction: column; align-items: center; gap: 40px; padding: 32px 24px; }
+      .wordmark { width: 100%; max-width: 384px; height: auto; }
+      .content { display: flex; width: 100%; max-width: 320px; flex-direction: column; gap: 16px; }
+      .stack { display: flex; flex-direction: column; gap: 8px; }
+      .center { text-align: center; }
+      h1 { margin: 0; font-size: 24px; line-height: 32px; font-weight: 400; letter-spacing: -0.025em; }
+      p { margin: 0; color: oklch(0.708 0 0); font-size: 14px; line-height: 1.625; }
+      p strong { color: oklch(0.985 0 0); font-weight: 400; overflow-wrap: anywhere; }
+      .note { padding-bottom: 8px; }
+      .terms { padding-top: 16px; text-align: center; font-size: 12px; line-height: 16px; }
+      p a { color: inherit; text-underline-offset: 4px; }
+      .terms a { color: oklch(0.985 0 0); }
+      .button { display: inline-flex; height: 36px; width: 100%; align-items: center; justify-content: center; border: 1px solid transparent; border-radius: 9999px; padding: 0 12px; font: inherit; font-size: 14px; font-weight: 500; text-decoration: none; cursor: pointer; transition: background-color 150ms; }
+      .primary { background: oklch(0.938 0.172 121.709); color: oklch(0.205 0 0); }
+      .primary:hover { background: oklch(0.938 0.172 121.709 / 0.8); }
+      .outline { border-color: oklch(1 0 0 / 15%); background: oklch(1 0 0 / 4.5%); color: oklch(0.985 0 0); }
+      .outline:hover { background: oklch(1 0 0 / 8%); }
+      .ghost { background: transparent; color: oklch(0.985 0 0); }
+      .ghost:hover { background: oklch(1 0 0 / 8%); }
+      .button:focus-visible, input:focus-visible { outline: 3px solid oklch(0.556 0 0 / 50%); outline-offset: 1px; }
+      input { height: 36px; width: 100%; border: 1px solid oklch(1 0 0 / 15%); border-radius: 9999px; background: oklch(1 0 0 / 4.5%); color: inherit; padding: 0 12px; font: inherit; font-size: 14px; }
+      input::placeholder { color: oklch(0.708 0 0); }
+      @media (min-width: 768px) {
+        main { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 2fr); gap: 0; padding: 0; }
+        .art { max-width: none; aspect-ratio: 1257 / 941; justify-self: center; }
+        .art img { width: 100%; transform: translate(-50%, -50%) rotate(-180deg); }
+        .panel { padding: 32px 48px; }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <div class="art"><img src="/start/background.png" alt=""></div>
+      <div class="panel">
+        <img class="wordmark" src="/start/wordmark.svg" alt="Suplex">
+        <div class="content">{content}</div>
+      </div>
+    </main>
+  </body>
+</html>

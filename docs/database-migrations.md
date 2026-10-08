@@ -1,6 +1,6 @@
 # Database migrations
 
-Suplex migrations are immutable SQL files in `migrations/`. Their names begin with
+Suplex migrations are immutable SQL files in `apps/server/migrations/`. Their names begin with
 a unique UTC timestamp, which determines their logical order without requiring
 a shared journal or sequential number:
 

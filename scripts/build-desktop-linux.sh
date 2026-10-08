@@ -1,8 +1,8 @@
 #!/bin/sh
 # Builds the Linux desktop app (deb and rpm, with the bundled host) in Docker for each architecture in
-# SUPLEX_LINUX_ARCHES (default "arm64 x64") under desktop/release/linux-<arch>/, then finishes each folder
-# on this Mac with desktop/scripts/finish-platform-release.sh, and checks each deb in a clean Ubuntu 22.04
-# container (desktop/scripts/test-packaged-linux.sh). Never publishes. --check runs the shell's clippy and
+# SUPLEX_LINUX_ARCHES (default "arm64 x64") under apps/desktop/release/linux-<arch>/, then finishes each folder
+# on this Mac with apps/desktop/scripts/finish-platform-release.sh, and checks each deb in a clean Ubuntu 22.04
+# container (apps/desktop/scripts/test-packaged-linux.sh). Never publishes. --check runs the shell's clippy and
 # tests in the build container instead.
 #
 #   SUPLEX_DESKTOP_REUSE=1         keep a folder already signed from this commit (a release rerun)
@@ -24,7 +24,7 @@ docker info >/dev/null 2>&1 || { echo "Start Docker; the Linux desktop build run
 
 mode="${1:-build}"
 # The container has no node_modules, so the web client is built here once.
-[ "$mode" = --check ] || pnpm exec vite build
+[ "$mode" = --check ] || pnpm --filter suplex-web build
 # The checkout and its Git directory keep their host paths, so build.rs can stamp the revision.
 common="$(git rev-parse --path-format=absolute --git-common-dir)"
 commit="$(git rev-parse HEAD)$([ -z "$(git status --porcelain)" ] || echo -dirty)"
@@ -33,18 +33,18 @@ for arch in ${SUPLEX_LINUX_ARCHES:-arm64 x64}; do
   feed=""
   [ -z "${SUPLEX_DESKTOP_UPDATE_URL:-}" ] || feed="$(printf %s "${SUPLEX_DESKTOP_UPDATE_URL%/}" | sed -E "s#/mac/arm64\$#/linux/$arch#")/"
   # A release rerun keeps a signed build of this same commit instead of building it again.
-  if [ -n "${SUPLEX_DESKTOP_REUSE:-}" ] && [ -f "desktop/release/linux-$arch/latest-tauri.json" ] \
-    && [ "$(cat "desktop/release/linux-$arch/.commit" 2>/dev/null)" = "$commit" ]; then
-    echo "desktop/release/linux-$arch is already built from $commit; skipping"
+  if [ -n "${SUPLEX_DESKTOP_REUSE:-}" ] && [ -f "apps/desktop/release/linux-$arch/latest-tauri.json" ] \
+    && [ "$(cat "apps/desktop/release/linux-$arch/.commit" 2>/dev/null)" = "$commit" ]; then
+    echo "apps/desktop/release/linux-$arch is already built from $commit; skipping"
     continue
   fi
   image="suplex-desktop-linux-$arch"
-  docker build --quiet --platform "$platform" -t "$image" desktop/linux >/dev/null
+  docker build --quiet --platform "$platform" -t "$image" apps/desktop/linux >/dev/null
   run() {
     docker run --rm --platform "$platform" \
       -v "$PWD:$PWD" -v "$common:$common:ro" \
       -v "suplex-desktop-linux-target-$arch:/target" -v "suplex-desktop-linux-cargo-$arch:/usr/local/cargo/registry" \
-      -w "$PWD/desktop" \
+      -w "$PWD/apps/desktop" \
       -e CARGO_TARGET_DIR=/target -e SUPLEX_SKIP_WEB_BUILD=1 -e SUPLEX_DESKTOP_ARCH="$arch" -e SUPLEX_DESKTOP_FEED="$feed" \
       -e SUPLEX_DESKTOP_UPDATER_PUBKEY -e SUPLEX_POSTHOG_KEY \
       "$image" "$@"
@@ -56,7 +56,7 @@ for arch in ${SUPLEX_LINUX_ARCHES:-arm64 x64}; do
   fi
   echo "Building the Linux $arch desktop app in Docker"
   run sh scripts/dist-linux.sh
-  SUPLEX_DESKTOP_PLATFORM=linux SUPLEX_DESKTOP_ARCH="$arch" SUPLEX_DESKTOP_FEED="$feed" sh desktop/scripts/finish-platform-release.sh
-  docker run --rm --platform "$platform" -v "$PWD/desktop/release/linux-$arch:/release" -v "$PWD/desktop/scripts:/scripts:ro" \
+  SUPLEX_DESKTOP_PLATFORM=linux SUPLEX_DESKTOP_ARCH="$arch" SUPLEX_DESKTOP_FEED="$feed" sh apps/desktop/scripts/finish-platform-release.sh
+  docker run --rm --platform "$platform" -v "$PWD/apps/desktop/release/linux-$arch:/release" -v "$PWD/apps/desktop/scripts:/scripts:ro" \
     ubuntu:22.04 sh /scripts/test-packaged-linux.sh
 done

@@ -100,7 +100,8 @@ checkout's owned development processes. The default development port is 14111; 4
 Conductor's Run command uses `http://127.0.0.1:<port>` with its assigned port.
 Other development launches keep the default Tailscale access mode.
 
-Mise keeps Rust build artifacts in each checkout's `rust/target` and uses
+The repository root is one Cargo workspace for the crates in `apps/`. Mise keeps Rust build artifacts
+in each checkout's root `target/` and uses
 `sccache` when it is on `PATH` to reuse compiled dependencies across worktrees.
 Install it with `cargo install sccache --locked`; without it, builds use rustc
 directly. Cargo downloads remain in the normal shared `CARGO_HOME` cache.
@@ -116,7 +117,7 @@ new worktrees still link their own binaries.
 Check the wrapper with `mise run test:sccache-wrapper`.
 
 The Vite development stack sets `SUPLEX_DEV_EMBED_FRONTEND=0` so changes to
-`dist/web` do not trigger Rust rebuilds. Other builds embed the frontend by
+`apps/web/dist` do not trigger Rust rebuilds. Other builds embed the frontend by
 default, and release builds always embed it. Migrations remain embedded in
 every build.
 
@@ -127,7 +128,7 @@ for this checkout.
 ## Set up an installation
 
 See [instances, clients, and distribution](docs/architecture/deployment.md) for
-the host model, development-server access, and desktop/Linux binary options.
+the host model, development-server access, and desktop and Linux binary options.
 
 The simplest install is the desktop app: open `Suplex-<version>-arm64.dmg`
 (Apple silicon) or `Suplex-<version>-x64.dmg` (Intel),
@@ -218,7 +219,7 @@ carry no identity header and see the account login instead.
 
 ### Desktop app
 
-Suplex.app is a Tauri 2 shell written in Rust (`desktop/src-tauri`, crate
+Suplex.app is a Tauri 2 shell written in Rust (`apps/desktop/src-tauri`, crate
 `suplex-desktop`) around the bundled `suplex` host. Its window is the system
 WKWebView, so the app needs macOS 14 or later. The window shows either the
 bundled setup pages or the web app served by the selected host; the host keeps
@@ -253,10 +254,10 @@ opens that host. Other `suplex://` links only bring the app to the front.
 
 | Command | Result |
 | --- | --- |
-| `mise run desktop:dev` | Runs the shell against this checkout's dev stack. Reuses the stack when it is running, or starts `pnpm dev:watch` and stops it on exit. React edits use Vite HMR; edits under `desktop/src-tauri` or the setup pages rebuild and restart only the shell. Uses the bundle ID `dev.suplex.desktop.dev` and data under `.context/tauri-migration/desktop-dev-data`. |
+| `mise run desktop:dev` | Runs the shell against this checkout's dev stack. Reuses the stack when it is running, or starts `pnpm dev:watch` and stops it on exit. React edits use Vite HMR; edits under `apps/desktop/src-tauri` or the setup pages rebuild and restart only the shell. Uses the bundle ID `dev.suplex.desktop.dev` and data under `.context/tauri-migration/desktop-dev-data`. |
 | `pnpm desktop:typecheck`, `pnpm desktop:test` | `cargo check` and the Rust behavior and IPC authorization tests of the shell. |
 | `pnpm desktop:test:native` | The macOS WKWebView smoke tests, against an app built with a test-only driver and isolated data. |
-| `mise run desktop:dist` | Builds `desktop/release/<arch>/Suplex.app`, the DMG, and the ZIP (`SUPLEX_DESKTOP_ARCH=arm64`, the default, or `x64`). Never publishes. |
+| `mise run desktop:dist` | Builds `apps/desktop/release/<arch>/Suplex.app`, the DMG, and the ZIP (`SUPLEX_DESKTOP_ARCH=arm64`, the default, or `x64`). Never publishes. |
 | `pnpm test:packaged` | Checks the built app, its bundled host, and its archives. |
 | `mise run desktop:install` | Builds this checkout and replaces `/Applications/Suplex.app` without a release. It quits, swaps, and relaunches the app, keeps its data, and refuses uncommitted changes unless `SUPLEX_INSTALL_DIRTY=1`. |
 | `mise run desktop:dist:signed` | Builds both architectures signed, notarized, and stapled, with both update feeds, from the credentials in 1Password. |

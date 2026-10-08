@@ -16,7 +16,7 @@ one 30-day Pro trial with no payment method. Without a payment method at the
 trial end, Stripe cancels the subscription and the host returns to Free. The
 Team plan (seats, centralized billing) is not implemented.
 
-`FREE` and `PRO` in `rust/src/billing/mod.rs` hold the limits.
+`FREE` and `PRO` in `apps/server/src/billing/mod.rs` hold the limits.
 `billing::require` decides each limit inside the transaction that writes:
 company creation and restore, project creation, task creation (every path:
 browser, agent API, MCP, GitHub triggers, moves), and Start anyway. Queue
@@ -45,7 +45,7 @@ and only when a Suplex account is linked.
 
 The website buttons link to `https://suplex.sh/start` (Start free) and
 `https://suplex.sh/start?plan=pro` (Start 30-day trial), implemented in
-`rust/src/accounts/hosted/start.rs`.
+`apps/server/src/accounts/hosted/start.rs`.
 
 - `/start` shows the Free limits and the downloads.
 - `/start?plan=pro` creates a login attempt for the installation `suplex.sh`
@@ -70,18 +70,18 @@ manageable in Stripe.
 
 Billing runs as two processes:
 
-1. The private Suplex application (`suplex`, `rust/src/billing/mod.rs`). It
+1. The private Suplex application (`suplex`, `apps/server/src/billing/mod.rs`). It
    counts projects and accounts, authorizes the operator, enforces project
    policy, and calls the billing service over outbound HTTPS. It holds no
    merchant credentials.
-2. The Suplex-operated public billing service (`rust/src/billing/hosted/`),
+2. The Suplex-operated public billing service (`apps/server/src/billing/hosted/`),
    part of `suplex hosted serve` at `https://suplex.sh` on Fly with
    [accounts](accounts.md) and the suplex.sh site. It owns Stripe and RevenueCat credentials,
    company billing accounts, Checkout and Portal creation, provider reads, and
    webhooks. It never runs the Suplex server, task hosts, or native runtimes.
 
 Both processes are the same `suplex` binary and share one wire contract,
-`rust/src/billing/wire.rs`. Installations never hold the service's provider
+`apps/server/src/billing/wire.rs`. Installations never hold the service's provider
 secrets, so the billing code they carry is inert there.
 
 Stripe owns monetary and quantity facts. RevenueCat supplies the imported `pro`
@@ -114,21 +114,21 @@ The Stripe sandbox and the RevenueCat project send webhooks to
 `127.0.0.1:4212`. Run the tunnel, the service, and Suplex in three terminals:
 
 ```sh
-mise run billing:tunnel
-mise run billing:dev     # sandbox secrets from 1Password .env.development
+mise run hosted:tunnel
+mise run hosted:dev     # sandbox secrets from 1Password .env.development
 SUPLEX_BILLING_SERVICE_URL=http://127.0.0.1:4212 mise run dev
 ```
 
 Both billing tasks read 1Password through the Suplex service account. The
-sandbox has no head office address, so `billing:dev` sets
+sandbox has no head office address, so `hosted:dev` sets
 `STRIPE_AUTOMATIC_TAX=false`. Pay with Stripe test cards such as
 `4242 4242 4242 4242`.
 
 Production targets the Fly app `suplex-production` (`fly.toml` and
-`Dockerfile` at the repository root). The configuration uses one machine
+`Dockerfile` in `apps/server/`). The configuration uses one machine
 in `yyz` and a `billing_data` volume mounted at `/data`. The public origin is
 `suplex.sh`; `www.suplex.sh` redirects to the origin. There is no legacy billing
-hostname. `mise run billing:dns` points both hostnames at Fly. `fly.toml` sets
+hostname. `mise run hosted:dns` points both hostnames at Fly. `fly.toml` sets
 the non-secret variables. Set the provider secrets once, then deploy:
 
 ```sh
@@ -137,7 +137,7 @@ fly secrets set --app suplex-production STRIPE_SECRET_KEY=... \
   STRIPE_WEBHOOK_SECRET=... REVENUECAT_SECRET_API_KEY=... \
   REVENUECAT_STRIPE_PUBLIC_API_KEY=... REVENUECAT_WEBHOOK_AUTHORIZATION=... \
   REVENUECAT_APP_ID=...
-mise run deploy_production
+mise run hosted:deploy
 ```
 
 The service refuses to start until every variable is set. Keep one machine:

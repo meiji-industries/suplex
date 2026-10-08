@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { expect, test, vi } from "vitest";
 
-const page = readFileSync(new URL("../rust/src/accounts/hosted/done.html", import.meta.url), "utf8");
+const page = readFileSync(new URL("../apps/server/src/accounts/hosted/done.html", import.meta.url), "utf8");
 const script = /<script>([\s\S]*?)<\/script>/.exec(page)?.[1] ?? "";
 
 /** Runs the page script against stand-ins for the browser globals it uses. */

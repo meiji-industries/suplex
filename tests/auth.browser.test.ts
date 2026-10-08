@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { CompanyResponseSchema } from "../src/frontend/contracts/common.js";
+import { CompanyResponseSchema } from "../apps/web/contracts/common.js";
 import { nativeBrowser } from "./helpers/native-browser.js";
 
 test("loopback requests create and preserve an Operator session", async () => {

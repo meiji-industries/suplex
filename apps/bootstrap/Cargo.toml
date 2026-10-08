@@ -1,0 +1,13 @@
+[package]
+name = "suplex-bootstrap"
+version = "0.1.0"
+edition = "2024"
+description = "Run Suplex on a cloud VM: interactive bootstrap, power control, status"
+license = "MIT"
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+cliclack = "0.5"
+console = "0.15"
+serde_json = { workspace = true }

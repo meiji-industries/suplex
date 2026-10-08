@@ -2,10 +2,10 @@
 
 For contributors designing task intake, this page explains which parts of a
 repeatable task are reusable and which belong to one execution. Sources:
-[workflow definitions](../../rust/src/coordination/workflows.rs),
-[named presets](../../rust/src/coordination/workflow_records.rs),
-[task templates](../../rust/src/tasks/templates.rs), and
-[task creation form](../../src/frontend/features/tasks/new-task-dialog.tsx).
+[workflow definitions](../../apps/server/src/coordination/workflows.rs),
+[named presets](../../apps/server/src/coordination/workflow_records.rs),
+[task templates](../../apps/server/src/tasks/templates.rs), and
+[task creation form](../../apps/web/features/tasks/new-task-dialog.tsx).
 
 ## Three kinds of reuse
 
@@ -54,18 +54,18 @@ not a general restriction on people editing or merging independently.
 
 ## Workflow diagrams
 
-The New Task preview and [workflow settings cards](../../src/frontend/features/settings/workflow-settings.tsx)
+The New Task preview and [workflow settings cards](../../apps/web/features/settings/workflow-settings.tsx)
 show the selected built-in workflow. A named preset uses its underlying
 workflow's diagram and supplies its own task defaults.
-The diagram does not define execution: [Rust workflow rules](../../rust/src/coordination/workflows.rs)
+The diagram does not define execution: [Rust workflow rules](../../apps/server/src/coordination/workflows.rs)
 and [coordination](coordination.md) own role handoffs and delivery decisions.
 The task detail plan also renders the shared illustration. Neither view is a
 runtime state machine.
 
-[The illustration](../../src/frontend/features/tasks/workflow-illustration.tsx)
+[The illustration](../../apps/web/features/tasks/workflow-illustration.tsx)
 renders labels, agent selectors, arrows, and theme colors. It positions nodes
-and routes from [checked-in geometry](../../src/frontend/features/tasks/workflow-layouts.json).
-The [layout generator](../../rust/examples/workflow_layout.rs) uses ELK's layered
+and routes from [checked-in geometry](../../apps/web/features/tasks/workflow-layouts.json).
+The [layout generator](../../apps/server/examples/workflow_layout.rs) uses ELK's layered
 algorithm to produce wide and compact layouts. It adds the visible return
 routes and aligns the pull request repair terminal node after layout. The app
 reads the generated JSON; it does not run ELK or cache a layout per task.
@@ -74,9 +74,9 @@ After changing a built-in diagram's nodes, edges, or spacing, regenerate both
 layouts and review the resulting SVG at desktop and narrow widths:
 
 ```bash
-cargo run --manifest-path rust/Cargo.toml --example workflow_layout --quiet > .context/workflow-layouts.json
-mv .context/workflow-layouts.json src/frontend/features/tasks/workflow-layouts.json
-pnpm exec vitest run --project unit tests/workflow-illustration.test.tsx
+cargo run -p suplex --example workflow_layout --quiet > .context/workflow-layouts.json
+mv .context/workflow-layouts.json apps/web/features/tasks/workflow-layouts.json
+pnpm --filter suplex-web test tests/workflow-illustration.test.tsx
 ```
 
 ## Intake from existing tools
@@ -84,7 +84,7 @@ pnpm exec vitest run --project unit tests/workflow-illustration.test.tsx
 GitHub trigger rules select a workflow preset and create work from labeled open
 pull requests. A trigger is an intake mechanism, not another workflow step or
 a general GitHub Actions integration. See the
-[trigger implementation](../../rust/src/integrations/github_triggers.rs) and
+[trigger implementation](../../apps/server/src/integrations/github_triggers.rs) and
 [product integration limits](../product.md#integrations).
 
 A paired agent can discover permitted templates and workflows and create tasks

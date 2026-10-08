@@ -2,12 +2,12 @@
 
 For maintainers who change phone notifications. Suplex sends one Web Push
 notification when a task enters `waiting_human`. Sources:
-[sender and validation](../rust/src/web_push/mod.rs),
-[store](../rust/src/web_push/store.rs),
-[key](../rust/src/web_push/keys.rs),
-[routes](../rust/src/http/routes/web_push.rs),
-[service worker](../rust/src/http/pwa/sw.js), and
-[Profile setting](../src/frontend/features/profiles/web-push-setting.tsx).
+[sender and validation](../apps/server/src/web_push/mod.rs),
+[store](../apps/server/src/web_push/store.rs),
+[key](../apps/server/src/web_push/keys.rs),
+[routes](../apps/server/src/http/routes/web_push.rs),
+[service worker](../apps/server/src/http/pwa/sw.js), and
+[Profile setting](../apps/web/features/profiles/web-push-setting.tsx).
 
 ## What sends a push
 

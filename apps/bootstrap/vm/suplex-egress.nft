@@ -1,0 +1,28 @@
+#!/usr/sbin/nft -f
+# All internet egress must go through the Tailscale exit node. Only tailscaled itself
+# (fwmark 0x80000) and link-local housekeeping may leave on any other interface.
+table inet egress
+flush table inet egress
+table inet egress {
+  chain output {
+    type filter hook output priority filter; policy drop;
+    oifname "lo" accept
+    oifname "tailscale0" accept
+    meta mark & 0xff0000 == 0x80000 accept comment "tailscaled: wireguard, derp, control"
+    udp sport 68 udp dport 67 accept comment "dhcp"
+    ip daddr 169.254.169.254 accept comment "cloud metadata (hetzner, aws, gcp, do)"
+    ip6 daddr fe80::/10 accept comment "ipv6 link-local / neighbour discovery"
+    icmpv6 type { nd-neighbor-solicit, nd-neighbor-advert, nd-router-solicit } accept
+    ct state established,related accept comment "replies to inbound only"
+    limit rate 6/minute log prefix "egress-drop "
+    counter drop
+  }
+  chain forward {
+    type filter hook forward priority filter; policy drop;
+    oifname "tailscale0" accept
+    oifname { "docker0", "br-*" } accept comment "to containers"
+    ct state established,related accept
+    limit rate 6/minute log prefix "egress-fwd-drop "
+    counter drop
+  }
+}

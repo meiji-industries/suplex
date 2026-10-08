@@ -2,11 +2,11 @@
 
 For contributors and operators choosing where Suplex runs, this page explains
 the host/client boundary and the supported distribution paths. Sources:
-[host entry point](../../rust/src/main.rs),
-[installation configuration](../../rust/src/platform/config.rs),
-[desktop boot](../../desktop/src-tauri/src/boot.rs),
-[desktop target policy](../../desktop/src-tauri/src/targets.rs),
-[binary embedding](../../rust/build.rs), and
+[host entry point](../../apps/server/src/main.rs),
+[installation configuration](../../apps/server/src/platform/config.rs),
+[desktop boot](../../apps/desktop/src-tauri/src/boot.rs),
+[desktop target policy](../../apps/desktop/src-tauri/src/targets.rs),
+[binary embedding](../../apps/server/build.rs), and
 [Linux packaging](../../scripts/build-linux.sh).
 
 ## One instance owns the work
@@ -106,12 +106,12 @@ The repository builds these forms of Suplex:
 
 | Distribution | Contents and execution | Client |
 | --- | --- | --- |
-| macOS desktop | Tauri 2 application (`desktop/src-tauri`, a Rust shell around the system WKWebView) with the native host binary and runtime manifest; Apple silicon and Intel builds; macOS 14 or later | The web client served by the selected host: its own bundled host in local mode, or another instance |
+| macOS desktop | Tauri 2 application (`apps/desktop/src-tauri`, a Rust shell around the system WKWebView) with the native host binary and runtime manifest; Apple silicon and Intel builds; macOS 14 or later | The web client served by the selected host: its own bundled host in local mode, or another instance |
 | Linux desktop | The same Tauri shell around WebKitGTK, with the bundled host; deb and rpm for arm64 and x64; Ubuntu 22.04, Debian 12, Fedora 36, or later | As macOS desktop; "This computer" replaces "This Mac" |
 | Windows desktop | The same Tauri shell around WebView2, without a host; per-user NSIS installer for arm64 and x64; Windows 10 1809 or later | Another instance only: the host does not run on Windows |
 | Linux binary | Architecture-specific `suplex` executable in a versioned tarball, with checksum and download manifest; arm64 and x64 builds | Browser, or a remote desktop client on another machine |
 | Source checkout | Frontend build plus native Rust host, with development and supervised installation commands | Browser or desktop URL connection |
-| iOS and Android shells | Tauri 2.12.1 app in `mobile/` with one webview that shows a remote host. It installs and runs no host and receives no push. | A remote HTTPS host only |
+| iOS and Android shells | Tauri 2.12.1 app in `apps/mobile/` with one webview that shows a remote host. It installs and runs no host and receives no push. | A remote HTTPS host only |
 | Installable web app | Every host serves `/manifest.webmanifest`, its icons, and the `/sw.js` push service worker. Installation needs HTTPS or loopback. | A phone or computer browser that adds Suplex to its Home Screen or app list |
 
 The release binary embeds the built frontend assets and SQL migrations. A
@@ -135,8 +135,8 @@ tray's **Check for updates** opens the update prompt. They have no
 extension on GNOME (Ubuntu includes one), the data folder is
 `~/.local/share/Suplex`, and Tailscale network access needs
 `sudo tailscale set --operator=$USER` once. On Windows the data folder is
-`%APPDATA%\Suplex`. Sources: [platform](../../desktop/src-tauri/src/platform.rs),
-[menu](../../desktop/src-tauri/src/menu.rs), and [paths](../../desktop/src-tauri/src/paths.rs).
+`%APPDATA%\Suplex`. Sources: [platform](../../apps/desktop/src-tauri/src/platform.rs),
+[menu](../../apps/desktop/src-tauri/src/menu.rs), and [paths](../../apps/desktop/src-tauri/src/paths.rs).
 
 ## Process ownership and updates
 
@@ -172,9 +172,9 @@ host picker. Other origins, cross-origin frames, retired webviews, and local
 files receive no command, and the shell checks the calling webview natively, so
 a raw IPC call cannot borrow another page's grant. No page receives updater,
 filesystem, process, or general window-management commands. Sources:
-[bridge](../../desktop/src-tauri/src/bridge.rs),
-[capabilities](../../desktop/src-tauri/capabilities), and
-[shell](../../desktop/src-tauri/src/shell.rs).
+[bridge](../../apps/desktop/src-tauri/src/bridge.rs),
+[capabilities](../../apps/desktop/src-tauri/capabilities), and
+[shell](../../apps/desktop/src-tauri/src/shell.rs).
 
 Desktop connection, installation, and updater controls belong to the desktop
 shell. The remote application does not receive authority to update the client

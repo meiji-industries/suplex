@@ -259,3 +259,62 @@ test("board durations use the timeline span, tick for Active, freeze for Deliver
     expect(api.readJsonUnchecked.mock.calls.filter(([path]) => /\/(timeline|checks)$/.test(String(path)))).toEqual([]);
   } finally { await act(async () => root.unmount()); container.remove(); }
 });
+
+function dragEvent(type: string): Event {
+  const event = new Event(type, { bubbles: true, cancelable: true });
+  Object.defineProperty(event, "dataTransfer", { value: { setData: () => undefined, effectAllowed: "", dropEffect: "" } });
+  return event;
+}
+
+test("a dropped card sends one command for a permitted column and the server status moves it", async () => {
+  window.history.replaceState(null, "", "/board?company=company-1&boardStatus=queued");
+  const queued = task("task-1", "Ship after review", "queued");
+  let release: (value: Task) => void = () => undefined;
+  api.readJsonUnchecked.mockClear();
+  api.readJsonUnchecked.mockImplementation((path: string) => path === "/api/tasks/task-1/force-start" ? new Promise<Task>(resolve => { release = resolve; }) : Promise.resolve(path.includes("/projects") ? { projects: [] } : { tasks: path.endsWith("/task-costs") ? [] : [queued, task("task-2", "Plan the migration", "backlog")] }));
+  const commands = () => api.readJsonUnchecked.mock.calls.filter(([, init]) => (init as RequestInit | undefined)?.method === "POST").map(([path]) => path);
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  const columns = () => Array.from(container.querySelectorAll("section")).map(section => section.getAttribute("aria-label"));
+  const column = (label: string) => container.querySelector<HTMLElement>(`section[aria-label="${label}"]`);
+  try {
+    await act(async () => root.render(<ServerStateProvider><TaskDataProvider><TasksView mode="board" /></TaskDataProvider></ServerStateProvider>));
+    expect(columns()).toEqual(["Queued"]);
+    const card = () => container.querySelector<HTMLAnchorElement>('a[href="/board/task-1"]');
+    await act(async () => { card()?.dispatchEvent(dragEvent("dragstart")); });
+    // The filter keeps its value, and the permitted destinations show while you drag.
+    expect(columns()).toEqual(["Backlog", "Queued", "Active"]);
+    expect(column("Active")?.textContent).toContain("Move the task here");
+    expect(column("Backlog")?.textContent).not.toContain("Plan the migration");
+    const over = (label: string) => { const event = dragEvent("dragover"); column(label)?.dispatchEvent(event); return event.defaultPrevented; };
+    expect([over("Active"), over("Backlog"), over("Queued")]).toEqual([true, true, false]);
+    await act(async () => { column("Queued")?.dispatchEvent(dragEvent("drop")); });
+    expect(commands()).toEqual([]);
+    await act(async () => { column("Active")?.dispatchEvent(dragEvent("drop")); });
+    expect(commands()).toEqual(["/api/tasks/task-1/force-start"]);
+    expect(columns()).toEqual(["Queued"]);
+    expect(container.querySelector('li[aria-busy="true"]')?.textContent).toContain("Ship after review");
+    // A second move on a pending card sends nothing.
+    await act(async () => { card()?.dispatchEvent(dragEvent("dragstart")); });
+    await act(async () => { column("Backlog")?.dispatchEvent(dragEvent("drop")); });
+    expect(commands()).toEqual(["/api/tasks/task-1/force-start"]);
+    await act(async () => { card()?.dispatchEvent(dragEvent("dragend")); release({ ...queued, status: "active", updatedAt: "2026-09-09T00:00:00.000Z" }); });
+    await act(async () => {});
+    expect(container.querySelector('li[aria-busy="true"]')).toBeNull();
+    expect(column("Queued")).toBeNull();
+  } finally { await act(async () => root.unmount()); container.remove(); window.history.replaceState(null, "", "/board?company=company-1"); }
+});
+
+test("only cards with a permitted move get the Task moves menu and drag", async () => {
+  const tasks = [task("task-1", "Plan the migration", "backlog"), task("task-2", "Wait for you", "waiting_human"), task("task-3", "Done work", "delivered"), { ...task("task-4", "Old backlog", "backlog"), archivedAt: "2026-09-08T00:00:00.000Z" }];
+  api.readJsonUnchecked.mockImplementation(async (path: string) => path.includes("/projects") ? { projects: [] } : { tasks: path.endsWith("/task-costs") ? [] : tasks });
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  try {
+    await act(async () => root.render(<ServerStateProvider><TaskDataProvider><TasksView mode="board" /></TaskDataProvider></ServerStateProvider>));
+    const card = (id: string) => container.querySelector(`a[href="/board/${id}"]`)?.closest("li");
+    expect(["task-1", "task-2", "task-3", "task-4"].map(id => [Boolean(card(id)?.querySelector('[aria-label="Task moves"]')), card(id)?.querySelector("a")?.getAttribute("draggable")])).toEqual([[true, null], [false, "false"], [false, "false"], [false, "false"]]);
+  } finally { await act(async () => root.unmount()); container.remove(); }
+});

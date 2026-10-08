@@ -62,6 +62,22 @@ test.each([1280, 390])("tasks can be created, started and viewed on the board at
     await page.goto(`${value.base}/board?company=${value.company.id}`);
     // Started tasks can leave Active before the board loads, so wait for each card in any column.
     for (const id of createdIds) await page.locator(`[data-task-board] a[href*="/board/${id}"]`).waitFor();
+    if (width === 1280) {
+      // Drag a Backlog card to Queued. The server decides the resulting status.
+      const backlog = await value.createTask({ title: "Drag example", description: "Move by drag", startImmediately: false, idempotencyKey: "board-drag" });
+      await page.reload();
+      const card = page.locator(`[data-task-board] a[href*="/board/${backlog.id}"]`);
+      const started = page.waitForResponse(candidate => candidate.url().endsWith(`/api/tasks/${backlog.id}/start`));
+      // Compact mode shows the empty Queued column only while you drag, so press, move, and then target it.
+      await card.hover();
+      await page.mouse.down();
+      await page.mouse.move(0, 0, { steps: 2 });
+      await page.getByRole("region", { name: "Queued", exact: true }).hover();
+      await page.mouse.up();
+      expect((await started).status()).toBe(200);
+      expect((await value.api("GET", `/api/tasks/${backlog.id}`)).body).not.toMatchObject({ status: "backlog" });
+      expect(new URL(page.url()).pathname).toBe("/board");
+    }
     expect(value.errors).toEqual([]);
   } finally { await value.close(); }
 });

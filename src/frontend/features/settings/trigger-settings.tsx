@@ -29,12 +29,12 @@ const sortOrderOptions: Array<{ value: GithubTriggerSortOrder; label: string }> 
 ];
 
 const columns: SettingsTableColumn[] = [
+  { key: "status", label: "Status", width: 100 },
   { key: "name", label: "Name", width: 180 },
   { key: "project", label: "Project", width: 150 },
   { key: "label", label: "Label", width: 140 },
   { key: "workflow", label: "Workflow", width: 170 },
   { key: "delivery", label: "Delivery", width: 140 },
-  { key: "status", label: "Status", width: 100 },
   { key: "check", label: "Last check", width: 180 },
   { key: "menu", width: 36 },
   { key: "edit", width: 36 },
@@ -107,13 +107,19 @@ export function TriggerSettingsView(): ReactElement {
   const save = async (): Promise<void> => {
     if (editor.kind === "closed") return;
     setBusy(true); setError("");
+    let created: GithubTriggerRule | null = null;
     try {
       const body = { ...editor.draft, protectedPaths: paths(editor.draft.protectedPaths) };
       if (editor.kind === "edit") await readJsonUnchecked(`/api/companies/${encodeURIComponent(companyId)}/github-triggers/${encodeURIComponent(editor.rule.id)}`, { method: "PATCH", body: JSON.stringify({ ...body, expectedRevision: editor.rule.revision }) });
-      else await readJsonUnchecked(`/api/companies/${encodeURIComponent(companyId)}/github-triggers`, { method: "POST", body: JSON.stringify(body) });
+      else created = await readJsonUnchecked<GithubTriggerRule>(`/api/companies/${encodeURIComponent(companyId)}/github-triggers`, { method: "POST", body: JSON.stringify(body) });
       await reload(); setEditor({ kind: "closed" });
-    } catch (reason) { setError(reason instanceof Error ? reason.message : "Unable to save trigger"); }
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Unable to save trigger");
+      if (!created) return;
+      setEditor({ kind: "closed" });
+    }
     finally { setBusy(false); }
+    if (created) await check(created, true);
   };
   const check = async (rule: GithubTriggerRule, preview = false): Promise<void> => {
     setBusy(true); setError("");
@@ -153,12 +159,12 @@ export function TriggerSettingsView(): ReactElement {
           {visible.map((rule) => {
             const ruleStatus = status(rule); const checkStatus = lastCheck(rule);
             return <SettingsTableRow key={rule.id} aria-label={`Edit ${rule.name}`} tabIndex={0} onClick={(event) => { if (!busy && !(event.target as HTMLElement).closest("button, input, label, [data-base-ui-portal]")) { setError(""); setEditor({ kind: "edit", rule, draft: draftFor(rule) }); } }}>
+              <SettingsTableCell><span className="flex items-center gap-1.5 text-muted-foreground"><span className={`size-1.5 rounded-full ${ruleStatus.color}`} />{ruleStatus.text}</span></SettingsTableCell>
               <SettingsTableCell className="font-medium">{rule.name}</SettingsTableCell>
               <SettingsTableCell className="truncate text-muted-foreground">{projects.find((project) => project.id === rule.projectId)?.name ?? rule.projectId}</SettingsTableCell>
               <SettingsTableCell className="truncate text-muted-foreground">{rule.label}</SettingsTableCell>
               <SettingsTableCell className="truncate text-muted-foreground">{workflows.find((workflow) => workflow.id === rule.workflowId)?.name ?? rule.workflowId}</SettingsTableCell>
               <SettingsTableCell className="truncate text-muted-foreground">{rule.deliveryTarget}</SettingsTableCell>
-              <SettingsTableCell><span className="flex items-center gap-1.5 text-muted-foreground"><span className={`size-1.5 rounded-full ${ruleStatus.color}`} />{ruleStatus.text}</span></SettingsTableCell>
               <SettingsTableCell className="truncate text-muted-foreground" title={checkStatus.title}>{checkStatus.text}</SettingsTableCell>
               <SettingsTableCell className="p-0"><DropdownMenu><DropdownMenuTrigger render={<Button variant="ghost" size="icon-xs" aria-label={`${rule.name} actions`} title={`${rule.name} actions`} disabled={busy} />}><Ellipsis /></DropdownMenuTrigger><DropdownMenuContent align="end">
                 <DropdownMenuItem disabled={busy || Boolean(rule.archivedAt)} onClick={() => void check(rule)}><Check />Check now</DropdownMenuItem>

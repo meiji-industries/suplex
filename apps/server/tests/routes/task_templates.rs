@@ -24,7 +24,7 @@ mod tests {
                 crate::identity::companies::create_company(database, &admin.user.id, "Templates", now)
                     .unwrap();
             database.connection().execute(
-                "INSERT INTO suplex_projects (id, company_id, name, repository_path, worktree_root, repository_identity, base_branch, setup_command, verification_command, root_profile_id, worker_profile_id, agent_task_policy_json, created_at, updated_at) VALUES ('project_templates', ?1, 'Templates', '/tmp/templates', '/tmp/templates-worktrees', 'owner/repo', 'main', '', '', 'profile_native_root', 'profile_native_worker', '{}', ?2, ?2)",
+                "INSERT INTO suplex_projects (id, company_id, name, repository_path, worktree_root, repository_identity, base_branch, setup_command, verification_command, root_profile_id, worker_profile_id, created_at, updated_at) VALUES ('project_templates', ?1, 'Templates', '/tmp/templates', '/tmp/templates-worktrees', 'owner/repo', 'main', '', '', 'profile_native_root', 'profile_native_worker', ?2, ?2)",
                 rusqlite::params![company.id, now.to_rfc3339()],
             ).unwrap();
             let project =

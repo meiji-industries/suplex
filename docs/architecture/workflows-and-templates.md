@@ -88,7 +88,7 @@ a general GitHub Actions integration. See the
 [product integration limits](../product.md#integrations).
 
 A paired agent can discover permitted templates and workflows and create tasks
-within its project grants and task policy. A bot can turn supplied meeting notes
+within its project grants. A bot can turn supplied meeting notes
 into task descriptions before calling Suplex. Meeting capture and transcription
 remain outside Suplex. The [agent API](../agent-api.md) owns this contract,
 including discovery, idempotency, and the distinction between reading tasks and

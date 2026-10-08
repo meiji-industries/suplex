@@ -1,0 +1,16 @@
+{
+  "contract": "projects.ProjectDeliveryDefaultsSchema",
+  "case": "first_field_missing",
+  "input": {
+    "runProjectTests": false,
+    "visualEvidence": "capture"
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "deliveryTarget": "pull_request_draft",
+      "runProjectTests": false,
+      "visualEvidence": "capture"
+    }
+  }
+}

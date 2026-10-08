@@ -344,7 +344,7 @@ mod tests {
             development::seed_development_data(database, Utc::now()).unwrap();
             let connection = database.connection();
             let company: String = connection.query_row("SELECT id FROM suplex_companies", [], |row| row.get(0)).unwrap();
-            connection.execute("INSERT INTO suplex_projects (id,company_id,name,repository_path,worktree_root,repository_identity,base_branch,setup_command,verification_command,root_profile_id,worker_profile_id,agent_task_policy_json,created_at,updated_at) VALUES ('reset_project',?1,'Project','/tmp/repo','/tmp/worktrees',NULL,'main','','','root','worker','{}','2026-09-22T00:00:00.000Z','2026-09-22T00:00:00.000Z')", [&company]).unwrap();
+            connection.execute("INSERT INTO suplex_projects (id,company_id,name,repository_path,worktree_root,repository_identity,base_branch,setup_command,verification_command,root_profile_id,worker_profile_id,created_at,updated_at) VALUES ('reset_project',?1,'Project','/tmp/repo','/tmp/worktrees',NULL,'main','','','root','worker','2026-09-22T00:00:00.000Z','2026-09-22T00:00:00.000Z')", [&company]).unwrap();
             // A minimal active control row: every required column gets a placeholder.
             connection.execute_batch("PRAGMA foreign_keys = OFF; PRAGMA ignore_check_constraints = ON").unwrap();
             let required: Vec<String> = connection.prepare("SELECT name FROM pragma_table_info('suplex_task_controls') WHERE \"notnull\" = 1 AND dflt_value IS NULL AND name NOT IN ('task_id', 'status')").unwrap().query_map([], |row| row.get(0)).unwrap().map(Result::unwrap).collect();

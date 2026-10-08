@@ -35,7 +35,7 @@ mod tests {
         let mut database = SuplexDatabase::open(&filename, OpenMode::Migrate).unwrap();
         let user = auth::development_sign_in(&mut database, now).unwrap().user;
         database.connection().execute("INSERT INTO suplex_companies (id,name,status,created_at) VALUES ('replace_company','Replace','active',?1)", [rfc3339_millis(now)]).unwrap();
-        database.connection().execute("INSERT INTO suplex_projects (id,company_id,name,repository_path,worktree_root,repository_identity,base_branch,setup_command,verification_command,root_profile_id,worker_profile_id,agent_task_policy_json,created_at,updated_at) VALUES ('replace_project','replace_company','Replace','/tmp/replace-repo','/tmp/replace-worktrees',NULL,'main','','','root','worker','{}',?1,?1)", [rfc3339_millis(now)]).unwrap();
+        database.connection().execute("INSERT INTO suplex_projects (id,company_id,name,repository_path,worktree_root,repository_identity,base_branch,setup_command,verification_command,root_profile_id,worker_profile_id,created_at,updated_at) VALUES ('replace_project','replace_company','Replace','/tmp/replace-repo','/tmp/replace-worktrees',NULL,'main','','','root','worker',?1,?1)", [rfc3339_millis(now)]).unwrap();
         let prepared = PreparedTask {
             id: repository::new_task_id(),
             company_id: "replace_company".into(),
@@ -476,7 +476,7 @@ mod tests {
         let mut database = SuplexDatabase::open(&filename, OpenMode::Migrate).unwrap();
         let user = auth::development_sign_in(&mut database, now).unwrap().user;
         database.connection().execute("INSERT INTO suplex_companies (id,name,status,created_at) VALUES ('event_company','Events','active',?1)", [rfc3339_millis(now)]).unwrap();
-        database.connection().execute("INSERT INTO suplex_projects (id,company_id,name,repository_path,worktree_root,repository_identity,base_branch,setup_command,verification_command,root_profile_id,worker_profile_id,agent_task_policy_json,created_at,updated_at) VALUES ('event_project','event_company','Events','/tmp/event-repo','/tmp/event-worktrees',NULL,'main','','','root','worker','{}',?1,?1)", [rfc3339_millis(now)]).unwrap();
+        database.connection().execute("INSERT INTO suplex_projects (id,company_id,name,repository_path,worktree_root,repository_identity,base_branch,setup_command,verification_command,root_profile_id,worker_profile_id,created_at,updated_at) VALUES ('event_project','event_company','Events','/tmp/event-repo','/tmp/event-worktrees',NULL,'main','','','root','worker',?1,?1)", [rfc3339_millis(now)]).unwrap();
         let first = PreparedTask {
             id: repository::new_task_id(),
             company_id: "event_company".into(),
@@ -573,7 +573,7 @@ mod tests {
         crate::billing::tests::grant_pro(&database);
         let user = auth::development_sign_in(&mut database, now).unwrap().user;
         database.connection().execute("INSERT INTO suplex_companies (id,name,status,created_at) VALUES ('merge_company','Merge','active',?1)", [rfc3339_millis(now)]).unwrap();
-        database.connection().execute("INSERT INTO suplex_projects (id,company_id,name,repository_path,worktree_root,repository_identity,base_branch,setup_command,verification_command,root_profile_id,worker_profile_id,agent_task_policy_json,created_at,updated_at) VALUES ('merge_project','merge_company','Merge','/tmp/merge-repo','/tmp/merge-worktrees',NULL,'main','','','root','worker','{}',?1,?1)", [rfc3339_millis(now)]).unwrap();
+        database.connection().execute("INSERT INTO suplex_projects (id,company_id,name,repository_path,worktree_root,repository_identity,base_branch,setup_command,verification_command,root_profile_id,worker_profile_id,created_at,updated_at) VALUES ('merge_project','merge_company','Merge','/tmp/merge-repo','/tmp/merge-worktrees',NULL,'main','','','root','worker',?1,?1)", [rfc3339_millis(now)]).unwrap();
         let waits = |database: &SuplexDatabase, id: &str| {
             let response = crate::tasks::response::get(database, id).unwrap().unwrap();
             serde_json::to_value(&response).unwrap()["queue"]["waitingOn"]
@@ -762,7 +762,7 @@ mod tests {
         let mut database = SuplexDatabase::open(&filename, OpenMode::Migrate).unwrap();
         let user = auth::development_sign_in(&mut database, now).unwrap().user;
         database.connection().execute("INSERT INTO suplex_companies (id,name,status,created_at) VALUES ('rows_company','Rows','active',?1)", [rfc3339_millis(now)]).unwrap();
-        database.connection().execute("INSERT INTO suplex_projects (id,company_id,name,repository_path,worktree_root,repository_identity,base_branch,setup_command,verification_command,root_profile_id,worker_profile_id,agent_task_policy_json,created_at,updated_at) VALUES ('rows_project','rows_company','Rows','/tmp/rows-repo','/tmp/rows-worktrees',NULL,'main','','','root','worker','{}',?1,?1)", [rfc3339_millis(now)]).unwrap();
+        database.connection().execute("INSERT INTO suplex_projects (id,company_id,name,repository_path,worktree_root,repository_identity,base_branch,setup_command,verification_command,root_profile_id,worker_profile_id,created_at,updated_at) VALUES ('rows_project','rows_company','Rows','/tmp/rows-repo','/tmp/rows-worktrees',NULL,'main','','','root','worker',?1,?1)", [rfc3339_millis(now)]).unwrap();
         let profile = serde_json::json!({"profileId":"root","provider":"codex","model":"test","reasoningLevel":"medium","serviceTier":"default","providerInstanceId":null,"instanceHomeDirectory":"/home/rows"});
         let prepared = PreparedTask {
             id: repository::new_task_id(),
@@ -903,7 +903,7 @@ mod tests {
         let mut database = SuplexDatabase::open(&filename, OpenMode::Migrate).unwrap();
         let user = auth::development_sign_in(&mut database, now).unwrap().user;
         database.connection().execute("INSERT INTO suplex_companies (id,name,status,created_at) VALUES ('note_company','Notes','active',?1)", [rfc3339_millis(now)]).unwrap();
-        database.connection().execute("INSERT INTO suplex_projects (id,company_id,name,repository_path,worktree_root,repository_identity,base_branch,setup_command,verification_command,root_profile_id,worker_profile_id,agent_task_policy_json,created_at,updated_at) VALUES ('note_project','note_company','Notes','/tmp/note-repo','/tmp/note-worktrees',NULL,'main','','','root','worker','{}',?1,?1)", [rfc3339_millis(now)]).unwrap();
+        database.connection().execute("INSERT INTO suplex_projects (id,company_id,name,repository_path,worktree_root,repository_identity,base_branch,setup_command,verification_command,root_profile_id,worker_profile_id,created_at,updated_at) VALUES ('note_project','note_company','Notes','/tmp/note-repo','/tmp/note-worktrees',NULL,'main','','','root','worker',?1,?1)", [rfc3339_millis(now)]).unwrap();
         let prepared = PreparedTask {
             id: repository::new_task_id(),
             company_id: "note_company".into(),
@@ -1021,7 +1021,7 @@ mod tests {
             [rfc3339_millis(now)],
         ).unwrap();
         database.connection().execute(
-            "INSERT INTO suplex_projects (id, company_id, name, repository_path, worktree_root, repository_identity, base_branch, setup_command, verification_command, root_profile_id, worker_profile_id, agent_task_policy_json, created_at, updated_at) VALUES ('project_task_test', 'company_task_test', 'Task project', '/tmp/suplex-task-project', '/tmp/suplex-task-worktrees', NULL, 'main', '', '', 'profile_native_root', 'profile_native_worker', '{}', ?1, ?1)",
+            "INSERT INTO suplex_projects (id, company_id, name, repository_path, worktree_root, repository_identity, base_branch, setup_command, verification_command, root_profile_id, worker_profile_id, created_at, updated_at) VALUES ('project_task_test', 'company_task_test', 'Task project', '/tmp/suplex-task-project', '/tmp/suplex-task-worktrees', NULL, 'main', '', '', 'profile_native_root', 'profile_native_worker', ?1, ?1)",
             [rfc3339_millis(now)],
         ).unwrap();
         let prepared = PreparedTask {
@@ -1771,7 +1771,7 @@ mod tests {
         let user = auth::development_sign_in(&mut database, now).unwrap().user;
         database.connection().execute("INSERT INTO suplex_companies (id,name,status,created_at) VALUES ('limit_company','Limit','active',?1)", [rfc3339_millis(now)]).unwrap();
         for project in ["limited_project", "open_project"] {
-            database.connection().execute("INSERT INTO suplex_projects (id,company_id,name,repository_path,worktree_root,repository_identity,base_branch,setup_command,verification_command,root_profile_id,worker_profile_id,agent_task_policy_json,created_at,updated_at) VALUES (?1,'limit_company',?1,'/tmp/' || ?1,'/tmp/' || ?1 || '-worktrees',NULL,'main','','','root','worker','{}',?2,?2)", params![project, rfc3339_millis(now)]).unwrap();
+            database.connection().execute("INSERT INTO suplex_projects (id,company_id,name,repository_path,worktree_root,repository_identity,base_branch,setup_command,verification_command,root_profile_id,worker_profile_id,created_at,updated_at) VALUES (?1,'limit_company',?1,'/tmp/' || ?1,'/tmp/' || ?1 || '-worktrees',NULL,'main','','','root','worker',?2,?2)", params![project, rfc3339_millis(now)]).unwrap();
         }
         let profile = serde_json::json!({"profileId":"root","provider":"codex","model":"test","reasoningLevel":"medium","serviceTier":"default"});
         let create = |database: &mut SuplexDatabase, project: &str, key: &str| {

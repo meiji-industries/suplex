@@ -151,7 +151,7 @@ mod tests {
         let f = fixture().await;
         for slug in ["one", "two"] {
             f.sql(
-                &format!("INSERT INTO suplex_projects (id, company_id, name, repository_path, worktree_root, repository_identity, base_branch, setup_command, verification_command, root_profile_id, worker_profile_id, agent_task_policy_json, created_at, updated_at) VALUES ('{slug}', ?1, '{slug}', '/tmp/{slug}', '/tmp/{slug}-worktrees', 'acme/{slug}', 'main', '', '', 'profile_native_root', 'profile_native_worker', '{{}}', '2026-09-14T00:00:00.000Z', '2026-09-14T00:00:00.000Z')"),
+                &format!("INSERT INTO suplex_projects (id, company_id, name, repository_path, worktree_root, repository_identity, base_branch, setup_command, verification_command, root_profile_id, worker_profile_id, created_at, updated_at) VALUES ('{slug}', ?1, '{slug}', '/tmp/{slug}', '/tmp/{slug}-worktrees', 'acme/{slug}', 'main', '', '', 'profile_native_root', 'profile_native_worker', '2026-09-14T00:00:00.000Z', '2026-09-14T00:00:00.000Z')"),
                 &[&f.company_id],
             );
         }

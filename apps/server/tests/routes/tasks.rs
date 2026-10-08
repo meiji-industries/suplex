@@ -182,8 +182,8 @@ mod tests {
             [now.to_rfc3339()],
         ).unwrap();
         database.connection().execute(
-            "INSERT INTO suplex_projects (id, company_id, name, repository_path, worktree_root, repository_identity, base_branch, setup_command, verification_command, root_profile_id, worker_profile_id, agent_task_policy_json, created_at, updated_at) VALUES ('task_http_project', 'task_http_company', 'Task project', ?1, ?2, 'acme/demo', 'main', '', '', 'profile_native_root', 'profile_native_worker', ?3, ?4, ?4)",
-            rusqlite::params![local.to_str().unwrap(), root.join("worktrees").to_str().unwrap(), json!({"workflowIds":["standard"],"defaultWorkflowId":"standard","rootProfileIds":["profile_native_root"],"workerProfileIds":["profile_native_worker"]}).to_string(), now.to_rfc3339()],
+            "INSERT INTO suplex_projects (id, company_id, name, repository_path, worktree_root, repository_identity, base_branch, setup_command, verification_command, root_profile_id, worker_profile_id, created_at, updated_at) VALUES ('task_http_project', 'task_http_company', 'Task project', ?1, ?2, 'acme/demo', 'main', '', '', 'profile_native_root', 'profile_native_worker', ?3, ?3)",
+            rusqlite::params![local.to_str().unwrap(), root.join("worktrees").to_str().unwrap(), now.to_rfc3339()],
         ).unwrap();
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();

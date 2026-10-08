@@ -2245,7 +2245,7 @@ mod tests {
             let time = rfc3339_millis(now);
             let connection = database.connection();
             connection.execute("INSERT INTO suplex_companies (id,name,status,created_at) VALUES ('c','C','active',?1)", [&time]).unwrap();
-            connection.execute("INSERT INTO suplex_projects (id,company_id,name,repository_path,worktree_root,repository_identity,base_branch,setup_command,verification_command,root_profile_id,worker_profile_id,agent_task_policy_json,created_at,updated_at) VALUES ('p','c','P','/tmp/trigger-repo','/tmp/trigger-worktrees','owner/repo','main','','','profile_native_root','profile_native_worker','{}',?1,?1)", [&time]).unwrap();
+            connection.execute("INSERT INTO suplex_projects (id,company_id,name,repository_path,worktree_root,repository_identity,base_branch,setup_command,verification_command,root_profile_id,worker_profile_id,created_at,updated_at) VALUES ('p','c','P','/tmp/trigger-repo','/tmp/trigger-worktrees','owner/repo','main','','','profile_native_root','profile_native_worker',?1,?1)", [&time]).unwrap();
         });
         crate::http::routes::auth::tests::require_remote_login(&state);
         Fixture {

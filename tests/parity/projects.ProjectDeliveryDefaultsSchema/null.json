@@ -1,7 +1,7 @@
 {
-  "contract": "projects.ProjectAgentTaskPolicySchema",
-  "case": "empty_array",
-  "input": [],
+  "contract": "projects.ProjectDeliveryDefaultsSchema",
+  "case": "null",
+  "input": null,
   "expected": {
     "accepted": false,
     "error": [

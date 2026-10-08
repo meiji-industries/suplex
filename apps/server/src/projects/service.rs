@@ -16,7 +16,7 @@ use serde_json::{Value, json};
 
 use crate::{
     http::contracts::typed::projects::{
-        self as project_contracts, LocalProjectCreate, ProjectAgentTaskPolicy, ProjectCreateBody,
+        self as project_contracts, LocalProjectCreate, ProjectCreateBody, ProjectDeliveryDefaults,
         ProjectExecution, ProjectIntegration, ProjectPatch, ProjectProviderPolicy, ProjectResponse,
     },
     identity::{auth, companies},
@@ -24,7 +24,6 @@ use crate::{
 };
 
 use super::git::{Finding, PreparedLocalProject};
-use crate::tasks::control::SessionKind;
 
 fn failure(message: &'static str, status: u16, findings: Vec<Finding>) -> Box<ProjectError> {
     ProjectError::new(message, status, findings).into()
@@ -61,7 +60,7 @@ pub struct Project {
     pub root_profile_id: String,
     pub worker_profile_id: String,
     pub alt_profile_id: String,
-    pub agent_task_policy: ProjectAgentTaskPolicy,
+    pub delivery_defaults: ProjectDeliveryDefaults,
     pub provider_policy: Option<ProjectProviderPolicy>,
     pub task_concurrency: Option<i64>,
     pub created_at: String,
@@ -85,7 +84,7 @@ pub fn response_project(project: &Project) -> ProjectResponse {
         root_profile_id: project.root_profile_id.clone(),
         worker_profile_id: project.worker_profile_id.clone(),
         alt_profile_id: project.alt_profile_id.clone(),
-        agent_task_policy: project.agent_task_policy.clone(),
+        delivery_defaults: project.delivery_defaults,
         provider_policy: project.provider_policy.clone(),
         task_concurrency: project.task_concurrency,
         created_at: project.created_at.clone(),
@@ -109,13 +108,13 @@ struct StoredProject {
     root_profile_id: String,
     worker_profile_id: String,
     alt_profile_id: String,
-    agent_task_policy_json: String,
+    delivery_defaults: ProjectDeliveryDefaults,
     task_concurrency: Option<i64>,
     created_at: String,
     updated_at: String,
 }
 
-const SELECTION: &str = "SELECT p.integration_json, p.execution_json, p.provider_policy_json, p.id, p.company_id, p.name, p.repository_path, p.worktree_root, p.repository_identity, p.base_branch, p.setup_command, p.verification_command, p.root_profile_id, p.worker_profile_id, p.agent_task_policy_json, p.created_at, p.updated_at, p.alt_profile_id, p.task_concurrency FROM suplex_projects p";
+const SELECTION: &str = "SELECT p.integration_json, p.execution_json, p.provider_policy_json, p.id, p.company_id, p.name, p.repository_path, p.worktree_root, p.repository_identity, p.base_branch, p.setup_command, p.verification_command, p.root_profile_id, p.worker_profile_id, p.created_at, p.updated_at, p.alt_profile_id, p.task_concurrency, p.delivery_target, p.run_project_tests, p.visual_evidence FROM suplex_projects p";
 
 fn stored(row: &Row<'_>) -> rusqlite::Result<StoredProject> {
     Ok(StoredProject {
@@ -133,25 +132,15 @@ fn stored(row: &Row<'_>) -> rusqlite::Result<StoredProject> {
         verification_command: row.get(11)?,
         root_profile_id: row.get(12)?,
         worker_profile_id: row.get(13)?,
-        agent_task_policy_json: row.get(14)?,
-        created_at: row.get(15)?,
-        updated_at: row.get(16)?,
-        alt_profile_id: row.get(17)?,
-        task_concurrency: row.get(18)?,
-    })
-}
-
-fn default_policy(root_profile_id: &str, worker_profile_id: &str) -> Value {
-    json!({
-        "workflowIds": ["workflow_native_standard"],
-        "defaultWorkflowId": "workflow_native_standard",
-        "templateIds": [],
-        "rootProfileIds": [root_profile_id],
-        "workerProfileIds": [worker_profile_id],
-        "advisorProfileIds": { "reviewer": [], "planner_a": [], "planner_b": [], "rater": [] },
-        "deliveryTarget": "pull_request_draft",
-        "runProjectTests": true,
-        "visualEvidence": "off"
+        created_at: row.get(14)?,
+        updated_at: row.get(15)?,
+        alt_profile_id: row.get(16)?,
+        task_concurrency: row.get(17)?,
+        delivery_defaults: ProjectDeliveryDefaults {
+            delivery_target: row.get(18)?,
+            run_project_tests: row.get(19)?,
+            visual_evidence: row.get(20)?,
+        },
     })
 }
 
@@ -239,101 +228,6 @@ fn validate_provider_policy(
     Ok(())
 }
 
-fn validate_agent_policy(
-    database: &SuplexDatabase,
-    policy: &ProjectAgentTaskPolicy,
-    project_id: &str,
-) -> DatabaseResult<()> {
-    for workflow_id in &policy.workflow_ids {
-        let exists: bool = database.connection().query_row(
-            "SELECT EXISTS(SELECT 1 FROM suplex_workflows WHERE id = ?1 AND archived_at IS NULL)",
-            [workflow_id],
-            |row| row.get(0),
-        )?;
-        if !exists {
-            return Err(failure(
-                "Project configuration is invalid",
-                422,
-                vec![finding(
-                    "workflow-ineligible",
-                    "agentTaskPolicy.workflowIds",
-                    "Select active workflows",
-                )],
-            ));
-        }
-    }
-    if !policy.workflow_ids.contains(&policy.default_workflow_id) {
-        return Err(failure(
-            "Project configuration is invalid",
-            422,
-            vec![finding(
-                "workflow-default-ineligible",
-                "agentTaskPolicy.defaultWorkflowId",
-                "Select one allowed workflow as the default",
-            )],
-        ));
-    }
-    for template_id in &policy.template_ids {
-        let exists: bool = database.connection().query_row(
-            "SELECT EXISTS(SELECT 1 FROM suplex_task_templates WHERE id = ?1 AND project_id = ?2)",
-            params![template_id, project_id],
-            |row| row.get(0),
-        )?;
-        if !exists {
-            return Err(failure(
-                "Project configuration is invalid",
-                422,
-                vec![finding(
-                    "template-ineligible",
-                    "agentTaskPolicy.templateIds",
-                    "Select templates that belong to this project",
-                )],
-            ));
-        }
-    }
-    for role in ["root", "worker"] {
-        let profile_ids = if role == SessionKind::Root.as_str() {
-            &policy.root_profile_ids
-        } else {
-            &policy.worker_profile_ids
-        };
-        for profile_id in profile_ids {
-            if profile_provider(database, profile_id, role)?.is_none() {
-                return Err(failure(
-                    "Project configuration is invalid",
-                    422,
-                    vec![finding(
-                        "profile-ineligible",
-                        "agentTaskPolicy",
-                        "Select active profiles with matching roles",
-                    )],
-                ));
-            }
-        }
-    }
-    for profile_ids in [
-        &policy.advisor_profile_ids.reviewer,
-        &policy.advisor_profile_ids.planner_a,
-        &policy.advisor_profile_ids.planner_b,
-        &policy.advisor_profile_ids.rater,
-    ] {
-        for profile_id in profile_ids {
-            if profile_provider(database, profile_id, "root")?.is_none() {
-                return Err(failure(
-                    "Project configuration is invalid",
-                    422,
-                    vec![finding(
-                        "profile-ineligible",
-                        "agentTaskPolicy",
-                        "Select active Advisor profiles",
-                    )],
-                ));
-            }
-        }
-    }
-    Ok(())
-}
-
 fn stored_contract<T>(
     raw: &str,
     parse: fn(Option<&Value>) -> project_contracts::ContractResult<T>,
@@ -357,26 +251,6 @@ fn parse_optional<T>(
 }
 
 fn public_project(stored: StoredProject) -> DatabaseResult<Project> {
-    let legacy = default_policy(&stored.root_profile_id, &stored.worker_profile_id);
-    let policy = if stored.agent_task_policy_json == "{}" {
-        serde_json::from_value(legacy).expect("generated default agent task policy is valid")
-    } else {
-        stored_contract(
-            &stored.agent_task_policy_json,
-            project_contracts::parse_agent_policy,
-        )
-        .map_err(|_| {
-            failure(
-                "Project agent policy is invalid",
-                422,
-                vec![finding(
-                    "agent-task-policy-invalid",
-                    "agentTaskPolicy",
-                    "Project agent task policy must be repaired before it can be used",
-                )],
-            ) as Box<dyn Error + Send + Sync>
-        })?
-    };
     let mut project = Project {
         repository_settings: None,
         integration: parse_optional(
@@ -396,7 +270,7 @@ fn public_project(stored: StoredProject) -> DatabaseResult<Project> {
         root_profile_id: stored.root_profile_id,
         worker_profile_id: stored.worker_profile_id,
         alt_profile_id: stored.alt_profile_id,
-        agent_task_policy: policy,
+        delivery_defaults: stored.delivery_defaults,
         provider_policy: parse_optional(
             stored.provider_policy_json,
             project_contracts::parse_provider_policy,
@@ -581,20 +455,26 @@ pub fn create_local(
 ) -> DatabaseResult<Project> {
     let root_profile_id = auth::js_trim(options.root_profile_id);
     let worker_profile_id = auth::js_trim(options.worker_profile_id);
-    let (integration, execution, explicit_policy, provider_policy) = match options.configuration {
+    let (integration, execution, delivery_defaults, provider_policy) = match options.configuration {
         Some(ProjectCreateBody::Local(value)) => (
             value.integration.clone(),
             value.execution.clone(),
-            value.agent_task_policy.clone(),
+            value.delivery_defaults.unwrap_or_default(),
             value.provider_policy.clone().flatten(),
         ),
-        Some(ProjectCreateBody::ExistingRepository(value)) => {
-            (value.integration.clone(), None, None, None)
-        }
-        Some(ProjectCreateBody::NewRepository(value)) => {
-            (value.integration.clone(), None, None, None)
-        }
-        None => (None, None, None, None),
+        Some(ProjectCreateBody::ExistingRepository(value)) => (
+            value.integration.clone(),
+            None,
+            ProjectDeliveryDefaults::default(),
+            None,
+        ),
+        Some(ProjectCreateBody::NewRepository(value)) => (
+            value.integration.clone(),
+            None,
+            ProjectDeliveryDefaults::default(),
+            None,
+        ),
+        None => (None, None, ProjectDeliveryDefaults::default(), None),
     };
     let explicit_alt = match options.configuration {
         Some(ProjectCreateBody::Local(value)) => value.alt_profile_id.as_deref(),
@@ -628,12 +508,6 @@ pub fn create_local(
     let id = project_id()?;
     let audit_id = random_hex_id("audit")?;
     let stamp = rfc3339_millis(options.now);
-    let policy_json = match &explicit_policy {
-        Some(policy) => json_text(policy)?,
-        None => {
-            crate::shared::js_json::stringify(&default_policy(root_profile_id, worker_profile_id))
-        }
-    };
     let integration_json = integration.as_ref().map(json_text).transpose()?;
     let execution_json = execution.as_ref().map(json_text).transpose()?;
     let provider_policy_json = provider_policy.as_ref().map(json_text).transpose()?;
@@ -661,12 +535,9 @@ pub fn create_local(
         if let Some(policy) = &provider_policy {
             validate_provider_policy(database, policy, root_profile_id, worker_profile_id, &alt_profile_id)?;
         }
-        if let Some(policy) = &explicit_policy {
-            validate_agent_policy(database, policy, &id)?;
-        }
         database.connection().execute(
-            "INSERT INTO suplex_projects (id, company_id, name, repository_path, worktree_root, repository_identity, base_branch, setup_command, verification_command, root_profile_id, worker_profile_id, agent_task_policy_json, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?13)",
-            params![id, company_id, prepared.name, prepared.repository_path.to_string_lossy(), prepared.worktree_root.to_string_lossy(), prepared.repository, prepared.base_branch, prepared.setup_command, prepared.verification_command, root_profile_id, worker_profile_id, policy_json, stamp],
+            "INSERT INTO suplex_projects (id, company_id, name, repository_path, worktree_root, repository_identity, base_branch, setup_command, verification_command, root_profile_id, worker_profile_id, delivery_target, run_project_tests, visual_evidence, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?15)",
+            params![id, company_id, prepared.name, prepared.repository_path.to_string_lossy(), prepared.worktree_root.to_string_lossy(), prepared.repository, prepared.base_branch, prepared.setup_command, prepared.verification_command, root_profile_id, worker_profile_id, delivery_defaults.delivery_target.as_str(), delivery_defaults.run_project_tests, delivery_defaults.visual_evidence.as_str(), stamp],
         )?;
         database.connection().execute(
             "UPDATE suplex_projects SET integration_json = ?1, execution_json = ?2, alt_profile_id = ?4 WHERE id = ?3",
@@ -750,39 +621,21 @@ fn stored_row(
         .optional()?)
 }
 
-/// The stored agent policy; the legacy `{}` means the default for these agents.
-fn stored_policy(raw: &str, root: &str, worker: &str) -> DatabaseResult<ProjectAgentTaskPolicy> {
-    if raw == "{}" {
-        return Ok(serde_json::from_value(default_policy(root, worker))?);
-    }
-    stored_contract(raw, project_contracts::parse_agent_policy).map_err(|_| {
-        failure(
-            "Project agent policy is invalid",
-            422,
-            vec![finding(
-                "agent-task-policy-invalid",
-                "agentTaskPolicy",
-                "Project agent task policy must be repaired before it can be used",
-            )],
-        ) as Box<dyn Error + Send + Sync>
-    })
-}
-
-/// Without an explicit policy the stored allowlists still admit the project's own defaults.
-fn admitted_policy(
-    mut policy: ProjectAgentTaskPolicy,
-    root: &str,
-    worker: &str,
-) -> ProjectAgentTaskPolicy {
-    for (ids, profile_id) in [
-        (&mut policy.root_profile_ids, root),
-        (&mut policy.worker_profile_ids, worker),
-    ] {
-        if !ids.iter().any(|id| id == profile_id) {
-            ids.push(profile_id.to_owned());
-        }
-    }
-    policy
+fn write_delivery_defaults(
+    database: &SuplexDatabase,
+    project_id: &str,
+    defaults: &ProjectDeliveryDefaults,
+) -> DatabaseResult<()> {
+    database.connection().execute(
+        "UPDATE suplex_projects SET delivery_target = ?1, run_project_tests = ?2, visual_evidence = ?3 WHERE id = ?4",
+        params![
+            defaults.delivery_target.as_str(),
+            defaults.run_project_tests,
+            defaults.visual_evidence.as_str(),
+            project_id
+        ],
+    )?;
+    Ok(())
 }
 
 fn require_profile(
@@ -894,25 +747,13 @@ pub fn update_local(
                     }
                 }
             }
-            let policy = match (&body.agent_task_policy, &stored) {
-                (Some(policy), _) => {
-                    validate_agent_policy(database, policy, project_id)?;
-                    policy.clone()
-                }
-                (None, Some(row)) => admitted_policy(
-                    stored_policy(&row.agent_task_policy_json, root, worker)?,
-                    root,
-                    worker,
-                ),
-                (None, None) => serde_json::from_value(default_policy(root, worker))?,
-            };
             let Some(stored) = stored.filter(|row| row.company_id == company_id) else {
                 return Err(failure("Not found", 404, vec![]));
             };
             reject_repository_replacement(&stored.repository_path, body)?;
             database.connection().execute(
-                "UPDATE suplex_projects SET name = ?1, repository_path = ?2, worktree_root = ?3, repository_identity = ?4, base_branch = ?5, setup_command = ?6, verification_command = ?7, root_profile_id = ?8, worker_profile_id = ?9, agent_task_policy_json = ?10, updated_at = ?11 WHERE id = ?12",
-                params![prepared.name, prepared.repository_path.to_string_lossy(), prepared.worktree_root.to_string_lossy(), prepared.repository, prepared.base_branch, prepared.setup_command, prepared.verification_command, root, worker, json_text(&policy)?, stamp, project_id],
+                "UPDATE suplex_projects SET name = ?1, repository_path = ?2, worktree_root = ?3, repository_identity = ?4, base_branch = ?5, setup_command = ?6, verification_command = ?7, root_profile_id = ?8, worker_profile_id = ?9, updated_at = ?10 WHERE id = ?11",
+                params![prepared.name, prepared.repository_path.to_string_lossy(), prepared.worktree_root.to_string_lossy(), prepared.repository, prepared.base_branch, prepared.setup_command, prepared.verification_command, root, worker, stamp, project_id],
             )?;
             let integration_json = match &body.integration {
                 Some(integration) => Some(json_text(integration)?),
@@ -926,6 +767,9 @@ pub fn update_local(
                 "UPDATE suplex_projects SET integration_json = ?1, execution_json = ?2, alt_profile_id = ?4 WHERE id = ?3",
                 params![integration_json, execution_json, project_id, alt],
             )?;
+            if let Some(defaults) = &body.delivery_defaults {
+                write_delivery_defaults(database, project_id, defaults)?;
+            }
             audit_update(database, actor_user_id, company_id, project_id, &stamp)?;
             database.connection().execute(
                 "UPDATE suplex_projects SET provider_policy_json = ?1 WHERE id = ?2",
@@ -1301,10 +1145,12 @@ pub fn apply_patch(
                     .map_err(|error| format!("Project execution is invalid: {error:?}"))?;
                 update("execution_json", Some(json_text(&execution)?))?;
             }
+            if let Some(defaults) = &patch.delivery_defaults {
+                write_delivery_defaults(database, project_id, defaults)?;
+            }
             if patch.root_profile_id.is_some()
                 || patch.alt_profile_id.is_some()
                 || patch.worker_profile_id.is_some()
-                || patch.agent_task_policy.is_some()
                 || patch.provider_policy.is_some()
             {
                 patch_agent_configuration(database, &stored, patch)?;
@@ -1346,17 +1192,6 @@ fn patch_agent_configuration(
     if let Some(policy) = &provider_policy {
         validate_provider_policy(database, policy, root, worker, alt)?;
     }
-    let policy = match &patch.agent_task_policy {
-        Some(policy) => {
-            validate_agent_policy(database, policy, &stored.id)?;
-            policy.clone()
-        }
-        None => admitted_policy(
-            stored_policy(&stored.agent_task_policy_json, root, worker)?,
-            root,
-            worker,
-        ),
-    };
     let connection = database.connection();
     if patch.root_profile_id.is_some() || patch.alt_profile_id.is_some() {
         connection.execute(
@@ -1368,15 +1203,6 @@ fn patch_agent_configuration(
         connection.execute(
             "UPDATE suplex_projects SET worker_profile_id = ?1 WHERE id = ?2",
             params![worker, stored.id],
-        )?;
-    }
-    if patch.agent_task_policy.is_some()
-        || patch.root_profile_id.is_some()
-        || patch.worker_profile_id.is_some()
-    {
-        connection.execute(
-            "UPDATE suplex_projects SET agent_task_policy_json = ?1 WHERE id = ?2",
-            params![json_text(&policy)?, stored.id],
         )?;
     }
     if patch.provider_policy.is_some() {
@@ -1993,7 +1819,7 @@ mod tests {
             verification_command: "pnpm test".to_owned(),
         };
         let configured = local_configuration(
-            json!({"integration":{"repository":{"kind":"github"}},"execution":{"instructions":"Build"},"agentTaskPolicy":{"workflowIds":["workflow_native_standard"],"defaultWorkflowId":"workflow_native_standard","rootProfileIds":["profile_native_root"],"workerProfileIds":["profile_native_worker"]},"providerPolicy":null}),
+            json!({"integration":{"repository":{"kind":"github"}},"execution":{"instructions":"Build"},"deliveryDefaults":{"deliveryTarget":"local_worktree","runProjectTests":false},"providerPolicy":null}),
         );
         let created = create_local(
             &mut database,
@@ -2019,8 +1845,8 @@ mod tests {
         );
         assert!(created.execution.unwrap().instructions == "Build");
         assert_eq!(
-            created.agent_task_policy.root_profile_ids,
-            vec!["profile_native_root"]
+            serde_json::to_value(created.delivery_defaults).unwrap(),
+            json!({"deliveryTarget":"local_worktree","runProjectTests":false,"visualEvidence":"off"})
         );
         assert_eq!(
             list(&database, &admin.id, Some(&company.id)).unwrap().len(),
@@ -2063,25 +1889,6 @@ mod tests {
         let rejected_instance = rejected_instance.downcast_ref::<ProjectError>().unwrap();
         assert_eq!(rejected_instance.status(), 422);
         assert_eq!(rejected_instance.findings()[0].code, "instance-ineligible");
-        let missing_workflow = local_configuration(
-            json!({"agentTaskPolicy":{"workflowIds":["missing_workflow"],"defaultWorkflowId":"missing_workflow","rootProfileIds":["profile_native_root"],"workerProfileIds":["profile_native_worker"]}}),
-        );
-        let rejected_workflow = create_local(
-            &mut database,
-            &admin.id,
-            &company.id,
-            &prepared,
-            CreateLocalOptions {
-                root_profile_id: "profile_native_root",
-                worker_profile_id: "profile_native_worker",
-                configuration: Some(&missing_workflow),
-                now,
-            },
-        )
-        .unwrap_err();
-        let rejected_workflow = rejected_workflow.downcast_ref::<ProjectError>().unwrap();
-        assert_eq!(rejected_workflow.status(), 422);
-        assert_eq!(rejected_workflow.findings()[0].code, "workflow-ineligible");
         let duplicate = create_local_default(
             &mut database,
             &admin.id,
@@ -2162,35 +1969,6 @@ mod tests {
         database
             .connection()
             .execute(
-                "UPDATE suplex_projects SET agent_task_policy_json = '{broken' WHERE id = ?1",
-                [&created.id],
-            )
-            .unwrap();
-        assert_eq!(
-            get(&database, &admin.id, &created.id)
-                .unwrap_err()
-                .downcast_ref::<ProjectError>()
-                .unwrap()
-                .status(),
-            422
-        );
-        database
-            .connection()
-            .execute(
-                "UPDATE suplex_projects SET agent_task_policy_json = '{}' WHERE id = ?1",
-                [&created.id],
-            )
-            .unwrap();
-        assert_eq!(
-            get(&database, &admin.id, &created.id)
-                .unwrap()
-                .agent_task_policy
-                .workflow_ids,
-            created.agent_task_policy.workflow_ids
-        );
-        database
-            .connection()
-            .execute(
                 "DELETE FROM suplex_memberships WHERE user_id = 'project_member'",
                 [],
             )
@@ -2242,15 +2020,15 @@ mod tests {
         )
         .unwrap();
         database.connection().execute(
-            r#"UPDATE suplex_projects SET integration_json = '{}', execution_json = '{"instructions":"Build","mcp":[{"name":"context7","transport":{"type":"http","url":"https://example.test/mcp","extra":true},"grants":{"root":[],"advisor":[],"worker":[],"extra":true},"extra":true}]}', provider_policy_json = '{"allowedProviders":["codex"],"allowedInstanceIds":["instance_a"]}', agent_task_policy_json = '{"workflowIds":["workflow_native_standard"],"defaultWorkflowId":"workflow_native_standard","rootProfileIds":["profile_native_root"],"workerProfileIds":["profile_native_worker"]}' WHERE id = ?1"#,
+            r#"UPDATE suplex_projects SET integration_json = '{}', execution_json = '{"instructions":"Build","mcp":[{"name":"context7","transport":{"type":"http","url":"https://example.test/mcp","extra":true},"grants":{"root":[],"advisor":[],"worker":[],"extra":true},"extra":true}]}', provider_policy_json = '{"allowedProviders":["codex"],"allowedInstanceIds":["instance_a"]}' WHERE id = ?1"#,
             [&created.id],
         ).unwrap();
         let normalized = get(&database, &admin.id, &created.id).unwrap();
         let response = serde_json::to_value(response_project(&normalized)).unwrap();
         assert_eq!(response["execution"]["instructions"], "Build");
         assert_eq!(
-            response["agentTaskPolicy"]["rootProfileIds"],
-            json!(["profile_native_root"])
+            response["deliveryDefaults"],
+            json!({"deliveryTarget":"pull_request_draft","runProjectTests":true,"visualEvidence":"off"})
         );
         assert_eq!(response["execution"]["skillDirectories"], json!([]));
         assert!(!response.to_string().contains("extra"));
@@ -2266,7 +2044,10 @@ mod tests {
             serde_json::to_value(normalized.provider_policy.as_ref().unwrap()).unwrap(),
             json!({"allowedProviders":["codex"],"allowedInstanceIds":["instance_a"]})
         );
-        assert!(normalized.agent_task_policy.root_profile_ids == vec!["profile_native_root"]);
+        assert_eq!(
+            normalized.delivery_defaults,
+            ProjectDeliveryDefaults::default()
+        );
         database.connection().execute(
             "UPDATE suplex_projects SET execution_json = '{\"environment\":{\"PATH\":\"x\"}}' WHERE id = ?1",
             [&created.id],

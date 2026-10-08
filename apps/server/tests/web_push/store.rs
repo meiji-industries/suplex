@@ -21,7 +21,7 @@ mod tests {
         state.with_database(|database| {
             let connection = database.connection();
             connection.execute("INSERT INTO suplex_companies (id,name,status,created_at) VALUES ('push_c','Push','active',?1)", [&time]).unwrap();
-            connection.execute("INSERT INTO suplex_projects (id,company_id,name,repository_path,worktree_root,repository_identity,base_branch,setup_command,verification_command,root_profile_id,worker_profile_id,agent_task_policy_json,created_at,updated_at) VALUES ('push_p','push_c','Push','/tmp/push-r','/tmp/push-w',NULL,'main','','','root','worker','{}',?1,?1)", [&time]).unwrap();
+            connection.execute("INSERT INTO suplex_projects (id,company_id,name,repository_path,worktree_root,repository_identity,base_branch,setup_command,verification_command,root_profile_id,worker_profile_id,created_at,updated_at) VALUES ('push_p','push_c','Push','/tmp/push-r','/tmp/push-w',NULL,'main','','','root','worker',?1,?1)", [&time]).unwrap();
             for (id, role) in [("push_creator", "member"), ("push_member", "member"), ("push_former", "member"), ("push_admin", "admin")] {
                 connection.execute("INSERT INTO suplex_users (id,display_name,username,role,status,created_at,updated_at,identity_version) VALUES (?1,?1,?1,?2,'active',?3,?3,1)", params![id, role, time]).unwrap();
                 save_subscription(database, id, &subscription(&format!("https://web.push.apple.com/{id}")), now).unwrap();

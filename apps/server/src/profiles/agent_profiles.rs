@@ -8,10 +8,7 @@ use getrandom::fill;
 use rusqlite::{OptionalExtension, Row, params};
 use serde::{Deserialize, Serialize};
 
-use crate::{
-    http::contracts::typed::projects,
-    platform::database::{DatabaseResult, SuplexDatabase},
-};
+use crate::platform::database::{DatabaseResult, SuplexDatabase};
 
 const SELECTION: &str = "SELECT id, name, role, avatar_seed, provider, model, reasoning_level, service_tier, provider_instance_id, archived_at, created_at, updated_at FROM suplex_profiles";
 
@@ -355,53 +352,6 @@ fn referenced_profile_error(references: &[&str]) -> String {
     format!("Select another agent for the {names} that use this agent before you delete it")
 }
 
-fn remove_id(values: &mut serde_json::Value, id: &str) {
-    if let Some(items) = values.as_array_mut() {
-        items.retain(|value| value.as_str() != Some(id));
-    }
-}
-
-fn pruned_policy(
-    raw: &str,
-    id: &str,
-    root_id: &str,
-    worker_id: &str,
-) -> DatabaseResult<Option<String>> {
-    if raw == "{}" {
-        return Ok(None);
-    }
-    let input: serde_json::Value = serde_json::from_str(raw)?;
-    let Ok(policy) = projects::parse_agent_policy(Some(&input)) else {
-        return Ok(None);
-    };
-    let mut parsed = serde_json::to_value(policy)?;
-    let original = parsed.clone();
-    let object = parsed.as_object_mut().expect("validated policy object");
-    for (field, fallback) in [("rootProfileIds", root_id), ("workerProfileIds", worker_id)] {
-        let values = object.get_mut(field).expect("validated policy field");
-        remove_id(values, id);
-        if values
-            .as_array()
-            .expect("validated policy array")
-            .is_empty()
-        {
-            *values = serde_json::json!([fallback]);
-        }
-    }
-    if let Some(advisors) = object
-        .get_mut("advisorProfileIds")
-        .and_then(|value| value.as_object_mut())
-    {
-        for values in advisors.values_mut() {
-            remove_id(values, id);
-        }
-    }
-    if parsed == original {
-        return Ok(None);
-    }
-    Ok(Some(serde_json::to_string(&parsed)?))
-}
-
 pub fn delete(
     database: &mut SuplexDatabase,
     user_id: &str,
@@ -424,14 +374,6 @@ pub fn delete(
         }
         if !used.is_empty() {
             return Err(ProfileFailure::new(referenced_profile_error(&used), 409));
-        }
-        let mut statement = database.connection().prepare("SELECT id, root_profile_id, worker_profile_id, agent_task_policy_json FROM suplex_projects WHERE agent_task_policy_json <> '{}'")?;
-        let projects = statement.query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?, row.get::<_, String>(3)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
-        drop(statement);
-        for (project_id, root_id, worker_id, raw) in projects {
-            if let Some(updated) = pruned_policy(&raw, id, &root_id, &worker_id)? {
-                database.connection().execute("UPDATE suplex_projects SET agent_task_policy_json = ?1 WHERE id = ?2", params![updated, project_id])?;
-            }
         }
         database.connection().execute("DELETE FROM suplex_avatars WHERE owner_id = ?1", [id])?;
         database.connection().execute("DELETE FROM suplex_profiles WHERE id = ?1", [id])?;
@@ -777,35 +719,6 @@ mod tests {
     }
 
     #[test]
-    fn deletion_prunes_valid_policy_references_and_keeps_invalid_policies() {
-        let policy = serde_json::json!({
-            "workflowIds": ["workflow_native_standard"],
-            "defaultWorkflowId": "workflow_native_standard",
-            "rootProfileIds": ["removed"],
-            "workerProfileIds": ["worker", "removed"],
-            "advisorProfileIds": { "reviewer": ["removed", "worker"] }
-        })
-        .to_string();
-        let pruned = pruned_policy(&policy, "removed", "root", "worker")
-            .unwrap()
-            .unwrap();
-        let value: serde_json::Value = serde_json::from_str(&pruned).unwrap();
-        assert_eq!(value["rootProfileIds"], serde_json::json!(["root"]));
-        assert_eq!(value["workerProfileIds"], serde_json::json!(["worker"]));
-        assert_eq!(
-            value["advisorProfileIds"]["reviewer"],
-            serde_json::json!(["worker"])
-        );
-        assert_eq!(value["deliveryTarget"], "pull_request_draft");
-        assert!(
-            pruned_policy(&policy, "absent", "root", "worker")
-                .unwrap()
-                .is_none()
-        );
-        assert!(pruned_policy("{bad json", "removed", "root", "worker").is_err());
-    }
-
-    #[test]
     fn default_selection_only_changes_untouched_fresh_install_profiles() {
         static NEXT_DATABASE: AtomicU64 = AtomicU64::new(10_000);
         let path = std::env::temp_dir().join(format!(
@@ -975,39 +888,22 @@ mod tests {
             [rfc3339_millis(now)],
         ).unwrap();
         database.connection().execute(
-            "INSERT INTO suplex_projects (id, company_id, name, repository_path, worktree_root, base_branch, setup_command, verification_command, root_profile_id, worker_profile_id, agent_task_policy_json, created_at, updated_at) VALUES ('profile_test_project', 'profile_test_company', 'Profile test', '/tmp/profile-repo', '/tmp/profile-worktrees', 'main', '', '', 'profile_native_root', 'profile_native_worker', '{broken', ?1, ?1)",
+            "INSERT INTO suplex_projects (id, company_id, name, repository_path, worktree_root, base_branch, setup_command, verification_command, root_profile_id, worker_profile_id, created_at, updated_at) VALUES ('profile_test_project', 'profile_test_company', 'Profile test', '/tmp/profile-repo', '/tmp/profile-worktrees', 'main', '', '', 'profile_native_root', 'profile_native_worker', ?1, ?1)",
             [rfc3339_millis(now)],
-        ).unwrap();
-        assert!(delete(&mut database, &admin.user.id, &created.id, now).is_err());
-        assert!(
-            get(&database, &created.id).is_ok(),
-            "bad stored JSON must roll back deletion"
-        );
-        let policy = serde_json::json!({
-            "workflowIds": ["workflow_native_standard"],
-            "defaultWorkflowId": "workflow_native_standard",
-            "rootProfileIds": ["profile_native_root", created.id],
-            "workerProfileIds": ["profile_native_worker"],
-        });
-        database.connection().execute(
-            "UPDATE suplex_projects SET agent_task_policy_json = ?1 WHERE id = 'profile_test_project'",
-            [policy.to_string()],
         ).unwrap();
         delete(&mut database, &admin.user.id, &created.id, now).unwrap();
         assert!(find(&database, &created.id).unwrap().is_none());
-        let stored: String = database.connection().query_row(
-            "SELECT agent_task_policy_json FROM suplex_projects WHERE id = 'profile_test_project'",
+        let defaults: (String, String) = database.connection().query_row(
+            "SELECT root_profile_id, worker_profile_id FROM suplex_projects WHERE id = 'profile_test_project'",
             [],
-            |row| row.get(0),
+            |row| Ok((row.get(0)?, row.get(1)?)),
         ).unwrap();
-        let stored: serde_json::Value = serde_json::from_str(&stored).unwrap();
         assert_eq!(
-            stored["rootProfileIds"],
-            serde_json::json!(["profile_native_root"])
-        );
-        assert_eq!(
-            stored["advisorProfileIds"]["reviewer"],
-            serde_json::json!([])
+            defaults,
+            (
+                "profile_native_root".to_owned(),
+                "profile_native_worker".to_owned()
+            )
         );
         drop(database);
         let _ = std::fs::remove_file(&path);

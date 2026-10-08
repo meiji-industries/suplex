@@ -1,0 +1,17 @@
+{
+  "contract": "projects.ProjectDeliveryDefaultsSchema",
+  "case": "all_fields",
+  "input": {
+    "deliveryTarget": "merged",
+    "runProjectTests": false,
+    "visualEvidence": "required"
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "deliveryTarget": "merged",
+      "runProjectTests": false,
+      "visualEvidence": "required"
+    }
+  }
+}

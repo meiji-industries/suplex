@@ -38,7 +38,7 @@ mod tests {
         let admin = crate::http::routes::auth::tests::verified_sign_in(&mut database, now).unwrap();
         let stamp = now.to_rfc3339();
         database.connection().execute("INSERT INTO suplex_companies (id,name,status,created_at) VALUES ('timeline_company','Timeline','active',?1)", [&stamp]).unwrap();
-        database.connection().execute("INSERT INTO suplex_projects (id,company_id,name,repository_path,worktree_root,repository_identity,base_branch,setup_command,verification_command,root_profile_id,worker_profile_id,agent_task_policy_json,created_at,updated_at) VALUES ('timeline_project','timeline_company','Timeline','/tmp/repo','/tmp/worktrees',NULL,'main','','','root_profile','worker_profile','{}',?1,?1)", [&stamp]).unwrap();
+        database.connection().execute("INSERT INTO suplex_projects (id,company_id,name,repository_path,worktree_root,repository_identity,base_branch,setup_command,verification_command,root_profile_id,worker_profile_id,created_at,updated_at) VALUES ('timeline_project','timeline_company','Timeline','/tmp/repo','/tmp/worktrees',NULL,'main','','','root_profile','worker_profile',?1,?1)", [&stamp]).unwrap();
         let task = repository::create(&mut database, &PreparedTask {
             id: repository::new_task_id(), company_id: "timeline_company".into(), project_id: "timeline_project".into(),
             title: "Saved timing".into(), description: "Read-only".into(),

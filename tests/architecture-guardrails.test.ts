@@ -8,7 +8,7 @@ import { AgentProfileInputSchema } from "../apps/web/contracts/profiles.js";
 
 test("task and project configuration have no phase, mirror gate, or harness capacity fields", () => {
   expect(Object.keys(TaskInputSchema.shape)).not.toEqual(expect.arrayContaining(["expectedRevision"]));
-  expect(Object.keys(ProjectBodySchema.shape).sort()).toEqual(["agentTaskPolicy", "altProfileId", "baseBranch", "execution", "integration", "name", "providerPolicy", "repository", "repositoryPath", "rootProfileId", "setupCommand", "verificationCommand", "workerProfileId", "worktreeRoot"]);
+  expect(Object.keys(ProjectBodySchema.shape).sort()).toEqual(["altProfileId", "baseBranch", "deliveryDefaults", "execution", "integration", "name", "providerPolicy", "repository", "repositoryPath", "rootProfileId", "setupCommand", "verificationCommand", "workerProfileId", "worktreeRoot"]);
   expect(Object.keys(AgentProfileInputSchema.shape).sort()).toEqual(["avatarSeed", "model", "name", "provider", "providerInstanceId", "reasoningLevel", "role", "serviceTier"]);
 });
 

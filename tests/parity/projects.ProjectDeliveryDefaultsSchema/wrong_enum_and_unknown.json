@@ -1,17 +1,7 @@
 {
-  "contract": "projects.ProjectAgentTaskPolicySchema",
+  "contract": "projects.ProjectDeliveryDefaultsSchema",
   "case": "wrong_enum_and_unknown",
   "input": {
-    "workflowIds": [
-      "workflow"
-    ],
-    "defaultWorkflowId": "workflow",
-    "rootProfileIds": [
-      "root"
-    ],
-    "workerProfileIds": [
-      "worker"
-    ],
     "deliveryTarget": "publish",
     "visualEvidence": "screenshots",
     "extra": true

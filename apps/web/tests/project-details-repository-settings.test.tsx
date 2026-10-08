@@ -14,7 +14,7 @@ vi.mock("../features/projects/project-details-layout.js", () => ({ ProjectDetail
 
 const project: ApiProject = {
   id: "project-1", companyId: "company-1", name: "Repository", repository: "owner/repo", repositoryPath: "/repo", worktreeRoot: "/worktrees", baseBranch: "main", setupCommand: "install", verificationCommand: "check", rootProfileId: "root", workerProfileId: "worker", altProfileId: "root",
-  agentTaskPolicy: { workflowIds: ["standard"], defaultWorkflowId: "standard", templateIds: [], rootProfileIds: ["root"], workerProfileIds: ["worker"], advisorProfileIds: { reviewer: [], planner_a: [], planner_b: [], rater: [] }, deliveryTarget: "pull_request_draft", runProjectTests: true, visualEvidence: "off" },
+  deliveryDefaults: { deliveryTarget: "pull_request_draft", runProjectTests: true, visualEvidence: "off" },
   providerPolicy: null, taskConcurrency: 1, repositorySettings: null, createdAt: "", updatedAt: "",
 };
 

@@ -1,6 +1,6 @@
 {
   "contract": "projects.ProjectBodySchema",
-  "case": "invalid_policy",
+  "case": "invalid_delivery_defaults",
   "input": {
     "name": "Project",
     "repositoryPath": "/tmp/project",
@@ -11,25 +11,16 @@
     "verificationCommand": "pnpm test",
     "rootProfileId": "root",
     "workerProfileId": "worker",
-    "agentTaskPolicy": {
-      "workflowIds": [
-        "workflow"
-      ],
-      "defaultWorkflowId": "",
-      "rootProfileIds": [
-        "root"
-      ],
-      "workerProfileIds": [
-        "worker"
-      ]
+    "deliveryDefaults": {
+      "deliveryTarget": "shipped"
     }
   },
   "expected": {
     "accepted": false,
     "error": [
       {
-        "code": "invalid-too_small",
-        "field": ".agentTaskPolicy.defaultWorkflowId",
+        "code": "invalid-invalid_value",
+        "field": ".deliveryDefaults.deliveryTarget",
         "message": "Request value is invalid"
       }
     ]

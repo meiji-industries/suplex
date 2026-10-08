@@ -1,7 +1,7 @@
 //! Project, profile, and provider request contracts (`projects.ts`,
 //! `providers.ts`, and the stored project schemas).
 
-use crate::tasks::control::DeliveryTarget;
+use crate::tasks::{control::DeliveryTarget, response::VisualEvidence};
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
@@ -18,7 +18,6 @@ pub use crate::profiles::agent_profiles::{
 };
 
 pub(crate) const HARNESSES: &[&str] = &["opencode", "claude-code", "devin", "codex"];
-const ADVISOR_ROLES: [&str; 4] = ["reviewer", "planner_a", "planner_b", "rater"];
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
@@ -106,35 +105,26 @@ pub struct ProjectExecution {
     #[serde(default)]
     pub mcp: Vec<McpServer>,
 }
-#[derive(Debug, Clone, Default, Serialize, Deserialize, TS)]
-#[serde(rename_all = "camelCase")]
-pub struct AdvisorProfilePolicy {
-    #[serde(default)]
-    pub reviewer: Vec<String>,
-    #[serde(default, rename = "planner_a")]
-    pub planner_a: Vec<String>,
-    #[serde(default, rename = "planner_b")]
-    pub planner_b: Vec<String>,
-    #[serde(default)]
-    pub rater: Vec<String>,
-}
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+/// The delivery settings an agent-created task takes when its request names none.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct ProjectAgentTaskPolicy {
-    pub workflow_ids: Vec<String>,
-    pub default_workflow_id: String,
-    #[serde(default)]
-    pub template_ids: Vec<String>,
-    pub root_profile_ids: Vec<String>,
-    pub worker_profile_ids: Vec<String>,
-    #[serde(default)]
-    pub advisor_profile_ids: AdvisorProfilePolicy,
+#[ts(export)]
+pub struct ProjectDeliveryDefaults {
     #[serde(default = "default_delivery_target")]
     pub delivery_target: DeliveryTarget,
     #[serde(default = "default_run_project_tests")]
     pub run_project_tests: bool,
     #[serde(default = "default_visual_evidence")]
-    pub visual_evidence: String,
+    pub visual_evidence: VisualEvidence,
+}
+impl Default for ProjectDeliveryDefaults {
+    fn default() -> Self {
+        Self {
+            delivery_target: default_delivery_target(),
+            run_project_tests: default_run_project_tests(),
+            visual_evidence: default_visual_evidence(),
+        }
+    }
 }
 fn default_delivery_target() -> DeliveryTarget {
     DeliveryTarget::PullRequestDraft
@@ -142,8 +132,8 @@ fn default_delivery_target() -> DeliveryTarget {
 fn default_run_project_tests() -> bool {
     true
 }
-fn default_visual_evidence() -> String {
-    "off".into()
+fn default_visual_evidence() -> VisualEvidence {
+    VisualEvidence::Off
 }
 pub use crate::projects::ProjectProviderPolicy;
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -183,7 +173,7 @@ pub struct LocalProjectCreate {
     pub root_profile_id: String,
     pub worker_profile_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub agent_task_policy: Option<ProjectAgentTaskPolicy>,
+    pub delivery_defaults: Option<ProjectDeliveryDefaults>,
     #[serde(
         default,
         deserialize_with = "super::present_nullable",
@@ -223,7 +213,7 @@ pub struct ProjectResponse {
     pub verification_command: String,
     pub root_profile_id: String,
     pub worker_profile_id: String,
-    pub agent_task_policy: ProjectAgentTaskPolicy,
+    pub delivery_defaults: ProjectDeliveryDefaults,
     pub provider_policy: Option<ProjectProviderPolicy>,
     /// The most tasks that run at one time; `None` means no limit.
     pub task_concurrency: Option<i64>,
@@ -248,7 +238,7 @@ pub struct ProjectPatch {
     pub verification_command: Option<String>,
     pub root_profile_id: Option<String>,
     pub worker_profile_id: Option<String>,
-    pub agent_task_policy: Option<ProjectAgentTaskPolicy>,
+    pub delivery_defaults: Option<ProjectDeliveryDefaults>,
     #[serde(default, deserialize_with = "super::present_nullable")]
     pub provider_policy: Option<Option<ProjectProviderPolicy>>,
     #[serde(default, deserialize_with = "super::present_nullable")]
@@ -516,32 +506,10 @@ impl Contract for ProjectExecution {
     }
 }
 
-fn profile_ids(min: usize) -> impl Fn(Option<&Value>) -> ContractResult<Value> + Copy {
-    list(text(1, 256), min, MAX)
-}
-
-/// `ProjectAgentTaskPolicySchema`.
-impl Contract for ProjectAgentTaskPolicy {
+/// `ProjectDeliveryDefaultsSchema`.
+impl Contract for ProjectDeliveryDefaults {
     fn schema(input: Option<&Value>) -> ContractResult<Value> {
-        let advisors = |input: Option<&Value>| {
-            ADVISOR_ROLES
-                .into_iter()
-                .fold(Fields::new(input)?, |fields, role| {
-                    fields.or(role, json!([]), profile_ids(0))
-                })
-                .finish()
-        };
         Fields::new(input)?
-            .req("workflowIds", profile_ids(1))
-            .req("defaultWorkflowId", text(1, 256))
-            .or("templateIds", json!([]), profile_ids(0))
-            .req("rootProfileIds", profile_ids(1))
-            .req("workerProfileIds", profile_ids(1))
-            .or(
-                "advisorProfileIds",
-                json!({"reviewer": [], "planner_a": [], "planner_b": [], "rater": []}),
-                advisors,
-            )
             .or(
                 "deliveryTarget",
                 json!("pull_request_draft"),
@@ -568,9 +536,6 @@ pub fn parse_integration(input: Option<&Value>) -> ContractResult<ProjectIntegra
 }
 pub fn parse_execution(input: Option<&Value>) -> ContractResult<ProjectExecution> {
     ProjectExecution::parse(input)
-}
-pub fn parse_agent_policy(input: Option<&Value>) -> ContractResult<ProjectAgentTaskPolicy> {
-    ProjectAgentTaskPolicy::parse(input)
 }
 pub fn parse_provider_policy(input: Option<&Value>) -> ContractResult<ProjectProviderPolicy> {
     ProjectProviderPolicy::parse(input)
@@ -601,7 +566,7 @@ fn project_fields(input: Option<&Value>, patch: bool) -> ContractResult<Fields<'
     }
     Ok(fields
         .opt("altProfileId", text(1, MAX))
-        .opt("agentTaskPolicy", nested::<ProjectAgentTaskPolicy>)
+        .opt("deliveryDefaults", nested::<ProjectDeliveryDefaults>)
         .opt("providerPolicy", nullable(nested::<ProjectProviderPolicy>)))
 }
 
@@ -879,7 +844,7 @@ mod tests {
             (serde_json::json!({"repositoryName":"x"}), "integration"),
             (local.clone(), "integration"),
             (local.clone(), "execution"),
-            (local, "agentTaskPolicy"),
+            (local, "deliveryDefaults"),
         ] {
             let mut input = base;
             input[field] = Value::Null;
@@ -912,7 +877,7 @@ mod tests {
 
     #[test]
     fn serde_dtos_project_all_accepted_project_request_fixtures() {
-        let contracts: [(&str, FixtureParser); 5] = [
+        let contracts: [(&str, FixtureParser); 4] = [
             ("projects.ProjectCreateBodySchema", |value| {
                 serde_json::from_value::<ProjectCreateBody>(value).and_then(serde_json::to_value)
             }),
@@ -921,10 +886,6 @@ mod tests {
             }),
             ("projects.ProjectExecutionSchema", |value| {
                 serde_json::from_value::<ProjectExecution>(value).and_then(serde_json::to_value)
-            }),
-            ("projects.ProjectAgentTaskPolicySchema", |value| {
-                serde_json::from_value::<ProjectAgentTaskPolicy>(value)
-                    .and_then(serde_json::to_value)
             }),
             ("projects.ProjectProviderPolicySchema", |value| {
                 serde_json::from_value::<ProjectProviderPolicy>(value)

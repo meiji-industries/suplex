@@ -1,0 +1,19 @@
+{
+  "contract": "projects.ProjectDeliveryDefaultsSchema",
+  "case": "first_field_null",
+  "input": {
+    "deliveryTarget": null,
+    "runProjectTests": false,
+    "visualEvidence": "capture"
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid-invalid_value",
+        "field": ".deliveryTarget",
+        "message": "Request value is invalid"
+      }
+    ]
+  }
+}

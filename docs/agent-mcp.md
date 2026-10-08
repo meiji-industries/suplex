@@ -25,7 +25,7 @@ Both the HTTP and stdio transports expose the same tools:
 
 | Tool | Purpose |
 | --- | --- |
-| `suplex_whoami` | Read the agent identity, projects, and task policy. |
+| `suplex_whoami` | Read the agent identity, projects, and project delivery defaults (`deliveryDefaults`; `agentTaskPolicy` is a deprecated alias). |
 | `suplex_capabilities` | Read autonomous and unavailable commands. |
 | `suplex_list_workflows` | List workflows for a granted project. |
 | `suplex_list_templates` | List templates for a granted project. |

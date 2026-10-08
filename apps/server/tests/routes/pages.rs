@@ -88,7 +88,7 @@ mod tests {
         state.with_database(|database| {
             let time = crate::shared::time::now_millis_rfc3339();
             database.connection().execute("INSERT INTO suplex_companies (id,name,status,created_at) VALUES ('company_today_root','Today company','active',?1)", [&time]).unwrap();
-            database.connection().execute("INSERT INTO suplex_projects (id,company_id,name,repository_path,worktree_root,repository_identity,base_branch,setup_command,verification_command,root_profile_id,worker_profile_id,agent_task_policy_json,created_at,updated_at) VALUES ('project_today_root','company_today_root','Today root','/tmp/today-root','/tmp/today-worktrees',NULL,'main','','','profile_native_root','profile_native_worker','{}',?1,?1)", [&time]).unwrap();
+            database.connection().execute("INSERT INTO suplex_projects (id,company_id,name,repository_path,worktree_root,repository_identity,base_branch,setup_command,verification_command,root_profile_id,worker_profile_id,created_at,updated_at) VALUES ('project_today_root','company_today_root','Today root','/tmp/today-root','/tmp/today-worktrees',NULL,'main','','','profile_native_root','profile_native_worker',?1,?1)", [&time]).unwrap();
         });
         let mut authenticated_root_headers = loopback.clone();
         authenticated_root_headers.insert(header::COOKIE, cookie.parse().unwrap());

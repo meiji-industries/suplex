@@ -1,0 +1,17 @@
+{
+  "contract": "projects.ProjectDeliveryDefaultsSchema",
+  "case": "wrong_type",
+  "input": {
+    "runProjectTests": "yes"
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid-invalid_type",
+        "field": ".runProjectTests",
+        "message": "Request value is invalid"
+      }
+    ]
+  }
+}

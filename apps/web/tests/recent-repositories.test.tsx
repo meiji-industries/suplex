@@ -48,7 +48,7 @@ test("load more appends distinct repositories and ends on the last page", async 
 test("an excluded-only page still offers more and a failure retries the same page", async () => {
   const project: ProjectResponse = {
     id: "project-1", companyId: "company-1", name: "Existing", repository: "acme/existing", repositoryPath: "/repo", worktreeRoot: "/worktrees", baseBranch: "main", setupCommand: "", verificationCommand: "", rootProfileId: "root", workerProfileId: "worker", altProfileId: "root",
-    agentTaskPolicy: { workflowIds: ["standard"], defaultWorkflowId: "standard", templateIds: [], rootProfileIds: ["root"], workerProfileIds: ["worker"], advisorProfileIds: { reviewer: [], planner_a: [], planner_b: [], rater: [] }, deliveryTarget: "pull_request_draft", runProjectTests: true, visualEvidence: "off" },
+    deliveryDefaults: { deliveryTarget: "pull_request_draft", runProjectTests: true, visualEvidence: "off" },
     repositorySettings: null, providerPolicy: null, taskConcurrency: null, createdAt: "", updatedAt: "",
   };
   projectApi.listRecentRepositories.mockResolvedValueOnce({ repositories: [repository("acme/existing")], nextPage: 2 })

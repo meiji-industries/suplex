@@ -197,7 +197,7 @@ mod host_tests {
             let user = auth::development_sign_in(&mut database, now).unwrap().user;
             let time = now.to_rfc3339();
             database.connection().execute("INSERT INTO suplex_companies (id,name,status,created_at) VALUES ('usage_company','Usage','active',?1)", [&time]).unwrap();
-            database.connection().execute("INSERT INTO suplex_projects (id,company_id,name,repository_path,worktree_root,repository_identity,base_branch,setup_command,verification_command,root_profile_id,worker_profile_id,agent_task_policy_json,created_at,updated_at) VALUES ('usage_project','usage_company','Project','/tmp/repo','/tmp/worktrees',NULL,'main','','','root_profile','worker_profile','{}',?1,?1)", [&time]).unwrap();
+            database.connection().execute("INSERT INTO suplex_projects (id,company_id,name,repository_path,worktree_root,repository_identity,base_branch,setup_command,verification_command,root_profile_id,worker_profile_id,created_at,updated_at) VALUES ('usage_project','usage_company','Project','/tmp/repo','/tmp/worktrees',NULL,'main','','','root_profile','worker_profile',?1,?1)", [&time]).unwrap();
             let prepared = PreparedTask {
                 id: repository::new_task_id(),
                 company_id: "usage_company".into(),
@@ -2016,7 +2016,7 @@ mod host_tests {
             let user = auth::development_sign_in(&mut database, now).unwrap().user;
             let time = now.to_rfc3339();
             database.connection().execute("INSERT INTO suplex_companies (id,name,status,created_at) VALUES ('host_company','Host','active',?1)", [&time]).unwrap();
-            database.connection().execute("INSERT INTO suplex_projects (id,company_id,name,repository_path,worktree_root,repository_identity,base_branch,setup_command,verification_command,root_profile_id,worker_profile_id,agent_task_policy_json,created_at,updated_at) VALUES ('host_project','host_company','Project',?1,?2,NULL,'main','','','root_profile','worker_profile','{}',?3,?3)", rusqlite::params![worktree.to_string_lossy(), base.to_string_lossy(), time]).unwrap();
+            database.connection().execute("INSERT INTO suplex_projects (id,company_id,name,repository_path,worktree_root,repository_identity,base_branch,setup_command,verification_command,root_profile_id,worker_profile_id,created_at,updated_at) VALUES ('host_project','host_company','Project',?1,?2,NULL,'main','','','root_profile','worker_profile',?3,?3)", rusqlite::params![worktree.to_string_lossy(), base.to_string_lossy(), time]).unwrap();
             let prepared = PreparedTask {
                 id: repository::new_task_id(),
                 company_id: "host_company".into(),

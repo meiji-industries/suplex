@@ -17,17 +17,10 @@
     "verificationCommand": "x",
     "rootProfileId": "x",
     "workerProfileId": "x",
-    "agentTaskPolicy": {
-      "workflowIds": [
-        "x"
-      ],
-      "defaultWorkflowId": "x",
-      "rootProfileIds": [
-        "x"
-      ],
-      "workerProfileIds": [
-        "x"
-      ]
+    "deliveryDefaults": {
+      "deliveryTarget": "remote_branch",
+      "runProjectTests": false,
+      "visualEvidence": "capture"
     },
     "providerPolicy": null
   },
@@ -49,27 +42,10 @@
       "verificationCommand": "x",
       "rootProfileId": "x",
       "workerProfileId": "x",
-      "agentTaskPolicy": {
-        "workflowIds": [
-          "x"
-        ],
-        "defaultWorkflowId": "x",
-        "templateIds": [],
-        "rootProfileIds": [
-          "x"
-        ],
-        "workerProfileIds": [
-          "x"
-        ],
-        "advisorProfileIds": {
-          "reviewer": [],
-          "planner_a": [],
-          "planner_b": [],
-          "rater": []
-        },
-        "deliveryTarget": "pull_request_draft",
-        "runProjectTests": true,
-        "visualEvidence": "off"
+      "deliveryDefaults": {
+        "deliveryTarget": "remote_branch",
+        "runProjectTests": false,
+        "visualEvidence": "capture"
       },
       "providerPolicy": null
     }

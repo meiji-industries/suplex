@@ -5,15 +5,17 @@ import type { ProjectIntegration } from "../../contracts/project-integration.js"
 import { isProfileAllowed } from "./lib/provider-policy.js";
 import type { ProjectProviderPolicy } from "../../contracts/provider-policy.js";
 import type { AgentProfile } from "../../contracts/profiles.js";
+import type { ProjectDeliveryDefaults } from "../../contracts/generated/ProjectDeliveryDefaults.js";
 import type { ProjectPatchBody } from "../../contracts/projects.js";
 import type { ApiProject } from "../../shell/view-shared.js";
 
-export type ProjectSection = "general" | "agents" | "execution" | "connections";
+export type ProjectSection = "general" | "agents" | "execution" | "delivery" | "connections";
 
 export const PROJECT_SECTIONS = [
   { id: "general", label: "General" },
   { id: "agents", label: "Agents" },
   { id: "execution", label: "Execution" },
+  { id: "delivery", label: "Delivery" },
   { id: "connections", label: "Connections" },
 ] as const satisfies ReadonlyArray<{ id: ProjectSection; label: string }>;
 
@@ -22,6 +24,7 @@ export type AgentsDraft = Pick<ApiProject, "rootProfileId" | "workerProfileId" |
 export type AgentsDraftFinding = { field: "rootProfileId" | "workerProfileId" | "altProfileId"; message: string };
 export type ExecutionDraft = Pick<ApiProject, "setupCommand" | "verificationCommand"> & Pick<ProjectExecution, "instructions"> & { skillDirectories: string; taskConcurrency: string };
 export type ExecutionDraftFinding = { field: "taskConcurrency"; message: string };
+export type DeliveryDraft = ProjectDeliveryDefaults;
 export type ConnectionsDraft = { integration: ProjectIntegration; environment: string; mcp: string };
 
 export function generalDraft(project: ApiProject): GeneralDraft {
@@ -40,6 +43,10 @@ export function executionDraft(project: ApiProject): ExecutionDraft {
     skillDirectories: project.execution?.skillDirectories.join("\n") ?? "",
     taskConcurrency: project.taskConcurrency?.toString() ?? "",
   };
+}
+
+export function deliveryDraft(project: ApiProject): DeliveryDraft {
+  return project.deliveryDefaults;
 }
 
 export function connectionsDraft(project: ApiProject): ConnectionsDraft {
@@ -96,6 +103,11 @@ export function executionProjectPatch(saved: ExecutionDraft, draft: ExecutionDra
     ...(Object.keys(execution).length > 0 ? { execution } : {}),
     ...(!repositoryProvides(settings, "task_concurrency") && draft.taskConcurrency.trim() !== saved.taskConcurrency ? { taskConcurrency: draft.taskConcurrency.trim() === "" ? null : Number(draft.taskConcurrency) } : {}),
   };
+}
+
+export function deliveryProjectPatch(saved: DeliveryDraft, draft: DeliveryDraft): ProjectPatchBody {
+  const changed = draft.deliveryTarget !== saved.deliveryTarget || draft.runProjectTests !== saved.runProjectTests || draft.visualEvidence !== saved.visualEvidence;
+  return changed ? { deliveryDefaults: { ...draft } } : {};
 }
 
 export function executionDraftFindings(draft: ExecutionDraft): ExecutionDraftFinding[] {

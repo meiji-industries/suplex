@@ -1,0 +1,20 @@
+{
+  "contract": "projects.ProjectDeliveryDefaultsSchema",
+  "case": "unknown_field",
+  "input": {
+    "deliveryTarget": "local_worktree",
+    "workflowIds": [
+      "workflow_native_standard"
+    ]
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid-unrecognized_keys",
+        "field": ".",
+        "message": "Request value is invalid"
+      }
+    ]
+  }
+}

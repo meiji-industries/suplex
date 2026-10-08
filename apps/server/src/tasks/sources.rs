@@ -754,11 +754,7 @@ mod tests {
             root_profile_id: "root".into(),
             worker_profile_id: "worker".into(),
             alt_profile_id: "alt".into(),
-            agent_task_policy: serde_json::from_value(json!({
-                "workflowIds": ["standard"], "defaultWorkflowId": "standard",
-                "rootProfileIds": ["root"], "workerProfileIds": ["worker"]
-            }))
-            .unwrap(),
+            delivery_defaults: Default::default(),
             provider_policy: None,
             task_concurrency: None,
             created_at: "2026-09-26T00:00:00Z".into(),

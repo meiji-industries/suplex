@@ -1,0 +1,17 @@
+{
+  "contract": "projects.ProjectPatchBodySchema",
+  "case": "delivery_defaults",
+  "input": {
+    "deliveryDefaults": {}
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "deliveryDefaults": {
+        "deliveryTarget": "pull_request_draft",
+        "runProjectTests": true,
+        "visualEvidence": "off"
+      }
+    }
+  }
+}

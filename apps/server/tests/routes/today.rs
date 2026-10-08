@@ -33,7 +33,7 @@ mod tests {
             let connection = database.connection();
             for index in 1..=3 {
                 connection.execute("INSERT INTO suplex_companies (id,name,status,created_at) VALUES (?1,?2,'active',?3)", rusqlite::params![format!("today_c{index}"), format!("Client {index}"), prior]).unwrap();
-                connection.execute("INSERT INTO suplex_projects (id,company_id,name,repository_path,worktree_root,repository_identity,base_branch,setup_command,verification_command,root_profile_id,worker_profile_id,agent_task_policy_json,created_at,updated_at) VALUES (?1,?2,?3,?4,?5,NULL,'main','','','root','worker','{}',?6,?6)", rusqlite::params![format!("today_p{index}"), format!("today_c{index}"), format!("Project {index}"), format!("/tmp/today-r{index}"), format!("/tmp/today-w{index}"), prior]).unwrap();
+                connection.execute("INSERT INTO suplex_projects (id,company_id,name,repository_path,worktree_root,repository_identity,base_branch,setup_command,verification_command,root_profile_id,worker_profile_id,created_at,updated_at) VALUES (?1,?2,?3,?4,?5,NULL,'main','','','root','worker',?6,?6)", rusqlite::params![format!("today_p{index}"), format!("today_c{index}"), format!("Project {index}"), format!("/tmp/today-r{index}"), format!("/tmp/today-w{index}"), prior]).unwrap();
             }
             connection.execute("INSERT INTO suplex_users (id,display_name,username,role,status,created_at,updated_at,identity_version) VALUES ('today_member','Today member','today-member','member','active',?1,?1,1)", [&prior]).unwrap();
             for company in ["today_c1", "today_c2"] {

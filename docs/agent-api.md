@@ -40,22 +40,25 @@ and receipts or losing replay protection during this rename.
 ## Discovery
 
 `GET /api/agent/me` returns the authenticated agent identity, actual supported
-capabilities, and `{ id, name, agentTaskPolicy }` metadata for currently granted
-projects. `agentTaskPolicy` reports the project's delivery defaults:
-`deliveryTargets` (the default delivery target), `runProjectTests`, and
-`visualEvidence`. A task that names none of these takes them.
+capabilities, and `{ id, name, deliveryDefaults, agentTaskPolicy }` metadata for
+currently granted projects. `deliveryDefaults` reports the project delivery
+defaults: `deliveryTargets` (the default delivery target), `runProjectTests`, and
+`visualEvidence`. A task that does not name one of these values takes the
+project default. People edit the defaults in the project settings, so read them
+again before each task. `agentTaskPolicy` is a deprecated alias with the same
+shape. It remains for one release; read `deliveryDefaults` instead.
 
 `GET /api/agent/capabilities` reports the deployment-wide surface. Its
 `capabilities.create.deliveryTargets` is the full set of delivery targets the
-route accepts; each project narrows that to the single value its policy fixes.
+route accepts; each project reports its single default in `deliveryDefaults`.
 Its `capabilities.read.workflows` and `capabilities.read.templates` flags
 advertise project-scoped creation discovery.
 
 `GET /api/agent/workflows?projectId=...` lists every non-archived workflow
 with `id`, `name`, `description`, and `permittedForAgentTaskCreation`. `GET
 /api/agent/templates?projectId=...` returns the same fields for templates in
-that project. Both routes require a current project grant. The permission flag
-comes from the project's agent task policy.
+that project. Both routes require a current project grant. Every listed
+workflow and template is permitted, so the permission flag is always `true`.
 
 `GET /api/agent/tasks` returns every task in the caller's currently granted
 projects. It accepts these query

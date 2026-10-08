@@ -14,20 +14,7 @@ import { DeliveryTargetSchema, VisualEvidenceSchema } from "./tasks.js";
 
 import { ProjectProviderPolicySchema } from "./provider-policy.js";
 
-const profileId = z.string().min(1).max(256);
-
-export const ProjectAgentTaskPolicySchema = z.object({
-  workflowIds: z.array(profileId).min(1),
-  defaultWorkflowId: profileId,
-  templateIds: z.array(profileId).default([]),
-  rootProfileIds: z.array(profileId).min(1),
-  workerProfileIds: z.array(profileId).min(1),
-  advisorProfileIds: z.object({
-    reviewer: z.array(profileId).default([]),
-    planner_a: z.array(profileId).default([]),
-    planner_b: z.array(profileId).default([]),
-    rater: z.array(profileId).default([]),
-  }).default({ reviewer: [], planner_a: [], planner_b: [], rater: [] }),
+export const ProjectDeliveryDefaultsSchema = z.object({
   deliveryTarget: DeliveryTargetSchema.default("pull_request_draft"),
   runProjectTests: z.boolean().default(true),
   visualEvidence: VisualEvidenceSchema.default("off"),
@@ -46,7 +33,7 @@ export const ProjectBodySchema = z.object({
   rootProfileId: z.string().min(1),
   workerProfileId: z.string().min(1),
   altProfileId: z.string().min(1).optional(),
-  agentTaskPolicy: ProjectAgentTaskPolicySchema.optional(),
+  deliveryDefaults: ProjectDeliveryDefaultsSchema.optional(),
   providerPolicy: ProjectProviderPolicySchema.nullable().optional(),
 }).strict();
 

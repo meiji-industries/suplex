@@ -1,7 +1,7 @@
 import { expect, test } from "vitest";
 
 import type { ApiProfile } from "../shell/view-shared.js";
-import { agentsDraftFindings, agentsProjectPatch, executionDraftFindings, executionProjectPatch, repositoryProvides, generalProjectPatch, type AgentsDraft, type ExecutionDraft } from "../features/projects/project-details-model.js";
+import { agentsDraftFindings, agentsProjectPatch, executionDraftFindings, deliveryProjectPatch, executionProjectPatch, repositoryProvides, generalProjectPatch, type AgentsDraft, type ExecutionDraft } from "../features/projects/project-details-model.js";
 import type { ProjectProviderPolicy } from "../contracts/provider-policy.js";
 
 const profiles: ApiProfile[] = [
@@ -20,6 +20,15 @@ test("General saves send only edited project fields", () => {
   expect(generalProjectPatch(saved, { ...saved, repositoryPath: "/repos/moved" })).toEqual({ repositoryPath: "/repos/moved" });
   expect(generalProjectPatch(saved, { ...saved, repository: "acme/renamed" })).toEqual({ repository: "acme/renamed" });
   expect(generalProjectPatch(saved, saved)).toEqual({});
+});
+
+test("Delivery saves send all three project delivery defaults only after an edit", () => {
+  const saved = { deliveryTarget: "pull_request_draft", runProjectTests: true, visualEvidence: "off" } as const;
+
+  expect(deliveryProjectPatch(saved, saved)).toEqual({});
+  expect(deliveryProjectPatch(saved, { ...saved, deliveryTarget: "merged" })).toEqual({ deliveryDefaults: { deliveryTarget: "merged", runProjectTests: true, visualEvidence: "off" } });
+  expect(deliveryProjectPatch(saved, { ...saved, runProjectTests: false })).toEqual({ deliveryDefaults: { deliveryTarget: "pull_request_draft", runProjectTests: false, visualEvidence: "off" } });
+  expect(deliveryProjectPatch(saved, { ...saved, visualEvidence: "capture" })).toEqual({ deliveryDefaults: { deliveryTarget: "pull_request_draft", runProjectTests: true, visualEvidence: "capture" } });
 });
 
 test("Agents allow a system login when its provider row is checked", () => {

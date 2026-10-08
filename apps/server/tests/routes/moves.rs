@@ -13,7 +13,7 @@ mod tests {
                 crate::identity::companies::create_company(database, &admin.user.id, "Moves", now)
                     .unwrap();
             database.connection().execute(
-                "INSERT INTO suplex_projects (id, company_id, name, repository_path, worktree_root, repository_identity, base_branch, setup_command, verification_command, root_profile_id, worker_profile_id, agent_task_policy_json, created_at, updated_at) VALUES ('project_moves', ?1, 'Moves', '/tmp/suplex-moves-missing', '/tmp/suplex-moves-missing-worktrees', 'owner/repo', 'main', '', '', 'profile_native_root', 'profile_native_worker', '{}', ?2, ?2)",
+                "INSERT INTO suplex_projects (id, company_id, name, repository_path, worktree_root, repository_identity, base_branch, setup_command, verification_command, root_profile_id, worker_profile_id, created_at, updated_at) VALUES ('project_moves', ?1, 'Moves', '/tmp/suplex-moves-missing', '/tmp/suplex-moves-missing-worktrees', 'owner/repo', 'main', '', '', 'profile_native_root', 'profile_native_worker', ?2, ?2)",
                 rusqlite::params![company.id, now.to_rfc3339()],
             ).unwrap();
             (admin, company.id)
@@ -234,12 +234,11 @@ mod tests {
                 crate::identity::companies::create_company(database, &admin.user.id, "Task moves", now)
                     .unwrap();
             database.connection().execute(
-                "INSERT INTO suplex_projects (id, company_id, name, repository_path, worktree_root, repository_identity, base_branch, setup_command, verification_command, root_profile_id, worker_profile_id, agent_task_policy_json, created_at, updated_at) VALUES ('project_task_moves', ?1, 'Task moves', ?2, ?3, 'acme/demo', 'main', '', 'make test', 'profile_native_root', 'profile_native_worker', ?4, ?5, ?5)",
+                "INSERT INTO suplex_projects (id, company_id, name, repository_path, worktree_root, repository_identity, base_branch, setup_command, verification_command, root_profile_id, worker_profile_id, created_at, updated_at) VALUES ('project_task_moves', ?1, 'Task moves', ?2, ?3, 'acme/demo', 'main', '', 'make test', 'profile_native_root', 'profile_native_worker', ?4, ?4)",
                 rusqlite::params![
                     company.id,
                     local.to_str().unwrap(),
                     root.join("worktrees").to_str().unwrap(),
-                    json!({"workflowIds":["standard","direct_build"],"defaultWorkflowId":"standard","rootProfileIds":["profile_native_root"],"workerProfileIds":["profile_native_worker"]}).to_string(),
                     now.to_rfc3339(),
                 ],
             ).unwrap();

@@ -141,7 +141,7 @@ pub(crate) mod tests {
         })
     }
 
-    /// The agent API fixture: a project on a real repository with a local-worktree agent policy.
+    /// The agent API fixture: a project on a real repository that delivers to a local worktree by default.
     pub(crate) async fn agent() -> Agent {
         agent_with(None).await
     }
@@ -150,16 +150,17 @@ pub(crate) mod tests {
         let root = std::env::temp_dir().join(format!("suplex-agent-api-{}", uuid::Uuid::new_v4()));
         let local = repository(&root);
         let (state, path) = route_auth::tests::state();
-        let mut state = state.with_artifact_root(root.join("artifacts"));
+        let mut state = state
+            .with_artifact_root(root.join("artifacts"))
+            .with_project_roots(root.join("repositories"), root.join("worktrees"));
         if let Some(host) = host {
             state = state.with_task_host(host);
         }
         let server = server(Some((state, path))).await;
-        let policy = json!({"workflowIds": ["workflow_native_standard"], "defaultWorkflowId": "workflow_native_standard", "rootProfileIds": ["profile_native_root"], "workerProfileIds": ["profile_native_worker"], "deliveryTarget": "local_worktree"});
         server.state.with_database(|database| {
             database.connection().execute(
-                "UPDATE suplex_projects SET root_profile_id = 'profile_native_root', worker_profile_id = 'profile_native_worker', agent_task_policy_json = ?1 WHERE id IN ('project_api', 'project_api_2')",
-                params![policy.to_string()],
+                "UPDATE suplex_projects SET root_profile_id = 'profile_native_root', worker_profile_id = 'profile_native_worker', delivery_target = 'local_worktree' WHERE id IN ('project_api', 'project_api_2')",
+                [],
             ).unwrap();
             database.connection().execute(
                 "UPDATE suplex_projects SET repository_path = ?1, worktree_root = ?2, repository_identity = 'acme/demo' WHERE id = 'project_api'",
@@ -448,7 +449,7 @@ pub(crate) mod tests {
         );
         assert_eq!(
             identity["projects"],
-            json!([{"id": "project_api", "name": "API Project", "agentTaskPolicy": {"deliveryTargets": ["local_worktree"], "runProjectTests": true, "visualEvidence": "off"}}])
+            json!([{"id": "project_api", "name": "API Project", "deliveryDefaults": {"deliveryTargets": ["local_worktree"], "runProjectTests": true, "visualEvidence": "off"}, "agentTaskPolicy": {"deliveryTargets": ["local_worktree"], "runProjectTests": true, "visualEvidence": "off"}}])
         );
         assert_eq!(
             identity["capabilities"]["taskCommands"]
@@ -575,7 +576,7 @@ pub(crate) mod tests {
             database.connection().execute("INSERT INTO suplex_external_agent_project_grants (agent_id, company_id, project_id, created_at) VALUES (?1, 'company_api', 'project_api', ?2)", params![agent.agent_id, Utc::now().to_rfc3339()]).unwrap();
             let now = Utc::now().to_rfc3339();
             database.connection().execute("INSERT INTO suplex_companies (id, name, status, created_at) VALUES ('company_other_move', 'Other move company', 'active', ?1)", [&now]).unwrap();
-            database.connection().execute("INSERT INTO suplex_projects (id, company_id, name, repository_path, worktree_root, repository_identity, base_branch, setup_command, verification_command, root_profile_id, worker_profile_id, agent_task_policy_json, created_at, updated_at) VALUES ('project_other_move', 'company_other_move', 'Other', '/tmp/missing', '/tmp/missing-worktrees', 'other/repo', 'main', '', '', 'profile_native_root', 'profile_native_worker', '{}', ?1, ?1)", [&now]).unwrap();
+            database.connection().execute("INSERT INTO suplex_projects (id, company_id, name, repository_path, worktree_root, repository_identity, base_branch, setup_command, verification_command, root_profile_id, worker_profile_id, created_at, updated_at) VALUES ('project_other_move', 'company_other_move', 'Other', '/tmp/missing', '/tmp/missing-worktrees', 'other/repo', 'main', '', '', 'profile_native_root', 'profile_native_worker', ?1, ?1)", [&now]).unwrap();
             database.connection().execute("INSERT INTO suplex_moves (id, company_id, project_id, name, prompt, runner, confirm, workflow, delivery_target, run_project_tests, visual_evidence, created_at, updated_at) VALUES ('move_other', 'company_other_move', 'project_other_move', 'Other move', 'Other', 'task', 0, 'standard', 'local_worktree', 1, 'off', ?1, ?1)", [&now]).unwrap();
             database.connection().execute("INSERT INTO suplex_move_runs (id, move_id, company_id, project_id, move_name, runner, prompt, inputs_json, excluded_pull_requests_json, outcomes_json, started_at, idempotency_key) VALUES ('run_other', 'move_other', 'company_other_move', 'project_other_move', 'Other move', 'task', 'Other', '{}', '[]', '[]', ?1, 'other-run')", [&now]).unwrap();
         });
@@ -1217,10 +1218,6 @@ pub(crate) mod tests {
         let agent = agent().await;
         let template = uuid::Uuid::new_v4().to_string();
         agent.server.state.with_database(|database| {
-            database.connection().execute(
-                "UPDATE suplex_projects SET agent_task_policy_json = json_set(agent_task_policy_json, '$.defaultWorkflowId', 'workflow_native_direct_build') WHERE id = 'project_api'",
-                [],
-            ).unwrap();
             let now = chrono::Utc::now().to_rfc3339();
             database.connection().execute("INSERT INTO suplex_task_templates (id, project_id, name, configuration_json, created_at, updated_at) VALUES (?1, 'project_api', 'Build', ?2, ?3, ?3)", params![template, json!({"name":"Build", "workflow":"direct_build", "advisorProfileIds":{}}).to_string(), now]).unwrap();
         });
@@ -1247,17 +1244,57 @@ pub(crate) mod tests {
         );
     }
 
+    /// A task that names no delivery settings takes the project delivery
+    /// defaults; a project PATCH changes them for the next task and identity.
+    #[tokio::test]
+    async fn project_delivery_defaults_apply_to_the_next_agent_task_and_identity() {
+        let agent = agent().await;
+        let (status, task) = agent.call(reqwest::Method::POST, "/api/agent/tasks", Some(json!({"projectId":"project_api", "title":"Before", "idempotencyKey":"delivery-defaults-001"}))).await;
+        assert_eq!(
+            (status, task["deliveryTarget"].as_str(), task["runProjectTests"].as_bool(), task["visualEvidence"].as_str()),
+            (201, Some("local_worktree"), Some(true), Some("off")),
+            "{task}"
+        );
+        let (status, project) = agent
+            .server
+            .send(
+                reqwest::Method::PATCH,
+                "/api/projects/project_api",
+                Some(&agent.server.admin_cookie),
+                Some(json!({"deliveryDefaults": {"deliveryTarget": "remote_branch", "runProjectTests": false, "visualEvidence": "capture"}})),
+            )
+            .await;
+        assert_eq!(status, 200, "{project}");
+        assert_eq!(
+            project["deliveryDefaults"],
+            json!({"deliveryTarget": "remote_branch", "runProjectTests": false, "visualEvidence": "capture"})
+        );
+        let (status, task) = agent.call(reqwest::Method::POST, "/api/agent/tasks", Some(json!({"projectId":"project_api", "title":"After", "idempotencyKey":"delivery-defaults-002"}))).await;
+        assert_eq!(
+            (status, task["deliveryTarget"].as_str(), task["runProjectTests"].as_bool(), task["visualEvidence"].as_str()),
+            (201, Some("remote_branch"), Some(false), Some("capture")),
+            "{task}"
+        );
+        let (status, task) = agent.call(reqwest::Method::POST, "/api/agent/tasks", Some(json!({"projectId":"project_api", "title":"Named", "idempotencyKey":"delivery-defaults-003", "deliveryTarget":"local_worktree", "runProjectTests": true, "visualEvidence": "off"}))).await;
+        assert_eq!(
+            (status, task["deliveryTarget"].as_str(), task["runProjectTests"].as_bool(), task["visualEvidence"].as_str()),
+            (201, Some("local_worktree"), Some(true), Some("off")),
+            "named delivery settings stand: {task}"
+        );
+        let (status, identity) = agent
+            .call(reqwest::Method::GET, "/api/agent/me", None)
+            .await;
+        assert_eq!(status, 200);
+        let expected = json!({"deliveryTargets": ["remote_branch"], "runProjectTests": false, "visualEvidence": "capture"});
+        assert_eq!(identity["projects"][0]["deliveryDefaults"], expected);
+        assert_eq!(identity["projects"][0]["agentTaskPolicy"], expected);
+    }
+
     /// An unnamed role uses its workflow or project default; a named profile
     /// must exist with the role it fills.
     #[tokio::test]
     async fn profiles_follow_defaults_or_an_existing_named_profile() {
         let agent = agent().await;
-        agent.server.state.with_database(|database| {
-            database.connection().execute(
-                "UPDATE suplex_projects SET agent_task_policy_json = json_set(agent_task_policy_json, '$.workflowIds', json('[\"workflow_native_standard\",\"workflow_native_independent_review\"]'), '$.workerProfileIds', json('[\"profile_elsewhere\"]')) WHERE id = 'project_api'",
-                [],
-            ).unwrap();
-        });
         let (status, task) = agent
             .call(reqwest::Method::POST, "/api/agent/tasks", Some(json!({"projectId":"project_api", "title":"Named agents", "idempotencyKey":"named-agents-001", "rootProfileId":"profile_native_independent", "workerProfileId":"profile_native_worker"})))
             .await;
@@ -1570,10 +1607,8 @@ pub(crate) mod tests {
         let agent = agent().await;
         let template = "agent_description_template";
         let now = Utc::now().to_rfc3339();
-        let policy = json!({"workflowIds":["workflow_native_standard"], "defaultWorkflowId":"workflow_native_standard", "templateIds":[template], "rootProfileIds":["profile_native_root"], "workerProfileIds":["profile_native_worker"], "deliveryTarget":"local_worktree"});
         agent.server.state.with_database(|database| {
             database.connection().execute("INSERT INTO suplex_task_templates (id, project_id, name, configuration_json, created_at, updated_at) VALUES (?1, 'project_api', 'Description', ?2, ?3, ?3)", rusqlite::params![template, json!({"name":"Description", "description":"Template brief", "workflow":"standard", "advisorProfileIds":{}}).to_string(), now]).unwrap();
-            database.connection().execute("UPDATE suplex_projects SET agent_task_policy_json = ?1 WHERE id = 'project_api'", [policy.to_string()]).unwrap();
         });
         let create = |title: &str, key: &str, description: Option<&str>| {
             let mut body = json!({"projectId":"project_api", "title":title, "idempotencyKey":key, "templateId":template});

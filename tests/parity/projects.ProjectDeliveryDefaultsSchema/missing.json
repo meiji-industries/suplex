@@ -1,5 +1,5 @@
 {
-  "contract": "projects.ProjectAgentTaskPolicySchema",
+  "contract": "projects.ProjectDeliveryDefaultsSchema",
   "case": "missing",
   "expected": {
     "accepted": false,

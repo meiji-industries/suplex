@@ -70,8 +70,8 @@ references keep integration token values out of saved task configuration, but
 do not establish host-level secret isolation. Provider sign-in also does not
 prove subscription entitlement or successful model inference.
 
-The paired-agent task policy is another boundary: it controls what an external
-caller can request when creating work. It does not confer the human operator's
+The paired-agent project grant is another boundary: it controls where an
+external caller can create work. It does not confer the human operator's
 permissions or create a universal fence around manual repository actions.
 See [external agent authorization](agent-api.md).
 

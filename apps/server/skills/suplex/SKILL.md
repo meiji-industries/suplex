@@ -125,9 +125,10 @@ you need the exact request shapes.
 ## Project selection
 
 `suplex_whoami` (`GET /api/agent/me`) returns the agent identity and the
-`projects` this agent was granted, each with its `agentTaskPolicy`
-(`deliveryTargets`, `runProjectTests`, `visualEvidence`), the delivery
-defaults a task takes when it names no other values. Suplex's persisted grants are authoritative:
+`projects` this agent was granted, each with its project delivery defaults in
+`deliveryDefaults` (`deliveryTargets`, `runProjectTests`, `visualEvidence`). A
+task takes these values when it names no other values. `agentTaskPolicy` is a
+deprecated alias with the same shape; read `deliveryDefaults`. Suplex's persisted grants are authoritative:
 
 - One granted project: use it.
 - Several: ask the person you work for which one. Do not guess.

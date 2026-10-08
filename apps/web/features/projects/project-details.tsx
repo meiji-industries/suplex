@@ -20,6 +20,9 @@ import type { ApiProfile, ApiProject } from "../../shell/view-shared.js";
 import { ProjectRepositoryConnection } from "./project-repository-connection.js";
 import { ProjectConnections } from "./project-connections.js";
 import { ProjectDetailsLayout } from "./project-details-layout.js";
+import { updateProject } from "./lib/project-api.js";
+import { taskDeliveryTargetOptions } from "../tasks/task-delivery-target.js";
+import { DeliveryTargetSchema, VisualEvidenceSchema } from "../../contracts/tasks.js";
 import { SettingRow, SettingsContent, SettingsSection } from "../settings/settings-layout.js";
 import { LoadingState } from "../../components/app/loading-state.js";
 import {
@@ -27,6 +30,8 @@ import {
   agentsDraftFindings,
   agentsProjectPatch,
   connectionsDraft,
+  deliveryDraft,
+  deliveryProjectPatch,
   executionDraft,
   executionDraftFindings,
   executionProjectPatch,
@@ -36,6 +41,7 @@ import {
   isProjectSection,
   type AgentsDraft,
   type ConnectionsDraft,
+  type DeliveryDraft,
   type ExecutionDraft,
   type GeneralDraft,
   type ProjectSection,
@@ -46,6 +52,7 @@ type SaveStatus = { kind: "idle" } | { kind: "saving" } | { kind: "saved" } | { 
 type DraftState<Draft> = { saved: Draft; draft: Draft; status: SaveStatus };
 
 const idle = { kind: "idle" } as const;
+const visualEvidenceLabels = { off: "Off", capture: "Capture", required: "Necessary" } as const;
 const same = (left: unknown, right: unknown): boolean => JSON.stringify(left) === JSON.stringify(right);
 const fieldFindings = (status: SaveStatus, ...fields: string[]): Finding[] => status.kind === "failed" ? status.findings.filter((finding) => fields.some((field) => finding.field === field || finding.field.startsWith(`${field}.`))) : [];
 const sectionError = (status: SaveStatus): string => status.kind === "failed" ? status.message : "";
@@ -86,9 +93,10 @@ export function ProjectDetails({ projectId }: { projectId: string }): ReactEleme
   const [general, setGeneral] = useState<DraftState<GeneralDraft>>();
   const [agentSettings, setAgentSettings] = useState<DraftState<AgentsDraft>>();
   const [execution, setExecution] = useState<DraftState<ExecutionDraft>>();
+  const [delivery, setDelivery] = useState<DraftState<DeliveryDraft>>();
   const [connections, setConnections] = useState<DraftState<ConnectionsDraft>>();
   const loadToken = useRef(0);
-  const saveTokens = useRef<Record<ProjectSection, number>>({ general: 0, agents: 0, execution: 0, connections: 0 });
+  const saveTokens = useRef<Record<ProjectSection, number>>({ general: 0, agents: 0, execution: 0, delivery: 0, connections: 0 });
 
   const loadProfiles = useCallback(async (generation: number): Promise<void> => {
     setProfilesLoading(true);
@@ -120,7 +128,7 @@ export function ProjectDetails({ projectId }: { projectId: string }): ReactEleme
     const token = ++loadToken.current;
     const invalidate = (): void => {
       if (loadToken.current === token) loadToken.current++;
-      saveTokens.current = { general: saveTokens.current.general + 1, agents: saveTokens.current.agents + 1, execution: saveTokens.current.execution + 1, connections: saveTokens.current.connections + 1 };
+      saveTokens.current = { general: saveTokens.current.general + 1, agents: saveTokens.current.agents + 1, execution: saveTokens.current.execution + 1, delivery: saveTokens.current.delivery + 1, connections: saveTokens.current.connections + 1 };
     };
     setProject(undefined);
     setAgents([]);
@@ -142,6 +150,7 @@ export function ProjectDetails({ projectId }: { projectId: string }): ReactEleme
       setGeneral(draftState(generalDraft(result)));
       setAgentSettings(draftState(agentsDraft(result)));
       setExecution(draftState(executionDraft(result)));
+      setDelivery(draftState(deliveryDraft(result)));
       setConnections(draftState(connectionsDraft(result)));
     }).catch(async (reason) => {
       if (token !== loadToken.current) return;
@@ -158,7 +167,7 @@ export function ProjectDetails({ projectId }: { projectId: string }): ReactEleme
     window.history.replaceState({}, "", `${url.pathname}${url.search}${url.hash}`);
   }, []);
 
-  const patch = async (body: ProjectPatchBody): Promise<ApiProject> => readJsonUnchecked<ApiProject>(`/api/projects/${encodeURIComponent(projectId)}`, { method: "PATCH", body: JSON.stringify(body) });
+  const patch = (body: ProjectPatchBody): Promise<ApiProject> => updateProject(projectId, body);
 
   const saveGeneral = async (): Promise<void> => {
     if (!general) return;
@@ -200,7 +209,7 @@ export function ProjectDetails({ projectId }: { projectId: string }): ReactEleme
       const result = await patch(body);
       if (token !== saveTokens.current.agents || generation !== loadToken.current) return;
       const saved = agentsDraft(result);
-      setProject((current) => current ? { ...current, rootProfileId: result.rootProfileId, workerProfileId: result.workerProfileId, altProfileId: result.altProfileId, providerPolicy: result.providerPolicy, agentTaskPolicy: result.agentTaskPolicy, updatedAt: result.updatedAt } : current);
+      setProject((current) => current ? { ...current, rootProfileId: result.rootProfileId, workerProfileId: result.workerProfileId, altProfileId: result.altProfileId, providerPolicy: result.providerPolicy, updatedAt: result.updatedAt } : current);
       setAgentSettings((current) => current ? { saved, draft: same(current.draft, submitted) ? saved : current.draft, status: same(current.draft, submitted) ? { kind: "saved" } : idle } : current);
     } catch (reason) {
       if (token === saveTokens.current.agents && generation === loadToken.current) setAgentSettings((current) => current ? { ...current, status: saveFailure(reason, "Unable to save Agents") } : current);
@@ -227,6 +236,24 @@ export function ProjectDetails({ projectId }: { projectId: string }): ReactEleme
       setExecution((current) => current ? { saved, draft: same(current.draft, submitted) ? saved : current.draft, status: same(current.draft, submitted) ? { kind: "saved" } : idle } : current);
     } catch (reason) {
       if (token === saveTokens.current.execution && generation === loadToken.current) setExecution((current) => current ? { ...current, status: saveFailure(reason, "Unable to save Execution") } : current);
+    }
+  };
+
+  const saveDelivery = async (): Promise<void> => {
+    if (!delivery) return;
+    const submitted = delivery.draft;
+    const body = deliveryProjectPatch(delivery.saved, submitted);
+    const token = ++saveTokens.current.delivery;
+    const generation = loadToken.current;
+    setDelivery((current) => current ? { ...current, status: { kind: "saving" } } : current);
+    try {
+      const result = await patch(body);
+      if (token !== saveTokens.current.delivery || generation !== loadToken.current) return;
+      const saved = deliveryDraft(result);
+      setProject((current) => current ? { ...current, deliveryDefaults: result.deliveryDefaults, updatedAt: result.updatedAt } : current);
+      setDelivery((current) => current ? { saved, draft: same(current.draft, submitted) ? saved : current.draft, status: same(current.draft, submitted) ? { kind: "saved" } : idle } : current);
+    } catch (reason) {
+      if (token === saveTokens.current.delivery && generation === loadToken.current) setDelivery((current) => current ? { ...current, status: saveFailure(reason, "Unable to save Delivery") } : current);
     }
   };
 
@@ -274,17 +301,19 @@ export function ProjectDetails({ projectId }: { projectId: string }): ReactEleme
   };
 
   if (loading || companyLoading) return <ProjectDetailsLayout projectId={projectId} companyId={companyId} title="Project details" active={section} onSectionChange={selectSection}><LoadingState /></ProjectDetailsLayout>;
-  if (loadError || !project || !general || !agentSettings || !execution || !connections) return <ProjectDetailsLayout projectId={projectId} companyId={companyId} title="Project details" active={section} onSectionChange={selectSection}><SettingsContent><Alert variant="destructive"><AlertDescription>{loadError || "Project not found"}</AlertDescription></Alert></SettingsContent></ProjectDetailsLayout>;
+  if (loadError || !project || !general || !agentSettings || !execution || !delivery || !connections) return <ProjectDetailsLayout projectId={projectId} companyId={companyId} title="Project details" active={section} onSectionChange={selectSection}><SettingsContent><Alert variant="destructive"><AlertDescription>{loadError || "Project not found"}</AlertDescription></Alert></SettingsContent></ProjectDetailsLayout>;
 
   const credentialLabel = (agent: ApiProfile): string => agent.providerInstanceId ? providerInstances.find((instance) => instance.id === agent.providerInstanceId)?.label ?? "Dedicated login" : `${agent.provider} system login`;
   const generalDirty = Object.keys(generalProjectPatch(general.saved, general.draft)).length > 0;
   const agentsDirty = Object.keys(agentsProjectPatch(agentSettings.saved, agentSettings.draft)).length > 0;
   const agentFindings = agentsDraftFindings(agentSettings.draft, agents);
   const executionDirty = Object.keys(executionProjectPatch(execution.saved, execution.draft, project.repositorySettings)).length > 0;
+  const deliveryDirty = Object.keys(deliveryProjectPatch(delivery.saved, delivery.draft)).length > 0;
   const connectionsDirty = !same(connections.saved, connections.draft);
   const updateGeneral = <Key extends keyof GeneralDraft>(key: Key, value: GeneralDraft[Key]): void => setGeneral((current) => current ? { ...current, draft: { ...current.draft, [key]: value }, status: current.status.kind === "saving" ? current.status : idle } : current);
   const updateAgents = <Key extends keyof AgentsDraft>(key: Key, value: AgentsDraft[Key]): void => setAgentSettings((current) => current ? { ...current, draft: { ...current.draft, [key]: value }, status: current.status.kind === "saving" ? current.status : idle } : current);
   const updateExecution = <Key extends keyof ExecutionDraft>(key: Key, value: ExecutionDraft[Key]): void => setExecution((current) => current ? { ...current, draft: { ...current.draft, [key]: value }, status: current.status.kind === "saving" ? current.status : idle } : current);
+  const updateDelivery = <Key extends keyof DeliveryDraft>(key: Key, value: DeliveryDraft[Key]): void => setDelivery((current) => current ? { ...current, draft: { ...current.draft, [key]: value }, status: current.status.kind === "saving" ? current.status : idle } : current);
   const updateConnections = <Key extends keyof ConnectionsDraft>(key: Key, value: ConnectionsDraft[Key]): void => setConnections((current) => current ? { ...current, draft: { ...current.draft, [key]: value }, status: current.status.kind === "saving" ? current.status : idle } : current);
 
   return <ProjectDetailsLayout projectId={project.id} companyId={project.companyId} title={project.name} active={section} onSectionChange={selectSection}>
@@ -350,6 +379,16 @@ export function ProjectDetails({ projectId }: { projectId: string }): ReactEleme
           <SettingRow label="Skill directories" description="One directory per line." htmlFor="project-skills"><div className="w-full sm:w-[28rem]"><Textarea id="project-skills" disabled={execution.status.kind === "saving"} value={execution.draft.skillDirectories} onChange={(event) => updateExecution("skillDirectories", event.target.value)} /></div></SettingRow>
         </SettingsSection>
         <SectionActions status={execution.status} dirty={executionDirty} onDiscard={() => setExecution(draftState(execution.saved))} />
+      </form> : null}
+
+      {section === "delivery" ? <form onSubmit={(event) => { event.preventDefault(); void saveDelivery(); }}>
+        {sectionError(delivery.status) ? <Alert variant="destructive"><AlertDescription>{sectionError(delivery.status)}</AlertDescription></Alert> : null}
+        <SettingsSection title="Delivery defaults" description="Agent tasks use these values when the request does not set them.">
+          <SettingRow label="Delivery target" description="Where Suplex delivers the completed task." htmlFor="project-delivery-target"><div className="w-full sm:w-80"><Select disabled={delivery.status.kind === "saving"} value={delivery.draft.deliveryTarget} onValueChange={(value) => { const target = DeliveryTargetSchema.safeParse(value); if (target.success) updateDelivery("deliveryTarget", target.data); }}><SelectTrigger id="project-delivery-target" aria-invalid={fieldFindings(delivery.status, "deliveryDefaults").length > 0}><SelectValue>{taskDeliveryTargetOptions.find((option) => option.value === delivery.draft.deliveryTarget)?.label}</SelectValue></SelectTrigger><SelectContent>{taskDeliveryTargetOptions.map((option) => <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>)}</SelectContent></Select><FieldError errors={fieldFindings(delivery.status, "deliveryDefaults")} /></div></SettingRow>
+          <SettingRow label="Run project tests" htmlFor="project-run-project-tests"><Checkbox id="project-run-project-tests" disabled={delivery.status.kind === "saving"} checked={delivery.draft.runProjectTests} onCheckedChange={(checked) => updateDelivery("runProjectTests", checked === true)} /></SettingRow>
+          <SettingRow label="Browser evidence" htmlFor="project-visual-evidence"><div className="w-full sm:w-80"><Select disabled={delivery.status.kind === "saving"} value={delivery.draft.visualEvidence} onValueChange={(value) => { const evidence = VisualEvidenceSchema.safeParse(value); if (evidence.success) updateDelivery("visualEvidence", evidence.data); }}><SelectTrigger id="project-visual-evidence"><SelectValue>{visualEvidenceLabels[delivery.draft.visualEvidence]}</SelectValue></SelectTrigger><SelectContent>{VisualEvidenceSchema.options.map((value) => <SelectItem key={value} value={value}>{visualEvidenceLabels[value]}</SelectItem>)}</SelectContent></Select></div></SettingRow>
+        </SettingsSection>
+        <SectionActions status={delivery.status} dirty={deliveryDirty} onDiscard={() => setDelivery(draftState(delivery.saved))} />
       </form> : null}
 
       {section === "connections" ? <form onSubmit={(event) => { event.preventDefault(); void saveConnections(); }}>

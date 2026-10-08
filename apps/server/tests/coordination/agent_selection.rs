@@ -30,7 +30,7 @@ mod agent_selection_tests {
         let user = auth::development_sign_in(&mut database, now).unwrap().user;
         let time = rfc3339_millis(now);
         database.connection().execute("INSERT INTO suplex_companies (id,name,status,created_at) VALUES ('select_company','Select','active',?1)", [&time]).unwrap();
-        database.connection().execute("INSERT INTO suplex_projects (id,company_id,name,repository_path,worktree_root,repository_identity,base_branch,setup_command,verification_command,root_profile_id,worker_profile_id,agent_task_policy_json,created_at,updated_at) VALUES ('select_project','select_company','Select','/tmp/select-repo','/tmp/select-worktrees',NULL,'main','','','root','worker','{}',?1,?1)", [&time]).unwrap();
+        database.connection().execute("INSERT INTO suplex_projects (id,company_id,name,repository_path,worktree_root,repository_identity,base_branch,setup_command,verification_command,root_profile_id,worker_profile_id,created_at,updated_at) VALUES ('select_project','select_company','Select','/tmp/select-repo','/tmp/select-worktrees',NULL,'main','','','root','worker',?1,?1)", [&time]).unwrap();
         for (id, role, provider) in [
             ("new-root", "root", "codex"),
             ("new-worker", "worker", "opencode"),

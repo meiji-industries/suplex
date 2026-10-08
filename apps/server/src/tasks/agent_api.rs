@@ -667,10 +667,12 @@ pub fn identity(database: &SuplexDatabase, principal: &Principal) -> DatabaseRes
         .collect::<rusqlite::Result<Vec<_>>>()?;
     let mut projects_json = Vec::new();
     for (id, name) in rows {
-        let policy =
-            projects::get_in_company(database, &principal.company_id, &id)?.agent_task_policy;
-        // A project fixes exactly one permitted delivery target; the list keeps room for more.
-        projects_json.push(json!({"id": id, "name": name, "agentTaskPolicy": {"deliveryTargets": [policy.delivery_target], "runProjectTests": policy.run_project_tests, "visualEvidence": policy.visual_evidence}}));
+        let defaults =
+            projects::get_in_company(database, &principal.company_id, &id)?.delivery_defaults;
+        // A project has exactly one default delivery target; the list keeps room for more.
+        let delivery_defaults = json!({"deliveryTargets": [defaults.delivery_target], "runProjectTests": defaults.run_project_tests, "visualEvidence": defaults.visual_evidence});
+        // `agentTaskPolicy` is the deprecated name of `deliveryDefaults`.
+        projects_json.push(json!({"id": id, "name": name, "deliveryDefaults": delivery_defaults, "agentTaskPolicy": delivery_defaults}));
     }
     let name: String = database.connection().query_row(
         "SELECT name FROM suplex_agents WHERE id = ?1",
@@ -1552,7 +1554,7 @@ fn project_profile(
 /// The caller's request, before a workflow or template applies. Delivery
 /// settings the caller leaves out come from the project.
 fn base_request(raw: &TaskCreateBody, project: &Project) -> task_contracts::TaskCreateBody {
-    let policy = &project.agent_task_policy;
+    let defaults = &project.delivery_defaults;
     task_contracts::TaskCreateBody {
         project_id: raw.project_id.clone(),
         title: raw.title.clone(),
@@ -1562,12 +1564,12 @@ fn base_request(raw: &TaskCreateBody, project: &Project) -> task_contracts::Task
         root_profile_id: raw.root_profile_id.clone(),
         worker_profile_id: raw.worker_profile_id.clone(),
         start_immediately: raw.queue.unwrap_or(false),
-        delivery_target: raw.delivery_target.unwrap_or(policy.delivery_target),
-        run_project_tests: raw.run_project_tests.unwrap_or(policy.run_project_tests),
+        delivery_target: raw.delivery_target.unwrap_or(defaults.delivery_target),
+        run_project_tests: raw.run_project_tests.unwrap_or(defaults.run_project_tests),
         visual_evidence: raw
             .visual_evidence
             .clone()
-            .unwrap_or_else(|| policy.visual_evidence.clone()),
+            .unwrap_or_else(|| defaults.visual_evidence.as_str().to_owned()),
         source: raw.source.clone(),
         issue: None,
         workflow: crate::coordination::workflows::Workflow::Standard,
@@ -2925,8 +2927,8 @@ fn duplicate_request(
     require_owned(database, principal, task_id)?;
     let source = task(database, task_id)?;
     let project_id = source.project_id.clone();
-    let policy =
-        projects::get_in_company(database, &principal.company_id, &project_id)?.agent_task_policy;
+    // The source project must still exist in this company.
+    projects::get_in_company(database, &principal.company_id, &project_id)?;
     let mut images = Vec::new();
     for image in &source.images {
         let artifact: Option<(String, String, String)> = database
@@ -2953,25 +2955,16 @@ fn duplicate_request(
         });
     }
     let engine = source.workflow.as_str();
-    let workflow_id = policy
-        .workflow_ids
-        .iter()
-        .find(|id| {
-            database
-                .connection()
-                .query_row(
-                    "SELECT engine FROM suplex_workflows WHERE id = ?1 AND archived_at IS NULL",
-                    [id],
-                    |row| row.get::<_, String>(0),
-                )
-                .optional()
-                .ok()
-                .flatten()
-                .as_deref()
-                == Some(engine)
-        })
-        .cloned()
-        .unwrap_or_else(|| policy.default_workflow_id.clone());
+    // The source's workflow engine, preferring the built-in workflow for it.
+    let workflow_id = database
+        .connection()
+        .query_row(
+            "SELECT id FROM suplex_workflows WHERE engine = ?1 AND archived_at IS NULL ORDER BY id LIKE 'workflow_native_%' DESC, created_at, id LIMIT 1",
+            [engine],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?
+        .unwrap_or_else(|| "workflow_native_standard".to_owned());
     // A profile removed since the source task ran falls back to its default.
     let existing = |id: &str, role: &str| -> DatabaseResult<Option<String>> {
         Ok(
@@ -3362,8 +3355,8 @@ mod retirement_admission_tests {
         let state = &server.state;
         state.with_database(|database| {
             database.connection().execute(
-                "UPDATE suplex_projects SET root_profile_id = 'profile_native_root', worker_profile_id = 'profile_native_worker', repository_identity = 'acme/demo', agent_task_policy_json = ?1 WHERE id = 'project_api'",
-                [json!({"workflowIds": ["workflow_native_standard"], "defaultWorkflowId": "workflow_native_standard", "rootProfileIds": ["profile_native_root"], "workerProfileIds": ["profile_native_worker"], "deliveryTarget": "local_worktree"}).to_string()],
+                "UPDATE suplex_projects SET root_profile_id = 'profile_native_root', worker_profile_id = 'profile_native_worker', repository_identity = 'acme/demo', delivery_target = 'local_worktree' WHERE id = 'project_api'",
+                [],
             ).unwrap();
         });
         let (credential, _) =
@@ -3438,7 +3431,7 @@ mod retirement_admission_tests {
             database
                 .connection()
                 .execute(
-                    "UPDATE suplex_projects SET agent_task_policy_json = json_set(agent_task_policy_json, '$.runProjectTests', json('false')) WHERE id = 'project_api'",
+                    "UPDATE suplex_projects SET run_project_tests = 0 WHERE id = 'project_api'",
                     [],
                 )
                 .unwrap()

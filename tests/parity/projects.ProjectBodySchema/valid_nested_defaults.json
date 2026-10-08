@@ -13,18 +13,7 @@
     "workerProfileId": "worker",
     "integration": {},
     "execution": {},
-    "agentTaskPolicy": {
-      "workflowIds": [
-        "workflow"
-      ],
-      "defaultWorkflowId": "workflow",
-      "rootProfileIds": [
-        "root"
-      ],
-      "workerProfileIds": [
-        "worker"
-      ]
-    },
+    "deliveryDefaults": {},
     "providerPolicy": {
       "allowedProviders": [
         "codex"
@@ -56,24 +45,7 @@
       "verificationCommand": "pnpm test",
       "rootProfileId": "root",
       "workerProfileId": "worker",
-      "agentTaskPolicy": {
-        "workflowIds": [
-          "workflow"
-        ],
-        "defaultWorkflowId": "workflow",
-        "templateIds": [],
-        "rootProfileIds": [
-          "root"
-        ],
-        "workerProfileIds": [
-          "worker"
-        ],
-        "advisorProfileIds": {
-          "reviewer": [],
-          "planner_a": [],
-          "planner_b": [],
-          "rater": []
-        },
+      "deliveryDefaults": {
         "deliveryTarget": "pull_request_draft",
         "runProjectTests": true,
         "visualEvidence": "off"

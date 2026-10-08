@@ -1,5 +1,5 @@
 import { readJsonUnchecked } from "../../../lib/api.js";
-import type { ProjectResponse } from "../../../contracts/projects.js";
+import type { ProjectPatchBody, ProjectResponse } from "../../../contracts/projects.js";
 import type { ProjectIntegration } from "../../../contracts/project-integration.js";
 import type { GithubLabelsResponse } from "../../../contracts/generated/GithubLabelsResponse.js";
 import type { RecentRepositories } from "../../../contracts/generated/RecentRepositories.js";
@@ -16,6 +16,11 @@ export type ProjectCreate = ({ repositoryUrl: string } | { repositoryName: strin
 
 export function createProject(companyId: string, body: ProjectCreate): Promise<ProjectResponse> {
   return readJsonUnchecked<ProjectResponse>(companyPath(companyId, "/projects"), { method: "POST", body: JSON.stringify(body) });
+}
+
+/** Change only the project fields in the body. */
+export function updateProject(projectId: string, body: ProjectPatchBody): Promise<ProjectResponse> {
+  return readJsonUnchecked<ProjectResponse>(`/api/projects/${encodeURIComponent(projectId)}`, { method: "PATCH", body: JSON.stringify(body) });
 }
 
 /** Accessible repositories, newest pushed first. */

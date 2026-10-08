@@ -126,7 +126,7 @@ mod tests {
         let company =
             companies::create_company(&mut database, &admin.user.id, "Projects", now).unwrap();
         database.connection().execute(
-            "INSERT INTO suplex_projects (id, company_id, name, repository_path, worktree_root, repository_identity, base_branch, setup_command, verification_command, root_profile_id, worker_profile_id, integration_json, execution_json, provider_policy_json, agent_task_policy_json, created_at, updated_at) VALUES ('project_http', ?1, 'Project', '/tmp/repository', '/tmp/worktrees', 'owner/repo', 'main', '', '', 'profile_native_root', 'profile_native_worker', '{}', ?2, NULL, '{}', ?3, ?3)",
+            "INSERT INTO suplex_projects (id, company_id, name, repository_path, worktree_root, repository_identity, base_branch, setup_command, verification_command, root_profile_id, worker_profile_id, integration_json, execution_json, provider_policy_json, created_at, updated_at) VALUES ('project_http', ?1, 'Project', '/tmp/repository', '/tmp/worktrees', 'owner/repo', 'main', '', '', 'profile_native_root', 'profile_native_worker', '{}', ?2, NULL, ?3, ?3)",
             rusqlite::params![company.id, r#"{"instructions":"Build"}"#, now.to_rfc3339()],
         ).unwrap();
         let member_now = Utc::now();
@@ -634,7 +634,7 @@ mod tests {
         let company =
             companies::create_company(&mut database, &admin.user.id, "Sources", now).unwrap();
         database.connection().execute(
-            "INSERT INTO suplex_projects (id, company_id, name, repository_path, worktree_root, repository_identity, base_branch, setup_command, verification_command, root_profile_id, worker_profile_id, integration_json, agent_task_policy_json, created_at, updated_at) VALUES ('project_sources', ?1, 'Project', '/tmp/repository', '/tmp/worktrees', 'owner/repo', 'main', '', '', 'profile_native_root', 'profile_native_worker', '{}', '{}', ?2, ?2)",
+            "INSERT INTO suplex_projects (id, company_id, name, repository_path, worktree_root, repository_identity, base_branch, setup_command, verification_command, root_profile_id, worker_profile_id, integration_json, created_at, updated_at) VALUES ('project_sources', ?1, 'Project', '/tmp/repository', '/tmp/worktrees', 'owner/repo', 'main', '', '', 'profile_native_root', 'profile_native_worker', '{}', ?2, ?2)",
             rusqlite::params![company.id, now.to_rfc3339()],
         ).unwrap();
         let state = AppState::new(
@@ -798,7 +798,7 @@ mod tests {
             companies::create_company(&mut database, &admin.user.id, "Patch", now).unwrap();
         // The stored paths do not exist: a patch that leaves the repository alone must not read Git.
         database.connection().execute(
-            "INSERT INTO suplex_projects (id, company_id, name, repository_path, worktree_root, repository_identity, base_branch, setup_command, verification_command, root_profile_id, worker_profile_id, agent_task_policy_json, created_at, updated_at) VALUES ('project_patch', ?1, 'Project', '/tmp/suplex-missing-repository', '/tmp/suplex-missing-worktrees', 'owner/repo', 'main', 'pnpm install', 'pnpm test', 'profile_native_root', 'profile_native_worker', '{}', ?2, ?2)",
+            "INSERT INTO suplex_projects (id, company_id, name, repository_path, worktree_root, repository_identity, base_branch, setup_command, verification_command, root_profile_id, worker_profile_id, created_at, updated_at) VALUES ('project_patch', ?1, 'Project', '/tmp/suplex-missing-repository', '/tmp/suplex-missing-worktrees', 'owner/repo', 'main', 'pnpm install', 'pnpm test', 'profile_native_root', 'profile_native_worker', ?2, ?2)",
             rusqlite::params![company.id, now.to_rfc3339()],
         ).unwrap();
         database.connection().execute(
@@ -911,6 +911,37 @@ mod tests {
             execution["execution"],
             json!({"instructions":"Build carefully","skillDirectories":[],"environment":{},"mcp":[]})
         );
+        assert_eq!(
+            execution["deliveryDefaults"],
+            json!({"deliveryTarget":"pull_request_draft","runProjectTests":true,"visualEvidence":"off"})
+        );
+        let (status, defaults) = read(
+            patch(
+                json!({"deliveryDefaults": {"deliveryTarget": "merged", "runProjectTests": false, "visualEvidence": "capture"}}),
+                headers.clone(),
+            )
+            .await,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{defaults}");
+        assert_eq!(
+            defaults["deliveryDefaults"],
+            json!({"deliveryTarget":"merged","runProjectTests":false,"visualEvidence":"capture"})
+        );
+        assert_eq!(defaults["execution"], execution["execution"]);
+        let (status, invalid) = read(
+            patch(
+                json!({"deliveryDefaults": {"deliveryTarget": "shipped"}}),
+                headers.clone(),
+            )
+            .await,
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(
+            invalid["findings"][0]["field"],
+            ".deliveryDefaults.deliveryTarget"
+        );
         // A repository change reads Git and the repository host again.
         let (status, moved) = read(
             patch(
@@ -939,6 +970,10 @@ mod tests {
             replaced["execution"]["instructions"], "Build carefully",
             "a full body without execution keeps the stored execution"
         );
+        assert_eq!(
+            replaced["deliveryDefaults"]["deliveryTarget"], "merged",
+            "a full body without delivery defaults keeps the stored defaults"
+        );
         let mut ineligible = full;
         ineligible["rootProfileId"] = json!("profile_native_worker");
         let (status, ineligible) = read(patch(ineligible, headers.clone()).await).await;
@@ -957,7 +992,7 @@ mod tests {
                 )
             })
             .unwrap();
-        assert_eq!(audits, 5);
+        assert_eq!(audits, 6);
         drop(state);
         let _ = fs::remove_dir_all(root);
     }

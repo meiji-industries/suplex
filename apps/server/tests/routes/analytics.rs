@@ -19,7 +19,7 @@ mod tests {
         let member = state.with_database(|database| {
             let connection = database.connection();
             connection.execute("INSERT INTO suplex_companies (id,name,status,created_at) VALUES ('c','C','active',?1)", [&time]).unwrap();
-            connection.execute("INSERT INTO suplex_projects (id,company_id,name,repository_path,worktree_root,repository_identity,base_branch,setup_command,verification_command,root_profile_id,worker_profile_id,agent_task_policy_json,created_at,updated_at) VALUES ('p','c','P','/tmp/r','/tmp/w',NULL,'main','','','root','worker','{}',?1,?1)", [&time]).unwrap();
+            connection.execute("INSERT INTO suplex_projects (id,company_id,name,repository_path,worktree_root,repository_identity,base_branch,setup_command,verification_command,root_profile_id,worker_profile_id,created_at,updated_at) VALUES ('p','c','P','/tmp/r','/tmp/w',NULL,'main','','','root','worker',?1,?1)", [&time]).unwrap();
             let configuration = json!({"repository": "owner/repo", "repositoryPath": "/tmp/r", "worktreeRoot": "/tmp/w", "branch": "task/analytics", "baseBranch": "main", "baselineSha": "0123456789abcdef0123456789abcdef01234567", "startingSha": "0123456789abcdef0123456789abcdef01234567", "capturedAt": time}).to_string();
             for (id, archived) in [("active_task", None), ("archived_task", Some(time.as_str()))] {
                 connection.execute("INSERT INTO suplex_tasks (id,company_id,project_id,title,description,configuration_json,idempotency_key,request_hash,creator_user_id,created_at,updated_at,archived_at) VALUES (?1,'c','p',?1,'',?4,?1,'h','user_development',?2,?2,?3)", rusqlite::params![id, time, archived, configuration]).unwrap();

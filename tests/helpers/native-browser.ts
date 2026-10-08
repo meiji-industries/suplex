@@ -132,7 +132,7 @@ export async function nativeFixture(host = "127.0.0.1", reachableAddress?: strin
     database = new DatabaseSync(databasePath);
     const project = { id: "project_browser", companyId: company.id, name: "Repository", repository: "owner/repo", repositoryPath, worktreeRoot, rootProfileId: "profile_native_root", workerProfileId: "profile_native_worker" };
     const now = new Date().toISOString();
-    database.prepare("INSERT INTO suplex_projects (id,company_id,name,repository_path,worktree_root,repository_identity,base_branch,setup_command,verification_command,root_profile_id,worker_profile_id,agent_task_policy_json,created_at,updated_at) VALUES (?,?,?,?,?,?,'main','','',?,?,'{}',?,?)")
+    database.prepare("INSERT INTO suplex_projects (id,company_id,name,repository_path,worktree_root,repository_identity,base_branch,setup_command,verification_command,root_profile_id,worker_profile_id,created_at,updated_at) VALUES (?,?,?,?,?,?,'main','','',?,?,?,?)")
       .run(project.id, company.id, project.name, repositoryPath, worktreeRoot, project.repository, project.rootProfileId, project.workerProfileId, now, now);
     const openedDatabase = database;
     return { directory, config: { port, databasePath, artifactRoot: join(directory, "data", "artifacts") }, database, userId: user.id, company, project, headers, api, createTask, base,

@@ -1,7 +1,7 @@
 [
   {
     "name": "suplex_whoami",
-    "description": "Read this paired agent's identity, capabilities, and granted projects with each project's delivery defaults (agentTaskPolicy). taskCommands lists exactly the lifecycle commands accepted by suplex_command_task. autonomousCommands also includes task creation and, when enabled, runtime delivery commands. MCP exposes task lifecycle commands only. It does not expose runtime delivery or merge commands. A paired agent can answer a task's Coordinator question with answer_human_question only after an administrator lets it answer on their behalf. Task limit decisions and command cleanup confirmations stay with a person. Suplex can perform delivery for a task's configured target, including a merge after review, without an agent command.",
+    "description": "Read this paired agent's identity, capabilities, and granted projects with their project delivery defaults in deliveryDefaults. agentTaskPolicy is a deprecated alias of deliveryDefaults with the same shape. taskCommands lists exactly the lifecycle commands accepted by suplex_command_task. autonomousCommands also includes task creation and, when enabled, runtime delivery commands. MCP exposes task lifecycle commands only. It does not expose runtime delivery or merge commands. A paired agent can answer a task's Coordinator question with answer_human_question only after an administrator lets it answer on their behalf. Task limit decisions and command cleanup confirmations stay with a person. Suplex can perform delivery for a task's configured target, including a merge after review, without an agent command.",
     "inputSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "type": "object",

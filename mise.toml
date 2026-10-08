@@ -56,7 +56,7 @@ run = "pnpm run build"
 run = '''
 cd rust
 unset RUSTUP_TOOLCHAIN
-RUST_TEST_THREADS=4 cargo test --all-targets
+cargo nextest run --all-targets
 '''
 
 [tasks."test:sccache-wrapper"]

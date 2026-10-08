@@ -28,6 +28,7 @@ mode="${1:-build}"
 # The checkout and its Git directory keep their host paths, so build.rs can stamp the revision.
 common="$(git rev-parse --path-format=absolute --git-common-dir)"
 commit="$(git rev-parse HEAD)$([ -z "$(git status --porcelain)" ] || echo -dirty)"
+. scripts/linux-builder.sh
 for arch in ${SUPLEX_LINUX_ARCHES:-arm64 x64}; do
   case "$arch" in arm64) platform=linux/arm64 ;; x64) platform=linux/amd64 ;; *) echo "SUPLEX_LINUX_ARCHES holds arm64 and x64, not $arch" >&2; exit 1 ;; esac
   feed=""
@@ -38,10 +39,12 @@ for arch in ${SUPLEX_LINUX_ARCHES:-arm64 x64}; do
     echo "apps/desktop/release/linux-$arch is already built from $commit; skipping"
     continue
   fi
+  linux_builder "$arch"
+  builder_push
   image="suplex-desktop-linux-$arch"
-  docker build --quiet --platform "$platform" -t "$image" apps/desktop/linux >/dev/null
+  dock build --quiet --platform "$platform" -t "$image" apps/desktop/linux >/dev/null
   run() {
-    docker run --rm --platform "$platform" \
+    dock run --rm --platform "$platform" \
       -v "$PWD:$PWD" -v "$common:$common:ro" \
       -v "suplex-desktop-linux-target-$arch:/target" -v "suplex-desktop-linux-cargo-$arch:/usr/local/cargo/registry" \
       -w "$PWD/apps/desktop" \
@@ -56,7 +59,9 @@ for arch in ${SUPLEX_LINUX_ARCHES:-arm64 x64}; do
   fi
   echo "Building the Linux $arch desktop app in Docker"
   run sh scripts/dist-linux.sh
+  builder_pull "apps/desktop/release/linux-$arch"
   SUPLEX_DESKTOP_PLATFORM=linux SUPLEX_DESKTOP_ARCH="$arch" SUPLEX_DESKTOP_FEED="$feed" sh apps/desktop/scripts/finish-platform-release.sh
-  docker run --rm --platform "$platform" -v "$PWD/apps/desktop/release/linux-$arch:/release" -v "$PWD/apps/desktop/scripts:/scripts:ro" \
+  builder_push "apps/desktop/release/linux-$arch"
+  dock run --rm --platform "$platform" -v "$PWD/apps/desktop/release/linux-$arch:/release" -v "$PWD/apps/desktop/scripts:/scripts:ro" \
     ubuntu:22.04 sh /scripts/test-packaged-linux.sh
 done

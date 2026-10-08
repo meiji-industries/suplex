@@ -130,11 +130,11 @@ Production targets the Fly app `suplex-production` (`fly.toml` and
 in `yyz` and a `billing_data` volume mounted at `/data`. The public origin is
 `suplex.sh`; `www.suplex.sh` redirects to the origin. There is no legacy billing
 hostname. `mise run hosted:dns` points both hostnames at Fly. `fly.toml` sets
-the non-secret variables. Set the provider secrets once, then deploy:
+the non-secret variables, including the live Stripe price IDs. Set the provider
+secrets once, then deploy:
 
 ```sh
 fly secrets set --app suplex-production STRIPE_SECRET_KEY=... \
-  STRIPE_PRO_MONTHLY_PRICE_ID=... STRIPE_PRO_ANNUAL_PRICE_ID=... \
   STRIPE_PORTAL_CONFIGURATION_ID=... \
   STRIPE_WEBHOOK_SECRET=... REVENUECAT_SECRET_API_KEY=... \
   REVENUECAT_STRIPE_PUBLIC_API_KEY=... REVENUECAT_WEBHOOK_AUTHORIZATION=... \

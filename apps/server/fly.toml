@@ -10,6 +10,9 @@ primary_region = "yyz"
   BILLING_BIND_ADDRESS = "0.0.0.0"
   BILLING_PORT = "8080"
   BILLING_DATABASE_PATH = "/data/billing.sqlite"
+  # Stripe price IDs are public identifiers, not secrets.
+  STRIPE_PRO_MONTHLY_PRICE_ID = "price_1UMK1wR8aLBouZpdZPcgb7EZ"
+  STRIPE_PRO_ANNUAL_PRICE_ID = "price_1UOQQ7R8aLBouZpdhpsttJwj"
 
 # One machine: the SQLite database lives on this volume.
 [mounts]

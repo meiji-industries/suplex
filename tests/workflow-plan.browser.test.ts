@@ -32,6 +32,8 @@ test.each([1440, 900, 390])("workflow plans use the shared illustration at %ipx"
       expect(await plan.locator("desc").first().textContent()).toContain(`Delivery: ${option.label}.`);
     }
     await page.route(`**/api/tasks/${standardTaskId}/execution`, route => route.fulfill({ json: { sessions: [{ id: "root", role: "root", generation: 1, available: true, limited: false, plan: [{ content: "Coordinator plan remains separate", status: "pending" }], tools: [], reasoning: [] }] } }));
+    // The sync feed pushes the real, empty execution and replaces the mocked read.
+    await page.routeWebSocket(/\/api\/companies\/[^/]+\/sync/, () => {});
     await page.goto(`${value.base}/tasks/${standardTaskId}?company=${value.company.id}`);
     await page.locator('[data-workflow-plan="standard"] [data-workflow-illustration="standard"]').waitFor({ state: "visible" });
     await page.getByText("Coordinator plan remains separate", { exact: true }).waitFor({ state: "visible" });

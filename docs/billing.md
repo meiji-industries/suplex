@@ -7,12 +7,13 @@ installation has one plan: the plan of the Suplex account linked to it
 | Limit | Free | Pro |
 | --- | --- | --- |
 | Companies that are not archived | 1 | 3 |
-| Projects in all companies | 2 | 10 |
+| Projects in all companies | 2 | 25 |
 | Tasks running at once (`active` or `waiting_human`) | 3 | Unlimited |
 | Tasks created each UTC calendar month, archived ones too | 50 | Unlimited |
 
-Pro costs USD 20 each month before tax for one seat. Each Suplex account gets
-one 30-day Pro trial with no payment method. Without a payment method at the
+Pro costs USD 20 each month, or USD 192 each year (20% less), before tax for
+one seat. Each Suplex account gets
+one 14-day Pro trial with no payment method. Without a payment method at the
 trial end, Stripe cancels the subscription and the host returns to Free. The
 Team plan (seats, centralized billing) is not implemented.
 
@@ -41,10 +42,10 @@ Members and administrators read the plan in Settings > Billing. Only active
 administrators can start the trial, select Pro, or open the billing portal,
 and only when a Suplex account is linked.
 
-## Start free and Start 30-day trial
+## Start free and Start 14-day trial
 
 The website buttons link to `https://suplex.sh/start` (Start free) and
-`https://suplex.sh/start?plan=pro` (Start 30-day trial), implemented in
+`https://suplex.sh/start?plan=pro` (Start 14-day trial), implemented in
 `apps/server/src/accounts/hosted/start.rs`.
 
 - `/start` shows the Free limits and the downloads.
@@ -133,7 +134,8 @@ the non-secret variables. Set the provider secrets once, then deploy:
 
 ```sh
 fly secrets set --app suplex-production STRIPE_SECRET_KEY=... \
-  STRIPE_PRO_MONTHLY_PRICE_ID=... STRIPE_PORTAL_CONFIGURATION_ID=... \
+  STRIPE_PRO_MONTHLY_PRICE_ID=... STRIPE_PRO_ANNUAL_PRICE_ID=... \
+  STRIPE_PORTAL_CONFIGURATION_ID=... \
   STRIPE_WEBHOOK_SECRET=... REVENUECAT_SECRET_API_KEY=... \
   REVENUECAT_STRIPE_PUBLIC_API_KEY=... REVENUECAT_WEBHOOK_AUTHORIZATION=... \
   REVENUECAT_APP_ID=...
@@ -157,6 +159,7 @@ Configuration is read only in the hosted process:
 | `BILLING_ENVIRONMENT` | Exactly `sandbox` or `production`. Must match the Stripe key mode and the RevenueCat project. |
 | `STRIPE_SECRET_KEY` | Merchant API secret for the matching environment. |
 | `STRIPE_PRO_MONTHLY_PRICE_ID` | The configured USD 20 monthly licensed seat price. |
+| `STRIPE_PRO_ANNUAL_PRICE_ID` | The configured USD 192 yearly licensed seat price. |
 | `STRIPE_PORTAL_CONFIGURATION_ID` | The dedicated Suplex portal configuration. |
 | `STRIPE_WEBHOOK_SECRET` | Signing secret of the Suplex Stripe webhook destination. |
 | `STRIPE_AUTOMATIC_TAX` | `true` (default) or `false`. Stripe Tax on Checkout needs a head office address in the Stripe account. |
@@ -174,8 +177,8 @@ the installation runs Free, a third project in a company returns 402
 with an existing billing binding reports the subscription as unknown, never as
 Free.
 
-The service verifies the configured price before it serves purchase mutations:
-`usd`, `unit_amount` 2000, monthly interval count 1, `licensed` usage,
+The service verifies each configured price before it serves purchase mutations:
+`usd`, `unit_amount` 2000 monthly or 19200 yearly, interval count 1, `licensed` usage,
 `per_unit` billing, no quantity transformation, and a key mode matching
 `BILLING_ENVIRONMENT`. A mismatch returns `billing_setup_invalid`; it never
 sells an arbitrary price.
@@ -197,11 +200,11 @@ Production uses a separate Stripe configuration and RevenueCat project with
 `BILLING_ENVIRONMENT=production`.
 
 1. Connect Stripe to RevenueCat as the RevenueCat project owner.
-2. Create the Stripe product `Suplex Pro` with a USD 20.00 monthly per-unit
-   licensed price (tax-exclusive). Enable Stripe Tax for production Checkout
+2. Create the Stripe product `Suplex Pro` with a USD 20.00 monthly and a
+   USD 192.00 yearly per-unit licensed price (tax-exclusive). Enable Stripe Tax for production Checkout
    and configure the merchant's tax settings before activation.
-3. Import the product into the RevenueCat Stripe configuration and attach the
-   price to the entitlement identifier `pro`. Use the same identifier in the
+3. Import the product into the RevenueCat Stripe configuration and attach both
+   prices to the entitlement identifier `pro`. Use the same identifier in the
    sandbox and production projects.
 4. Configure external purchase recognition to wait until the invoice is paid.
    Enable tracking new purchases with the App User ID from the `app_user_id`
@@ -231,8 +234,10 @@ Production uses a separate Stripe configuration and RevenueCat project with
    from the wrong environment never enter reconciliation.
 8. Configure the Stripe customer portal for payment methods, invoices,
    billing details, cancellation at period end, and resuming a scheduled
-   cancellation. Disable product switching, quantity updates, trials, coupons,
-   and retention discounts there. Seat changes go through Suplex.
+   cancellation. Allow switching only between the monthly and yearly Pro
+   prices, so a trial or monthly subscriber can change to yearly. Disable
+   quantity updates, trials, coupons, and retention discounts there. Seat
+   changes go through Suplex and apply only to the monthly price.
 9. Configure Stripe payment retries and customer emails in Stripe. Suplex does
    not run dunning or send payment email.
 
@@ -246,8 +251,8 @@ credential created at registration. Only SHA-256 hashes are stored.
 | Endpoint | Behavior |
 | --- | --- |
 | `GET /v1/plan` | Bearer Suplex account token. The account's `{state, trialAvailable}`. |
-| `POST /v1/plan/trial` | Bearer Suplex account token. Start the account's one 30-day trial, or return the current plan. 409 `trial_used` after a trial. |
-| `POST /v1/plan/checkout` | Bearer Suplex account token plus `Idempotency-Key`. Checkout for one Pro seat. |
+| `POST /v1/plan/trial` | Bearer Suplex account token. Start the account's one 14-day trial, or return the current plan. 409 `trial_used` after a trial. |
+| `POST /v1/plan/checkout` | Bearer Suplex account token plus `Idempotency-Key`. Optional body `{interval: "month" \| "year"}`; no body is monthly. Checkout for one Pro seat at that price. |
 | `POST /v1/plan/portal` | Bearer Suplex account token. A portal session for the account's customer. |
 | `POST /v1/accounts` | Register or recover the credential-bound empty account (v1.3.0 per-company billing). |
 | `GET /v1/billing` | Read the current provider state for the caller's account. |

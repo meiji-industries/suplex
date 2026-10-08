@@ -62,7 +62,7 @@ mod tests {
         assert_eq!(plan["state"]["purchasedSeats"], json!(1));
         assert_eq!(
             plan["state"]["accessUntil"],
-            json!(iso((f.now_ms() / 1000) * 1000 + 30 * DAY_MS))
+            json!(iso((f.now_ms() / 1000) * 1000 + 14 * DAY_MS))
         );
         let subscription = f.stripe.with(|stripe| {
             assert_eq!(stripe.customers.len(), 1);
@@ -78,7 +78,7 @@ mod tests {
         assert_eq!(f.stripe.with(|stripe| stripe.subscriptions.len()), 1);
 
         // Without a payment method, Stripe cancels the trial at its end.
-        f.advance(31 * DAY_MS);
+        f.advance(15 * DAY_MS);
         f.stripe
             .with(|stripe| stripe.subscription(&subscription).status = "canceled".into());
         let (_, ended) = f.get("/v1/plan", Some(&token)).await;
@@ -86,6 +86,69 @@ mod tests {
         assert_eq!(ended["trialAvailable"], json!(false));
         let (status, used) = trial(&f, &token).await;
         assert_eq!((status, used["code"].clone()), (409, json!("trial_used")));
+    }
+
+    #[tokio::test]
+    async fn checkout_buys_the_requested_pro_price() {
+        use crate::billing::hosted::fakes::{ANNUAL_PRICE_ID, PRICE_ID};
+        let f = Fixture::new().await;
+        let token = login(&f, "user_1");
+        let annual = json!({"interval": "year"});
+
+        let (status, body) = f
+            .post("/v1/plan/checkout", Some(&token), Some("key-annual-1"), &annual)
+            .await;
+        assert_eq!((status, body["status"].clone()), (200, json!("redirect")), "{body}");
+        let (annual_session, customer) = f.stripe.with(|stripe| {
+            let session = &stripe.sessions[0];
+            assert_eq!(session.line_items, [(ANNUAL_PRICE_ID.to_owned(), 1)]);
+            (session.id.clone(), session.customer_id.clone())
+        });
+
+        // One key buys one price.
+        let (status, body) = f
+            .post("/v1/plan/checkout", Some(&token), Some("key-annual-1"), &json!({}))
+            .await;
+        assert_eq!((status, body["code"].clone()), (409, json!("idempotency_conflict")));
+        let (status, _) = f
+            .post("/v1/plan/checkout", Some(&token), Some("key-annual-2"), &json!({"interval": "week"}))
+            .await;
+        assert_eq!(status, 400);
+
+        // A host before annual Pro sends no body: monthly, and the open
+        // annual session is not reused.
+        let authorization = format!("Bearer {token}");
+        let response = f
+            .send(
+                Method::POST,
+                "/v1/plan/checkout",
+                &[("authorization", &authorization), ("idempotency-key", "key-monthly-1")],
+                None,
+            )
+            .await;
+        assert_eq!(response.status().as_u16(), 200);
+        f.stripe.with(|stripe| {
+            assert_eq!(stripe.expire_calls, std::slice::from_ref(&annual_session));
+            assert_eq!(stripe.sessions[1].line_items, [(PRICE_ID.to_owned(), 1)]);
+        });
+
+        // An annual subscription is Pro.
+        f.stripe.with(|stripe| {
+            let subscription = stripe.add_subscription(&customer, 1);
+            stripe.subscription(&subscription).items[0].price_id = ANNUAL_PRICE_ID.into();
+        });
+        let (_, plan) = f.get("/v1/plan", Some(&token)).await;
+        assert_eq!(plan["state"]["active"], json!(true), "{plan}");
+
+        // A misconfigured annual price never sells.
+        let f = Fixture::new().await;
+        let token = login(&f, "user_2");
+        f.stripe.with(|stripe| stripe.annual_price["unit_amount"] = json!(24000));
+        let (status, body) = f
+            .post("/v1/plan/checkout", Some(&token), Some("key-annual-3"), &annual)
+            .await;
+        assert_eq!((status, body["code"].clone()), (503, json!("billing_setup_invalid")));
+        assert_eq!(f.stripe.with(|stripe| stripe.sessions.len()), 0);
     }
 
     #[tokio::test]

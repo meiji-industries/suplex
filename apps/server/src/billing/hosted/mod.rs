@@ -15,7 +15,7 @@ use serde_json::Value;
 use subtle::ConstantTimeEq;
 
 use crate::{
-    billing::wire::{BillingEnvironment, HostedSeatPreview, RegistrationBody},
+    billing::wire::{BillingEnvironment, BillingInterval, HostedSeatPreview, RegistrationBody},
     shared::{hash::sha256_hex, js_json, time::rfc3339_millis},
 };
 use revenuecat::RevenueCatClient;
@@ -46,7 +46,9 @@ pub type Clock = Arc<dyn Fn() -> i64 + Send + Sync>;
 pub struct HostedConfig {
     pub origin: String,
     pub environment: BillingEnvironment,
+    /// The monthly Pro price; legacy seat commands use only this one.
     pub stripe_price_id: String,
+    pub stripe_annual_price_id: String,
     pub stripe_portal_configuration_id: String,
     pub stripe_webhook_secret: String,
     pub automatic_tax: bool,
@@ -55,6 +57,19 @@ pub struct HostedConfig {
     /// Hosted telemetry is a separate service-level opt-in. It is never
     /// inferred from a registered installation or billing request.
     pub telemetry: Option<telemetry::Config>,
+}
+
+impl HostedConfig {
+    pub fn price_id(&self, interval: BillingInterval) -> &str {
+        match interval {
+            BillingInterval::Month => &self.stripe_price_id,
+            BillingInterval::Year => &self.stripe_annual_price_id,
+        }
+    }
+
+    pub fn is_pro_price(&self, price_id: &str) -> bool {
+        price_id == self.stripe_price_id || price_id == self.stripe_annual_price_id
+    }
 }
 
 /// A failure with a public status, optional code, and extra body fields.
@@ -222,7 +237,8 @@ pub struct Inner {
     clock: Clock,
     // Lock map never shrinks; evict when account count matters
     locks: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
-    price_verified: AtomicBool,
+    /// Monthly and annual price verification, cached on success.
+    price_verified: [AtomicBool; 2],
     processing: tokio::sync::Mutex<()>,
 }
 
@@ -249,7 +265,7 @@ impl Hosted {
             revenuecat,
             clock,
             locks: Mutex::default(),
-            price_verified: AtomicBool::new(false),
+            price_verified: Default::default(),
             processing: tokio::sync::Mutex::new(()),
         }))
     }

@@ -15,7 +15,7 @@ export function OnboardingPlanPicker({ value, onChange, projectCount, trialAvail
 }): ReactElement {
   const plans = [
     { id: "free", label: "Free", detail: "1 company, 2 projects, 3 tasks at a time, 50 tasks each month", price: "$0", interval: "/month", disabled: projectCount >= 3 },
-    { id: "pro", label: "Pro", detail: "3 companies, 10 projects, unlimited tasks", price: `$${PRO_MONTHLY_AMOUNT / 100}`, interval: "/month", disabled: false },
+    { id: "pro", label: "Pro", detail: "3 companies, 25 projects, unlimited tasks", price: `$${PRO_MONTHLY_AMOUNT / 100}`, interval: "/month", disabled: false },
     { id: "enterprise", label: "Enterprise", detail: "", price: "", interval: "", disabled: true },
   ];
 

@@ -31,6 +31,7 @@ use super::{
 use crate::billing::wire::BillingEnvironment;
 
 pub const PRICE_ID: &str = "price_pro_monthly";
+pub const ANNUAL_PRICE_ID: &str = "price_pro_annual";
 pub const WEBHOOK_SECRET: &str = "whsec_fake";
 pub const RC_AUTHORIZATION: &str = "rc-hook-auth";
 pub const RC_APP_ID: &str = "app_suplex";
@@ -264,6 +265,7 @@ pub struct UpdateCall {
 pub struct StripeState {
     clock: TestClock,
     pub price: Value,
+    pub annual_price: Value,
     pub customers: IndexMap<String, FakeCustomer>,
     pub subscriptions: IndexMap<String, FakeSubscription>,
     pub sessions: IndexMap<String, FakeSession>,
@@ -317,6 +319,16 @@ impl StripeState {
                 "livemode": false,
                 "transform_quantity": null,
                 "recurring": {"interval": "month", "interval_count": 1, "usage_type": "licensed"},
+            }),
+            annual_price: json!({
+                "id": ANNUAL_PRICE_ID,
+                "object": "price",
+                "currency": "usd",
+                "unit_amount": 19200,
+                "billing_scheme": "per_unit",
+                "livemode": false,
+                "transform_quantity": null,
+                "recurring": {"interval": "year", "interval_count": 1, "usage_type": "licensed"},
             }),
             customers: IndexMap::new(),
             subscriptions: IndexMap::new(),
@@ -778,6 +790,9 @@ impl StripeState {
             return (503, json!({"error": {"type": "api_error"}}));
         }
         match call.segments().as_slice() {
+            ["v1", "prices", id] if get && *id == ANNUAL_PRICE_ID => {
+                (200, self.annual_price.clone())
+            }
             ["v1", "prices", _] if get => (200, self.price.clone()),
             ["v1", "customers"] => {
                 self.create_customer_keys.push(key);
@@ -983,6 +998,7 @@ pub fn hosted_config(environment: BillingEnvironment) -> HostedConfig {
         origin: ORIGIN.into(),
         environment,
         stripe_price_id: PRICE_ID.into(),
+        stripe_annual_price_id: ANNUAL_PRICE_ID.into(),
         stripe_portal_configuration_id: "bpc_fake".into(),
         stripe_webhook_secret: WEBHOOK_SECRET.into(),
         automatic_tax: true,

@@ -4,6 +4,7 @@ use std::error::Error;
 
 use axum::{
     Json, Router,
+    body::Bytes,
     extract::State,
     http::{HeaderMap, HeaderValue, header},
     response::{IntoResponse, Response},
@@ -13,13 +14,13 @@ use serde::Serialize;
 use serde_json::json;
 
 use crate::{
-    billing,
+    billing::{self, wire::CheckoutBody},
     http::{
         AppState,
         access::{authorize, authorize_method, with_cookies},
         contracts::typed::billing::IdempotencyHeader,
         error::ApiError,
-        validation::valid,
+        validation::{body_contract, valid},
     },
 };
 
@@ -68,16 +69,23 @@ async fn trial(State(state): State<AppState>, headers: HeaderMap) -> Response {
     respond(billing::start_trial(&state, &user_id).await, cookies)
 }
 
-async fn checkout(State(state): State<AppState>, headers: HeaderMap) -> Response {
+async fn checkout(State(state): State<AppState>, headers: HeaderMap, body: Bytes) -> Response {
     let key = match idempotency_key(&headers) {
         Ok(key) => key,
+        Err(response) => return *response,
+    };
+    let body = match body_contract::<Option<CheckoutBody>>(&headers, &body) {
+        Ok(body) => body.unwrap_or_default(),
         Err(response) => return *response,
     };
     let (user_id, cookies) = match authorize_method(&state, &headers, "POST") {
         Ok(value) => value,
         Err(response) => return *response,
     };
-    respond(billing::checkout(&state, &user_id, &key).await, cookies)
+    respond(
+        billing::checkout(&state, &user_id, &key, body).await,
+        cookies,
+    )
 }
 
 async fn portal(State(state): State<AppState>, headers: HeaderMap) -> Response {

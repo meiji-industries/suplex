@@ -1,4 +1,4 @@
-//! `suplex.sh/start`: the website's Start free and Start 30-day trial
+//! `suplex.sh/start`: the website's Start free and Start 14-day trial
 //! buttons. Free goes to the downloads. Pro logs in to a Suplex account in
 //! this browser, starts that account's trial, then shows the downloads.
 //!
@@ -76,7 +76,7 @@ async fn start(
             StatusCode::OK,
             "Start Suplex for free",
             &format!(
-                "<p class=\"center\">Free includes 1 company, 2 projects, 3 tasks at a time, and 50 tasks each month. No credit card is necessary.</p>{DOWNLOADS}<p class=\"center\">Download Suplex, then log in with your Suplex account. Want more? <a href=\"/start?plan=pro\">Start a 30-day Pro trial</a>.</p>"
+                "<p class=\"center\">Free includes 1 company, 2 projects, 3 tasks at a time, and 50 tasks each month. No credit card is necessary.</p>{DOWNLOADS}<p class=\"center\">Download Suplex, then log in with your Suplex account. Want more? <a href=\"/start?plan=pro\">Start a 14-day Pro trial</a>.</p>"
             ),
         )
     };

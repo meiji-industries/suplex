@@ -2325,11 +2325,11 @@ mod tests {
         f.fake
             .with(|hosted| hosted.respond("/v1/plan", 200, pro_plan()));
         crate::billing::observe(&f.state, crate::billing::Limit::Projects).await;
-        for slug in 3..=10 {
+        for slug in 3..=25 {
             commit(slug.to_string()).await.unwrap();
         }
         assert_eq!(
-            code(commit("11".into()).await.unwrap_err()),
+            code(commit("26".into()).await.unwrap_err()),
             Some("project_limit_reached")
         );
     }

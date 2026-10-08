@@ -12,14 +12,13 @@ use super::{
     stripe::{Customer, Invoice, InvoiceLine, Item, Subscription},
 };
 use crate::billing::wire::{
-    BillingEnvironment, HostedBillingState, SEAT_CURRENCY, SEAT_UNIT_AMOUNT,
+    ANNUAL_UNIT_AMOUNT, BillingEnvironment, BillingInterval, HostedBillingState, SEAT_CURRENCY,
+    SEAT_UNIT_AMOUNT,
 };
 
 pub const TERMINAL_STATUSES: [&str; 2] = ["canceled", "incomplete_expired"];
 pub const UNPAID_STATUSES: [&str; 3] = ["incomplete", "past_due", "unpaid"];
 const GRACE_ELIGIBLE_STATUSES: [&str; 3] = ["past_due", "unpaid", "paused"];
-const SEAT_INTERVAL: &str = "month";
-const SEAT_INTERVAL_COUNT: i64 = 1;
 
 pub fn terminal(status: &str) -> bool {
     TERMINAL_STATUSES.contains(&status)
@@ -115,20 +114,27 @@ impl Hosted {
     }
 
     /// Cached on success only.
-    pub(super) async fn ensure_price_verified(&self) -> HostedResult<()> {
-        if self.price_verified.load(Ordering::Acquire) {
+    pub(super) async fn ensure_price_verified(
+        &self,
+        interval: BillingInterval,
+    ) -> HostedResult<()> {
+        let (verified, amount) = match interval {
+            BillingInterval::Month => (&self.price_verified[0], SEAT_UNIT_AMOUNT),
+            BillingInterval::Year => (&self.price_verified[1], ANNUAL_UNIT_AMOUNT),
+        };
+        if verified.load(Ordering::Acquire) {
             return Ok(());
         }
         let price = self
             .stripe
-            .retrieve_price(&self.config.stripe_price_id)
+            .retrieve_price(self.config.price_id(interval))
             .await
             .map_err(|_| HostedError::unavailable())?;
         let valid = price.currency == SEAT_CURRENCY
-            && price.unit_amount == Some(SEAT_UNIT_AMOUNT)
+            && price.unit_amount == Some(amount)
             && price.recurring.as_ref().is_some_and(|recurring| {
-                recurring.interval == SEAT_INTERVAL
-                    && recurring.interval_count == SEAT_INTERVAL_COUNT
+                recurring.interval == interval.as_str()
+                    && recurring.interval_count == 1
                     && recurring.usage_type == "licensed"
             })
             && price.billing_scheme.as_deref() == Some("per_unit")
@@ -138,10 +144,17 @@ impl Hosted {
             return Err(HostedError::new(
                 503,
                 Some("billing_setup_invalid"),
-                "The configured Stripe price is not the Suplex Pro monthly seat price",
+                match interval {
+                    BillingInterval::Month => {
+                        "The configured Stripe price is not the Suplex Pro monthly seat price"
+                    }
+                    BillingInterval::Year => {
+                        "The configured Stripe price is not the Suplex Pro annual seat price"
+                    }
+                },
             ));
         }
-        self.price_verified.store(true, Ordering::Release);
+        verified.store(true, Ordering::Release);
         Ok(())
     }
 
@@ -214,7 +227,7 @@ impl Hosted {
         Ok(None)
     }
 
-    /// The live subscription with the configured price, newest first.
+    /// The live subscription with a Pro price, newest first.
     fn select_subscription(&self, subscriptions: &[Subscription]) -> Option<(Subscription, Item)> {
         let mut candidates = subscriptions
             .iter()
@@ -222,7 +235,7 @@ impl Hosted {
                 let item = subscription
                     .items
                     .iter()
-                    .find(|item| item.price_id == self.config.stripe_price_id)?;
+                    .find(|item| self.config.is_pro_price(&item.price_id))?;
                 Some((subscription, item))
             })
             .collect::<Vec<_>>();
@@ -245,7 +258,7 @@ impl Hosted {
             .iter()
             .filter(|line| {
                 line.period_end > line.period_start
-                    && (line.price_id.as_deref() == Some(&self.config.stripe_price_id)
+                    && (line.price_id.as_deref() == Some(&item.price_id)
                         || line.subscription_item_id.as_deref() == Some(&item.id))
             })
             .collect()
@@ -377,7 +390,7 @@ impl Hosted {
         let should_represent = !terminal(&subscription.status) && !current_period_fully_refunded;
         let represented = should_represent
             && subscriber
-                .and_then(|subscriber| subscriber.subscriptions.get(&self.config.stripe_price_id))
+                .and_then(|subscriber| subscriber.subscriptions.get(&item.price_id))
                 .is_some_and(|record| !record.refunded());
 
         if !should_represent {
@@ -549,9 +562,7 @@ impl Hosted {
         // The RevenueCat Stripe integration names products by price id.
         let grace_until = subscriber
             .as_ref()
-            .and_then(|subscriber| {
-                pro_entitlement_window(subscriber, environment, &self.config.stripe_price_id)
-            })
+            .and_then(|subscriber| pro_entitlement_window(subscriber, environment, &item.price_id))
             .and_then(|window| window.grace_until)
             .and_then(|at| parse_ms(&at));
         // Grace extends only a renewal failure on the same product; it never

@@ -21,6 +21,7 @@ mod tests {
             ),
             ("STRIPE_SECRET_KEY", "sk_test_1"),
             ("STRIPE_PRO_MONTHLY_PRICE_ID", "price_1"),
+            ("STRIPE_PRO_ANNUAL_PRICE_ID", "price_2"),
             ("STRIPE_PORTAL_CONFIGURATION_ID", "bpc_1"),
             ("STRIPE_WEBHOOK_SECRET", "whsec_1"),
             ("REVENUECAT_SECRET_API_KEY", "rc_secret"),
@@ -104,6 +105,7 @@ mod tests {
         assert_eq!((config.address.as_str(), config.port), ("127.0.0.1", 4211));
         assert_eq!(config.environment, BillingEnvironment::Sandbox);
         assert_eq!(config.hosted().revenuecat_webhook_authorization, "rc-auth");
+        assert_eq!(config.hosted().stripe_annual_price_id, "price_2");
         assert!(config.automatic_tax);
         assert!(config.telemetry.is_none());
         let telemetry = load(&[

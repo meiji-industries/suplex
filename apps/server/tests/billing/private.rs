@@ -23,6 +23,7 @@ pub(crate) mod tests {
         pub path: String,
         pub authorization: Option<String>,
         pub idempotency_key: Option<String>,
+        pub body: String,
     }
 
     /// A loopback fake of the hosted billing API. Each path answers with its
@@ -92,36 +93,36 @@ pub(crate) mod tests {
         .map(|(path, body)| (path.to_owned(), (200, body.to_string())))
         .collect();
         let shared = hosted.clone();
-        let app =
-            axum::Router::new().fallback(move |uri: Uri, headers: HeaderMap, _body: Bytes| {
-                let hosted = shared.clone();
-                async move {
-                    let header = |name: &str| {
-                        headers
-                            .get(name)
-                            .and_then(|value| value.to_str().ok())
-                            .map(str::to_owned)
-                    };
-                    let mut hosted = hosted.lock().unwrap();
-                    let path = uri.path().to_owned();
-                    hosted.calls.push(Call {
-                        path: path.clone(),
-                        authorization: header("authorization"),
-                        idempotency_key: header("idempotency-key"),
-                    });
-                    let (status, body) = hosted
-                        .responses
-                        .get(&path)
-                        .cloned()
-                        .unwrap_or((404, json!({"error": "Not found"}).to_string()));
-                    (
-                        StatusCode::from_u16(status).unwrap(),
-                        [("content-type", "application/json")],
-                        body,
-                    )
-                        .into_response()
-                }
-            });
+        let app = axum::Router::new().fallback(move |uri: Uri, headers: HeaderMap, body: Bytes| {
+            let hosted = shared.clone();
+            async move {
+                let header = |name: &str| {
+                    headers
+                        .get(name)
+                        .and_then(|value| value.to_str().ok())
+                        .map(str::to_owned)
+                };
+                let mut hosted = hosted.lock().unwrap();
+                let path = uri.path().to_owned();
+                hosted.calls.push(Call {
+                    path: path.clone(),
+                    authorization: header("authorization"),
+                    idempotency_key: header("idempotency-key"),
+                    body: String::from_utf8_lossy(&body).into_owned(),
+                });
+                let (status, body) = hosted
+                    .responses
+                    .get(&path)
+                    .cloned()
+                    .unwrap_or((404, json!({"error": "Not found"}).to_string()));
+                (
+                    StatusCode::from_u16(status).unwrap(),
+                    [("content-type", "application/json")],
+                    body,
+                )
+                    .into_response()
+            }
+        });
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = Url::parse(&format!("http://{}/", listener.local_addr().unwrap())).unwrap();
         tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
@@ -206,13 +207,8 @@ pub(crate) mod tests {
             (Some(1), Some(2), Some(3), Some(50))
         );
         assert_eq!(
-            (
-                PRO.companies,
-                PRO.projects,
-                PRO.running_tasks,
-                PRO.monthly_tasks
-            ),
-            (Some(3), Some(10), None, None)
+            (PRO.companies, PRO.projects, PRO.running_tasks, PRO.monthly_tasks),
+            (Some(3), Some(25), None, None)
         );
         // The SQL running limit is the same number.
         assert!(running_limited_sql!().contains(&format!(" >= {FREE_RUNNING_TASKS})")));
@@ -404,9 +400,7 @@ pub(crate) mod tests {
         assert_eq!(summary["plan"], json!("pro"));
 
         let BillingCheckoutResponse::Redirect { url } =
-            checkout(&f.state, &f.admin_id, "checkout-key-1")
-                .await
-                .unwrap()
+            checkout(&f.state, &f.admin_id, "checkout-key-1", CheckoutBody::default()).await.unwrap()
         else {
             panic!("checkout did not redirect");
         };
@@ -415,6 +409,13 @@ pub(crate) mod tests {
             f.fake
                 .with(|hosted| hosted.calls.last().unwrap().idempotency_key.clone()),
             Some("checkout-key-1".into())
+        );
+        assert_eq!(f.fake.with(|hosted| hosted.calls.last().unwrap().body.clone()), "{}");
+        let annual = CheckoutBody { interval: Some(crate::billing::wire::BillingInterval::Year) };
+        checkout(&f.state, &f.admin_id, "checkout-key-2", annual).await.unwrap();
+        assert_eq!(
+            f.fake.with(|hosted| hosted.calls.last().unwrap().body.clone()),
+            r#"{"interval":"year"}"#
         );
         f.fake.with(|hosted| {
             hosted.respond(

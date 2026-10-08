@@ -5,6 +5,8 @@
 use serde::{Deserialize, Deserializer, Serialize, de::Error as _};
 
 pub const SEAT_UNIT_AMOUNT: i64 = 2000;
+/// Pro each year: 12 months less 20%.
+pub const ANNUAL_UNIT_AMOUNT: i64 = 19200;
 pub const SEAT_CURRENCY: &str = "usd";
 pub const MAX_SEATS: i64 = 9999;
 const MAX_URL: usize = 2048;
@@ -12,6 +14,19 @@ const MAX_ID: usize = 128;
 
 crate::shared::wire_enum! {
     pub enum BillingEnvironment { Sandbox = "sandbox", Production = "production" }
+}
+
+crate::shared::wire_enum! {
+    /// The Pro price a checkout buys. A request without one buys monthly.
+    pub enum BillingInterval { Month = "month", Year = "year" }
+}
+
+/// The body of a Pro checkout request.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct CheckoutBody {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub interval: Option<BillingInterval>,
 }
 
 /// `z.number().int().min(1).max(9999)`: any integral JSON number.

@@ -4,8 +4,8 @@
 use serde::Deserialize;
 use serde_json::Value;
 
-use super::{Contract, ContractResult, Fields, MAX, fail, text};
-use crate::billing::wire::valid_idempotency_key;
+use super::{Contract, ContractResult, Fields, MAX, choice, fail, text};
+use crate::billing::wire::{BillingInterval, CheckoutBody, valid_idempotency_key};
 
 /// Money mutations require an `Idempotency-Key` header.
 #[derive(Clone, Debug, Deserialize)]
@@ -26,5 +26,14 @@ impl Contract for IdempotencyHeader {
                 }
             })
             .finish()
+    }
+}
+
+/// The Pro price to buy; an absent body or interval buys monthly.
+impl Contract for CheckoutBody {
+    fn schema(input: Option<&Value>) -> ContractResult<Value> {
+        Fields::new(input)?
+            .opt("interval", choice::<BillingInterval>)
+            .strict()
     }
 }

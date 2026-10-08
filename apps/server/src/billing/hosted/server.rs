@@ -23,8 +23,8 @@ use super::{
 };
 use crate::{
     billing::wire::{
-        BillingEnvironment, HostedSeatChangeBody, QuantityBody, RegistrationResponse,
-        seat_quantity, valid_idempotency_key,
+        BillingEnvironment, BillingInterval, HostedSeatChangeBody, QuantityBody,
+        RegistrationResponse, seat_quantity, valid_idempotency_key,
     },
     shared::{hash::sha256_hex, page, time::now_millis_rfc3339},
 };
@@ -46,6 +46,7 @@ pub struct ServiceConfig {
     pub environment: BillingEnvironment,
     pub stripe_secret_key: String,
     pub stripe_price_id: String,
+    pub stripe_annual_price_id: String,
     pub stripe_portal_configuration_id: String,
     pub stripe_webhook_secret: String,
     /// Stripe Tax on Checkout. It needs a head office address in Stripe.
@@ -63,6 +64,7 @@ impl ServiceConfig {
             origin: self.origin.clone(),
             environment: self.environment,
             stripe_price_id: self.stripe_price_id.clone(),
+            stripe_annual_price_id: self.stripe_annual_price_id.clone(),
             stripe_portal_configuration_id: self.stripe_portal_configuration_id.clone(),
             stripe_webhook_secret: self.stripe_webhook_secret.clone(),
             automatic_tax: self.automatic_tax,
@@ -152,6 +154,7 @@ pub fn load_config(env: &dyn Fn(&str) -> Option<String>) -> Result<ServiceConfig
         environment,
         stripe_secret_key: require("STRIPE_SECRET_KEY")?,
         stripe_price_id: require("STRIPE_PRO_MONTHLY_PRICE_ID")?,
+        stripe_annual_price_id: require("STRIPE_PRO_ANNUAL_PRICE_ID")?,
         stripe_portal_configuration_id: require("STRIPE_PORTAL_CONFIGURATION_ID")?,
         stripe_webhook_secret: require("STRIPE_WEBHOOK_SECRET")?,
         automatic_tax,
@@ -289,7 +292,9 @@ async fn checkout(
     let key = idempotency_key(&headers)?;
     let quantity = quantity_body(&body)?;
     Ok(to_json(
-        &hosted.checkout(&mut account, quantity, &key).await?,
+        &hosted
+            .checkout(&mut account, quantity, BillingInterval::Month, &key)
+            .await?,
     ))
 }
 

@@ -15,16 +15,18 @@ use serde_json::{Value, json};
 
 use super::{
     Hosted, HostedError, HostedResult,
-    server::idempotency_key,
+    server::{JsonBody, idempotency_key},
     store::{self, AccountKey, AccountRow, NewAccount},
 };
 use crate::{
     accounts::wire::token_shape,
-    billing::wire::{HostedCheckoutResult, HostedPlan, HostedPortalResult},
+    billing::wire::{
+        BillingInterval, CheckoutBody, HostedCheckoutResult, HostedPlan, HostedPortalResult,
+    },
     shared::hash::sha256_hex,
 };
 
-pub const TRIAL_DAYS: i64 = 30;
+pub const TRIAL_DAYS: i64 = 14;
 
 impl Hosted {
     /// The billing account of a Suplex account, created on first use.
@@ -82,11 +84,11 @@ impl Hosted {
         })
     }
 
-    /// Starts the account's one trial: Pro for 30 days with no payment method.
+    /// Starts the account's one trial: Pro for 14 days with no payment method.
     /// A repeated request returns the current plan.
     pub async fn start_trial(&self, account: &mut AccountRow) -> HostedResult<HostedPlan> {
         let _lock = self.account_lock(&account.id).await;
-        self.ensure_price_verified().await?;
+        self.ensure_price_verified(BillingInterval::Month).await?;
         let inspection = self.inspect_source(account).await?;
         if !inspection.subscriptions.is_empty() {
             if inspection.state.active {
@@ -151,11 +153,22 @@ async fn trial(State(hosted): State<Hosted>, headers: HeaderMap) -> Reply {
     Ok(to_json(&hosted.start_trial(&mut account).await?))
 }
 
-/// Pro is one seat.
-async fn checkout(State(hosted): State<Hosted>, headers: HeaderMap) -> Reply {
+/// Pro is one seat. Hosts before annual Pro send no body: monthly.
+async fn checkout(
+    State(hosted): State<Hosted>,
+    headers: HeaderMap,
+    JsonBody(body): JsonBody,
+) -> Reply {
     let mut account = hosted.billing_for_token(&headers)?;
     let key = idempotency_key(&headers)?;
-    let result: HostedCheckoutResult = hosted.checkout(&mut account, 1, &key).await?;
+    let body = if body.is_null() {
+        CheckoutBody::default()
+    } else {
+        serde_json::from_value::<CheckoutBody>(body)
+            .map_err(|_| HostedError::new(400, None, "Invalid request"))?
+    };
+    let interval = body.interval.unwrap_or(BillingInterval::Month);
+    let result: HostedCheckoutResult = hosted.checkout(&mut account, 1, interval, &key).await?;
     Ok(to_json(&result))
 }
 

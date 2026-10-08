@@ -57,10 +57,10 @@ fn prerequisites() -> Value {
                 .next()
                 .and_then(|value| value.parse::<u32>().ok())
                 .unwrap_or(0);
-            if major < 22 {
+            if major < 23 {
                 return failure(
                     format!(
-                        "Suplex needs macOS 13 or newer and this Mac reports Darwin {release}."
+                        "Suplex needs macOS 14 or newer and this Mac reports Darwin {release}."
                     ),
                     "Update macOS in System Settings, then try again.",
                 );

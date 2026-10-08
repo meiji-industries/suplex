@@ -71,7 +71,7 @@ test("Free shows usage against each limit and starts the trial without a tab", a
   for (const usage of ["1 / 1", "2 / 3", "12 / 50"]) expect(text).toContain(usage);
   expect(text).toContain("No credit card is necessary.");
   expect(button(container, "Open billing")).toBeUndefined();
-  await act(async () => button(container, "Start the 30-day trial")!.click());
+  await act(async () => button(container, "Start the 14-day trial")!.click());
   expect(posts("/api/billing/trial")).toHaveLength(1);
   expect(window.open).not.toHaveBeenCalled();
   expect(container.textContent).toContain("Pro trial");
@@ -86,21 +86,34 @@ test("Select Pro opens Checkout in a tab and keeps its key after a failure", asy
     return { status: "redirect", url: "https://checkout.stripe.com/c/pay/1" };
   });
   const container = await mount();
-  expect(button(container, "Start the 30-day trial")).toBeUndefined();
+  expect(button(container, "Start the 14-day trial")).toBeUndefined();
   await act(async () => button(container, "Select Pro")!.click());
   expect(container.textContent).toContain("Suplex cannot check the subscription.");
   expect(tab.close).toHaveBeenCalledOnce();
   await act(async () => button(container, "Select Pro")!.click());
   const keys = posts("/api/billing/checkout").map(([, init]) => (init.headers as Record<string, string>)["Idempotency-Key"]);
   expect(keys[0]).toBe(keys[1]);
+  expect(posts("/api/billing/checkout")[0]![1].body).toBe(JSON.stringify({ interval: "month" }));
   expect(tab.location.href).toBe("https://checkout.stripe.com/c/pay/1");
+});
+
+test("Annual shows the yearly price and buys it with a new key", async () => {
+  api.readJson.mockImplementation(async (url: string) => url === "/api/billing" ? free : { status: "redirect", url: "https://checkout.stripe.com/c/pay/1" });
+  const container = await mount();
+  await act(async () => button(container, "Select Pro")!.click());
+  await act(async () => button(container, "Annual")!.click());
+  expect(container.textContent).toContain("$192 each year ($16 each month).");
+  await act(async () => button(container, "Select Pro")!.click());
+  const [monthly, annual] = posts("/api/billing/checkout").map(([, init]) => init);
+  expect(annual.body).toBe(JSON.stringify({ interval: "year" }));
+  expect(annual.headers["Idempotency-Key"]).not.toBe(monthly.headers["Idempotency-Key"]);
 });
 
 test("Pro offers the billing portal and shows the renewal", async () => {
   api.readJson.mockImplementation(async (url: string) => url === "/api/billing/portal" ? { url: "https://billing.stripe.com/p/1" } : pro);
   const container = await mount();
   expect(container.textContent).toContain("Pro plan");
-  expect(container.textContent).toContain("$20 each month. Renews on");
+  expect(container.textContent).toContain("Renews on");
   expect(button(container, "Select Pro")).toBeUndefined();
   await act(async () => button(container, "Open billing")!.click());
   expect(tab.location.href).toBe("https://billing.stripe.com/p/1");

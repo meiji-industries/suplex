@@ -15,8 +15,8 @@ use super::{
 };
 use crate::{
     billing::wire::{
-        HostedCheckoutResult, HostedPortalResult, HostedSeatChangeBody, HostedSeatChangeResult,
-        HostedSeatPreview, SEAT_CURRENCY, SEAT_UNIT_AMOUNT,
+        BillingInterval, HostedCheckoutResult, HostedPortalResult, HostedSeatChangeBody,
+        HostedSeatChangeResult, HostedSeatPreview, SEAT_CURRENCY, SEAT_UNIT_AMOUNT,
     },
     shared::hash::sha256_hex,
 };
@@ -202,12 +202,12 @@ impl Hosted {
     // Checkout
     // -----------------------------------------------------------------------
 
-    fn session_has_configured_price(&self, session: &CheckoutSession) -> bool {
+    fn session_has_price(session: &CheckoutSession, price_id: &str) -> bool {
         session.line_items.is_empty()
             || session
                 .line_items
                 .iter()
-                .any(|line| line.price_id == self.config.stripe_price_id)
+                .any(|line| line.price_id == price_id)
     }
 
     /// Verified source state as a checkout result; `None` when no live
@@ -286,6 +286,7 @@ impl Hosted {
         account: &mut AccountRow,
         operation: &mut OperationRow,
         requested: i64,
+        price_id: &str,
         for_owner: bool,
     ) -> HostedResult<Option<HostedCheckoutResult>> {
         let fail = |error| self.provider_failure("stripe request", error);
@@ -336,13 +337,13 @@ impl Hosted {
             let stored_quantity = session_quantity(session)
                 .or_else(|| operation.input.get("quantity").and_then(Value::as_i64))
                 .unwrap_or(requested);
-            if stored_quantity == requested && self.session_has_configured_price(session) {
+            if stored_quantity == requested && Self::session_has_price(session, price_id) {
                 if operation.state != "provider_pending" {
                     self.update_operation(operation, Some("provider_pending"), None)?;
                 }
                 return self.redirect(operation, session).map(Some);
             }
-            // A different quantity on an unpaid session: expire before
+            // A different quantity or price on an unpaid session: expire before
             // creating again; a payment that raced expiration wins.
             self.stripe
                 .expire_checkout_session(&session.id)
@@ -399,6 +400,7 @@ impl Hosted {
         account: &mut AccountRow,
         operation: &mut OperationRow,
         quantity: i64,
+        price_id: &str,
     ) -> HostedResult<HostedCheckoutResult> {
         let fail = |error| self.provider_failure("stripe request", error);
         let inspection = self.inspect_source(account).await?;
@@ -424,8 +426,8 @@ impl Hosted {
         let data = merged(operation, [("stripeCustomerId", json!(customer_id))]);
         self.update_operation(operation, None, Some(data))?;
 
-        // Reuse an open session for the same quantity; expire unpaid
-        // sessions for another quantity only after re-reading their status.
+        // Reuse an open session for the same quantity and price; expire unpaid
+        // sessions for another one only after re-reading their status.
         let open = self
             .stripe
             .list_open_checkout_sessions(&customer_id)
@@ -433,7 +435,7 @@ impl Hosted {
             .map_err(fail)?;
         if let Some(session) = open.iter().find(|session| {
             session_quantity(session) == Some(quantity)
-                && self.session_has_configured_price(session)
+                && Self::session_has_price(session, price_id)
         }) {
             let data = merged(
                 operation,
@@ -469,7 +471,7 @@ impl Hosted {
             .create_checkout_session(
                 &CheckoutParams {
                     customer_id: &customer_id,
-                    price_id: &self.config.stripe_price_id,
+                    price_id,
                     quantity,
                     automatic_tax: self.config.automatic_tax,
                     success_url: &format!("{}/checkout/return", self.config.origin),
@@ -504,11 +506,17 @@ impl Hosted {
         &self,
         account: &mut AccountRow,
         quantity: i64,
+        interval: BillingInterval,
         idempotency_key: &str,
     ) -> HostedResult<HostedCheckoutResult> {
         let _lock = self.account_lock(&account.id).await;
-        self.ensure_price_verified().await?;
-        let input = json!({"quantity": quantity});
+        self.ensure_price_verified(interval).await?;
+        let price_id = self.config.price_id(interval).to_owned();
+        // A monthly input keeps its original shape, so its hash still matches.
+        let mut input = json!({"quantity": quantity});
+        if interval == BillingInterval::Year {
+            input["interval"] = json!(interval);
+        }
         let hash = input_hash("checkout", &input);
 
         let existing =
@@ -532,7 +540,7 @@ impl Hosted {
                     .unwrap_or(stored));
             }
             if let Some(resolved) = self
-                .resolve_checkout_operation(account, &mut operation, quantity, true)
+                .resolve_checkout_operation(account, &mut operation, quantity, &price_id, true)
                 .await?
             {
                 return Ok(resolved);
@@ -543,7 +551,13 @@ impl Hosted {
             if let Some(mut pending) = pending {
                 if pending.kind == "checkout" {
                     if let Some(resolved) = self
-                        .resolve_checkout_operation(account, &mut pending, quantity, false)
+                        .resolve_checkout_operation(
+                            account,
+                            &mut pending,
+                            quantity,
+                            &price_id,
+                            false,
+                        )
                         .await?
                     {
                         return Ok(resolved);
@@ -559,7 +573,7 @@ impl Hosted {
                     // Persist the immutable command before any dispatch.
                     let data = json!({"command": {
                         "quantity": quantity,
-                        "priceId": self.config.stripe_price_id,
+                        "priceId": price_id,
                         "providerKey": format!("suplex_checkout_{}", operation.id),
                     }});
                     self.update_operation(&mut operation, None, data.as_object().cloned())?;
@@ -575,7 +589,9 @@ impl Hosted {
                             self.query(|db| store::find_pending_mutation(db, &account.id))?;
                         if let Some(mut other) = other.filter(|other| other.kind == "checkout")
                             && let Some(resolved) = self
-                                .resolve_checkout_operation(account, &mut other, quantity, false)
+                                .resolve_checkout_operation(
+                                    account, &mut other, quantity, &price_id, false,
+                                )
                                 .await?
                         {
                             return Ok(resolved);
@@ -585,7 +601,7 @@ impl Hosted {
                         ));
                     };
                     if let Some(resolved) = self
-                        .resolve_checkout_operation(account, &mut raced, quantity, true)
+                        .resolve_checkout_operation(account, &mut raced, quantity, &price_id, true)
                         .await?
                     {
                         return Ok(resolved);
@@ -595,7 +611,7 @@ impl Hosted {
                 Err(error) => return Err(error.into()),
             }
         };
-        self.run_checkout_attempt(account, &mut operation, quantity)
+        self.run_checkout_attempt(account, &mut operation, quantity, &price_id)
             .await
     }
 
@@ -604,11 +620,18 @@ impl Hosted {
     // -----------------------------------------------------------------------
 
     fn require_paid_subscription(
+        &self,
         inspection: &SourceInspection,
     ) -> HostedResult<(Subscription, Item)> {
         let (Some(subscription), Some(item)) = (&inspection.subscription, &inspection.item) else {
             return Err(no_subscription("This account has no subscription"));
         };
+        // Seat quotes price the monthly seat; an annual Pro is one seat.
+        if item.price_id != self.config.stripe_price_id {
+            return Err(no_subscription(
+                "Seat changes apply only to a monthly subscription",
+            ));
+        }
         if terminal(&subscription.status) {
             return Err(no_subscription("This account has no active subscription"));
         }
@@ -690,7 +713,7 @@ impl Hosted {
         quantity: i64,
     ) -> HostedResult<HostedSeatPreview> {
         let _lock = self.account_lock(&account.id).await;
-        self.ensure_price_verified().await?;
+        self.ensure_price_verified(BillingInterval::Month).await?;
         let pending = self.query(|db| store::find_pending_mutation(db, &account.id))?;
         if let Some(pending) = pending
             && !self.resolve_pending_operation(account, pending).await?
@@ -700,7 +723,7 @@ impl Hosted {
             ));
         }
         let inspection = self.inspect_source(account).await?;
-        let (subscription, item) = Self::require_paid_subscription(&inspection)?;
+        let (subscription, item) = self.require_paid_subscription(&inspection)?;
         if quantity <= item.quantity {
             return Err(HostedError::invalid_seat_quantity(
                 "A seat increase preview requires a quantity above the current seats",
@@ -1079,8 +1102,21 @@ impl Hosted {
             .get("quantity")
             .and_then(Value::as_i64)
             .unwrap_or(1);
-        self.resolve_checkout_operation(account, &mut pending, stored_quantity, false)
-            .await?;
+        let stored_price = pending
+            .data
+            .get("command")
+            .and_then(|command| command.get("priceId"))
+            .and_then(Value::as_str)
+            .unwrap_or(&self.config.stripe_price_id)
+            .to_owned();
+        self.resolve_checkout_operation(
+            account,
+            &mut pending,
+            stored_quantity,
+            &stored_price,
+            false,
+        )
+        .await?;
         let fresh = self.query(|db| store::find_operation_by_id(db, &pending.id))?;
         Ok(fresh.is_none_or(|fresh| !is_pending(&fresh.state)))
     }
@@ -1108,7 +1144,7 @@ impl Hosted {
         idempotency_key: &str,
     ) -> HostedResult<HostedSeatChangeResult> {
         let _lock = self.account_lock(&account.id).await;
-        self.ensure_price_verified().await?;
+        self.ensure_price_verified(BillingInterval::Month).await?;
         // Idempotency compares the normalized mutation input: an increase is
         // keyed by preview binding, a decrease by the refund acknowledgment.
         let stored_input = match body {
@@ -1161,7 +1197,7 @@ impl Hosted {
         }
 
         let inspection = self.inspect_source(account).await?;
-        let (subscription, item) = Self::require_paid_subscription(&inspection)?;
+        let (subscription, item) = self.require_paid_subscription(&inspection)?;
         let quantity = body.quantity();
         let insert = || match self.insert_operation(
             &account.id,

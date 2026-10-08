@@ -2,8 +2,9 @@ import { Alert, AlertDescription } from "../../components/ui/alert.js";
 import { Button } from "../../components/ui/button.js";
 import { Skeleton } from "../../components/ui/skeleton.js";
 import { Spinner } from "../../components/ui/spinner.js";
+import { Tabs, TabsList, TabsTrigger } from "../../components/ui/tabs.js";
 import { isApiError } from "../../lib/api.js";
-import { PRO_MONTHLY_AMOUNT, type BillingSummary } from "../../contracts/billing.js";
+import { PRO_ANNUAL_AMOUNT, PRO_MONTHLY_AMOUNT, type BillingInterval, type BillingSummary } from "../../contracts/billing.js";
 import { getBillingSummary, openBillingPortal, startCheckout, startTrial } from "./lib/billing-api.js";
 import { useOptionalCompanyContext } from "../../shell/company-context.js";
 import { SettingsSection, SettingRow } from "./settings-layout.js";
@@ -32,7 +33,7 @@ function actionMessage(reason: unknown): string {
   return reason instanceof Error ? reason.message : "Suplex cannot check the subscription.";
 }
 
-const PRO_FEATURES = ["3 companies", "10 projects", "Unlimited tasks at a time", "Unlimited tasks each month"];
+const PRO_FEATURES = ["3 companies", "25 projects", "Unlimited tasks at a time", "Unlimited tasks each month"];
 
 // A browser allows a new tab only during the click, so open it before the
 // request and send it to the hosted URL when the answer arrives.
@@ -52,10 +53,10 @@ function limitText(used: number, limit: number | null): string {
 function planDetail(summary: BillingSummary): string {
   const trial = summary.plan === "pro" && summary.subscriptionStatus === "trialing";
   if (trial) return summary.accessUntil ? `The trial ends on ${formatDate(summary.accessUntil)}. Add a payment method in Open billing to keep Pro.` : "The trial is active.";
+  // The summary does not tell monthly from yearly, so the price is not shown.
   if (summary.plan === "pro") {
-    const price = `${formatUsd(PRO_MONTHLY_AMOUNT)} each month`;
-    if (summary.cancelAtPeriodEnd && summary.accessUntil) return `${price}. Pro ends on ${formatDate(summary.accessUntil)}.`;
-    return summary.renewalAt ? `${price}. Renews on ${formatDate(summary.renewalAt)}.` : `${price}.`;
+    if (summary.cancelAtPeriodEnd && summary.accessUntil) return `Pro ends on ${formatDate(summary.accessUntil)}.`;
+    return summary.renewalAt ? `Renews on ${formatDate(summary.renewalAt)}.` : "Pro is active.";
   }
   return "Free includes 1 company, 2 projects, 3 tasks at a time, and 50 tasks each month.";
 }
@@ -76,6 +77,7 @@ export function BillingSection(): ReactElement {
   const [busy, setBusy] = useState("");
   const [externalOpen, setExternalOpen] = useState(false);
   const checkoutKey = useRef<string | undefined>(undefined);
+  const [interval, setCheckoutInterval] = useState<BillingInterval>("month");
   const mounted = useRef(true);
 
   const setPlan = useOptionalCompanyContext()?.setPlan;
@@ -132,7 +134,7 @@ export function BillingSection(): ReactElement {
     const tab = pendingTab();
     try {
       checkoutKey.current ??= crypto.randomUUID();
-      const result = await startCheckout(checkoutKey.current);
+      const result = await startCheckout(checkoutKey.current, interval);
       if (result.status === "redirect") {
         tab.go(result.url);
         setExternalOpen(true);
@@ -195,9 +197,14 @@ export function BillingSection(): ReactElement {
       </SettingsSection>
       {canUpgrade ? (
         <SettingsSection>
-          <SettingRow label="Upgrade to Pro" description={summary.trialAvailable ? `No credit card is necessary. Then ${formatUsd(PRO_MONTHLY_AMOUNT)} each month. Taxes are additional.` : `${formatUsd(PRO_MONTHLY_AMOUNT)} each month. Taxes are additional.`}>
+          <SettingRow label="Upgrade to Pro" description={interval === "year"
+            ? `${formatUsd(PRO_ANNUAL_AMOUNT)} each year (${formatUsd(PRO_ANNUAL_AMOUNT / 12)} each month). Taxes are additional.`
+            : `${summary.trialAvailable ? "No credit card is necessary. Then " : ""}${formatUsd(PRO_MONTHLY_AMOUNT)} each month. Taxes are additional.`}>
             <div className="flex flex-wrap items-center justify-end gap-2">
-              {summary.trialAvailable ? <Button size="sm" onClick={() => void trial()} disabled={busy !== ""}>{busy === "trial" ? <Spinner /> : null}Start the 30-day trial</Button> : null}
+              <Tabs value={interval} onValueChange={next => { setCheckoutInterval(next as BillingInterval); checkoutKey.current = undefined; }}>
+                <TabsList aria-label="Billing period"><TabsTrigger value="month">Monthly</TabsTrigger><TabsTrigger value="year">Annual</TabsTrigger></TabsList>
+              </Tabs>
+              {summary.trialAvailable ? <Button size="sm" onClick={() => void trial()} disabled={busy !== ""}>{busy === "trial" ? <Spinner /> : null}Start the 14-day trial</Button> : null}
               <Button size="sm" variant={summary.trialAvailable ? "outline" : "default"} onClick={() => void checkout()} disabled={busy !== ""}>{busy === "checkout" ? <Spinner /> : null}Select Pro</Button>
             </div>
           </SettingRow>

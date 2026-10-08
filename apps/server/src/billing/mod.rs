@@ -24,7 +24,7 @@ use crate::{
     platform::database::{DatabaseResult, SuplexDatabase},
     shared::{PublicFailure, time::rfc3339_millis},
 };
-use wire::{HostedCheckoutResult, HostedErrorBody, HostedPlan, HostedPortalResult};
+use wire::{CheckoutBody, HostedCheckoutResult, HostedErrorBody, HostedPlan, HostedPortalResult};
 
 pub mod hosted;
 pub mod wire;
@@ -52,7 +52,7 @@ pub const FREE: PlanLimits = PlanLimits {
 
 pub const PRO: PlanLimits = PlanLimits {
     companies: Some(3),
-    projects: Some(10),
+    projects: Some(25),
     running_tasks: None,
     monthly_tasks: None,
 };
@@ -259,11 +259,15 @@ impl BillingClient {
         path: &str,
         token: &str,
         idempotency_key: Option<&str>,
+        body: Option<&serde_json::Value>,
     ) -> Result<T, PublicFailure> {
         let url = self.base.join(path).map_err(|_| unavailable())?;
         let mut request = self.http.request(method, url).bearer_auth(token);
         if let Some(key) = idempotency_key {
             request = request.header("idempotency-key", key);
+        }
+        if let Some(body) = body {
+            request = request.json(body);
         }
         let response = request.send().await.map_err(|_| unavailable())?;
         let status = response.status().as_u16();
@@ -350,7 +354,7 @@ pub async fn refresh(state: &AppState) -> Result<Option<HostedPlan>, Box<dyn Err
     };
     let plan = valid(
         client
-            .call(Method::GET, "/v1/plan", &account.token, None)
+            .call(Method::GET, "/v1/plan", &account.token, None, None)
             .await?,
     )?;
     remember(state, &account.account_id, &plan)?;
@@ -477,7 +481,7 @@ pub async fn start_trial(
     let (client, account) = administered(state, user_id)?;
     let plan = valid(
         client
-            .call(Method::POST, "/v1/plan/trial", &account.token, None)
+            .call(Method::POST, "/v1/plan/trial", &account.token, None, None)
             .await?,
     )?;
     remember(state, &account.account_id, &plan)?;
@@ -488,14 +492,17 @@ pub async fn checkout(
     state: &AppState,
     user_id: &str,
     idempotency_key: &str,
+    body: CheckoutBody,
 ) -> Result<BillingCheckoutResponse, Box<dyn Error + Send + Sync>> {
     let (client, account) = administered(state, user_id)?;
+    let body = serde_json::to_value(body)?;
     let result: HostedCheckoutResult = client
         .call(
             Method::POST,
             "/v1/plan/checkout",
             &account.token,
             Some(idempotency_key),
+            Some(&body),
         )
         .await?;
     if !result.valid() {
@@ -523,7 +530,7 @@ pub async fn portal(
 ) -> Result<BillingPortalResponse, Box<dyn Error + Send + Sync>> {
     let (client, account) = administered(state, user_id)?;
     let result: HostedPortalResult = client
-        .call(Method::POST, "/v1/plan/portal", &account.token, None)
+        .call(Method::POST, "/v1/plan/portal", &account.token, None, None)
         .await?;
     Ok(BillingPortalResponse {
         url: client.forwarded_url(&result.url)?,

@@ -5,8 +5,8 @@ use std::error::Error;
 #[derive(Debug)]
 pub struct ApiError(pub PublicFailure);
 
-impl From<Box<dyn Error>> for ApiError {
-    fn from(error: Box<dyn Error>) -> Self {
+impl From<Box<dyn Error + Send + Sync>> for ApiError {
+    fn from(error: Box<dyn Error + Send + Sync>) -> Self {
         Self(public_failure(error))
     }
 }
@@ -21,7 +21,7 @@ impl IntoResponse for ApiError {
     }
 }
 impl ApiError {
-    pub fn response(error: Box<dyn Error>) -> Response {
+    pub fn response(error: Box<dyn Error + Send + Sync>) -> Response {
         Self::from(error).into_response()
     }
 }

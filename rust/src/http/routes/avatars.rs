@@ -55,24 +55,26 @@ async fn image(
         Ok(value) => value,
         Err(response) => return *response,
     };
-    let result = state.with_database(|database| -> Result<Response, Box<dyn Error>> {
-        if let Some(uploaded) = avatars::image(database, &user_id, &owner_id)? {
-            return Ok(
-                ([(header::CONTENT_TYPE, uploaded.mime_type)], uploaded.image).into_response(),
-            );
-        }
-        let (kind, seed) = avatars::owner(database, &user_id, &owner_id)?;
-        if kind == "project"
-            && let Ok(Some(favicon)) = avatars::project_favicon(database, &user_id, &owner_id)
-        {
-            return Ok(([(header::CONTENT_TYPE, "image/x-icon")], favicon).into_response());
-        }
-        Ok((
-            StatusCode::FOUND,
-            [(header::LOCATION, avatars::dicebear_url(kind, &seed))],
-        )
-            .into_response())
-    });
+    let result = state.with_database(
+        |database| -> Result<Response, Box<dyn Error + Send + Sync>> {
+            if let Some(uploaded) = avatars::image(database, &user_id, &owner_id)? {
+                return Ok(
+                    ([(header::CONTENT_TYPE, uploaded.mime_type)], uploaded.image).into_response(),
+                );
+            }
+            let (kind, seed) = avatars::owner(database, &user_id, &owner_id)?;
+            if kind == "project"
+                && let Ok(Some(favicon)) = avatars::project_favicon(database, &user_id, &owner_id)
+            {
+                return Ok(([(header::CONTENT_TYPE, "image/x-icon")], favicon).into_response());
+            }
+            Ok((
+                StatusCode::FOUND,
+                [(header::LOCATION, avatars::dicebear_url(kind, &seed))],
+            )
+                .into_response())
+        },
+    );
     let mut response = match result {
         Ok(response) => response,
         Err(error) => ApiError::response(error),

@@ -71,7 +71,7 @@ async fn checks(
         Ok(value) => value,
         Err(response) => return *response,
     };
-    let intent = state.with_database(|database| -> Result<_, Box<dyn Error>> {
+    let intent = state.with_database(|database| -> Result<_, Box<dyn Error + Send + Sync>> {
         let (rows, _) = read_task(database, &user_id, &task_id)?;
         let configuration = &rows.context["configuration"];
         Ok(rows
@@ -121,7 +121,7 @@ fn read_task(
     database: &SuplexDatabase,
     user_id: &str,
     task_id: &str,
-) -> Result<(RootObservationRows, PathBuf), Box<dyn Error>> {
+) -> Result<(RootObservationRows, PathBuf), Box<dyn Error + Send + Sync>> {
     crate::tasks::authorize_task(database, user_id, task_id)?;
     let rows = root_session_store::root_observation_rows(database, task_id)?;
     let database_path = PathBuf::from(
@@ -133,7 +133,10 @@ fn read_task(
     Ok((rows, database_path))
 }
 
-fn respond<T: Serialize>(result: Result<T, Box<dyn Error>>, cookies: Vec<String>) -> Response {
+fn respond<T: Serialize>(
+    result: Result<T, Box<dyn Error + Send + Sync>>,
+    cookies: Vec<String>,
+) -> Response {
     let mut response = match result {
         Ok(value) => {
             let mut response = Json(value).into_response();
@@ -214,7 +217,7 @@ pub(crate) fn activity_document(
     rows: &RootObservationRows,
     task_id: &str,
     host: Option<&HostTerminals>,
-) -> Result<TaskActivityResponse, Box<dyn Error>> {
+) -> Result<TaskActivityResponse, Box<dyn Error + Send + Sync>> {
     let sessions = rows
         .sessions
         .iter()
@@ -280,79 +283,81 @@ pub(crate) fn activity_document(
     })
 }
 
-pub(crate) fn execution_document(
+pub(crate) async fn execution_document(
     rows: &RootObservationRows,
     database_path: &std::path::Path,
-) -> Result<TaskExecutionResponse, Box<dyn Error>> {
-    let sessions = rows
+) -> Result<TaskExecutionResponse, Box<dyn Error + Send + Sync>> {
+    let mut sessions = Vec::new();
+    for session in rows
         .sessions
         .iter()
         .filter(|session| session.native_session_id.is_some())
-        .map(|session| -> Result<TaskExecutionSession, Box<dyn Error>> {
-            let profile = rows.profile_of(session);
-            let observed = session
-                .native_session_id
-                .as_deref()
-                .and_then(|native_session_id| {
-                    let reader = task_harness_registry::native_session_reader(native_session_id)?;
-                    let session = ReaderSession {
-                        database_path,
-                        session_id: &session.id,
-                        native_session_id,
-                        instance_home_directory: profile
-                            .instance_home_directory()
-                            .map(std::path::Path::new),
-                    };
-                    // ponytail: read native logs twice; combine observations if Activity polling becomes costly.
-                    reader.execution(&session).ok().map(|execution| {
-                        (execution, reader.reasoning(&session).unwrap_or_default())
-                    })
-                });
-            let available = observed.is_some();
-            let (tools, plan, reasoning) = match observed {
-                Some(((tools, plan), reasoning)) => {
-                    let tools = tools
-                        .into_iter()
-                        .map(|tool| {
-                            Ok(TaskExecutionTool {
-                                id: tool.id,
-                                name: tool.name,
-                                status: TaskToolStatus::parse(tool.status)
-                                    .ok_or("Native tool status is invalid")?,
-                                input: Value::Object(tool.input),
-                                output: tool.output,
-                                error: tool.error,
-                            })
-                        })
-                        .collect::<Result<Vec<_>, Box<dyn Error>>>()?;
-                    (
-                        tools,
-                        serde_json::from_value(plan)?,
-                        reasoning
-                            .into_iter()
-                            .map(|part| TaskExecutionReasoning {
-                                id: part.id,
-                                text: part.text,
-                            })
-                            .collect(),
-                    )
-                }
-                None => (Vec::new(), None, Vec::new()),
+    {
+        let profile = rows.profile_of(session);
+        let mut observed = None;
+        if let Some(native_session_id) = session.native_session_id.as_deref()
+            && let Some(reader) = task_harness_registry::native_session_reader(native_session_id)
+        {
+            let session = ReaderSession {
+                database_path,
+                session_id: &session.id,
+                native_session_id,
+                instance_home_directory: profile
+                    .instance_home_directory()
+                    .map(std::path::Path::new),
             };
-            Ok(TaskExecutionSession {
-                id: session.id.clone(),
-                role: session.kind,
-                advisor_role: session.advisor_role,
-                label: role_label(session).into(),
-                generation: session.generation,
-                available,
-                limited: false,
-                tools,
-                reasoning,
-                plan,
-            })
-        })
-        .collect::<Result<Vec<_>, _>>()?;
+            // ponytail: read native logs twice; combine observations if Activity polling becomes costly.
+            if let Ok(execution) = reader.execution(&session).await {
+                observed = Some((
+                    execution,
+                    reader.reasoning(&session).await.unwrap_or_default(),
+                ));
+            }
+        }
+        let available = observed.is_some();
+        let (tools, plan, reasoning) = match observed {
+            Some(((tools, plan), reasoning)) => {
+                let tools = tools
+                    .into_iter()
+                    .map(|tool| {
+                        Ok(TaskExecutionTool {
+                            id: tool.id,
+                            name: tool.name,
+                            status: TaskToolStatus::parse(tool.status)
+                                .ok_or("Native tool status is invalid")?,
+                            input: Value::Object(tool.input),
+                            output: tool.output,
+                            error: tool.error,
+                        })
+                    })
+                    .collect::<Result<Vec<_>, Box<dyn Error + Send + Sync>>>()?;
+                (
+                    tools,
+                    serde_json::from_value(plan)?,
+                    reasoning
+                        .into_iter()
+                        .map(|part| TaskExecutionReasoning {
+                            id: part.id,
+                            text: part.text,
+                        })
+                        .collect(),
+                )
+            }
+            None => (Vec::new(), None, Vec::new()),
+        };
+        sessions.push(TaskExecutionSession {
+            id: session.id.clone(),
+            role: session.kind,
+            advisor_role: session.advisor_role,
+            label: role_label(session).into(),
+            generation: session.generation,
+            available,
+            limited: false,
+            tools,
+            reasoning,
+            plan,
+        });
+    }
     Ok(TaskExecutionResponse { sessions })
 }
 
@@ -375,8 +380,8 @@ async fn setup_log(
     })
     .await;
     let result = result
-        .map_err(|error| Box::new(error) as Box<dyn Error>)
-        .and_then(|result| result.map_err(|error| Box::new(error) as Box<dyn Error>));
+        .map_err(|error| Box::new(error) as Box<dyn Error + Send + Sync>)
+        .and_then(|result| result.map_err(|error| Box::new(error) as Box<dyn Error + Send + Sync>));
     let result = state
         .with_database(|database| read_task(database, &user_id, &task_id))
         .and(result);
@@ -392,15 +397,17 @@ async fn activity(
         Ok(value) => value,
         Err(response) => return *response,
     };
-    let result = state.with_database(|database| -> Result<TaskActivityResponse, Box<dyn Error>> {
-        let (rows, _) = read_task(database, &user_id, &task_id)?;
-        activity_document(
-            database,
-            &rows,
-            &task_id,
-            terminals::host_enabled(database).then_some(&*state.host_terminals),
-        )
-    });
+    let result = state.with_database(
+        |database| -> Result<TaskActivityResponse, Box<dyn Error + Send + Sync>> {
+            let (rows, _) = read_task(database, &user_id, &task_id)?;
+            activity_document(
+                database,
+                &rows,
+                &task_id,
+                terminals::host_enabled(database).then_some(&*state.host_terminals),
+            )
+        },
+    );
     respond(result, cookies)
 }
 
@@ -418,14 +425,9 @@ async fn execution(
             Ok(value) => value,
             Err(error) => return respond::<Value>(Err(error), cookies),
         };
-    let observation = match tokio::task::spawn_blocking(move || {
-        execution_document(&rows, &database_path).map_err(|error| error.to_string())
-    })
-    .await
-    {
-        Ok(Ok(value)) => value,
-        Ok(Err(error)) => return respond::<Value>(Err(error.into()), cookies),
-        Err(error) => return respond::<Value>(Err(Box::new(error)), cookies),
+    let observation = match execution_document(&rows, &database_path).await {
+        Ok(value) => value,
+        Err(error) => return respond::<Value>(Err(error.to_string().into()), cookies),
     };
     // Native files can change during observation; refresh user scope after it.
     let scope = state.with_database(|database| read_task(database, &user_id, &task_id));
@@ -490,36 +492,38 @@ async fn read_diff(
             pull_request: Option<u64>,
         },
     }
-    let intent = match state.with_database(|database| -> Result<DiffIntent, Box<dyn Error>> {
-        let (rows, _) = read_task(database, &user_id, &task_id)?;
-        let Some(path) = rows.control.worktree_path() else {
-            return Ok(DiffIntent::NoWorktree);
-        };
-        let configuration = &rows.context["configuration"];
-        // A pull request diff uses its current base branch.
-        let pull_request = rows
-            .control
-            .pull_request
-            .as_ref()
-            .map(|pull| pull.number)
-            .or_else(|| {
-                (configuration["source"]["kind"] == "pull_request")
-                    .then(|| configuration["source"]["number"].as_u64())
-                    .flatten()
-            });
-        let repository = configuration["repository"]
-            .as_str()
-            .ok_or("Task repository is missing")?;
-        let base_branch = configuration["baseBranch"]
-            .as_str()
-            .ok_or("Task base branch is missing")?;
-        Ok(DiffIntent::Local {
-            path: PathBuf::from(path),
-            repository: repository.to_owned(),
-            base_branch: base_branch.to_owned(),
-            pull_request,
-        })
-    }) {
+    let intent = match state.with_database(
+        |database| -> Result<DiffIntent, Box<dyn Error + Send + Sync>> {
+            let (rows, _) = read_task(database, &user_id, &task_id)?;
+            let Some(path) = rows.control.worktree_path() else {
+                return Ok(DiffIntent::NoWorktree);
+            };
+            let configuration = &rows.context["configuration"];
+            // A pull request diff uses its current base branch.
+            let pull_request = rows
+                .control
+                .pull_request
+                .as_ref()
+                .map(|pull| pull.number)
+                .or_else(|| {
+                    (configuration["source"]["kind"] == "pull_request")
+                        .then(|| configuration["source"]["number"].as_u64())
+                        .flatten()
+                });
+            let repository = configuration["repository"]
+                .as_str()
+                .ok_or("Task repository is missing")?;
+            let base_branch = configuration["baseBranch"]
+                .as_str()
+                .ok_or("Task base branch is missing")?;
+            Ok(DiffIntent::Local {
+                path: PathBuf::from(path),
+                repository: repository.to_owned(),
+                base_branch: base_branch.to_owned(),
+                pull_request,
+            })
+        },
+    ) {
         Ok(intent) => intent,
         Err(error) => return respond::<Value>(Err(error), cookies),
     };

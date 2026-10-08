@@ -510,9 +510,9 @@ impl RootBridgeServer {
         let database_path = self.database_path.clone();
         let artifact_root = self.artifact_root.clone();
         let root = self.root.clone();
-        // The blocking worker owns claim, operation, and release together. Dropping
+        // The spawned task owns claim, operation, and release together. Dropping
         // the MCP request future cannot strand a token held by this live process.
-        tokio::task::spawn_blocking(move || -> Result<Value, String> {
+        tokio::spawn(async move {
             let mut database = SuplexDatabase::open(&database_path, OpenMode::ReadWrite)
                 .map_err(|error| error.to_string())?;
             root_session_store::assert_current_root(&database, &root.task_id, &root.session_id, root.generation)
@@ -521,14 +521,14 @@ impl RootBridgeServer {
                 .map_err(|error| error.to_string())?
                 .ok_or_else(|| "Another Suplex tool call for this task is still in progress. Retry after it finishes.".to_owned())?;
             let (path, artifacts, db) = (&database_path, &artifact_root, &mut database);
-            let result = crate::shared::blocking::block_on(|| async {
+            let result = async {
                 match call {
                     RootCall::Observe => root_controller::observe(db, path, &root).await,
                     RootCall::ReadImage(artifact_id) => {
                         root_controller::read_image(db, artifacts, &root, &artifact_id)
                     }
                     RootCall::ReadWorkerEvidence(request) => {
-                        root_controller::read_worker_evidence(db, path, &root, &request)
+                        root_controller::read_worker_evidence(db, path, &root, &request).await
                     }
                     RootCall::DelegateWorker(assignment) => {
                         root_controller::delegate_worker(db, path, &root, &token, &assignment).await
@@ -571,7 +571,8 @@ impl RootBridgeServer {
                     }
                 }
                 .map_err(|error| error.to_string())
-            });
+            }
+            .await;
             root_session_store::release_tool_owner(&mut database, &root.task_id, &token)
                 .map_err(|error| error.to_string())?;
             result
@@ -657,7 +658,7 @@ impl ServerHandler for RootBridgeServer {
     }
 }
 
-pub async fn serve_from_environment() -> Result<(), Box<dyn std::error::Error>> {
+pub async fn serve_from_environment() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let binding = root_bridge::authenticated_binding()?;
     let server = RootBridgeServer {
         root: binding.root,

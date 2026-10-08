@@ -521,8 +521,8 @@ mod host_tests {
         fs::remove_dir_all(base).unwrap();
     }
 
-    #[test]
-    fn native_launch_refuses_a_missing_worktree() {
+    #[tokio::test]
+    async fn native_launch_refuses_a_missing_worktree() {
         let (base, database_path, task_id) = fixture_task();
         root_controller::prepare_root(
             &mut SuplexDatabase::open(&database_path, OpenMode::ReadWrite).unwrap(),
@@ -540,11 +540,12 @@ mod host_tests {
                 estimated_cost_usd: Some(0.0),
             },
         };
-        let error = recover_session_blocking(
+        let error = recover_session(
             &mut SuplexDatabase::open(&database_path, OpenMode::ReadWrite).unwrap(),
             &host,
             LaunchPlan::Root,
         )
+        .await
         .unwrap_err();
         assert!(matches!(
             error.downcast_ref::<TaskError>(),
@@ -1568,7 +1569,7 @@ mod host_tests {
             ).unwrap();
         }
         let observed = root_controller::observe(
-            &SuplexDatabase::open(&database_path, OpenMode::ReadOnly).unwrap(),
+            &mut SuplexDatabase::open(&database_path, OpenMode::ReadOnly).unwrap(),
             &database_path,
             &identity,
         )
@@ -2586,6 +2587,7 @@ mod host_tests {
                 &failing_turn,
                 &failure
             )
+            .await
             .unwrap()
         );
         let failed = root_session_store::root_observation_rows(&database, &failing_task)

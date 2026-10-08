@@ -95,9 +95,12 @@ pub fn turn_file(directory: &Path, turn_id: &str, suffix: &str) -> PathBuf {
     directory.join(format!("turn-{turn_id}.{suffix}"))
 }
 
-pub fn dispatch<F>(input: DispatchInput<'_>, claim: F) -> Result<HeadlessTurnRecord, Box<dyn Error>>
+pub fn dispatch<F>(
+    input: DispatchInput<'_>,
+    claim: F,
+) -> Result<HeadlessTurnRecord, Box<dyn Error + Send + Sync>>
 where
-    F: FnOnce(&str) -> Result<bool, Box<dyn Error>>,
+    F: FnOnce(&str) -> Result<bool, Box<dyn Error + Send + Sync>>,
 {
     dispatch_with_exclusions(input, &[], claim)
 }
@@ -106,9 +109,9 @@ pub fn dispatch_with_exclusions<F>(
     input: DispatchInput<'_>,
     excluded_environment_keys: &[String],
     claim: F,
-) -> Result<HeadlessTurnRecord, Box<dyn Error>>
+) -> Result<HeadlessTurnRecord, Box<dyn Error + Send + Sync>>
 where
-    F: FnOnce(&str) -> Result<bool, Box<dyn Error>>,
+    F: FnOnce(&str) -> Result<bool, Box<dyn Error + Send + Sync>>,
 {
     fs::create_dir_all(input.directory)?;
     fs::set_permissions(input.directory, fs::Permissions::from_mode(0o700))?;

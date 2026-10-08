@@ -203,7 +203,7 @@ pub fn read_saved(
     }))
 }
 
-fn timestamp(millis: i64) -> Result<String, Box<dyn Error>> {
+fn timestamp(millis: i64) -> Result<String, Box<dyn Error + Send + Sync>> {
     Ok(crate::shared::time::rfc3339_millis(
         DateTime::<Utc>::from_timestamp_millis(millis)
             .ok_or("Native usage timestamp is out of range")?,
@@ -229,7 +229,7 @@ fn activity(
     session: &TimelineSession,
     mut usage: Vec<TimelineUsage>,
     live_id: Option<&str>,
-) -> Result<Vec<TimelineActivity>, Box<dyn Error>> {
+) -> Result<Vec<TimelineActivity>, Box<dyn Error + Send + Sync>> {
     let profile = session.profile.as_ref().unwrap_or_else(|| {
         if session.kind == SessionKind::Root {
             &task.root_profile
@@ -322,10 +322,10 @@ fn activity(
     Ok(turns.into_iter().map(|(_, entry)| entry).collect())
 }
 
-fn native_usage(
+async fn native_usage(
     database_path: &Path,
     session: &TimelineSession,
-) -> Result<(Vec<TimelineUsage>, Option<String>), Box<dyn Error>> {
+) -> Result<(Vec<TimelineUsage>, Option<String>), Box<dyn Error + Send + Sync>> {
     let native_id = session
         .native_session_id
         .as_deref()
@@ -340,7 +340,8 @@ fn native_usage(
                 instance_home_directory: None,
             },
             None,
-        )?;
+        )
+        .await?;
     let usage = observed
         .usage
         .into_iter()
@@ -356,10 +357,10 @@ fn native_usage(
     Ok((usage, observed.live_message_id))
 }
 
-pub fn observe(
+pub async fn observe(
     database_path: &Path,
     saved: SavedTimeline,
-) -> Result<TimelineResponse, Box<dyn Error>> {
+) -> Result<TimelineResponse, Box<dyn Error + Send + Sync>> {
     let SavedTimeline {
         task,
         sessions,
@@ -397,7 +398,7 @@ pub fn observe(
             && session.current
             && matches!(session.lifecycle.as_str(), "live" | "unknown")
         {
-            match native_usage(database_path, session) {
+            match native_usage(database_path, session).await {
                 Ok((native, current_live)) => {
                     for entry in native {
                         if let Some(previous) = merged
@@ -495,8 +496,8 @@ mod tests {
         assert_eq!(running[0].finished_at, None);
     }
 
-    #[test]
-    fn native_overlay_and_missing_record_preserve_saved_timing() {
+    #[tokio::test]
+    async fn native_overlay_and_missing_record_preserve_saved_timing() {
         let (task, session) = fixture();
         let saved = SavedTimeline {
             task,
@@ -531,7 +532,7 @@ mod tests {
                     .set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_millis(4000)),
             )
             .unwrap();
-        let observed = observe(&database_path, saved.clone()).unwrap();
+        let observed = observe(&database_path, saved.clone()).await.unwrap();
         assert_eq!(observed.unavailable_sessions, 0);
         assert_eq!(observed.tasks[0].activity.len(), 2);
         assert_eq!(
@@ -539,7 +540,7 @@ mod tests {
             "1970-01-01T00:00:04.000Z"
         );
         std::fs::remove_dir_all(&directory).unwrap();
-        let missing = observe(&database_path, saved.clone()).unwrap();
+        let missing = observe(&database_path, saved.clone()).await.unwrap();
         assert_eq!(missing.unavailable_sessions, 1);
         assert_eq!(missing.tasks[0].activity.len(), 1);
         assert_eq!(
@@ -548,7 +549,7 @@ mod tests {
         );
         let mut archived = saved;
         archived.task.archived_at = Some("2026-01-01T00:00:00.000Z".into());
-        let archived = observe(&database_path, archived).unwrap();
+        let archived = observe(&database_path, archived).await.unwrap();
         assert_eq!(archived.unavailable_sessions, 0);
         assert_eq!(archived.tasks[0].activity.len(), 1);
         std::fs::remove_dir_all(root).unwrap();

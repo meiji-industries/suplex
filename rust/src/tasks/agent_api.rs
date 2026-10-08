@@ -53,11 +53,16 @@ use super::{
     response, sources,
 };
 
-fn fail(message: &str, status: u16, code: &'static str) -> Box<dyn Error> {
+fn fail(message: &str, status: u16, code: &'static str) -> Box<dyn Error + Send + Sync> {
     fail_with(message, status, code, Value::Null)
 }
 
-fn fail_with(message: &str, status: u16, code: &'static str, details: Value) -> Box<dyn Error> {
+fn fail_with(
+    message: &str,
+    status: u16,
+    code: &'static str,
+    details: Value,
+) -> Box<dyn Error + Send + Sync> {
     TaskError::Agent {
         status,
         code,
@@ -67,7 +72,7 @@ fn fail_with(message: &str, status: u16, code: &'static str, details: Value) -> 
     .into()
 }
 
-fn not_found() -> Box<dyn Error> {
+fn not_found() -> Box<dyn Error + Send + Sync> {
     fail("Not found", 404, "resource_not_found")
 }
 
@@ -753,7 +758,7 @@ fn cursor_filter(query: &TaskListQuery) -> Value {
     })
 }
 
-fn invalid_cursor() -> Box<dyn Error> {
+fn invalid_cursor() -> Box<dyn Error + Send + Sync> {
     fail("Invalid cursor", 400, "cursor_invalid")
 }
 
@@ -1039,7 +1044,7 @@ pub async fn read(state: &AppState, principal: &Principal, task_id: &str) -> Dat
     let (projection, stored) = state.with_database(|database| {
         let projection = projection(database, principal, task_id)?;
         let stored = targets(database, principal, std::slice::from_ref(&projection))?;
-        Ok::<_, Box<dyn Error>>((projection, stored))
+        Ok::<_, Box<dyn Error + Send + Sync>>((projection, stored))
     })?;
     Ok(with_integration(vec![projection], stored).await.remove(0))
 }
@@ -1095,7 +1100,7 @@ fn advisor_roles(workflow: &str) -> &'static [&'static str] {
     }
 }
 
-fn workflow_input_failure(message: &str) -> Box<dyn Error> {
+fn workflow_input_failure(message: &str) -> Box<dyn Error + Send + Sync> {
     fail(message, 422, "task_failure")
 }
 
@@ -1276,7 +1281,7 @@ fn legacy_hash(raw: &TaskCreateBody, agent_id: &str) -> DatabaseResult<String> {
     Ok(sha256_hex(crate::shared::js_json::stringify(&payload)))
 }
 
-fn conflict() -> Box<dyn Error> {
+fn conflict() -> Box<dyn Error + Send + Sync> {
     fail(
         "This idempotency key belongs to a different request",
         409,
@@ -1315,7 +1320,11 @@ struct Resolved {
     signature: String,
 }
 
-fn profile_not_available(profile_id: &str, role: &str, field: &str) -> Box<dyn Error> {
+fn profile_not_available(
+    profile_id: &str,
+    role: &str,
+    field: &str,
+) -> Box<dyn Error + Send + Sync> {
     let code = if role == "worker" {
         "worker_profile_not_found"
     } else if field == "rootProfileId" {
@@ -1657,7 +1666,7 @@ fn project_signature(project: &Project) -> Value {
     })
 }
 
-fn dependency_unavailable(dependency: &str) -> Box<dyn Error> {
+fn dependency_unavailable(dependency: &str) -> Box<dyn Error + Send + Sync> {
     let reason = "The dependency is not available.";
     fail_with(
         reason,
@@ -1868,7 +1877,7 @@ fn admit(
         .iter()
         .map(images::decode_task_image)
         .collect::<Result<Vec<_>, _>>()
-        .map_err(|failure| Box::new(failure) as Box<dyn Error>)?;
+        .map_err(|failure| Box::new(failure) as Box<dyn Error + Send + Sync>)?;
     Ok(Admission::Capture(Box::new(Pending {
         resolved,
         project,
@@ -2141,7 +2150,10 @@ pub async fn create(
 }
 
 /// A rejected source names its field, value, and reason; provider outages keep their own failure.
-fn source_rejection(error: Box<dyn Error>, selector: Option<&Value>) -> Box<dyn Error> {
+fn source_rejection(
+    error: Box<dyn Error + Send + Sync>,
+    selector: Option<&Value>,
+) -> Box<dyn Error + Send + Sync> {
     let reason = if let Some(TaskError::Source {
         status, message, ..
     }) = error.downcast_ref()
@@ -2250,7 +2262,9 @@ pub fn set_dependencies_array(
 }
 
 /// TypeScript `observePullRequestDependencies` for an agent: every rejection names the pull request.
-pub fn pull_request_unavailable(rejection: pull_request_dependencies::Rejection) -> Box<dyn Error> {
+pub fn pull_request_unavailable(
+    rejection: pull_request_dependencies::Rejection,
+) -> Box<dyn Error + Send + Sync> {
     let (pull_request_dependencies::Rejection::Unobservable(number)
     | pull_request_dependencies::Rejection::NotFound(number)) = rejection;
     let reason = "The pull request is not available.";
@@ -2334,7 +2348,7 @@ pub fn preview_dependencies(
             json!({"dryRun": true, "dependsOn": task["dependsOn"]}),
             would_start(&task),
         );
-        Err::<(), _>(Box::new(DryRunRollback(preview)) as Box<dyn Error>)
+        Err::<(), _>(Box::new(DryRunRollback(preview)) as Box<dyn Error + Send + Sync>)
     });
     match result {
         Err(error) if error.is::<DryRunRollback>() => Ok(error
@@ -2392,7 +2406,7 @@ pub fn wakes_host(command: &str) -> bool {
     )
 }
 
-fn stale() -> Box<dyn Error> {
+fn stale() -> Box<dyn Error + Send + Sync> {
     fail("Task revision is stale", 412, "revision_stale")
 }
 
@@ -2868,8 +2882,9 @@ pub async fn command(
                 .ok_or("Database path is unavailable")?;
             let archiving = principal.clone();
             let id = task_id.to_owned();
-            let outcome = tokio::task::spawn_blocking(move || {
+            let outcome = tokio::spawn(async move {
                 archive::archive_task(&path, &agent_authority(&archiving), &id, false)
+                    .await
                     .map_err(crossed)
             })
             .await?;
@@ -3066,7 +3081,7 @@ enum Crossed {
     Other(String),
 }
 
-fn crossed(error: Box<dyn Error>) -> Crossed {
+fn crossed(error: Box<dyn Error + Send + Sync>) -> Crossed {
     match error.downcast::<TaskError>() {
         Ok(failure)
             if matches!(
@@ -3081,7 +3096,7 @@ fn crossed(error: Box<dyn Error>) -> Crossed {
     }
 }
 
-fn uncrossed(error: Crossed) -> Box<dyn Error> {
+fn uncrossed(error: Crossed) -> Box<dyn Error + Send + Sync> {
     match error {
         Crossed::Task(failure) => failure.into(),
         // TypeScript turns any other archive failure into a 409 task failure.

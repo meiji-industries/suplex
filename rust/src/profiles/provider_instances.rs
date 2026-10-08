@@ -13,11 +13,11 @@ use serde_json::{Value, json};
 
 use crate::platform::database::SuplexDatabase;
 
-type Result<T> = std::result::Result<T, Box<dyn Error>>;
+type Result<T> = std::result::Result<T, Box<dyn Error + Send + Sync>>;
 
 const SELECTION: &str = "SELECT id, provider, label, home_directory, created_at, updated_at FROM suplex_provider_instances";
 
-fn failure(message: &'static str, status_code: u16) -> Box<dyn Error> {
+fn failure(message: &'static str, status_code: u16) -> Box<dyn Error + Send + Sync> {
     IdentityError::auth(message, status_code, "auth_failure").into()
 }
 

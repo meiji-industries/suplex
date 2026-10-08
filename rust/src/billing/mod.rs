@@ -188,7 +188,7 @@ pub fn require(database: &SuplexDatabase, limit: Limit, now: DateTime<Utc>) -> D
 /// fails: the decision that follows uses whatever plan is then confirmed.
 pub async fn observe(state: &AppState, limit: Limit) {
     let refused = state.with_database(|database| {
-        Ok::<_, Box<dyn Error>>(
+        Ok::<_, Box<dyn Error + Send + Sync>>(
             plan(database)? == Plan::Free
                 && reached(Plan::Free, &usage(database, Utc::now())?, limit).is_some(),
         )
@@ -343,7 +343,7 @@ fn valid(plan: HostedPlan) -> Result<HostedPlan, PublicFailure> {
 
 /// Reads the linked account's plan from suplex.sh and remembers it. `None`
 /// means no Suplex account is linked, which is Free.
-pub async fn refresh(state: &AppState) -> Result<Option<HostedPlan>, Box<dyn Error>> {
+pub async fn refresh(state: &AppState) -> Result<Option<HostedPlan>, Box<dyn Error + Send + Sync>> {
     let client = state.billing.as_ref().ok_or_else(not_configured)?;
     let Some(account) = state.with_database(|database| accounts::linked(database))? else {
         return Ok(None);
@@ -382,10 +382,13 @@ pub struct BillingSummary {
     pub payment_action_url: Option<String>,
 }
 
-pub async fn summary(state: &AppState, user_id: &str) -> Result<BillingSummary, Box<dyn Error>> {
+pub async fn summary(
+    state: &AppState,
+    user_id: &str,
+) -> Result<BillingSummary, Box<dyn Error + Send + Sync>> {
     let (can_manage_billing, account_linked) = state.with_database(|database| {
         let admin = companies::require_admin(database, user_id).is_ok();
-        Ok::<_, Box<dyn Error>>((admin, accounts::linked(database)?.is_some()))
+        Ok::<_, Box<dyn Error + Send + Sync>>((admin, accounts::linked(database)?.is_some()))
     })?;
     let remote = if account_linked && state.billing.is_some() {
         refresh(state).await.ok().flatten()
@@ -393,7 +396,7 @@ pub async fn summary(state: &AppState, user_id: &str) -> Result<BillingSummary, 
         None
     };
     let (plan, usage) = state.with_database(|database| {
-        Ok::<_, Box<dyn Error>>((plan(database)?, usage(database, Utc::now())?))
+        Ok::<_, Box<dyn Error + Send + Sync>>((plan(database)?, usage(database, Utc::now())?))
     })?;
     let payment_action_url = match (&remote, &state.billing) {
         (Some(remote), Some(client)) if can_manage_billing => remote
@@ -458,7 +461,7 @@ pub struct BillingPortalResponse {
 fn administered<'a>(
     state: &'a AppState,
     user_id: &str,
-) -> Result<(&'a BillingClient, accounts::LinkedAccount), Box<dyn Error>> {
+) -> Result<(&'a BillingClient, accounts::LinkedAccount), Box<dyn Error + Send + Sync>> {
     state.with_database(|database| {
         companies::require_admin(database, user_id)?;
         let client = state.billing.as_ref().ok_or_else(not_configured)?;
@@ -470,7 +473,7 @@ fn administered<'a>(
 pub async fn start_trial(
     state: &AppState,
     user_id: &str,
-) -> Result<BillingSummary, Box<dyn Error>> {
+) -> Result<BillingSummary, Box<dyn Error + Send + Sync>> {
     let (client, account) = administered(state, user_id)?;
     let plan = valid(
         client
@@ -485,7 +488,7 @@ pub async fn checkout(
     state: &AppState,
     user_id: &str,
     idempotency_key: &str,
-) -> Result<BillingCheckoutResponse, Box<dyn Error>> {
+) -> Result<BillingCheckoutResponse, Box<dyn Error + Send + Sync>> {
     let (client, account) = administered(state, user_id)?;
     let result: HostedCheckoutResult = client
         .call(
@@ -517,7 +520,7 @@ pub async fn checkout(
 pub async fn portal(
     state: &AppState,
     user_id: &str,
-) -> Result<BillingPortalResponse, Box<dyn Error>> {
+) -> Result<BillingPortalResponse, Box<dyn Error + Send + Sync>> {
     let (client, account) = administered(state, user_id)?;
     let result: HostedPortalResult = client
         .call(Method::POST, "/v1/plan/portal", &account.token, None)

@@ -44,7 +44,10 @@ pub fn router() -> Router<AppState> {
     Router::new().route("/api/admin/access", get(read).put(update))
 }
 
-fn response(state: &AppState, _actor: &str) -> Result<AccessResponse, Box<dyn std::error::Error>> {
+fn response(
+    state: &AppState,
+    _actor: &str,
+) -> Result<AccessResponse, Box<dyn std::error::Error + Send + Sync>> {
     state.with_database(|database| {
         let external_https_origin = remote_access::external_https_origin(database)?;
         Ok(AccessResponse {

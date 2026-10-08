@@ -148,13 +148,13 @@ fn task_command<T>(
     headers: &HeaderMap,
     method: &str,
     id: &str,
-    command: impl FnOnce(&mut SuplexDatabase, &str) -> Result<T, Box<dyn Error>>,
+    command: impl FnOnce(&mut SuplexDatabase, &str) -> Result<T, Box<dyn Error + Send + Sync>>,
 ) -> Response {
     let (user_id, cookies) = match admit(state, headers, method) {
         Ok(value) => value,
         Err(response) => return *response,
     };
-    let result = state.with_database(|database| -> Result<_, Box<dyn Error>> {
+    let result = state.with_database(|database| -> Result<_, Box<dyn Error + Send + Sync>> {
         command(database, &user_id)?;
         task_response::get(database, id)?.ok_or_else(|| format!("task {id} disappeared").into())
     });
@@ -184,7 +184,7 @@ async fn refresh(
         Ok(value) => value,
         Err(response) => return *response,
     };
-    let result = state.with_database(|database| -> Result<_, Box<dyn Error>> {
+    let result = state.with_database(|database| -> Result<_, Box<dyn Error + Send + Sync>> {
         commands::user_task_configuration(database, &user_id, &id)?;
         task_response::get(database, &id)?.ok_or_else(|| "refreshed task disappeared".into())
     });
@@ -218,7 +218,7 @@ struct ArchiveConfirmation {
 }
 
 /// Archive keeps the envelope of task and access failures; any other failure is a 409.
-fn archive_error(error: Box<dyn Error>) -> PublicFailure {
+fn archive_error(error: Box<dyn Error + Send + Sync>) -> PublicFailure {
     if matches!(error.downcast_ref(), Some(TaskError::Failure { .. }))
         || matches!(error.downcast_ref(), Some(IdentityError::Auth { .. }))
     {
@@ -246,15 +246,16 @@ async fn archive_pending(
         );
     };
     let response_user_id = user_id.clone();
-    // Admission owns the blocking operation, including its in-process archive
+    // Admission owns the spawned operation, including its in-process archive
     // guard, even if the HTTP waiter disconnects before Git cleanup finishes.
-    let operation = tokio::task::spawn_blocking(move || {
+    let operation = tokio::spawn(async move {
         archive::archive_local_task(
             &database_path,
             &user_id,
             &id,
             request.unwrap_or_default().confirm_discard_dirty,
         )
+        .await
         .map_err(archive_error)
     });
     let Ok(result) = operation.await else {
@@ -275,11 +276,16 @@ async fn archive_pending(
         ),
         Ok(ArchiveOutcome::Archived(task)) => {
             state.host_terminals.close_task(&task.id, false);
-            let result = state.with_database(|database| -> Result<_, Box<dyn Error>> {
-                companies::require_company_access(database, &response_user_id, &task.company_id)?;
-                task_response::get(database, &task.id)?
-                    .ok_or_else(|| "archived task disappeared".into())
-            });
+            let result =
+                state.with_database(|database| -> Result<_, Box<dyn Error + Send + Sync>> {
+                    companies::require_company_access(
+                        database,
+                        &response_user_id,
+                        &task.company_id,
+                    )?;
+                    task_response::get(database, &task.id)?
+                        .ok_or_else(|| "archived task disappeared".into())
+                });
             match result {
                 Ok(task) => with_cookies(Json(task).into_response(), cookies),
                 Err(error) => with_cookies(ApiError::response(error), cookies),
@@ -386,7 +392,7 @@ async fn get_one(
         Ok(value) => value,
         Err(response) => return *response,
     };
-    let result = state.with_database(|database| -> Result<_, Box<dyn Error>> {
+    let result = state.with_database(|database| -> Result<_, Box<dyn Error + Send + Sync>> {
         crate::tasks::authorize_task(database, &user_id, &id)?;
         task_response::get(database, &id)?.ok_or_else(|| TaskError::not_found().into())
     });
@@ -488,19 +494,20 @@ async fn set_dependencies(
         Err(response) => return *response,
     };
     // GitHub observes each pull request prerequisite before any write.
-    let repository = match state.with_database(|database| -> Result<String, Box<dyn Error>> {
-        for dependency in &request.depends_on {
-            commands::user_task_configuration(database, &user_id, dependency)?;
-        }
-        let configuration = commands::user_task_configuration(database, &user_id, &id)?;
-        Ok(configuration["repository"]
-            .as_str()
-            .unwrap_or("")
-            .to_owned())
-    }) {
-        Ok(repository) => repository,
-        Err(error) => return with_cookies(ApiError::response(error), cookies),
-    };
+    let repository =
+        match state.with_database(|database| -> Result<String, Box<dyn Error + Send + Sync>> {
+            for dependency in &request.depends_on {
+                commands::user_task_configuration(database, &user_id, dependency)?;
+            }
+            let configuration = commands::user_task_configuration(database, &user_id, &id)?;
+            Ok(configuration["repository"]
+                .as_str()
+                .unwrap_or("")
+                .to_owned())
+        }) {
+            Ok(repository) => repository,
+            Err(error) => return with_cookies(ApiError::response(error), cookies),
+        };
     let numbers = request
         .blocked_by_pull_requests
         .iter()
@@ -516,7 +523,7 @@ async fn set_dependencies(
                 );
             }
         };
-    let result = state.with_database(|database| -> Result<_, Box<dyn Error>> {
+    let result = state.with_database(|database| -> Result<_, Box<dyn Error + Send + Sync>> {
         commands::set_user_task_dependencies(
             database,
             &user_id,
@@ -558,7 +565,7 @@ async fn set_issue(
                     .read(&serde_json::to_value(issue)?)
                     .await
                     .map_err(|error| error.to_string())?;
-                Ok::<_, Box<dyn Error>>(context["issue"].clone())
+                Ok::<_, Box<dyn Error + Send + Sync>>(context["issue"].clone())
             };
             match read.await {
                 Ok(issue) => Some(issue),
@@ -566,7 +573,7 @@ async fn set_issue(
             }
         }
     };
-    let result = state.with_database(|database| -> Result<_, Box<dyn Error>> {
+    let result = state.with_database(|database| -> Result<_, Box<dyn Error + Send + Sync>> {
         commands::set_user_task_issue(database, &user_id, &id, resolved.as_ref(), Utc::now())?;
         task_response::get(database, &id)?.ok_or_else(|| "linked task disappeared".into())
     });

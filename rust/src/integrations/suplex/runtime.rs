@@ -27,7 +27,7 @@ pub struct SuplexMcpRuntime {
     pub agent_delivery: bool,
 }
 
-type Outcome = Result<(u16, Value), Box<dyn std::error::Error>>;
+type Outcome = Result<(u16, Value), Box<dyn std::error::Error + Send + Sync>>;
 
 impl SuplexMcpRuntime {
     fn wake(&self, task_id: &str) {

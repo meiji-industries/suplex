@@ -36,14 +36,14 @@ pub fn router() -> Router<AppState> {
 }
 
 /// `AgentProfileSchema` output in its key order; a profile that fails it is a 500.
-fn view(profile: &AgentProfile) -> Result<Value, Box<dyn std::error::Error>> {
+fn view(profile: &AgentProfile) -> Result<Value, Box<dyn std::error::Error + Send + Sync>> {
     profile_response(&serde_json::to_value(profile)?)
         .map_err(|failure| format!("profile response is invalid: {failure:?}").into())
 }
 
 /// A profile response with the given status.
 fn respond_profile(
-    result: Result<AgentProfile, Box<dyn std::error::Error>>,
+    result: Result<AgentProfile, Box<dyn std::error::Error + Send + Sync>>,
     status: StatusCode,
 ) -> Response {
     match result.and_then(|profile| view(&profile)) {

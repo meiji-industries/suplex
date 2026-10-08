@@ -647,7 +647,7 @@ pub enum ReleasePort<'a> {
     Bitbucket(BitbucketClient),
 }
 
-type PortResult<T> = Result<T, Box<dyn std::error::Error>>;
+type PortResult<T> = Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
 fn port<T>(result: ProviderResult<T>) -> PortResult<T> {
     result.map_err(|error| error as _)

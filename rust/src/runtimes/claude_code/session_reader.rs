@@ -15,7 +15,8 @@ use crate::{
         headless::busy,
         native::{NativeReasoning, NativeTool},
         task_harness::{
-            NativeSessionReader, NativeTimeline, ReaderSession, UsageEntry, modified_ms,
+            HarnessFuture, NativeSessionReader, NativeTimeline, ReaderSession, UsageEntry,
+            modified_ms,
         },
     },
 };
@@ -73,122 +74,148 @@ fn entries(session: &ReaderSession<'_>) -> io::Result<Vec<transcript::ClaudeMess
 }
 
 impl NativeSessionReader for ClaudeCodeTaskRuntime {
-    fn history(&self, session: &ReaderSession<'_>) -> io::Result<Vec<Value>> {
-        live_history::read(
-            &session.runtime_directory()?,
-            transcript_path(session)?.as_deref(),
-        )
-    }
-
-    fn execution(&self, session: &ReaderSession<'_>) -> io::Result<(Vec<NativeTool>, Value)> {
-        Ok(transcript::execution(&entries(session)?))
-    }
-
-    fn reasoning(&self, session: &ReaderSession<'_>) -> io::Result<Vec<NativeReasoning>> {
-        Ok(entries(session)?
-            .into_iter()
-            .filter(|entry| entry.kind == "assistant" && !entry.is_sidechain)
-            .flat_map(|entry| {
-                let blocks = transcript::blocks(&entry);
-                let id = entry.uuid;
-                blocks
-                    .into_iter()
-                    .enumerate()
-                    .filter_map(move |(index, block)| match block {
-                        transcript::Block::Thinking(text) if !text.trim().is_empty() => {
-                            Some(NativeReasoning {
-                                id: format!("{id}:{index}"),
-                                text,
-                            })
-                        }
-                        _ => None,
-                    })
-            })
-            .collect())
-    }
-
-    fn turn_evidence(
-        &self,
-        session: &ReaderSession<'_>,
-        turn_id: &str,
-    ) -> io::Result<Option<Vec<NativeTool>>> {
-        if turn_id.is_empty()
-            || !turn_id.as_bytes()[0].is_ascii_alphanumeric()
-            || !turn_id
-                .bytes()
-                .all(|byte| byte.is_ascii_alphanumeric() || b"._:-".contains(&byte))
-        {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "Invalid task turn identity",
-            ));
-        }
-        match fs::read_to_string(
-            session
-                .runtime_directory()?
-                .join(format!("turn-{turn_id}.jsonl")),
-        ) {
-            Ok(log) => Ok(Some(
-                transcript::execution(&transcript::message_entries(&transcript::parse_json_lines(
-                    &log,
-                )))
-                .0,
-            )),
-            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
-            Err(error) => Err(error),
-        }
-    }
-
-    fn timeline(
-        &self,
-        session: &ReaderSession<'_>,
-        pricing: Option<&ModelPricingCatalog>,
-    ) -> io::Result<NativeTimeline> {
-        let mut usage = transcript::usage_records(&entries(session)?, pricing)
-            .into_iter()
-            .map(|record| UsageEntry {
-                message_id: record.message_id,
-                turn_id: record.turn_id,
-                provider: "anthropic",
-                model: record.model,
-                started_at_ms: record.started_at_ms,
-                completed_at_ms: Some(record.started_at_ms),
-                failed: record.failed,
-                tokens: record.tokens,
-                cost_usd: record.cost_usd,
-                subsidized: record.cost_usd > 0.0,
-                summary: false,
-                steps: 1.0,
-                source: "message",
-            })
-            .collect::<Vec<_>>();
-        let mut live_message_id = None;
-        if self.busy(session)?
-            && let Some(live) = usage.last_mut()
-        {
-            live.completed_at_ms = None;
-            live_message_id = Some(live.message_id.clone());
-        }
-        Ok(NativeTimeline {
-            usage,
-            live_message_id,
+    fn history<'a>(
+        &'a self,
+        session: &'a ReaderSession<'_>,
+    ) -> HarnessFuture<'a, io::Result<Vec<Value>>> {
+        Box::pin(async move {
+            live_history::read(
+                &session.runtime_directory()?,
+                transcript_path(session)?.as_deref(),
+            )
         })
     }
 
-    fn busy(&self, session: &ReaderSession<'_>) -> io::Result<bool> {
-        busy(&session.runtime_directory()?)
+    fn execution<'a>(
+        &'a self,
+        session: &'a ReaderSession<'_>,
+    ) -> HarnessFuture<'a, io::Result<(Vec<NativeTool>, Value)>> {
+        Box::pin(async move { Ok(transcript::execution(&entries(session)?)) })
     }
 
-    fn status(&self, session: &ReaderSession<'_>) -> io::Result<(&'static str, f64)> {
-        let path = match transcript_path(session)? {
-            Some(path) => path,
-            None => session.runtime_directory()?.join("turn.json"),
-        };
-        let updated_at = modified_ms(&path)?;
-        Ok((
-            if self.busy(session)? { "busy" } else { "idle" },
-            updated_at,
-        ))
+    fn reasoning<'a>(
+        &'a self,
+        session: &'a ReaderSession<'_>,
+    ) -> HarnessFuture<'a, io::Result<Vec<NativeReasoning>>> {
+        Box::pin(async move {
+            Ok(entries(session)?
+                .into_iter()
+                .filter(|entry| entry.kind == "assistant" && !entry.is_sidechain)
+                .flat_map(|entry| {
+                    let blocks = transcript::blocks(&entry);
+                    let id = entry.uuid;
+                    blocks
+                        .into_iter()
+                        .enumerate()
+                        .filter_map(move |(index, block)| match block {
+                            transcript::Block::Thinking(text) if !text.trim().is_empty() => {
+                                Some(NativeReasoning {
+                                    id: format!("{id}:{index}"),
+                                    text,
+                                })
+                            }
+                            _ => None,
+                        })
+                })
+                .collect())
+        })
+    }
+
+    fn turn_evidence<'a>(
+        &'a self,
+        session: &'a ReaderSession<'_>,
+        turn_id: &'a str,
+    ) -> HarnessFuture<'a, io::Result<Option<Vec<NativeTool>>>> {
+        Box::pin(async move {
+            if turn_id.is_empty()
+                || !turn_id.as_bytes()[0].is_ascii_alphanumeric()
+                || !turn_id
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || b"._:-".contains(&byte))
+            {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "Invalid task turn identity",
+                ));
+            }
+            match fs::read_to_string(
+                session
+                    .runtime_directory()?
+                    .join(format!("turn-{turn_id}.jsonl")),
+            ) {
+                Ok(log) => Ok(Some(
+                    transcript::execution(&transcript::message_entries(
+                        &transcript::parse_json_lines(&log),
+                    ))
+                    .0,
+                )),
+                Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+                Err(error) => Err(error),
+            }
+        })
+    }
+
+    fn timeline<'a>(
+        &'a self,
+        session: &'a ReaderSession<'_>,
+        pricing: Option<&'a ModelPricingCatalog>,
+    ) -> HarnessFuture<'a, io::Result<NativeTimeline>> {
+        Box::pin(async move {
+            let mut usage = transcript::usage_records(&entries(session)?, pricing)
+                .into_iter()
+                .map(|record| UsageEntry {
+                    message_id: record.message_id,
+                    turn_id: record.turn_id,
+                    provider: "anthropic",
+                    model: record.model,
+                    started_at_ms: record.started_at_ms,
+                    completed_at_ms: Some(record.started_at_ms),
+                    failed: record.failed,
+                    tokens: record.tokens,
+                    cost_usd: record.cost_usd,
+                    subsidized: record.cost_usd > 0.0,
+                    summary: false,
+                    steps: 1.0,
+                    source: "message",
+                })
+                .collect::<Vec<_>>();
+            let mut live_message_id = None;
+            if self.busy(session).await?
+                && let Some(live) = usage.last_mut()
+            {
+                live.completed_at_ms = None;
+                live_message_id = Some(live.message_id.clone());
+            }
+            Ok(NativeTimeline {
+                usage,
+                live_message_id,
+            })
+        })
+    }
+
+    fn busy<'a>(&'a self, session: &'a ReaderSession<'_>) -> HarnessFuture<'a, io::Result<bool>> {
+        Box::pin(async move { busy(&session.runtime_directory()?) })
+    }
+
+    fn status<'a>(
+        &'a self,
+        session: &'a ReaderSession<'_>,
+    ) -> HarnessFuture<'a, io::Result<(&'static str, f64)>> {
+        Box::pin(async move {
+            let path = match transcript_path(session)? {
+                Some(path) => path,
+                None => session.runtime_directory()?.join("turn.json"),
+            };
+            let updated_at = modified_ms(&path)?;
+            Ok((
+                if self.busy(session).await? {
+                    "busy"
+                } else {
+                    "idle"
+                },
+                updated_at,
+            ))
+        })
     }
 }
 
@@ -197,8 +224,8 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    #[test]
-    fn the_session_reader_discovers_a_local_instance_transcript_without_a_session_profile() {
+    #[tokio::test]
+    async fn the_session_reader_discovers_a_local_instance_transcript_without_a_session_profile() {
         let root =
             std::env::temp_dir().join(format!("suplex-claude-reader-{}", uuid::Uuid::new_v4()));
         // A fresh identity cannot match a transcript in the user's own config.
@@ -219,12 +246,19 @@ mod tests {
         };
         let reader = ClaudeCodeTaskRuntime;
         assert_eq!(
-            reader.history(&session).unwrap()[0]["content"][0]["text"],
+            reader.history(&session).await.unwrap()[0]["content"][0]["text"],
             "Local transcript"
         );
-        assert!(reader.execution(&session).unwrap().0.is_empty());
-        assert!(!reader.busy(&session).unwrap());
-        assert!(reader.timeline(&session, None).unwrap().usage.is_empty());
+        assert!(reader.execution(&session).await.unwrap().0.is_empty());
+        assert!(!reader.busy(&session).await.unwrap());
+        assert!(
+            reader
+                .timeline(&session, None)
+                .await
+                .unwrap()
+                .usage
+                .is_empty()
+        );
         let empty = root.join("empty-instance");
         let dedicated = ReaderSession {
             instance_home_directory: Some(&empty),
@@ -233,16 +267,17 @@ mod tests {
         assert!(
             reader
                 .execution(&dedicated)
+                .await
                 .unwrap_err()
                 .to_string()
                 .contains("transcript is not available")
         );
-        assert!(reader.history(&dedicated).unwrap().is_empty());
+        assert!(reader.history(&dedicated).await.unwrap().is_empty());
         fs::remove_dir_all(root).unwrap();
     }
 
-    #[test]
-    fn workflow_evidence_reads_only_the_requested_native_turn() {
+    #[tokio::test]
+    async fn workflow_evidence_reads_only_the_requested_native_turn() {
         let root =
             std::env::temp_dir().join(format!("suplex-claude-evidence-{}", uuid::Uuid::new_v4()));
         let database = root.join("suplex.sqlite");
@@ -256,6 +291,7 @@ mod tests {
         assert!(
             reader
                 .turn_evidence(&session, "msg_turn")
+                .await
                 .unwrap()
                 .is_none()
         );
@@ -272,14 +308,19 @@ mod tests {
             .join("\n"),
         )
         .unwrap();
-        let tools =
-            serde_json::to_value(reader.turn_evidence(&session, "msg_turn").unwrap().unwrap())
-                .unwrap();
+        let tools = serde_json::to_value(
+            reader
+                .turn_evidence(&session, "msg_turn")
+                .await
+                .unwrap()
+                .unwrap(),
+        )
+        .unwrap();
         assert_eq!(
             tools,
             json!([{"id":"check","name":"Bash","status":"completed","input":{"command":"pnpm test"},"output":"Tests passed","error":null}])
         );
-        assert!(reader.turn_evidence(&session, "../x").is_err());
+        assert!(reader.turn_evidence(&session, "../x").await.is_err());
         fs::remove_dir_all(root).unwrap();
     }
 }

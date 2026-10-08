@@ -34,12 +34,12 @@ pub struct TerminalDelegateTurn<'a> {
 }
 
 /// TypeScript `harness.turnEvidence` through the session's native reader.
-pub fn native_tools(
+pub async fn native_tools(
     database_path: &Path,
     session: &SessionRow,
     turn_id: &str,
 ) -> Result<Vec<Value>, String> {
-    let read = || -> Result<Vec<Value>, Box<dyn std::error::Error>> {
+    let read = async {
         let native_session_id = session.native_session_id.as_deref().unwrap_or_default();
         let reader = task_harness_registry::for_session(Some(native_session_id))
             .ok_or("No native reader for this session")?;
@@ -56,32 +56,23 @@ pub fn native_tools(
                         .map(Path::new),
                 },
                 turn_id,
-            )?
+            )
+            .await?
             .ok_or("The native turn log is missing")?;
-        Ok(tools
-            .into_iter()
-            .map(serde_json::to_value)
-            .collect::<Result<_, _>>()?)
+        Ok::<Vec<Value>, Box<dyn std::error::Error + Send + Sync>>(
+            tools
+                .into_iter()
+                .map(serde_json::to_value)
+                .collect::<Result<_, _>>()?,
+        )
     };
-    read().map_err(|error| format!("Native tool evidence could not be read: {error}"))
-}
-
-/// `root_controller::source_still_matches` for the synchronous recovery path.
-fn source_still_matches(
-    database_path: &Path,
-    task_id: &str,
-    pinned: &ReviewRange,
-    activity: &str,
-) -> Result<ReviewRange, Box<root_controller::SourceMismatch>> {
-    crate::shared::blocking::block_on(|| {
-        root_controller::source_still_matches(database_path, task_id, pinned, activity)
-    })
-    .map_err(Box::new)
+    read.await
+        .map_err(|error| format!("Native tool evidence could not be read: {error}"))
 }
 
 /// TypeScript `verifyAdvisorOutcome`: a valid report stays valid only while
 /// its pinned evidence files and committed source are unchanged.
-fn verify_advisor_outcome(
+async fn verify_advisor_outcome(
     database_path: &Path,
     task_id: &str,
     input: &Value,
@@ -100,7 +91,7 @@ fn verify_advisor_outcome(
         "{} review",
         advisor_label(input["role"].as_str().unwrap_or_default())
     );
-    match source_still_matches(database_path, task_id, &range, &activity) {
+    match root_controller::source_still_matches(database_path, task_id, &range, &activity).await {
         Ok(_) => outcome,
         Err(mismatch) => Err(format!("{}. Request a new assessment.", mismatch.0)),
     }
@@ -133,7 +124,7 @@ fn advisor_summary(outcome: &AdvisorReportOutcome) -> String {
 
 /// TypeScript `finishTurn` for a Worker or Advisor session: records the result,
 /// any Reviewer or Rater verdict, and the Coordinator wake in one transaction.
-pub fn finish_delegate_turn(
+pub async fn finish_delegate_turn(
     database: &mut SuplexDatabase,
     database_path: &Path,
     finished: TerminalDelegateTurn<'_>,
@@ -188,7 +179,9 @@ pub fn finish_delegate_turn(
         let outcome = if state == "completed" {
             advisor_bridge::advisor_report_from_turn(
                 role,
-                &native_tools(database_path, &session_row, &turn.id).unwrap_or_default(),
+                &native_tools(database_path, &session_row, &turn.id)
+                    .await
+                    .unwrap_or_default(),
                 text,
             )
         } else {
@@ -199,7 +192,8 @@ pub fn finish_delegate_turn(
             };
             Err(format!("The {label} turn ended with state {state}{detail}"))
         };
-        let outcome = verify_advisor_outcome(database_path, &session.task_id, &input, outcome);
+        let outcome =
+            verify_advisor_outcome(database_path, &session.task_id, &input, outcome).await;
         let (result, invalid_reason) = match &outcome {
             Ok(result) => (result.clone(), Value::Null),
             Err(reason) => (Value::Null, json!(reason)),
@@ -227,19 +221,26 @@ pub fn finish_delegate_turn(
     if purpose == "verification" && input["kind"] == "worker" {
         let before = ReviewRange::from_value(&input["range"]).unwrap_or_default();
         verification_range = Some(
-            match source_still_matches(database_path, &session.task_id, &before, "check") {
+            match root_controller::source_still_matches(
+                database_path,
+                &session.task_id,
+                &before,
+                "check",
+            )
+            .await
+            {
                 Ok(after) => {
                     json!({"before":before,"after":after,"cleanAfter":true,"valid":true,"invalidReason":null})
                 }
                 Err(mismatch) => {
-                    let (reason, after, clean) = *mismatch;
+                    let (reason, after, clean) = mismatch;
                     json!({"before":before,"after":after,"cleanAfter":clean,"valid":false,"invalidReason":reason})
                 }
             },
         );
     }
     if workflow != Workflow::Standard {
-        match native_tools(database_path, &session_row, &turn.id) {
+        match native_tools(database_path, &session_row, &turn.id).await {
             Ok(tools) => {
                 base["tools"] = json!(tools);
                 base["toolsLimit"] = Value::Null;
@@ -435,7 +436,7 @@ fn dispatch_state(turn: &TurnRow) -> DispatchState {
     }
 }
 
-fn observe_or_recover_fenced(
+async fn observe_or_recover_fenced(
     database: &mut SuplexDatabase,
     database_path: &Path,
     harness: &dyn TaskHarness,
@@ -444,7 +445,7 @@ fn observe_or_recover_fenced(
     turn: &TurnRow,
     owner: &str,
 ) -> DatabaseResult<(PromptObservation, bool)> {
-    let observed = observe_turn(database_path, harness, session, native_id, turn)?;
+    let observed = observe_turn(database_path, harness, session, native_id, turn).await?;
     if turn.status == TurnStatus::PendingPrompt && turn.dispatch_attempt.is_none() {
         let replayable = observed.retry_allowed;
         return Ok((observed, replayable));
@@ -464,14 +465,16 @@ fn observe_or_recover_fenced(
         return Ok((observed, false));
     }
     let directory = session_reader::session_directory(database_path, &session.id)?;
-    let recovered = harness.recover_dispatch(
-        SessionRef {
-            directory: &directory,
-            native_session_id: native_id,
-        },
-        &turn.id,
-        &attempt.server_generation,
-    )?;
+    let recovered = harness
+        .recover_dispatch(
+            SessionRef {
+                directory: &directory,
+                native_session_id: native_id,
+            },
+            &turn.id,
+            &attempt.server_generation,
+        )
+        .await?;
     if recovered.retry_allowed {
         root_session_store::requeue_fenced_prompt(database, turn, attempt, owner, Utc::now())?;
     }
@@ -480,7 +483,7 @@ fn observe_or_recover_fenced(
     Ok((recovered, false))
 }
 
-fn observe_turn(
+async fn observe_turn(
     database_path: &Path,
     harness: &dyn TaskHarness,
     session: &SessionRow,
@@ -492,15 +495,17 @@ fn observe_turn(
         .dispatch_attempt
         .as_ref()
         .map(|attempt: &PromptDispatchAttempt| attempt.server_generation.as_str());
-    Ok(harness.observe(
-        SessionRef {
-            directory: &directory,
-            native_session_id: native_id,
-        },
-        &turn.id,
-        dispatch_state(turn),
-        attempt,
-    )?)
+    Ok(harness
+        .observe(
+            SessionRef {
+                directory: &directory,
+                native_session_id: native_id,
+            },
+            &turn.id,
+            dispatch_state(turn),
+            attempt,
+        )
+        .await?)
 }
 
 /// TypeScript `dependencyBlockers`: native work waits until every
@@ -600,7 +605,7 @@ fn terminal_observation<'a>(
 }
 
 /// TypeScript `observation.native`, completed by the harness.
-fn native_observation(
+async fn native_observation(
     harness: &dyn TaskHarness,
     directory: &Path,
     rows: &root_session_store::RootObservationRows,
@@ -610,16 +615,18 @@ fn native_observation(
     let profile = selected_profile(rows, kind);
     let provider = task_harness_registry::profile_harness(profile.provider.as_str());
     let agent = format!("suplex-{kind}");
-    Ok(harness.native(
-        directory,
-        &turn.id,
-        serde_json::json!({
-            "messageID":turn.id,"parentID":turn.id,"providerID":provider,
-            "modelID":profile.model,"mode":agent,
-            "agent":agent,"cwd":rows.control.worktree_path(),
-            "root":rows.control.worktree_path(),
-        }),
-    )?)
+    Ok(harness
+        .native(
+            directory,
+            &turn.id,
+            serde_json::json!({
+                "messageID":turn.id,"parentID":turn.id,"providerID":provider,
+                "modelID":profile.model,"mode":agent,
+                "agent":agent,"cwd":rows.control.worktree_path(),
+                "root":rows.control.worktree_path(),
+            }),
+        )
+        .await?)
 }
 
 /// TypeScript `session.profile ?? control.<role>Profile`.
@@ -637,7 +644,7 @@ fn selected_profile<'a>(
         .unwrap_or(fallback)
 }
 
-fn complete_root_if_terminal(
+async fn complete_root_if_terminal(
     database: &mut SuplexDatabase,
     database_path: &Path,
     harness: &dyn TaskHarness,
@@ -650,8 +657,8 @@ fn complete_root_if_terminal(
     }
     let rows = root_session_store::root_observation_rows(database, &session.task_id)?;
     let directory = session_reader::session_directory(database_path, &session.id)?;
-    let text = harness.result_text(&directory, &turn.id)?;
-    let native = native_observation(harness, &directory, &rows, "root", turn)?;
+    let text = harness.result_text(&directory, &turn.id).await?;
+    let native = native_observation(harness, &directory, &rows, "root", turn).await?;
     let terminal_observation = terminal_observation(observation, native, &text, &directory, turn)?;
     let continuation = (observation.state == PromptState::Interrupted).then_some("The previous execution stopped before a final response. Its admitted message will not be replayed. Observe current task, worktree and GitHub state, preserve any partial work, and continue from that evidence.");
     let completed = root_session_store::complete_root_turn(
@@ -693,7 +700,7 @@ fn complete_root_if_terminal(
 
 /// TypeScript `finishTurn` for a Worker or Advisor: the native evidence is read
 /// here, and `session_recovery` records the workflow result and Coordinator wake.
-fn complete_worker_if_terminal(
+async fn complete_worker_if_terminal(
     database: &mut SuplexDatabase,
     bound: &BoundSession<'_>,
     turn: &TurnRow,
@@ -711,24 +718,26 @@ fn complete_worker_if_terminal(
     }
     let rows = root_session_store::root_observation_rows(database, &session.task_id)?;
     let directory = session_reader::session_directory(database_path, &session.id)?;
-    let text = harness.result_text(&directory, &turn.id)?;
+    let text = harness.result_text(&directory, &turn.id).await?;
     let agent = if launch.workflow.advisor.is_some() {
         "suplex-advisor"
     } else {
         "suplex-worker"
     };
     let provider = launch.profile.provider.as_str();
-    let native = harness.native(
-        &directory,
-        &turn.id,
-        serde_json::json!({
-            "messageID":turn.id,"parentID":turn.id,
-            "providerID":task_harness_registry::profile_harness(provider),
-            "modelID":launch.profile.model,"mode":agent,
-            "agent":agent,"cwd":rows.control.worktree_path(),
-            "root":rows.control.worktree_path(),
-        }),
-    )?;
+    let native = harness
+        .native(
+            &directory,
+            &turn.id,
+            serde_json::json!({
+                "messageID":turn.id,"parentID":turn.id,
+                "providerID":task_harness_registry::profile_harness(provider),
+                "modelID":launch.profile.model,"mode":agent,
+                "agent":agent,"cwd":rows.control.worktree_path(),
+                "root":rows.control.worktree_path(),
+            }),
+        )
+        .await?;
     let terminal_observation = terminal_observation(observation, native, &text, &directory, turn)?;
     let completed = finish_delegate_turn(
         database,
@@ -742,7 +751,8 @@ fn complete_worker_if_terminal(
             text: &text,
             base: serde_json::to_value(&terminal_observation)?,
         },
-    )?;
+    )
+    .await?;
     if completed && observation.reason == "native_startup_failed" {
         let agent = if launch.workflow.advisor.is_some() {
             "Advisor"
@@ -872,7 +882,7 @@ fn claim_operation(
 }
 
 impl BoundSession<'_> {
-    fn complete(
+    async fn complete(
         &self,
         database: &mut SuplexDatabase,
         turn: &TurnRow,
@@ -881,34 +891,37 @@ impl BoundSession<'_> {
         let launch = self.launch;
         match launch.delegate {
             Some(delegate) => {
-                complete_worker_if_terminal(database, self, turn, observation, delegate)
+                complete_worker_if_terminal(database, self, turn, observation, delegate).await
             }
-            None => complete_root_if_terminal(
-                database,
-                self.host.database_path,
-                launch.harness,
-                launch.session,
-                turn,
-                observation,
-            ),
+            None => {
+                complete_root_if_terminal(
+                    database,
+                    self.host.database_path,
+                    launch.harness,
+                    launch.session,
+                    turn,
+                    observation,
+                )
+                .await
+            }
         }
     }
 
     /// Record native admission and a terminal result.
-    fn record(
+    async fn record(
         &self,
         database: &mut SuplexDatabase,
         turn: &TurnRow,
         observation: PromptObservation,
     ) -> DatabaseResult<PromptObservation> {
         persist_native_admission(database, turn, &observation)?;
-        self.complete(database, turn, &observation)?;
+        self.complete(database, turn, &observation).await?;
         Ok(observation)
     }
 
     /// Observe the pending turn. An unadmitted idle Root turn coalesces into
     /// the next pending turn, which is observed in its place.
-    fn observe_pending(
+    async fn observe_pending(
         &self,
         database: &mut SuplexDatabase,
         mut turn: TurnRow,
@@ -923,9 +936,12 @@ impl BoundSession<'_> {
                 self.native_id,
                 &turn,
                 launch.owner,
-            )?;
+            )
+            .await?;
             if !before.retry_allowed || !replayable {
-                return Ok(PendingTurn::Settled(self.record(database, &turn, before)?));
+                return Ok(PendingTurn::Settled(
+                    self.record(database, &turn, before).await?,
+                ));
             }
             if launch.delegate.is_some()
                 || !root_session_store::coalesce_unadmitted_idle_root_turn(
@@ -949,7 +965,7 @@ impl BoundSession<'_> {
 
 /// Bind the native session, observe the pending turn, and dispatch it only
 /// when native evidence proves it was not admitted.
-fn dispatch_claimed(
+async fn dispatch_claimed(
     database: &mut SuplexDatabase,
     host: &RecoveryHost<'_>,
     launch: &SessionLaunch<'_>,
@@ -1018,9 +1034,9 @@ fn dispatch_claimed(
     });
     // TypeScript `ensureSession`: a runtime restarts what it needs, such as a lost OpenCode server, before observation.
     if let Some(scope) = &scope {
-        harness.ensure_session(scope)?;
+        harness.ensure_session(scope).await?;
     }
-    let (before, turn) = match bound.observe_pending(database, turn)? {
+    let (before, turn) = match bound.observe_pending(database, turn).await? {
         PendingTurn::Settled(observation) => return Ok(observation),
         PendingTurn::Dispatchable(before, turn) => (before, *turn),
     };
@@ -1048,25 +1064,27 @@ fn dispatch_claimed(
     // A refused claim is not a failure: another dispatcher admitted the prompt,
     // or the task stopped being dispatchable. The next sweep observes the result.
     let mut refused = false;
-    let dispatched = harness.dispatch(&scope, &turn.id, &prompt, &mut |server_generation| {
-        let claimed = root_session_store::claim_prompt(
-            database,
-            &turn,
-            launch.owner,
-            server_generation,
-            host.usage,
-            Utc::now(),
-        )?;
-        refused = !claimed;
-        Ok(claimed)
-    });
+    let dispatched = harness
+        .dispatch(&scope, &turn.id, &prompt, &mut |server_generation| {
+            let claimed = root_session_store::claim_prompt(
+                database,
+                &turn,
+                launch.owner,
+                server_generation,
+                host.usage,
+                Utc::now(),
+            )?;
+            refused = !claimed;
+            Ok(claimed)
+        })
+        .await;
     if refused {
         return Ok(before);
     }
-    bound.record(database, &turn, dispatched?)
+    bound.record(database, &turn, dispatched?).await
 }
 
-fn recover_session_blocking(
+async fn recover_session(
     database: &mut SuplexDatabase,
     host: &RecoveryHost<'_>,
     plan: LaunchPlan<'_>,
@@ -1097,7 +1115,7 @@ fn recover_session_blocking(
         harness,
         owner: &owner,
     };
-    let result = dispatch_claimed(database, host, &launch, turn);
+    let result = dispatch_claimed(database, host, &launch, turn).await;
     root_session_store::release_session_operation(database, &session.id, &owner, Utc::now())?;
     result.map(Some)
 }
@@ -1124,7 +1142,9 @@ pub async fn recover_prepared_root(
     let task_id = task_id.to_owned();
     let executable: Option<PathBuf> = executable.map(Path::to_path_buf);
     let inherited_environment = inherited_environment.clone();
-    tokio::task::spawn_blocking(move || {
+    // The spawned task owns claim, dispatch, and release together; dropping
+    // this future cannot strand the session operation.
+    tokio::spawn(async move {
         let host = RecoveryHost {
             database_path: &database_path,
             artifact_root: &artifact_root,
@@ -1133,7 +1153,8 @@ pub async fn recover_prepared_root(
             inherited_environment: &inherited_environment,
             usage,
         };
-        recover_session_blocking(&mut database, &host, LaunchPlan::Root)
+        recover_session(&mut database, &host, LaunchPlan::Root)
+            .await
             .map_err(|error| error.to_string())
     })
     .await?
@@ -1199,8 +1220,9 @@ pub async fn recover_prepared_worker(
     let executable = executable.map(Path::to_path_buf);
     let inherited_environment = inherited_environment.clone();
     // TypeScript `recover` resumes every current delegate: the serial Worker or
-    // Advisor slot and both Combined planning slots.
-    tokio::task::spawn_blocking(move || {
+    // Advisor slot and both Combined planning slots. The spawned task owns each
+    // claim, dispatch, and release together.
+    tokio::spawn(async move {
         let host = RecoveryHost {
             database_path: &database_path,
             artifact_root: &artifact_root,
@@ -1211,9 +1233,9 @@ pub async fn recover_prepared_worker(
         };
         let mut first = None;
         for slot in ["delegate", "planner_a", "planner_b"] {
-            let observed =
-                recover_session_blocking(&mut database, &host, LaunchPlan::Delegate(slot))
-                    .map_err(|error| error.to_string())?;
+            let observed = recover_session(&mut database, &host, LaunchPlan::Delegate(slot))
+                .await
+                .map_err(|error| error.to_string())?;
             first = first.or(observed);
         }
         Ok::<_, String>(first)
@@ -1259,15 +1281,12 @@ async fn stop_retired_session(
         return Ok(None);
     }
     let directory = session_reader::session_directory(database_path, &session_id)?;
-    let stopped = tokio::task::spawn_blocking(move || {
-        match task_harness_registry::for_session(native_id.as_deref()) {
-            Some(harness) => harness.stop(&directory, native_id.as_deref()),
-            // An unbound session never started a native process.
-            None if native_id.is_none() => Ok(()),
-            None => Err(io::Error::other("No task harness for session")),
-        }
-    })
-    .await?;
+    let stopped = match task_harness_registry::for_session(native_id.as_deref()) {
+        Some(harness) => harness.stop(&directory, native_id.as_deref()).await,
+        // An unbound session never started a native process.
+        None if native_id.is_none() => Ok(()),
+        None => Err(io::Error::other("No task harness for session")),
+    };
     Ok(Some(stopped))
 }
 
@@ -1710,8 +1729,8 @@ mod tests {
         std::fs::remove_dir_all(directory).unwrap();
     }
 
-    #[test]
-    fn a_failed_reviewer_turn_records_an_invalid_review_and_wakes_coordinator() {
+    #[tokio::test]
+    async fn a_failed_reviewer_turn_records_an_invalid_review_and_wakes_coordinator() {
         let (directory, mut database, root) = fixture("independent_review");
         let reviewer = root_session_store::launch_advisor(
             &mut database,
@@ -1743,6 +1762,7 @@ mod tests {
                     base: json!({"state":"error","native":{},"reason":"native_error","text":""}),
                 }
             )
+            .await
             .unwrap()
         );
         let state = serde_json::to_value(

@@ -64,7 +64,11 @@ fn update_running(installation: &Installation) -> io::Result<bool> {
         Ok(false)
     }
 }
-fn run(root: &Path, name: &str, args: &[&str]) -> Result<String, Box<dyn std::error::Error>> {
+fn run(
+    root: &Path,
+    name: &str,
+    args: &[&str],
+) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
     let mut command = Command::new(name);
     command
         .args(args)
@@ -143,7 +147,7 @@ fn run(root: &Path, name: &str, args: &[&str]) -> Result<String, Box<dyn std::er
     }
     Ok(String::from_utf8(stdout)?.trim().to_owned())
 }
-fn git(root: &Path, args: &[&str]) -> Result<String, Box<dyn std::error::Error>> {
+fn git(root: &Path, args: &[&str]) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
     run(root, "git", args)
 }
 fn canonical_remote(raw: &str) -> bool {
@@ -173,7 +177,7 @@ fn canonical_remote(raw: &str) -> bool {
         .trim_end_matches(".git")
         .eq_ignore_ascii_case(REPOSITORY)
 }
-fn remote(root: &Path) -> Result<String, Box<dyn std::error::Error>> {
+fn remote(root: &Path) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
     let branch = git(root, &["symbolic-ref", "--short", "HEAD"])?;
     if branch != "main" {
         return Err(format!(
@@ -216,7 +220,9 @@ fn remote(root: &Path) -> Result<String, Box<dyn std::error::Error>> {
     }
     .into())
 }
-fn check_remote(root: &Path) -> Result<(String, String, String), Box<dyn std::error::Error>> {
+fn check_remote(
+    root: &Path,
+) -> Result<(String, String, String), Box<dyn std::error::Error + Send + Sync>> {
     let remote = remote(root)?;
     let remote_ref = format!("refs/remotes/{remote}/main");
     git(
@@ -266,7 +272,7 @@ fn start_binary(
     binary: &Path,
     root: &Path,
     installation: &Installation,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let output = Command::new(binary)
         .arg("start")
         .current_dir(root)
@@ -348,7 +354,9 @@ pub fn snapshot(installation: &Installation, check: bool, admin: bool) -> Value 
     response
 }
 
-pub fn request_apply(installation: &Installation) -> Result<Value, Box<dyn std::error::Error>> {
+pub fn request_apply(
+    installation: &Installation,
+) -> Result<Value, Box<dyn std::error::Error + Send + Sync>> {
     let _request = REQUEST_LOCK
         .lock()
         .map_err(|_| "Update request lock was poisoned")?;
@@ -393,7 +401,7 @@ pub fn request_apply(installation: &Installation) -> Result<Value, Box<dyn std::
     Ok(json!({"accepted":true,"status":status}))
 }
 
-pub fn apply() -> Result<(), Box<dyn std::error::Error>> {
+pub fn apply() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let installation = Installation::load()?;
     fs::create_dir_all(&installation.runtime)?;
     let lock = fs::OpenOptions::new()
@@ -412,7 +420,7 @@ pub fn apply() -> Result<(), Box<dyn std::error::Error>> {
     let rollback = installation.runtime.join("update-rollback-suplex");
     let mut host_stopped = false;
     let mut recovery_attempted = false;
-    let result = (|| -> Result<(), Box<dyn std::error::Error>> {
+    let result = (|| -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         applying(&installation, "fetch", "Suplex checks the update.")?;
         let (head, available, remote_ref) = check_remote(&root)?;
         if head != available {

@@ -231,8 +231,8 @@ mod tests {
         fs::remove_dir_all(directory).unwrap();
     }
 
-    #[test]
-    fn a_watch_serves_an_archived_open_task_of_the_company() {
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_watch_serves_an_archived_open_task_of_the_company() {
         let (directory, _, mut database, task_id) = fixture();
         let foreign = add_task(&mut database, "Foreign", vec![]);
         let stamp = Utc::now().to_rfc3339();

@@ -340,7 +340,7 @@ fn stored_contract<T>(
         Box::new(std::io::Error::new(
             std::io::ErrorKind::InvalidData,
             format!("Stored project configuration is invalid: {error:?}"),
-        )) as Box<dyn Error>
+        )) as Box<dyn Error + Send + Sync>
     })
 }
 
@@ -371,7 +371,7 @@ fn public_project(stored: StoredProject) -> DatabaseResult<Project> {
                     "agentTaskPolicy",
                     "Project agent task policy must be repaired before it can be used",
                 )],
-            ) as Box<dyn Error>
+            ) as Box<dyn Error + Send + Sync>
         })?
     };
     let mut project = Project {
@@ -448,7 +448,9 @@ pub fn get(
             .query_row(&sql, params![project_id, actor_user_id], stored)
             .optional()?
     };
-    public_project(result.ok_or_else(|| failure("Not found", 404, vec![]) as Box<dyn Error>)?)
+    public_project(
+        result.ok_or_else(|| failure("Not found", 404, vec![]) as Box<dyn Error + Send + Sync>)?,
+    )
 }
 
 /// `getProjectInCompany`: the caller already holds the company authority.
@@ -462,7 +464,9 @@ pub fn get_in_company(
         .connection()
         .query_row(&sql, params![id, company_id], stored)
         .optional()?;
-    public_project(row.ok_or_else(|| failure("Not found", 404, vec![]) as Box<dyn Error>)?)
+    public_project(
+        row.ok_or_else(|| failure("Not found", 404, vec![]) as Box<dyn Error + Send + Sync>)?,
+    )
 }
 
 pub fn list(
@@ -703,7 +707,7 @@ pub fn create_local(
     get(database, actor_user_id, &id)
 }
 
-fn already_assigned(error: Box<dyn Error>) -> Box<dyn Error> {
+fn already_assigned(error: Box<dyn Error + Send + Sync>) -> Box<dyn Error + Send + Sync> {
     let message = error.to_string();
     let field = if message.contains("suplex_projects.repository_path") {
         "repositoryPath"
@@ -757,7 +761,7 @@ fn stored_policy(raw: &str, root: &str, worker: &str) -> DatabaseResult<ProjectA
                 "agentTaskPolicy",
                 "Project agent task policy must be repaired before it can be used",
             )],
-        ) as Box<dyn Error>
+        ) as Box<dyn Error + Send + Sync>
     })
 }
 
@@ -2304,7 +2308,7 @@ mod tests {
                 .await
             }
         };
-        let code = |error: Box<dyn Error>| crate::shared::public_failure(error).code;
+        let code = |error: Box<dyn Error + Send + Sync>| crate::shared::public_failure(error).code;
         commit("1".into()).await.unwrap();
         commit("2".into()).await.unwrap();
         let refused = crate::shared::public_failure(commit("3".into()).await.unwrap_err());

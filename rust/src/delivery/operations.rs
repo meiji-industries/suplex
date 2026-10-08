@@ -48,7 +48,10 @@ use crate::{
 pub const DELIVERY_WAIT_NEXT: &str =
     "End this Coordinator turn. Suplex will resume it when delivery state changes.";
 
-pub fn delivery_failure(code: &'static str, message: impl Into<String>) -> Box<dyn Error> {
+pub fn delivery_failure(
+    code: &'static str,
+    message: impl Into<String>,
+) -> Box<dyn Error + Send + Sync> {
     DeliveryError::operation(code, message).into()
 }
 
@@ -2327,7 +2330,7 @@ impl DeliveryOperations {
         control: &TaskControlRow,
         question: &str,
         code: &'static str,
-    ) -> DatabaseResult<Box<dyn Error>> {
+    ) -> DatabaseResult<Box<dyn Error + Send + Sync>> {
         if control.status == TaskStatus::Active {
             self.ask_human(control.task_id.as_str(), question)?;
         }
@@ -2449,19 +2452,17 @@ pub async fn host_observation(database_path: &Path, artifact_root: &Path, task_i
         artifact_root.to_owned(),
         task_id.to_owned(),
     );
-    let observed = tokio::task::spawn_blocking(move || {
-        crate::shared::blocking::block_on(|| async {
-            let operations = DeliveryOperations::new(&database_path, &artifact_root);
-            operations
-                .observe_host_task(&task_id)
-                .await
-                .map_err(|error| {
-                    (
-                        github_delivery::is_rate_limited(error.as_ref()),
-                        format!("{task_id}: {error}"),
-                    )
-                })
-        })
+    // Its own task, so a panic in the observation does not stop the recovery sweep.
+    let observed = tokio::spawn(async move {
+        DeliveryOperations::new(&database_path, &artifact_root)
+            .observe_host_task(&task_id)
+            .await
+            .map_err(|error| {
+                (
+                    github_delivery::is_rate_limited(error.as_ref()),
+                    format!("{task_id}: {error}"),
+                )
+            })
     })
     .await;
     if let Ok(Err((false, error))) = observed {
@@ -2982,7 +2983,8 @@ pub(crate) mod tests {
             .unwrap()
             .expect("the task carries a trigger policy");
         assert_eq!(policy.dispatch_id, "dispatch_1");
-        let code = |error: Box<dyn Error>| DeliveryError::code_of(error.as_ref()).unwrap();
+        let code =
+            |error: Box<dyn Error + Send + Sync>| DeliveryError::code_of(error.as_ref()).unwrap();
         let moved = operations
             .inspect_trigger_policy(&control, Some(&"c".repeat(40)), false)
             .await

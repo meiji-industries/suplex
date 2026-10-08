@@ -55,7 +55,7 @@ fn image(
     artifact_root: &Path,
     task_id: &str,
     artifact_id: &str,
-) -> Result<EvidenceAttachment, Box<dyn std::error::Error>> {
+) -> Result<EvidenceAttachment, Box<dyn std::error::Error + Send + Sync>> {
     let artifact = root_session_store::task_artifact(database, task_id, artifact_id)?
         .ok_or("Task image is not available")?;
     let bytes = artifacts::read(artifact_root, &artifact.company_id, &artifact.storage_path)
@@ -83,7 +83,7 @@ pub fn prepare_advisor_evidence(
     rows: &RootObservationRows,
     range: &ReviewRange,
     pull_request_checks: Option<&Observation>,
-) -> Result<AdvisorEvidence, Box<dyn std::error::Error>> {
+) -> Result<AdvisorEvidence, Box<dyn std::error::Error + Send + Sync>> {
     let task_id = rows.control.task_id.as_str();
     let worktree = rows
         .control

@@ -15,7 +15,10 @@ use super::{CacheTokens, TaskUsage, Tokens, failed, observe, record, session_obs
 use crate::{
     platform::database::{DatabaseResult, OpenMode, SuplexDatabase},
     profiles::model_pricing::{ModelPricingCatalog, ModelsDevCatalogReader},
-    runtimes::{task_harness::ReaderSession, task_harness_registry},
+    runtimes::{
+        task_harness::{HarnessFuture, ReaderSession},
+        task_harness_registry,
+    },
 };
 
 /// The provider instance home of the session profile, when it has one.
@@ -42,24 +45,26 @@ pub struct Session {
 
 /// `AnalyticsHistoryReader.read`: the native usage of one session, read by the
 /// runtime that owns it.
-pub fn read_native_usage(
+pub async fn read_native_usage(
     database_path: &Path,
     session: &Session,
     instance_home: Option<&Path>,
     pricing: Option<&ModelPricingCatalog>,
-) -> Result<Vec<TaskUsage>, Box<dyn Error>> {
+) -> Result<Vec<TaskUsage>, Box<dyn Error + Send + Sync>> {
     let native = session.native_session_id.as_str();
     let reader = task_harness_registry::native_session_reader(native)
         .ok_or("Native timeline reader is not available")?;
-    let observed = reader.timeline(
-        &ReaderSession {
-            database_path,
-            session_id: &session.id,
-            native_session_id: native,
-            instance_home_directory: instance_home,
-        },
-        pricing,
-    )?;
+    let observed = reader
+        .timeline(
+            &ReaderSession {
+                database_path,
+                session_id: &session.id,
+                native_session_id: native,
+                instance_home_directory: instance_home,
+            },
+            pricing,
+        )
+        .await?;
     Ok(observed
         .usage
         .into_iter()
@@ -94,17 +99,56 @@ pub fn read_native_usage(
         .collect())
 }
 
-pub type ReadUsage<'a> = dyn FnMut(&Session) -> Result<Vec<TaskUsage>, Box<dyn Error>> + 'a;
-
 /// One pass over every task: observe its lifecycle, then refresh each native
 /// session whose saved usage is due. A read failure keeps the saved usage and
 /// marks the session stale.
-pub fn collect(
+/// Reads the native usage of one due session.
+pub trait UsageReader: Send {
+    fn read<'a>(
+        &'a mut self,
+        session: &'a Session,
+    ) -> HarnessFuture<'a, Result<Vec<TaskUsage>, Box<dyn Error + Send + Sync>>>;
+}
+
+/// The runtime that owns each session reads it. The pricing catalog is read
+/// once, when the first due session is read, so an idle pass fetches nothing.
+struct NativeUsage {
+    database_path: PathBuf,
+    catalog: Option<Arc<ModelsDevCatalogReader>>,
+    pricing: Option<Option<Arc<ModelPricingCatalog>>>,
+}
+
+impl UsageReader for NativeUsage {
+    fn read<'a>(
+        &'a mut self,
+        session: &'a Session,
+    ) -> HarnessFuture<'a, Result<Vec<TaskUsage>, Box<dyn Error + Send + Sync>>> {
+        Box::pin(async move {
+            if self.pricing.is_none() {
+                self.pricing = Some(match &self.catalog {
+                    Some(catalog) => catalog.read().await,
+                    None => None,
+                });
+            }
+            let pricing = self.pricing.clone().flatten();
+            let home = instance_home(&self.database_path, &session.id);
+            read_native_usage(
+                &self.database_path,
+                session,
+                home.as_deref(),
+                pricing.as_deref(),
+            )
+            .await
+        })
+    }
+}
+
+pub async fn collect(
     database: &mut SuplexDatabase,
     startup: bool,
     now: DateTime<Utc>,
-    read_usage: &mut ReadUsage<'_>,
-    report: &mut dyn FnMut(&str, Box<dyn Error>),
+    read_usage: &mut dyn UsageReader,
+    report: &mut (dyn FnMut(&str, Box<dyn Error + Send + Sync>) + Send),
 ) -> DatabaseResult<()> {
     let tasks = {
         let mut statement = database.connection().prepare(
@@ -123,7 +167,7 @@ pub fn collect(
             .collect::<rusqlite::Result<Vec<_>>>()?
     };
     for (task_id, status, question, updated_at, archived) in tasks {
-        let mut pass = || -> DatabaseResult<()> {
+        let pass = async {
             observe(
                 database,
                 &task_id,
@@ -175,7 +219,7 @@ pub fn collect(
                     continue;
                 }
                 let started = now_millis_rfc3339();
-                match read_usage(&session) {
+                match read_usage.read(&session).await {
                     Ok(usage) => record(database, &task_id, &session.id, &usage, &started)?,
                     Err(error) => {
                         failed(database, &task_id, &session.id, &now_millis_rfc3339())?;
@@ -191,9 +235,9 @@ pub fn collect(
                     }
                 }
             }
-            Ok(())
+            Ok::<(), Box<dyn Error + Send + Sync>>(())
         };
-        if let Err(error) = pass() {
+        if let Err(error) = pass.await {
             report(&format!("task {task_id}"), error);
         }
     }
@@ -239,22 +283,16 @@ pub fn spawn(database_path: PathBuf, mut shutdown: watch::Receiver<bool>) {
         let reader = ModelsDevCatalogReader::new().ok().map(Arc::new);
         let mut startup = true;
         loop {
-            let path = database_path.clone();
-            let reader = reader.clone();
-            let result = tokio::task::spawn_blocking(move || -> Result<(), String> {
-                let mut database =
-                    SuplexDatabase::open(&path, OpenMode::ReadWrite).map_err(|e| e.to_string())?;
-                let mut pricing: Option<Option<Arc<ModelPricingCatalog>>> = None;
-                let mut read = |session: &Session| -> Result<Vec<TaskUsage>, Box<dyn Error>> {
-                    let catalog = pricing.get_or_insert_with(|| {
-                        reader
-                            .as_ref()
-                            .and_then(|reader| crate::shared::blocking::block_on(|| reader.read()))
-                    });
-                    let home = instance_home(&path, &session.id);
-                    read_native_usage(&path, session, home.as_deref(), catalog.as_deref())
-                };
-                let mut report = |context: &str, error: Box<dyn Error>| {
+            let mut read = NativeUsage {
+                database_path: database_path.clone(),
+                catalog: reader.clone(),
+                pricing: None,
+            };
+            // Each pass runs as its own task, so a failed pass does not stop collection.
+            let result = tokio::spawn(async move {
+                let mut database = SuplexDatabase::open(&read.database_path, OpenMode::ReadWrite)
+                    .map_err(|e| e.to_string())?;
+                let mut report = |context: &str, error: Box<dyn Error + Send + Sync>| {
                     if let Some(event) = incomplete_usage_diagnostic(error.as_ref()) {
                         crate::platform::system_events::emit(event);
                     } else {
@@ -262,6 +300,7 @@ pub fn spawn(database_path: PathBuf, mut shutdown: watch::Receiver<bool>) {
                     }
                 };
                 collect(&mut database, startup, Utc::now(), &mut read, &mut report)
+                    .await
                     .map_err(|error| error.to_string())
             })
             .await;
@@ -279,6 +318,19 @@ pub fn spawn(database_path: PathBuf, mut shutdown: watch::Receiver<bool>) {
 
 #[cfg(test)]
 mod tests {
+    /// Tests read usage synchronously.
+    impl<F> UsageReader for F
+    where
+        F: FnMut(&Session) -> Result<Vec<TaskUsage>, Box<dyn Error + Send + Sync>> + Send,
+    {
+        fn read<'a>(
+            &'a mut self,
+            session: &'a Session,
+        ) -> HarnessFuture<'a, Result<Vec<TaskUsage>, Box<dyn Error + Send + Sync>>> {
+            Box::pin(std::future::ready(self(session)))
+        }
+    }
+
     use std::fs;
 
     use serde_json::json;
@@ -359,34 +411,106 @@ mod tests {
         fs::create_dir_all(&runtime).unwrap();
         fs::write(runtime.join("server.json"), json!({"pid":4321,"baseUrl":url,"password":"a".repeat(64),"directory":"/repo","executable":"/bin/opencode","generation":"b775df17-718a-4cb2-8e23-6912b8aa0d39","configHash":"a".repeat(64),"processIdentity":{"command":"opencode serve","executable":"/bin/opencode","argv":["opencode","serve"],"processGroup":4321,"startTime":"start","ownerUid":501}}).to_string()).unwrap();
         let path_for_read = path.clone();
-        tokio::task::spawn_blocking(move || {
-            let pricing = ModelPricingCatalog::from([("openai/model".into(), ModelPricing { input:2.0, output:5.0, cache_read:0.5, cache_write:1.0 })]);
+        {
+            let pricing = ModelPricingCatalog::from([(
+                "openai/model".into(),
+                ModelPricing {
+                    input: 2.0,
+                    output: 5.0,
+                    cache_read: 0.5,
+                    cache_write: 1.0,
+                },
+            )]);
             let mut database = SuplexDatabase::open(&path_for_read, OpenMode::ReadWrite).unwrap();
-            database.connection().execute("UPDATE suplex_task_sessions SET native_session_id='ses_live' WHERE id='s'", []).unwrap();
-            let usage = read_native_usage(&path_for_read, &Session { id:"s".into(), native_session_id:"ses_live".into(), kind:"root".into() }, None, Some(&pricing)).unwrap();
+            database
+                .connection()
+                .execute(
+                    "UPDATE suplex_task_sessions SET native_session_id='ses_live' WHERE id='s'",
+                    [],
+                )
+                .unwrap();
+            let usage = read_native_usage(
+                &path_for_read,
+                &Session {
+                    id: "s".into(),
+                    native_session_id: "ses_live".into(),
+                    kind: "root".into(),
+                },
+                None,
+                Some(&pricing),
+            )
+            .await
+            .unwrap();
             let by_id = |id: &str| usage.iter().find(|entry| entry.message_id == id).unwrap();
             let steps = by_id("msg_steps");
-            assert_eq!((steps.steps, steps.source.as_str(), steps.summary, steps.subsidized), (2.0,"steps",true,true));
+            assert_eq!(
+                (
+                    steps.steps,
+                    steps.source.as_str(),
+                    steps.summary,
+                    steps.subsidized
+                ),
+                (2.0, "steps", true, true)
+            );
             assert!((steps.cost - 0.0004).abs() < 1e-12);
-            assert_eq!((by_id("msg_billed").cost, by_id("msg_billed").subsidized), (3.0,false));
-            assert_eq!((by_id("msg_unfinished").steps, by_id("msg_unfinished").completed_at, by_id("msg_unfinished").cost), (0.0,None,0.0));
+            assert_eq!(
+                (by_id("msg_billed").cost, by_id("msg_billed").subsidized),
+                (3.0, false)
+            );
+            assert_eq!(
+                (
+                    by_id("msg_unfinished").steps,
+                    by_id("msg_unfinished").completed_at,
+                    by_id("msg_unfinished").cost
+                ),
+                (0.0, None, 0.0)
+            );
             record(&mut database, "t", "s", &usage, &now_millis_rfc3339()).unwrap();
             let saved = analytics::read(&database, "t").unwrap().usage;
             for entry in &usage {
-                assert_eq!(serde_json::to_value(saved.iter().find(|saved| saved.message_id == entry.message_id).unwrap()).unwrap(), serde_json::to_value(entry).unwrap());
+                assert_eq!(
+                    serde_json::to_value(
+                        saved
+                            .iter()
+                            .find(|saved| saved.message_id == entry.message_id)
+                            .unwrap()
+                    )
+                    .unwrap(),
+                    serde_json::to_value(entry).unwrap()
+                );
             }
-            let timeline = task_harness_registry::native_session_reader("ses_live").unwrap().timeline(&ReaderSession { database_path:&path_for_read, session_id:"s", native_session_id:"ses_live", instance_home_directory:None }, Some(&pricing)).unwrap();
-            crate::tasks::limits::replace_observed_usage(&mut database, "t", vec![("ses_live".into(),"root".into(),timeline)]).unwrap();
+            let timeline = task_harness_registry::native_session_reader("ses_live")
+                .unwrap()
+                .timeline(
+                    &ReaderSession {
+                        database_path: &path_for_read,
+                        session_id: "s",
+                        native_session_id: "ses_live",
+                        instance_home_directory: None,
+                    },
+                    Some(&pricing),
+                )
+                .await
+                .unwrap();
+            crate::tasks::limits::replace_observed_usage(
+                &mut database,
+                "t",
+                vec![("ses_live".into(), "root".into(), timeline)],
+            )
+            .unwrap();
             for entry in &usage {
                 let raw: String = database.connection().query_row("SELECT snapshot FROM suplex_task_usage WHERE task_id='t' AND message_id=?1", [&entry.message_id], |row| row.get(0)).unwrap();
-                assert_eq!(serde_json::to_value(serde_json::from_str::<TaskUsage>(&raw).unwrap()).unwrap(), serde_json::to_value(entry).unwrap());
+                assert_eq!(
+                    serde_json::to_value(serde_json::from_str::<TaskUsage>(&raw).unwrap()).unwrap(),
+                    serde_json::to_value(entry).unwrap()
+                );
             }
-        }).await.unwrap();
+        }
         fs::remove_dir_all(root).unwrap();
     }
 
-    #[test]
-    fn collector_refreshes_devin_and_final_timing_without_coupling_delivery_to_storage() {
+    #[tokio::test]
+    async fn collector_refreshes_devin_and_final_timing_without_coupling_delivery_to_storage() {
         for native in ["devin-old", "ses_finished"] {
             let (path, mut database) = task_database();
             database
@@ -418,11 +542,11 @@ mod tests {
                 ..old
             };
             let mut reads = 0;
-            let mut read = |_: &Session| -> Result<Vec<TaskUsage>, Box<dyn Error>> {
+            let mut read = |_: &Session| -> Result<Vec<TaskUsage>, Box<dyn Error + Send + Sync>> {
                 reads += 1;
                 Ok(vec![refreshed.clone()])
             };
-            let mut report = |_: &str, error: Box<dyn Error>| panic!("{error}");
+            let mut report = |_: &str, error: Box<dyn Error + Send + Sync>| panic!("{error}");
             collect(
                 &mut database,
                 native == "devin-old",
@@ -430,8 +554,11 @@ mod tests {
                 &mut read,
                 &mut report,
             )
+            .await
             .unwrap();
-            collect(&mut database, false, Utc::now(), &mut read, &mut report).unwrap();
+            collect(&mut database, false, Utc::now(), &mut read, &mut report)
+                .await
+                .unwrap();
             assert_eq!(reads, 1);
             let saved = analytics::read(&database, "t").unwrap();
             assert_eq!(
@@ -447,9 +574,12 @@ mod tests {
                 &mut database,
                 false,
                 Utc::now(),
-                &mut |_| Ok(vec![refreshed.clone()]),
+                &mut |_: &Session| -> Result<Vec<TaskUsage>, Box<dyn Error + Send + Sync>> {
+                    Ok(vec![refreshed.clone()])
+                },
                 &mut |_, _| errors += 1,
             )
+            .await
             .unwrap();
             assert_eq!(errors, 1);
             assert_eq!(
@@ -468,8 +598,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn analytics_reads_codex_usage_and_estimates_its_cost_from_the_turn_log() {
+    #[tokio::test]
+    async fn analytics_reads_codex_usage_and_estimates_its_cost_from_the_turn_log() {
         let root =
             std::env::temp_dir().join(format!("suplex-codex-analytics-{}", uuid::Uuid::new_v4()));
         let (database_path, directory) = runtime(&root);
@@ -508,7 +638,9 @@ mod tests {
             ("openai/gpt-6-astra".to_owned(), price),
         ]);
         let session = session(native, "worker");
-        let usage = read_native_usage(&database_path, &session, None, Some(&pricing)).unwrap();
+        let usage = read_native_usage(&database_path, &session, None, Some(&pricing))
+            .await
+            .unwrap();
         assert_eq!(usage.len(), 1);
         let first = &usage[0];
         assert_eq!(
@@ -546,7 +678,9 @@ mod tests {
             second(2_000, 1_200, 200, 100, 40),
         )
         .unwrap();
-        let resumed = read_native_usage(&database_path, &session, None, Some(&pricing)).unwrap();
+        let resumed = read_native_usage(&database_path, &session, None, Some(&pricing))
+            .await
+            .unwrap();
         assert_eq!(
             resumed
                 .iter()
@@ -560,13 +694,15 @@ mod tests {
             second(3_000, 1_800, 300, 150, 60),
         )
         .unwrap();
-        let refreshed = read_native_usage(&database_path, &session, None, Some(&pricing)).unwrap();
+        let refreshed = read_native_usage(&database_path, &session, None, Some(&pricing))
+            .await
+            .unwrap();
         assert!((refreshed[1].cost - 2.0 * first.cost).abs() < 1e-10);
         fs::remove_dir_all(root).unwrap();
     }
 
-    #[test]
-    fn codex_usage_is_unpriced_without_a_catalog_entry_and_missing_logs_are_not_zero_usage() {
+    #[tokio::test]
+    async fn codex_usage_is_unpriced_without_a_catalog_entry_and_missing_logs_are_not_zero_usage() {
         let root =
             std::env::temp_dir().join(format!("suplex-codex-analytics-{}", uuid::Uuid::new_v4()));
         let (database_path, directory) = runtime(&root);
@@ -575,7 +711,8 @@ mod tests {
             &session("codex-missing", "worker"),
             None,
             None,
-        );
+        )
+        .await;
         assert_eq!(
             missing.unwrap_err().to_string(),
             "Codex turn logs are missing"
@@ -593,6 +730,7 @@ mod tests {
             None,
             None,
         )
+        .await
         .unwrap();
         assert_eq!(
             (usage[0].model.as_str(), usage[0].cost, usage[0].subsidized),
@@ -622,6 +760,7 @@ mod tests {
                 None,
                 None
             )
+            .await
             .unwrap(),
             vec![]
         );
@@ -651,8 +790,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn the_first_pass_refreshes_a_delivered_codex_session_despite_a_recent_observation() {
+    #[tokio::test]
+    async fn the_first_pass_refreshes_a_delivered_codex_session_despite_a_recent_observation() {
         let (path, mut database) = task_database();
         record(
             &mut database,
@@ -663,13 +802,17 @@ mod tests {
         )
         .unwrap();
         let mut reads = 0;
-        let mut read = |_: &Session| -> Result<Vec<TaskUsage>, Box<dyn Error>> {
+        let mut read = |_: &Session| -> Result<Vec<TaskUsage>, Box<dyn Error + Send + Sync>> {
             reads += 1;
             Ok(vec![usage_with(3.0)])
         };
-        let mut report = |_: &str, error: Box<dyn Error>| panic!("{error}");
-        collect(&mut database, true, Utc::now(), &mut read, &mut report).unwrap();
-        collect(&mut database, false, Utc::now(), &mut read, &mut report).unwrap();
+        let mut report = |_: &str, error: Box<dyn Error + Send + Sync>| panic!("{error}");
+        collect(&mut database, true, Utc::now(), &mut read, &mut report)
+            .await
+            .unwrap();
+        collect(&mut database, false, Utc::now(), &mut read, &mut report)
+            .await
+            .unwrap();
         assert_eq!(reads, 1);
         assert_eq!(analytics::read(&database, "t").unwrap().usage[0].cost, 3.0);
         let events = analytics::read(&database, "t").unwrap().events;
@@ -683,8 +826,9 @@ mod tests {
         let _ = fs::remove_file(path);
     }
 
-    #[test]
-    fn a_failed_read_keeps_saved_usage_marks_the_session_stale_and_retries_after_five_minutes() {
+    #[tokio::test]
+    async fn a_failed_read_keeps_saved_usage_marks_the_session_stale_and_retries_after_five_minutes()
+     {
         let (path, mut database) = task_database();
         database
             .connection()
@@ -704,12 +848,12 @@ mod tests {
         )
         .unwrap();
         let (mut reads, mut errors, mut available) = (0, 0, false);
-        let pass = |database: &mut SuplexDatabase,
-                    now: DateTime<Utc>,
-                    available: bool,
-                    reads: &mut i32,
-                    errors: &mut i32| {
-            let mut read = |_: &Session| -> Result<Vec<TaskUsage>, Box<dyn Error>> {
+        let pass = async |database: &mut SuplexDatabase,
+                          now: DateTime<Utc>,
+                          available: bool,
+                          reads: &mut i32,
+                          errors: &mut i32| {
+            let mut read = |_: &Session| -> Result<Vec<TaskUsage>, Box<dyn Error + Send + Sync>> {
                 *reads += 1;
                 if available {
                     Ok(vec![usage_with(2.0)])
@@ -717,8 +861,10 @@ mod tests {
                     Err("history is missing".into())
                 }
             };
-            let mut report = |_: &str, _: Box<dyn Error>| *errors += 1;
-            collect(database, false, now, &mut read, &mut report).unwrap();
+            let mut report = |_: &str, _: Box<dyn Error + Send + Sync>| *errors += 1;
+            collect(database, false, now, &mut read, &mut report)
+                .await
+                .unwrap();
         };
         pass(
             &mut database,
@@ -726,7 +872,8 @@ mod tests {
             available,
             &mut reads,
             &mut errors,
-        );
+        )
+        .await;
         let saved = analytics::read(&database, "t").unwrap();
         assert_eq!(
             (
@@ -744,7 +891,8 @@ mod tests {
             available,
             &mut reads,
             &mut errors,
-        );
+        )
+        .await;
         assert_eq!(reads, 1);
         available = true;
         pass(
@@ -753,7 +901,8 @@ mod tests {
             available,
             &mut reads,
             &mut errors,
-        );
+        )
+        .await;
         let recovered = analytics::read(&database, "t").unwrap();
         assert_eq!(
             (
@@ -766,15 +915,15 @@ mod tests {
         let _ = fs::remove_file(path);
     }
 
-    #[test]
-    fn a_session_opencode_no_longer_has_is_marked_stale_without_an_error_report() {
+    #[tokio::test]
+    async fn a_session_opencode_no_longer_has_is_marked_stale_without_an_error_report() {
         let (path, mut database) = task_database();
         database
             .connection()
             .execute("UPDATE suplex_task_controls SET status = 'active'", [])
             .unwrap();
         let mut errors = 0;
-        let mut read = |_: &Session| -> Result<Vec<TaskUsage>, Box<dyn Error>> {
+        let mut read = |_: &Session| -> Result<Vec<TaskUsage>, Box<dyn Error + Send + Sync>> {
             // As the OpenCode runtime returns it: the typed error inside an io::Error.
             Err(Box::new(std::io::Error::other(
                 crate::runtimes::opencode::session_history::SessionNotFound,
@@ -783,8 +932,10 @@ mod tests {
         assert!(missing_native_session(&std::io::Error::from(
             std::io::ErrorKind::NotFound
         )));
-        let mut report = |_: &str, _: Box<dyn Error>| errors += 1;
-        collect(&mut database, false, Utc::now(), &mut read, &mut report).unwrap();
+        let mut report = |_: &str, _: Box<dyn Error + Send + Sync>| errors += 1;
+        collect(&mut database, false, Utc::now(), &mut read, &mut report)
+            .await
+            .unwrap();
         assert_eq!(errors, 0);
         assert!(
             analytics::read(&database, "t").unwrap().sessions[0]

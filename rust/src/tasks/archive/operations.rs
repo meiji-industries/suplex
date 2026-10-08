@@ -63,11 +63,15 @@ pub fn in_progress(task_id: &str) -> bool {
         .unwrap_or(false)
 }
 
-fn failure(message: &str, status_code: u16) -> Box<dyn std::error::Error> {
+fn failure(message: &str, status_code: u16) -> Box<dyn std::error::Error + Send + Sync> {
     failure_code(message, status_code, "task_failure")
 }
 
-fn failure_code(message: &str, status_code: u16, code: &'static str) -> Box<dyn std::error::Error> {
+fn failure_code(
+    message: &str,
+    status_code: u16,
+    code: &'static str,
+) -> Box<dyn std::error::Error + Send + Sync> {
     TaskError::Failure {
         message: message.to_owned(),
         status: status_code,
@@ -76,7 +80,9 @@ fn failure_code(message: &str, status_code: u16, code: &'static str) -> Box<dyn 
     .into()
 }
 
-fn cleanup_error(error: Box<dyn std::error::Error>) -> Box<dyn std::error::Error> {
+fn cleanup_error(
+    error: Box<dyn std::error::Error + Send + Sync>,
+) -> Box<dyn std::error::Error + Send + Sync> {
     if matches!(error.downcast_ref(), Some(TaskError::Failure { .. })) {
         error
     } else {
@@ -130,17 +136,23 @@ struct IdleSession {
     native_session_id: Option<String>,
 }
 
-/// TypeScript `stopIdleArchiveSessions`: every native reader confirms its
-/// session is idle before anything stops.
-fn archive_sessions_idle(
+/// A task session: id, launch owner process id and start time, native id, and instance home.
+type ArchiveSession = (
+    String,
+    Option<u32>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+);
+
+fn archive_sessions(
     database: &SuplexDatabase,
-    database_path: &Path,
     task_id: &str,
-) -> DatabaseResult<Vec<IdleSession>> {
+) -> DatabaseResult<Vec<ArchiveSession>> {
     let mut statement = database.connection().prepare(
         "SELECT id, launch_owner_pid, launch_owner_start_time, native_session_id, json_extract(profile_json, '$.instanceHomeDirectory') FROM suplex_task_sessions WHERE task_id = ?1",
     )?;
-    let sessions = statement
+    Ok(statement
         .query_map([task_id], |row| {
             Ok((
                 row.get::<_, String>(0)?,
@@ -150,7 +162,15 @@ fn archive_sessions_idle(
                 row.get::<_, Option<String>>(4)?,
             ))
         })?
-        .collect::<rusqlite::Result<Vec<_>>>()?;
+        .collect::<rusqlite::Result<Vec<_>>>()?)
+}
+
+/// TypeScript `stopIdleArchiveSessions`: every native reader confirms its
+/// session is idle before anything stops.
+async fn archive_sessions_idle(
+    sessions: Vec<ArchiveSession>,
+    database_path: &Path,
+) -> DatabaseResult<Vec<IdleSession>> {
     let mut idle = Vec::new();
     for (session_id, owner_pid, owner_start_time, native_session_id, instance_home) in sessions {
         if let (Some(pid), Some(start_time)) = (owner_pid, owner_start_time)
@@ -167,12 +187,14 @@ fn archive_sessions_idle(
         // TypeScript `nativeSessionReader`: a session without a native identity belongs to OpenCode.
         let harness = task_harness_registry::for_session(native_session_id.as_deref())
             .ok_or_else(|| TaskError::internal("No native reader for this session"))?;
-        let busy = harness.busy(&ReaderSession {
-            database_path,
-            session_id: &session_id,
-            native_session_id: native_session_id.as_deref().unwrap_or_default(),
-            instance_home_directory: instance_home.as_deref().map(Path::new),
-        })?;
+        let busy = harness
+            .busy(&ReaderSession {
+                database_path,
+                session_id: &session_id,
+                native_session_id: native_session_id.as_deref().unwrap_or_default(),
+                instance_home_directory: instance_home.as_deref().map(Path::new),
+            })
+            .await?;
         if busy {
             return Err(failure(
                 "An agent is still active. Retry after it stops.",
@@ -232,9 +254,9 @@ pub fn unarchive_task(
     })
 }
 
-/// Synchronous archive operation for a detached blocking caller. The database
-/// is never held locked while native processes or Git are inspected.
-pub fn archive_local_task(
+/// Archive operation for a detached caller. The database is never held locked
+/// while native processes or Git are inspected.
+pub async fn archive_local_task(
     database_path: &Path,
     actor_user_id: &str,
     task_id: &str,
@@ -246,9 +268,10 @@ pub fn archive_local_task(
         task_id,
         confirm_discard_dirty,
     )
+    .await
 }
 
-pub fn archive_task(
+pub async fn archive_task(
     database_path: &Path,
     authority: Authority<'_>,
     task_id: &str,
@@ -264,13 +287,17 @@ pub fn archive_task(
         return Err(failure("Cancel the task before archiving it", 409));
     }
     let _guard = ArchiveGuard::acquire(task_id)?;
-    let idle = archive_sessions_idle(&database, database_path, task_id).map_err(cleanup_error)?;
+    let sessions = archive_sessions(&database, task_id).map_err(cleanup_error)?;
+    let idle = archive_sessions_idle(sessions, database_path)
+        .await
+        .map_err(cleanup_error)?;
     let displays = displays::prepare_task_displays(&database, task_id).map_err(cleanup_error)?;
     // An idle OpenCode server still runs until its harness stops it.
     for session in &idle {
         session
             .harness
             .stop(&session.directory, session.native_session_id.as_deref())
+            .await
             .map_err(|error| cleanup_error(error.into()))?;
     }
     reauthorize(&database, authority, task_id)?;
@@ -334,8 +361,8 @@ mod tests {
     use serde_json::json;
     use std::fs;
 
-    #[test]
-    fn archive_uses_live_native_and_git_facts_then_commits_once() {
+    #[tokio::test]
+    async fn archive_uses_live_native_and_git_facts_then_commits_once() {
         let base = std::env::temp_dir().join(format!("suplex-archive-{}", uuid::Uuid::new_v4()));
         let repository_path = base.join("repository");
         let worktree_root = base.join("worktrees");
@@ -389,7 +416,11 @@ mod tests {
         let owner = inspect_process(std::process::id()).unwrap();
         database.connection().execute("UPDATE suplex_task_sessions SET launch_owner_pid = ?1,launch_owner_start_time = ?2 WHERE id = 'archive_session'", params![owner.pid,owner.start_time]).unwrap();
         drop(database);
-        assert!(archive_local_task(&database_path, &user.id, &task_id, false).is_err());
+        assert!(
+            archive_local_task(&database_path, &user.id, &task_id, false)
+                .await
+                .is_err()
+        );
         assert!(worktree.path.exists());
         let database = SuplexDatabase::open(&database_path, OpenMode::ReadWrite).unwrap();
         database.connection().execute("UPDATE suplex_task_sessions SET launch_owner_pid = NULL,launch_owner_start_time = NULL,native_session_id = 'codex-native',profile_json = '{\"provider\":\"opencode\"}' WHERE id = 'archive_session'", []).unwrap();
@@ -417,7 +448,11 @@ mod tests {
             serde_json::to_vec(&native).unwrap(),
         )
         .unwrap();
-        assert!(archive_local_task(&database_path, &user.id, &task_id, false).is_err());
+        assert!(
+            archive_local_task(&database_path, &user.id, &task_id, false)
+                .await
+                .is_err()
+        );
         assert!(worktree.path.exists());
         fs::remove_file(directory.join("turn.json")).unwrap();
         // Every provider is ported, so no native session is an unsupported one anymore.
@@ -425,14 +460,20 @@ mod tests {
         database.connection().execute("UPDATE suplex_task_sessions SET native_session_id = NULL WHERE id = 'archive_session'", []).unwrap();
         drop(database);
         fs::write(worktree.path.join("draft.txt"), "keep\n").unwrap();
-        match archive_local_task(&database_path, &user.id, &task_id, false).unwrap() {
+        match archive_local_task(&database_path, &user.id, &task_id, false)
+            .await
+            .unwrap()
+        {
             ArchiveOutcome::ConfirmationRequired(paths) => assert_eq!(paths, ["draft.txt"]),
             ArchiveOutcome::Archived(_) => panic!("dirty worktree needs confirmation"),
         }
         let database = SuplexDatabase::open(&database_path, OpenMode::ReadWrite).unwrap();
         database.connection().execute("UPDATE suplex_task_controls SET delivery_target = 'pull_request_draft' WHERE task_id = ?1", [&task_id]).unwrap();
         drop(database);
-        match archive_local_task(&database_path, &user.id, &task_id, false).unwrap() {
+        match archive_local_task(&database_path, &user.id, &task_id, false)
+            .await
+            .unwrap()
+        {
             ArchiveOutcome::ConfirmationRequired(paths) => assert_eq!(paths, ["draft.txt"]),
             ArchiveOutcome::Archived(_) => panic!("dirty pull-request task needs confirmation"),
         }
@@ -471,7 +512,10 @@ mod tests {
                 "processGroup": identity.process_group, "startTime": identity.start_time, "ownerUid": identity.owner_uid.unwrap()},
         });
         fs::write(directory.join("server.json"), reference.to_string()).unwrap();
-        match archive_local_task(&database_path, &user.id, &task_id, false).unwrap() {
+        match archive_local_task(&database_path, &user.id, &task_id, false)
+            .await
+            .unwrap()
+        {
             ArchiveOutcome::ConfirmationRequired(paths) => assert_eq!(paths, ["draft.txt"]),
             ArchiveOutcome::Archived(_) => panic!("dirty worktree needs confirmation"),
         }
@@ -489,7 +533,10 @@ mod tests {
         let database = SuplexDatabase::open(&database_path, OpenMode::ReadWrite).unwrap();
         database.connection().execute("UPDATE suplex_task_sessions SET launch_owner_pid = ?1,launch_owner_start_time = 'stale-start',native_session_id = 'codex-native' WHERE id = 'archive_session'", [owner.pid]).unwrap();
         drop(database);
-        match archive_local_task(&database_path, &user.id, &task_id, false).unwrap() {
+        match archive_local_task(&database_path, &user.id, &task_id, false)
+            .await
+            .unwrap()
+        {
             ArchiveOutcome::ConfirmationRequired(paths) => assert_eq!(paths, ["draft.txt"]),
             ArchiveOutcome::Archived(_) => panic!("dirty worktree needs confirmation"),
         }
@@ -506,7 +553,7 @@ mod tests {
             .unwrap();
         #[cfg(target_os = "macos")]
         std::thread::sleep(std::time::Duration::from_millis(150));
-        let result = archive_local_task(&database_path, &user.id, &task_id, true);
+        let result = archive_local_task(&database_path, &user.id, &task_id, true).await;
         #[cfg(target_os = "macos")]
         if result.is_err() {
             let _ = native_without_record.kill();

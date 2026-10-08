@@ -31,7 +31,10 @@ pub fn router() -> Router<AppState> {
         .route("/api/billing/portal", post(portal))
 }
 
-fn respond<T: Serialize>(result: Result<T, Box<dyn Error>>, cookies: Vec<String>) -> Response {
+fn respond<T: Serialize>(
+    result: Result<T, Box<dyn Error + Send + Sync>>,
+    cookies: Vec<String>,
+) -> Response {
     let mut response = match result {
         Ok(value) => Json(value).into_response(),
         Err(error) => ApiError::response(error),

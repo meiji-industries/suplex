@@ -21,35 +21,36 @@ pub async fn create_browser(
     request: task_contracts::TaskCreateBody,
 ) -> Result<(bool, TaskResponse), PublicFailure> {
     let (project, existing) = {
-        let admission = state.with_database(|database| -> Result<_, Box<dyn Error>> {
-            let company = companies::require_company_access(database, &user_id, &company_id)?;
-            if company.status != "active" {
-                return Err(TaskError::new("The company is not active", 409).into());
-            }
-            let project = projects::get(database, &user_id, &request.project_id)?;
-            if project.company_id != company_id {
-                return Err(TaskError::not_found().into());
-            }
-            let hash = commands::task_request_hash(&request, &user_id)?;
-            if let Some(existing) = commands::existing_user_task(
-                database,
-                &company_id,
-                &request.idempotency_key,
-                &hash,
-                &user_id,
-            )? {
-                return Ok((
-                    None,
-                    Some((
-                        existing.status,
-                        existing.id.clone(),
-                        task_response::get(database, &existing.id)?
-                            .ok_or("existing task disappeared")?,
-                    )),
-                ));
-            }
-            Ok((Some(project), None))
-        });
+        let admission =
+            state.with_database(|database| -> Result<_, Box<dyn Error + Send + Sync>> {
+                let company = companies::require_company_access(database, &user_id, &company_id)?;
+                if company.status != "active" {
+                    return Err(TaskError::new("The company is not active", 409).into());
+                }
+                let project = projects::get(database, &user_id, &request.project_id)?;
+                if project.company_id != company_id {
+                    return Err(TaskError::not_found().into());
+                }
+                let hash = commands::task_request_hash(&request, &user_id)?;
+                if let Some(existing) = commands::existing_user_task(
+                    database,
+                    &company_id,
+                    &request.idempotency_key,
+                    &hash,
+                    &user_id,
+                )? {
+                    return Ok((
+                        None,
+                        Some((
+                            existing.status,
+                            existing.id.clone(),
+                            task_response::get(database, &existing.id)?
+                                .ok_or("existing task disappeared")?,
+                        )),
+                    ));
+                }
+                Ok((Some(project), None))
+            });
         match admission {
             Ok(value) => value,
             Err(error) => return Err(public_failure(error)),
@@ -152,7 +153,7 @@ async fn finish_admitted_create(
         .map_err(public_failure)?;
     let now = Utc::now();
     let host = state.task_host.clone();
-    let written = state.with_database(|database| -> Result<_, Box<dyn Error>> {
+    let written = state.with_database(|database| -> Result<_, Box<dyn Error + Send + Sync>> {
         let mut prepared = commands::prepare_local_user_task(
             &company_id,
             &user_id,
@@ -197,7 +198,10 @@ pub async fn capture(
     state: &AppState,
     project: &projects::Project,
     request: &task_contracts::TaskCreateBody,
-    source_error: impl FnOnce(Box<dyn Error>, Option<&Value>) -> Box<dyn Error>,
+    source_error: impl FnOnce(
+        Box<dyn Error + Send + Sync>,
+        Option<&Value>,
+    ) -> Box<dyn Error + Send + Sync>,
 ) -> crate::platform::database::DatabaseResult<(super::sources::CreationSource, String)> {
     let selector = request
         .source

@@ -102,7 +102,11 @@ fn oauth_error(error: &(dyn std::error::Error + 'static), oauth: &OAuth) -> Resp
     response
 }
 
-fn failure(error: &'static str, message: &str, status: u16) -> Box<dyn std::error::Error> {
+fn failure(
+    error: &'static str,
+    message: &str,
+    status: u16,
+) -> Box<dyn std::error::Error + Send + Sync> {
     Box::new(OAuthFailure::new(error, message, status))
 }
 
@@ -120,7 +124,7 @@ fn content_type(headers: &HeaderMap) -> String {
 fn form(
     headers: &HeaderMap,
     body: &Bytes,
-) -> Result<HashMap<String, String>, Box<dyn std::error::Error>> {
+) -> Result<HashMap<String, String>, Box<dyn std::error::Error + Send + Sync>> {
     if content_type(headers) != "application/x-www-form-urlencoded" || body.len() > 16 * 1024 {
         return Err(failure("invalid_request", "Form body is invalid", 400));
     }
@@ -148,7 +152,10 @@ fn source_address(request: &Request) -> String {
 }
 
 /// Twenty registrations per source address per hour, across at most a thousand sources.
-fn throttle(state: &AppState, source: &str) -> Result<(), Box<dyn std::error::Error>> {
+fn throttle(
+    state: &AppState,
+    source: &str,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let limited = || {
         failure(
             "temporarily_unavailable",
@@ -211,7 +218,7 @@ async fn register(State(state): State<AppState>, request: Request) -> Response {
                 Utc::now(),
             )
         })?;
-        Ok::<_, Box<dyn std::error::Error>>(serde_json::to_value(registered)?)
+        Ok::<_, Box<dyn std::error::Error + Send + Sync>>(serde_json::to_value(registered)?)
     })();
     match result {
         Ok(client) => {
@@ -228,7 +235,7 @@ async fn register(State(state): State<AppState>, request: Request) -> Response {
 fn session_user(
     state: &AppState,
     headers: &HeaderMap,
-) -> Result<(Option<String>, Vec<String>), Box<dyn std::error::Error>> {
+) -> Result<(Option<String>, Vec<String>), Box<dyn std::error::Error + Send + Sync>> {
     let session = state.with_database(|database| {
         session::session_user(database, headers, Some(&state.session_config), Utc::now())
     })?;
@@ -336,7 +343,7 @@ async fn consent(
             .collect::<Vec<_>>();
         let mut body = serde_json::to_value(consent)?.as_object().cloned().unwrap_or_else(Map::new);
         body.insert("projects".into(), json!(visible));
-        Ok::<_, Box<dyn std::error::Error>>(Value::Object(body))
+        Ok::<_, Box<dyn std::error::Error + Send + Sync>>(Value::Object(body))
     });
     let response = match result {
         Ok(body) => {
@@ -356,7 +363,7 @@ async fn consent(
 }
 
 /// `requireCsrf`: the double-submit token, independent of the request origin.
-fn require_csrf(headers: &HeaderMap) -> Result<(), Box<dyn std::error::Error>> {
+fn require_csrf(headers: &HeaderMap) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let mut values = headers.get_all(session::CSRF_HEADER_NAME).iter();
     let header = values.next().and_then(|value| value.to_str().ok());
     let cookie = session::cookie(headers, session::CSRF_COOKIE_NAME);
@@ -489,7 +496,7 @@ async fn token(State(state): State<AppState>, headers: HeaderMap, body: Bytes) -
             }
             _ => return Err(invalid()),
         };
-        Ok::<_, Box<dyn std::error::Error>>(serde_json::to_value(tokens)?)
+        Ok::<_, Box<dyn std::error::Error + Send + Sync>>(serde_json::to_value(tokens)?)
     })();
     match result {
         Ok(tokens) => {

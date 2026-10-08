@@ -522,7 +522,7 @@ impl Publisher<'_> {
     /// Observe the pull request, the clean local branch, and the task
     /// authorization again before each write.
     async fn inspect_before_write(&self) -> Result<PullRequest, String> {
-        let text = |error: Box<dyn Error>| error.to_string();
+        let text = |error: Box<dyn Error + Send + Sync>| error.to_string();
         let (task_id, head_sha, repository) = (self.task_id, self.head_sha, &self.repository);
         let control = control_now(&self.database(), task_id).map_err(text)?;
         let path = control

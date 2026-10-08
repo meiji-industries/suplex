@@ -76,7 +76,7 @@ pub fn inspect_revisions(
     head_sha: &str,
     github_token: Option<&str>,
     base_branch: &str,
-) -> Result<DeliveryDiff, Box<dyn Error>> {
+) -> Result<DeliveryDiff, Box<dyn Error + Send + Sync>> {
     if ![base_sha, head_sha].iter().all(|sha| valid_sha(sha)) {
         return Err(unavailable("GitHub delivery revisions are not valid"));
     }
@@ -190,7 +190,7 @@ pub struct DeliveryDiff {
     pub base_branch: String,
 }
 
-fn unavailable(message: &'static str) -> Box<dyn Error> {
+fn unavailable(message: &'static str) -> Box<dyn Error + Send + Sync> {
     DeliveryError::internal(message).into()
 }
 
@@ -209,7 +209,7 @@ pub fn inspect_git_range(
     published_base: git2::Oid,
     github_token: Option<&str>,
     base_branch: &str,
-) -> Result<DeliveryDiff, Box<dyn Error>> {
+) -> Result<DeliveryDiff, Box<dyn Error + Send + Sync>> {
     let base = worktree::published_base_commit(repository, published_base, github_token)?;
     inspect_loaded_range(repository, head, base, base_branch)
 }
@@ -219,7 +219,7 @@ fn inspect_loaded_range(
     head: git2::Oid,
     base: git2::Oid,
     base_branch: &str,
-) -> Result<DeliveryDiff, Box<dyn Error>> {
+) -> Result<DeliveryDiff, Box<dyn Error + Send + Sync>> {
     let merge_base = repository.merge_base(base, head)?;
     let base_tree = repository.find_commit(merge_base)?.tree()?;
     let head_tree = repository.find_commit(head)?.tree()?;

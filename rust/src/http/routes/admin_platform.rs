@@ -141,7 +141,7 @@ pub(crate) fn record_audit(
     actor_user_id: Option<&str>,
     action: &str,
     metadata: Value,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     crate::identity::audit::record(
         database,
         &crate::identity::audit::AuditEvent {
@@ -206,7 +206,11 @@ async fn read_telemetry(
             )
             .unwrap_or(false);
         let account_id = crate::accounts::linked(database)?.map(|account| account.account_id);
-        Ok::<_, Box<dyn std::error::Error>>((settings.telemetry_enabled, acknowledged, account_id))
+        Ok::<_, Box<dyn std::error::Error + Send + Sync>>((
+            settings.telemetry_enabled,
+            acknowledged,
+            account_id,
+        ))
     });
     let (setting_enabled, acknowledged, account_id) = status.unwrap_or((false, false, None));
     let required = user.role == "admin" && config.is_some() && setting_enabled && !acknowledged;
@@ -251,7 +255,7 @@ async fn acknowledge_telemetry(State(state): State<AppState>, headers: HeaderMap
     };
     let result = state.with_database(|database| {
         crate::telemetry::acknowledge(database, Utc::now())?;
-        Ok::<_, Box<dyn std::error::Error>>(())
+        Ok::<_, Box<dyn std::error::Error + Send + Sync>>(())
     });
     let response = match result {
         Ok(()) => private(StatusCode::NO_CONTENT.into_response()),
@@ -314,7 +318,7 @@ async fn update_environment(
                 "telemetryEnabled": updated.telemetry_enabled.to_string(),
             }),
         )?;
-        Ok::<_, Box<dyn std::error::Error>>(updated)
+        Ok::<_, Box<dyn std::error::Error + Send + Sync>>(updated)
     });
     if let Ok(settings) = &result {
         crate::projects::git::set_libgit2_transport(settings.git2_enabled);

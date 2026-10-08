@@ -220,7 +220,7 @@ pub(crate) fn annotate_pull_request_owners(
     state: &AppState,
     project: &service::Project,
     sources: &mut serde_json::Value,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let Some(repository) = project.repository.as_deref() else {
         return Ok(());
     };
@@ -373,7 +373,7 @@ async fn update(
     let existing = match state.with_database(|database| {
         let existing = service::get(database, &user_id, &project_id)?;
         service::admit_configuration(database, &user_id, &existing.company_id)?;
-        Ok::<_, Box<dyn Error>>(existing)
+        Ok::<_, Box<dyn Error + Send + Sync>>(existing)
     }) {
         Ok(existing) => existing,
         Err(error) => {

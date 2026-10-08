@@ -61,7 +61,7 @@ pub fn prepare_root(database: &mut SuplexDatabase, task_id: &str) -> DatabaseRes
     Ok(root)
 }
 
-fn invalid(message: &'static str) -> Box<dyn std::error::Error> {
+fn invalid(message: &'static str) -> Box<dyn std::error::Error + Send + Sync> {
     CoordinationError::refused(message).into()
 }
 
@@ -177,7 +177,7 @@ fn assemble_observation(
 /// Observe durable task intent and fresh local Git state for the current Root.
 /// A missing Git observation is reported as unknown; it does not gate the task.
 pub async fn observe(
-    database: &SuplexDatabase,
+    database: &mut SuplexDatabase,
     database_path: &Path,
     root: &RootIdentity,
 ) -> DatabaseResult<Value> {
@@ -243,8 +243,8 @@ pub struct WorkerEvidenceRequest {
 
 /// Read an admitted Worker's native turn log. The log is the evidence source;
 /// persisted completion metadata only identifies and describes that turn.
-pub fn read_worker_evidence(
-    database: &SuplexDatabase,
+pub async fn read_worker_evidence(
+    database: &mut SuplexDatabase,
     database_path: &Path,
     root: &RootIdentity,
     request: &WorkerEvidenceRequest,
@@ -288,7 +288,8 @@ pub fn read_worker_evidence(
                     .map(Path::new),
             },
             &request.turn_id,
-        )?;
+        )
+        .await?;
     let (tools, limitation) = match evidence {
         Some(tools) => (tools, Value::Null),
         None => (Vec::new(), json!("The native turn log is missing")),
@@ -328,7 +329,10 @@ fn recheck(
     root_session_store::assert_tool_owner(database, &root.task_id, owner_token)
 }
 
-fn delivery_failure(code: &'static str, message: &'static str) -> Box<dyn std::error::Error> {
+fn delivery_failure(
+    code: &'static str,
+    message: &'static str,
+) -> Box<dyn std::error::Error + Send + Sync> {
     crate::delivery::DeliveryError::operation(code, message).into()
 }
 
@@ -795,7 +799,7 @@ const ADVISOR_NEXT: &str = "End this Coordinator turn now. Suplex will send the 
 
 /// Observe the committed live range for an Advisor request and pin its evidence.
 async fn advisor_source(
-    database: &SuplexDatabase,
+    database: &mut SuplexDatabase,
     database_path: &Path,
     artifact_root: &Path,
     root: &RootIdentity,
@@ -1068,7 +1072,7 @@ pub async fn complete_workflow_local_work(
 /// TypeScript `requestDelivery` for `inspect_delivery_diff` outside Standard:
 /// the reviewed range also gets a pinned evidence directory.
 pub async fn inspect_workflow_delivery_diff(
-    database: &SuplexDatabase,
+    database: &mut SuplexDatabase,
     database_path: &Path,
     artifact_root: &Path,
     root: &RootIdentity,
@@ -1279,8 +1283,8 @@ mod tests {
         (database_path, database, task, root)
     }
 
-    #[test]
-    fn worker_evidence_reads_only_the_admitted_native_turn() {
+    #[tokio::test]
+    async fn worker_evidence_reads_only_the_admitted_native_turn() {
         let (database_path, mut database, task, root) = standard_task("worker-evidence");
         let directory = database_path.parent().unwrap().to_owned();
         let now = Utc::now();
@@ -1325,14 +1329,16 @@ mod tests {
                 max_characters: 1000,
             },
         };
-        let result = read_worker_evidence(&database, &database_path, &identity, &request).unwrap();
+        let result = read_worker_evidence(&mut database, &database_path, &identity, &request)
+            .await
+            .unwrap();
         assert_eq!(result["turnId"], turn_id);
         assert_eq!(result["tool"]["status"], "completed");
         assert_eq!(result["evidence"]["text"], "2 passed");
         assert_eq!(result["limitation"], Value::Null);
         assert!(
             read_worker_evidence(
-                &database,
+                &mut database,
                 &database_path,
                 &RootIdentity {
                     generation: identity.generation + 1,
@@ -1340,6 +1346,7 @@ mod tests {
                 },
                 &request
             )
+            .await
             .is_err()
         );
         fs::remove_dir_all(directory).unwrap();

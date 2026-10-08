@@ -1740,7 +1740,7 @@ mod tests {
         }
     }
 
-    fn failure(error: Box<dyn Error>) -> (u16, String) {
+    fn failure(error: Box<dyn Error + Send + Sync>) -> (u16, String) {
         let failure = crate::shared::PublicFailure::from(*error.downcast::<TaskError>().unwrap());
         (failure.status.as_u16(), failure.message)
     }

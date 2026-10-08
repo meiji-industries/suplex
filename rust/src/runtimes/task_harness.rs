@@ -111,7 +111,11 @@ impl TaskScope<'_> {
     }
 }
 
-pub type DispatchClaim<'a> = &'a mut dyn FnMut(&str) -> Result<bool, Box<dyn Error>>;
+pub type DispatchClaim<'a> =
+    &'a mut (dyn FnMut(&str) -> Result<bool, Box<dyn Error + Send + Sync>> + Send);
+
+/// One harness operation. Boxed so the harness traits stay usable as `dyn`.
+pub type HarnessFuture<'a, T> = std::pin::Pin<Box<dyn std::future::Future<Output = T> + Send + 'a>>;
 
 /// The native session a reader observes.
 pub struct ReaderSession<'a> {
@@ -155,37 +159,52 @@ pub struct NativeTimeline {
 
 /// TypeScript `NativeSessionReader`: read-only observation of a native
 /// session for the UI, analytics, limits, and Archive.
-pub trait NativeSessionReader {
+pub trait NativeSessionReader: Sync {
     /// The authoritative native conversation snapshot.
-    fn history(&self, session: &ReaderSession<'_>) -> io::Result<Vec<Value>>;
+    fn history<'a>(
+        &'a self,
+        session: &'a ReaderSession<'_>,
+    ) -> HarnessFuture<'a, io::Result<Vec<Value>>>;
     /// Native tools and the current plan.
-    fn execution(&self, session: &ReaderSession<'_>) -> io::Result<(Vec<NativeTool>, Value)>;
-    fn reasoning(
-        &self,
-        _session: &ReaderSession<'_>,
-    ) -> io::Result<Vec<crate::runtimes::native::NativeReasoning>> {
-        Ok(Vec::new())
+    fn execution<'a>(
+        &'a self,
+        session: &'a ReaderSession<'_>,
+    ) -> HarnessFuture<'a, io::Result<(Vec<NativeTool>, Value)>>;
+    fn reasoning<'a>(
+        &'a self,
+        _session: &'a ReaderSession<'_>,
+    ) -> HarnessFuture<'a, io::Result<Vec<crate::runtimes::native::NativeReasoning>>> {
+        Box::pin(async { Ok(Vec::new()) })
     }
     /// One admitted native turn; `None` when its log is missing.
-    fn turn_evidence(
-        &self,
-        session: &ReaderSession<'_>,
-        turn_id: &str,
-    ) -> io::Result<Option<Vec<NativeTool>>>;
-    fn timeline(
-        &self,
-        session: &ReaderSession<'_>,
-        pricing: Option<&ModelPricingCatalog>,
-    ) -> io::Result<NativeTimeline>;
-    fn busy(&self, session: &ReaderSession<'_>) -> io::Result<bool>;
+    fn turn_evidence<'a>(
+        &'a self,
+        session: &'a ReaderSession<'_>,
+        turn_id: &'a str,
+    ) -> HarnessFuture<'a, io::Result<Option<Vec<NativeTool>>>>;
+    fn timeline<'a>(
+        &'a self,
+        session: &'a ReaderSession<'_>,
+        pricing: Option<&'a ModelPricingCatalog>,
+    ) -> HarnessFuture<'a, io::Result<NativeTimeline>>;
+    fn busy<'a>(&'a self, session: &'a ReaderSession<'_>) -> HarnessFuture<'a, io::Result<bool>>;
     /// TypeScript `status`: `busy`, `retry`, or `idle`, and when the native
     /// session last changed (Unix ms). Headless runtimes read `turn.json`.
-    fn status(&self, session: &ReaderSession<'_>) -> io::Result<(&'static str, f64)> {
-        let path = session.runtime_directory()?.join("turn.json");
-        Ok((
-            if self.busy(session)? { "busy" } else { "idle" },
-            modified_ms(&path)?,
-        ))
+    fn status<'a>(
+        &'a self,
+        session: &'a ReaderSession<'_>,
+    ) -> HarnessFuture<'a, io::Result<(&'static str, f64)>> {
+        Box::pin(async move {
+            let path = session.runtime_directory()?.join("turn.json");
+            Ok((
+                if self.busy(session).await? {
+                    "busy"
+                } else {
+                    "idle"
+                },
+                modified_ms(&path)?,
+            ))
+        })
     }
 }
 
@@ -202,42 +221,58 @@ pub fn modified_ms(path: &Path) -> io::Result<f64> {
 /// TypeScript `TaskHarness`. The registry selects one implementation by the
 /// profile provider or the native session identity; the same runtime reads
 /// its native sessions.
-pub trait TaskHarness: NativeSessionReader + Sync {
+pub trait TaskHarness: NativeSessionReader {
     /// Reserve a new native session identity.
     fn new_session_id(&self) -> String;
     /// TypeScript `ensureSession`: prepare what the native session needs, such
     /// as its server, before the host observes or dispatches a turn.
-    fn ensure_session(&self, _scope: &TaskScope<'_>) -> Result<(), Box<dyn Error>> {
-        Ok(())
+    fn ensure_session<'a>(
+        &'a self,
+        _scope: &'a TaskScope<'_>,
+    ) -> HarnessFuture<'a, Result<(), Box<dyn Error + Send + Sync>>> {
+        Box::pin(async { Ok(()) })
     }
-    fn observe(
-        &self,
-        session: SessionRef<'_>,
-        turn_id: &str,
+    fn observe<'a>(
+        &'a self,
+        session: SessionRef<'a>,
+        turn_id: &'a str,
         dispatch: DispatchState,
-        generation: Option<&str>,
-    ) -> io::Result<PromptObservation>;
+        generation: Option<&'a str>,
+    ) -> HarnessFuture<'a, io::Result<PromptObservation>>;
     /// Claim the prompt inside the native dispatch, then start it once.
-    fn dispatch(
-        &self,
-        scope: &TaskScope<'_>,
-        turn_id: &str,
-        prompt: &str,
-        claim: DispatchClaim<'_>,
-    ) -> Result<PromptObservation, Box<dyn Error>>;
+    fn dispatch<'a>(
+        &'a self,
+        scope: &'a TaskScope<'_>,
+        turn_id: &'a str,
+        prompt: &'a str,
+        claim: DispatchClaim<'a>,
+    ) -> HarnessFuture<'a, Result<PromptObservation, Box<dyn Error + Send + Sync>>>;
     /// Stop a fenced execution, then observe it as not submitted.
-    fn recover_dispatch(
-        &self,
-        session: SessionRef<'_>,
-        turn_id: &str,
-        generation: &str,
-    ) -> io::Result<PromptObservation>;
-    fn result_text(&self, directory: &Path, turn_id: &str) -> io::Result<String>;
+    fn recover_dispatch<'a>(
+        &'a self,
+        session: SessionRef<'a>,
+        turn_id: &'a str,
+        generation: &'a str,
+    ) -> HarnessFuture<'a, io::Result<PromptObservation>>;
+    fn result_text<'a>(
+        &'a self,
+        directory: &'a Path,
+        turn_id: &'a str,
+    ) -> HarnessFuture<'a, io::Result<String>>;
     /// TypeScript `observation.native`, completed from native evidence.
-    fn native(&self, _directory: &Path, _turn_id: &str, base: Value) -> io::Result<Value> {
-        Ok(base)
+    fn native<'a>(
+        &'a self,
+        _directory: &'a Path,
+        _turn_id: &'a str,
+        base: Value,
+    ) -> HarnessFuture<'a, io::Result<Value>> {
+        Box::pin(async { Ok(base) })
     }
-    fn stop(&self, directory: &Path, native_session_id: Option<&str>) -> io::Result<()>;
+    fn stop<'a>(
+        &'a self,
+        directory: &'a Path,
+        native_session_id: Option<&'a str>,
+    ) -> HarnessFuture<'a, io::Result<()>>;
 }
 
 /// TypeScript `recoverHeadlessDispatch`: stop the fenced generation only.

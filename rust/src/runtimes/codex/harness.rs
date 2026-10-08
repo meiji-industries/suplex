@@ -17,8 +17,9 @@ use crate::{
     runtimes::{
         headless,
         task_harness::{
-            DispatchClaim, DispatchState, NativeSessionReader, NativeTimeline, PromptObservation,
-            ReaderSession, TaskHarness, TaskRole, TaskScope, UsageEntry, recover_headless_dispatch,
+            DispatchClaim, DispatchState, HarnessFuture, NativeSessionReader, NativeTimeline,
+            PromptObservation, ReaderSession, TaskHarness, TaskRole, TaskScope, UsageEntry,
+            recover_headless_dispatch,
         },
     },
 };
@@ -27,159 +28,181 @@ pub struct CodexTaskRuntime;
 
 /// TypeScript `CodexSessionReader`: every turn log in the session runtime.
 impl NativeSessionReader for CodexTaskRuntime {
-    fn history(&self, session: &ReaderSession<'_>) -> io::Result<Vec<Value>> {
-        let turns = session_reader::turns(&session.runtime_directory()?)?;
-        Ok(turns
-            .into_iter()
-            .filter_map(|turn| {
-                let text = transcript::result_text(&turn.events);
-                let mut content: Vec<Value> = Vec::new();
-                for event in &turn.events {
-                    if !matches!(
-                        event.kind(),
-                        "item.started" | "item.updated" | "item.completed"
-                    ) {
-                        continue;
-                    }
-                    let Some(item) = event.value().get("item") else {
-                        continue;
-                    };
-                    if item["type"] != "reasoning" {
-                        continue;
-                    }
-                    let (Some(id), Some(reasoning)) = (item["id"].as_str(), item["text"].as_str())
-                    else {
-                        continue;
-                    };
-                    if reasoning.trim().is_empty() {
-                        continue;
-                    }
-                    let id = format!("{}:{id}", turn.id);
-                    if let Some(part) = content.iter_mut().find(|part| part["id"] == id) {
-                        part["text"] = json!(reasoning);
-                    } else {
-                        content.push(json!({"id":id,"type":"reasoning","text":reasoning}));
-                    }
-                }
-                if !text.is_empty() {
-                    content
-                        .push(json!({"id":format!("{}:text",turn.id),"type":"text","text":text}));
-                }
-                if content.is_empty() {
-                    return None;
-                }
-                let created_at: i64 = turn
-                    .updated_at
-                    .duration_since(UNIX_EPOCH)
-                    .ok()?
-                    .as_millis()
-                    .try_into()
-                    .ok()?;
-                Some(json!({
-                    "id":turn.id,"role":"assistant","createdAt":created_at,
-                    "content":content,
-                }))
-            })
-            .collect())
-    }
-
-    fn execution(&self, session: &ReaderSession<'_>) -> io::Result<(Vec<NativeTool>, Value)> {
-        let turns = session_reader::turns(&session.runtime_directory()?)?;
-        let tools = turns
-            .iter()
-            .flat_map(|turn| {
-                codex_tools(&turn.events).into_iter().map(move |mut tool| {
-                    tool.id = format!("{}:{}", turn.id, tool.id);
-                    tool
-                })
-            })
-            .collect();
-        Ok((tools, Value::Null))
-    }
-
-    fn reasoning(&self, session: &ReaderSession<'_>) -> io::Result<Vec<NativeReasoning>> {
-        let mut parts: Vec<NativeReasoning> = Vec::new();
-        for turn in session_reader::turns(&session.runtime_directory()?)? {
-            for event in turn.events {
-                let Some(item) = event.value().get("item") else {
-                    continue;
-                };
-                if !matches!(
-                    event.kind(),
-                    "item.started" | "item.updated" | "item.completed"
-                ) || item["type"] != "reasoning"
-                {
-                    continue;
-                }
-                let (Some(id), Some(text)) = (item["id"].as_str(), item["text"].as_str()) else {
-                    continue;
-                };
-                if text.trim().is_empty() {
-                    continue;
-                }
-                let id = format!("{}:{id}", turn.id);
-                if let Some(part) = parts.iter_mut().find(|part| part.id == id) {
-                    part.text = text.to_owned();
-                } else {
-                    parts.push(NativeReasoning {
-                        id,
-                        text: text.to_owned(),
-                    });
-                }
-            }
-        }
-        Ok(parts)
-    }
-
-    fn turn_evidence(
-        &self,
-        session: &ReaderSession<'_>,
-        turn_id: &str,
-    ) -> io::Result<Option<Vec<NativeTool>>> {
-        Ok(
-            session_reader::turn_evidence(&session.runtime_directory()?, turn_id)?
-                .map(|events| codex_tools(&events)),
-        )
-    }
-
-    fn timeline(
-        &self,
-        session: &ReaderSession<'_>,
-        pricing: Option<&ModelPricingCatalog>,
-    ) -> io::Result<NativeTimeline> {
-        let observed = usage::observe_session(
-            &session.runtime_directory()?,
-            session.native_session_id,
-            pricing,
-        )?;
-        let live = observed.live_turn_id;
-        Ok(NativeTimeline {
-            usage: observed
-                .turns
+    fn history<'a>(
+        &'a self,
+        session: &'a ReaderSession<'_>,
+    ) -> HarnessFuture<'a, io::Result<Vec<Value>>> {
+        Box::pin(async move {
+            let turns = session_reader::turns(&session.runtime_directory()?)?;
+            Ok(turns
                 .into_iter()
-                .map(|turn| UsageEntry {
-                    completed_at_ms: (live.as_deref() != Some(turn.turn_id.as_str()))
-                        .then_some(turn.updated_at_ms),
-                    message_id: turn.turn_id.clone(),
-                    turn_id: turn.turn_id,
-                    provider: "openai",
-                    model: turn.model,
-                    started_at_ms: turn.started_at_ms,
-                    failed: turn.failed,
-                    tokens: turn.tokens,
-                    cost_usd: turn.cost_usd,
-                    subsidized: turn.cost_usd > 0.0,
-                    summary: false,
-                    steps: 1.0,
-                    source: "message",
+                .filter_map(|turn| {
+                    let text = transcript::result_text(&turn.events);
+                    let mut content: Vec<Value> = Vec::new();
+                    for event in &turn.events {
+                        if !matches!(
+                            event.kind(),
+                            "item.started" | "item.updated" | "item.completed"
+                        ) {
+                            continue;
+                        }
+                        let Some(item) = event.value().get("item") else {
+                            continue;
+                        };
+                        if item["type"] != "reasoning" {
+                            continue;
+                        }
+                        let (Some(id), Some(reasoning)) =
+                            (item["id"].as_str(), item["text"].as_str())
+                        else {
+                            continue;
+                        };
+                        if reasoning.trim().is_empty() {
+                            continue;
+                        }
+                        let id = format!("{}:{id}", turn.id);
+                        if let Some(part) = content.iter_mut().find(|part| part["id"] == id) {
+                            part["text"] = json!(reasoning);
+                        } else {
+                            content.push(json!({"id":id,"type":"reasoning","text":reasoning}));
+                        }
+                    }
+                    if !text.is_empty() {
+                        content.push(
+                            json!({"id":format!("{}:text",turn.id),"type":"text","text":text}),
+                        );
+                    }
+                    if content.is_empty() {
+                        return None;
+                    }
+                    let created_at: i64 = turn
+                        .updated_at
+                        .duration_since(UNIX_EPOCH)
+                        .ok()?
+                        .as_millis()
+                        .try_into()
+                        .ok()?;
+                    Some(json!({
+                        "id":turn.id,"role":"assistant","createdAt":created_at,
+                        "content":content,
+                    }))
                 })
-                .collect(),
-            live_message_id: live,
+                .collect())
         })
     }
 
-    fn busy(&self, session: &ReaderSession<'_>) -> io::Result<bool> {
-        crate::runtimes::headless::busy(&session.runtime_directory()?)
+    fn execution<'a>(
+        &'a self,
+        session: &'a ReaderSession<'_>,
+    ) -> HarnessFuture<'a, io::Result<(Vec<NativeTool>, Value)>> {
+        Box::pin(async move {
+            let turns = session_reader::turns(&session.runtime_directory()?)?;
+            let tools = turns
+                .iter()
+                .flat_map(|turn| {
+                    codex_tools(&turn.events).into_iter().map(move |mut tool| {
+                        tool.id = format!("{}:{}", turn.id, tool.id);
+                        tool
+                    })
+                })
+                .collect();
+            Ok((tools, Value::Null))
+        })
+    }
+
+    fn reasoning<'a>(
+        &'a self,
+        session: &'a ReaderSession<'_>,
+    ) -> HarnessFuture<'a, io::Result<Vec<NativeReasoning>>> {
+        Box::pin(async move {
+            let mut parts: Vec<NativeReasoning> = Vec::new();
+            for turn in session_reader::turns(&session.runtime_directory()?)? {
+                for event in turn.events {
+                    let Some(item) = event.value().get("item") else {
+                        continue;
+                    };
+                    if !matches!(
+                        event.kind(),
+                        "item.started" | "item.updated" | "item.completed"
+                    ) || item["type"] != "reasoning"
+                    {
+                        continue;
+                    }
+                    let (Some(id), Some(text)) = (item["id"].as_str(), item["text"].as_str())
+                    else {
+                        continue;
+                    };
+                    if text.trim().is_empty() {
+                        continue;
+                    }
+                    let id = format!("{}:{id}", turn.id);
+                    if let Some(part) = parts.iter_mut().find(|part| part.id == id) {
+                        part.text = text.to_owned();
+                    } else {
+                        parts.push(NativeReasoning {
+                            id,
+                            text: text.to_owned(),
+                        });
+                    }
+                }
+            }
+            Ok(parts)
+        })
+    }
+
+    fn turn_evidence<'a>(
+        &'a self,
+        session: &'a ReaderSession<'_>,
+        turn_id: &'a str,
+    ) -> HarnessFuture<'a, io::Result<Option<Vec<NativeTool>>>> {
+        Box::pin(async move {
+            Ok(
+                session_reader::turn_evidence(&session.runtime_directory()?, turn_id)?
+                    .map(|events| codex_tools(&events)),
+            )
+        })
+    }
+
+    fn timeline<'a>(
+        &'a self,
+        session: &'a ReaderSession<'_>,
+        pricing: Option<&'a ModelPricingCatalog>,
+    ) -> HarnessFuture<'a, io::Result<NativeTimeline>> {
+        Box::pin(async move {
+            let observed = usage::observe_session(
+                &session.runtime_directory()?,
+                session.native_session_id,
+                pricing,
+            )?;
+            let live = observed.live_turn_id;
+            Ok(NativeTimeline {
+                usage: observed
+                    .turns
+                    .into_iter()
+                    .map(|turn| UsageEntry {
+                        completed_at_ms: (live.as_deref() != Some(turn.turn_id.as_str()))
+                            .then_some(turn.updated_at_ms),
+                        message_id: turn.turn_id.clone(),
+                        turn_id: turn.turn_id,
+                        provider: "openai",
+                        model: turn.model,
+                        started_at_ms: turn.started_at_ms,
+                        failed: turn.failed,
+                        tokens: turn.tokens,
+                        cost_usd: turn.cost_usd,
+                        subsidized: turn.cost_usd > 0.0,
+                        summary: false,
+                        steps: 1.0,
+                        source: "message",
+                    })
+                    .collect(),
+                live_message_id: live,
+            })
+        })
+    }
+
+    fn busy<'a>(&'a self, session: &'a ReaderSession<'_>) -> HarnessFuture<'a, io::Result<bool>> {
+        Box::pin(async move { crate::runtimes::headless::busy(&session.runtime_directory()?) })
     }
 }
 
@@ -189,99 +212,114 @@ impl TaskHarness for CodexTaskRuntime {
         format!("codex-{}", uuid::Uuid::new_v4())
     }
 
-    fn observe(
-        &self,
-        session: SessionRef<'_>,
-        turn_id: &str,
+    fn observe<'a>(
+        &'a self,
+        session: SessionRef<'a>,
+        turn_id: &'a str,
         dispatch: DispatchState,
-        generation: Option<&str>,
-    ) -> io::Result<PromptObservation> {
-        let directory = session.directory;
-        let native_session_id = session.native_session_id;
-        runtime::observe(directory, native_session_id, turn_id, dispatch, generation)
+        generation: Option<&'a str>,
+    ) -> HarnessFuture<'a, io::Result<PromptObservation>> {
+        Box::pin(async move {
+            let directory = session.directory;
+            let native_session_id = session.native_session_id;
+            runtime::observe(directory, native_session_id, turn_id, dispatch, generation)
+        })
     }
 
-    fn dispatch(
-        &self,
-        scope: &TaskScope<'_>,
-        turn_id: &str,
-        prompt: &str,
-        claim: DispatchClaim<'_>,
-    ) -> Result<PromptObservation, Box<dyn Error>> {
-        // The host already prepended the project context to `prompt`.
-        match scope.role {
-            TaskRole::Root(identity) => task_runtime::dispatch_codex_root(
-                RootCodexLaunch {
-                    database_path: scope.database_path,
-                    artifact_root: scope.artifact_root,
-                    identity,
-                    native_session_id: scope.native_session_id,
-                    turn_id,
-                    worktree: scope.worktree,
-                    prompt,
-                    project_context: None,
-                    project_context_path: None,
-                    project_environment: scope.project_environment,
-                    excluded_environment_keys: scope.excluded_environment_keys,
-                    model: scope.model,
-                    reasoning_effort: scope.reasoning_effort,
-                    codex_executable: scope.executable,
-                    inherited_environment: scope.inherited_environment,
-                    standard: !scope.workflow.workflow_root,
+    fn dispatch<'a>(
+        &'a self,
+        scope: &'a TaskScope<'_>,
+        turn_id: &'a str,
+        prompt: &'a str,
+        claim: DispatchClaim<'a>,
+    ) -> HarnessFuture<'a, Result<PromptObservation, Box<dyn Error + Send + Sync>>> {
+        Box::pin(async move {
+            // The host already prepended the project context to `prompt`.
+            match scope.role {
+                TaskRole::Root(identity) => task_runtime::dispatch_codex_root(
+                    RootCodexLaunch {
+                        database_path: scope.database_path,
+                        artifact_root: scope.artifact_root,
+                        identity,
+                        native_session_id: scope.native_session_id,
+                        turn_id,
+                        worktree: scope.worktree,
+                        prompt,
+                        project_context: None,
+                        project_context_path: None,
+                        project_environment: scope.project_environment,
+                        excluded_environment_keys: scope.excluded_environment_keys,
+                        model: scope.model,
+                        reasoning_effort: scope.reasoning_effort,
+                        codex_executable: scope.executable,
+                        inherited_environment: scope.inherited_environment,
+                        standard: !scope.workflow.workflow_root,
+                    },
+                    claim,
+                ),
+                TaskRole::Worker(purpose) => task_runtime::dispatch_codex_worker(
+                    WorkerCodexLaunch {
+                        database_path: scope.database_path,
+                        session_id: scope.session_id,
+                        native_session_id: scope.native_session_id,
+                        turn_id,
+                        worktree: scope.worktree,
+                        prompt,
+                        project_context: None,
+                        project_context_path: None,
+                        project_environment: scope.project_environment,
+                        excluded_environment_keys: scope.excluded_environment_keys,
+                        purpose,
+                        model: scope.model,
+                        reasoning_effort: scope.reasoning_effort,
+                        codex_executable: scope.executable,
+                        inherited_environment: scope.inherited_environment,
+                        direct: scope.workflow.direct,
+                        advisor: scope.workflow.advisor,
+                    },
+                    claim,
+                ),
+            }
+        })
+    }
+
+    fn recover_dispatch<'a>(
+        &'a self,
+        session: SessionRef<'a>,
+        turn_id: &'a str,
+        generation: &'a str,
+    ) -> HarnessFuture<'a, io::Result<PromptObservation>> {
+        Box::pin(async move {
+            let directory = session.directory;
+            let native_session_id = session.native_session_id;
+            recover_headless_dispatch(directory, generation)?;
+            self.observe(
+                SessionRef {
+                    directory,
+                    native_session_id,
                 },
-                claim,
-            ),
-            TaskRole::Worker(purpose) => task_runtime::dispatch_codex_worker(
-                WorkerCodexLaunch {
-                    database_path: scope.database_path,
-                    session_id: scope.session_id,
-                    native_session_id: scope.native_session_id,
-                    turn_id,
-                    worktree: scope.worktree,
-                    prompt,
-                    project_context: None,
-                    project_context_path: None,
-                    project_environment: scope.project_environment,
-                    excluded_environment_keys: scope.excluded_environment_keys,
-                    purpose,
-                    model: scope.model,
-                    reasoning_effort: scope.reasoning_effort,
-                    codex_executable: scope.executable,
-                    inherited_environment: scope.inherited_environment,
-                    direct: scope.workflow.direct,
-                    advisor: scope.workflow.advisor,
-                },
-                claim,
-            ),
-        }
+                turn_id,
+                DispatchState::NotSubmitted,
+                Some(generation),
+            )
+            .await
+        })
     }
 
-    fn recover_dispatch(
-        &self,
-        session: SessionRef<'_>,
-        turn_id: &str,
-        generation: &str,
-    ) -> io::Result<PromptObservation> {
-        let directory = session.directory;
-        let native_session_id = session.native_session_id;
-        recover_headless_dispatch(directory, generation)?;
-        self.observe(
-            SessionRef {
-                directory,
-                native_session_id,
-            },
-            turn_id,
-            DispatchState::NotSubmitted,
-            Some(generation),
-        )
+    fn result_text<'a>(
+        &'a self,
+        directory: &'a Path,
+        turn_id: &'a str,
+    ) -> HarnessFuture<'a, io::Result<String>> {
+        Box::pin(async move { runtime::result_text(directory, turn_id) })
     }
 
-    fn result_text(&self, directory: &Path, turn_id: &str) -> io::Result<String> {
-        runtime::result_text(directory, turn_id)
-    }
-
-    fn stop(&self, directory: &Path, native_session_id: Option<&str>) -> io::Result<()> {
-        headless::stop_session(directory, native_session_id)
+    fn stop<'a>(
+        &'a self,
+        directory: &'a Path,
+        native_session_id: Option<&'a str>,
+    ) -> HarnessFuture<'a, io::Result<()>> {
+        Box::pin(async move { headless::stop_session(directory, native_session_id) })
     }
 }
 
@@ -290,8 +328,8 @@ mod tests {
     use super::*;
     use std::{collections::HashMap, fs, path::Path};
 
-    #[test]
-    fn reasoning_reads_completed_native_text() {
+    #[tokio::test]
+    async fn reasoning_reads_completed_native_text() {
         let root =
             std::env::temp_dir().join(format!("suplex-codex-reasoning-{}", uuid::Uuid::new_v4()));
         let database = root.join("suplex.sqlite");
@@ -311,6 +349,7 @@ mod tests {
                 native_session_id: "native-1",
                 instance_home_directory: None,
             })
+            .await
             .unwrap();
         assert_eq!(parts.len(), 1);
         assert_eq!(parts[0].id, "msg_1:r1");
@@ -322,6 +361,7 @@ mod tests {
                 native_session_id: "native-1",
                 instance_home_directory: None,
             })
+            .await
             .unwrap();
         assert_eq!(
             history[0]["content"],
@@ -333,8 +373,8 @@ mod tests {
         fs::remove_dir_all(root).unwrap();
     }
 
-    #[test]
-    fn timeline_keeps_a_running_empty_turn_unfinished() {
+    #[tokio::test]
+    async fn timeline_keeps_a_running_empty_turn_unfinished() {
         let root =
             std::env::temp_dir().join(format!("suplex-codex-timeline-{}", uuid::Uuid::new_v4()));
         let database = root.join("suplex.sqlite");
@@ -368,6 +408,7 @@ mod tests {
                 },
                 None,
             )
+            .await
             .unwrap();
         assert_eq!(timeline.live_message_id.as_deref(), Some("msg_live"));
         assert_eq!(timeline.usage.len(), 1);

@@ -57,7 +57,7 @@ impl<'a> RunActor<'a> {
     }
 }
 
-fn agent_not_found() -> Box<dyn Error> {
+fn agent_not_found() -> Box<dyn Error + Send + Sync> {
     TaskError::Agent {
         status: 404,
         code: "resource_not_found",
@@ -67,7 +67,11 @@ fn agent_not_found() -> Box<dyn Error> {
     .into()
 }
 
-fn agent_failure(status: u16, code: &'static str, message: impl Into<String>) -> Box<dyn Error> {
+fn agent_failure(
+    status: u16,
+    code: &'static str,
+    message: impl Into<String>,
+) -> Box<dyn Error + Send + Sync> {
     TaskError::Agent {
         status,
         code,
@@ -83,7 +87,7 @@ fn agent_scope(
     principal: &Principal,
     company_id: &str,
     project_id: &str,
-) -> Result<(), Box<dyn Error>> {
+) -> Result<(), Box<dyn Error + Send + Sync>> {
     let permitted: bool = database.connection().query_row(
         "SELECT EXISTS(SELECT 1 FROM suplex_external_agents a JOIN suplex_external_agent_project_grants g ON g.agent_id = a.id AND g.company_id = a.company_id WHERE a.id = ?1 AND a.company_id = ?2 AND a.status = 'paired' AND a.revoked_at IS NULL AND a.moves_granted_at IS NOT NULL AND g.project_id = ?3)",
         params![principal.agent_id, company_id, project_id], |row| row.get(0),
@@ -99,7 +103,7 @@ fn agent_stored(
     database: &SuplexDatabase,
     principal: &Principal,
     move_id: &str,
-) -> Result<StoredMove, Box<dyn Error>> {
+) -> Result<StoredMove, Box<dyn Error + Send + Sync>> {
     let stored = database
         .connection()
         .query_row(
@@ -117,7 +121,7 @@ pub fn agent_list(
     database: &SuplexDatabase,
     principal: &Principal,
     project_id: &str,
-) -> Result<MovesResponse, Box<dyn Error>> {
+) -> Result<MovesResponse, Box<dyn Error + Send + Sync>> {
     agent_scope(database, principal, &principal.company_id, project_id)?;
     let mut statement = database.connection().prepare(&format!(
         "{MOVE_COLUMNS} WHERE company_id = ?1 AND project_id = ?2 ORDER BY name COLLATE NOCASE, id"
@@ -137,7 +141,7 @@ pub fn agent_get(
     database: &SuplexDatabase,
     principal: &Principal,
     move_id: &str,
-) -> Result<MoveResponse, Box<dyn Error>> {
+) -> Result<MoveResponse, Box<dyn Error + Send + Sync>> {
     response(database, agent_stored(database, principal, move_id)?)
 }
 
@@ -148,7 +152,7 @@ pub fn agent_create(
     principal: &Principal,
     body: MoveBody,
     idempotency_key: &str,
-) -> Result<(bool, MoveResponse), Box<dyn Error>> {
+) -> Result<(bool, MoveResponse), Box<dyn Error + Send + Sync>> {
     agent_scope(database, principal, &principal.company_id, &body.project_id)?;
     let project = projects::get_in_company(database, &principal.company_id, &body.project_id)?;
     let body = checked_body(database, &project, body)?;
@@ -184,7 +188,7 @@ pub fn agent_update(
     move_id: &str,
     body: MoveBody,
     updated_at: &str,
-) -> Result<MoveResponse, Box<dyn Error>> {
+) -> Result<MoveResponse, Box<dyn Error + Send + Sync>> {
     let stored = agent_stored(database, principal, move_id)?;
     agent_scope(database, principal, &principal.company_id, &body.project_id)?;
     let project = projects::get_in_company(database, &principal.company_id, &body.project_id)?;
@@ -205,7 +209,7 @@ pub fn agent_delete(
     principal: &Principal,
     move_id: &str,
     updated_at: &str,
-) -> Result<(), Box<dyn Error>> {
+) -> Result<(), Box<dyn Error + Send + Sync>> {
     let stored = agent_stored(database, principal, move_id)?;
     database.transaction(false, |database| {
         agent_scope(database, principal, &stored.company_id, &stored.project_id)?;
@@ -227,7 +231,7 @@ pub fn agent_runs(
     database: &SuplexDatabase,
     principal: &Principal,
     move_id: &str,
-) -> Result<MoveRunsResponse, Box<dyn Error>> {
+) -> Result<MoveRunsResponse, Box<dyn Error + Send + Sync>> {
     agent_stored(database, principal, move_id)?;
     Ok(MoveRunsResponse {
         runs: runs_of(database, move_id, 50)?,
@@ -237,7 +241,7 @@ pub fn agent_run(
     database: &SuplexDatabase,
     principal: &Principal,
     run_id: &str,
-) -> Result<MoveRunResponse, Box<dyn Error>> {
+) -> Result<MoveRunResponse, Box<dyn Error + Send + Sync>> {
     let run = database
         .connection()
         .query_row(&format!("{RUN_COLUMNS} WHERE r.id = ?1"), [run_id], run_row)
@@ -252,7 +256,7 @@ pub fn agent_transcript(
     database: &SuplexDatabase,
     principal: &Principal,
     run_id: &str,
-) -> Result<MoveRunTranscript, Box<dyn Error>> {
+) -> Result<MoveRunTranscript, Box<dyn Error + Send + Sync>> {
     agent_run(database, principal, run_id)?;
     let stored: Option<String> = database.connection().query_row(
         "SELECT transcript_json FROM suplex_move_runs WHERE id = ?1",
@@ -268,7 +272,7 @@ pub fn agent_stop(
     database: &SuplexDatabase,
     principal: &Principal,
     run_id: &str,
-) -> Result<(), Box<dyn Error>> {
+) -> Result<(), Box<dyn Error + Send + Sync>> {
     agent_run(database, principal, run_id).map(|_| ())
 }
 
@@ -278,7 +282,7 @@ pub fn agent_archive(
     database: &SuplexDatabase,
     principal: &Principal,
     run_id: &str,
-) -> Result<(), Box<dyn Error>> {
+) -> Result<(), Box<dyn Error + Send + Sync>> {
     agent_run(database, principal, run_id)?;
     database.connection().execute(
         "UPDATE suplex_move_runs SET archived_at = ?1 WHERE id = ?2 AND archived_at IS NULL",
@@ -469,7 +473,7 @@ fn run_response(
         started_by_id,
         started_at,
     ): RunRow,
-) -> Result<MoveRunResponse, Box<dyn Error>> {
+) -> Result<MoveRunResponse, Box<dyn Error + Send + Sync>> {
     Ok(MoveRunResponse {
         id,
         move_id,
@@ -490,7 +494,7 @@ fn runs_of(
     database: &SuplexDatabase,
     move_id: &str,
     limit: i64,
-) -> Result<Vec<MoveRunResponse>, Box<dyn Error>> {
+) -> Result<Vec<MoveRunResponse>, Box<dyn Error + Send + Sync>> {
     let mut statement = database.connection().prepare(&format!(
         "{RUN_COLUMNS} WHERE r.move_id = ?1 AND r.archived_at IS NULL ORDER BY r.started_at DESC, r.id DESC LIMIT ?2"
     ))?;
@@ -500,7 +504,10 @@ fn runs_of(
     rows.into_iter().map(run_response).collect()
 }
 
-fn response(database: &SuplexDatabase, stored: StoredMove) -> Result<MoveResponse, Box<dyn Error>> {
+fn response(
+    database: &SuplexDatabase,
+    stored: StoredMove,
+) -> Result<MoveResponse, Box<dyn Error + Send + Sync>> {
     Ok(MoveResponse {
         inputs: prompt::inputs(&stored.prompt),
         last_run: runs_of(database, &stored.id, 1)?.into_iter().next(),
@@ -526,7 +533,7 @@ fn accessible(
     database: &SuplexDatabase,
     user_id: &str,
     move_id: &str,
-) -> Result<(StoredMove, Project), Box<dyn Error>> {
+) -> Result<(StoredMove, Project), Box<dyn Error + Send + Sync>> {
     let stored = database
         .connection()
         .query_row(
@@ -545,7 +552,7 @@ fn company_project(
     user_id: &str,
     company_id: &str,
     project_id: &str,
-) -> Result<Project, Box<dyn Error>> {
+) -> Result<Project, Box<dyn Error + Send + Sync>> {
     companies::require_company_access(database, user_id, company_id)?;
     let project = projects::get(database, user_id, project_id)?;
     if project.company_id != company_id {
@@ -563,7 +570,7 @@ fn checked_body(
     database: &SuplexDatabase,
     project: &Project,
     mut body: MoveBody,
-) -> Result<MoveBody, Box<dyn Error>> {
+) -> Result<MoveBody, Box<dyn Error + Send + Sync>> {
     match body.runner {
         MoveRunner::Prompt if body.prompt.trim().is_empty() => {
             return Err(TaskError::new("Write the prompt for this move", 422).into());
@@ -620,7 +627,7 @@ fn name_taken(
     project_id: &str,
     name: &str,
     id: &str,
-) -> Result<(), Box<dyn Error>> {
+) -> Result<(), Box<dyn Error + Send + Sync>> {
     let taken: bool = database.connection().query_row(
         "SELECT EXISTS(SELECT 1 FROM suplex_moves WHERE project_id = ?1 AND name = ?2 AND id <> ?3)",
         params![project_id, name, id],
@@ -636,7 +643,7 @@ pub fn list(
     database: &SuplexDatabase,
     user_id: &str,
     company_id: &str,
-) -> Result<MovesResponse, Box<dyn Error>> {
+) -> Result<MovesResponse, Box<dyn Error + Send + Sync>> {
     companies::require_company_access(database, user_id, company_id)?;
     let mut moves = list_company(database, company_id)?;
     moves.retain(|item| projects::get(database, user_id, &item.project_id).is_ok());
@@ -647,7 +654,7 @@ pub fn list(
 pub(crate) fn list_company(
     database: &SuplexDatabase,
     company_id: &str,
-) -> Result<Vec<MoveResponse>, Box<dyn Error>> {
+) -> Result<Vec<MoveResponse>, Box<dyn Error + Send + Sync>> {
     let mut statement = database.connection().prepare(&format!(
         "{MOVE_COLUMNS} WHERE company_id = ?1 ORDER BY name COLLATE NOCASE, id"
     ))?;
@@ -671,7 +678,7 @@ pub fn create(
     user_id: &str,
     company_id: &str,
     body: MoveBody,
-) -> Result<MoveResponse, Box<dyn Error>> {
+) -> Result<MoveResponse, Box<dyn Error + Send + Sync>> {
     let project = company_project(database, user_id, company_id, &body.project_id)?;
     let body = checked_body(database, &project, body)?;
     let id = random_hex_id("move")?;
@@ -691,7 +698,7 @@ pub fn get(
     database: &SuplexDatabase,
     user_id: &str,
     move_id: &str,
-) -> Result<MoveResponse, Box<dyn Error>> {
+) -> Result<MoveResponse, Box<dyn Error + Send + Sync>> {
     let (stored, _) = accessible(database, user_id, move_id)?;
     response(database, stored)
 }
@@ -701,7 +708,7 @@ pub fn update(
     user_id: &str,
     move_id: &str,
     body: MoveBody,
-) -> Result<MoveResponse, Box<dyn Error>> {
+) -> Result<MoveResponse, Box<dyn Error + Send + Sync>> {
     let (stored, _) = accessible(database, user_id, move_id)?;
     let project = company_project(database, user_id, &stored.company_id, &body.project_id)?;
     let body = checked_body(database, &project, body)?;
@@ -720,7 +727,7 @@ pub fn delete(
     database: &mut SuplexDatabase,
     user_id: &str,
     move_id: &str,
-) -> Result<(), Box<dyn Error>> {
+) -> Result<(), Box<dyn Error + Send + Sync>> {
     accessible(database, user_id, move_id)?;
     database
         .connection()
@@ -732,7 +739,7 @@ pub fn runs(
     database: &SuplexDatabase,
     user_id: &str,
     move_id: &str,
-) -> Result<MoveRunsResponse, Box<dyn Error>> {
+) -> Result<MoveRunsResponse, Box<dyn Error + Send + Sync>> {
     accessible(database, user_id, move_id)?;
     Ok(MoveRunsResponse {
         runs: runs_of(database, move_id, 50)?,
@@ -743,7 +750,7 @@ fn existing_run(
     database: &SuplexDatabase,
     move_id: &str,
     idempotency_key: &str,
-) -> Result<Option<MoveRunResponse>, Box<dyn Error>> {
+) -> Result<Option<MoveRunResponse>, Box<dyn Error + Send + Sync>> {
     database
         .connection()
         .query_row(
@@ -783,7 +790,9 @@ pub fn plan_pull_requests(open: &[OpenPullRequest], excluded: &[i64]) -> Vec<Mov
         .collect()
 }
 
-fn open_pull_requests(sources: &Value) -> Result<Vec<OpenPullRequest>, Box<dyn Error>> {
+fn open_pull_requests(
+    sources: &Value,
+) -> Result<Vec<OpenPullRequest>, Box<dyn Error + Send + Sync>> {
     if sources["available"] == false {
         let reason = sources["reason"]
             .as_str()
@@ -824,7 +833,7 @@ async fn create_task(
             return;
         }
     };
-    let result: Result<Value, Box<dyn Error>> = match actor {
+    let result: Result<Value, Box<dyn Error + Send + Sync>> = match actor {
         RunActor::User(user_id) => creation::create_browser(
             state.clone(),
             company_id.to_owned(),
@@ -832,7 +841,7 @@ async fn create_task(
             request,
         )
         .await
-        .map_err(|error| Box::new(error) as Box<dyn Error>)
+        .map_err(|error| Box::new(error) as Box<dyn Error + Send + Sync>)
         .and_then(|(_, task)| serde_json::to_value(task).map_err(Into::into)),
         RunActor::Agent(principal) => {
             // The browser request has `startImmediately` and a workflow engine,
@@ -866,7 +875,7 @@ async fn create_task(
                     if active && let Some(host) = &state.task_host {
                         host.wake(id.clone());
                     }
-                    Ok::<Value, Box<dyn Error>>(json!({"id": id}))
+                    Ok::<Value, Box<dyn Error + Send + Sync>>(json!({"id": id}))
                 }
                 Ok(agent_api::Creation::DryRun(_)) => Err(Box::new(TaskError::new(
                     "Move task creation unexpectedly dry-ran",
@@ -895,7 +904,7 @@ pub async fn start(
     actor: RunActor<'_>,
     move_id: &str,
     body: MoveRunBody,
-) -> Result<(bool, MoveRunResponse), Box<dyn Error>> {
+) -> Result<(bool, MoveRunResponse), Box<dyn Error + Send + Sync>> {
     let request_hash = sha256_hex(crate::shared::js_json::stringify(
         &json!({"actor": actor.request_identity(), "inputs": body.inputs, "excluded": body.excluded_pull_requests}),
     ));
@@ -910,7 +919,7 @@ pub async fn start(
             }
         };
         let replay = existing_run(database, move_id, &body.idempotency_key)?;
-        Ok::<_, Box<dyn Error>>((stored, project, replay))
+        Ok::<_, Box<dyn Error + Send + Sync>>((stored, project, replay))
     })?;
     if let Some(run) = replay {
         let hash: Option<String> = state.with_database(|database| {
@@ -949,7 +958,7 @@ pub async fn start(
     }
     let task_key = |suffix: &str| format!("move:{move_id}:{}:{suffix}", body.idempotency_key);
     let outcomes = async {
-        Ok::<_, Box<dyn Error>>(match stored.runner {
+        Ok::<_, Box<dyn Error + Send + Sync>>(match stored.runner {
         MoveRunner::Prompt | MoveRunner::Script => {
             let command = if stored.runner == MoveRunner::Script {
                 shell::script(&rendered)
@@ -1082,7 +1091,7 @@ pub fn get_run(
     database: &SuplexDatabase,
     user_id: &str,
     run_id: &str,
-) -> Result<MoveRunResponse, Box<dyn Error>> {
+) -> Result<MoveRunResponse, Box<dyn Error + Send + Sync>> {
     let run = database
         .connection()
         .query_row(&format!("{RUN_COLUMNS} WHERE r.id = ?1"), [run_id], run_row)
@@ -1099,7 +1108,7 @@ pub fn archive_run(
     database: &SuplexDatabase,
     user_id: &str,
     run_id: &str,
-) -> Result<(), Box<dyn Error>> {
+) -> Result<(), Box<dyn Error + Send + Sync>> {
     get_run(database, user_id, run_id)?;
     database.connection().execute(
         "UPDATE suplex_move_runs SET archived_at = ?1 WHERE id = ?2 AND archived_at IS NULL",
@@ -1112,7 +1121,7 @@ pub(crate) fn save_transcript(
     database: &SuplexDatabase,
     run_id: &str,
     transcript: crate::terminals::host::Transcript,
-) -> Result<(), Box<dyn Error>> {
+) -> Result<(), Box<dyn Error + Send + Sync>> {
     let stored = MoveRunTranscript {
         cols: transcript.cols,
         rows: transcript.rows,
@@ -1130,7 +1139,7 @@ pub fn transcript(
     database: &SuplexDatabase,
     user_id: &str,
     run_id: &str,
-) -> Result<MoveRunTranscript, Box<dyn Error>> {
+) -> Result<MoveRunTranscript, Box<dyn Error + Send + Sync>> {
     get_run(database, user_id, run_id)?;
     let stored: Option<String> = database.connection().query_row(
         "SELECT transcript_json FROM suplex_move_runs WHERE id = ?1",

@@ -16,7 +16,7 @@ use crate::{
     runtimes::task_display::{is_shell_process, task_shell_pane_binding},
 };
 
-type Result<T> = std::result::Result<T, Box<dyn Error>>;
+type Result<T> = std::result::Result<T, Box<dyn Error + Send + Sync>>;
 pub type Kill = fn(i32, Signal) -> nix::Result<()>;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -49,7 +49,7 @@ fn active(info: &ProcessInfo) -> Vec<&ForegroundProcess> {
         .collect()
 }
 
-fn uninspectable() -> Box<dyn Error> {
+fn uninspectable() -> Box<dyn Error + Send + Sync> {
     "The task terminal could not be inspected.".into()
 }
 
@@ -211,7 +211,7 @@ impl DisplayCleanup {
             let closed = self
                 .herdr
                 .close_workspace(workspace_id)
-                .map_err(Box::<dyn Error>::from)
+                .map_err(Box::<dyn Error + Send + Sync>::from)
                 .and_then(|()| {
                     if self.herdr.get_workspace(workspace_id)?.is_some() {
                         return Err("Herdr did not close the task workspace.".into());

@@ -362,9 +362,9 @@ pub fn dispatch<F>(
     role_prompt: &str,
     prompt: &str,
     claim: F,
-) -> Result<PromptObservation, Box<dyn Error>>
+) -> Result<PromptObservation, Box<dyn Error + Send + Sync>>
 where
-    F: FnOnce(&str) -> Result<bool, Box<dyn Error>>,
+    F: FnOnce(&str) -> Result<bool, Box<dyn Error + Send + Sync>>,
 {
     let directory = scope.runtime_directory()?;
     let before = observe(

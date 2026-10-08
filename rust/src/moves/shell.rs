@@ -39,7 +39,7 @@ pub fn command(
     profile: &TaskProfile,
     base_branch: &str,
     prompt: &str,
-) -> Result<String, Box<dyn Error>> {
+) -> Result<String, Box<dyn Error + Send + Sync>> {
     let effort = profile.reasoning_level.as_str();
     let args = match profile.provider {
         HarnessKind::ClaudeCode => vec![
@@ -96,7 +96,7 @@ pub fn prepare_worktree(
     repository: &Path,
     worktree: &Path,
     base_branch: &str,
-) -> Result<(), Box<dyn Error>> {
+) -> Result<(), Box<dyn Error + Send + Sync>> {
     let _ = git(repository, &["fetch", "origin", base_branch]);
     git(
         repository,

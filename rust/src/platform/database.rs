@@ -13,7 +13,7 @@ use rusqlite::{Connection, OpenFlags, params};
 
 use super::embedded::{EmbeddedFile, MIGRATIONS};
 
-pub type DatabaseResult<T> = Result<T, Box<dyn Error>>;
+pub type DatabaseResult<T> = Result<T, Box<dyn Error + Send + Sync>>;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum OpenMode {

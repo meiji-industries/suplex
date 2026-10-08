@@ -466,7 +466,7 @@ type Rejection = Box<Response>;
 pub(crate) fn authenticate(
     state: &AppState,
     headers: &HeaderMap,
-) -> Result<Principal, Box<dyn Error>> {
+) -> Result<Principal, Box<dyn Error + Send + Sync>> {
     let token = headers
         .get(header::AUTHORIZATION)
         .and_then(|value| value.to_str().ok())
@@ -533,7 +533,11 @@ fn no_store(status: StatusCode, body: &Value) -> Response {
         .into_response()
 }
 
-fn respond(result: Result<Value, Box<dyn Error>>, status: StatusCode, runtime: bool) -> Response {
+fn respond(
+    result: Result<Value, Box<dyn Error + Send + Sync>>,
+    status: StatusCode,
+    runtime: bool,
+) -> Response {
     match result {
         Ok(body) => no_store(status, &body),
         Err(error) => agent_api_runtime::failure(error, runtime),
@@ -856,13 +860,13 @@ fn delivery_task(
     Ok((delivery, principal, id))
 }
 
-/// Some delivery operations hold non-`Send` errors across awaits; run them on their own thread.
+/// Run a delivery operation as its own task, so a dropped request does not cancel it.
 async fn detached<F, Fut>(operation: F) -> Response
 where
-    F: FnOnce() -> Fut + Send + 'static,
-    Fut: std::future::Future<Output = Response>,
+    F: FnOnce() -> Fut,
+    Fut: std::future::Future<Output = Response> + Send + 'static,
 {
-    tokio::task::spawn_blocking(move || crate::shared::blocking::block_on(operation))
+    tokio::spawn(operation())
         .await
         .unwrap_or_else(|_| agent_api_runtime::failure("delivery failed".into(), false))
 }

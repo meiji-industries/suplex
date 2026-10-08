@@ -78,7 +78,7 @@ fn respond<T: Serialize>(
     operation: impl FnOnce(
         &mut crate::platform::database::SuplexDatabase,
         &AuthUser,
-    ) -> Result<T, Box<dyn std::error::Error>>,
+    ) -> Result<T, Box<dyn std::error::Error + Send + Sync>>,
 ) -> Response {
     if let Some(method) = method
         && !session::csrf_allowed(&state.session_config, headers, method, false)

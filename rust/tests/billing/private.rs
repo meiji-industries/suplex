@@ -189,7 +189,7 @@ pub(crate) mod tests {
         }
     }
 
-    fn code(error: Box<dyn Error>) -> Option<&'static str> {
+    fn code(error: Box<dyn Error + Send + Sync>) -> Option<&'static str> {
         crate::shared::public_failure(error).code
     }
 

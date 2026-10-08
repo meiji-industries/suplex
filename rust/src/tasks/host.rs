@@ -356,7 +356,7 @@ async fn sweep_task_once(
             }
             crate::tasks::preparation::prepare_before_native_work(database_path, task_id).await?;
             crate::coordination::root_controller::prepare_root(database, task_id)?;
-            Ok::<_, Box<dyn std::error::Error>>(true)
+            Ok::<_, Box<dyn std::error::Error + Send + Sync>>(true)
         }
         .await;
         match prepared {
@@ -437,7 +437,7 @@ async fn sweep_task_once(
 async fn require_open_source_pull_request(
     database: &mut SuplexDatabase,
     task_id: &str,
-) -> Result<bool, Box<dyn std::error::Error>> {
+) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
     let Some((repository, number)) = source_pull_request(database, task_id)? else {
         return Ok(true);
     };
@@ -453,7 +453,7 @@ pub(crate) fn settle_source_pull_request(
     task_id: &str,
     number: u64,
     state: &str,
-) -> Result<bool, Box<dyn std::error::Error>> {
+) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
     use crate::coordination::workflows::{Completion, CompletionKind};
     match state {
         "open" => Ok(true),

@@ -59,7 +59,10 @@ fn respond(
     state: &AppState,
     headers: &HeaderMap,
     method: &str,
-    operation: impl FnOnce(&mut SuplexDatabase, &str) -> Result<Response, Box<dyn std::error::Error>>,
+    operation: impl FnOnce(
+        &mut SuplexDatabase,
+        &str,
+    ) -> Result<Response, Box<dyn std::error::Error + Send + Sync>>,
 ) -> Response {
     let (user, cookies) = match crate::http::access::authorize_method(state, headers, method) {
         Ok(value) => value,

@@ -35,7 +35,7 @@ fn scoped_artifact(
     user_id: &str,
     task_id: &str,
     artifact_id: &str,
-) -> Result<TaskArtifact, Box<dyn Error>> {
+) -> Result<TaskArtifact, Box<dyn Error + Send + Sync>> {
     state.with_database(|database| {
         crate::tasks::authorize_task(database, user_id, task_id)?;
         root_session_store::task_artifact(database, task_id, artifact_id)?
@@ -43,7 +43,11 @@ fn scoped_artifact(
     })
 }
 
-fn reauthorize(state: &AppState, user_id: &str, task_id: &str) -> Result<(), Box<dyn Error>> {
+fn reauthorize(
+    state: &AppState,
+    user_id: &str,
+    task_id: &str,
+) -> Result<(), Box<dyn Error + Send + Sync>> {
     state.with_database(|database| {
         crate::tasks::authorize_task(database, user_id, task_id)?;
         Ok(())

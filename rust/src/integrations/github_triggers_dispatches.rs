@@ -30,7 +30,7 @@ static REPOSITORY: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(?i)^[a-z0-9][a-z0-9_.-]{0,99}/[a-z0-9][a-z0-9_.-]{0,99}$").expect("valid regex")
 });
 
-fn fail(message: &str) -> Box<dyn Error> {
+fn fail(message: &str) -> Box<dyn Error + Send + Sync> {
     message.into()
 }
 
@@ -252,7 +252,7 @@ impl StoredDispatch {
 }
 
 impl TryFrom<StoredDispatch> for Dispatch {
-    type Error = Box<dyn Error>;
+    type Error = Box<dyn Error + Send + Sync>;
 
     fn try_from(row: StoredDispatch) -> DatabaseResult<Self> {
         let request = serde_json::from_str(&row.request)?;

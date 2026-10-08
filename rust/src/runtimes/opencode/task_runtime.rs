@@ -9,9 +9,7 @@ use crate::runtimes::native::SessionRef;
 use crate::shared::hash::sha256_hex;
 use std::{
     error::Error,
-    fs,
-    future::Future,
-    io,
+    fs, io,
     path::{Path, PathBuf},
     sync::Mutex,
 };
@@ -43,9 +41,9 @@ use crate::{
         git_guard, headless,
         native::{NativeReasoning, NativeTool, UsageTokens},
         task_harness::{
-            DispatchClaim, DispatchState, NativeSessionReader, NativeTimeline, PromptObservation,
-            PromptState, ReaderSession, TaskHarness, TaskRole, TaskScope, UsageEntry,
-            WorkflowLaunch, task_scope_environment,
+            DispatchClaim, DispatchState, HarnessFuture, NativeSessionReader, NativeTimeline,
+            PromptObservation, PromptState, ReaderSession, TaskHarness, TaskRole, TaskScope,
+            UsageEntry, WorkflowLaunch, task_scope_environment,
         },
     },
 };
@@ -55,12 +53,8 @@ const SESSION_BINDING: &str = "opencode-session.json";
 pub struct OpenCodeTaskRuntime;
 
 /// Keeps the native error as the source so callers can classify it (such as `SessionNotFound`).
-fn io_error(error: BoxError) -> io::Error {
-    io::Error::other(error)
-}
-
-fn run<T: Send, F: Future<Output = Result<T, BoxError>> + Send>(future: F) -> io::Result<T> {
-    crate::shared::blocking::block_on(|| future).map_err(io_error)
+fn io_error(error: impl Into<BoxError>) -> io::Error {
+    io::Error::other(error.into())
 }
 
 /// The native OpenCode session for a Suplex identity: itself when native, else the recorded pairing.
@@ -547,154 +541,173 @@ async fn messages(
 }
 
 impl NativeSessionReader for OpenCodeTaskRuntime {
-    fn history(&self, session: &ReaderSession<'_>) -> io::Result<Vec<Value>> {
-        let Some(native) = resolved(session)? else {
-            return Ok(Vec::new());
-        };
-        let reader = reader(session);
-        run(async {
-            reader
+    fn history<'a>(
+        &'a self,
+        session: &'a ReaderSession<'_>,
+    ) -> HarnessFuture<'a, io::Result<Vec<Value>>> {
+        Box::pin(async move {
+            let Some(native) = resolved(session)? else {
+                return Ok(Vec::new());
+            };
+            reader(session)
                 .history(&opencode_session(Some(&native), session.session_id, true))
                 .await
+                .map_err(io_error)
         })
     }
 
-    fn execution(&self, session: &ReaderSession<'_>) -> io::Result<(Vec<NativeTool>, Value)> {
-        let Some(native) = resolved(session)? else {
-            return Ok((Vec::new(), Value::Null));
-        };
-        let reader = reader(session);
-        let (execution, _) = run(async {
-            match reader
+    fn execution<'a>(
+        &'a self,
+        session: &'a ReaderSession<'_>,
+    ) -> HarnessFuture<'a, io::Result<(Vec<NativeTool>, Value)>> {
+        Box::pin(async move {
+            let Some(native) = resolved(session)? else {
+                return Ok((Vec::new(), Value::Null));
+            };
+            let reader = reader(session);
+            let (execution, _) = match reader
                 .execution(&opencode_session(Some(&native), session.session_id, true))
                 .await
             {
-                Ok(read) => Ok(read),
-                Err(_) => {
-                    reader
-                        .execution(&opencode_session(Some(&native), session.session_id, false))
-                        .await
-                }
+                Ok(read) => read,
+                Err(_) => reader
+                    .execution(&opencode_session(Some(&native), session.session_id, false))
+                    .await
+                    .map_err(io_error)?,
+            };
+            Ok((execution.tools, json!(execution.plan)))
+        })
+    }
+
+    fn reasoning<'a>(
+        &'a self,
+        session: &'a ReaderSession<'_>,
+    ) -> HarnessFuture<'a, io::Result<Vec<NativeReasoning>>> {
+        Box::pin(async move {
+            let Some(native) = resolved(session)? else {
+                return Ok(Vec::new());
+            };
+            let messages = messages(session.session_id, session.database_path, &native)
+                .await
+                .map_err(io_error)?;
+            Ok(session_reader::reasoning_from_messages(&messages))
+        })
+    }
+
+    fn turn_evidence<'a>(
+        &'a self,
+        session: &'a ReaderSession<'_>,
+        turn_id: &'a str,
+    ) -> HarnessFuture<'a, io::Result<Option<Vec<NativeTool>>>> {
+        Box::pin(async move {
+            let Some(native) = resolved(session)? else {
+                return Ok(None);
+            };
+            let messages = messages(session.session_id, session.database_path, &native)
+                .await
+                .map_err(io_error)?;
+            let correlated = correlated_assistants(&messages, turn_id);
+            if !correlated.prompt_found {
+                return Ok(None);
             }
-        })?;
-        Ok((execution.tools, json!(execution.plan)))
+            Ok(Some(
+                session_reader::execution_from_messages(&correlated.messages)
+                    .map_err(io_error)?
+                    .tools,
+            ))
+        })
     }
 
-    fn reasoning(&self, session: &ReaderSession<'_>) -> io::Result<Vec<NativeReasoning>> {
-        let Some(native) = resolved(session)? else {
-            return Ok(Vec::new());
-        };
-        let messages = run(messages(session.session_id, session.database_path, &native))?;
-        Ok(session_reader::reasoning_from_messages(&messages))
-    }
-
-    fn turn_evidence(
-        &self,
-        session: &ReaderSession<'_>,
-        turn_id: &str,
-    ) -> io::Result<Option<Vec<NativeTool>>> {
-        let Some(native) = resolved(session)? else {
-            return Ok(None);
-        };
-        let database_path = session.database_path;
-        let messages = run(messages(session.session_id, database_path, &native))?;
-        let correlated = correlated_assistants(&messages, turn_id);
-        if !correlated.prompt_found {
-            return Ok(None);
-        }
-        Ok(Some(
-            session_reader::execution_from_messages(&correlated.messages)
-                .map_err(io_error)?
-                .tools,
-        ))
-    }
-
-    fn timeline(
-        &self,
-        session: &ReaderSession<'_>,
-        pricing: Option<&ModelPricingCatalog>,
-    ) -> io::Result<NativeTimeline> {
-        let Some(native) = resolved(session)? else {
-            return Ok(NativeTimeline::default());
-        };
-        let reader = reader(session);
-        let timeline = run(async {
-            match reader
+    fn timeline<'a>(
+        &'a self,
+        session: &'a ReaderSession<'_>,
+        pricing: Option<&'a ModelPricingCatalog>,
+    ) -> HarnessFuture<'a, io::Result<NativeTimeline>> {
+        Box::pin(async move {
+            let Some(native) = resolved(session)? else {
+                return Ok(NativeTimeline::default());
+            };
+            let reader = reader(session);
+            let timeline = match reader
                 .timeline(
                     &opencode_session(Some(&native), session.session_id, true),
                     pricing,
                 )
                 .await
             {
-                Ok(timeline) => Ok(timeline),
-                Err(_) => {
-                    reader
-                        .timeline(
-                            &opencode_session(Some(&native), session.session_id, false),
-                            pricing,
-                        )
-                        .await
-                }
-            }
-        })?;
-        let number = |value: &Value| value.as_f64().unwrap_or_default();
-        Ok(NativeTimeline {
-            usage: timeline
-                .usage
-                .iter()
-                .map(|entry| UsageEntry {
-                    message_id: entry["messageId"].as_str().unwrap_or_default().to_owned(),
-                    turn_id: entry["turnId"].as_str().unwrap_or_default().to_owned(),
-                    provider: provider_name(entry["provider"].as_str().unwrap_or_default()),
-                    model: entry["model"].as_str().unwrap_or_default().to_owned(),
-                    started_at_ms: number(&entry["startedAt"]) as i64,
-                    completed_at_ms: entry["completedAt"].as_f64().map(|value| value as i64),
-                    failed: entry["failed"] == true,
-                    tokens: UsageTokens {
-                        input: number(&entry["tokens"]["input"]),
-                        output: number(&entry["tokens"]["output"]),
-                        reasoning: number(&entry["tokens"]["reasoning"]),
-                        cache_read: number(&entry["tokens"]["cache"]["read"]),
-                        cache_write: number(&entry["tokens"]["cache"]["write"]),
-                    },
-                    cost_usd: number(&entry["cost"]),
-                    subsidized: entry["subsidized"] == true,
-                    summary: entry["summary"] == true,
-                    steps: number(&entry["steps"]),
-                    source: if entry["source"] == "steps" {
-                        "steps"
-                    } else {
-                        "message"
-                    },
-                })
-                .collect(),
-            live_message_id: timeline.live_message_id,
+                Ok(timeline) => timeline,
+                Err(_) => reader
+                    .timeline(
+                        &opencode_session(Some(&native), session.session_id, false),
+                        pricing,
+                    )
+                    .await
+                    .map_err(io_error)?,
+            };
+            let number = |value: &Value| value.as_f64().unwrap_or_default();
+            Ok(NativeTimeline {
+                usage: timeline
+                    .usage
+                    .iter()
+                    .map(|entry| UsageEntry {
+                        message_id: entry["messageId"].as_str().unwrap_or_default().to_owned(),
+                        turn_id: entry["turnId"].as_str().unwrap_or_default().to_owned(),
+                        provider: provider_name(entry["provider"].as_str().unwrap_or_default()),
+                        model: entry["model"].as_str().unwrap_or_default().to_owned(),
+                        started_at_ms: number(&entry["startedAt"]) as i64,
+                        completed_at_ms: entry["completedAt"].as_f64().map(|value| value as i64),
+                        failed: entry["failed"] == true,
+                        tokens: UsageTokens {
+                            input: number(&entry["tokens"]["input"]),
+                            output: number(&entry["tokens"]["output"]),
+                            reasoning: number(&entry["tokens"]["reasoning"]),
+                            cache_read: number(&entry["tokens"]["cache"]["read"]),
+                            cache_write: number(&entry["tokens"]["cache"]["write"]),
+                        },
+                        cost_usd: number(&entry["cost"]),
+                        subsidized: entry["subsidized"] == true,
+                        summary: entry["summary"] == true,
+                        steps: number(&entry["steps"]),
+                        source: if entry["source"] == "steps" {
+                            "steps"
+                        } else {
+                            "message"
+                        },
+                    })
+                    .collect(),
+                live_message_id: timeline.live_message_id,
+            })
         })
     }
 
-    fn busy(&self, session: &ReaderSession<'_>) -> io::Result<bool> {
-        let Some(reference) = server::read_server(&session.runtime_directory()?)? else {
-            return Ok(false);
-        };
-        if !server::server_running(&reference) {
-            return Ok(false);
-        }
-        run(async {
-            let statuses = server::client(&reference)?
+    fn busy<'a>(&'a self, session: &'a ReaderSession<'_>) -> HarnessFuture<'a, io::Result<bool>> {
+        Box::pin(async move {
+            let Some(reference) = server::read_server(&session.runtime_directory()?)? else {
+                return Ok(false);
+            };
+            if !server::server_running(&reference) {
+                return Ok(false);
+            }
+            let statuses = server::client(&reference)
+                .map_err(io_error)?
                 .get_status(Some(&reference.directory))
-                .await?;
+                .await
+                .map_err(io_error)?;
             Ok(statuses.values().any(|status| status.kind() != "idle"))
         })
     }
 
-    fn status(&self, session: &ReaderSession<'_>) -> io::Result<(&'static str, f64)> {
-        let native =
-            resolved(session)?.ok_or_else(|| io::Error::other("Session is not available"))?;
-        let reader = reader(session);
-        run(async {
-            reader
+    fn status<'a>(
+        &'a self,
+        session: &'a ReaderSession<'_>,
+    ) -> HarnessFuture<'a, io::Result<(&'static str, f64)>> {
+        Box::pin(async move {
+            let native =
+                resolved(session)?.ok_or_else(|| io::Error::other("Session is not available"))?;
+            reader(session)
                 .status(&opencode_session(Some(&native), session.session_id, true))
                 .await
+                .map_err(io_error)
         })
     }
 }
@@ -706,118 +719,135 @@ impl TaskHarness for OpenCodeTaskRuntime {
     }
 
     /// A dead server, such as after a machine restart, is started again here.
-    fn ensure_session(&self, scope: &TaskScope<'_>) -> Result<(), Box<dyn Error>> {
-        run(ensure_session(scope))?;
-        Ok(())
+    fn ensure_session<'a>(
+        &'a self,
+        scope: &'a TaskScope<'_>,
+    ) -> HarnessFuture<'a, Result<(), Box<dyn Error + Send + Sync>>> {
+        Box::pin(async move {
+            ensure_session(scope).await.map_err(io_error)?;
+            Ok(())
+        })
     }
 
-    fn observe(
-        &self,
-        session: SessionRef<'_>,
-        turn_id: &str,
+    fn observe<'a>(
+        &'a self,
+        session: SessionRef<'a>,
+        turn_id: &'a str,
         dispatch: DispatchState,
-        generation: Option<&str>,
-    ) -> io::Result<PromptObservation> {
-        let directory = session.directory;
-        let native_session_id = session.native_session_id;
-        let observed = run(observe_native(
-            directory,
-            native_session_id,
-            turn_id,
-            dispatch_state(dispatch),
-            generation,
-        ))?;
-        Ok(shared(&observed))
+        generation: Option<&'a str>,
+    ) -> HarnessFuture<'a, io::Result<PromptObservation>> {
+        Box::pin(async move {
+            let observed = observe_native(
+                session.directory,
+                session.native_session_id,
+                turn_id,
+                dispatch_state(dispatch),
+                generation,
+            )
+            .await
+            .map_err(io_error)?;
+            Ok(shared(&observed))
+        })
     }
 
-    fn dispatch(
-        &self,
-        scope: &TaskScope<'_>,
-        turn_id: &str,
-        prompt: &str,
-        claim: DispatchClaim<'_>,
-    ) -> Result<PromptObservation, Box<dyn Error>> {
-        let directory = scope.runtime_directory()?;
-        let native = run(ensure_session(scope))?;
-        let (_, agent, _, system) = role_parts(scope.role, scope.workflow);
-        let intent = PromptIntent {
-            session_id: native,
-            message_id: turn_id.to_owned(),
-            directory: scope.worktree.to_string_lossy().into_owned(),
-            prompt: prompt.to_owned(),
-            system: Some(system.to_owned()),
-            prompt_hash: sha256_hex(prompt.as_bytes()),
-            model: open_code_model(scope.model)?,
-            agent: agent.to_owned(),
-            variant: scope.reasoning_effort.to_owned(),
-            dispatch: Dispatch::NotSubmitted,
-        };
-        crate::shared::fs::write_private(
-            &intent_path(&directory, turn_id)?,
-            &serde_json::to_vec(&intent)?,
-        )?;
-        let reference =
-            server::read_server(&directory)?.ok_or("OpenCode server reference is missing")?;
-        crate::shared::fs::write_private(
-            &directory.join(format!("dispatch-server-{}.json", reference.generation)),
-            &serde_json::to_vec(&reference)?,
-        )?;
-        let client = server::client(&reference)?;
-        if run(async { Ok(reconcile(&client, &intent).await) })?.retry != Retry::Allowed {
-            return Err(
-                ReplayBlocked("OpenCode prompt was not proven absent; replay is blocked").into(),
-            );
-        }
-        if !claim(&reference.generation)? {
-            return Err(ReplayBlocked("OpenCode prompt replay claim was not acquired").into());
-        }
-        run(async { PromptPort::prompt_async(&client, &intent).await })?;
-        let ambiguous = PromptIntent {
-            dispatch: Dispatch::Ambiguous,
-            ..intent
-        };
-        let observed = run(async { Ok(reconcile(&client, &ambiguous).await) })?;
-        Ok(shared(&observed))
+    fn dispatch<'a>(
+        &'a self,
+        scope: &'a TaskScope<'_>,
+        turn_id: &'a str,
+        prompt: &'a str,
+        claim: DispatchClaim<'a>,
+    ) -> HarnessFuture<'a, Result<PromptObservation, Box<dyn Error + Send + Sync>>> {
+        Box::pin(async move {
+            let directory = scope.runtime_directory()?;
+            let native = ensure_session(scope).await.map_err(io_error)?;
+            let (_, agent, _, system) = role_parts(scope.role, scope.workflow);
+            let intent = PromptIntent {
+                session_id: native,
+                message_id: turn_id.to_owned(),
+                directory: scope.worktree.to_string_lossy().into_owned(),
+                prompt: prompt.to_owned(),
+                system: Some(system.to_owned()),
+                prompt_hash: sha256_hex(prompt.as_bytes()),
+                model: open_code_model(scope.model)?,
+                agent: agent.to_owned(),
+                variant: scope.reasoning_effort.to_owned(),
+                dispatch: Dispatch::NotSubmitted,
+            };
+            crate::shared::fs::write_private(
+                &intent_path(&directory, turn_id)?,
+                &serde_json::to_vec(&intent)?,
+            )?;
+            let reference =
+                server::read_server(&directory)?.ok_or("OpenCode server reference is missing")?;
+            crate::shared::fs::write_private(
+                &directory.join(format!("dispatch-server-{}.json", reference.generation)),
+                &serde_json::to_vec(&reference)?,
+            )?;
+            let client = server::client(&reference)?;
+            if reconcile(&client, &intent).await.retry != Retry::Allowed {
+                return Err(ReplayBlocked(
+                    "OpenCode prompt was not proven absent; replay is blocked",
+                )
+                .into());
+            }
+            if !claim(&reference.generation)? {
+                return Err(ReplayBlocked("OpenCode prompt replay claim was not acquired").into());
+            }
+            PromptPort::prompt_async(&client, &intent)
+                .await
+                .map_err(io_error)?;
+            let ambiguous = PromptIntent {
+                dispatch: Dispatch::Ambiguous,
+                ..intent
+            };
+            let observed = reconcile(&client, &ambiguous).await;
+            Ok(shared(&observed))
+        })
     }
 
-    fn recover_dispatch(
-        &self,
-        session: SessionRef<'_>,
-        turn_id: &str,
-        generation: &str,
-    ) -> io::Result<PromptObservation> {
-        let directory = session.directory;
-        let native_session_id = session.native_session_id;
-        let observed = run(async {
-            match turn_context(
+    fn recover_dispatch<'a>(
+        &'a self,
+        session: SessionRef<'a>,
+        turn_id: &'a str,
+        generation: &'a str,
+    ) -> HarnessFuture<'a, io::Result<PromptObservation>> {
+        Box::pin(async move {
+            let (directory, native_session_id) = (session.directory, session.native_session_id);
+            let observed = match turn_context(
                 directory,
                 native_session_id,
                 turn_id,
                 Dispatch::NotSubmitted,
             )
-            .await?
+            .await
+            .map_err(io_error)?
             {
-                Some((_, intent)) => recover_native(directory, &intent, generation).await,
-                None => Ok(unsubmitted(
-                    native_session_id,
-                    turn_id,
-                    Dispatch::NotSubmitted,
-                )),
-            }
-        })?;
-        Ok(shared(&observed))
+                Some((_, intent)) => recover_native(directory, &intent, generation)
+                    .await
+                    .map_err(io_error)?,
+                None => unsubmitted(native_session_id, turn_id, Dispatch::NotSubmitted),
+            };
+            Ok(shared(&observed))
+        })
     }
 
-    fn result_text(&self, directory: &Path, turn_id: &str) -> io::Result<String> {
-        let intent = read_intent(directory, turn_id)?
-            .ok_or_else(|| io::Error::other("OpenCode turn intent is missing"))?;
-        run(async {
-            let reference =
-                server::read_server(directory)?.ok_or("OpenCode server reference is missing")?;
-            let messages = server::client(&reference)?
+    fn result_text<'a>(
+        &'a self,
+        directory: &'a Path,
+        turn_id: &'a str,
+    ) -> HarnessFuture<'a, io::Result<String>> {
+        Box::pin(async move {
+            let intent = read_intent(directory, turn_id)?
+                .ok_or_else(|| io::Error::other("OpenCode turn intent is missing"))?;
+            let reference = server::read_server(directory)
+                .map_err(io_error)?
+                .ok_or_else(|| io::Error::other("OpenCode server reference is missing"))?;
+            let messages = server::client(&reference)
+                .map_err(io_error)?
                 .get_messages(&intent.session_id, Some(&intent.directory), None)
-                .await?;
-            let observed = reconcile(&server::client(&reference)?, &intent).await;
+                .await
+                .map_err(io_error)?;
+            let observed = reconcile(&server::client(&reference).map_err(io_error)?, &intent).await;
             Ok(observed
                 .assistant_message_id
                 .and_then(|id| messages.iter().find(|message| message.info.id() == id))
@@ -826,46 +856,62 @@ impl TaskHarness for OpenCodeTaskRuntime {
         })
     }
 
-    fn native(&self, directory: &Path, turn_id: &str, base: Value) -> io::Result<Value> {
-        let Some(intent) = read_intent(directory, turn_id)? else {
-            return Ok(base);
-        };
-        let observed = run(async {
-            let reference =
-                server::read_server(directory)?.ok_or("OpenCode server reference is missing")?;
-            Ok(reconcile(&server::client(&reference)?, &intent).await)
-        })?;
-        match observed.native {
-            Some(native) => serde_json::to_value(native).map_err(io::Error::other),
-            None => Ok(base),
-        }
+    fn native<'a>(
+        &'a self,
+        directory: &'a Path,
+        turn_id: &'a str,
+        base: Value,
+    ) -> HarnessFuture<'a, io::Result<Value>> {
+        Box::pin(async move {
+            let Some(intent) = read_intent(directory, turn_id)? else {
+                return Ok(base);
+            };
+            let reference = server::read_server(directory)
+                .map_err(io_error)?
+                .ok_or_else(|| io::Error::other("OpenCode server reference is missing"))?;
+            let observed = reconcile(&server::client(&reference).map_err(io_error)?, &intent).await;
+            match observed.native {
+                Some(native) => serde_json::to_value(native).map_err(io::Error::other),
+                None => Ok(base),
+            }
+        })
     }
 
-    fn stop(&self, directory: &Path, reserved: Option<&str>) -> io::Result<()> {
-        let Some(reference) = server::read_server(directory)? else {
-            return headless::stop_session(directory, None);
-        };
-        let native = match reserved {
-            Some(reserved) => native_session_id(directory, reserved)?,
-            None => None,
-        };
-        if let Some(native) = native
-            && server::server_running(&reference)
-        {
-            run(async {
-                let client = server::client(&reference)?;
-                client.abort_session(&native, &reference.directory).await?;
-                let status = client.get_status(Some(&reference.directory)).await?;
-                match status.get(&native) {
-                    Some(status) if status.kind() != "idle" => {
-                        Err("OpenCode session has not stopped".into())
-                    }
-                    _ => Ok(()),
+    fn stop<'a>(
+        &'a self,
+        directory: &'a Path,
+        reserved: Option<&'a str>,
+    ) -> HarnessFuture<'a, io::Result<()>> {
+        Box::pin(async move {
+            let Some(reference) = server::read_server(directory)? else {
+                return headless::stop_session(directory, None);
+            };
+            let native = match reserved {
+                Some(reserved) => native_session_id(directory, reserved)?,
+                None => None,
+            };
+            if let Some(native) = native
+                && server::server_running(&reference)
+            {
+                let client = server::client(&reference).map_err(io_error)?;
+                client
+                    .abort_session(&native, &reference.directory)
+                    .await
+                    .map_err(io_error)?;
+                let status = client
+                    .get_status(Some(&reference.directory))
+                    .await
+                    .map_err(io_error)?;
+                if status
+                    .get(&native)
+                    .is_some_and(|status| status.kind() != "idle")
+                {
+                    return Err(io::Error::other("OpenCode session has not stopped"));
                 }
-            })?;
-        }
-        server::stop_server(&reference)?;
-        headless::stop_session(directory, None)
+            }
+            server::stop_server(&reference)?;
+            headless::stop_session(directory, None)
+        })
     }
 }
 
@@ -880,13 +926,10 @@ mod tests {
     };
 
     #[test]
-    fn run_keeps_the_native_error_for_callers_that_classify_it() {
-        let error = run(async {
-            Err::<(), BoxError>(Box::new(
-                crate::runtimes::opencode::session_history::SessionNotFound,
-            ))
-        })
-        .unwrap_err();
+    fn io_error_keeps_the_native_error_for_callers_that_classify_it() {
+        let error = io_error(
+            Box::new(crate::runtimes::opencode::session_history::SessionNotFound) as BoxError,
+        );
         assert!(error.get_ref().is_some_and(|source| {
             source.is::<crate::runtimes::opencode::session_history::SessionNotFound>()
         }));
@@ -959,8 +1002,8 @@ mod tests {
         assert!(ROOT_STANDARD.contains("pullRequestBody"));
     }
 
-    #[test]
-    fn an_unpaired_reservation_has_no_native_prompt_and_a_native_identity_is_used_as_is() {
+    #[tokio::test]
+    async fn an_unpaired_reservation_has_no_native_prompt_and_a_native_identity_is_used_as_is() {
         let directory = temporary("opencode-pairing");
         assert_eq!(native_session_id(&directory, "opencode-1").unwrap(), None);
         assert_eq!(
@@ -989,6 +1032,7 @@ mod tests {
                 DispatchState::NotSubmitted,
                 None,
             )
+            .await
             .unwrap();
         assert!(observed.retry_allowed && !observed.admission_observed);
         let ambiguous = OpenCodeTaskRuntime
@@ -1001,6 +1045,7 @@ mod tests {
                 DispatchState::Ambiguous,
                 None,
             )
+            .await
             .unwrap();
         assert!(!ambiguous.retry_allowed);
         assert_eq!(
@@ -1014,8 +1059,8 @@ mod tests {
         fs::remove_dir_all(directory).unwrap();
     }
 
-    #[test]
-    fn ensure_session_restarts_a_lost_server_and_keeps_the_native_session() {
+    #[tokio::test]
+    async fn ensure_session_restarts_a_lost_server_and_keeps_the_native_session() {
         use std::os::unix::fs::PermissionsExt;
         let base = temporary("opencode-ensure");
         let worktree = base.join("worktree");
@@ -1065,7 +1110,7 @@ process.on("SIGTERM", () => server.close(() => process.exit(0)));
             executable: Some(&executable),
             inherited_environment: &inherited,
         };
-        OpenCodeTaskRuntime.ensure_session(&scope).unwrap();
+        OpenCodeTaskRuntime.ensure_session(&scope).await.unwrap();
         let runtime = scope.runtime_directory().unwrap();
         let first = server::read_server(&runtime).unwrap().unwrap();
         assert_eq!(
@@ -1077,7 +1122,7 @@ process.on("SIGTERM", () => server.close(() => process.exit(0)));
         // The machine restarted: the recorded server is gone.
         server::stop_server(&first).unwrap();
         assert!(!server::server_running(&first));
-        OpenCodeTaskRuntime.ensure_session(&scope).unwrap();
+        OpenCodeTaskRuntime.ensure_session(&scope).await.unwrap();
         let restarted = server::read_server(&runtime).unwrap().unwrap();
         assert_ne!(restarted.generation, first.generation);
         assert!(server::server_running(&restarted));

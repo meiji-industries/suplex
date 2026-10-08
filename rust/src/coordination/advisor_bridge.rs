@@ -501,7 +501,7 @@ fn capture(path: &std::path::Path, report: &Value) -> io::Result<()> {
     crate::shared::fs::write_private(path, &serde_json::to_vec(report).map_err(io::Error::other)?)
 }
 
-pub async fn serve_from_environment() -> Result<(), Box<dyn std::error::Error>> {
+pub async fn serve_from_environment() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let path = bridge_auth::binding_path(ADVISOR_BINDING_ENV, "Advisor report")?;
     let binding: Binding = serde_json::from_slice(&std::fs::read(path)?)?;
     if binding.version != 1 || binding.server.command.is_empty() {

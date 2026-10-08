@@ -502,29 +502,22 @@ pub(crate) async fn observed_usage(
             estimated_cost_usd: (!require_complete).then_some(0.0),
         });
     }
-    let native_database_path = database_path.to_path_buf();
-    let observed = tokio::task::spawn_blocking(
-        move || -> Result<Vec<(String, String, NativeTimeline)>, String> {
-            let mut observed = Vec::new();
-            for (session_id, native_id, role, instance) in sessions {
-                let reader = task_harness_registry::native_session_reader(&native_id).ok_or(
-                    "Native task usage is not available. Suplex will retry the observation.",
-                )?;
-                let session = ReaderSession {
-                    database_path: &native_database_path,
-                    session_id: &session_id,
-                    native_session_id: &native_id,
-                    instance_home_directory: instance.as_deref().map(Path::new),
-                };
-                let timeline = reader
-                    .timeline(&session, None)
-                    .map_err(|error| error.to_string())?;
-                observed.push((native_id, role, timeline));
-            }
-            Ok(observed)
-        },
-    )
-    .await??;
+    let mut observed: Vec<(String, String, NativeTimeline)> = Vec::new();
+    for (session_id, native_id, role, instance) in sessions {
+        let reader = task_harness_registry::native_session_reader(&native_id)
+            .ok_or("Native task usage is not available. Suplex will retry the observation.")?;
+        let session = ReaderSession {
+            database_path,
+            session_id: &session_id,
+            native_session_id: &native_id,
+            instance_home_directory: instance.as_deref().map(Path::new),
+        };
+        let timeline = reader
+            .timeline(&session, None)
+            .await
+            .map_err(|error| error.to_string())?;
+        observed.push((native_id, role, timeline));
+    }
     // TypeScript `observeTaskLimitUsage`: a session without usage leaves the
     // observation incomplete; dispatch continues with the partial cost.
     let pricing = pricing_for_unpriced(&observed).await;

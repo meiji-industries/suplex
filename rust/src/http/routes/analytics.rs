@@ -38,7 +38,10 @@ pub fn router() -> Router<AppState> {
         )
 }
 
-fn respond<T: Serialize>(result: Result<T, Box<dyn Error>>, cookies: Vec<String>) -> Response {
+fn respond<T: Serialize>(
+    result: Result<T, Box<dyn Error + Send + Sync>>,
+    cookies: Vec<String>,
+) -> Response {
     let mut response =
         match result.and_then(|value| serde_json::to_value(value).map_err(Into::into)) {
             Ok(value) => (
@@ -90,7 +93,7 @@ fn saved_timelines(
     database: &SuplexDatabase,
     user_id: &str,
     company_id: &str,
-) -> Result<(Vec<timeline::SavedTimeline>, PathBuf), Box<dyn Error>> {
+) -> Result<(Vec<timeline::SavedTimeline>, PathBuf), Box<dyn Error + Send + Sync>> {
     let mut ids = analytics::company_task_ids(database, user_id, company_id, false)?;
     ids.extend(analytics::company_task_ids(
         database, user_id, company_id, true,
@@ -121,30 +124,29 @@ async fn company_timeline(
             Ok(value) => value,
             Err(error) => return respond::<()>(Err(error), cookies),
         };
-    let observed =
-        tokio::task::spawn_blocking(move || -> Result<timeline::TimelineResponse, String> {
-            let mut tasks = Vec::new();
-            let mut unavailable = 0;
-            for task in saved {
-                let value =
-                    timeline::observe(&database_path, task).map_err(|error| error.to_string())?;
-                tasks.extend(value.tasks);
-                unavailable += value.unavailable_sessions;
-            }
-            Ok(timeline::TimelineResponse {
-                tasks,
-                unavailable_sessions: unavailable,
-            })
+    let observed = async {
+        let mut tasks = Vec::new();
+        let mut unavailable = 0;
+        for task in saved {
+            let value = timeline::observe(&database_path, task)
+                .await
+                .map_err(|error| error.to_string())?;
+            tasks.extend(value.tasks);
+            unavailable += value.unavailable_sessions;
+        }
+        Ok::<_, String>(timeline::TimelineResponse {
+            tasks,
+            unavailable_sessions: unavailable,
         })
-        .await;
+    }
+    .await;
     let result = match observed {
-        Ok(Ok(value)) => state
+        Ok(value) => state
             .with_database(|database| {
                 analytics::company_task_ids(database, &user_id, &company_id, false)
             })
             .map(|_| value),
-        Ok(Err(error)) => Err(error.into()),
-        Err(error) => Err(Box::new(error) as Box<dyn Error>),
+        Err(error) => Err(error.into()),
     };
     let mut response = respond(result, cookies);
     if response.status() == StatusCode::OK {

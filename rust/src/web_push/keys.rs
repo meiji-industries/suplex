@@ -15,7 +15,7 @@ impl VapidKey {
         Self(ES256KeyPair::generate())
     }
 
-    pub fn from_base64url(value: &str) -> Result<Self, Box<dyn Error>> {
+    pub fn from_base64url(value: &str) -> Result<Self, Box<dyn Error + Send + Sync>> {
         let bytes = decode_base64url(value).ok_or("Web push key is invalid")?;
         ES256KeyPair::from_bytes(&bytes)
             .map(Self)

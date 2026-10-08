@@ -74,9 +74,9 @@ fn require_absent(directory: &Path, session_id: &str, turn_id: &str) -> io::Resu
 pub fn dispatch_codex_root<F>(
     input: RootCodexLaunch<'_>,
     claim: F,
-) -> Result<crate::runtimes::native::PromptObservation, Box<dyn Error>>
+) -> Result<crate::runtimes::native::PromptObservation, Box<dyn Error + Send + Sync>>
 where
-    F: FnOnce(&str) -> Result<bool, Box<dyn Error>>,
+    F: FnOnce(&str) -> Result<bool, Box<dyn Error + Send + Sync>>,
 {
     let directory = crate::runtimes::native::session_directory(
         input.database_path,
@@ -173,9 +173,9 @@ where
 pub fn dispatch_codex_worker<F>(
     input: WorkerCodexLaunch<'_>,
     claim: F,
-) -> Result<crate::runtimes::native::PromptObservation, Box<dyn Error>>
+) -> Result<crate::runtimes::native::PromptObservation, Box<dyn Error + Send + Sync>>
 where
-    F: FnOnce(&str) -> Result<bool, Box<dyn Error>>,
+    F: FnOnce(&str) -> Result<bool, Box<dyn Error + Send + Sync>>,
 {
     let directory =
         crate::runtimes::native::session_directory(input.database_path, input.session_id)?;

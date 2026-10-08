@@ -36,7 +36,7 @@ pub(crate) mod tests {
             identity::IdentityError, platform::PlatformError, projects::ProjectError,
             shared::PublicFailure, tasks::TaskError,
         };
-        let public = |error: Box<dyn Error>| public_failure(error);
+        let public = |error: Box<dyn Error + Send + Sync>| public_failure(error);
         assert_eq!(
             public(TaskError::new("Busy", 409).into()),
             PublicFailure::new(409, "Busy")

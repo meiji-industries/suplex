@@ -746,7 +746,7 @@ pub(crate) fn task_worktree(
     database: &SuplexDatabase,
     user_id: &str,
     task_id: &str,
-) -> Result<(String, Option<String>), Box<dyn std::error::Error>> {
+) -> Result<(String, Option<String>), Box<dyn std::error::Error + Send + Sync>> {
     let company_id = super::authorize_task(database, user_id, task_id)?;
     let path = database
         .connection()

@@ -22,7 +22,7 @@ const SHELLS: [&str; 6] = ["zsh", "bash", "sh", "fish", "nu", "pwsh"];
 
 pub const TASK_SHELL_PANE_TITLE: &str = "Shell";
 
-pub type DisplayResult<T> = Result<T, Box<dyn Error>>;
+pub type DisplayResult<T> = Result<T, Box<dyn Error + Send + Sync>>;
 /// Records a pane binding. A failed write aborts the display attachment.
 pub type Persist<'a> = &'a mut dyn FnMut(&str) -> DisplayResult<()>;
 

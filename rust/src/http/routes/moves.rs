@@ -82,7 +82,7 @@ fn respond<T: serde::Serialize>(
     headers: &HeaderMap,
     method: Method,
     status: StatusCode,
-    operation: impl FnOnce(&mut SuplexDatabase, &str) -> Result<T, Box<dyn Error>>,
+    operation: impl FnOnce(&mut SuplexDatabase, &str) -> Result<T, Box<dyn Error + Send + Sync>>,
 ) -> Response {
     let (user_id, cookies) = match admitted(state, headers, &method) {
         Ok(value) => value,

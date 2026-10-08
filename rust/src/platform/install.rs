@@ -232,7 +232,7 @@ async fn developer_tools() -> Value {
 }
 /// Installs Herdr when it is absent, then starts its server. Shared by
 /// `suplex install` and the one-click repair in the browser.
-pub async fn herdr() -> Value {
+pub fn herdr() -> Value {
     let installed = command("herdr", &["--version"]).is_ok_and(|output| output.status.success());
     if !installed {
         let script =
@@ -355,7 +355,7 @@ pub async fn herdr() -> Value {
         }
         let _ = server_command.spawn();
         for _ in 0..30 {
-            tokio::time::sleep(Duration::from_secs(1)).await;
+            std::thread::sleep(Duration::from_secs(1));
             if command("herdr", &["workspace", "list"]).is_ok_and(|output| output.status.success())
             {
                 return success("Herdr server is ready", false);
@@ -502,7 +502,7 @@ pub async fn run(args: &[String]) -> i32 {
     let outcome = match name.as_str() {
         "prerequisites" => prerequisites(),
         "developer-tools" => developer_tools().await,
-        "herdr" => herdr().await,
+        "herdr" => herdr(),
         "data" => data(),
         "complete" => complete().await,
         _ => failure(

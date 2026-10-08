@@ -144,9 +144,12 @@ pub struct CodexDispatch<'a> {
     pub excluded_environment_keys: &'a [String],
 }
 
-pub fn dispatch<F>(input: CodexDispatch<'_>, claim: F) -> Result<PromptObservation, Box<dyn Error>>
+pub fn dispatch<F>(
+    input: CodexDispatch<'_>,
+    claim: F,
+) -> Result<PromptObservation, Box<dyn Error + Send + Sync>>
 where
-    F: FnOnce(&str) -> Result<bool, Box<dyn Error>>,
+    F: FnOnce(&str) -> Result<bool, Box<dyn Error + Send + Sync>>,
 {
     let before = observe(
         input.directory,

@@ -2,8 +2,8 @@
 //! active tasks, moves, and projects again when any process commits to the
 //! database, or when a move run's terminal opens or closes. The same thread
 //! reads the stored values of each open task, and starts a thread that reads
-//! the task costs again when the stored usage changed. A second thread reads
-//! the native runtime values of watched tasks on a timer, because native files
+//! the task costs again when the stored usage changed. A task reads the
+//! native runtime values of watched tasks on a timer, because native files
 //! report no change. A published value is a display observation, not
 //! authority.
 
@@ -13,13 +13,15 @@ use std::{
     hash::{Hash, Hasher},
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
-    thread::Thread,
     time::Duration,
 };
 
 use chrono::Utc;
 use serde::Serialize;
-use tokio::sync::watch;
+use tokio::{
+    runtime::Handle,
+    sync::{Notify, watch},
+};
 
 use crate::{
     coordination::root_session_store,
@@ -84,8 +86,8 @@ struct Subscriptions {
     watchers: Vec<Watcher>,
     /// The last values of each watched task.
     tasks: HashMap<String, Observed>,
-    /// The thread that reads native runtime values while a socket watches.
-    observer: Option<Thread>,
+    /// Wakes the task that reads native runtime values while a socket watches.
+    observer: Option<Arc<Notify>>,
     /// The companies whose costs a thread reads now, and the newest stored
     /// usage the tail saw for each.
     costing: HashMap<String, u64>,
@@ -114,6 +116,9 @@ pub struct CompanyFeed {
     database_path: PathBuf,
     terminals: Arc<HostTerminals>,
     subscriptions: Arc<Mutex<Subscriptions>>,
+    /// The runtime the feed was created on; it runs the observer task when a
+    /// watch starts outside a runtime.
+    runtime: Option<Handle>,
 }
 
 impl CompanyFeed {
@@ -122,12 +127,16 @@ impl CompanyFeed {
             database_path,
             terminals,
             subscriptions: Arc::default(),
+            runtime: Handle::try_current().ok(),
         }
     }
 
     /// The same database with another terminal registry.
     pub fn with_terminals(&self, terminals: Arc<HostTerminals>) -> Self {
-        Self::new(self.database_path.clone(), terminals)
+        Self {
+            runtime: Handle::try_current().ok().or_else(|| self.runtime.clone()),
+            ..Self::new(self.database_path.clone(), terminals)
+        }
     }
 
     /// The company's lists, `None` until the first read. The channel closes
@@ -185,12 +194,20 @@ impl CompanyFeed {
         }
         // A new watch reads its runtime values now instead of on the next pass.
         match &subscriptions.observer {
-            Some(observer) => observer.unpark(),
+            Some(observer) => observer.notify_one(),
             None => {
-                let path = self.database_path.clone();
-                let shared = self.subscriptions.clone();
-                let observer = std::thread::spawn(move || observe(&path, &shared));
-                subscriptions.observer = Some(observer.thread().clone());
+                // Without any runtime there is no observer to read native values.
+                let Some(runtime) = Handle::try_current().ok().or_else(|| self.runtime.clone())
+                else {
+                    return;
+                };
+                let wake = Arc::new(Notify::new());
+                subscriptions.observer = Some(wake.clone());
+                runtime.spawn(observe(
+                    self.database_path.clone(),
+                    self.subscriptions.clone(),
+                    wake,
+                ));
             }
         }
     }
@@ -411,11 +428,11 @@ fn data_version(database: &SuplexDatabase) -> DatabaseResult<i64> {
 }
 
 /// Runs while a socket watches a task. Native runtime files report no change,
-/// so this thread reads them again on a timer, apart from the database pushes.
+/// so this task reads them again on a timer, apart from the database pushes.
 // ponytail: parses the native files again on each pass even when they did not
 // change. The readers resolve their own paths; cache by file time if this
 // shows up in a profile.
-fn observe(path: &Path, subscriptions: &Mutex<Subscriptions>) {
+async fn observe(path: PathBuf, subscriptions: Arc<Mutex<Subscriptions>>, wake: Arc<Notify>) {
     let mut database: Option<SuplexDatabase> = None;
     for pass in 0_u64.. {
         let (agents, open) = {
@@ -442,50 +459,68 @@ fn observe(path: &Path, subscriptions: &Mutex<Subscriptions>) {
                 .collect::<Vec<_>>();
             (agents, open)
         };
-        let opened = match &database {
-            Some(open) => Ok(open),
-            None => SuplexDatabase::open(path, OpenMode::ReadOnly)
-                .map(|opened| &*database.insert(opened)),
+        // Stored rows first; the database is not held while native values are read.
+        let stored = {
+            let opened = match &database {
+                Some(open) => Ok(open),
+                None => SuplexDatabase::open(&path, OpenMode::ReadOnly)
+                    .map(|opened| &*database.insert(opened)),
+            };
+            opened.map(|database| {
+                let agents = agents
+                    .into_iter()
+                    .map(|(id, previous)| {
+                        let task = task_agents::saved_task(database, &id).ok();
+                        (id, previous, task)
+                    })
+                    .collect::<Vec<_>>();
+                let open = open
+                    .into_iter()
+                    .map(|(id, previous)| {
+                        let rows = root_session_store::root_observation_rows(database, &id).ok();
+                        let saved = timeline::read_saved(database, &id).ok().flatten();
+                        (id, previous, rows, saved)
+                    })
+                    .collect::<Vec<_>>();
+                (crate::terminals::host_enabled(database), agents, open)
+            })
         };
         // The tail closes the sockets when the database cannot be read.
-        if let Ok(database) = opened {
-            let host = crate::terminals::host_enabled(database);
-            let agents = agents
-                .into_iter()
-                .map(|(id, previous)| {
-                    let next = task_agents::saved_task(database, &id)
-                        .ok()
-                        .and_then(|task| task_agents::agents(&task, path, host).ok());
-                    let next = match (previous, next) {
-                        (Some(previous), Some(next)) if *previous == next => Some(previous),
-                        (previous, next) => next.map(Arc::new).or(previous),
-                    };
-                    (id, next)
-                })
-                .collect::<Vec<_>>();
-            let open = open
-                .into_iter()
-                .map(|(id, previous)| {
-                    let execution = root_session_store::root_observation_rows(database, &id)
-                        .ok()
-                        .and_then(|rows| task_reads::execution_document(&rows, path).ok());
-                    let timeline = timeline::read_saved(database, &id)
-                        .ok()
-                        .flatten()
-                        .and_then(|saved| timeline::observe(path, saved).ok());
-                    let execution = kept_json(previous.execution, execution);
-                    let timeline = kept_json(previous.timeline, timeline);
-                    (id, execution, timeline)
-                })
-                .collect::<Vec<_>>();
+        if let Ok((host, agents, open)) = stored {
+            let mut agents_next = Vec::new();
+            for (id, previous, task) in agents {
+                let next = match task {
+                    Some(task) => task_agents::agents(&task, &path, host).await.ok(),
+                    None => None,
+                };
+                let next = match (previous, next) {
+                    (Some(previous), Some(next)) if *previous == next => Some(previous),
+                    (previous, next) => next.map(Arc::new).or(previous),
+                };
+                agents_next.push((id, next));
+            }
+            let mut open_next = Vec::new();
+            for (id, previous, rows, saved) in open {
+                let execution = match rows {
+                    Some(rows) => task_reads::execution_document(&rows, &path).await.ok(),
+                    None => None,
+                };
+                let timeline = match saved {
+                    Some(saved) => timeline::observe(&path, saved).await.ok(),
+                    None => None,
+                };
+                let execution = kept_json(previous.execution, execution);
+                let timeline = kept_json(previous.timeline, timeline);
+                open_next.push((id, execution, timeline));
+            }
             let mut subscriptions = subscriptions.lock().expect("company feed lock poisoned");
-            for (id, next) in agents {
+            for (id, next) in agents_next {
                 if let Some(observed) = subscriptions.tasks.get_mut(&id) {
                     observed.agents_read = true;
                     observed.agents = next;
                 }
             }
-            for (id, execution, timeline) in open {
+            for (id, execution, timeline) in open_next {
                 if let Some(observed) = subscriptions.tasks.get_mut(&id) {
                     observed.runtime_read = true;
                     observed.open.execution = execution;
@@ -494,7 +529,7 @@ fn observe(path: &Path, subscriptions: &Mutex<Subscriptions>) {
             }
             publish_watched(&subscriptions);
         }
-        std::thread::park_timeout(RUNTIME_POLL);
+        let _ = tokio::time::timeout(RUNTIME_POLL, wake.notified()).await;
     }
 }
 
@@ -525,7 +560,7 @@ fn publish(
     terminals: &HostTerminals,
     shared: &Arc<Mutex<Subscriptions>>,
     company_id: &str,
-) -> Result<(), Box<dyn Error>> {
+) -> Result<(), Box<dyn Error + Send + Sync>> {
     let tasks = repository::list_active(database, company_id)?;
     let mut moves = moves::list_company(database, company_id)?;
     for item in &mut moves {

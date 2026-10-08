@@ -443,7 +443,7 @@ impl ServerHandler for Bridge {
     }
 }
 
-pub async fn serve_from_environment() -> Result<(), Box<dyn std::error::Error>> {
+pub async fn serve_from_environment() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let environment = std::env::vars().collect::<HashMap<_, _>>();
     let settings = settings(&environment)?;
     // See session_protocol_versions: skip rmcp's handshake so a discover probe cannot fix the lifecycle.

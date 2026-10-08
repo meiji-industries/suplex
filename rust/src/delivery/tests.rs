@@ -1033,12 +1033,10 @@ async fn delivered_pull_refresh_updates_only_current_facts_and_rediscovers_missi
     }
     let race_path = fixture.database_path.clone();
     let race_github = Github::new(Access::for_api(&api, None).unwrap());
-    let pending = tokio::task::spawn_blocking(move || {
-        crate::shared::blocking::block_on(|| async move {
-            super::completed_pull_requests::refresh(&race_path, Some(&race_github))
-                .await
-                .map_err(|error| error.to_string())
-        })
+    let pending = tokio::spawn(async move {
+        super::completed_pull_requests::refresh(&race_path, Some(&race_github))
+            .await
+            .map_err(|error| error.to_string())
     });
     tokio::time::timeout(std::time::Duration::from_secs(10), gate.wait())
         .await

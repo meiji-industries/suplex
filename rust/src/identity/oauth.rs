@@ -49,7 +49,11 @@ impl OAuthFailure {
         }
     }
 
-    fn boxed(error: &'static str, public_message: &str, status_code: u16) -> Box<dyn Error> {
+    fn boxed(
+        error: &'static str,
+        public_message: &str,
+        status_code: u16,
+    ) -> Box<dyn Error + Send + Sync> {
         Box::new(Self::new(error, public_message, status_code))
     }
 
@@ -428,15 +432,16 @@ impl OAuth {
                 ));
             }
         };
-        let redirected = |error: &'static str, message: &str, status: u16| -> Box<dyn Error> {
-            Box::new(OAuthFailure {
-                error,
-                public_message: message.to_owned(),
-                status_code: status,
-                redirect_uri: Some(input.redirect_uri.to_owned()),
-                state: input.state.map(str::to_owned),
-            })
-        };
+        let redirected =
+            |error: &'static str, message: &str, status: u16| -> Box<dyn Error + Send + Sync> {
+                Box::new(OAuthFailure {
+                    error,
+                    public_message: message.to_owned(),
+                    status_code: status,
+                    redirect_uri: Some(input.redirect_uri.to_owned()),
+                    state: input.state.map(str::to_owned),
+                })
+            };
         if input.response_type != "code" {
             return Err(redirected(
                 "unsupported_response_type",

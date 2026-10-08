@@ -40,17 +40,15 @@ async fn install_herdr(State(state): State<AppState>, headers: HeaderMap) -> Res
         Err(response) => return *response,
     };
     // The installer runs blocking commands, so it leaves the async workers free.
-    let handle = tokio::runtime::Handle::current();
-    let outcome =
-        tokio::task::spawn_blocking(move || handle.block_on(crate::platform::install::herdr()))
-            .await
-            .ok()
-            .and_then(|outcome| serde_json::from_value::<HerdrInstallResponse>(outcome).ok())
-            .unwrap_or_else(|| HerdrInstallResponse {
-                ok: false,
-                reason: "The Herdr installer did not finish.".into(),
-                remedy: Some("Open Terminal, run herdr, then try again.".into()),
-            });
+    let outcome = tokio::task::spawn_blocking(crate::platform::install::herdr)
+        .await
+        .ok()
+        .and_then(|outcome| serde_json::from_value::<HerdrInstallResponse>(outcome).ok())
+        .unwrap_or_else(|| HerdrInstallResponse {
+            ok: false,
+            reason: "The Herdr installer did not finish.".into(),
+            remedy: Some("Open Terminal, run herdr, then try again.".into()),
+        });
     let mut response = Json(outcome).into_response();
     auth::append_cookies(&mut response, cookies);
     response

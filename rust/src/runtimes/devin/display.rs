@@ -206,7 +206,7 @@ pub fn run(
 
 /// `suplex display devin <runtime directory>`. SIGINT and SIGTERM end the
 /// process through their default action.
-pub fn main(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
+pub fn main(args: &[String]) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let directory = args.first().map(PathBuf::from);
     let Some(directory) = directory.filter(|path| path.is_absolute()) else {
         return Err("A private runtime directory is required".into());

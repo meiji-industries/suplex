@@ -51,7 +51,7 @@ async fn status(State(state): State<AppState>, headers: HeaderMap) -> Response {
         let required = !session::is_local_recovery(&headers);
         let session =
             session::session_user(database, &headers, Some(&state.session_config), Utc::now())?;
-        Ok::<_, Box<dyn Error>>((required, session))
+        Ok::<_, Box<dyn Error + Send + Sync>>((required, session))
     });
     match result {
         Ok((required, session)) => {
@@ -83,7 +83,7 @@ async fn update_me(
         let session =
             session::session_user(database, &headers, Some(&state.session_config), Utc::now())?;
         let Some(user) = session.user else {
-            return Ok::<_, Box<dyn Error>>((None, session.set_cookies));
+            return Ok::<_, Box<dyn Error + Send + Sync>>((None, session.set_cookies));
         };
         let update = ProfileUpdate {
             display_name: parsed.display_name,
@@ -122,7 +122,7 @@ async fn sign_out(State(state): State<AppState>, headers: HeaderMap) -> Response
     let result = state.with_database(|database| {
         let session = session::session_user(database, &headers, None, Utc::now())?;
         if session.user.is_none() {
-            return Ok::<_, Box<dyn Error>>(false);
+            return Ok::<_, Box<dyn Error + Send + Sync>>(false);
         }
         let token = session::cookie(&headers, session::SESSION_COOKIE_NAME)
             .or_else(|| session::cookie(&headers, session::LEGACY_SESSION_COOKIE_NAME))

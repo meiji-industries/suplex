@@ -20,7 +20,9 @@ pub fn router() -> Router<AppState> {
     Router::new().route("/api/today", get(today))
 }
 
-fn parse_range(raw: Option<&str>) -> Result<(DateTime<Utc>, DateTime<Utc>), Box<dyn Error>> {
+fn parse_range(
+    raw: Option<&str>,
+) -> Result<(DateTime<Utc>, DateTime<Utc>), Box<dyn Error + Send + Sync>> {
     let mut start = None;
     let mut end = None;
     for (key, value) in url::form_urlencoded::parse(raw.unwrap_or_default().as_bytes()) {

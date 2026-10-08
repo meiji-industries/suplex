@@ -19,9 +19,9 @@ use crate::{
         git_guard, headless,
         project_mcp::{project_mcp_servers, project_mcp_tools},
         task_harness::{
-            DispatchClaim, DispatchState, ExecutableSpec, GH_EXECUTABLE, PromptObservation,
-            PromptState, TaskHarness, TaskRole, TaskScope, recover_headless_dispatch,
-            resolve_executable, task_scope_environment,
+            DispatchClaim, DispatchState, ExecutableSpec, GH_EXECUTABLE, HarnessFuture,
+            PromptObservation, PromptState, TaskHarness, TaskRole, TaskScope,
+            recover_headless_dispatch, resolve_executable, task_scope_environment,
         },
     },
 };
@@ -238,212 +238,246 @@ impl TaskHarness for ClaudeCodeTaskRuntime {
         uuid::Uuid::new_v4().to_string()
     }
 
-    fn observe(
-        &self,
-        session: SessionRef<'_>,
-        turn_id: &str,
+    fn observe<'a>(
+        &'a self,
+        session: SessionRef<'a>,
+        turn_id: &'a str,
         dispatch: DispatchState,
-        generation: Option<&str>,
-    ) -> io::Result<PromptObservation> {
-        let directory = session.directory;
-        let native_session_id = session.native_session_id;
-        let record = headless::admitted_record(directory, turn_id, generation)?;
-        let log = read_optional(&headless::turn_file(directory, turn_id, "jsonl"))?;
-        if let Some(observed) =
-            headless::observe_admission(record.as_ref(), native_session_id, dispatch, log.is_some())
-        {
-            return Ok(observed);
-        }
-        let record = record.expect("admission checked");
-        let mut values = transcript::parse_json_lines(log.as_deref().unwrap_or_default());
-        let mut result = transcript::stream_result(&values);
-        let process_running = if result.is_none() {
-            let running = headless::running(&record)?;
-            if !running {
-                values = turn_values(directory, turn_id)?;
-                result = transcript::stream_result(&values);
-            }
-            running
-        } else {
-            false
-        };
-        let entries = transcript::message_entries(&values);
-        let mut observed = PromptObservation {
-            admission_observed: true,
-            unsettled_tool_ids: transcript::unsettled_tool_ids(&entries)
-                .into_iter()
-                .take(32)
-                .collect(),
-            native_final_observed: result.is_some(),
-            ..observation(PromptState::Running, "dispatch_process_running")
-        };
-        if let Some(result) = result {
-            (observed.state, observed.reason) = if result.is_error || result.subtype != "success" {
-                (PromptState::Error, "native_error")
-            } else {
-                (PromptState::Completed, "native_turn_completed")
-            };
-        } else if process_running {
-            observed.process_running = true;
-        } else if transcript::stream_init(&values).is_none() {
-            (observed.state, observed.reason) = (PromptState::Error, "native_startup_failed");
-        } else if !observed.unsettled_tool_ids.is_empty() {
-            (observed.state, observed.reason) =
-                (PromptState::Unknown, "tool_execution_after_process_stopped");
-            observed.execution_uncertain = true;
-        } else {
-            (observed.state, observed.reason) =
-                (PromptState::Interrupted, "dispatch_process_stopped");
-        }
-        Ok(observed)
-    }
-
-    fn dispatch(
-        &self,
-        scope: &TaskScope<'_>,
-        turn_id: &str,
-        prompt: &str,
-        claim: DispatchClaim<'_>,
-    ) -> Result<PromptObservation, Box<dyn Error>> {
-        let directory = scope.runtime_directory()?;
-        let before = self.observe(
-            SessionRef {
-                directory: &directory,
-                native_session_id: scope.native_session_id,
-            },
-            turn_id,
-            DispatchState::NotSubmitted,
-            None,
-        )?;
-        if !before.retry_allowed {
-            return Err(io::Error::other(
-                "Claude Code prompt was not proven absent; replay is blocked",
-            )
-            .into());
-        }
-        let executable = resolve_executable(
-            &CLAUDE_EXECUTABLE,
-            scope.executable,
-            scope.inherited_environment,
-            home_directory().as_deref(),
-        )?;
-        prepare_session(scope, &directory, scope.inherited_environment)?;
-        let config = scope.instance_home_directory.map_or_else(
-            || transcript::config_directory(scope.inherited_environment),
-            Path::to_path_buf,
-        );
-        let resume = transcript::find_transcript(scope.native_session_id, &config)?.is_some();
-        let inherited = match (scope.role, scope.workflow.advisor) {
-            (TaskRole::Worker(_), None) => {
-                let (git, gh) = git_guard::resolve_guard_binaries(scope.inherited_environment)?;
-                git_guard::create_git_command_guard(
-                    &directory,
-                    &git,
-                    gh.as_deref(),
-                    scope.inherited_environment,
-                )?
-                .environment
-            }
-            _ => scope.inherited_environment.clone(),
-        };
-        let environment = task_scope_environment(
-            claude_environment(scope.instance_home_directory, &inherited),
-            scope.worktree,
-            scope.project_environment,
-        );
-        let args = claude_arguments(scope, scope.native_session_id, resume, &directory);
-        if let Ok(display) = super::display::claude_display_command(&directory) {
-            let attached =
-                |argv: &[String]| super::display::claude_display_attached(&directory, argv);
-            crate::runtimes::task_display::show_scope(
-                scope,
-                "claude-code",
-                &display.command,
-                &attached,
-            );
-        }
-        let record = headless::dispatch_with_exclusions(
-            headless::DispatchInput {
-                directory: &directory,
-                worktree: scope.worktree,
-                session_id: scope.native_session_id,
-                turn_id,
-                executable: &executable,
-                args: &args,
-                prompt,
-                environment: &environment,
-            },
-            scope.excluded_environment_keys,
-            claim,
-        )?;
-        Ok(self.observe(
-            SessionRef {
-                directory: &directory,
-                native_session_id: scope.native_session_id,
-            },
-            turn_id,
-            DispatchState::Ambiguous,
-            Some(&record.generation),
-        )?)
-    }
-
-    fn recover_dispatch(
-        &self,
-        session: SessionRef<'_>,
-        turn_id: &str,
-        generation: &str,
-    ) -> io::Result<PromptObservation> {
-        let directory = session.directory;
-        let native_session_id = session.native_session_id;
-        recover_headless_dispatch(directory, generation)?;
-        self.observe(
-            SessionRef {
-                directory,
+        generation: Option<&'a str>,
+    ) -> HarnessFuture<'a, io::Result<PromptObservation>> {
+        Box::pin(async move {
+            let directory = session.directory;
+            let native_session_id = session.native_session_id;
+            let record = headless::admitted_record(directory, turn_id, generation)?;
+            let log = read_optional(&headless::turn_file(directory, turn_id, "jsonl"))?;
+            if let Some(observed) = headless::observe_admission(
+                record.as_ref(),
                 native_session_id,
-            },
-            turn_id,
-            DispatchState::NotSubmitted,
-            Some(generation),
-        )
-    }
-
-    fn result_text(&self, directory: &Path, turn_id: &str) -> io::Result<String> {
-        let values = turn_values(directory, turn_id)?;
-        let text = transcript::stream_result(&values)
-            .and_then(|result| result.result)
-            .unwrap_or_else(|| transcript::assistant_text(&transcript::message_entries(&values)));
-        if !text.is_empty() {
-            return Ok(text);
-        }
-        let stderr = read_optional(&headless::turn_file(directory, turn_id, "stderr.log"))?
-            .unwrap_or_default();
-        let stderr = stderr.trim();
-        let skip = stderr.chars().count().saturating_sub(2_000);
-        Ok(stderr.chars().skip(skip).collect())
-    }
-
-    fn native(&self, directory: &Path, turn_id: &str, mut base: Value) -> io::Result<Value> {
-        let values = turn_values(directory, turn_id)?;
-        let entries = transcript::message_entries(&values);
-        base["providerID"] = json!("claude-code");
-        if let Some(last) = last_assistant(&entries) {
-            base["messageID"] = json!(last.uuid);
-        }
-        if let Some((cwd, model)) = transcript::stream_init(&values) {
-            base["modelID"] = json!(model);
-            base["cwd"] = json!(cwd);
-        }
-        if let Some(result) = transcript::stream_result(&values) {
-            base["finish"] = json!(result.subtype);
-            if result.is_error {
-                base["error"] = json!({"name":result.subtype});
+                dispatch,
+                log.is_some(),
+            ) {
+                return Ok(observed);
             }
-        }
-        Ok(base)
+            let record = record.expect("admission checked");
+            let mut values = transcript::parse_json_lines(log.as_deref().unwrap_or_default());
+            let mut result = transcript::stream_result(&values);
+            let process_running = if result.is_none() {
+                let running = headless::running(&record)?;
+                if !running {
+                    values = turn_values(directory, turn_id)?;
+                    result = transcript::stream_result(&values);
+                }
+                running
+            } else {
+                false
+            };
+            let entries = transcript::message_entries(&values);
+            let mut observed = PromptObservation {
+                admission_observed: true,
+                unsettled_tool_ids: transcript::unsettled_tool_ids(&entries)
+                    .into_iter()
+                    .take(32)
+                    .collect(),
+                native_final_observed: result.is_some(),
+                ..observation(PromptState::Running, "dispatch_process_running")
+            };
+            if let Some(result) = result {
+                (observed.state, observed.reason) =
+                    if result.is_error || result.subtype != "success" {
+                        (PromptState::Error, "native_error")
+                    } else {
+                        (PromptState::Completed, "native_turn_completed")
+                    };
+            } else if process_running {
+                observed.process_running = true;
+            } else if transcript::stream_init(&values).is_none() {
+                (observed.state, observed.reason) = (PromptState::Error, "native_startup_failed");
+            } else if !observed.unsettled_tool_ids.is_empty() {
+                (observed.state, observed.reason) =
+                    (PromptState::Unknown, "tool_execution_after_process_stopped");
+                observed.execution_uncertain = true;
+            } else {
+                (observed.state, observed.reason) =
+                    (PromptState::Interrupted, "dispatch_process_stopped");
+            }
+            Ok(observed)
+        })
     }
 
-    fn stop(&self, directory: &Path, native_session_id: Option<&str>) -> io::Result<()> {
-        headless::stop_session(directory, native_session_id)
+    fn dispatch<'a>(
+        &'a self,
+        scope: &'a TaskScope<'_>,
+        turn_id: &'a str,
+        prompt: &'a str,
+        claim: DispatchClaim<'a>,
+    ) -> HarnessFuture<'a, Result<PromptObservation, Box<dyn Error + Send + Sync>>> {
+        Box::pin(async move {
+            let directory = scope.runtime_directory()?;
+            let before = self
+                .observe(
+                    SessionRef {
+                        directory: &directory,
+                        native_session_id: scope.native_session_id,
+                    },
+                    turn_id,
+                    DispatchState::NotSubmitted,
+                    None,
+                )
+                .await?;
+            if !before.retry_allowed {
+                return Err(io::Error::other(
+                    "Claude Code prompt was not proven absent; replay is blocked",
+                )
+                .into());
+            }
+            let executable = resolve_executable(
+                &CLAUDE_EXECUTABLE,
+                scope.executable,
+                scope.inherited_environment,
+                home_directory().as_deref(),
+            )?;
+            prepare_session(scope, &directory, scope.inherited_environment)?;
+            let config = scope.instance_home_directory.map_or_else(
+                || transcript::config_directory(scope.inherited_environment),
+                Path::to_path_buf,
+            );
+            let resume = transcript::find_transcript(scope.native_session_id, &config)?.is_some();
+            let inherited = match (scope.role, scope.workflow.advisor) {
+                (TaskRole::Worker(_), None) => {
+                    let (git, gh) = git_guard::resolve_guard_binaries(scope.inherited_environment)?;
+                    git_guard::create_git_command_guard(
+                        &directory,
+                        &git,
+                        gh.as_deref(),
+                        scope.inherited_environment,
+                    )?
+                    .environment
+                }
+                _ => scope.inherited_environment.clone(),
+            };
+            let environment = task_scope_environment(
+                claude_environment(scope.instance_home_directory, &inherited),
+                scope.worktree,
+                scope.project_environment,
+            );
+            let args = claude_arguments(scope, scope.native_session_id, resume, &directory);
+            if let Ok(display) = super::display::claude_display_command(&directory) {
+                let attached =
+                    |argv: &[String]| super::display::claude_display_attached(&directory, argv);
+                crate::runtimes::task_display::show_scope(
+                    scope,
+                    "claude-code",
+                    &display.command,
+                    &attached,
+                );
+            }
+            let record = headless::dispatch_with_exclusions(
+                headless::DispatchInput {
+                    directory: &directory,
+                    worktree: scope.worktree,
+                    session_id: scope.native_session_id,
+                    turn_id,
+                    executable: &executable,
+                    args: &args,
+                    prompt,
+                    environment: &environment,
+                },
+                scope.excluded_environment_keys,
+                claim,
+            )?;
+            Ok(self
+                .observe(
+                    SessionRef {
+                        directory: &directory,
+                        native_session_id: scope.native_session_id,
+                    },
+                    turn_id,
+                    DispatchState::Ambiguous,
+                    Some(&record.generation),
+                )
+                .await?)
+        })
+    }
+
+    fn recover_dispatch<'a>(
+        &'a self,
+        session: SessionRef<'a>,
+        turn_id: &'a str,
+        generation: &'a str,
+    ) -> HarnessFuture<'a, io::Result<PromptObservation>> {
+        Box::pin(async move {
+            let directory = session.directory;
+            let native_session_id = session.native_session_id;
+            recover_headless_dispatch(directory, generation)?;
+            self.observe(
+                SessionRef {
+                    directory,
+                    native_session_id,
+                },
+                turn_id,
+                DispatchState::NotSubmitted,
+                Some(generation),
+            )
+            .await
+        })
+    }
+
+    fn result_text<'a>(
+        &'a self,
+        directory: &'a Path,
+        turn_id: &'a str,
+    ) -> HarnessFuture<'a, io::Result<String>> {
+        Box::pin(async move {
+            let values = turn_values(directory, turn_id)?;
+            let text = transcript::stream_result(&values)
+                .and_then(|result| result.result)
+                .unwrap_or_else(|| {
+                    transcript::assistant_text(&transcript::message_entries(&values))
+                });
+            if !text.is_empty() {
+                return Ok(text);
+            }
+            let stderr = read_optional(&headless::turn_file(directory, turn_id, "stderr.log"))?
+                .unwrap_or_default();
+            let stderr = stderr.trim();
+            let skip = stderr.chars().count().saturating_sub(2_000);
+            Ok(stderr.chars().skip(skip).collect())
+        })
+    }
+
+    fn native<'a>(
+        &'a self,
+        directory: &'a Path,
+        turn_id: &'a str,
+        mut base: Value,
+    ) -> HarnessFuture<'a, io::Result<Value>> {
+        Box::pin(async move {
+            let values = turn_values(directory, turn_id)?;
+            let entries = transcript::message_entries(&values);
+            base["providerID"] = json!("claude-code");
+            if let Some(last) = last_assistant(&entries) {
+                base["messageID"] = json!(last.uuid);
+            }
+            if let Some((cwd, model)) = transcript::stream_init(&values) {
+                base["modelID"] = json!(model);
+                base["cwd"] = json!(cwd);
+            }
+            if let Some(result) = transcript::stream_result(&values) {
+                base["finish"] = json!(result.subtype);
+                if result.is_error {
+                    base["error"] = json!({"name":result.subtype});
+                }
+            }
+            Ok(base)
+        })
+    }
+
+    fn stop<'a>(
+        &'a self,
+        directory: &'a Path,
+        native_session_id: Option<&'a str>,
+    ) -> HarnessFuture<'a, io::Result<()>> {
+        Box::pin(async move { headless::stop_session(directory, native_session_id) })
     }
 }
 
@@ -576,7 +610,7 @@ mod tests {
         )
     }
 
-    fn settle(scope: &TaskScope<'_>, generation: Option<&str>) -> PromptObservation {
+    async fn settle(scope: &TaskScope<'_>, generation: Option<&str>) -> PromptObservation {
         let directory = scope.runtime_directory().unwrap();
         for _ in 0..100 {
             let observed = ClaudeCodeTaskRuntime
@@ -589,6 +623,7 @@ mod tests {
                     DispatchState::Ambiguous,
                     generation,
                 )
+                .await
                 .unwrap();
             if observed.state != PromptState::Running {
                 return observed;
@@ -598,12 +633,17 @@ mod tests {
         panic!("fake Claude did not settle");
     }
 
-    fn dispatch(scope: &TaskScope<'_>) -> Result<PromptObservation, Box<dyn Error>> {
-        ClaudeCodeTaskRuntime.dispatch(scope, "msg_turn", "Implement the change", &mut |_| Ok(true))
+    async fn dispatch(
+        scope: &TaskScope<'_>,
+    ) -> Result<PromptObservation, Box<dyn Error + Send + Sync>> {
+        ClaudeCodeTaskRuntime
+            .dispatch(scope, "msg_turn", "Implement the change", &mut |_| Ok(true))
+            .await
     }
 
-    #[test]
-    fn a_headless_turn_is_dispatched_once_observed_from_its_stream_and_reported_as_the_result() {
+    #[tokio::test]
+    async fn a_headless_turn_is_dispatched_once_observed_from_its_stream_and_reported_as_the_result()
+     {
         let f = fixture("complete");
         let scope = worker(&f);
         let directory = scope.runtime_directory().unwrap();
@@ -618,6 +658,7 @@ mod tests {
                 DispatchState::NotSubmitted,
                 None,
             )
+            .await
             .unwrap();
         assert_eq!(
             (
@@ -638,10 +679,11 @@ mod tests {
                     Ok(true)
                 },
             )
+            .await
             .unwrap();
         assert_eq!(claims.len(), 1);
         assert!(dispatched.admission_observed);
-        let observed = settle(&scope, Some(&claims[0]));
+        let observed = settle(&scope, Some(&claims[0])).await;
         assert_eq!(
             (observed.state, observed.retry_allowed),
             (PromptState::Completed, false)
@@ -668,6 +710,7 @@ mod tests {
         assert!(!args.contains(&"--resume"));
         let native = ClaudeCodeTaskRuntime
             .native(&directory, "msg_turn", json!({"messageID":"msg_turn"}))
+            .await
             .unwrap();
         assert_eq!(
             native,
@@ -676,11 +719,13 @@ mod tests {
         assert_eq!(
             ClaudeCodeTaskRuntime
                 .result_text(&directory, "msg_turn")
+                .await
                 .unwrap(),
             "Reviewed the change."
         );
         assert!(
             dispatch(&scope)
+                .await
                 .unwrap_err()
                 .to_string()
                 .contains("replay is blocked")
@@ -688,8 +733,8 @@ mod tests {
         assert!(!crate::runtimes::headless::busy(&directory).unwrap());
     }
 
-    #[test]
-    fn a_local_claude_instance_supplies_its_config_directory_and_isolates_auth() {
+    #[tokio::test]
+    async fn a_local_claude_instance_supplies_its_config_directory_and_isolates_auth() {
         let f = fixture("complete");
         let local = f.root.join("provider-instances/local");
         fs::create_dir_all(local.join("projects/worktree")).unwrap();
@@ -699,8 +744,8 @@ mod tests {
             TaskRole::Worker(WorkerPurpose::Implementation),
             Some(&local),
         );
-        dispatch(&scope).unwrap();
-        settle(&scope, None);
+        dispatch(&scope).await.unwrap();
+        settle(&scope, None).await;
         let observed = fs::read_to_string(f.root.join("config-dir.txt")).unwrap();
         let fields = observed.split('|').collect::<Vec<_>>();
         assert_eq!(fields[0], local.to_string_lossy());
@@ -723,8 +768,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn root_dispatch_inherits_caller_configuration_and_writes_the_bridge_to_mcp_config() {
+    #[tokio::test]
+    async fn root_dispatch_inherits_caller_configuration_and_writes_the_bridge_to_mcp_config() {
         let mut f = fixture("complete");
         let gh = f.root.join("gh");
         fs::write(&gh, "#!/bin/sh\nexit 0\n").unwrap();
@@ -739,8 +784,8 @@ mod tests {
             generation: 1,
         };
         let scope = scope(&f, "session-root", TaskRole::Root(&identity), None);
-        dispatch(&scope).unwrap();
-        assert_eq!(settle(&scope, None).state, PromptState::Completed);
+        dispatch(&scope).await.unwrap();
+        assert_eq!(settle(&scope, None).await.state, PromptState::Completed);
         let observed = fs::read_to_string(f.root.join("config-dir.txt")).unwrap();
         let fields = observed.split('|').collect::<Vec<_>>();
         assert_eq!(fields[0], f.inherited["CLAUDE_CONFIG_DIR"]);
@@ -790,8 +835,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn an_advisor_runs_read_only_with_its_report_bridge_and_the_workflow_evidence() {
+    #[tokio::test]
+    async fn an_advisor_runs_read_only_with_its_report_bridge_and_the_workflow_evidence() {
         let f = fixture("complete");
         let mut scope = scope(
             &f,
@@ -846,8 +891,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn mcp_worker_grants_never_run_with_permission_bypass() {
+    #[tokio::test]
+    async fn mcp_worker_grants_never_run_with_permission_bypass() {
         let f = fixture("complete");
         let servers = json!([{"name":"context7","transport":{"type":"http","url":"https://example.com/mcp","headers":{"Authorization":"CONTEXT7_TOKEN"}},"grants":{"root":["query_docs"],"advisor":[],"worker":["query_docs","resolve_library_id"]}}]);
         let mut scope = scope(
@@ -905,13 +950,13 @@ mod tests {
         );
     }
 
-    #[test]
-    fn a_running_turn_is_busy_until_stopped_then_reads_as_an_uncertain_execution_when_tools_were_open()
+    #[tokio::test]
+    async fn a_running_turn_is_busy_until_stopped_then_reads_as_an_uncertain_execution_when_tools_were_open()
      {
         let f = fixture("hang");
         let scope = worker(&f);
         let directory = scope.runtime_directory().unwrap();
-        let dispatched = dispatch(&scope).unwrap();
+        let dispatched = dispatch(&scope).await.unwrap();
         assert!(dispatched.admission_observed);
         let generation = headless::read_record(&directory.join("turn.json"))
             .unwrap()
@@ -933,6 +978,7 @@ mod tests {
                     DispatchState::Ambiguous,
                     Some(&generation),
                 )
+                .await
                 .unwrap();
         }
         assert_eq!(observed.state, PromptState::Running);
@@ -940,6 +986,7 @@ mod tests {
         assert!(crate::runtimes::headless::busy(&directory).unwrap());
         ClaudeCodeTaskRuntime
             .stop(&directory, Some(SESSION))
+            .await
             .unwrap();
         assert!(!crate::runtimes::headless::busy(&directory).unwrap());
         let recovered = ClaudeCodeTaskRuntime
@@ -951,43 +998,46 @@ mod tests {
                 "msg_turn",
                 &generation,
             )
+            .await
             .unwrap();
         assert_eq!(recovered.state, PromptState::Unknown);
         assert!(recovered.execution_uncertain);
     }
 
-    #[test]
-    fn a_turn_whose_process_exits_without_a_result_is_interrupted_and_a_startup_failure_surfaces_stderr()
+    #[tokio::test]
+    async fn a_turn_whose_process_exits_without_a_result_is_interrupted_and_a_startup_failure_surfaces_stderr()
      {
         let crashed = fixture("crash");
         let scope = worker(&crashed);
-        dispatch(&scope).unwrap();
-        let observed = settle(&scope, None);
+        dispatch(&scope).await.unwrap();
+        let observed = settle(&scope, None).await;
         assert_eq!(
             (observed.state, observed.reason),
             (PromptState::Interrupted, "dispatch_process_stopped")
         );
         let failed = fixture("startup_failure");
         let scope = worker(&failed);
-        dispatch(&scope).unwrap();
-        let observed = settle(&scope, None);
+        dispatch(&scope).await.unwrap();
+        let observed = settle(&scope, None).await;
         assert_eq!(
             (observed.state, observed.reason),
             (PromptState::Error, "native_startup_failed")
         );
         let text = ClaudeCodeTaskRuntime
             .result_text(&scope.runtime_directory().unwrap(), "msg_turn")
+            .await
             .unwrap();
         assert!(text.contains("Not logged in"));
     }
 
-    #[test]
-    fn an_unclaimed_prompt_is_never_spawned_and_a_log_without_an_identity_is_uncertain() {
+    #[tokio::test]
+    async fn an_unclaimed_prompt_is_never_spawned_and_a_log_without_an_identity_is_uncertain() {
         let f = fixture("complete");
         let scope = worker(&f);
         let directory = scope.runtime_directory().unwrap();
         let refused = ClaudeCodeTaskRuntime
             .dispatch(&scope, "msg_turn", "prompt", &mut |_| Ok(false))
+            .await
             .unwrap_err();
         assert!(refused.to_string().contains("claim was not acquired"));
         assert!(!directory.join("turn.json").exists());
@@ -1002,6 +1052,7 @@ mod tests {
                 DispatchState::Ambiguous,
                 Some("b775df17-718a-4cb2-8e23-6912b8aa0d39"),
             )
+            .await
             .unwrap();
         assert_eq!(
             (observed.state, observed.retry_allowed, observed.reason),

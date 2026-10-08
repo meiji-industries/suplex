@@ -366,6 +366,31 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn a_watch_outside_a_runtime_observes_on_the_runtime_the_feed_was_created_on() {
+        let (directory, path, _database, task_id) = fixture();
+        // No runtime anywhere: the watch starts without an observer and does not panic.
+        let unobserved = CompanyFeed::new(path.clone(), Arc::default());
+        let receiver = unobserved.watch(vec![task_id.clone()], None);
+        assert!(unobserved.subscriptions.lock().unwrap().observer.is_none());
+        drop(receiver);
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let feed = {
+            let _entered = runtime.enter();
+            CompanyFeed::new(path, Arc::default())
+        };
+        // This thread has no runtime; the observer runs on the feed's runtime.
+        let receiver = feed.watch(vec![task_id.clone()], None);
+        let watched = wait_watched(&receiver, |_| true);
+        assert_eq!(watched.agents.len(), 1);
+        assert_eq!(watched.agents[0].task_id, task_id);
+        drop(receiver);
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
     fn feed_closes_the_channel_when_it_cannot_read_the_database() {
         let missing = std::env::temp_dir()
             .join(format!("suplex-sync-missing-{}", Uuid::new_v4()))
@@ -380,8 +405,8 @@ pub(crate) mod tests {
         assert!(receiver.borrow().is_none());
     }
 
-    #[test]
-    fn watch_publishes_each_value_then_pushes_a_turn_committed_by_another_process() {
+    #[tokio::test(flavor = "multi_thread")]
+    async fn watch_publishes_each_value_then_pushes_a_turn_committed_by_another_process() {
         let (directory, path, database, task_id) = fixture();
         add_turn(&database, &task_id);
         let feed = CompanyFeed::new(path.clone(), Arc::default());
@@ -396,7 +421,9 @@ pub(crate) mod tests {
                 &task_agents::saved_task(&database, &task_id).unwrap(),
                 &path,
                 false
-            ).unwrap())
+            )
+            .await
+            .unwrap())
             .unwrap()
         );
         assert_eq!(first.agents[0].agents[0].status, TaskAgentStatus::Queued);
@@ -410,11 +437,11 @@ pub(crate) mod tests {
         );
         assert_eq!(
             value(&first.open.execution),
-            serde_json::to_value(task_reads::execution_document(&rows, &path).unwrap()).unwrap()
+            serde_json::to_value(task_reads::execution_document(&rows, &path).await.unwrap()).unwrap()
         );
         assert_eq!(
             value(&first.open.timeline),
-            serde_json::to_value(timeline::observe(&path, saved).unwrap()).unwrap()
+            serde_json::to_value(timeline::observe(&path, saved).await.unwrap()).unwrap()
         );
 
         // A turn change leaves the task list as it is, so only the watch reports it.
@@ -495,8 +522,8 @@ pub(crate) mod tests {
         fs::remove_dir_all(directory).unwrap();
     }
 
-    #[test]
-    fn a_new_watch_replaces_the_old_one_and_a_dropped_watch_stops_observation() {
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_new_watch_replaces_the_old_one_and_a_dropped_watch_stops_observation() {
         let (directory, path, mut database, first) = fixture();
         let second = add_task(&mut database, "Second", vec![]);
         let feed = CompanyFeed::new(path, Arc::default());

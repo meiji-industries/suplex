@@ -16,7 +16,7 @@ use sha2::{Digest, Sha512};
 
 use crate::platform::{config::Installation, supervisor};
 
-type UpdateResult = Result<i32, Box<dyn std::error::Error>>;
+type UpdateResult = Result<i32, Box<dyn std::error::Error + Send + Sync>>;
 
 /// The top-level fields of the Mac feed's `latest-mac.yml` (the electron-builder format, still published beside the Tauri feed).
 #[derive(Debug, PartialEq)]
@@ -128,7 +128,7 @@ impl Drop for Staging {
     }
 }
 
-fn feed_url(app: &Path) -> Result<String, Box<dyn std::error::Error>> {
+fn feed_url(app: &Path) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
     let config = fs::read_to_string(app.join("Contents/Resources/app-update.yml"))
         .map_err(|_| "This Suplex.app has no update feed. Install a new build to update it.")?;
     let url = config
@@ -139,7 +139,7 @@ fn feed_url(app: &Path) -> Result<String, Box<dyn std::error::Error>> {
     Ok(format!("{}/", url.trim_end_matches('/')))
 }
 
-fn parse_feed(text: &str) -> Result<Release, Box<dyn std::error::Error>> {
+fn parse_feed(text: &str) -> Result<Release, Box<dyn std::error::Error + Send + Sync>> {
     let field = |name: &str| {
         text.lines()
             .find_map(|line| line.strip_prefix(&format!("{name}: ")))
@@ -161,7 +161,10 @@ fn newer(candidate: &str, current: &str) -> bool {
 }
 
 /// The new bundle must pass Gatekeeper and come from the same team as the installed one.
-fn verify_signature(installed: &Path, new_app: &Path) -> Result<(), Box<dyn std::error::Error>> {
+fn verify_signature(
+    installed: &Path,
+    new_app: &Path,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     check(
         Command::new("codesign")
             .args(["--verify", "--deep", "--strict"])
@@ -219,7 +222,7 @@ fn wait_for_exit(app: &Path, limit: Duration) -> bool {
 }
 
 /// Returns true when the app had to be killed, which leaves the host it started running.
-fn quit_app(app: &Path) -> Result<bool, Box<dyn std::error::Error>> {
+fn quit_app(app: &Path) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
     let script = format!("tell application \"{}\" to quit", app.display());
     let accepted = Command::new("osascript")
         .args(["-e", &script])
@@ -262,7 +265,10 @@ fn confirm(version: &str, assume_yes: bool) -> io::Result<bool> {
     ))
 }
 
-fn check(command: &mut Command, name: &str) -> Result<(), Box<dyn std::error::Error>> {
+fn check(
+    command: &mut Command,
+    name: &str,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let output = command.output()?;
     if output.status.success() {
         return Ok(());

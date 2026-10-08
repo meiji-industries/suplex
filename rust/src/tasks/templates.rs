@@ -21,7 +21,7 @@ fn require_project(
     database: &SuplexDatabase,
     user_id: &str,
     project_id: &str,
-) -> Result<(), Box<dyn Error>> {
+) -> Result<(), Box<dyn Error + Send + Sync>> {
     let company_id: Option<String> = database
         .connection()
         .query_row(
@@ -39,7 +39,7 @@ type TemplateRow = (String, String, String, String, String);
 
 fn template(
     (id, project_id, configuration_json, created_at, updated_at): TemplateRow,
-) -> Result<TemplateResponse, Box<dyn Error>> {
+) -> Result<TemplateResponse, Box<dyn Error + Send + Sync>> {
     let value: Value = serde_json::from_str(&configuration_json)?;
     let configuration = task_templates::parse_stored_configuration(value)?;
     Ok(TemplateResponse {
@@ -68,7 +68,7 @@ pub fn list(
     database: &SuplexDatabase,
     user_id: &str,
     project_id: &str,
-) -> Result<Vec<TemplateResponse>, Box<dyn Error>> {
+) -> Result<Vec<TemplateResponse>, Box<dyn Error + Send + Sync>> {
     require_project(database, user_id, project_id)?;
     let mut statement = database.connection().prepare(&format!(
         "{COLUMNS} WHERE project_id = ?1 ORDER BY name COLLATE NOCASE, id"
@@ -78,7 +78,9 @@ pub fn list(
 }
 
 /// Apply workflow defaults, then the create schema.
-fn normalized(mut input: Map<String, Value>) -> Result<TemplateConfiguration, Box<dyn Error>> {
+fn normalized(
+    mut input: Map<String, Value>,
+) -> Result<TemplateConfiguration, Box<dyn Error + Send + Sync>> {
     normalize_workflow_input(&mut input, false).map_err(|message| TaskError::new(message, 422))?;
     Ok(task_templates::parse_stored_configuration(Value::Object(
         input,
@@ -90,7 +92,7 @@ fn assert_name(
     project_id: &str,
     name: &str,
     id: &str,
-) -> Result<(), Box<dyn Error>> {
+) -> Result<(), Box<dyn Error + Send + Sync>> {
     let taken: bool = database.connection().query_row(
         "SELECT EXISTS(SELECT 1 FROM suplex_task_templates WHERE project_id = ?1 AND name = ?2 AND id <> ?3)",
         params![project_id, name, id],
@@ -107,7 +109,7 @@ pub fn create(
     user_id: &str,
     project_id: &str,
     input: Map<String, Value>,
-) -> Result<TemplateResponse, Box<dyn Error>> {
+) -> Result<TemplateResponse, Box<dyn Error + Send + Sync>> {
     require_project(database, user_id, project_id)?;
     let configuration = normalized(input)?;
     let id = random_hex_id("template")?;
@@ -135,7 +137,7 @@ pub fn create_from_task(
     user_id: &str,
     task_id: &str,
     name: &str,
-) -> Result<TemplateResponse, Box<dyn Error>> {
+) -> Result<TemplateResponse, Box<dyn Error + Send + Sync>> {
     let company_id: Option<String> = database
         .connection()
         .query_row(
@@ -181,7 +183,7 @@ fn get(
     database: &SuplexDatabase,
     user_id: &str,
     template_id: &str,
-) -> Result<TemplateResponse, Box<dyn Error>> {
+) -> Result<TemplateResponse, Box<dyn Error + Send + Sync>> {
     let stored = database
         .connection()
         .query_row(&format!("{COLUMNS} WHERE id = ?1"), [template_id], row)
@@ -197,7 +199,7 @@ pub fn update(
     user_id: &str,
     template_id: &str,
     changes: Map<String, Value>,
-) -> Result<TemplateResponse, Box<dyn Error>> {
+) -> Result<TemplateResponse, Box<dyn Error + Send + Sync>> {
     let current = get(database, user_id, template_id)?;
     let Value::Object(mut values) = serde_json::to_value(&current.configuration)? else {
         unreachable!("a template configuration serializes as an object");
@@ -250,7 +252,7 @@ pub fn delete(
     database: &mut SuplexDatabase,
     user_id: &str,
     template_id: &str,
-) -> Result<(), Box<dyn Error>> {
+) -> Result<(), Box<dyn Error + Send + Sync>> {
     get(database, user_id, template_id)?;
     database.transaction(false, |database| {
         database.connection().execute(

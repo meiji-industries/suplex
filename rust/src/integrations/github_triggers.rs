@@ -84,7 +84,7 @@ const CHANGED: &str = "This GitHub rule changed. Refresh and try again.";
 const UNAVAILABLE: &str = "GitHub could not complete this check.";
 
 /// Keep the failure class of a database error while making it `Send`.
-pub fn send(error: Box<dyn Error>) -> Failure {
+pub fn send(error: Box<dyn Error + Send + Sync>) -> Failure {
     macro_rules! keep {
         ($error:ident, $($kind:ty),*) => {$(
             let $error = match $error.downcast::<$kind>() {
@@ -93,7 +93,7 @@ pub fn send(error: Box<dyn Error>) -> Failure {
             };
         )*};
     }
-    let error: Box<dyn Error> = match error.downcast::<TaskError>() {
+    let error: Box<dyn Error + Send + Sync> = match error.downcast::<TaskError>() {
         Ok(task) if matches!(*task, TaskError::Failure { .. } | TaskError::Source { .. }) => {
             return task;
         }
@@ -466,7 +466,7 @@ fn normalized_run_project_tests(
     Ok(preset.run_project_tests)
 }
 
-fn local_failure(message: impl Into<String>, status: u16) -> Box<dyn Error> {
+fn local_failure(message: impl Into<String>, status: u16) -> Box<dyn Error + Send + Sync> {
     Box::new(TriggerFailure {
         message: message.into(),
         status,
@@ -1689,8 +1689,9 @@ impl<D: Db> Pass<'_, D> {
 
 /// `requireGithubTriggerAdmission`: live authority, rule, preset, and profiles.
 fn require_admission(database: &SuplexDatabase, dispatch: &Dispatch) -> DatabaseResult<()> {
-    let failure =
-        |message: &str, status: u16| -> Box<dyn Error> { TaskError::new(message, status).into() };
+    let failure = |message: &str, status: u16| -> Box<dyn Error + Send + Sync> {
+        TaskError::new(message, status).into()
+    };
     if active_role(database, &dispatch.authority_user_id)?.as_deref() != Some("admin") {
         return Err(failure("GitHub trigger authority is not available", 422));
     }
@@ -1929,7 +1930,7 @@ fn start_linked_task(
 ) -> DatabaseResult<(String, String)> {
     let current = dispatches::get(database, dispatch_id)?
         .filter(|value| value.task_id.is_some())
-        .ok_or_else(|| -> Box<dyn Error> {
+        .ok_or_else(|| -> Box<dyn Error + Send + Sync> {
             TaskError::new("GitHub trigger dispatch is not linked to a task", 404).into()
         })?;
     let (status, can_start) = startable(database, task_id)?;

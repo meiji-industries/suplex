@@ -139,7 +139,8 @@ fn actor(database: &SuplexDatabase, user_id: &str, admin: bool) -> DatabaseResul
 }
 
 fn get(database: &SuplexDatabase, id: &str) -> DatabaseResult<AgentProfile> {
-    find(database, id)?.ok_or_else(|| ProfileFailure::new("Not found", 404) as Box<dyn Error>)
+    find(database, id)?
+        .ok_or_else(|| ProfileFailure::new("Not found", 404) as Box<dyn Error + Send + Sync>)
 }
 
 fn find(database: &SuplexDatabase, id: &str) -> DatabaseResult<Option<AgentProfile>> {

@@ -17,7 +17,7 @@ async fn main() {
     }
 }
 
-async fn run() -> Result<(), Box<dyn std::error::Error>> {
+async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     suplex::platform::user_path::extend();
     let command = std::env::args().skip(1).collect::<Vec<_>>();
     if command == ["github-store-credential"] {
@@ -102,7 +102,7 @@ fn server_event(state: &str, extra: serde_json::Value) {
     system_events::emit_with_context(event, context);
 }
 
-async fn serve() -> Result<(), Box<dyn std::error::Error>> {
+async fn serve() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let installation = Installation::load()?;
     suplex::integrations::github::use_installation(&installation.database);
     system_events::install(installation.logs.clone());

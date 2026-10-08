@@ -800,7 +800,9 @@ pub fn launch_planner_pair(
             .iter()
             .find(|session| session.id == id)
             .cloned()
-            .ok_or_else(|| Box::<dyn std::error::Error>::from("planner_session_missing"))
+            .ok_or_else(|| {
+                Box::<dyn std::error::Error + Send + Sync>::from("planner_session_missing")
+            })
     };
     Ok([find(&ids[0])?, find(&ids[1])?])
 }

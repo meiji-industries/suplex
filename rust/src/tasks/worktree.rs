@@ -15,7 +15,7 @@ use git2::{
     RemoteRedirect, Repository, StatusOptions, WorktreeAddOptions, WorktreePruneOptions,
 };
 
-pub type WorktreeResult<T> = Result<T, Box<dyn Error>>;
+pub type WorktreeResult<T> = Result<T, Box<dyn Error + Send + Sync>>;
 
 #[derive(Debug, Clone)]
 pub struct TaskWorktreeIntent {
@@ -233,7 +233,7 @@ pub(crate) fn bound_pane(
     user_id: &str,
     task_id: &str,
     role: &str,
-) -> Result<Option<String>, Box<dyn Error>> {
+) -> Result<Option<String>, Box<dyn Error + Send + Sync>> {
     state.with_database(|database| super::repository::bound_pane(database, user_id, task_id, role))
 }
 
@@ -243,7 +243,7 @@ pub(crate) fn task_shell_pane(
     state: &AppState,
     user_id: &str,
     task_id: &str,
-) -> Result<Option<String>, Box<dyn Error>> {
+) -> Result<Option<String>, Box<dyn Error + Send + Sync>> {
     let (shell, excluded, cwd) = state.with_database(|database| {
         super::repository::shell_pane_context(database, user_id, task_id)
     })?;
@@ -293,7 +293,7 @@ mod github_credentials_tests {
     }
 }
 
-fn invalid(message: &'static str) -> Box<dyn Error> {
+fn invalid(message: &'static str) -> Box<dyn Error + Send + Sync> {
     io::Error::new(io::ErrorKind::InvalidInput, message).into()
 }
 

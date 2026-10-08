@@ -28,7 +28,7 @@ pub struct Installation {
 }
 
 impl Installation {
-    pub fn load() -> Result<Self, Box<dyn std::error::Error>> {
+    pub fn load() -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         let current = env::current_dir()?;
         let home = env::var_os("HOME")
             .map(PathBuf::from)
@@ -311,7 +311,7 @@ fn absolute(current: &Path, path: &Path) -> PathBuf {
         current.join(path)
     }
 }
-fn parse_port(value: &str) -> Result<u16, Box<dyn std::error::Error>> {
+fn parse_port(value: &str) -> Result<u16, Box<dyn std::error::Error + Send + Sync>> {
     let port = value.parse::<u16>()?;
     if port == 0 {
         return Err("SUPLEX_PORT must be between 1 and 65535".into());
@@ -354,7 +354,9 @@ pub fn is_tailscale_address(address: &str) -> bool {
         }
     }
 }
-fn persistent_installation_id(data: &Path) -> Result<String, Box<dyn std::error::Error>> {
+fn persistent_installation_id(
+    data: &Path,
+) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
     let path = data
         .parent()
         .ok_or("Data root has no parent")?

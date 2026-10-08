@@ -63,7 +63,7 @@ fn scoped_session(
     user_id: &str,
     task_id: &str,
     session_id: &str,
-) -> Result<ScopedSession, Box<dyn Error>> {
+) -> Result<ScopedSession, Box<dyn Error + Send + Sync>> {
     crate::tasks::authorize_task(database, user_id, task_id)?;
     let rows = root_session_store::root_observation_rows(database, task_id)?;
     let session = rows.session(session_id).ok_or_else(TaskError::not_found)?;
@@ -85,7 +85,7 @@ fn scoped_session(
     })
 }
 
-fn native_history(scoped: &ScopedSession) -> io::Result<Vec<Value>> {
+async fn native_history(scoped: &ScopedSession) -> io::Result<Vec<Value>> {
     let Some(native_session_id) = scoped.native_session_id.as_deref() else {
         return Ok(Vec::new());
     };
@@ -100,6 +100,7 @@ fn native_history(scoped: &ScopedSession) -> io::Result<Vec<Value>> {
                 .as_deref()
                 .map(std::path::Path::new),
         })
+        .await
 }
 
 fn page(messages: &[Value], before: Option<&str>) -> Result<Value, TaskError> {
@@ -162,11 +163,10 @@ async fn history(
             return response;
         }
     };
-    let observed = tokio::task::spawn_blocking(move || native_history(&scoped)).await;
-    let result = match observed {
-        Ok(Ok(messages)) => page(&messages, before.as_deref())
-            .map_err(|failure| Box::new(failure) as Box<dyn Error>),
-        Ok(Err(_)) | Err(_) => {
+    let result = match native_history(&scoped).await {
+        Ok(messages) => page(&messages, before.as_deref())
+            .map_err(|failure| Box::new(failure) as Box<dyn Error + Send + Sync>),
+        Err(_) => {
             let mut response = auth::error(
                 StatusCode::SERVICE_UNAVAILABLE,
                 "Session history is not available",
@@ -239,7 +239,7 @@ enum LiveFailure {
     Native,
 }
 
-fn live_scope_error(error: Box<dyn Error>) -> LiveFailure {
+fn live_scope_error(error: Box<dyn Error + Send + Sync>) -> LiveFailure {
     if matches!(error.downcast_ref(), Some(TaskError::Failure { .. })) {
         LiveFailure::Missing
     } else {
@@ -258,10 +258,8 @@ async fn read_live(
     let scoped = state
         .with_database(|database| scoped_session(database, user_id, task_id, session_id))
         .map_err(live_scope_error)?;
-    let reading = scoped.clone();
-    let messages = tokio::task::spawn_blocking(move || native_history(&reading))
+    let messages = native_history(&scoped)
         .await
-        .map_err(|_| LiveFailure::Native)?
         .map_err(|_| LiveFailure::Native)?;
     state
         .with_database(|database| scoped_session(database, user_id, task_id, session_id))

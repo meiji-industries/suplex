@@ -88,7 +88,7 @@ fn write_private(path: &Path, bytes: &[u8]) -> io::Result<()> {
 }
 
 /// The complete three-dot, no-rename patch from the merge base to the head.
-fn patch(worktree: &Path, range: &ReviewRange) -> Result<Vec<u8>, Box<dyn Error>> {
+fn patch(worktree: &Path, range: &ReviewRange) -> Result<Vec<u8>, Box<dyn Error + Send + Sync>> {
     let repository = Repository::open(worktree)?;
     let base = git2::Oid::from_str(&range.base_sha)?;
     let head = git2::Oid::from_str(&range.head_sha)?;
@@ -148,7 +148,7 @@ pub fn write_task_evidence(
     range: &ReviewRange,
     attachments: Vec<EvidenceAttachment>,
     verification: &Value,
-) -> Result<WrittenEvidence, Box<dyn Error>> {
+) -> Result<WrittenEvidence, Box<dyn Error + Send + Sync>> {
     if !valid_id(task_id) {
         return Err(CoordinationError::refused("Invalid task evidence identity").into());
     }
@@ -162,58 +162,59 @@ pub fn write_task_evidence(
     for path in [&pending, &pending.join("attachments")] {
         fs::set_permissions(path, fs::Permissions::from_mode(0o700))?;
     }
-    let written = (|| -> Result<(String, Vec<ManifestAttachment>), Box<dyn Error>> {
-        write_private(&pending.join("patch.diff"), &patch(worktree, range)?)?;
-        let mut manifest_attachments = Vec::new();
-        for attachment in attachments {
-            let artifact_id = attachment.artifact_id;
-            let (path, error) = if !valid_id(&artifact_id) {
-                (None, Some("invalid artifact identity".to_owned()))
-            } else if let Some(extension) = extension(&attachment.mime_type) {
-                let name = format!("{artifact_id}.{extension}");
-                match attachment
-                    .bytes
-                    .map_err(io::Error::other)
-                    .and_then(|bytes| {
-                        write_private(&pending.join("attachments").join(&name), &bytes)
-                    }) {
-                    Ok(()) => (Some(format!("attachments/{name}")), None),
-                    Err(error) => (None, Some(error.to_string())),
-                }
-            } else {
-                (
-                    None,
-                    Some(format!("unsupported type {}", attachment.mime_type)),
-                )
+    let written =
+        (|| -> Result<(String, Vec<ManifestAttachment>), Box<dyn Error + Send + Sync>> {
+            write_private(&pending.join("patch.diff"), &patch(worktree, range)?)?;
+            let mut manifest_attachments = Vec::new();
+            for attachment in attachments {
+                let artifact_id = attachment.artifact_id;
+                let (path, error) = if !valid_id(&artifact_id) {
+                    (None, Some("invalid artifact identity".to_owned()))
+                } else if let Some(extension) = extension(&attachment.mime_type) {
+                    let name = format!("{artifact_id}.{extension}");
+                    match attachment
+                        .bytes
+                        .map_err(io::Error::other)
+                        .and_then(|bytes| {
+                            write_private(&pending.join("attachments").join(&name), &bytes)
+                        }) {
+                        Ok(()) => (Some(format!("attachments/{name}")), None),
+                        Err(error) => (None, Some(error.to_string())),
+                    }
+                } else {
+                    (
+                        None,
+                        Some(format!("unsupported type {}", attachment.mime_type)),
+                    )
+                };
+                manifest_attachments.push(ManifestAttachment {
+                    artifact_id,
+                    path,
+                    error,
+                });
+            }
+            let manifest = EvidenceManifest {
+                version: 1,
+                task_id,
+                created_at: now_millis_rfc3339(),
+                base_sha: &range.base_sha,
+                head_sha: &range.head_sha,
+                files: &range.files,
+                commits: &range.commits,
+                attachments: &manifest_attachments,
             };
-            manifest_attachments.push(ManifestAttachment {
-                artifact_id,
-                path,
-                error,
-            });
-        }
-        let manifest = EvidenceManifest {
-            version: 1,
-            task_id,
-            created_at: now_millis_rfc3339(),
-            base_sha: &range.base_sha,
-            head_sha: &range.head_sha,
-            files: &range.files,
-            commits: &range.commits,
-            attachments: &manifest_attachments,
-        };
-        write_private(
-            &pending.join("manifest.json"),
-            serde_json::to_string_pretty(&manifest)?.as_bytes(),
-        )?;
-        write_private(
-            &pending.join("verification.json"),
-            serde_json::to_string_pretty(verification)?.as_bytes(),
-        )?;
-        let sha256 = digest_files(&pending, evidence_files(&pending))?;
-        fs::rename(&pending, &directory)?;
-        Ok((sha256, manifest_attachments))
-    })();
+            write_private(
+                &pending.join("manifest.json"),
+                serde_json::to_string_pretty(&manifest)?.as_bytes(),
+            )?;
+            write_private(
+                &pending.join("verification.json"),
+                serde_json::to_string_pretty(verification)?.as_bytes(),
+            )?;
+            let sha256 = digest_files(&pending, evidence_files(&pending))?;
+            fs::rename(&pending, &directory)?;
+            Ok((sha256, manifest_attachments))
+        })();
     match written {
         Ok((sha256, attachments)) => Ok(WrittenEvidence {
             directory,

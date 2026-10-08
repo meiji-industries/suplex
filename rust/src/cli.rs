@@ -20,7 +20,7 @@ use crate::{
     },
 };
 
-pub type CliResult = Result<i32, Box<dyn std::error::Error>>;
+pub type CliResult = Result<i32, Box<dyn std::error::Error + Send + Sync>>;
 
 pub const HELP: &str = "\
 Usage:  suplex COMMAND [OPTIONS]
@@ -533,7 +533,9 @@ fn installation_checks(installation: &Installation) -> Vec<DoctorCheck> {
 
 /// `platform/diagnostics/doctor.ts`: schema, references, host health with
 /// every provider, and each unarchived task that waits for a person.
-pub async fn run_doctor(state: &AppState) -> Result<Vec<DoctorCheck>, Box<dyn std::error::Error>> {
+pub async fn run_doctor(
+    state: &AppState,
+) -> Result<Vec<DoctorCheck>, Box<dyn std::error::Error + Send + Sync>> {
     let (schema, references) = state.with_database(|database| {
         let schema = database
             .schema_status()
@@ -547,7 +549,7 @@ pub async fn run_doctor(state: &AppState) -> Result<Vec<DoctorCheck>, Box<dyn st
         } else {
             0
         };
-        Ok::<_, Box<dyn std::error::Error>>((schema, references))
+        Ok::<_, Box<dyn std::error::Error + Send + Sync>>((schema, references))
     })?;
     let mut checks = vec![DoctorCheck::new(
         if schema.state == SchemaState::Current {
@@ -673,7 +675,7 @@ pub fn inspect_task(
     database: &SuplexDatabase,
     task_id: &str,
     all_history: bool,
-) -> Result<Value, Box<dyn std::error::Error>> {
+) -> Result<Value, Box<dyn std::error::Error + Send + Sync>> {
     let rows = |sql: &str| -> rusqlite::Result<Vec<Value>> {
         let mut statement = database.connection().prepare(sql)?;
         let names = statement

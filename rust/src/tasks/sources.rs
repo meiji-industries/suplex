@@ -33,7 +33,7 @@ fn branch_pattern(branch: &str) -> bool {
         && !branch.chars().any(char::is_whitespace)
 }
 
-fn failure(code: &'static str, message: &'static str, status: u16) -> Box<dyn Error> {
+fn failure(code: &'static str, message: &'static str, status: u16) -> Box<dyn Error + Send + Sync> {
     super::TaskError::Source {
         status,
         code,
@@ -42,7 +42,7 @@ fn failure(code: &'static str, message: &'static str, status: u16) -> Box<dyn Er
     .into()
 }
 
-fn unavailable() -> Box<dyn Error> {
+fn unavailable() -> Box<dyn Error + Send + Sync> {
     failure(
         "source-provider-unavailable",
         "The repository source could not be read",
@@ -50,7 +50,7 @@ fn unavailable() -> Box<dyn Error> {
     )
 }
 
-fn safe_ref(branch: &str) -> Result<(), Box<dyn Error>> {
+fn safe_ref(branch: &str) -> Result<(), Box<dyn Error + Send + Sync>> {
     if !branch_pattern(branch) {
         return Err(failure(
             "unsafe-branch",
@@ -61,7 +61,7 @@ fn safe_ref(branch: &str) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-fn safe_branch(project: &Project, branch: &str) -> Result<(), Box<dyn Error>> {
+fn safe_branch(project: &Project, branch: &str) -> Result<(), Box<dyn Error + Send + Sync>> {
     safe_ref(branch)?;
     if branch == project.base_branch {
         return Err(failure(
@@ -77,7 +77,7 @@ fn pinned_pull_request(
     repository: &str,
     base_branch: &str,
     pull: &github_delivery::PullRequest,
-) -> Result<Value, Box<dyn Error>> {
+) -> Result<Value, Box<dyn Error + Send + Sync>> {
     if pull.state != "open" {
         return Err(failure(
             "source-pull-request-closed",
@@ -146,7 +146,7 @@ fn remote_branches(
     path: &Path,
     base_branch: &str,
     token: Option<&str>,
-) -> Result<Vec<Value>, Box<dyn Error>> {
+) -> Result<Vec<Value>, Box<dyn Error + Send + Sync>> {
     let repository = Repository::open(path).map_err(|_| unavailable())?;
     fetch(
         &repository,
@@ -192,7 +192,7 @@ fn remote_branches(
 }
 
 /// TypeScript `ProjectService`: a Bitbucket project reads sources through its own release port.
-fn bitbucket(project: &Project) -> Result<Option<BitbucketClient>, Box<dyn Error>> {
+fn bitbucket(project: &Project) -> Result<Option<BitbucketClient>, Box<dyn Error + Send + Sync>> {
     Ok(match &project.integration {
         Some(integration) => {
             ReleasePort::bitbucket(&serde_json::to_value(&integration.repository)?)
@@ -233,7 +233,7 @@ async fn resolve_pull_request(
     base_branch: &str,
     number: u64,
     port: &ReleasePort<'_>,
-) -> Result<Value, Box<dyn Error>> {
+) -> Result<Value, Box<dyn Error + Send + Sync>> {
     let pull = port
         .get_pull_request(repository, number)
         .await
@@ -248,7 +248,10 @@ async fn resolve_pull_request(
 }
 
 /// TypeScript `ProjectService.discoverTaskSources` and `TaskSourceService.discover`.
-pub async fn discover(project: &Project, kind: &str) -> Result<Value, Box<dyn Error>> {
+pub async fn discover(
+    project: &Project,
+    kind: &str,
+) -> Result<Value, Box<dyn Error + Send + Sync>> {
     let tracker = project
         .integration
         .as_ref()
@@ -316,7 +319,10 @@ pub async fn discover(project: &Project, kind: &str) -> Result<Value, Box<dyn Er
 }
 
 /// TypeScript `ProjectService.resolveTaskSource` and `TaskSourceService.resolve`.
-pub async fn resolve(project: &Project, selector: &Value) -> Result<Value, Box<dyn Error>> {
+pub async fn resolve(
+    project: &Project,
+    selector: &Value,
+) -> Result<Value, Box<dyn Error + Send + Sync>> {
     if selector["kind"] == "issue"
         && let Some(integration) = &project.integration
     {
@@ -444,7 +450,7 @@ pub async fn creation_source(
     description: &str,
     source: Option<&Value>,
     issue: Option<Option<&Value>>,
-) -> Result<CreationSource, Box<dyn Error>> {
+) -> Result<CreationSource, Box<dyn Error + Send + Sync>> {
     let pinned = match source {
         Some(selector) => Some(resolve(project, selector).await?),
         None => None,
@@ -622,7 +628,7 @@ mod tests {
 
     #[test]
     fn repair_pull_request_rejects_closed_and_foreign_sources_and_pins_the_open_head() {
-        let code = |error: Box<dyn Error>| match error
+        let code = |error: Box<dyn Error + Send + Sync>| match error
             .downcast::<super::super::TaskError>()
             .unwrap()
             .as_ref()
@@ -772,7 +778,7 @@ mod tests {
             json!({"kind":"branch","branch":"feature/one","headSha":newer.to_string()})
         );
         assert_eq!(clone.head().unwrap().name().map(str::to_owned), head);
-        let code = |error: Box<dyn Error>| match error
+        let code = |error: Box<dyn Error + Send + Sync>| match error
             .downcast::<super::super::TaskError>()
             .unwrap()
             .as_ref()

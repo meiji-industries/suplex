@@ -22,19 +22,23 @@ use super::{
 
 const PAIRING_TTL_MINUTES: i64 = 10;
 
-fn not_found(code: &'static str) -> Box<dyn Error> {
+fn not_found(code: &'static str) -> Box<dyn Error + Send + Sync> {
     IdentityError::external_agent("Not found", 404, code).into()
 }
 
-fn pairing_failure() -> Box<dyn Error> {
+fn pairing_failure() -> Box<dyn Error + Send + Sync> {
     IdentityError::external_agent("Pairing failed", 401, "pairing_invalid").into()
 }
 
-pub fn authentication_failure() -> Box<dyn Error> {
+pub fn authentication_failure() -> Box<dyn Error + Send + Sync> {
     IdentityError::external_agent("Authentication failed", 401, "credential_invalid").into()
 }
 
-fn invalid_configuration(message: &str, status_code: u16, code: &'static str) -> Box<dyn Error> {
+fn invalid_configuration(
+    message: &str,
+    status_code: u16,
+    code: &'static str,
+) -> Box<dyn Error + Send + Sync> {
     IdentityError::external_agent(message, status_code, code).into()
 }
 
@@ -1068,7 +1072,7 @@ pub(crate) mod tests {
         .unwrap()
     }
 
-    fn failure(error: Box<dyn Error>) -> IdentityError {
+    fn failure(error: Box<dyn Error + Send + Sync>) -> IdentityError {
         error
             .downcast_ref::<IdentityError>()
             .cloned()

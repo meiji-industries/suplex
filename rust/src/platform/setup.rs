@@ -8,7 +8,7 @@ use std::{
     process::Command,
 };
 
-pub fn environment_path() -> Result<PathBuf, Box<dyn std::error::Error>> {
+pub fn environment_path() -> Result<PathBuf, Box<dyn std::error::Error + Send + Sync>> {
     let path = env::var("SUPLEX_ENV_FILE").unwrap_or_else(|_| ".suplex/suplex.env".into());
     Ok(env::current_dir()?.join(path))
 }
@@ -95,7 +95,9 @@ pub fn serve_proxy(installation: &Installation) -> String {
     format!("http://{host}:{}", installation.port)
 }
 
-pub fn configure_serve(installation: &Installation) -> Result<(), Box<dyn std::error::Error>> {
+pub fn configure_serve(
+    installation: &Installation,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     if installation.access_mode != "tailscale" || installation.tailscale_exposure != "serve" {
         return Ok(());
     }
@@ -117,7 +119,7 @@ pub fn configure_serve(installation: &Installation) -> Result<(), Box<dyn std::e
     Ok(())
 }
 
-pub fn run(local: bool) -> Result<(), Box<dyn std::error::Error>> {
+pub fn run(local: bool) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let file = environment_path()?;
     let port = env::var("SUPLEX_PORT").unwrap_or_else(|_| "4111".into());
     let _ = port.parse::<std::num::NonZeroU16>()?;

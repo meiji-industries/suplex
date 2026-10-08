@@ -34,7 +34,7 @@ fn scoped(
     database: &SuplexDatabase,
     user_id: &str,
     task_id: &str,
-) -> Result<(SavedTimeline, PathBuf), Box<dyn Error>> {
+) -> Result<(SavedTimeline, PathBuf), Box<dyn Error + Send + Sync>> {
     crate::tasks::authorize_task(database, user_id, task_id)?;
     let saved = timeline::read_saved(database, task_id)?.ok_or_else(TaskError::not_found)?;
     let database_path = PathBuf::from(
@@ -46,12 +46,19 @@ fn scoped(
     Ok((saved, database_path))
 }
 
-fn recheck(database: &SuplexDatabase, user_id: &str, task_id: &str) -> Result<(), Box<dyn Error>> {
+fn recheck(
+    database: &SuplexDatabase,
+    user_id: &str,
+    task_id: &str,
+) -> Result<(), Box<dyn Error + Send + Sync>> {
     crate::tasks::authorize_task(database, user_id, task_id)?;
     Ok(())
 }
 
-fn respond(result: Result<TimelineResponse, Box<dyn Error>>, cookies: Vec<String>) -> Response {
+fn respond(
+    result: Result<TimelineResponse, Box<dyn Error + Send + Sync>>,
+    cookies: Vec<String>,
+) -> Response {
     let mut response = match result {
         Ok(value) => {
             let mut response = Json(value).into_response();
@@ -81,14 +88,9 @@ async fn task_timeline(
             Ok(value) => value,
             Err(error) => return respond(Err(error), cookies),
         };
-    let observation = match tokio::task::spawn_blocking(move || {
-        timeline::observe(&database_path, saved).map_err(|error| error.to_string())
-    })
-    .await
-    {
-        Ok(Ok(value)) => value,
-        Ok(Err(error)) => return respond(Err(error.into()), cookies),
-        Err(error) => return respond(Err(Box::new(error)), cookies),
+    let observation = match timeline::observe(&database_path, saved).await {
+        Ok(value) => value,
+        Err(error) => return respond(Err(error.to_string().into()), cookies),
     };
     let scope = state.with_database(|database| recheck(database, &user_id, &task_id));
     respond(scope.map(|_| observation), cookies)

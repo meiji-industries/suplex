@@ -64,7 +64,7 @@ use crate::{
     tasks::TaskError,
 };
 use std::error::Error;
-pub fn public_failure(error: Box<dyn Error>) -> PublicFailure {
+pub fn public_failure(error: Box<dyn Error + Send + Sync>) -> PublicFailure {
     crate::platform::system_events::emit(json!({
         "type":"failure", "state":"error", "level":40, "reason":error.to_string(),
     }));

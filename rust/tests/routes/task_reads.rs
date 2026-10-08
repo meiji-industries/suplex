@@ -155,6 +155,7 @@ mod tests {
         });
         assert_eq!(
             super::super::task_agents::agents(&agents, &database_path, false)
+                .await
                 .unwrap()
                 .setup
                 .state,

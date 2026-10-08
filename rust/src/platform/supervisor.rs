@@ -325,7 +325,9 @@ pub fn register_foreground(installation: &Installation) -> io::Result<()> {
     )?;
     Ok(())
 }
-pub fn configure_foreground(installation: &Installation) -> Result<(), Box<dyn std::error::Error>> {
+pub fn configure_foreground(
+    installation: &Installation,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     setup::configure_serve(installation)
 }
 pub fn unregister_foreground(installation: &Installation) {
@@ -384,7 +386,7 @@ async fn stop_child(child: &mut tokio::process::Child) {
         let _ = child.kill().await;
     }
 }
-pub async fn run_foreground() -> Result<(), Box<dyn std::error::Error>> {
+pub async fn run_foreground() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     require_non_root_host()?;
     let installation = Installation::load()?;
     register_foreground(&installation)?;
@@ -392,7 +394,9 @@ pub async fn run_foreground() -> Result<(), Box<dyn std::error::Error>> {
     unregister_foreground(&installation);
     result
 }
-async fn supervise(installation: &Installation) -> Result<(), Box<dyn std::error::Error>> {
+async fn supervise(
+    installation: &Installation,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let executable = std::env::current_exe()?;
     #[cfg(unix)]
     let mut interrupt = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())?;
@@ -456,7 +460,7 @@ async fn supervise(installation: &Installation) -> Result<(), Box<dyn std::error
     }
 }
 
-pub fn start(installation: &Installation) -> Result<u32, Box<dyn std::error::Error>> {
+pub fn start(installation: &Installation) -> Result<u32, Box<dyn std::error::Error + Send + Sync>> {
     require_non_root_host()?;
     if let Some(existing) = read(&registry_path(installation)).ok().flatten()
         && matches(&existing.process)
@@ -515,7 +519,9 @@ pub fn start(installation: &Installation) -> Result<u32, Box<dyn std::error::Err
     Err("Suplex API did not become reachable within 30 seconds".into())
 }
 
-pub fn stop(installation: &Installation) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
+pub fn stop(
+    installation: &Installation,
+) -> Result<serde_json::Value, Box<dyn std::error::Error + Send + Sync>> {
     let path = registry_path(installation);
     let recorded = read(&path).ok().flatten();
     let registry = recorded

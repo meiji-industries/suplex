@@ -73,7 +73,7 @@ mod tests {
         let (state, filename) = auth::tests::state();
         let now = Utc::now();
         let time = rfc3339_millis(now);
-        let (first, second) = state.with_database(|database| Ok::<_, Box<dyn std::error::Error>>((vapid_key(database)?.to_base64url(), vapid_key(database)?.to_base64url()))).unwrap();
+        let (first, second) = state.with_database(|database| Ok::<_, Box<dyn std::error::Error + Send + Sync>>((vapid_key(database)?.to_base64url(), vapid_key(database)?.to_base64url()))).unwrap();
         assert_eq!(first, second);
         let owners = state.with_database(|database| {
             for id in ["push_one", "push_two"] {
@@ -84,7 +84,7 @@ mod tests {
             delete_subscription(database, "push_one", "https://fcm.googleapis.com/fcm/send/x")?;
             let mut statement = database.connection().prepare("SELECT user_id FROM suplex_web_push_subscriptions")?;
             let owners = statement.query_map([], |row| row.get::<_, String>(0))?.collect::<rusqlite::Result<Vec<_>>>()?;
-            Ok::<_, Box<dyn std::error::Error>>(owners)
+            Ok::<_, Box<dyn std::error::Error + Send + Sync>>(owners)
         }).unwrap();
         assert_eq!(owners, ["push_two"]);
         drop(state);

@@ -85,7 +85,7 @@ Reply with only this JSON object, with no other text:
 
 /// The agent's one-shot command line, with tools that can change files or run
 /// commands turned off.
-fn command(profile: &TaskProfile) -> Result<String, Box<dyn Error>> {
+fn command(profile: &TaskProfile) -> Result<String, Box<dyn Error + Send + Sync>> {
     shell::check_provider(profile)?;
     let effort = profile.reasoning_level.as_str();
     let provider = profile.provider.as_str();
@@ -201,7 +201,7 @@ pub async fn recommend(
     state: &AppState,
     user_id: &str,
     project_id: &str,
-) -> Result<MoveRecommendationsResponse, Box<dyn Error>> {
+) -> Result<MoveRecommendationsResponse, Box<dyn Error + Send + Sync>> {
     let (project, profile, existing) = state.with_database(|database| {
         let project = projects::get(database, user_id, project_id)?;
         let profile = crate::tasks::commands::selected_profile(
@@ -217,7 +217,7 @@ pub async fn recommend(
         let existing = statement
             .query_map([&project.id], |row| row.get::<_, String>(0))?
             .collect::<rusqlite::Result<Vec<_>>>()?;
-        Ok::<_, Box<dyn Error>>((project, profile, existing))
+        Ok::<_, Box<dyn Error + Send + Sync>>((project, profile, existing))
     })?;
     let line = command(&profile)?;
     let child = tokio::process::Command::new("/bin/sh")

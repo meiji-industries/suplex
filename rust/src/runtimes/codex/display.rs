@@ -313,7 +313,7 @@ pub fn run_display(
 }
 
 /// Entry point for `suplex codex-display <runtime directory>`.
-pub async fn serve(runtime_directory: &str) -> Result<(), Box<dyn Error>> {
+pub async fn serve(runtime_directory: &str) -> Result<(), Box<dyn Error + Send + Sync>> {
     let directory = PathBuf::from(runtime_directory);
     if !directory.is_absolute() {
         return Err("A private runtime directory is required".into());

@@ -110,7 +110,7 @@ fn internal(runtime: bool) -> Response {
 }
 
 /// `sendDomainFailure` plus the artifact and fallback branches of the TypeScript error handler.
-pub(crate) fn failure(error: Box<dyn Error>, runtime: bool) -> Response {
+pub(crate) fn failure(error: Box<dyn Error + Send + Sync>, runtime: bool) -> Response {
     match error.downcast_ref::<IdentityError>() {
         Some(IdentityError::ExternalAgent {
             status: status_code,

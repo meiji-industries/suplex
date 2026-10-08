@@ -1,5 +1,4 @@
 use serde_json::json;
-use suplex::http::routes::access::NetworkAccessMode;
 use suplex::tasks::control::HarnessKind;
 use suplex::{
     http::{self, AppState, session::SessionConfig},
@@ -110,11 +109,10 @@ async fn serve() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     system_events::install(installation.logs.clone());
     let mut database = SuplexDatabase::open(&installation.database, OpenMode::Migrate)?;
     suplex::identity::auth::normalize_legacy_users(&database)?;
-    if installation.development_auto_login
-        || installation.access_mode == NetworkAccessMode::Local.as_str()
-    {
-        development::seed_development_data(&mut database, chrono::Utc::now())?;
-    }
+    // Every access mode needs the Operator and a first company: loopback and tailnet requests
+    // sign in as the Operator (ADR 0009), and onboarding renames that company rather than
+    // creating one. Idempotent, so restarts are no-ops.
+    development::seed_development_data(&mut database, chrono::Utc::now())?;
     std::fs::create_dir_all(&installation.artifacts)?;
     std::fs::create_dir_all(&installation.worktrees)?;
     std::fs::create_dir_all(&installation.runtime)?;

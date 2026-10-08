@@ -1,5 +1,5 @@
-//! `platform/development.ts`: local mode and explicit development auto-login
-//! seed the Operator's first company at startup.
+//! Every host start seeds the Operator and its first company; onboarding
+//! renames that company instead of creating one.
 
 use crate::identity::IdentityError;
 use crate::identity::auth::UserRole;

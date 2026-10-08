@@ -10,7 +10,14 @@ use suplex::{
 use tokio::net::TcpListener;
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+async fn main() {
+    if let Err(error) = run().await {
+        eprintln!("{error}");
+        std::process::exit(1);
+    }
+}
+
+async fn run() -> Result<(), Box<dyn std::error::Error>> {
     suplex::platform::user_path::extend();
     let command = std::env::args().skip(1).collect::<Vec<_>>();
     if command == ["github-store-credential"] {
@@ -62,7 +69,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     if matches!(
         command.first().map(String::as_str),
-        Some("serve" | "start" | "up" | "restart")
+        Some("serve" | "start" | "up" | "restart" | "stop" | "down")
     ) {
         suplex::platform::supervisor::require_non_root_host()?;
     }

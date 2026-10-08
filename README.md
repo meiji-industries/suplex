@@ -162,7 +162,7 @@ Provision privileged steps once, without blanket sudo access for this user.
 For a systemd service, set `User=suplex`, `HOME=/home/suplex`, and a `PATH` that includes the user's tool manager shims.
 For example, include `/home/suplex/.local/share/mise/shims` and `/home/suplex/.local/bin` before `/usr/local/bin:/usr/bin:/bin`.
 Check `pnpm --version` with that service user's environment before task setup.
-The Linux installer, `suplex up`, and `suplex serve` refuse to run as root.
+The Linux installer and the `suplex up`, `restart`, `down`, and `serve` commands refuse to run as root.
 
 To run Suplex on a host from a checkout instead:
 

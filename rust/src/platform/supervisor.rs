@@ -29,16 +29,21 @@ struct Registry {
 
 pub fn require_non_root_host() -> io::Result<()> {
     #[cfg(target_os = "linux")]
-    refuse_root(unsafe { libc::geteuid() })?;
+    refuse_root(
+        unsafe { libc::geteuid() },
+        &std::env::args().skip(1).collect::<Vec<_>>().join(" "),
+    )?;
     Ok(())
 }
 
 #[cfg(any(target_os = "linux", test))]
-fn refuse_root(effective_uid: u32) -> io::Result<()> {
+fn refuse_root(effective_uid: u32, command: &str) -> io::Result<()> {
     if effective_uid == 0 {
         return Err(io::Error::new(
             io::ErrorKind::PermissionDenied,
-            "Suplex cannot run as root. Start Suplex as a dedicated non-root user. See https://github.com/meiji-industries/suplex/blob/main/README.md#linux-host.",
+            format!(
+                "Suplex cannot run as root. Run this command as the dedicated non-root user that owns the installation, for example:\n  sudo -u suplex -i suplex {command}\nSee https://github.com/meiji-industries/suplex/blob/main/README.md#linux-host."
+            ),
         ));
     }
     Ok(())
@@ -456,9 +461,11 @@ pub fn start(installation: &Installation) -> Result<u32, Box<dyn std::error::Err
     if let Some(existing) = read(&registry_path(installation)).ok().flatten()
         && matches(&existing.process)
     {
+        setup::configure_serve(installation)?;
         return Ok(existing.process.pid);
     }
     if let Some(existing) = discover(installation) {
+        setup::configure_serve(installation)?;
         return Ok(existing.process.pid);
     }
     fs::create_dir_all(&installation.runtime)?;
@@ -522,7 +529,10 @@ pub fn stop(installation: &Installation) -> Result<serde_json::Value, Box<dyn st
         {
             let _ = fs::remove_file(&path);
         }
-        stop_serve(installation)?;
+        // Another owner's server still answers on this port; its route is not ours to remove.
+        if !http_ready(&installation.bind_address, installation.port) {
+            stop_serve(installation)?;
+        }
         return Ok(serde_json::json!({"stopped":0,"skipped":[]}));
     };
     let pid = registry.process.pid;
@@ -577,11 +587,16 @@ mod tests {
     use super::*;
     #[test]
     fn host_refuses_only_effective_root() {
-        let error = refuse_root(0).unwrap_err();
+        let error = refuse_root(0, "down").unwrap_err();
         assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
         assert!(error.to_string().contains("dedicated non-root user"));
+        assert!(
+            error
+                .to_string()
+                .contains("sudo -u suplex -i suplex down\n")
+        );
         assert!(error.to_string().contains("README.md#linux-host"));
-        assert!(refuse_root(1000).is_ok());
+        assert!(refuse_root(1000, "down").is_ok());
     }
 
     #[test]
@@ -622,6 +637,58 @@ mod tests {
             );
             server.join().unwrap();
         }
+    }
+    #[cfg(unix)]
+    #[test]
+    fn stop_without_an_owned_server_keeps_the_route_of_a_server_still_answering() {
+        use std::os::unix::fs::PermissionsExt;
+        let directory = std::env::temp_dir().join(format!("suplex-stop-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&directory).unwrap();
+        let calls = directory.join("tailscale-calls");
+        let tailscale = directory.join("tailscale");
+        fs::write(
+            &tailscale,
+            format!("#!/bin/sh\necho \"$@\" >> {}\nexit 1\n", calls.display()),
+        )
+        .unwrap();
+        fs::set_permissions(&tailscale, fs::Permissions::from_mode(0o755)).unwrap();
+        // SAFETY: no other test in this binary reads or writes this variable.
+        unsafe { std::env::set_var("SUPLEX_TAILSCALE_COMMAND", &tailscale) };
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        // Not joined: a regression would never connect, and the test must fail, not hang.
+        thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut reader = io::BufReader::new(&mut stream);
+            let mut request = String::new();
+            while !request.ends_with("\r\n\r\n") {
+                assert!(reader.read_line(&mut request).unwrap() > 0);
+            }
+            write!(stream, "HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n").unwrap();
+        });
+        let installation = Installation {
+            root: directory.clone(),
+            data: directory.clone(),
+            database: directory.join("suplex.sqlite"),
+            artifacts: directory.join("artifacts"),
+            logs: directory.join("logs"),
+            runtime: directory.join("runtime"),
+            repositories: directory.join("repos"),
+            worktrees: directory.join("worktrees"),
+            configuration: directory.join("suplex.env"),
+            port,
+            bind_address: "127.0.0.1".into(),
+            reachable_address: String::new(),
+            access_mode: "tailscale".into(),
+            tailscale_exposure: "serve".into(),
+            installation_id: "test".into(),
+            development_auto_login: false,
+            billing_service_url: None,
+            account_service_url: None,
+        };
+        assert_eq!(stop(&installation).unwrap()["stopped"], 0);
+        assert!(!calls.exists(), "stop touched Tailscale Serve");
+        let _ = fs::remove_dir_all(directory);
     }
     #[test]
     fn stale_identity_cannot_signal_reused_pid() {

@@ -9,6 +9,16 @@ export function showRecentTasks(path: string): boolean {
   return !/^\/(?:admin(?:\/|$)|profile(?:\/|$)|companies\/[^/]+\/settings(?:\/|$))/.test(path);
 }
 
+/** The days of delivered work the board shows before "Select all". Linear and Jira default to a week too. */
+export const RECENT_DELIVERED_DAYS = 7;
+
+/** Items whose timestamp is within the last `days` of `now`, in their given order. */
+// ponytail: client window only; add a server LIMIT to list_active when the sync snapshot gets slow.
+export function recentItems<T>(items: readonly T[], at: (item: T) => string, now: Date, days = RECENT_DELIVERED_DAYS): T[] {
+  const cutoff = now.getTime() - days * 86_400_000;
+  return items.filter(item => Date.parse(at(item)) >= cutoff);
+}
+
 type QueuedTask = Pick<TaskListTask, "id" | "statusChangedAt" | "queuePriority" | "dependsOn">;
 
 /** Orders queued tasks by run order: each root, then its dependent chain depth-first, after all queued blockers. */

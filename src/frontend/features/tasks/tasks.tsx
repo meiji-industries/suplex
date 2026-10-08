@@ -31,7 +31,7 @@ import { CostValue } from "../../components/app/cost-value.js";
 import { useTaskCosts } from "../analytics/lib/analytics.js";
 import { relativeTime, type ApiProject } from "../../shell/view-shared.js";
 import { taskListKey, useTaskCache, useTaskData } from "./task-data.js";
-import { queueOrder } from "./lib/task-list.js";
+import { RECENT_DELIVERED_DAYS, queueOrder, recentItems } from "./lib/task-list.js";
 import { skipToken, useQuery } from "@tanstack/react-query";
 import { syncedPolling, useSyncLive } from "../../shell/sync.js";
 import { useTask } from "./lib/task-queries.js";
@@ -94,6 +94,7 @@ export function TasksView({ mode = "list" }: { mode?: "list" | "board" }): React
   }, [cacheTask]);
   const startDrag = useCallback((id: string, status: TaskControlStatus) => setDragging({ id, status }), []);
   const endDrag = useCallback(() => setDragging(null), []);
+  const [allDelivered, setAllDelivered] = useState(false);
   const costs = useTaskCosts(mode === "list" && !selectedId ? companyId : undefined); useTaskListUrl({ archived, status, projectId, query, boardView, boardStatus, boardShow }, !selectedId); useTaskListScroll(!selectedId && loaded);
   const refresh = async () => { await Promise.all([projectList.refetch({ throwOnError: true }), ...(companyId ? [(archived ? archivedList : taskList).refetch({ throwOnError: true }), ...(selectedId ? [taskQuery.refetch({ throwOnError: true })] : [])] : [])]); };
   const visible = tasks.filter(task => (mode !== "board" || boardShow !== "moves") && (status === "all" || task.status === status || status === "active" && task.status === "waiting_human") && (boardStatus === "all" || task.status === boardStatus) && (projectId === "all" || task.projectId === projectId) && `${task.issueKey ?? ""} ${task.title}`.toLowerCase().includes(query.trim().toLowerCase()));
@@ -108,10 +109,15 @@ export function TasksView({ mode = "list" }: { mode?: "list" | "board" }): React
     if (value === "active") column.sort((left, right) => right.statusChangedAt.localeCompare(left.statusChangedAt) || left.id.localeCompare(right.id));
     if (value === "queued") return queueOrder(column).map(task => <BoardTaskCard key={task.id} task={task} project={project(task.projectId)} pending={pending.has(task.id)} onDragStart={startDrag} onDragEnd={endDrag} onMove={moveTask} />);
     if (value !== "delivered") return column.map(task => <BoardTaskCard key={task.id} task={task} project={project(task.projectId)} pending={pending.has(task.id)} onDragStart={startDrag} onDragEnd={endDrag} onMove={moveTask} />);
-    return [
+    const delivered = [
       ...column.map(task => ({ at: task.statusChangedAt, card: <BoardTaskCard key={task.id} task={task} project={project(task.projectId)} pending={pending.has(task.id)} onDragStart={startDrag} onDragEnd={endDrag} onMove={moveTask} /> })),
       ...boardRuns.map(({ move, run }) => ({ at: run.startedAt, card: <BoardRunCard key={run.id} move={move} run={run} project={project(move.projectId)} /> })),
-    ].sort((left, right) => right.at.localeCompare(left.at)).map(item => item.card);
+    ].sort((left, right) => right.at.localeCompare(left.at));
+    // The column shows the last week by default; the header count stays the total.
+    const shown = allDelivered ? delivered : recentItems(delivered, item => item.at, new Date());
+    const older = delivered.length - shown.length;
+    const toggle = allDelivered || older > 0 ? <li key="delivered-window" className="min-w-0"><Button variant="ghost" size="sm" data-delivered-window onClick={() => setAllDelivered(!allDelivered)}>{allDelivered ? `Select the last ${RECENT_DELIVERED_DAYS} days` : `Select all ${delivered.length}`}</Button></li> : null;
+    return [...shown.map(item => item.card), ...(toggle ? [toggle] : [])];
   };
   // Count tasks that Pro can start without waiting for a project slot or dependency.
   const planHeld = !archived && currentCompany?.plan === "free" ? tasks.filter(task => task.status === "queued" && task.queue.planConcurrencyLimited && !task.queue.projectConcurrencyLimited && task.queue.waitingOn.length === 0).length : 0;

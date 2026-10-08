@@ -2285,7 +2285,7 @@ mod tests {
             force_start_user_task(&mut database, &user, &queued.id, now, |_| {}).unwrap_err();
         let failure = error.downcast::<crate::shared::PublicFailure>().unwrap();
         assert_eq!(failure.status.as_u16(), 402);
-        assert_eq!(failure.code.as_deref(), Some("running_task_limit_reached"));
+        assert_eq!(failure.code, Some("running_task_limit_reached"));
         let rows =
             crate::coordination::root_session_store::root_observation_rows(&database, &queued.id)
                 .unwrap();

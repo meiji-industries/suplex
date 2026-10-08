@@ -209,31 +209,27 @@ the app never asks for a login.
 These steps need a person with access to Cloudflare, Fly, Google Cloud,
 GitHub, Resend, Stripe, RevenueCat, 1Password, and Framer.
 
-1. Deploy with `mise run hosted:deploy` before setting account secrets, and do steps 2 and
-   3 right after it: Checkout and portal return URLs now point at `suplex.sh`.
+1. Deploy with `mise run hosted:deploy` before setting account secrets, and do step 2
+   right after it: Checkout and portal return URLs now point at `suplex.sh`.
    Through `https://suplex-production.fly.dev`, check that `/health`
    answers, `/auth/start` answers 503 `account_unavailable`, and `/install.sh`
    returns the script.
-2. In Cloudflare, remove the `suplex.sh` and `www.suplex.sh` custom domains from
-   the `suplex-web` Worker, and disconnect its CI/CD from this repository.
-3. Run `mise run hosted:dns`. It points `suplex.sh` and `www.suplex.sh` at
+2. Run `mise run hosted:dns`. It points `suplex.sh` and `www.suplex.sh` at
    the Fly app, adds missing Fly certificates, and checks
    them. Then check `curl -I https://suplex.sh/install.sh`,
    `curl -I 'https://suplex.sh/download?platform=macos-arm64'`, and
    `curl -I https://www.suplex.sh/terms`.
-4. Change the Stripe webhook destination to `https://suplex.sh/webhooks/stripe`
+3. Change the Stripe webhook destination to `https://suplex.sh/webhooks/stripe`
    and the RevenueCat webhook to `https://suplex.sh/webhooks/revenuecat`.
-5. To keep `download_started`, set `BILLING_TELEMETRY=true` and
+4. To keep `download_started`, set `BILLING_TELEMETRY=true` and
    `BILLING_POSTHOG_KEY` as Fly secrets, if they are not set.
-6. Create the Google OAuth client, the two GitHub OAuth apps, and the Resend
+5. Create the Google OAuth client, the two GitHub OAuth apps, and the Resend
    domain and API key as described in Provider setup.
-7. Store the six account values in the Suplex 1Password vault: production
+6. Store the six account values in the Suplex 1Password vault: production
    values for Fly, and sandbox values as fields of the `.env.development` item
    that `scripts/billing-dev.env` reads. `mise run hosted:dev` fails until the
    sandbox fields exist.
-8. Run the `fly secrets set` command in Deploy. Fly restarts the machine.
-9. Paste the updated `apps/server/src/hosted/framer-attribution.js` into Framer.
+7. Run the `fly secrets set` command in Deploy. Fly restarts the machine.
+8. Paste the updated `apps/server/src/hosted/framer-attribution.js` into Framer.
    In a private browser, check that a download link gets `?visitor=` only
    after you accept analytics.
-10. Disconnect the `suplex-web` Worker's Cloudflare CI if step 2 did not, and
-    archive the `meiji-industries/suplex-web` repository.

@@ -1,6 +1,6 @@
 #[cfg(test)]
 mod tests {
-    use crate::accounts::hosted::fakes::Fixture;
+    use crate::accounts::hosted::fakes::{Fixture, account_config};
 
     fn attempt_in(html: &str) -> String {
         let start = html.find("attempt=").unwrap() + "attempt=".len();
@@ -46,6 +46,20 @@ mod tests {
         assert_eq!(f.logout(Some(&token)).await, 204);
         // The attempt went with the account.
         assert_eq!(f.post_form("/account/delete/confirm", &[("attempt", &attempt)]).await.status(), 404);
+    }
+
+    #[tokio::test]
+    async fn the_review_address_goes_straight_to_the_confirmation() {
+        let mut config = account_config();
+        config.review_email = Some("review-k3y@suplex.test".into());
+        let f = Fixture::with(Some(config)).await;
+        let html = f.get("/account/delete?with=email", &[]).await.text().await.unwrap();
+        let start = html.find("name=\"attempt\" value=\"").unwrap() + "name=\"attempt\" value=\"".len();
+        let attempt: String = html[start..].chars().take_while(|c| *c != '"').collect();
+        let sent = f.post_form("/account/delete/email", &[("attempt", &attempt), ("email", "review-k3y@suplex.test")]).await;
+        assert_eq!(sent.status(), 303);
+        assert_eq!(sent.headers()["location"], format!("/account/delete/confirm?attempt={attempt}").as_str());
+        assert!(f.calls("/emails").is_empty());
     }
 
     #[tokio::test]

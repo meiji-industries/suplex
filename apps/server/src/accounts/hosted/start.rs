@@ -10,7 +10,7 @@ use axum::{
     Form, Router,
     extract::{Query, State},
     http::{HeaderMap, StatusCode, header},
-    response::{Html, IntoResponse, Response},
+    response::{Html, IntoResponse, Redirect, Response},
     routing::{get, post},
 };
 use serde::Deserialize;
@@ -134,7 +134,8 @@ async fn email(State(accounts): State<Accounts>, Form(form): Form<EmailForm>) ->
         email: form.email.unwrap_or_default(),
     };
     match accounts.send_magic_link(&body).await {
-        Ok(()) => html(
+        Ok(Some(next)) => Redirect::to(&next).into_response(),
+        Ok(None) => html(
             StatusCode::OK,
             "Check your email",
             &message(

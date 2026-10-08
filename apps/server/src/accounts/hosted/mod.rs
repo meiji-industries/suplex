@@ -262,7 +262,9 @@ impl Accounts {
     }
 
     /// Sends a magic link for the attempt. Five sends per address per hour.
-    pub async fn send_magic_link(&self, body: &AuthEmailBody) -> HostedResult<()> {
+    /// The review address sends nothing: its attempt completes at once, and
+    /// the result is the page the browser opens next.
+    pub async fn send_magic_link(&self, body: &AuthEmailBody) -> HostedResult<Option<String>> {
         let config = self.config()?;
         let email = normalize_email(&body.email)
             .filter(|_| valid_attempt_id(&body.attempt_id))
@@ -275,7 +277,7 @@ impl Accounts {
             let profile = Profile { email, name: None };
             return self
                 .complete(&body.attempt_id, AuthProvider::Email, profile, None)
-                .map(|_| ());
+                .map(Some);
         }
         let token = random_token().map_err(internal)?;
         let token_hash = sha256_hex(&token);
@@ -316,7 +318,7 @@ impl Accounts {
                 .query(|db| store::delete_magic_link(db, &token_hash))?;
             return Err(error);
         }
-        Ok(())
+        Ok(None)
     }
 
     pub fn verify_magic_link(&self, token: &str, visitor: Option<&str>) -> HostedResult<String> {

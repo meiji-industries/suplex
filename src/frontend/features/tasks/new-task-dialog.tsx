@@ -27,7 +27,7 @@ import { WorkflowIllustration } from "./workflow-illustration.js";
 import { TaskSourcePicker, issueTaskSource, prefillForTaskSource, type TaskSourceSelector, type TaskSourceSummary } from "./task-source-picker.js";
 import { BlockedByPickerDialog } from "./blocked-by-picker.js";
 import { taskDeliveryTargetOptions } from "./task-delivery-target.js";
-import { readNewTaskMemory, writeNewTaskMemory, type NewTaskMemory } from "./new-task-memory.js";
+import { readNewTaskMemory, rememberedWorkflow, writeNewTaskMemory, type NewTaskMemory } from "./new-task-memory.js";
 import { TaskRoleSelector } from "./task-role-selectors.js";
 import { supportsDeliveryTarget } from "./lib/delivery-target-capabilities.js";
 import type { NewTaskDraft } from "./lib/duplicate-task-prefill.js";
@@ -40,7 +40,7 @@ import { PhosphorIcon, recordingCaret } from "../../components/app/phosphor-icon
 type Delivery = { deliveryTarget: NonNullable<TaskInput["deliveryTarget"]>; runProjectTests: boolean };
 type RecordFallback = { rootProfileId?: string | undefined; workerProfileId?: string | undefined; advisorProfileIds?: AdvisorProfileIds | undefined; deliveryTarget?: Delivery["deliveryTarget"] | undefined; runProjectTests?: boolean | undefined; visualEvidence?: NonNullable<TaskInput["visualEvidence"]> | undefined };
 const REPAIR: WorkflowId = "refine_pull_request";
-/** Every fresh task opens with Run and open a PR; start mode and delivery target are not remembered. */
+/** A fresh task opens with Run and open a PR unless its workflow sets a target; start mode and delivery target are not remembered. */
 const DEFAULT_DELIVERY: Delivery["deliveryTarget"] = "pull_request_ready";
 const repairNote = "Suplex repairs this pull request, then pushes and merges it after the checks pass.";
 
@@ -121,8 +121,9 @@ export function NewTaskDialog({ open, onOpenChange, companyId, onCreated, initia
     setSettingsLoaded(false);
     if (!open) return;
     setWorkflowPreviewOpen(true);
-    // Explicit draft fields apply over the remembered general settings; workflow selections are never remembered.
+    // Explicit draft fields apply over the remembered settings. The remembered workflow applies once the records load.
     const saved = { ...memory(), ...initialDraft };
+    const rememberedWorkflowId = initialDraft?.workflow || initialDraft?.workflowId ? undefined : saved.workflowId;
     if (!initialDraft && selectedProject.current !== saved.projectId) { setSource(undefined); setSourceSummary(undefined); }
     setProjectId(saved.projectId ?? "");
     setStartImmediately(saved.startImmediately ?? true);
@@ -147,7 +148,15 @@ export function NewTaskDialog({ open, onOpenChange, companyId, onCreated, initia
       if (cancelled) return;
       setProjects(projectResult); setProfiles(profileResult.profiles); setWorkflows(workflowResult.workflows);
       // The workflow record supplies its engine and defaults once it is known; explicit draft fields still win.
-      const record = findRecord(workflowResult.workflows, initialDraft?.workflowId, nextWorkflow);
+      // A remembered record that is archived, deleted, or not admitted for the project falls back to Standard.
+      const repositoryKind = (projectResult.find(project => project.id === saved.projectId) ?? projectResult[0])?.integration?.repository?.kind;
+      const record = rememberedWorkflow(workflowResult.workflows, rememberedWorkflowId, repositoryKind) ?? findRecord(workflowResult.workflows, initialDraft?.workflowId, nextWorkflow);
+      if (record?.engine === REPAIR && nextWorkflow !== REPAIR) {
+        // A remembered repair workflow opens as if the user chose it: only a pull request source stays.
+        previousDelivery.current = DEFAULT_DELIVERY;
+        setSource(current => current?.kind === "pull_request" ? current : undefined);
+        setSourceSummary(current => current?.kind === "pull_request" ? current : undefined);
+      }
       if (record) { setWorkflow(record.engine); setWorkflowId(record.id); applyRecord(record, initialDraft ?? {}, memory()); }
       setRootProfileId(current => profileResult.profiles.some(profile => profile.id === current && profile.role === "root") ? current : "");
       setWorkerProfileId(current => profileResult.profiles.some(profile => profile.id === current && profile.role === "worker") ? current : "");
@@ -172,7 +181,7 @@ export function NewTaskDialog({ open, onOpenChange, companyId, onCreated, initia
     const remembered = memory();
     const rootProfile = rootProfileId && rootProfileId === defaults.rootProfileId ? remembered.rootProfileId : rootProfileId || undefined;
     const workerProfile = workerProfileId && workerProfileId === defaults.workerProfileId ? remembered.workerProfileId : workerProfileId || undefined;
-    writeNewTaskMemory({ projectId, rootProfileId: rootProfile, workerProfileId: workerProfile, runProjectTests, visualEvidence });
+    writeNewTaskMemory({ projectId, rootProfileId: rootProfile, workerProfileId: workerProfile, runProjectTests, visualEvidence, workflowId: workflowId || undefined });
   }, [open, settingsLoaded, projects, projectId, rootProfileId, workerProfileId, runProjectTests, visualEvidence, workflows, workflowId, editing]);
   const selectRecord = (record: ApiWorkflow) => {
     if (record.id === workflowId) return;

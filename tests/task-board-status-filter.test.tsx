@@ -285,6 +285,10 @@ test("a dropped card sends one command for a permitted column and the server sta
     await act(async () => { card()?.dispatchEvent(dragEvent("dragstart")); });
     // The filter keeps its value, and the permitted destinations show while you drag.
     expect(columns()).toEqual(["Backlog", "Queued", "Active"]);
+    // The lifted copy follows the pointer, and the slot stays as a faint outline.
+    const overlay = () => document.querySelector("[data-board-drag-overlay]");
+    expect(overlay()?.textContent).toContain("Ship after review");
+    expect(card()?.closest("li")?.className).toContain("opacity-30");
     expect(column("Active")?.textContent).toContain("Move the task here");
     expect(column("Backlog")?.textContent).not.toContain("Plan the migration");
     const over = (label: string) => { const event = dragEvent("dragover"); column(label)?.dispatchEvent(event); return event.defaultPrevented; };
@@ -295,6 +299,8 @@ test("a dropped card sends one command for a permitted column and the server sta
     expect(commands()).toEqual(["/api/tasks/task-1/force-start"]);
     expect(columns()).toEqual(["Queued"]);
     expect(container.querySelector('li[aria-busy="true"]')?.textContent).toContain("Ship after review");
+    // The card waits on the column until the board shows the new status.
+    expect(overlay()).not.toBeNull();
     // A second move on a pending card sends nothing.
     await act(async () => { card()?.dispatchEvent(dragEvent("dragstart")); });
     await act(async () => { column("Backlog")?.dispatchEvent(dragEvent("drop")); });
@@ -303,11 +309,13 @@ test("a dropped card sends one command for a permitted column and the server sta
     await act(async () => {});
     expect(container.querySelector('li[aria-busy="true"]')).toBeNull();
     expect(column("Queued")).toBeNull();
+    expect(overlay()).toBeNull();
+    expect(container.querySelector("li.opacity-30")).toBeNull();
   } finally { await act(async () => root.unmount()); container.remove(); window.history.replaceState(null, "", "/board?company=company-1"); }
 });
 
 test("only cards with a permitted move get the Task moves menu and drag", async () => {
-  const tasks = [task("task-1", "Plan the migration", "backlog"), task("task-2", "Wait for you", "waiting_human"), task("task-3", "Done work", "delivered"), { ...task("task-4", "Old backlog", "backlog"), archivedAt: "2026-09-08T00:00:00.000Z" }];
+  const tasks = [task("task-1", "Plan the migration", "backlog"), task("task-2", "Wait for you", "waiting_human"), { ...task("task-3", "Done work", "delivered"), statusChangedAt: new Date().toISOString() }, { ...task("task-4", "Old backlog", "backlog"), archivedAt: "2026-09-08T00:00:00.000Z" }];
   api.readJsonUnchecked.mockImplementation(async (path: string) => path.includes("/projects") ? { projects: [] } : { tasks: path.endsWith("/task-costs") ? [] : tasks });
   const container = document.createElement("div");
   document.body.append(container);

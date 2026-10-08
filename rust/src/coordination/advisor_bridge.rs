@@ -254,7 +254,9 @@ fn flatten_finding(value: &Value) -> Option<String> {
                 .join(": ");
             (!js_trim(&text).is_empty()).then(|| js_trim(&text).to_owned())
         }
-        _ => None,
+        Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) | Value::Array(_) => {
+            None
+        }
     }
 }
 

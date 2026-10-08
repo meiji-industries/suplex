@@ -1,6 +1,7 @@
 //! Native update control and client lifecycle report.
 
 use crate::http::error::ApiError;
+use crate::identity::auth::UserRole;
 use std::sync::LazyLock;
 
 use axum::{
@@ -98,7 +99,7 @@ async fn read_update(
         .any(|item| item == "check=1");
     let mut body = match state.installation.clone() {
         Some(installation) => match tokio::task::spawn_blocking(move || {
-            update::snapshot(&installation, check, authenticated.role == "admin")
+            update::snapshot(&installation, check, authenticated.role == UserRole::Admin)
         })
         .await
         {
@@ -127,7 +128,7 @@ async fn restart(State(state): State<AppState>, headers: HeaderMap) -> Response 
         Ok(value) => value,
         Err(response) => return *response,
     };
-    let response = if user.role != "admin" {
+    let response = if user.role != UserRole::Admin {
         auth::error(StatusCode::FORBIDDEN, "Administrator access necessary")
     } else {
         match state.installation.as_ref().map(update::request_apply) {

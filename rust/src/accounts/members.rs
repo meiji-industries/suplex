@@ -1,5 +1,7 @@
 //! Company invitations belong to the host. Hosted login proves the email;
 //! current host membership decides access on every request.
+use crate::identity::auth::UserRole;
+use crate::identity::auth::UserStatus;
 use chrono::{DateTime, Duration, Utc};
 use rusqlite::{OptionalExtension, params};
 use serde::Serialize;
@@ -94,8 +96,8 @@ pub fn prepare(
         let existing: Option<String> = database.connection().query_row("SELECT user_id FROM suplex_account_users WHERE email = ?1 COLLATE NOCASE", [&body.email], |row| row.get(0)).optional()?;
         let user_id = if let Some(id) = existing {
             let user = auth::public_user(database, &id)?.ok_or("User missing")?;
-            if user.status == "revoked" { return Err(PublicFailure::new(409, "This user was revoked").into()); }
-            if user.company_ids.iter().any(|id| id == company_id) && user.status == "active" { return Err(PublicFailure::new(409, "This user is already a member").into()); }
+            if user.status == UserStatus::Revoked { return Err(PublicFailure::new(409, "This user was revoked").into()); }
+            if user.company_ids.iter().any(|id| id == company_id) && user.status == UserStatus::Active { return Err(PublicFailure::new(409, "This user is already a member").into()); }
             id
         } else {
             let id = random_hex_id("user")?;
@@ -131,7 +133,7 @@ pub fn accept(
             let (id, saved_account) = mapped.ok_or_else(|| PublicFailure::new(403, "This account has not been invited to this host"))?;
             if saved_account.as_ref().is_some_and(|saved| saved != &account.id) { return Err(PublicFailure::new(403, "This email is linked to another account").into()); }
             let user = auth::public_user(database, &id)?.ok_or("User missing")?;
-            if user.status == "revoked" || user.company_ids.is_empty() { return Err(PublicFailure::new(403, "Company access was removed").into()); }
+            if user.status == UserStatus::Revoked || user.company_ids.is_empty() { return Err(PublicFailure::new(403, "Company access was removed").into()); }
             let timestamp = rfc3339_millis(now);
             let invitations: i64 = database.connection().query_row("SELECT COUNT(*) FROM suplex_company_invitations i JOIN suplex_memberships m ON m.user_id = i.user_id AND m.company_id = i.company_id WHERE i.user_id = ?1 AND i.revoked_at IS NULL AND i.sent_at IS NOT NULL AND (i.accepted_at IS NOT NULL OR i.expires_at > ?2)", params![id, timestamp], |row| row.get(0))?;
             if invitations == 0 { return Err(PublicFailure::new(403, "The invitation expired or was removed").into()); }
@@ -205,16 +207,18 @@ pub fn session_verified(
     if user.id == "user_development" {
         return Ok(super::linked(database)?.is_some_and(|owner| owner.account_id == account));
     }
-    Ok((user.role == "admin" || !user.company_ids.is_empty())
-        && database
-            .connection()
-            .query_row(
-                "SELECT 1 FROM suplex_account_users WHERE user_id = ?1 AND account_id = ?2",
-                params![user.id, account],
-                |_| Ok(()),
-            )
-            .optional()?
-            .is_some())
+    Ok(
+        (user.role == UserRole::Admin || !user.company_ids.is_empty())
+            && database
+                .connection()
+                .query_row(
+                    "SELECT 1 FROM suplex_account_users WHERE user_id = ?1 AND account_id = ?2",
+                    params![user.id, account],
+                    |_| Ok(()),
+                )
+                .optional()?
+                .is_some(),
+    )
 }
 
 #[cfg(test)]

@@ -12,6 +12,7 @@ use std::{
 
 use rusqlite::{OptionalExtension, params};
 
+use crate::tasks::control::SessionKind;
 use crate::{
     integrations::herdr::{Herdr, HerdrFailure, MetadataReport, Pane, ProcessInfo},
     platform::database::{OpenMode, SuplexDatabase},
@@ -357,7 +358,7 @@ pub fn attach_session(herdr: &Herdr, display: &SessionDisplay<'_>) -> DisplayRes
         )
         .optional()?
         .flatten();
-    let root_pane_id = if kind == "worker" {
+    let root_pane_id = if kind == SessionKind::Worker.as_str() {
         database
             .connection()
             .query_row(
@@ -378,7 +379,7 @@ pub fn attach_session(herdr: &Herdr, display: &SessionDisplay<'_>) -> DisplayRes
             task_id: &task_id,
             binding_id: display.session_id,
             directory: &directory,
-            role: if kind == "root" {
+            role: if kind == SessionKind::Root.as_str() {
                 "Coordinator"
             } else {
                 "Worker"

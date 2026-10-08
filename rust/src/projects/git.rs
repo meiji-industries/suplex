@@ -804,9 +804,10 @@ pub async fn inspect_with(
 
 /// GitHub's status for a failed request, when GitHub answered.
 pub(super) fn github_status(error: &octocrab::Error) -> Option<u16> {
-    match error {
-        octocrab::Error::GitHub { source, .. } => Some(source.status_code.as_u16()),
-        _ => None,
+    if let octocrab::Error::GitHub { source, .. } = error {
+        Some(source.status_code.as_u16())
+    } else {
+        None
     }
 }
 

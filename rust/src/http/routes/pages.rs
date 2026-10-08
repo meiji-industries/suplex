@@ -1,5 +1,8 @@
+#![cfg_attr(not(test), deny(clippy::disallowed_types, clippy::disallowed_macros))]
+
 use crate::http::access::with_cookies;
 use crate::http::error::ApiError;
+use crate::identity::auth::UserRole;
 use axum::{
     Router,
     extract::{Path, RawQuery, State},
@@ -125,7 +128,7 @@ async fn root(
     };
     let destination = match state.with_database(|database| service::list(database, &user.id, None))
     {
-        Ok(projects) if projects.is_empty() && user.role == "admin" => "/onboarding",
+        Ok(projects) if projects.is_empty() && user.role == UserRole::Admin => "/onboarding",
         Ok(_) => "/today",
         Err(source) => {
             return with_cookies(ApiError::response(source), cookies);
@@ -216,7 +219,7 @@ async fn company_settings(
         Ok(value) => value,
         Err(response) => return *response,
     };
-    if user.role != "admin"
+    if user.role != UserRole::Admin
         || state
             .with_database(|database| {
                 companies::require_company_access(database, &user.id, &company_id)

@@ -1,3 +1,5 @@
+#![cfg_attr(not(test), deny(clippy::disallowed_types, clippy::disallowed_macros))]
+
 use std::error::Error;
 
 use axum::{

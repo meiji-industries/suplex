@@ -211,7 +211,7 @@ fn timestamp(millis: i64) -> Result<String, Box<dyn Error + Send + Sync>> {
 }
 
 fn role_label(kind: &str, advisor_role: Option<&str>) -> &'static str {
-    if kind == "root" {
+    if kind == SessionKind::Root.as_str() {
         "Coordinator"
     } else {
         match advisor_role {
@@ -245,7 +245,7 @@ fn activity(
         .advisor_role
         .map(AdvisorRole::as_str)
         .unwrap_or(session.kind.as_str());
-    usage.sort_by(|left, right| left.started_at.cmp(&right.started_at));
+    usage.sort_by_key(|entry| entry.started_at);
     let mut turns = Vec::<(String, TimelineActivity)>::new();
     let last = usage.len().saturating_sub(1);
     for (index, entry) in usage.iter().enumerate() {

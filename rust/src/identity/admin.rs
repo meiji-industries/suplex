@@ -1,4 +1,5 @@
 use crate::identity::IdentityError;
+use crate::identity::auth::UserStatus;
 use crate::shared::ids::random_hex_id;
 use crate::shared::time::rfc3339_millis;
 use chrono::{DateTime, Utc};
@@ -73,7 +74,7 @@ pub fn revoke_user(
 ) -> DatabaseResult<()> {
     database.transaction(false, |database| {
         companies::require_admin(database, actor_user_id)?;
-        let status: Option<String> = database
+        let status: Option<UserStatus> = database
             .connection()
             .query_row(
                 "SELECT status FROM suplex_users WHERE id = ?1",
@@ -82,7 +83,7 @@ pub fn revoke_user(
             )
             .optional()?;
         if status.is_none()
-            || status.as_deref() == Some("revoked")
+            || status == Some(UserStatus::Revoked)
             || target_user_id == actor_user_id
         {
             return Err(IdentityError::not_found().into());
@@ -195,7 +196,7 @@ mod tests {
         let users = list_users(&database, &admin.user.id).unwrap();
         assert_eq!(
             users.iter().find(|user| user.id == member).unwrap().status,
-            "revoked"
+            UserStatus::Revoked
         );
         assert_eq!(
             list_audit_events(&database, &admin.user.id).unwrap().len(),

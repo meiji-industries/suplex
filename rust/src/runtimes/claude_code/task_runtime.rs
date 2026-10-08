@@ -12,6 +12,7 @@ use super::{
     environment::{claude_environment, claude_settings_arguments},
     transcript::{self, ClaudeMessageEntry},
 };
+use crate::tasks::control::SessionKind;
 use crate::{
     coordination::{advisor_bridge, bridge_auth, root_bridge},
     profiles::agent_profiles::home_directory,
@@ -72,7 +73,7 @@ pub fn claude_arguments(
         scope.instance_home_directory.is_some() || has_project_mcp,
     ));
     let role_prompt = scope.workflow.role_prompt(scope.role);
-    let mcp_config = if role != "worker" || !mcp_tools.is_empty() {
+    let mcp_config = if role != SessionKind::Worker.as_str() || !mcp_tools.is_empty() {
         runtime_directory
             .join("mcp.json")
             .to_string_lossy()
@@ -103,8 +104,8 @@ pub fn claude_arguments(
                 .into_owned(),
         ]);
     }
-    if role != "worker" {
-        let bridge = if role == "root" {
+    if role != SessionKind::Worker.as_str() {
+        let bridge = if role == SessionKind::Root.as_str() {
             "mcp__suplex_root"
         } else {
             "mcp__suplex_advisor__submit_report"

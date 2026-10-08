@@ -9,6 +9,7 @@ use crate::{
 };
 
 use super::provider_readiness::{binary_name, claude_routing_variable, resolve_executable};
+use crate::tasks::control::HarnessKind;
 
 pub const PROVIDER_LOGIN_WORKSPACE_LABEL: &str = "suplex-provider-login";
 
@@ -50,7 +51,7 @@ pub fn provider_login_command(
         |_| binary_name(provider).to_owned(),
         |path| quoted(&path.to_string_lossy()),
     );
-    let login = if provider == "codex" {
+    let login = if provider == HarnessKind::Codex.as_str() {
         "login"
     } else {
         "auth login"

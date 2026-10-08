@@ -1,3 +1,4 @@
+use crate::http::routes::access::NetworkAccessMode;
 use std::{
     collections::HashMap,
     env, fs,
@@ -91,10 +92,10 @@ impl Installation {
             }
             .into()
         });
-        if !matches!(access_mode.as_str(), "local" | "tailscale" | "all") {
+        if NetworkAccessMode::parse(&access_mode).is_none() {
             return Err("SUPLEX_ACCESS_MODE must be local, tailscale, or all".into());
         }
-        let tailscale_exposure = if access_mode != "tailscale" {
+        let tailscale_exposure = if access_mode != NetworkAccessMode::Tailscale.as_str() {
             "direct".to_owned()
         } else {
             value("SUPLEX_TAILSCALE_EXPOSURE").unwrap_or_else(|| "direct".into())
@@ -114,14 +115,14 @@ impl Installation {
             })
             .trim()
             .to_owned();
-        let (host, scheme) = if access_mode == "local" {
+        let (host, scheme) = if access_mode == NetworkAccessMode::Local.as_str() {
             if !matches!(bind_address.as_str(), "127.0.0.1" | "::1") {
                 return Err(
                     format!("Local access binds loopback only; received {bind_address}").into(),
                 );
             }
             (bind_address.clone(), "http")
-        } else if access_mode == "all" {
+        } else if access_mode == NetworkAccessMode::All.as_str() {
             if bind_address != "0.0.0.0" {
                 return Err(format!(
                     "All-network access requires 0.0.0.0; received {bind_address}"

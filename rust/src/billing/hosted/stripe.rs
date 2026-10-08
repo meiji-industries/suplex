@@ -179,7 +179,11 @@ fn flag(value: &Value, key: &str) -> bool {
 fn expandable_id(value: Option<&Value>) -> Option<String> {
     match value? {
         Value::String(id) => Some(id.clone()),
-        object => text(object, "id"),
+        object @ Value::Null
+        | object @ Value::Bool(_)
+        | object @ Value::Number(_)
+        | object @ Value::Array(_)
+        | object @ Value::Object(_) => text(object, "id"),
     }
 }
 

@@ -1,6 +1,7 @@
 //! Local provider instances: a private home directory per Claude Code login.
 
 use crate::identity::IdentityError;
+use crate::identity::auth::UserRole;
 use crate::shared::time::now_millis_rfc3339;
 use std::{
     error::Error,
@@ -12,6 +13,7 @@ use rusqlite::{OptionalExtension, params};
 use serde_json::{Value, json};
 
 use crate::platform::database::SuplexDatabase;
+use crate::tasks::control::HarnessKind;
 
 type Result<T> = std::result::Result<T, Box<dyn Error + Send + Sync>>;
 
@@ -29,7 +31,7 @@ pub fn provider_instances_directory(database_path: &Path) -> PathBuf {
 }
 
 fn require_admin(database: &SuplexDatabase, user_id: &str) -> Result<()> {
-    let role: Option<String> = database
+    let role: Option<UserRole> = database
         .connection()
         .query_row(
             "SELECT role FROM suplex_users WHERE id = ?1 AND status = 'active'",
@@ -37,7 +39,7 @@ fn require_admin(database: &SuplexDatabase, user_id: &str) -> Result<()> {
             |row| row.get(0),
         )
         .optional()?;
-    if role.as_deref() == Some("admin") {
+    if role == Some(UserRole::Admin) {
         Ok(())
     } else {
         Err(failure("Administrator access required", 403))
@@ -81,7 +83,7 @@ pub fn create(
     label: &str,
 ) -> Result<Value> {
     require_admin(database, user_id)?;
-    if provider != "claude-code" {
+    if provider != HarnessKind::ClaudeCode.as_str() {
         return Err(failure(
             "This provider does not support local instances",
             422,

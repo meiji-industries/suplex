@@ -12,6 +12,7 @@ use std::{
 use serde_json::{Map, Value, json};
 
 use crate::profiles::agent_profiles::{executable, home_directory};
+use crate::tasks::control::HarnessKind;
 
 /// Label, binary, pinning variable, and home install paths per provider CLI.
 fn spec(
@@ -387,7 +388,7 @@ pub async fn check(
     let executable = resolve_executable(kind);
     let result = match &executable {
         Ok(path) => {
-            let directory = (kind == "claude-code")
+            let directory = (kind == HarnessKind::ClaudeCode.as_str())
                 .then(|| {
                     environment
                         .as_ref()
@@ -399,7 +400,7 @@ pub async fn check(
                 args.extend(["--setting-sources", ""]);
             }
             let environment = environment.map(|environment| {
-                if kind == "claude-code" {
+                if kind == HarnessKind::ClaudeCode.as_str() {
                     claude_environment(directory.as_deref(), environment)
                 } else {
                     environment

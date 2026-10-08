@@ -14,9 +14,10 @@ use crate::platform::{
     database::{DatabaseResult, SuplexDatabase},
 };
 
-use super::control::{DeliveryIntent, TaskProfile, TaskStatus};
+use super::control::{DeliveryIntent, DeliveryTarget, TaskProfile, TaskStatus};
 use super::images::DecodedTaskImage;
 use crate::coordination::advisor_bridge::AdvisorRole;
+use crate::http::contracts::typed::tasks::TaskPaneRole;
 use std::collections::BTreeMap;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -143,11 +144,26 @@ pub(crate) fn prerequisites_complete(
     task_id: &str,
 ) -> DatabaseResult<bool> {
     let waiting: bool = database.connection().query_row(
-        "SELECT EXISTS(SELECT 1 FROM suplex_task_dependencies d JOIN suplex_tasks t ON t.id = d.depends_on_task_id JOIN suplex_task_controls c ON c.task_id = t.id WHERE d.task_id = ?1 AND (c.status <> 'delivered' OR (c.delivery_target IN ('pull_request_draft', 'pull_request_ready', 'merged') AND COALESCE(json_extract(c.pull_request_json, '$.state'), '') <> 'merged'))) OR EXISTS(SELECT 1 FROM suplex_task_pull_request_dependencies d WHERE d.task_id = ?1 AND d.state <> 'merged')",
-        [task_id], |row| row.get(0),
+        "SELECT EXISTS(SELECT 1 FROM suplex_task_dependencies d JOIN suplex_tasks t ON t.id = d.depends_on_task_id JOIN suplex_task_controls c ON c.task_id = t.id WHERE d.task_id = ?1 AND (c.status <> ?2 OR (c.delivery_target IN (?3, ?4, ?5) AND COALESCE(json_extract(c.pull_request_json, '$.state'), '') <> 'merged'))) OR EXISTS(SELECT 1 FROM suplex_task_pull_request_dependencies d WHERE d.task_id = ?1 AND d.state <> 'merged')",
+        params![
+            task_id,
+            TaskStatus::Delivered.as_str(),
+            DeliveryTarget::PullRequestDraft.as_str(),
+            DeliveryTarget::PullRequestReady.as_str(),
+            DeliveryTarget::Merged.as_str(),
+        ],
+        |row| row.get(0),
     )?;
     Ok(!waiting)
 }
+
+/// Statuses of a task that still works on its source.
+const OPEN: [&str; 4] = [
+    TaskStatus::Backlog.as_str(),
+    TaskStatus::Queued.as_str(),
+    TaskStatus::Active.as_str(),
+    TaskStatus::WaitingHuman.as_str(),
+];
 
 /// An open task that already works on a source.
 #[derive(Clone, Debug, serde::Serialize)]
@@ -155,7 +171,7 @@ pub struct PullRequestOwner {
     #[serde(rename = "taskId")]
     pub task_id: String,
     pub title: String,
-    pub status: String,
+    pub status: TaskStatus,
 }
 
 pub(crate) fn issue_owner(
@@ -164,8 +180,8 @@ pub(crate) fn issue_owner(
     id: &str,
 ) -> DatabaseResult<Option<PullRequestOwner>> {
     Ok(database.connection().query_row(
-        "SELECT t.id, t.title, c.status FROM suplex_tasks t JOIN suplex_task_controls c ON c.task_id = t.id WHERE t.archived_at IS NULL AND c.status IN ('backlog','queued','active','waiting_human') AND json_extract(t.issue_json, '$.kind') = ?1 AND json_extract(t.issue_json, '$.id') = ?2 ORDER BY t.created_at LIMIT 1",
-        params![kind, id],
+        "SELECT t.id, t.title, c.status FROM suplex_tasks t JOIN suplex_task_controls c ON c.task_id = t.id WHERE t.archived_at IS NULL AND c.status IN (?3, ?4, ?5, ?6) AND json_extract(t.issue_json, '$.kind') = ?1 AND json_extract(t.issue_json, '$.id') = ?2 ORDER BY t.created_at LIMIT 1",
+        params![kind, id, OPEN[0], OPEN[1], OPEN[2], OPEN[3]],
         |row| Ok(PullRequestOwner { task_id: row.get(0)?, title: row.get(1)?, status: row.get(2)? }),
     ).optional()?)
 }
@@ -180,8 +196,8 @@ pub(crate) fn pull_request_owner(
     number: i64,
 ) -> DatabaseResult<Option<PullRequestOwner>> {
     Ok(database.connection().query_row(
-        "WITH owner_host(kind) AS (SELECT COALESCE((SELECT json_extract(configuration_json, '$.integration.repository.kind') FROM suplex_tasks WHERE id = ?1), ?4)), known(id, name) AS (SELECT repository_id, repository_name FROM suplex_github_trigger_rules UNION SELECT repository_id, repository_name FROM suplex_github_trigger_dispatches), names(name) AS (SELECT lower(?2) UNION SELECT lower(name) FROM known WHERE (SELECT kind FROM owner_host) = 'github' AND id IN (SELECT id FROM known WHERE lower(name) = lower(?2))) SELECT t.id, t.title, c.status FROM suplex_tasks t JOIN suplex_task_controls c ON c.task_id = t.id WHERE t.id <> ?1 AND t.archived_at IS NULL AND c.status IN ('backlog','queued','active','waiting_human') AND COALESCE(json_extract(t.configuration_json, '$.integration.repository.kind'), 'github') = (SELECT kind FROM owner_host) AND ((lower(json_extract(t.configuration_json, '$.repository')) IN (SELECT name FROM names) AND json_extract(t.configuration_json, '$.source.kind') = 'pull_request' AND json_extract(t.configuration_json, '$.source.number') = ?3) OR (lower(json_extract(c.delivery_intent_json, '$.repository')) IN (SELECT name FROM names) AND json_extract(c.delivery_intent_json, '$.pullRequestNumber') = ?3) OR (lower(json_extract(c.pull_request_json, '$.repository')) IN (SELECT name FROM names) AND json_extract(c.pull_request_json, '$.number') = ?3)) ORDER BY t.created_at LIMIT 1",
-        params![task_id, repository, number, host],
+        "WITH owner_host(kind) AS (SELECT COALESCE((SELECT json_extract(configuration_json, '$.integration.repository.kind') FROM suplex_tasks WHERE id = ?1), ?4)), known(id, name) AS (SELECT repository_id, repository_name FROM suplex_github_trigger_rules UNION SELECT repository_id, repository_name FROM suplex_github_trigger_dispatches), names(name) AS (SELECT lower(?2) UNION SELECT lower(name) FROM known WHERE (SELECT kind FROM owner_host) = 'github' AND id IN (SELECT id FROM known WHERE lower(name) = lower(?2))) SELECT t.id, t.title, c.status FROM suplex_tasks t JOIN suplex_task_controls c ON c.task_id = t.id WHERE t.id <> ?1 AND t.archived_at IS NULL AND c.status IN (?5, ?6, ?7, ?8) AND COALESCE(json_extract(t.configuration_json, '$.integration.repository.kind'), 'github') = (SELECT kind FROM owner_host) AND ((lower(json_extract(t.configuration_json, '$.repository')) IN (SELECT name FROM names) AND json_extract(t.configuration_json, '$.source.kind') = 'pull_request' AND json_extract(t.configuration_json, '$.source.number') = ?3) OR (lower(json_extract(c.delivery_intent_json, '$.repository')) IN (SELECT name FROM names) AND json_extract(c.delivery_intent_json, '$.pullRequestNumber') = ?3) OR (lower(json_extract(c.pull_request_json, '$.repository')) IN (SELECT name FROM names) AND json_extract(c.pull_request_json, '$.number') = ?3)) ORDER BY t.created_at LIMIT 1",
+        params![task_id, repository, number, host, OPEN[0], OPEN[1], OPEN[2], OPEN[3]],
         |row| Ok(PullRequestOwner { task_id: row.get(0)?, title: row.get(1)?, status: row.get(2)? }),
     ).optional()?)
 }
@@ -615,8 +631,8 @@ pub fn start(
                 params![time, task_id],
             )?;
             let queued: bool = database.connection().query_row(
-                "SELECT EXISTS(SELECT 1 FROM suplex_task_controls c JOIN suplex_tasks t ON t.id = c.task_id WHERE c.task_id = ?1 AND c.status = 'queued' AND t.archived_at IS NULL)",
-                [task_id], |row| row.get(0),
+                "SELECT EXISTS(SELECT 1 FROM suplex_task_controls c JOIN suplex_tasks t ON t.id = c.task_id WHERE c.task_id = ?1 AND c.status = ?2 AND t.archived_at IS NULL)",
+                params![task_id, TaskStatus::Queued.as_str()], |row| row.get(0),
             )?;
             if !queued { return Ok(None); }
             let admitted = admit_queued(database, task_id, now)?;
@@ -767,7 +783,7 @@ pub(crate) fn bound_pane(
     role: &str,
 ) -> DatabaseResult<Option<String>> {
     super::authorize_task(database, user_id, task_id)?;
-    let pane = if role == "shell" {
+    let pane = if role == TaskPaneRole::Shell.as_str() {
         database
             .connection()
             .query_row(

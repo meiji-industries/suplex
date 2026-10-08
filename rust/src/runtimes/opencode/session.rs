@@ -273,7 +273,7 @@ fn message_text(message: &Envelope) -> String {
         .iter()
         .filter_map(|part| match part {
             Part::Text(text) => Some(text.text.as_str()),
-            _ => None,
+            Part::Tool(_) | Part::Compaction { .. } | Part::Other(_) => None,
         })
         .collect()
 }
@@ -281,7 +281,7 @@ fn message_text(message: &Envelope) -> String {
 fn tools(message: &Envelope) -> impl Iterator<Item = &super::contracts::ToolPart> {
     message.parts.iter().filter_map(|part| match part {
         Part::Tool(tool) => Some(tool),
-        _ => None,
+        Part::Text(_) | Part::Compaction { .. } | Part::Other(_) => None,
     })
 }
 

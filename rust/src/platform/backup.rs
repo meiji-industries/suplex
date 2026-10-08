@@ -231,7 +231,11 @@ fn modified_iso(time: SystemTime) -> String {
 fn manifest_text(value: &Value) -> String {
     match value {
         Value::String(text) => text.clone(),
-        other => other.to_string(),
+        other @ Value::Null
+        | other @ Value::Bool(_)
+        | other @ Value::Number(_)
+        | other @ Value::Array(_)
+        | other @ Value::Object(_) => other.to_string(),
     }
 }
 

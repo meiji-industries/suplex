@@ -1,4 +1,5 @@
 //! Browser authentication and response cookies. Routes retain their validation order.
+use crate::identity::auth::UserRole;
 use std::{
     net::SocketAddr,
     sync::{Arc, Mutex},
@@ -229,7 +230,7 @@ fn authorize_browser(
 ) -> Result<(String, Vec<String>), Box<Response>> {
     Csrf::check(state, headers, method).map_err(|error| Box::new(error.into_response()))?;
     let (user, cookies) = authenticated(state, headers)?;
-    if admin && user.role != "admin" {
+    if admin && user.role != UserRole::Admin {
         return Err(Box::new(with_cookies(
             PublicFailure::new(403, "Administrator access required").into_response(),
             cookies,

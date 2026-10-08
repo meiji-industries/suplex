@@ -693,10 +693,26 @@ async fn direct_merge_completes_and_stale_local_pull_request_is_replaced() {
         .await
         .unwrap();
     // A stale cached pull request never blocks: GitHub's current match replaces it.
-    operations.set_pull_request(&fixture.task_id, Some(&json!({"repository":"owner/repo","number":1,"url":"https://github.com/owner/repo/pull/1","headSha":"f".repeat(40),"state":"closed","mergedAt":null})), true).unwrap();
-    let observed = operations.observe(&fixture.task_id).await.unwrap();
-    assert_eq!(observed["state"], "open");
-    assert_eq!(observed["headSha"], head.as_str());
+    operations
+        .set_pull_request(
+            &fixture.task_id,
+            Some(&crate::tasks::control::PullRequestReference {
+                repository: "owner/repo".into(),
+                number: 1,
+                url: "https://github.com/owner/repo/pull/1".into(),
+                head_sha: "f".repeat(40),
+                state: crate::tasks::control::PullRequestState::Closed,
+                merged_at: None,
+            }),
+            true,
+        )
+        .unwrap();
+    let observed = operations.observe(&fixture.task_id).await.unwrap().unwrap();
+    assert_eq!(
+        observed.state,
+        crate::tasks::control::PullRequestState::Open
+    );
+    assert_eq!(observed.head_sha, head);
     let merged = operations
         .execute(
             root,
@@ -891,7 +907,7 @@ async fn observing_a_pull_request_another_task_names_records_the_observation() {
         .unwrap();
     drop(database);
     let observed = operations.observe(&fixture.task_id).await.unwrap();
-    assert_eq!(observed["number"], 1);
+    assert_eq!(observed.unwrap().number, 1);
     assert_eq!(control(&fixture).pull_request.unwrap().number, 1);
     std::fs::remove_dir_all(&fixture.base).unwrap();
 }

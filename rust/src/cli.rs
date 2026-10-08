@@ -9,6 +9,7 @@ use std::{
 use chrono::Utc;
 use serde_json::{Map, Value, json};
 
+use crate::http::routes::access::NetworkAccessMode;
 use crate::{
     http::{AppState, routes::health, session::SessionConfig},
     platform::{
@@ -331,7 +332,9 @@ fn detail_rows(details: &Value) -> Vec<(String, String)> {
                     let minutes = number.as_i64().unwrap_or(0) / 60_000;
                     format!("{}h {}m", minutes / 60, minutes % 60)
                 }
-                other => other.to_string(),
+                other @ Value::Number(_) | other @ Value::Array(_) | other @ Value::Object(_) => {
+                    other.to_string()
+                }
             };
             let key = key
                 .strip_suffix("Bytes")
@@ -489,7 +492,7 @@ fn installation_checks(installation: &Installation) -> Vec<DoctorCheck> {
         ("bind address".into(), installation.bind_address.clone()),
         ("port".into(), installation.port.to_string()),
     ];
-    if installation.access_mode == "tailscale" {
+    if installation.access_mode == NetworkAccessMode::Tailscale.as_str() {
         access.details.push((
             "tailscale exposure".into(),
             installation.tailscale_exposure.clone(),

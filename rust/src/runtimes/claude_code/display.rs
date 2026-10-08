@@ -325,7 +325,7 @@ impl TurnState {
                 return Ok(());
             }
             Value::Array(blocks) => blocks,
-            _ => return Ok(()),
+            Value::Null | Value::Bool(_) | Value::Number(_) | Value::Object(_) => return Ok(()),
         };
         let message_key = message_id.unwrap_or(uuid).to_owned();
         let offset = self

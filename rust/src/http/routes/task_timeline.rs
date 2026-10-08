@@ -1,5 +1,7 @@
 //! Task timeline reads saved usage and current native execution evidence.
 
+#![cfg_attr(not(test), deny(clippy::disallowed_types, clippy::disallowed_macros))]
+
 use crate::http::error::ApiError;
 
 use crate::http::access::authorize;

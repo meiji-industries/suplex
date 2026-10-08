@@ -42,7 +42,7 @@ pub struct CompanyIdParams {
 #[serde(rename_all = "camelCase")]
 pub struct CompanyStatusParams {
     pub company_id: String,
-    pub status: String,
+    pub status: crate::identity::companies::CompanyStatus,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

@@ -1,6 +1,8 @@
 //! The company sync socket: the company's lists, then their changes, and the
 //! values of the tasks the client watches.
 
+#![cfg_attr(not(test), deny(clippy::disallowed_types, clippy::disallowed_macros))]
+
 use std::{sync::Arc, time::Duration};
 
 use axum::{

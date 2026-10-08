@@ -147,7 +147,7 @@ impl Validate for TaskSource {
             Self::Branch { branch } if branch.is_empty() => {
                 report.append(path().join("branch"), garde::Error::new("too_small"));
             }
-            _ => {}
+            Self::Issue { .. } | Self::Branch { .. } | Self::PullRequest { .. } => {}
         }
     }
 }
@@ -297,10 +297,21 @@ pub struct TaskNoteBody {
 
 pub use crate::tasks::control::{TaskCoordinatorReplacementBody, TaskWorkerReplacementBody};
 
+crate::shared::wire_enum! {
+    pub enum AgentSelectionRole {
+        Root = "root",
+        Worker = "worker",
+        Reviewer = "reviewer",
+        PlannerA = "planner_a",
+        PlannerB = "planner_b",
+        Rater = "rater",
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TaskAgentSelectionBody {
-    pub role: String,
+    pub role: AgentSelectionRole,
     pub expected_profile_id: String,
     pub expected_session_id: Option<String>,
     pub profile_id: String,
@@ -718,7 +729,11 @@ impl Contract for WorktreeOpenBody {
 #[serde(rename_all = "camelCase")]
 pub struct TaskPaneParams {
     pub task_id: String,
-    pub role: String,
+    pub role: TaskPaneRole,
+}
+
+crate::shared::wire_enum! {
+    pub enum TaskPaneRole { Root = "root", Worker = "worker", Shell = "shell" }
 }
 
 impl Contract for TaskPaneParams {

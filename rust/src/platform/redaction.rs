@@ -39,7 +39,7 @@ pub fn value(value: Value) -> Value {
                 })
                 .collect(),
         ),
-        other => other,
+        other @ Value::Null | other @ Value::Bool(_) | other @ Value::Number(_) => other,
     }
 }
 

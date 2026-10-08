@@ -1,5 +1,7 @@
 //! Current task-agent rows use saved session intent and live native process observation.
 
+#![cfg_attr(not(test), deny(clippy::disallowed_types, clippy::disallowed_macros))]
+
 use crate::http::error::ApiError;
 
 use crate::http::access::authorize;

@@ -11,6 +11,7 @@ use serde_json::{Map, Value, json};
 use crate::coordination::bridge_auth::{
     ADVISOR_BINDING_ENV, ADVISOR_TOKEN_ENV, ROOT_BINDING_ENV, ROOT_TOKEN_ENV,
 };
+use crate::tasks::control::SessionKind;
 
 const LOCAL_CONFIG_PATH: &str = ".devin/mcp_config.local.json";
 // The trailing * also hides the pending file written beside the config.
@@ -66,7 +67,7 @@ fn ensure_excluded(directory: &Path) -> io::Result<()> {
 /// The bridge command with `${VAR}` placeholders; Devin interpolates its
 /// project-local MCP environment from the dispatched turn's environment.
 fn environment_bridge_server(kind: &str, suplex: &str, gh_command: Option<&str>) -> Value {
-    let (binding, token) = if kind == "root" {
+    let (binding, token) = if kind == SessionKind::Root.as_str() {
         (ROOT_BINDING_ENV, ROOT_TOKEN_ENV)
     } else {
         (ADVISOR_BINDING_ENV, ADVISOR_TOKEN_ENV)

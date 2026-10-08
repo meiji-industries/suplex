@@ -181,7 +181,7 @@ pub async fn ensure_session(scope: &TaskScope<'_>) -> Result<String, BoxError> {
             )?
             .environment
         }
-        _ => scope.inherited_environment.clone(),
+        RoleKind::Root | RoleKind::Advisor => scope.inherited_environment.clone(),
     };
     let mut environment =
         task_scope_environment(environment, scope.worktree, scope.project_environment);
@@ -313,7 +313,7 @@ fn text(message: &Envelope, separator: &str) -> String {
         .iter()
         .filter_map(|part| match part {
             Part::Text(text) => Some(text.text.as_str()),
-            _ => None,
+            Part::Tool(_) | Part::Compaction { .. } | Part::Other(_) => None,
         })
         .collect::<Vec<_>>()
         .join(separator)

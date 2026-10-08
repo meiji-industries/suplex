@@ -31,14 +31,14 @@ pub struct TaskResponse {
     pub(super) issue_key: Option<String>,
     issue: Option<IssueAssociation>,
     pub(super) title: String,
-    description: String,
+    pub(super) description: String,
     pub(super) status: TaskStatus,
     pub(super) queue_priority: i64,
     pub(super) delivery_target: DeliveryTarget,
-    root_profile: TaskProfile,
-    worker_profile: TaskProfile,
+    pub(super) root_profile: TaskProfile,
+    pub(super) worker_profile: TaskProfile,
     pub(super) workflow: Workflow,
-    advisor_profiles: BTreeMap<AdvisorRole, TaskProfile>,
+    pub(super) advisor_profiles: BTreeMap<AdvisorRole, TaskProfile>,
     pub(super) workflow_state: PublicWorkflowState,
     pub(super) depends_on: Vec<String>,
     pub(super) configuration: TaskConfiguration,
@@ -49,7 +49,7 @@ pub struct TaskResponse {
     pub(super) queue: TaskQueue,
     limits: TaskLimitSummary,
     wake_at: Option<String>,
-    images: Vec<TaskImage>,
+    pub(super) images: Vec<TaskImage>,
     artifacts: Vec<TaskImage>,
     pub(super) created_at: String,
     pub(super) updated_at: String,
@@ -155,7 +155,7 @@ pub(super) struct TaskQueue {
     project_concurrency_limited: bool,
     /// Free's running-task limit holds the task back.
     plan_concurrency_limited: bool,
-    waiting_on: Vec<TaskQueueWait>,
+    pub(super) waiting_on: Vec<TaskQueueWait>,
 }
 
 #[derive(Debug, Serialize, TS)]
@@ -177,8 +177,8 @@ fn serialize_js_number<S: Serializer>(value: &f64, serializer: S) -> Result<S::O
 
 #[derive(Debug, Deserialize, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
-struct TaskImage {
-    artifact_id: String,
+pub(super) struct TaskImage {
+    pub(super) artifact_id: String,
     filename: String,
     mime_type: String,
     byte_size: i64,
@@ -816,14 +816,12 @@ mod dependency_tests {
     }
 }
 #[cfg(test)]
-mod fixture_tests {
-    use super::*;
-
-    #[test]
-    fn populated_task_matches_shared_fixture() {
+impl TaskResponse {
+    /// A populated task that matches `tests/fixtures/task-response.json`.
+    pub(crate) fn fixture() -> Self {
         let timestamp = "2026-09-26T12:00:00.000Z";
         let sha = "0123456789abcdef0123456789abcdef01234567";
-        let response = TaskResponse {
+        TaskResponse {
             id: "task_01".into(),
             company_id: "company_01".into(),
             project_id: "project_01".into(),
@@ -953,7 +951,17 @@ mod fixture_tests {
             status_changed_at: timestamp.into(),
             queue_priority: 0,
             archived_at: None,
-        };
+        }
+    }
+}
+
+#[cfg(test)]
+mod fixture_tests {
+    use super::*;
+
+    #[test]
+    fn populated_task_matches_shared_fixture() {
+        let response = TaskResponse::fixture();
         let expected: serde_json::Value =
             serde_json::from_str(include_str!("../../../tests/fixtures/task-response.json"))
                 .unwrap();

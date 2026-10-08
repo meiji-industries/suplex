@@ -1,5 +1,7 @@
 //! Pairing-code exchange: a one-time code becomes a scoped agent credential.
 
+#![cfg_attr(not(test), deny(clippy::disallowed_types, clippy::disallowed_macros))]
+
 use axum::{
     Json, Router,
     body::Bytes,

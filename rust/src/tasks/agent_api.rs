@@ -3,12 +3,18 @@
 //! Reads cover every task in the agent's current project grants. Commands,
 //! dependency writes, and duplicates stay limited to tasks the agent created.
 
-use crate::coordination::workflows::{Completion, DeliveryWait};
+use crate::coordination::advisor_bridge::AdvisorRole;
+use crate::coordination::workflows::{
+    Completion, CompletionKind, DeliveryWait, DeliveryWaitReason, Workflow,
+};
 use crate::projects::ProjectError;
 use crate::shared::hash::sha256_hex;
 use crate::shared::time::rfc3339_millis;
 use crate::tasks::TaskError;
-use crate::tasks::control::{PullRequestReference, TaskProfile, TaskStatus};
+use crate::tasks::control::{
+    DeliveryTarget, PullRequestReference, PullRequestState, TaskProfile, TaskStatus,
+};
+use crate::tasks::response::VisualEvidence;
 use std::{
     collections::HashSet,
     error::Error,
@@ -52,6 +58,8 @@ use super::{
     repository::{self, TaskCreator},
     response, sources,
 };
+use crate::identity::companies::CompanyStatus;
+use crate::tasks::control::SessionKind;
 
 fn fail(message: &str, status: u16, code: &'static str) -> Box<dyn Error + Send + Sync> {
     fail_with(message, status, code, Value::Null)
@@ -184,7 +192,7 @@ fn require_scope(
     ).optional()?;
     match status {
         None => Err(denied(failure)),
-        Some(status) if active && status != "active" => {
+        Some(status) if active && status != CompanyStatus::Active.as_str() => {
             Err(fail("The company is not active", 409, "task_failure"))
         }
         Some(_) => Ok(()),
@@ -225,9 +233,8 @@ fn agent_authority(
     move |database, task| require_owned(database, principal, &task.id).map(|_| ())
 }
 
-fn task_json(database: &SuplexDatabase, task_id: &str) -> DatabaseResult<Value> {
-    let task = response::get(database, task_id)?.ok_or_else(not_found)?;
-    Ok(serde_json::to_value(task)?)
+fn task(database: &SuplexDatabase, task_id: &str) -> DatabaseResult<response::TaskResponse> {
+    response::get(database, task_id)?.ok_or_else(not_found)
 }
 
 /// A plain Coordinator question. Task limit decisions and command cleanup stay human-only.
@@ -294,38 +301,50 @@ fn option_index(id: &str) -> Option<usize> {
 }
 
 /// The current question with the identifiers an agent answers with.
-#[derive(serde::Serialize)]
+#[derive(serde::Serialize, ts_rs::TS)]
 #[serde(rename_all = "camelCase")]
-struct AgentQuestion<'a> {
-    id: &'a str,
-    kind: &'static str,
+pub struct AgentQuestion {
+    id: String,
+    kind: AgentQuestionKind,
     requires_command_cleanup: bool,
-    options: Vec<AgentQuestionOption<'a>>,
+    options: Vec<AgentQuestionOption>,
 }
 
-#[derive(serde::Serialize)]
+crate::shared::wire_enum! {
+    pub enum AgentQuestionKind {
+        Question = "question",
+        TaskLimit = "task_limit",
+    }
+}
+
+#[derive(serde::Serialize, ts_rs::TS)]
 #[serde(rename_all = "camelCase")]
-struct AgentQuestionOption<'a> {
+pub struct AgentQuestionOption {
     id: String,
-    label: &'a str,
-    description: &'a str,
+    label: String,
+    description: String,
     recommended: bool,
 }
 
-fn agent_question(question: &response::TaskHumanQuestion) -> AgentQuestion<'_> {
+fn agent_question(question: &response::TaskHumanQuestion) -> AgentQuestion {
     let (id, kind, options, requires_command_cleanup) = match question {
         response::TaskHumanQuestion::Question {
             id,
             options,
             requires_command_cleanup,
             ..
-        } => (id, "question", options, *requires_command_cleanup),
+        } => (
+            id,
+            AgentQuestionKind::Question,
+            options,
+            *requires_command_cleanup,
+        ),
         response::TaskHumanQuestion::TaskLimit { id, options, .. } => {
-            (id, "task_limit", options, false)
+            (id, AgentQuestionKind::TaskLimit, options, false)
         }
     };
     AgentQuestion {
-        id,
+        id: id.clone(),
         kind,
         requires_command_cleanup,
         options: options
@@ -333,8 +352,8 @@ fn agent_question(question: &response::TaskHumanQuestion) -> AgentQuestion<'_> {
             .enumerate()
             .map(|(index, option)| AgentQuestionOption {
                 id: option_id(index),
-                label: &option.label,
-                description: &option.description,
+                label: option.label.clone(),
+                description: option.description.clone(),
                 recommended: option.recommended,
             })
             .collect(),
@@ -352,59 +371,132 @@ fn selection(task: &response::TaskResponse) -> (Option<&str>, Option<&str>, Opti
     }
 }
 
-/// Response order for a pull request prerequisite follows the agent schema, which puts `url` before `state`.
-fn response_blocker(item: &Value) -> Value {
-    let Some(fields) = item.as_object() else {
-        return item.clone();
-    };
-    let mut ordered = Map::new();
-    for name in [
-        "id",
-        "title",
-        "status",
-        "kind",
-        "number",
-        "url",
-        "state",
-        "observedAt",
-    ] {
-        if let Some(value) = fields.get(name) {
-            ordered.insert(name.to_owned(), value.clone());
-        }
-    }
-    Value::Object(ordered)
+/// A prerequisite in the agent schema order, which puts `url` before `state`.
+#[derive(serde::Serialize, ts_rs::TS)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentBlocker {
+    id: String,
+    title: String,
+    status: TaskStatus,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    kind: Option<response::DependencyKind>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    number: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    state: Option<PullRequestState>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    observed_at: Option<String>,
 }
 
-#[derive(serde::Serialize)]
+impl From<&response::TaskBlockedBy> for AgentBlocker {
+    fn from(item: &response::TaskBlockedBy) -> Self {
+        Self {
+            id: item.id.clone(),
+            title: item.title.clone(),
+            status: item.status,
+            kind: item.kind,
+            number: item.number,
+            url: item.url.clone(),
+            state: item.state,
+            observed_at: item.observed_at.clone(),
+        }
+    }
+}
+
+#[derive(serde::Serialize, ts_rs::TS)]
+pub struct AgentProject {
+    id: String,
+    name: String,
+}
+
+/// What holds the task back from progress on its own.
+#[derive(serde::Serialize, ts_rs::TS)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum AgentTaskBlocker {
+    HumanQuestion,
+    DeliveryWait { reason: DeliveryWaitReason },
+}
+
+#[derive(serde::Serialize, ts_rs::TS)]
+pub struct AgentWorkflow {
+    id: Option<String>,
+    engine: Workflow,
+    name: Option<String>,
+}
+
+/// The pull request, delivery wait, and completion.
+#[derive(serde::Serialize, ts_rs::TS)]
 #[serde(rename_all = "camelCase")]
-struct AgentTaskProjection<'a> {
-    id: &'a str,
-    issue_key: Option<&'a str>,
-    project_id: &'a str,
-    project: Value,
-    title: &'a str,
-    source: &'a Option<task_contracts::TaskSource>,
-    status: &'a str,
+pub struct AgentDelivery {
+    pull_request: Option<AgentDeliveryPullRequest>,
+    checks: (),
+    waiting: Option<AgentDeliveryWait>,
+    completion: Option<AgentCompletion>,
+}
+
+#[derive(serde::Serialize, ts_rs::TS)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentDeliveryPullRequest {
+    number: u64,
+    url: String,
+    state: PullRequestState,
+    merged_at: Option<String>,
+}
+
+#[derive(serde::Serialize, ts_rs::TS)]
+pub struct AgentDeliveryWait {
+    reason: DeliveryWaitReason,
+    since: String,
+}
+
+#[derive(serde::Serialize, ts_rs::TS)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentCompletion {
+    kind: CompletionKind,
+    pull_request_number: Option<u64>,
+    observed_at: String,
+}
+
+/// `agentApiProjection`: a task as a paired agent reads it.
+#[derive(serde::Serialize, ts_rs::TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct AgentTaskProjection {
+    id: String,
+    issue_key: Option<String>,
+    project_id: String,
+    project: AgentProject,
+    title: String,
+    source: Option<task_contracts::TaskSource>,
+    status: TaskStatus,
     queue_priority: i64,
-    queue: &'a response::TaskQueue,
-    depends_on: &'a [String],
-    blocked_by: Vec<Value>,
+    queue: response::TaskQueue,
+    depends_on: Vec<String>,
+    blocked_by: Vec<AgentBlocker>,
     archived: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     revision: Option<String>,
     permitted_commands: Vec<&'static str>,
     human_question: Option<String>,
-    question: Option<AgentQuestion<'a>>,
-    blocker: Value,
-    workflow_stage: String,
-    workflow: Value,
-    template_id: Option<&'a str>,
-    delivery_target: &'a str,
+    question: Option<AgentQuestion>,
+    blocker: Option<AgentTaskBlocker>,
+    workflow_stage: &'static str,
+    workflow: AgentWorkflow,
+    template_id: Option<String>,
+    delivery_target: DeliveryTarget,
     run_project_tests: bool,
-    visual_evidence: &'a str,
-    delivery: Value,
-    created_at: &'a str,
-    updated_at: &'a str,
+    visual_evidence: VisualEvidence,
+    delivery: Option<AgentDelivery>,
+    created_at: String,
+    updated_at: String,
 }
 
 /// The agent API workflow stage of a task.
@@ -413,36 +505,48 @@ fn workflow_stage(
     completion: &Option<Completion>,
     question: bool,
     wait: &Option<DeliveryWait>,
-) -> String {
+) -> &'static str {
     if status == TaskStatus::Cancelled {
-        "cancelled".to_owned()
+        "cancelled"
     } else if completion.is_some() || status == TaskStatus::Delivered {
-        "completed".to_owned()
+        "completed"
     } else if question {
-        "waiting_human".to_owned()
+        "waiting_human"
     } else if wait.is_some() {
-        "waiting_delivery".to_owned()
+        "waiting_delivery"
     } else if status == TaskStatus::Active {
-        "working".to_owned()
+        "working"
     } else {
-        status.as_str().to_owned()
+        status.as_str()
     }
 }
 
-/// The pull request, delivery wait, and completion, or null when there is none.
+/// The pull request, delivery wait, and completion, or none when there is none.
 fn delivery_summary(
     pull: &Option<PullRequestReference>,
     wait: &Option<DeliveryWait>,
     completion: &Option<Completion>,
-) -> Value {
+) -> Option<AgentDelivery> {
     if pull.is_none() && wait.is_none() && completion.is_none() {
-        return Value::Null;
+        return None;
     }
-    json!({
-        "pullRequest": pull.as_ref().map(|pull| json!({"number": pull.number, "url": pull.url, "state": pull.state, "mergedAt": pull.merged_at})),
-        "checks": null,
-        "waiting": wait.as_ref().map(|wait| json!({"reason": wait.reason, "since": wait.since})),
-        "completion": completion.as_ref().map(|completion| json!({"kind": completion.kind, "pullRequestNumber": completion.pull_request_number, "observedAt": completion.observed_at})),
+    Some(AgentDelivery {
+        pull_request: pull.as_ref().map(|pull| AgentDeliveryPullRequest {
+            number: pull.number,
+            url: pull.url.clone(),
+            state: pull.state,
+            merged_at: pull.merged_at.clone(),
+        }),
+        checks: (),
+        waiting: wait.as_ref().map(|wait| AgentDeliveryWait {
+            reason: wait.reason,
+            since: wait.since.clone(),
+        }),
+        completion: completion.as_ref().map(|completion| AgentCompletion {
+            kind: completion.kind,
+            pull_request_number: completion.pull_request_number,
+            observed_at: completion.observed_at.clone(),
+        }),
     })
 }
 
@@ -451,8 +555,8 @@ fn projection_of(
     database: &SuplexDatabase,
     principal: &Principal,
     row: &Row,
-) -> DatabaseResult<Value> {
-    let task = response::get(database, &row.id)?.ok_or_else(not_found)?;
+) -> DatabaseResult<AgentTaskProjection> {
+    let task = task(database, &row.id)?;
     let project: Option<(String, String)> = database
         .connection()
         .query_row(
@@ -471,49 +575,47 @@ fn projection_of(
     let completion = &task.workflow_state.completion;
     let status = task.status;
     let blocker = if question.is_some() {
-        json!({"kind": "human_question"})
-    } else if let Some(wait) = wait {
-        json!({"kind": "delivery_wait", "reason": wait.reason})
+        Some(AgentTaskBlocker::HumanQuestion)
     } else {
-        Value::Null
+        wait.as_ref().map(|wait| AgentTaskBlocker::DeliveryWait {
+            reason: wait.reason,
+        })
     };
-    let stage = workflow_stage(status, completion, question.is_some(), wait);
-    let delivery = delivery_summary(&task.pull_request, wait, completion);
     let (workflow_id, workflow_name, template_id) = selection(&task);
-    let source = &task.configuration.source;
-    let archived = task.archived_at.is_some();
-    let permitted = permitted_commands(&task, principal);
     let mut value = AgentTaskProjection {
-        id: &task.id,
-        issue_key: task.issue_key.as_deref(),
-        project_id: &task.project_id,
-        project: json!({"id": project_id, "name": project_name}),
-        title: &task.title,
-        source,
-        status: status.as_str(),
+        id: task.id.clone(),
+        issue_key: task.issue_key.clone(),
+        project_id: task.project_id.clone(),
+        project: AgentProject {
+            id: project_id,
+            name: project_name,
+        },
+        title: task.title.clone(),
+        source: task.configuration.source.clone(),
+        status,
         queue_priority: task.queue_priority,
-        queue: &task.queue,
-        depends_on: &task.depends_on,
-        blocked_by: task
-            .blocked_by
-            .iter()
-            .map(serde_json::to_value)
-            .collect::<Result<_, _>>()?,
-        archived,
+        queue: task.queue.clone(),
+        depends_on: task.depends_on.clone(),
+        blocked_by: task.blocked_by.iter().map(AgentBlocker::from).collect(),
+        archived: task.archived_at.is_some(),
         revision: None,
-        permitted_commands: permitted,
+        permitted_commands: permitted_commands(&task, principal),
+        workflow_stage: workflow_stage(status, completion, question.is_some(), wait),
         human_question: question,
         question: task.human_question.as_ref().map(agent_question),
         blocker,
-        workflow_stage: stage,
-        workflow: json!({"id": workflow_id, "engine": task.workflow, "name": workflow_name}),
-        template_id,
-        delivery_target: task.delivery_target.as_str(),
+        workflow: AgentWorkflow {
+            id: workflow_id.map(str::to_owned),
+            engine: task.workflow,
+            name: workflow_name.map(str::to_owned),
+        },
+        template_id: template_id.map(str::to_owned),
+        delivery_target: task.delivery_target,
         run_project_tests: task.configuration.run_project_tests,
-        visual_evidence: task.configuration.visual_evidence.as_str(),
-        delivery,
-        created_at: &task.created_at,
-        updated_at: &task.updated_at,
+        visual_evidence: task.configuration.visual_evidence,
+        delivery: delivery_summary(&task.pull_request, wait, completion),
+        created_at: task.created_at.clone(),
+        updated_at: task.updated_at.clone(),
     };
     let hash = |value: &Value| {
         URL_SAFE_NO_PAD.encode(Sha256::digest(
@@ -522,15 +624,16 @@ fn projection_of(
     };
     // Host sweeps and delivery observation move `updatedAt` and `delivery` on a running task.
     // They form a separate revision part so a poll sees them and a command does not conflict on them.
+    // The revision hashes prerequisites in their task response order, before the agent schema order.
     let mut stable = serde_json::to_value(&value)?;
+    stable["blockedBy"] = serde_json::to_value(&task.blocked_by)?;
     let observed = json!([stable["updatedAt"].take(), stable["delivery"].take()]);
     value.revision = Some(format!(
         "{}.{}",
         hash(&json!({"value": stable, "commandRevision": row.command_revision})),
         hash(&observed)
     ));
-    value.blocked_by = value.blocked_by.iter().map(response_blocker).collect();
-    Ok(serde_json::to_value(value)?)
+    Ok(value)
 }
 
 /// `getAgentApiTask`: any task in a granted project.
@@ -539,6 +642,16 @@ pub fn projection(
     principal: &Principal,
     task_id: &str,
 ) -> DatabaseResult<Value> {
+    Ok(serde_json::to_value(typed_projection(
+        database, principal, task_id,
+    )?)?)
+}
+
+fn typed_projection(
+    database: &SuplexDatabase,
+    principal: &Principal,
+    task_id: &str,
+) -> DatabaseResult<AgentTaskProjection> {
     let row = require_readable(database, principal, task_id)?;
     projection_of(database, principal, &row)
 }
@@ -812,9 +925,9 @@ fn parse_cursor(
     Ok((updated_at.clone(), id.clone()))
 }
 
-fn create_cursor(principal: &Principal, filter: &Value, task: &Value) -> String {
+fn create_cursor(principal: &Principal, filter: &Value, task: &AgentTaskProjection) -> String {
     let payload = URL_SAFE_NO_PAD.encode(crate::shared::js_json::stringify(&json!({
-        "agentId": principal.agent_id, "filter": filter, "updatedAt": task["updatedAt"], "id": task["id"],
+        "agentId": principal.agent_id, "filter": filter, "updatedAt": task.updated_at, "id": task.id,
     })));
     let signature = hmac(&principal.cursor_key, &payload);
     format!("{payload}.{signature}")
@@ -825,7 +938,7 @@ fn list_page(
     database: &SuplexDatabase,
     principal: &Principal,
     query: &TaskListQuery,
-) -> DatabaseResult<(Vec<Value>, Option<String>)> {
+) -> DatabaseResult<(Vec<AgentTaskProjection>, Option<String>)> {
     if let Some(project_id) = &query.project_id {
         require_scope(
             database,
@@ -875,30 +988,49 @@ fn list_page(
     Ok((tasks, next))
 }
 
-fn summary(task: &Value) -> Value {
-    let mut fields = Map::new();
-    for name in ["id", "title", "status", "archived"] {
-        fields.insert(name.into(), task[name].clone());
+/// A list row in the summary view.
+#[derive(serde::Serialize, ts_rs::TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct AgentTaskSummary {
+    id: String,
+    title: String,
+    status: TaskStatus,
+    archived: bool,
+    /// A summary omits the default priority to stay small.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    queue_priority: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    workflow: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    source: Option<task_contracts::TaskSource>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pull_request_number: Option<u64>,
+    depends_on: Vec<String>,
+    updated_at: String,
+}
+
+fn summary(task: &AgentTaskProjection) -> AgentTaskSummary {
+    AgentTaskSummary {
+        id: task.id.clone(),
+        title: task.title.clone(),
+        status: task.status,
+        archived: task.archived,
+        queue_priority: (task.queue_priority != 0).then_some(task.queue_priority),
+        workflow: task.workflow.name.clone(),
+        source: task.source.clone(),
+        pull_request_number: task
+            .delivery
+            .as_ref()
+            .and_then(|delivery| delivery.pull_request.as_ref())
+            .map(|pull| pull.number),
+        depends_on: task.depends_on.clone(),
+        updated_at: task.updated_at.clone(),
     }
-    // A summary omits the default priority to stay small.
-    if task["queuePriority"] != 0 {
-        fields.insert("queuePriority".into(), task["queuePriority"].clone());
-    }
-    if !task["workflow"]["name"].is_null() {
-        fields.insert("workflow".into(), task["workflow"]["name"].clone());
-    }
-    if !task["source"].is_null() {
-        fields.insert("source".into(), task["source"].clone());
-    }
-    if !task["delivery"].is_null() && !task["delivery"]["pullRequest"].is_null() {
-        fields.insert(
-            "pullRequestNumber".into(),
-            task["delivery"]["pullRequest"]["number"].clone(),
-        );
-    }
-    fields.insert("dependsOn".into(), task["dependsOn"].clone());
-    fields.insert("updatedAt".into(), task["updatedAt"].clone());
-    Value::Object(fields)
 }
 
 // Integration health: `withAgentApiIntegration` over `tasks/integration.rs`
@@ -909,7 +1041,10 @@ struct Observed {
     failure: Option<String>,
 }
 
-async fn observe(github: &mut Option<Result<Github, String>>, task: &Value) -> Observed {
+async fn observe(
+    github: &mut Option<Result<Github, String>>,
+    task: &response::TaskResponse,
+) -> Observed {
     if !integration::observable_delivery(task) {
         return Observed {
             observation: None,
@@ -932,12 +1067,10 @@ async fn observe(github: &mut Option<Result<Github, String>>, task: &Value) -> O
             };
         }
     };
-    let configuration = &task["configuration"];
-    let number = task["pullRequest"]["number"].as_u64();
-    let repository = configuration["repository"].as_str().unwrap_or_default();
-    let branch = configuration["branch"].as_str().unwrap_or_default();
+    let configuration = &task.configuration;
+    let number = task.pull_request.as_ref().map(|pull| pull.number);
     match client
-        .observe_pull_request(repository, branch, number)
+        .observe_pull_request(&configuration.repository, &configuration.branch, number)
         .await
     {
         Ok(observation) => Observed {
@@ -953,23 +1086,20 @@ async fn observe(github: &mut Option<Result<Github, String>>, task: &Value) -> O
 
 /// The stored facts integration reads: each target row and task, and the agent's upstream pool.
 struct Targets {
-    targets: Vec<(Row, Value)>,
-    pool: Vec<Value>,
+    targets: Vec<response::TaskResponse>,
+    pool: Vec<response::TaskResponse>,
 }
 
 fn targets(
     database: &SuplexDatabase,
     principal: &Principal,
-    projections: &[Value],
+    projections: &[AgentTaskProjection],
 ) -> DatabaseResult<Targets> {
     let targets = projections
         .iter()
         .map(|projection| {
-            let id = projection["id"].as_str().unwrap_or_default();
-            Ok((
-                task_row(database, id)?.ok_or_else(not_found)?,
-                task_json(database, id)?,
-            ))
+            task_row(database, &projection.id)?.ok_or_else(not_found)?;
+            task(database, &projection.id)
         })
         .collect::<DatabaseResult<Vec<_>>>()?;
     let pool = rows(
@@ -981,17 +1111,37 @@ fn targets(
         },
     )?
     .iter()
-    .map(|row| task_json(database, &row.id))
+    .map(|row| task(database, &row.id))
     .collect::<DatabaseResult<Vec<_>>>()?;
     Ok(Targets { targets, pool })
 }
 
-async fn with_integration(projections: Vec<Value>, stored: Targets) -> Vec<Value> {
+/// `readAgentApiTask`: a task projection with its implementation status and observed integration health.
+#[derive(serde::Serialize, ts_rs::TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct AgentTask {
+    #[serde(flatten)]
+    projection: AgentTaskProjection,
+    implementation: AgentImplementation,
+    integration: integration::TaskIntegration,
+    action_required: Option<integration::ActionRequired>,
+}
+
+#[derive(serde::Serialize, ts_rs::TS)]
+pub struct AgentImplementation {
+    status: TaskStatus,
+}
+
+async fn with_integration(
+    projections: Vec<AgentTaskProjection>,
+    stored: Targets,
+) -> Vec<AgentTask> {
     let Targets { targets, pool } = stored;
     let observed_at = crate::shared::time::now_millis_rfc3339();
     let upstreams = targets
         .iter()
-        .map(|(_, task)| {
+        .map(|task| {
             pool.iter()
                 .filter(|other| integration::is_upstream_of(other, task))
                 .collect::<Vec<_>>()
@@ -999,13 +1149,8 @@ async fn with_integration(projections: Vec<Value>, stored: Targets) -> Vec<Value
         .collect::<Vec<_>>();
     let mut github = None;
     let mut integrations = std::collections::HashMap::new();
-    for task in targets
-        .iter()
-        .map(|(_, task)| task)
-        .chain(upstreams.iter().flatten().copied())
-    {
-        let id = task["id"].as_str().unwrap_or_default().to_owned();
-        if integrations.contains_key(&id) {
+    for task in targets.iter().chain(upstreams.iter().flatten().copied()) {
+        if integrations.contains_key(&task.id) {
             continue;
         }
         let observed = observe(&mut github, task).await;
@@ -1015,26 +1160,32 @@ async fn with_integration(projections: Vec<Value>, stored: Targets) -> Vec<Value
             observed.failure.as_deref(),
             &observed_at,
         );
-        integrations.insert(id, value);
+        integrations.insert(task.id.clone(), value);
     }
     projections
         .into_iter()
         .zip(targets.iter().zip(&upstreams))
-        .map(|(mut projection, ((_, task), upstream))| {
-            let id = task["id"].as_str().unwrap_or_default();
-            let integration = integrations[id].clone();
-            let blocking = upstream
+        .map(|(projection, (task, upstream))| {
+            let integration = &integrations[&task.id];
+            let upstream = upstream
                 .iter()
-                .find(|other| integrations.get(other["id"].as_str().unwrap_or_default()).is_none_or(|value| value["integrated"] != true));
-            let upstream = blocking.map_or(Value::Null, |other| json!({"taskId": other["id"], "pullRequestNumber": other["pullRequest"].get("number").cloned().unwrap_or(Value::Null)}));
-            let required = integration::derive_action_required(task, &integration, &upstream);
-            let status = projection["status"].clone();
-            if let Some(fields) = projection.as_object_mut() {
-                fields.insert("implementation".into(), json!({"status": status}));
-                fields.insert("integration".into(), integration);
-                fields.insert("actionRequired".into(), required);
+                .find(|other| {
+                    integrations
+                        .get(&other.id)
+                        .is_none_or(|value| !value.integrated)
+                })
+                .map(|other| integration::UpstreamBlocker {
+                    task_id: other.id.clone(),
+                    pull_request_number: other.pull_request.as_ref().map(|pull| pull.number),
+                });
+            AgentTask {
+                implementation: AgentImplementation {
+                    status: projection.status,
+                },
+                action_required: integration::derive_action_required(task, integration, upstream),
+                integration: integration.clone(),
+                projection,
             }
-            projection
         })
         .collect()
 }
@@ -1042,11 +1193,13 @@ async fn with_integration(projections: Vec<Value>, stored: Targets) -> Vec<Value
 /// `readAgentApiTask`: the stored projection plus observed integration health.
 pub async fn read(state: &AppState, principal: &Principal, task_id: &str) -> DatabaseResult<Value> {
     let (projection, stored) = state.with_database(|database| {
-        let projection = projection(database, principal, task_id)?;
+        let projection = typed_projection(database, principal, task_id)?;
         let stored = targets(database, principal, std::slice::from_ref(&projection))?;
         Ok::<_, Box<dyn Error + Send + Sync>>((projection, stored))
     })?;
-    Ok(with_integration(vec![projection], stored).await.remove(0))
+    Ok(serde_json::to_value(
+        with_integration(vec![projection], stored).await.remove(0),
+    )?)
 }
 
 /// `readAgentApiTasks`; `view` defaults differ between HTTP (full) and MCP (summary).
@@ -1059,7 +1212,7 @@ pub async fn read_list(
     let (tasks, next) = state.with_database(|database| list_page(database, principal, query))?;
     if view == "summary" && query.filter.is_none() {
         return Ok(
-            json!({"tasks": tasks.iter().map(summary).collect::<Vec<_>>(), "nextCursor": next}),
+            json!({"tasks": serde_json::to_value(tasks.iter().map(summary).collect::<Vec<_>>())?, "nextCursor": next}),
         );
     }
     let stored = state.with_database(|database| targets(database, principal, &tasks))?;
@@ -1070,20 +1223,20 @@ pub async fn read_list(
         .filter(|task| {
             query.filter.as_deref().is_none_or(|filter| {
                 integration::matches_agent_api_filter(
-                    &task["integration"],
-                    &task["actionRequired"],
+                    &task.integration,
+                    task.action_required.as_ref(),
                     filter,
                 )
             })
         })
         .map(|task| {
-            if view == "summary" {
-                summary(&task)
+            Ok(if view == "summary" {
+                serde_json::to_value(summary(&task.projection))?
             } else {
-                task
-            }
+                serde_json::to_value(task)?
+            })
         })
-        .collect::<Vec<_>>();
+        .collect::<DatabaseResult<Vec<_>>>()?;
     Ok(json!({"tasks": tasks, "nextCursor": next}))
 }
 
@@ -1154,8 +1307,8 @@ fn validate_workflow(
             extra.join(", ")
         )));
     }
-    if workflow == "refine_pull_request" {
-        if delivery_target.is_some_and(|value| value != "merged") {
+    if workflow == Workflow::RefinePullRequest.as_str() {
+        if delivery_target.is_some_and(|value| value != DeliveryTarget::Merged.as_str()) {
             return Err(workflow_input_failure(
                 "Pull request repair always delivers a merged pull request",
             ));
@@ -1192,7 +1345,7 @@ fn normalize_workflow(fields: &mut Map<String, Value>) -> DatabaseResult<()> {
     )?;
     fields.insert("workflow".into(), json!(workflow));
     fields.insert("advisorProfileIds".into(), advisors);
-    if workflow == "refine_pull_request" {
+    if workflow == Workflow::RefinePullRequest.as_str() {
         fields.insert("deliveryTarget".into(), json!("merged"));
     }
     Ok(())
@@ -1205,7 +1358,9 @@ fn task_input(mut fields: Map<String, Value>) -> DatabaseResult<task_contracts::
         ContractFailure::Issues(issues) => {
             TaskError::internal(format!("task input is invalid: {issues:?}")).into()
         }
-        other => TaskError::internal(format!("task input is invalid: {other:?}")).into(),
+        other @ ContractFailure::Unhandled | other @ ContractFailure::Internal(_) => {
+            TaskError::internal(format!("task input is invalid: {other:?}")).into()
+        }
     })
 }
 
@@ -1227,7 +1382,10 @@ fn sorted(value: &Value) -> Value {
                     .collect(),
             )
         }
-        other => other.clone(),
+        other @ Value::Null
+        | other @ Value::Bool(_)
+        | other @ Value::Number(_)
+        | other @ Value::String(_) => other.clone(),
     }
 }
 
@@ -1325,7 +1483,7 @@ fn profile_not_available(
     role: &str,
     field: &str,
 ) -> Box<dyn Error + Send + Sync> {
-    let code = if role == "worker" {
+    let code = if role == SessionKind::Worker.as_str() {
         "worker_profile_not_found"
     } else if field == "rootProfileId" {
         "root_profile_not_found"
@@ -1676,12 +1834,15 @@ fn dependency_unavailable(dependency: &str) -> Box<dyn Error + Send + Sync> {
     )
 }
 
-fn would_start(task: &Value) -> Value {
-    match task["status"].as_str() {
-        Some("backlog") => json!({"wouldStart": "backlog", "blockingPrerequisiteIds": []}),
-        Some("active") => json!({"wouldStart": "now", "blockingPrerequisiteIds": []}),
-        _ => {
-            json!({"wouldStart": "waiting", "blockingPrerequisiteIds": task["queue"]["waitingOn"].as_array().into_iter().flatten().map(|wait| wait["id"].clone()).collect::<Vec<_>>()})
+fn would_start(status: TaskStatus, queue: &response::TaskQueue) -> Value {
+    match status {
+        TaskStatus::Backlog => json!({"wouldStart": "backlog", "blockingPrerequisiteIds": []}),
+        TaskStatus::Active => json!({"wouldStart": "now", "blockingPrerequisiteIds": []}),
+        TaskStatus::Queued
+        | TaskStatus::WaitingHuman
+        | TaskStatus::Cancelled
+        | TaskStatus::Delivered => {
+            json!({"wouldStart": "waiting", "blockingPrerequisiteIds": queue.waiting_on.iter().map(|wait| &wait.id).collect::<Vec<_>>()})
         }
     }
 }
@@ -1746,7 +1907,7 @@ fn replayed(
     else {
         return Ok(None);
     };
-    let active = task_json(database, &id)?["status"] == "active";
+    let active = task(database, &id)?.status == TaskStatus::Active;
     Ok(Some(Creation::Task {
         id,
         created: false,
@@ -1845,7 +2006,7 @@ fn admit(
                 json!({"dryRun": true, "status": 200, "existingTaskId": id}),
             )));
         }
-        let active = task_json(database, &id)?["status"] == "active";
+        let active = task(database, &id)?.status == TaskStatus::Active;
         return Ok(Admission::Done(Creation::Task {
             id,
             created: false,
@@ -1984,16 +2145,16 @@ fn recheck_policy(
 }
 
 /// The dry-run response: what the admission would create and start.
-fn dry_run_preview(task: &Value, project: &Project, selection: &Value) -> Value {
+fn dry_run_preview(task: &response::TaskResponse, project: &Project, selection: &Value) -> Value {
     merged(
         json!({
-            "dryRun": true, "projectId": task["projectId"], "project": {"id": project.id, "name": project.name},
-            "title": task["title"],
-            "workflow": {"id": selection["workflowId"], "engine": task["workflow"], "name": selection["workflowName"]},
-            "templateId": selection["templateId"], "deliveryTarget": task["deliveryTarget"],
-            "branch": task["configuration"]["branch"], "dependsOn": task["dependsOn"],
+            "dryRun": true, "projectId": task.project_id, "project": {"id": project.id, "name": project.name},
+            "title": task.title,
+            "workflow": {"id": selection["workflowId"], "engine": task.workflow, "name": selection["workflowName"]},
+            "templateId": selection["templateId"], "deliveryTarget": task.delivery_target,
+            "branch": task.configuration.branch, "dependsOn": task.depends_on,
         }),
-        would_start(task),
+        would_start(task.status, &task.queue),
     )
 }
 
@@ -2075,7 +2236,7 @@ fn write(
             now,
             &mut written,
         )?;
-        let task = task_json(database, &result.task.id)?;
+        let task = task(database, &result.task.id)?;
         if dry_run {
             let preview = dry_run_preview(&task, &project, &pending.resolved.selection);
             return Err(Box::new(DryRunRollback(preview)));
@@ -2083,7 +2244,7 @@ fn write(
         Ok(Creation::Task {
             id: result.task.id,
             created: result.created,
-            active: task["status"] == "active",
+            active: task.status == TaskStatus::Active,
         })
     });
     match result {
@@ -2236,7 +2397,7 @@ fn set_dependency_ids(
     task_id: &str,
     depends_on: &[String],
     now: DateTime<Utc>,
-) -> DatabaseResult<Value> {
+) -> DatabaseResult<AgentTaskProjection> {
     let row = require_owned(database, principal, task_id)?;
     for dependency in depends_on {
         require_readable(database, principal, dependency)?;
@@ -2249,7 +2410,7 @@ fn set_dependency_ids(
         task_id,
         now,
     )?;
-    projection(database, principal, task_id)
+    typed_projection(database, principal, task_id)
 }
 
 pub fn set_dependencies_array(
@@ -2258,7 +2419,13 @@ pub fn set_dependencies_array(
     task_id: &str,
     depends_on: &[String],
 ) -> DatabaseResult<Value> {
-    set_dependency_ids(database, principal, task_id, depends_on, Utc::now())
+    Ok(serde_json::to_value(set_dependency_ids(
+        database,
+        principal,
+        task_id,
+        depends_on,
+        Utc::now(),
+    )?)?)
 }
 
 /// TypeScript `observePullRequestDependencies` for an agent: every rejection names the pull request.
@@ -2290,10 +2457,7 @@ pub fn dependency_repository(
         require_readable(database, principal, dependency)
             .map_err(|_| dependency_unavailable(dependency))?;
     }
-    Ok(task_json(database, task_id)?["configuration"]["repository"]
-        .as_str()
-        .unwrap_or("")
-        .to_owned())
+    Ok(task(database, task_id)?.configuration.repository)
 }
 
 /// The HTTP body form: pull request prerequisites are replaced with the task prerequisites.
@@ -2345,8 +2509,8 @@ pub fn preview_dependencies(
     let result = database.transaction(true, |database| {
         let task = set_dependency_ids(database, principal, task_id, depends_on, Utc::now())?;
         let preview = merged(
-            json!({"dryRun": true, "dependsOn": task["dependsOn"]}),
-            would_start(&task),
+            json!({"dryRun": true, "dependsOn": task.depends_on}),
+            would_start(task.status, &task.queue),
         );
         Err::<(), _>(Box::new(DryRunRollback(preview)) as Box<dyn Error + Send + Sync>)
     });
@@ -2428,7 +2592,7 @@ fn claim(
     request: &impl serde::Serialize,
     revision: &str,
     idempotency_key: &str,
-    legal: impl FnOnce(&SuplexDatabase, &Value) -> DatabaseResult<()>,
+    legal: impl FnOnce(&SuplexDatabase, &AgentTaskProjection) -> DatabaseResult<()>,
 ) -> DatabaseResult<Claim> {
     let hash = sha256_hex(crate::shared::js_json::stringify(&serde_json::to_value(
         request,
@@ -2470,7 +2634,7 @@ fn claim(
     let row = require_owned(database, principal, task_id)?;
     let before = projection_of(database, principal, &row)?;
     let command_part = |revision: &str| revision.split('.').next().unwrap_or_default().to_owned();
-    if before["revision"].as_str().map(command_part) != Some(command_part(revision)) {
+    if before.revision.as_deref().map(command_part) != Some(command_part(revision)) {
         return Err(stale());
     }
     legal(database, &before)?;
@@ -2507,10 +2671,7 @@ fn claim_command(
             if input.command == ANSWER_HUMAN_QUESTION {
                 require_answerable(database, task_id, input)?;
             }
-            if task["permittedCommands"]
-                .as_array()
-                .is_some_and(|commands| commands.contains(&json!(input.command)))
-            {
+            if task.permitted_commands.contains(&input.command.as_str()) {
                 Ok(())
             } else {
                 Err(fail(
@@ -2681,9 +2842,9 @@ fn apply(
         }
         "send_task_note" => {
             require_owned(database, principal, task_id)?;
-            let task = task_json(database, task_id)?;
-            if !task["archivedAt"].is_null()
-                || !matches!(task["status"].as_str(), Some("active" | "delivered"))
+            let task = task(database, task_id)?;
+            if task.archived_at.is_some()
+                || !matches!(task.status, TaskStatus::Active | TaskStatus::Delivered)
             {
                 return Err(fail(
                     "Start the task or answer its current decision before you send a message.",
@@ -2762,17 +2923,17 @@ fn duplicate_request(
     artifact_root: Option<&std::path::Path>,
 ) -> DatabaseResult<TaskCreateBody> {
     require_owned(database, principal, task_id)?;
-    let source = task_json(database, task_id)?;
-    let project_id = source["projectId"].as_str().unwrap_or_default().to_owned();
+    let source = task(database, task_id)?;
+    let project_id = source.project_id.clone();
     let policy =
         projects::get_in_company(database, &principal.company_id, &project_id)?.agent_task_policy;
     let mut images = Vec::new();
-    for image in source["images"].as_array().into_iter().flatten() {
+    for image in &source.images {
         let artifact: Option<(String, String, String)> = database
             .connection()
             .query_row(
                 "SELECT filename, mime_type, storage_path FROM suplex_artifacts WHERE id = ?1 AND task_id = ?2 AND company_id = ?3",
-                params![image["artifactId"].as_str().unwrap_or_default(), task_id, principal.company_id],
+                params![image.artifact_id, task_id, principal.company_id],
                 |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
             )
             .optional()?;
@@ -2791,7 +2952,7 @@ fn duplicate_request(
             base64: STANDARD.encode(bytes),
         });
     }
-    let engine = source["workflow"].as_str().unwrap_or("standard");
+    let engine = source.workflow.as_str();
     let workflow_id = policy
         .workflow_ids
         .iter()
@@ -2812,47 +2973,37 @@ fn duplicate_request(
         .cloned()
         .unwrap_or_else(|| policy.default_workflow_id.clone());
     // A profile removed since the source task ran falls back to its default.
-    let existing = |id: &Value, role: &str| -> DatabaseResult<Option<String>> {
-        let Some(id) = id.as_str() else {
-            return Ok(None);
-        };
+    let existing = |id: &str, role: &str| -> DatabaseResult<Option<String>> {
         Ok(
             crate::profiles::agent_profiles::read_profile(database, id, role)?
                 .map(|_| id.to_owned()),
         )
     };
-    let mut advisor_ids = Map::new();
-    if let Some(stored) = source["advisorProfiles"].as_object() {
-        for (role, profile) in stored {
-            if let Some(id) = existing(&profile["profileId"], "root")? {
-                advisor_ids.insert(role.clone(), json!(id));
-            }
+    let mut advisor_ids = task_contracts::AdvisorProfileIds::default();
+    for (role, profile) in &source.advisor_profiles {
+        let id = existing(&profile.profile_id, "root")?;
+        match role {
+            AdvisorRole::Reviewer => advisor_ids.reviewer = id,
+            AdvisorRole::PlannerA => advisor_ids.planner_a = id,
+            AdvisorRole::PlannerB => advisor_ids.planner_b = id,
+            AdvisorRole::Rater => advisor_ids.rater = id,
         }
     }
-    let task_source = source["configuration"]
-        .get("source")
-        .filter(|value| !value.is_null())
-        .cloned();
     Ok(TaskCreateBody {
         project_id,
-        title: duplicate_title(source["title"].as_str().unwrap_or_default()),
-        description: Some(
-            source["description"]
-                .as_str()
-                .unwrap_or_default()
-                .to_owned(),
-        ),
+        title: duplicate_title(&source.title),
+        description: Some(source.description.clone()),
         idempotency_key: format!("duplicate-{}", sha256_hex(format!("{task_id}:{key}"))),
         depends_on: None,
         blocked_by_pull_requests: None,
         queue: None,
         images,
-        source: task_source.map(serde_json::from_value).transpose()?,
+        source: source.configuration.source.clone(),
         workflow_id: Some(workflow_id),
         template_id: None,
-        root_profile_id: existing(&source["rootProfile"]["profileId"], "root")?,
-        worker_profile_id: existing(&source["workerProfile"]["profileId"], "worker")?,
-        advisor_profile_ids: serde_json::from_value(Value::Object(advisor_ids))?,
+        root_profile_id: existing(&source.root_profile.profile_id, "root")?,
+        worker_profile_id: existing(&source.worker_profile.profile_id, "worker")?,
+        advisor_profile_ids: advisor_ids,
         delivery_target: None,
         run_project_tests: None,
         visual_evidence: None,
@@ -3252,7 +3403,8 @@ mod retirement_admission_tests {
         let Creation::Task { id, .. } = created else {
             panic!("the repair task must be created");
         };
-        let task = state.with_database(|database| task_json(database, &id).unwrap());
+        let task = state
+            .with_database(|database| serde_json::to_value(task(database, &id).unwrap()).unwrap());
         assert_eq!(
             (
                 &task["workflow"],

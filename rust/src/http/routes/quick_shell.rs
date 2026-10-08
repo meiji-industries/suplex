@@ -2,6 +2,8 @@
 //! directory. It stays open between views until its person exits it or
 //! Suplex stops, so closing the console never ends the shell.
 
+#![cfg_attr(not(test), deny(clippy::disallowed_types, clippy::disallowed_macros))]
+
 use axum::{
     Router,
     extract::{RawQuery, State, ws::WebSocketUpgrade},

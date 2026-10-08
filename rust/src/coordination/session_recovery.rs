@@ -211,14 +211,16 @@ pub async fn finish_delegate_turn(
         );
         return record(database, &observation, &wake, review.as_ref());
     }
-    let purpose = if input["kind"] == "worker" {
+    let purpose = if input["kind"] == SessionKind::Worker.as_str() {
         input["purpose"].as_str().unwrap_or("implementation")
     } else {
         "implementation"
     }
     .to_owned();
     let mut verification_range = None;
-    if purpose == "verification" && input["kind"] == "worker" {
+    if purpose == WorkerAssignmentPurpose::Verification.as_str()
+        && input["kind"] == SessionKind::Worker.as_str()
+    {
         let before = ReviewRange::from_value(&input["range"]).unwrap_or_default();
         verification_range = Some(
             match root_controller::source_still_matches(
@@ -297,6 +299,9 @@ use crate::{
     tasks::archive::processes,
 };
 
+use crate::http::contracts::task_reads::WorkerAssignmentMode;
+use crate::http::contracts::task_reads::WorkerAssignmentPurpose;
+use crate::tasks::control::SessionKind;
 use crate::tasks::limits::{needs_admission_usage, observed_usage};
 pub(crate) struct ProjectLaunchScope {
     context: Option<String>,
@@ -634,7 +639,7 @@ fn selected_profile<'a>(
     rows: &'a root_session_store::RootObservationRows,
     kind: &str,
 ) -> &'a TaskProfile {
-    let (session, fallback) = if kind == "root" {
+    let (session, fallback) = if kind == SessionKind::Root.as_str() {
         (rows.root.as_ref(), &rows.control.root_profile)
     } else {
         (rows.worker.as_ref(), &rows.control.worker_profile)
@@ -1183,17 +1188,20 @@ fn delegate_launch(
         .iter()
         .find(|turn| turn.id == turn_id)
         .and_then(|turn| workflows::turn_workflow_input(&rows.sessions, turn))
-        .filter(|input| input["kind"] == "worker");
+        .filter(|input| input["kind"] == SessionKind::Worker.as_str());
     DelegateLaunch {
         profile: profile.clone(),
-        purpose: if input.is_some_and(|input| input["purpose"] == "verification") {
+        purpose: if input
+            .is_some_and(|input| input["purpose"] == WorkerAssignmentPurpose::Verification.as_str())
+        {
             WorkerPurpose::Verification
         } else {
             WorkerPurpose::Implementation
         },
         workflow: WorkflowLaunch {
             workflow_root: false,
-            direct: input.is_some_and(|input| input["mode"] == "direct"),
+            direct: input
+                .is_some_and(|input| input["mode"] == WorkerAssignmentMode::Direct.as_str()),
             advisor: session.and_then(|session| session.advisor_role),
         },
     }
@@ -1529,14 +1537,15 @@ mod tests {
     #[test]
     fn approve_then_build_gates_the_first_build_on_the_durable_approved_plan() {
         use crate::coordination::root_controller::{WorkerAssignment, check_plan_approval};
+        use crate::http::contracts::task_reads::{WorkerAssignmentMode, WorkerAssignmentPurpose};
         let (directory, mut database, root) = fixture("approve_then_build");
         let task_id = root.task_id.clone();
         let assignment = |plan: &str, purpose: &str| WorkerAssignment {
             plan: Some(plan.into()),
             acceptance_criteria: vec!["Done".into()],
             instruction: "Build".into(),
-            mode: "planned".into(),
-            purpose: purpose.into(),
+            mode: WorkerAssignmentMode::Planned,
+            purpose: WorkerAssignmentPurpose::parse(purpose).unwrap(),
             advisor_turn_id: None,
             advisor_session_id: None,
             candidate_turn_ids: None,

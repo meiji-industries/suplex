@@ -1,4 +1,5 @@
 //! Task creation orchestration shared by browser and agent entry points.
+use crate::identity::companies::CompanyStatus;
 use crate::{
     http::{AppState, contracts::typed::tasks as task_contracts},
     identity::companies,
@@ -24,7 +25,7 @@ pub async fn create_browser(
         let admission =
             state.with_database(|database| -> Result<_, Box<dyn Error + Send + Sync>> {
                 let company = companies::require_company_access(database, &user_id, &company_id)?;
-                if company.status != "active" {
+                if company.status != CompanyStatus::Active {
                     return Err(TaskError::new("The company is not active", 409).into());
                 }
                 let project = projects::get(database, &user_id, &request.project_id)?;

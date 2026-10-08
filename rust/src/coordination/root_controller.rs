@@ -9,6 +9,7 @@ use serde_json::{Map, Value, json};
 
 use crate::{
     delivery::operations::DeliveryOperations,
+    http::contracts::task_reads::{WorkerAssignmentMode, WorkerAssignmentPurpose},
     http::contracts::typed::tasks::TaskWorkerReplacementBody,
     platform::{
         artifacts,
@@ -33,14 +34,15 @@ use super::{
         turn_workflow_input,
     },
 };
+use crate::tasks::control::SessionKind;
 
 /// TypeScript `WorkerAssignment` after the Root tool contract validated it.
 pub struct WorkerAssignment {
     pub plan: Option<String>,
     pub acceptance_criteria: Vec<String>,
     pub instruction: String,
-    pub mode: String,
-    pub purpose: String,
+    pub mode: WorkerAssignmentMode,
+    pub purpose: WorkerAssignmentPurpose,
     pub advisor_turn_id: Option<String>,
     pub advisor_session_id: Option<String>,
     pub candidate_turn_ids: Option<[String; 2]>,
@@ -78,7 +80,7 @@ fn accepted_assignment(turns: &[TurnRow], worker: &SessionRow) -> Option<Value> 
         .rev()
         .find(|turn| turn.session_id == worker.id && turn.generation == worker.generation)?;
     Some(match &turn.workflow_input {
-        Some(input) if input["kind"] == "worker" => {
+        Some(input) if input["kind"] == SessionKind::Worker.as_str() => {
             json!({"kind":"workflow_input","input":input})
         }
         _ => json!({"kind":"saved_prompt","prompt":turn.prompt_text}),
@@ -469,12 +471,14 @@ const DIRTY_CHECK_SOURCE: &str = "The worktree has uncommitted changes. A check-
 
 /// Direct mode belongs to Direct build; planned mode needs the plan.
 fn check_assignment_mode(assignment: &WorkerAssignment, workflow: Workflow) -> DatabaseResult<()> {
-    if assignment.mode == "direct" && workflow != Workflow::DirectBuild {
+    if assignment.mode == WorkerAssignmentMode::Direct && workflow != Workflow::DirectBuild {
         return Err(invalid(
             "Direct mode is legal only for the Direct build workflow. Supply a plan in planned mode.",
         ));
     }
-    if assignment.mode == "planned" && assignment.plan.as_deref().is_none_or(str::is_empty) {
+    if assignment.mode == WorkerAssignmentMode::Planned
+        && assignment.plan.as_deref().is_none_or(str::is_empty)
+    {
         return Err(invalid(
             "A planned assignment requires the Coordinator's plan.",
         ));
@@ -505,8 +509,8 @@ impl AssignmentDraft<'_> {
         let assignment = self.assignment;
         Ok(
             root_prompts::compose_worker_assignment(&WorkerAssignmentText {
-                mode: &assignment.mode,
-                purpose: &assignment.purpose,
+                mode: assignment.mode.as_str(),
+                purpose: assignment.purpose.as_str(),
                 plan: assignment.plan.as_deref(),
                 acceptance_criteria: &assignment.acceptance_criteria,
                 instruction: &assignment.instruction,
@@ -541,7 +545,8 @@ fn launch_worker(
     text: &str,
     workflow_input: Option<&Value>,
 ) -> DatabaseResult<Value> {
-    let prompt = root_prompts::worker_prompt(&assignment.mode, &assignment.purpose, text)?;
+    let prompt =
+        root_prompts::worker_prompt(assignment.mode.as_str(), assignment.purpose.as_str(), text)?;
     let current_root = root_session_store::current_root(database, &root.task_id)?
         .ok_or_else(|| invalid("root_identity_mismatch"))?;
     let worker = root_session_store::launch_standard_worker(
@@ -562,7 +567,8 @@ fn implementation_built(rows: &RootObservationRows) -> bool {
         rows.session(&turn.session_id)
             .is_some_and(SessionRow::is_plain_worker)
             && input.is_some_and(|input| {
-                input["kind"] == "worker" && input["purpose"] == "implementation"
+                input["kind"] == SessionKind::Worker.as_str()
+                    && input["purpose"] == WorkerAssignmentPurpose::Implementation.as_str()
             })
             && turn.status == TurnStatus::Completed
             && turn_outcome(turn.terminal_observation.as_deref())
@@ -615,7 +621,7 @@ fn candidate_plan_reports(
         }
         return Ok(Value::Null);
     }
-    if assignment.purpose != "implementation" || implementation_built(rows) {
+    if assignment.purpose != WorkerAssignmentPurpose::Implementation || implementation_built(rows) {
         return Ok(Value::Null);
     }
     let by_turn = assignment.candidate_turn_ids.is_some();
@@ -648,7 +654,7 @@ pub(crate) fn check_plan_approval(
     assignment: &WorkerAssignment,
 ) -> DatabaseResult<()> {
     if workflow != Workflow::ApproveThenBuild
-        || assignment.purpose != "implementation"
+        || assignment.purpose != WorkerAssignmentPurpose::Implementation
         || implementation_built(rows)
     {
         return Ok(());
@@ -730,7 +736,9 @@ fn advisor_references(
     workflow: Workflow,
     assignment: &WorkerAssignment,
 ) -> DatabaseResult<(Option<String>, Value)> {
-    if workflow == Workflow::RefinePullRequest && assignment.purpose == "implementation" {
+    if workflow == Workflow::RefinePullRequest
+        && assignment.purpose == WorkerAssignmentPurpose::Implementation
+    {
         let (text, reference) = rater_reference(rows, assignment)?;
         return Ok((Some(text), reference));
     }
@@ -756,7 +764,7 @@ pub async fn delegate_worker(
             .unwrap_or("required")
             .to_owned(),
     };
-    let verification = assignment.purpose == "verification";
+    let verification = assignment.purpose == WorkerAssignmentPurpose::Verification;
     if workflow == Workflow::Standard && !verification {
         let workflow_input = draft.input(None, Value::Null, Value::Null);
         return launch_worker(
@@ -888,21 +896,20 @@ pub async fn delegate_advisor(
     artifact_root: &Path,
     root: &RootIdentity,
     owner_token: &str,
-    role: &str,
+    advisor: AdvisorRole,
     brief: Option<&str>,
 ) -> DatabaseResult<Value> {
     let rows = open_root(database, root)?;
     let definition = rows.control.workflow.definition();
+    let role = advisor.as_str();
     let label = advisor_label(role);
-    let Some(advisor) =
-        AdvisorRole::parse(role).filter(|_| definition.advisor_roles.contains(&role))
-    else {
+    if !definition.advisor_roles.contains(&role) {
         return Err(CoordinationError::refused(format!(
             "The {} workflow has no {label} Advisor.",
             definition.name
         ))
         .into());
-    };
+    }
     if brief.is_some() && advisor != AdvisorRole::Reviewer {
         return Err(CoordinationError::refused(format!(
             "Suplex composes the {label} input; a brief is accepted only for Reviewer."
@@ -1364,8 +1371,8 @@ mod tests {
             plan: Some("Add the field".into()),
             acceptance_criteria: vec!["The field shows".into()],
             instruction: "Build it".into(),
-            mode: "planned".into(),
-            purpose: "implementation".into(),
+            mode: WorkerAssignmentMode::Planned,
+            purpose: WorkerAssignmentPurpose::Implementation,
             advisor_turn_id: None,
             advisor_session_id: None,
             candidate_turn_ids: None,

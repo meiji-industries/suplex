@@ -2,6 +2,8 @@
 //! (`src/integrations/github/triggers.ts`, `trigger-repository.ts`,
 //! `trigger-poller.ts`, and the trigger admission paths of `tasks/tasks.ts`).
 
+use crate::identity::auth::UserRole;
+use crate::identity::companies::CompanyStatus;
 use std::collections::HashMap;
 
 use crate::identity::IdentityError;
@@ -35,7 +37,10 @@ use super::{
         validate_protected_paths,
     },
 };
+use crate::coordination::workflows::Workflow;
 use crate::http::contracts::typed::projects::RepositoryConnection;
+use crate::tasks::control::DeliveryTarget;
+use crate::tasks::control::TaskStatus;
 use crate::{
     coordination::{advisor_bridge::AdvisorRole, workflow_records, workflows::workflow_definition},
     http::{
@@ -369,7 +374,7 @@ fn record(
 
 fn admin(database: &SuplexDatabase, user_id: &str, company_id: &str) -> DatabaseResult<()> {
     companies::require_company_access(database, user_id, company_id)?;
-    if active_role(database, user_id)?.as_deref() != Some("admin") {
+    if active_role(database, user_id)? != Some(UserRole::Admin) {
         return Err(Box::new(TriggerFailure {
             message: "Administrator access required".into(),
             status: 403,
@@ -379,7 +384,7 @@ fn admin(database: &SuplexDatabase, user_id: &str, company_id: &str) -> Database
     Ok(())
 }
 
-fn active_role(database: &SuplexDatabase, user_id: &str) -> DatabaseResult<Option<String>> {
+fn active_role(database: &SuplexDatabase, user_id: &str) -> DatabaseResult<Option<UserRole>> {
     Ok(database
         .connection()
         .query_row(
@@ -460,7 +465,9 @@ fn normalized_run_project_tests(
             extra.join(", ")
         ));
     }
-    if engine == "refine_pull_request" && delivery_target != "merged" {
+    if engine == Workflow::RefinePullRequest.as_str()
+        && delivery_target != DeliveryTarget::Merged.as_str()
+    {
         return Err("Pull request repair always delivers a merged pull request".into());
     }
     Ok(preset.run_project_tests)
@@ -524,12 +531,12 @@ fn local(
     config: &Config,
 ) -> DatabaseResult<Local> {
     admin(database, actor, company_id)?;
-    if active_role(database, &config.authority_user_id)?.as_deref() != Some("admin") {
+    if active_role(database, &config.authority_user_id)? != Some(UserRole::Admin) {
         return Err(local_failure("GitHub authority is unavailable", 422));
     }
     let company =
         companies::require_company_access(database, &config.authority_user_id, company_id)?;
-    if company.status != "active" {
+    if company.status != CompanyStatus::Active {
         return Err(local_failure("Company is not active", 409));
     }
     let project = projects::get(database, &config.authority_user_id, &config.project_id)?;
@@ -1692,7 +1699,7 @@ fn require_admission(database: &SuplexDatabase, dispatch: &Dispatch) -> Database
     let failure = |message: &str, status: u16| -> Box<dyn Error + Send + Sync> {
         TaskError::new(message, status).into()
     };
-    if active_role(database, &dispatch.authority_user_id)?.as_deref() != Some("admin") {
+    if active_role(database, &dispatch.authority_user_id)? != Some(UserRole::Admin) {
         return Err(failure("GitHub trigger authority is not available", 422));
     }
     let company = companies::require_company_access(
@@ -1700,7 +1707,7 @@ fn require_admission(database: &SuplexDatabase, dispatch: &Dispatch) -> Database
         &dispatch.authority_user_id,
         &dispatch.company_id,
     )?;
-    if company.status != "active" {
+    if company.status != CompanyStatus::Active {
         return Err(failure("Company is not active", 409));
     }
     let rule = get_rule(database, &dispatch.company_id, &dispatch.rule_id)?.filter(|rule| {
@@ -1895,7 +1902,7 @@ fn startable(database: &SuplexDatabase, task_id: &str) -> DatabaseResult<(String
         |row| Ok((row.get::<_, String>(0)?, row.get::<_, bool>(1)?)),
     )?;
     // A queued task was already started; the scheduler admits it when capacity frees.
-    let can_start = live && status == "backlog";
+    let can_start = live && status == TaskStatus::Backlog.as_str();
     Ok((status, can_start))
 }
 

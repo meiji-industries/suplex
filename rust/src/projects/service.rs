@@ -2,6 +2,8 @@ use super::repository_settings::{RepositorySettings, RepositorySettingsField};
 use super::{git, provisioning, repository_settings};
 use crate::http::{AppState, contracts::typed::projects::RepositoryConnection};
 use crate::identity::IdentityError;
+use crate::identity::auth::UserRole;
+use crate::identity::companies::CompanyStatus;
 use crate::projects::ProjectError;
 use crate::shared::ids::random_hex_id;
 use crate::shared::time::rfc3339_millis;
@@ -22,6 +24,7 @@ use crate::{
 };
 
 use super::git::{Finding, PreparedLocalProject};
+use crate::tasks::control::SessionKind;
 
 fn failure(message: &'static str, status: u16, findings: Vec<Finding>) -> Box<ProjectError> {
     ProjectError::new(message, status, findings).into()
@@ -289,7 +292,7 @@ fn validate_agent_policy(
         }
     }
     for role in ["root", "worker"] {
-        let profile_ids = if role == "root" {
+        let profile_ids = if role == SessionKind::Root.as_str() {
             &policy.root_profile_ids
         } else {
             &policy.worker_profile_ids
@@ -406,7 +409,7 @@ fn public_project(stored: StoredProject) -> DatabaseResult<Project> {
     Ok(project)
 }
 
-fn active_role(database: &SuplexDatabase, actor_user_id: &str) -> DatabaseResult<String> {
+fn active_role(database: &SuplexDatabase, actor_user_id: &str) -> DatabaseResult<UserRole> {
     database
         .connection()
         .query_row(
@@ -430,14 +433,14 @@ pub fn get(
     project_id: &str,
 ) -> DatabaseResult<Project> {
     let role = active_role(database, actor_user_id)?;
-    let sql = if role == "admin" {
+    let sql = if role == UserRole::Admin {
         format!("{SELECTION} WHERE p.id = ?1")
     } else {
         format!(
             "{SELECTION} JOIN suplex_memberships m ON m.company_id = p.company_id WHERE p.id = ?1 AND m.user_id = ?2"
         )
     };
-    let result = if role == "admin" {
+    let result = if role == UserRole::Admin {
         database
             .connection()
             .query_row(&sql, [project_id], stored)
@@ -479,7 +482,7 @@ pub fn list(
         companies::require_company_access(database, actor_user_id, company_id)?;
         return list_company(database, company_id);
     }
-    let mut statement = if role == "admin" {
+    let mut statement = if role == UserRole::Admin {
         database
             .connection()
             .prepare(&format!("{SELECTION} ORDER BY p.name"))?
@@ -488,7 +491,7 @@ pub fn list(
             "{SELECTION} JOIN suplex_memberships m ON m.company_id = p.company_id WHERE m.user_id = ?1 ORDER BY p.name"
         ))?
     };
-    let rows = if role == "admin" {
+    let rows = if role == UserRole::Admin {
         statement.query_map([], stored)?
     } else {
         statement.query_map([actor_user_id], stored)?
@@ -611,7 +614,7 @@ pub fn create_local(
         .map_or_else(|| root_profile_id.to_owned(), |profile| profile.profile_id)
     };
     let company = companies::require_company_access(database, actor_user_id, company_id)?;
-    if company.status != "active" {
+    if company.status != CompanyStatus::Active {
         return Err(failure(
             "Company is not active",
             409,
@@ -636,7 +639,7 @@ pub fn create_local(
     let provider_policy_json = provider_policy.as_ref().map(json_text).transpose()?;
     let result = database.transaction(false, |database| {
         let company = companies::require_company_access(database, actor_user_id, company_id)?;
-        if company.status != "active" {
+        if company.status != CompanyStatus::Active {
             return Err(failure("Company is not active", 409, vec![]));
         }
         crate::billing::require(database, crate::billing::Limit::Projects, options.now)?;
@@ -830,7 +833,9 @@ fn require_active_company(
     actor_user_id: &str,
     company_id: &str,
 ) -> DatabaseResult<()> {
-    if companies::require_company_access(database, actor_user_id, company_id)?.status != "active" {
+    if companies::require_company_access(database, actor_user_id, company_id)?.status
+        != CompanyStatus::Active
+    {
         return Err(failure("Company is not active", 409, vec![]));
     }
     Ok(())
@@ -1519,7 +1524,7 @@ pub(crate) fn admit_configuration(
     company_id: &str,
 ) -> DatabaseResult<()> {
     let company = companies::require_company_access(database, user_id, company_id)?;
-    if company.status != "active" {
+    if company.status != CompanyStatus::Active {
         return Err(ProjectError::new(
             "Company is not active",
             409,
@@ -2134,7 +2139,7 @@ mod tests {
         database
             .connection()
             .execute(
-                "UPDATE suplex_companies SET status = 'suspended' WHERE id = ?1",
+                "UPDATE suplex_companies SET status = 'paused' WHERE id = ?1",
                 [&company.id],
             )
             .unwrap();

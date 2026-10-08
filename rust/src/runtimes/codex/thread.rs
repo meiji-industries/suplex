@@ -66,7 +66,7 @@ pub fn recover_thread_id(directory: &Path) -> io::Result<Option<String>> {
             logs.push((modified, entry.path()));
         }
     }
-    logs.sort_by(|left, right| right.0.cmp(&left.0));
+    logs.sort_by_key(|log| std::cmp::Reverse(log.0));
     let dead = dead_thread_ids(directory);
     for (_, path) in logs {
         let content = fs::read_to_string(path).unwrap_or_default();

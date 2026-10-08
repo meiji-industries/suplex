@@ -1,312 +1,440 @@
 //! TypeScript `tasks/integration.ts`: derive a task's integration state and
 //! next required action from its public task shape and a GitHub observation.
-//! The agent API routes (W8) call these; inputs are the public task JSON.
+//! The agent API routes (W8) call these.
 
-use serde_json::{Value, json};
+#![cfg_attr(not(test), deny(clippy::disallowed_types, clippy::disallowed_macros))]
 
+use serde::Serialize;
+use ts_rs::TS;
+
+use crate::http::contracts::typed::tasks::TaskSource;
 use crate::integrations::github_delivery::Observation;
-use crate::tasks::control::DeliveryTarget;
+use crate::tasks::control::TaskStatus;
+use crate::tasks::response::TaskResponse;
 
-pub fn requires_pull_request(task: &Value) -> bool {
-    task["deliveryTarget"]
-        .as_str()
-        .and_then(DeliveryTarget::parse)
-        .is_some_and(DeliveryTarget::uses_pull_request)
+crate::shared::wire_enum! {
+    pub enum IntegrationPullRequestState {
+        Absent = "absent",
+        Merged = "merged",
+        Closed = "closed",
+        Conflicting = "conflicting",
+        Draft = "draft",
+        Ready = "ready",
+        Open = "open",
+    }
+}
+
+crate::shared::wire_enum! {
+    pub enum ObservationStatus {
+        Observed = "observed",
+        Unavailable = "unavailable",
+    }
+}
+
+crate::shared::wire_enum! {
+    pub enum ActionOwner {
+        Human = "human",
+        Suplex = "suplex",
+        Agent = "agent",
+        Upstream = "upstream",
+    }
+}
+
+crate::shared::wire_enum! {
+    pub enum ActionReason {
+        WaitingHuman = "waiting_human",
+        ObservationUnavailable = "observation_unavailable",
+        ConflictingPullRequest = "conflicting_pull_request",
+        FailedChecks = "failed_checks",
+        StaleDelivery = "stale_delivery",
+        PullRequestMissing = "pull_request_missing",
+        BlockedByDependency = "blocked_by_dependency",
+        PendingChecks = "pending_checks",
+        PendingReview = "pending_review",
+    }
+}
+
+/// TypeScript `TaskIntegration`.
+#[derive(Clone, Debug, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct TaskIntegration {
+    pub integrated: bool,
+    pub pull_request: IntegrationPullRequest,
+    pub observed_at: String,
+    pub observation: ObservationStatus,
+    pub observation_reason: Option<String>,
+    pub deployed: Deployed,
+}
+
+#[derive(Clone, Debug, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct IntegrationPullRequest {
+    pub state: IntegrationPullRequestState,
+    pub number: Option<u64>,
+    pub url: Option<String>,
+    pub target_branch: String,
+    pub head_sha: Option<String>,
+    pub base_sha: Option<String>,
+    pub mergeable: Option<String>,
+    pub merge_state_status: Option<String>,
+    pub review_decision: Option<String>,
+    pub checks: CheckCounts,
+}
+
+#[derive(Clone, Debug, Default, Serialize, TS)]
+pub struct CheckCounts {
+    pub total: u64,
+    pub pending: u64,
+    pub failing: u64,
+    pub successful: u64,
+}
+
+/// Suplex does not observe deployed runtimes, so it never claims that a change is live.
+#[derive(Clone, Debug, Serialize, TS)]
+pub struct Deployed {
+    included: (),
+    #[ts(type = "\"not_determinable\"")]
+    reason: &'static str,
+}
+
+/// TypeScript `ActionRequired`.
+#[derive(Clone, Debug, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ActionRequired {
+    pub upstream: Option<UpstreamBlocker>,
+    pub human_approval_required: bool,
+    pub owner: ActionOwner,
+    pub reason_code: ActionReason,
+    pub summary: &'static str,
+    pub suggested_commands: Vec<String>,
+    pub evidence_at: String,
+}
+
+#[derive(Clone, Debug, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct UpstreamBlocker {
+    pub task_id: String,
+    pub pull_request_number: Option<u64>,
+}
+
+pub fn requires_pull_request(task: &TaskResponse) -> bool {
+    task.delivery_target.uses_pull_request()
 }
 
 /// GitHub is only asked once a task has a pull request or delivered to a pull request target.
-pub fn observable_delivery(task: &Value) -> bool {
-    !task["pullRequest"].is_null() || (task["status"] == "delivered" && requires_pull_request(task))
+pub fn observable_delivery(task: &TaskResponse) -> bool {
+    task.pull_request.is_some()
+        || (task.status == TaskStatus::Delivered && requires_pull_request(task))
 }
 
-fn pull_request_state(observation: Option<&Observation>) -> &'static str {
+fn pull_request_state(observation: Option<&Observation>) -> IntegrationPullRequestState {
+    use IntegrationPullRequestState as State;
     let Some(observation) = observation.filter(|observation| observation.exists) else {
-        return "absent";
+        return State::Absent;
     };
     match observation.state.as_deref() {
-        Some("merged") => return "merged",
-        Some("closed") => return "closed",
+        Some("merged") => return State::Merged,
+        Some("closed") => return State::Closed,
         _ => {}
     }
     if observation.mergeable.as_deref() == Some("CONFLICTING")
         || observation.merge_state_status.as_deref() == Some("DIRTY")
     {
-        return "conflicting";
+        return State::Conflicting;
     }
     match observation.is_draft {
-        Some(true) => "draft",
-        Some(false) => "ready",
-        None => "open",
+        Some(true) => State::Draft,
+        Some(false) => State::Ready,
+        None => State::Open,
     }
 }
 
 /// TypeScript `deriveTaskIntegration`.
 pub fn derive_task_integration(
-    task: &Value,
+    task: &TaskResponse,
     observation: Option<&Observation>,
     failure_code: Option<&str>,
     observed_at: &str,
-) -> Value {
+) -> TaskIntegration {
     let state = pull_request_state(observation);
-    let integrated = state == "merged"
-        || (task["status"] == "delivered"
+    let integrated = state == IntegrationPullRequestState::Merged
+        || (task.status == TaskStatus::Delivered
             && !requires_pull_request(task)
             && failure_code.is_none());
-    let checks = observation.map(|observation| &observation.checks);
-    json!({
-        "integrated": integrated,
-        "pullRequest": {
-            "state": state,
-            "number": observation.and_then(|o| o.number).map(Value::from).unwrap_or_else(|| task["pullRequest"]["number"].clone()),
-            "url": observation.and_then(|o| o.url.clone()),
-            "targetBranch": task["configuration"]["baseBranch"],
-            "headSha": observation.and_then(|o| o.head_sha.clone()),
-            "baseSha": observation.and_then(|o| o.base_sha.clone()),
-            "mergeable": observation.and_then(|o| o.mergeable.clone()),
-            "mergeStateStatus": observation.and_then(|o| o.merge_state_status.clone()),
-            "reviewDecision": observation.and_then(|o| o.review_decision.clone()),
-            "checks": {
-                "total": checks.map_or(0, |c| c.total), "pending": checks.map_or(0, |c| c.pending),
-                "failing": checks.map_or(0, |c| c.failing), "successful": checks.map_or(0, |c| c.successful),
-            },
+    let checks = observation.map_or_else(CheckCounts::default, |observation| CheckCounts {
+        total: observation.checks.total,
+        pending: observation.checks.pending,
+        failing: observation.checks.failing,
+        successful: observation.checks.successful,
+    });
+    TaskIntegration {
+        integrated,
+        pull_request: IntegrationPullRequest {
+            state,
+            number: observation
+                .and_then(|o| o.number)
+                .or(task.pull_request.as_ref().map(|pull| pull.number)),
+            url: observation.and_then(|o| o.url.clone()),
+            target_branch: task.configuration.base_branch.clone(),
+            head_sha: observation.and_then(|o| o.head_sha.clone()),
+            base_sha: observation.and_then(|o| o.base_sha.clone()),
+            mergeable: observation.and_then(|o| o.mergeable.clone()),
+            merge_state_status: observation.and_then(|o| o.merge_state_status.clone()),
+            review_decision: observation.and_then(|o| o.review_decision.clone()),
+            checks,
         },
-        "observedAt": observed_at,
-        "observation": if failure_code.is_none() { "observed" } else { "unavailable" },
-        "observationReason": failure_code,
-        // Suplex does not observe deployed runtimes, so it never claims that a change is live.
-        "deployed": {"included": null, "reason": "not_determinable"},
-    })
+        observed_at: observed_at.to_owned(),
+        observation: if failure_code.is_none() {
+            ObservationStatus::Observed
+        } else {
+            ObservationStatus::Unavailable
+        },
+        observation_reason: failure_code.map(str::to_owned),
+        deployed: Deployed {
+            included: (),
+            reason: "not_determinable",
+        },
+    }
 }
 
 /// TypeScript `isUpstreamOf`: branched from the upstream head branch or pull request.
-pub fn is_upstream_of(upstream: &Value, task: &Value) -> bool {
-    if upstream["id"] == task["id"] {
+pub fn is_upstream_of(upstream: &TaskResponse, task: &TaskResponse) -> bool {
+    if upstream.id == task.id {
         return false;
     }
-    let lower = |value: &Value| value.as_str().map(str::to_lowercase);
-    if lower(&upstream["configuration"]["repository"])
-        != lower(&task["configuration"]["repository"])
+    if upstream.configuration.repository.to_lowercase()
+        != task.configuration.repository.to_lowercase()
     {
         return false;
     }
-    let source = &task["configuration"]["source"];
-    if source["kind"] == "branch" && source["branch"] == upstream["configuration"]["branch"] {
-        return true;
+    match &task.configuration.source {
+        Some(TaskSource::Branch { branch }) if *branch == upstream.configuration.branch => {
+            return true;
+        }
+        Some(TaskSource::PullRequest { number })
+            if upstream.pull_request.as_ref().map(|pull| pull.number) == Some(*number) =>
+        {
+            return true;
+        }
+        _ => {}
     }
-    if source["kind"] == "pull_request"
-        && !upstream["pullRequest"]["number"].is_null()
-        && upstream["pullRequest"]["number"] == source["number"]
-    {
-        return true;
-    }
-    task["configuration"]["baseBranch"] == upstream["configuration"]["branch"]
+    task.configuration.base_branch == upstream.configuration.branch
 }
 
-fn merge_commands(task: &Value) -> Vec<String> {
-    let base = task["configuration"]["baseBranch"].as_str().unwrap_or("");
+fn merge_commands(task: &TaskResponse) -> Vec<String> {
+    let base = &task.configuration.base_branch;
     vec![
         format!("git fetch origin {base}"),
         format!("git merge origin/{base}"),
     ]
 }
 
-fn action(
-    owner: &str,
-    reason: &str,
-    summary: &str,
-    commands: Vec<String>,
-    upstream: Value,
-    human: bool,
-    at: &Value,
-) -> Value {
-    json!({"upstream": upstream, "humanApprovalRequired": human, "owner": owner, "reasonCode": reason, "summary": summary, "suggestedCommands": commands, "evidenceAt": at})
-}
-
 /// TypeScript `deriveActionRequired`.
-pub fn derive_action_required(task: &Value, integration: &Value, upstream: &Value) -> Value {
-    let at = &integration["observedAt"];
-    let pull = &integration["pullRequest"];
-    let repository = task["configuration"]["repository"].as_str().unwrap_or("");
-    let reference = match pull["number"].as_u64() {
-        None => task["configuration"]["branch"]
-            .as_str()
-            .unwrap_or("")
-            .to_owned(),
+pub fn derive_action_required(
+    task: &TaskResponse,
+    integration: &TaskIntegration,
+    upstream: Option<UpstreamBlocker>,
+) -> Option<ActionRequired> {
+    use ActionOwner::{Agent, Human, Suplex};
+    use IntegrationPullRequestState as State;
+    let action = |owner, reason_code, summary, suggested_commands, human_approval_required| {
+        Some(ActionRequired {
+            upstream: None,
+            human_approval_required,
+            owner,
+            reason_code,
+            summary,
+            suggested_commands,
+            evidence_at: integration.observed_at.clone(),
+        })
+    };
+    let pull = &integration.pull_request;
+    let repository = &task.configuration.repository;
+    let reference = match pull.number {
+        None => task.configuration.branch.clone(),
         Some(number) => format!("{number} --repo {repository}"),
     };
-    let state = pull["state"].as_str().unwrap_or("");
-    if task["status"] == "waiting_human" {
+    let state = pull.state;
+    if task.status == TaskStatus::WaitingHuman {
         return action(
-            "human",
-            "waiting_human",
+            Human,
+            ActionReason::WaitingHuman,
             "The task waits for your answer. Answer the question in Suplex.",
             vec![],
-            Value::Null,
             true,
-            at,
         );
     }
-    if integration["observation"] == "unavailable" {
+    if integration.observation == ObservationStatus::Unavailable {
         return action(
-            "suplex",
-            "observation_unavailable",
+            Suplex,
+            ActionReason::ObservationUnavailable,
             "Suplex could not read the pull request from GitHub. Check the GitHub access and retry.",
             vec![format!("gh pr view {reference}")],
-            Value::Null,
             false,
-            at,
         );
     }
-    if integration["integrated"] == true {
-        return Value::Null;
+    if integration.integrated {
+        return None;
     }
-    if state == "conflicting" {
+    if state == State::Conflicting {
         return action(
-            "agent",
-            "conflicting_pull_request",
+            Agent,
+            ActionReason::ConflictingPullRequest,
             "GitHub reports merge conflicts on the pull request. The task owner must merge the base branch and resolve the conflicts.",
             merge_commands(task),
-            Value::Null,
             false,
-            at,
         );
     }
-    if pull["checks"]["failing"].as_u64().unwrap_or(0) > 0 {
+    if pull.checks.failing > 0 {
         return action(
-            "agent",
-            "failed_checks",
+            Agent,
+            ActionReason::FailedChecks,
             "CI reports failed checks on the pull request. The task owner must read the checks and repair the build.",
             vec![format!("gh pr checks {reference}")],
-            Value::Null,
             false,
-            at,
         );
     }
-    let stale_head = !task["pullRequest"]["headSha"].is_null()
-        && !pull["headSha"].is_null()
-        && task["pullRequest"]["headSha"] != pull["headSha"];
-    if state != "absent"
-        && state != "closed"
-        && (pull["mergeStateStatus"] == "BEHIND" || stale_head)
+    let stale_head = match (&task.pull_request, &pull.head_sha) {
+        (Some(stored), Some(observed)) => stored.head_sha != *observed,
+        _ => false,
+    };
+    if state != State::Absent
+        && state != State::Closed
+        && (pull.merge_state_status.as_deref() == Some("BEHIND") || stale_head)
     {
         return action(
-            "agent",
-            "stale_delivery",
+            Agent,
+            ActionReason::StaleDelivery,
             "The pull request is behind the base branch. The task owner must update the branch and push the result.",
             merge_commands(task),
-            Value::Null,
             false,
-            at,
         );
     }
-    if task["status"] == "delivered"
+    if task.status == TaskStatus::Delivered
         && requires_pull_request(task)
-        && (state == "absent" || state == "closed")
+        && (state == State::Absent || state == State::Closed)
     {
         let command = format!(
             "gh pr create --repo {repository} --head {} --base {}",
-            task["configuration"]["branch"].as_str().unwrap_or(""),
-            task["configuration"]["baseBranch"].as_str().unwrap_or("")
+            task.configuration.branch, task.configuration.base_branch
         );
         return action(
-            "agent",
-            "pull_request_missing",
+            Agent,
+            ActionReason::PullRequestMissing,
             "Suplex delivered the task without an open pull request. The task owner must create the pull request for the branch.",
             vec![command],
-            Value::Null,
             false,
-            at,
         );
     }
-    if !upstream.is_null() {
-        return action(
-            "upstream",
-            "blocked_by_dependency",
-            "An upstream task is not integrated. Wait for the upstream pull request to merge.",
-            vec![],
-            upstream.clone(),
-            false,
-            at,
-        );
+    if let Some(upstream) = upstream {
+        return Some(ActionRequired {
+            upstream: Some(upstream),
+            human_approval_required: false,
+            owner: ActionOwner::Upstream,
+            reason_code: ActionReason::BlockedByDependency,
+            summary: "An upstream task is not integrated. Wait for the upstream pull request to merge.",
+            suggested_commands: vec![],
+            evidence_at: integration.observed_at.clone(),
+        });
     }
-    if state == "absent" {
-        return Value::Null;
+    if state == State::Absent {
+        return None;
     }
-    if pull["checks"]["pending"].as_u64().unwrap_or(0) > 0 {
+    if pull.checks.pending > 0 {
         return action(
-            "suplex",
-            "pending_checks",
+            Suplex,
+            ActionReason::PendingChecks,
             "CI checks are not complete on the pull request. Check the pull request after the checks finish.",
             vec![format!("gh pr checks {reference}")],
-            Value::Null,
             false,
-            at,
         );
     }
-    if pull["reviewDecision"] != "APPROVED" {
+    if pull.review_decision.as_deref() != Some("APPROVED") {
         return action(
-            "human",
-            "pending_review",
+            Human,
+            ActionReason::PendingReview,
             "The pull request waits for a review decision. Review the pull request.",
             vec![format!("gh pr view {reference}")],
-            Value::Null,
             true,
-            at,
         );
     }
     action(
-        "human",
-        "waiting_human",
+        Human,
+        ActionReason::WaitingHuman,
         "The pull request is approved and not merged. Merge the pull request.",
         vec![format!("gh pr view {reference}")],
-        Value::Null,
         true,
-        at,
     )
 }
 
 /// TypeScript `matchesAgentApiFilter`.
 pub fn matches_agent_api_filter(
-    integration: &Value,
-    action_required: &Value,
+    integration: &TaskIntegration,
+    action_required: Option<&ActionRequired>,
     filter: &str,
 ) -> bool {
     if filter == "not_integrated" {
-        return integration["integrated"] != true;
+        return !integration.integrated;
     }
-    action_required["reasonCode"] == filter
+    action_required.is_some_and(|action| action.reason_code.as_str() == filter)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tasks::control::{DeliveryTarget, PullRequestReference, PullRequestState};
+    use serde_json::json;
 
-    fn task(status: &str, target: &str) -> Value {
-        json!({"id":"t1","status":status,"deliveryTarget":target,"pullRequest":null,
-            "configuration":{"repository":"o/r","branch":"task","baseBranch":"main","source":null}})
+    fn task(status: TaskStatus, target: DeliveryTarget) -> TaskResponse {
+        let mut task = TaskResponse::fixture();
+        task.id = "t1".into();
+        task.status = status;
+        task.delivery_target = target;
+        task.configuration.repository = "o/r".into();
+        task.configuration.branch = "task".into();
+        task.configuration.base_branch = "main".into();
+        task
     }
 
     #[test]
     fn delivered_local_work_is_integrated_and_needs_no_action() {
-        let task = task("delivered", "local_worktree");
+        let task = task(TaskStatus::Delivered, DeliveryTarget::LocalWorktree);
         let integration = derive_task_integration(&task, None, None, "2026-09-25T00:00:00.000Z");
-        assert_eq!(integration["integrated"], true);
-        assert_eq!(integration["pullRequest"]["state"], "absent");
-        assert!(derive_action_required(&task, &integration, &Value::Null).is_null());
+        assert!(integration.integrated);
+        assert_eq!(
+            integration.pull_request.state,
+            IntegrationPullRequestState::Absent
+        );
+        assert!(derive_action_required(&task, &integration, None).is_none());
         assert!(!matches_agent_api_filter(
             &integration,
-            &Value::Null,
+            None,
             "failed_checks"
         ));
+        assert_eq!(
+            serde_json::to_value(&integration).unwrap(),
+            json!({
+                "integrated": true,
+                "pullRequest": {"state": "absent", "number": null, "url": null, "targetBranch": "main",
+                    "headSha": null, "baseSha": null, "mergeable": null, "mergeStateStatus": null,
+                    "reviewDecision": null, "checks": {"total": 0, "pending": 0, "failing": 0, "successful": 0}},
+                "observedAt": "2026-09-25T00:00:00.000Z",
+                "observation": "observed",
+                "observationReason": null,
+                "deployed": {"included": null, "reason": "not_determinable"},
+            })
+        );
     }
 
     #[test]
     fn conflicts_failures_and_missing_pull_requests_name_the_owner() {
-        let task = task("delivered", "pull_request_draft");
+        let task = task(TaskStatus::Delivered, DeliveryTarget::PullRequestDraft);
         let missing = derive_task_integration(&task, None, None, "now");
         assert_eq!(
-            derive_action_required(&task, &missing, &Value::Null)["reasonCode"],
-            "pull_request_missing"
+            derive_action_required(&task, &missing, None)
+                .unwrap()
+                .reason_code,
+            ActionReason::PullRequestMissing
         );
         let mut observed = Observation {
             exists: true,
@@ -317,34 +445,55 @@ mod tests {
             ..Observation::default()
         };
         let conflicting = derive_task_integration(&task, Some(&observed), None, "now");
-        assert_eq!(conflicting["pullRequest"]["state"], "conflicting");
         assert_eq!(
-            derive_action_required(&task, &conflicting, &Value::Null)["owner"],
-            "agent"
+            conflicting.pull_request.state,
+            IntegrationPullRequestState::Conflicting
+        );
+        assert_eq!(
+            derive_action_required(&task, &conflicting, None)
+                .unwrap()
+                .owner,
+            ActionOwner::Agent
         );
         observed.mergeable = None;
         observed.checks.failing = 1;
         let failing = derive_task_integration(&task, Some(&observed), None, "now");
         assert_eq!(
-            derive_action_required(&task, &failing, &Value::Null)["suggestedCommands"],
-            json!(["gh pr checks 7 --repo o/r"])
+            serde_json::to_value(derive_action_required(&task, &failing, None)).unwrap(),
+            json!({"upstream": null, "humanApprovalRequired": false, "owner": "agent",
+                "reasonCode": "failed_checks",
+                "summary": "CI reports failed checks on the pull request. The task owner must read the checks and repair the build.",
+                "suggestedCommands": ["gh pr checks 7 --repo o/r"], "evidenceAt": "now"})
         );
         let unavailable = derive_task_integration(&task, None, Some("provider-unavailable"), "now");
         assert_eq!(
-            derive_action_required(&task, &unavailable, &Value::Null)["reasonCode"],
-            "observation_unavailable"
+            derive_action_required(&task, &unavailable, None)
+                .unwrap()
+                .reason_code,
+            ActionReason::ObservationUnavailable
         );
     }
 
     #[test]
     fn upstream_follows_branch_source_and_base_branch() {
-        let upstream = json!({"id":"up","pullRequest":{"number":3},"configuration":{"repository":"O/R","branch":"feature"}});
-        let mut child = task("active", "merged");
+        let mut upstream = task(TaskStatus::Active, DeliveryTarget::Merged);
+        upstream.id = "up".into();
+        upstream.configuration.repository = "O/R".into();
+        upstream.configuration.branch = "feature".into();
+        upstream.pull_request = Some(PullRequestReference {
+            repository: "O/R".into(),
+            number: 3,
+            url: "https://github.com/O/R/pull/3".into(),
+            head_sha: "abc".into(),
+            state: PullRequestState::Open,
+            merged_at: None,
+        });
+        let mut child = task(TaskStatus::Active, DeliveryTarget::Merged);
         assert!(!is_upstream_of(&upstream, &child));
-        child["configuration"]["source"] = json!({"kind":"pull_request","number":3});
+        child.configuration.source = Some(TaskSource::PullRequest { number: 3 });
         assert!(is_upstream_of(&upstream, &child));
-        child["configuration"]["source"] = Value::Null;
-        child["configuration"]["baseBranch"] = json!("feature");
+        child.configuration.source = None;
+        child.configuration.base_branch = "feature".into();
         assert!(is_upstream_of(&upstream, &child));
     }
 }

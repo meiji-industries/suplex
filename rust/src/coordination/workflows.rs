@@ -9,6 +9,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use super::advisor_bridge::AdvisorRole;
+use crate::http::contracts::task_reads::WorkerAssignmentMode;
+use crate::http::contracts::task_reads::WorkerAssignmentPurpose;
 use crate::tasks::control::{SessionKind, SessionRow, TaskControlRow, TurnRow, TurnStatus};
 
 pub const REPAIR_RATING_TARGET: i64 = 9;
@@ -107,7 +109,7 @@ pub fn advisor_label(role: &str) -> &'static str {
 
 /// One label helper for native titles, panes, API labels, and UI.
 pub fn role_label(kind: &str, advisor_role: Option<&str>) -> &'static str {
-    if kind == "root" {
+    if kind == SessionKind::Root.as_str() {
         return "Coordinator";
     }
     advisor_role.map_or("Worker", advisor_label)
@@ -357,7 +359,7 @@ pub fn review_gate(
             short(&range.head_sha)
         ));
     }
-    if result["role"] == "reviewer" {
+    if result["role"] == AdvisorRole::Reviewer.as_str() {
         return if result["approved"] == true {
             Ok(())
         } else {
@@ -485,9 +487,9 @@ pub fn workflow_ready_for_delivery(
                 let input = turn_workflow_input(sessions, turn);
                 worker_turn(turn)
                     && input.is_some_and(|input| {
-                        input["kind"] == "worker"
-                            && input["mode"] == "direct"
-                            && input["purpose"] == "implementation"
+                        input["kind"] == SessionKind::Worker.as_str()
+                            && input["mode"] == WorkerAssignmentMode::Direct.as_str()
+                            && input["purpose"] == WorkerAssignmentPurpose::Implementation.as_str()
                     })
                     && succeeded(turn)
             });
@@ -502,7 +504,7 @@ pub fn workflow_ready_for_delivery(
                 let input = turn_workflow_input(sessions, turn);
                 worker_turn(turn)
                     && input.is_some_and(|input| {
-                        input["kind"] == "worker"
+                        input["kind"] == SessionKind::Worker.as_str()
                             && input["plan"].as_str().is_some_and(|plan| !plan.is_empty())
                             && worker_candidate_reports(input).is_some()
                     })
@@ -543,8 +545,8 @@ pub fn workflow_ready_for_delivery(
                 let input = turn_workflow_input(sessions, turn);
                 worker_turn(turn)
                     && input.is_some_and(|input| {
-                        input["kind"] == "worker"
-                            && input["purpose"] == "implementation"
+                        input["kind"] == SessionKind::Worker.as_str()
+                            && input["purpose"] == WorkerAssignmentPurpose::Implementation.as_str()
                             && approved.is_some_and(|plan| {
                                 input["plan"].as_str().map(str::trim) == Some(plan)
                             })

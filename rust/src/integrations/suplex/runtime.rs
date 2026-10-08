@@ -20,6 +20,7 @@ use crate::{
 };
 
 use super::{InvalidArguments, TOOLS};
+use crate::tasks::control::TaskStatus;
 
 pub struct SuplexMcpRuntime {
     pub state: AppState,
@@ -120,7 +121,7 @@ impl SuplexMcpRuntime {
                 let task = state.with_database(|database| {
                     agent_api::update(database, principal, &task_id, &body)
                 })?;
-                if task["status"] == "active" {
+                if task["status"] == TaskStatus::Active.as_str() {
                     self.wake(&task_id);
                 }
                 Ok((200, task))

@@ -1,5 +1,7 @@
 //! Moves: list, create, edit, delete, start, and read run history.
 
+#![cfg_attr(not(test), deny(clippy::disallowed_types, clippy::disallowed_macros))]
+
 use crate::http::error::ApiError;
 use std::error::Error;
 

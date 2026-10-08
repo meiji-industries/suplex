@@ -2,6 +2,7 @@
 
 use crate::http::access::with_cookies;
 use crate::http::error::ApiError;
+use crate::identity::auth::UserRole;
 use std::collections::HashMap;
 
 use axum::{
@@ -100,10 +101,11 @@ async fn create_instance(
         Ok(value) => value,
         Err(response) => return *response,
     };
-    let created = state.with_database(|database| {
-        provider_instances::create(database, &user_id, &input.provider, &input.label)
-            .map_err(ApiError::response)
-    });
+    let created = state
+        .with_database(|database| {
+            provider_instances::create(database, &user_id, &input.provider, &input.label)
+        })
+        .map_err(ApiError::response);
     let response = match created {
         Ok(instance) => (StatusCode::CREATED, Json(instance)).into_response(),
         Err(response) => response,
@@ -120,9 +122,10 @@ async fn delete_instance(
         Ok(value) => value,
         Err(response) => return *response,
     };
-    let response = match state.with_database(|database| {
-        provider_instances::delete(database, &user_id, &instance_id).map_err(ApiError::response)
-    }) {
+    let response = match state
+        .with_database(|database| provider_instances::delete(database, &user_id, &instance_id))
+        .map_err(ApiError::response)
+    {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
         Err(response) => response,
     };
@@ -263,12 +266,12 @@ fn admin(state: &AppState, user_id: &str) -> bool {
             .query_row(
                 "SELECT role FROM suplex_users WHERE id = ?1 AND status = 'active'",
                 [user_id],
-                |row| row.get::<_, String>(0),
+                |row| row.get::<_, UserRole>(0),
             )
             .optional()
             .ok()
             .flatten()
-            .is_some_and(|role| role == "admin")
+            .is_some_and(|role| role == UserRole::Admin)
     })
 }
 

@@ -1,5 +1,6 @@
 //! Periodic native usage collection (`src/tasks/analytics/collector.ts`).
 
+use crate::tasks::control::HarnessKind;
 use std::{
     error::Error,
     path::{Path, PathBuf},
@@ -200,7 +201,11 @@ pub async fn collect(
                 let changed = previous
                     .and_then(|value| value.observed_at.as_deref())
                     .is_some_and(|observed| updated_at.as_str() > observed);
-                let refresh_ms = if startup && matches!(harness, "codex" | "devin") {
+                let refresh_ms = if startup
+                    && matches!(
+                        HarnessKind::parse(harness),
+                        Some(HarnessKind::Codex | HarnessKind::Devin)
+                    ) {
                     0
                 } else if previous.is_some_and(|value| value.error_at.is_some()) {
                     300_000

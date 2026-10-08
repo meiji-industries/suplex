@@ -1,5 +1,7 @@
 //! Web push key and the session user's browser subscriptions.
 
+#![cfg_attr(not(test), deny(clippy::disallowed_types, clippy::disallowed_macros))]
+
 use axum::{
     Json, Router,
     body::Bytes,

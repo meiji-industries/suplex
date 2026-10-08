@@ -1287,7 +1287,9 @@ impl Github {
             .await?
         {
             Api::Json(body) => Ok(body),
-            _ => Err(failure("provider-unavailable", operation.to_owned())),
+            Api::NotFound | Api::Accepted { .. } => {
+                Err(failure("provider-unavailable", operation.to_owned()))
+            }
         }
     }
 
@@ -1432,7 +1434,7 @@ impl Github {
                 "GitHub pull request response is malformed",
             )?
             .normalize(),
-            _ => Err(failure("provider-unavailable", summary)),
+            Api::NotFound | Api::Accepted { .. } => Err(failure("provider-unavailable", summary)),
         }
     }
 

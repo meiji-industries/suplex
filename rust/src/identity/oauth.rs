@@ -1,6 +1,8 @@
 //! OAuth 2.1 authorization server for the remote MCP resource.
 
 use crate::identity::IdentityError;
+use crate::identity::auth::UserRole;
+use crate::identity::auth::UserStatus;
 use crate::shared::hash::sha256_hex;
 use crate::shared::ids::random_hex_id;
 use crate::shared::time::rfc3339_millis;
@@ -524,7 +526,9 @@ impl OAuth {
             ));
         }
         let pending = Self::live_pending(database, request_id, now)?;
-        if auth::public_user(database, user_id)?.is_none_or(|user| user.status != "active") {
+        if auth::public_user(database, user_id)?
+            .is_none_or(|user| user.status != UserStatus::Active)
+        {
             return Err(OAuthFailure::boxed(
                 "access_denied",
                 "Authentication is necessary",
@@ -561,7 +565,7 @@ impl OAuth {
         let now_iso = rfc3339_millis(now);
         let (redirect_uri, state) = database.transaction(true, |database| {
             let pending = Self::live_pending(database, request_id, now)?;
-            if !auth::public_user(database, user_id)?.is_some_and(|user| user.status == "active" && user.role == "admin") {
+            if !auth::public_user(database, user_id)?.is_some_and(|user| user.status == UserStatus::Active && user.role == UserRole::Admin) {
                 return Err(OAuthFailure::boxed("access_denied", "Administrator access is necessary", 403));
             }
             companies::require_company_access(database, user_id, company_id)?;
@@ -648,7 +652,7 @@ impl OAuth {
         let now_iso = rfc3339_millis(now);
         let pending = database.transaction(true, |database| {
             let pending = Self::live_pending(database, request_id, now)?;
-            if auth::public_user(database, user_id)?.is_none_or(|user| user.status != "active") {
+            if auth::public_user(database, user_id)?.is_none_or(|user| user.status != UserStatus::Active) {
                 return Err(OAuthFailure::boxed("access_denied", "Authentication is necessary", 401));
             }
             if database.connection().execute(
@@ -672,7 +676,7 @@ impl OAuth {
         let inactive =
             || OAuthFailure::boxed("invalid_grant", "Authorization is no longer active", 400);
         let admin = auth::public_user(database, &grant.user_id)?
-            .is_some_and(|user| user.status == "active" && user.role == "admin");
+            .is_some_and(|user| user.status == UserStatus::Active && user.role == UserRole::Admin);
         if !admin
             || companies::require_company_access(database, &grant.user_id, &grant.company_id)
                 .is_err()

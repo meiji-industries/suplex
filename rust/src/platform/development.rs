@@ -2,6 +2,8 @@
 //! seed the Operator's first company at startup.
 
 use crate::identity::IdentityError;
+use crate::identity::auth::UserRole;
+use crate::identity::auth::UserStatus;
 use crate::shared::time::rfc3339_millis;
 use chrono::{DateTime, Utc};
 
@@ -29,7 +31,7 @@ fn ensure_development_user(
             [rfc3339_millis(now)],
         )?;
         let user = auth::public_user(database, "user_development")?.ok_or("development user missing")?;
-        if user.role != "admin" || user.status != "active" {
+        if user.role != UserRole::Admin || user.status != UserStatus::Active {
             return Err(IdentityError::auth(
                 "Development user is unavailable",
                 409,

@@ -1,5 +1,6 @@
 //! User task commands keep authorization, intent, audit, and wake admission together.
 
+use crate::identity::companies::CompanyStatus;
 use crate::profiles::agent_profiles::{allowed_profile, read_profile};
 
 use crate::shared::hash::sha256_hex;
@@ -23,9 +24,9 @@ use crate::{
         projects::ProjectProviderPolicy,
         task_answers::{AnswerBody, LimitDecisionBody, TaskLimitDecision},
         tasks::{
-            TaskAgentSelectionBody, TaskContinueDeliveryBody, TaskCoordinatorReplacementBody,
-            TaskCreateBody, TaskDependenciesBody, TaskDetailsBody, TaskNoteBody, TaskRenameBody,
-            TaskWorkerReplacementBody,
+            AgentSelectionRole, TaskAgentSelectionBody, TaskContinueDeliveryBody,
+            TaskCoordinatorReplacementBody, TaskCreateBody, TaskDependenciesBody, TaskDetailsBody,
+            TaskNoteBody, TaskRenameBody, TaskWorkerReplacementBody,
         },
     },
     identity::companies,
@@ -459,7 +460,7 @@ fn require_creator_scope(
     prepared: &PreparedTask,
 ) -> DatabaseResult<()> {
     let company = companies::require_company_access(database, actor_user_id, &prepared.company_id)?;
-    if company.status != "active" {
+    if company.status != CompanyStatus::Active {
         return Err(TaskError::new("The company is not active", 409).into());
     }
     if prepared.creator != TaskCreator::User(actor_user_id.to_owned()) {
@@ -690,7 +691,7 @@ pub fn select_user_task_agent(
     let conflict = |message: &str| TaskError::new(message, 409).into();
     let coordinator_changed =
         "The Coordinator changed. Read the current Coordinator before selecting another.";
-    if request.role == "root"
+    if request.role == AgentSelectionRole::Root
         && let Some(expected_session_id) = &request.expected_session_id
     {
         let (root_session_id, root_profile): (Option<String>, String) =
@@ -715,7 +716,7 @@ pub fn select_user_task_agent(
         return replace_user_coordinator(database, actor_user_id, task_id, &replacement, now, wake);
     }
     let intent = AgentSelection {
-        role: request.role.clone(),
+        role: request.role.as_str().to_owned(),
         expected_profile_id: request.expected_profile_id.clone(),
         expected_session_id: request.expected_session_id.clone(),
         profile_id: request.profile_id.clone(),
@@ -723,7 +724,7 @@ pub fn select_user_task_agent(
         resume: request.resume,
         question_id: request.question_id.clone().filter(|_| request.resume),
     };
-    if request.role == "root" {
+    if request.role == AgentSelectionRole::Root {
         root_session_store::select_initial_root(database, task_id, &intent, now)?;
     } else {
         root_session_store::select_delegate(database, task_id, &intent, now)?;

@@ -92,35 +92,36 @@ pub(crate) mod tests {
         .map(|(path, body)| (path.to_owned(), (200, body.to_string())))
         .collect();
         let shared = hosted.clone();
-        let app = axum::Router::new().fallback(move |uri: Uri, headers: HeaderMap, _body: Bytes| {
-            let hosted = shared.clone();
-            async move {
-                let header = |name: &str| {
-                    headers
-                        .get(name)
-                        .and_then(|value| value.to_str().ok())
-                        .map(str::to_owned)
-                };
-                let mut hosted = hosted.lock().unwrap();
-                let path = uri.path().to_owned();
-                hosted.calls.push(Call {
-                    path: path.clone(),
-                    authorization: header("authorization"),
-                    idempotency_key: header("idempotency-key"),
-                });
-                let (status, body) = hosted
-                    .responses
-                    .get(&path)
-                    .cloned()
-                    .unwrap_or((404, json!({"error": "Not found"}).to_string()));
-                (
-                    StatusCode::from_u16(status).unwrap(),
-                    [("content-type", "application/json")],
-                    body,
-                )
-                    .into_response()
-            }
-        });
+        let app =
+            axum::Router::new().fallback(move |uri: Uri, headers: HeaderMap, _body: Bytes| {
+                let hosted = shared.clone();
+                async move {
+                    let header = |name: &str| {
+                        headers
+                            .get(name)
+                            .and_then(|value| value.to_str().ok())
+                            .map(str::to_owned)
+                    };
+                    let mut hosted = hosted.lock().unwrap();
+                    let path = uri.path().to_owned();
+                    hosted.calls.push(Call {
+                        path: path.clone(),
+                        authorization: header("authorization"),
+                        idempotency_key: header("idempotency-key"),
+                    });
+                    let (status, body) = hosted
+                        .responses
+                        .get(&path)
+                        .cloned()
+                        .unwrap_or((404, json!({"error": "Not found"}).to_string()));
+                    (
+                        StatusCode::from_u16(status).unwrap(),
+                        [("content-type", "application/json")],
+                        body,
+                    )
+                        .into_response()
+                }
+            });
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = Url::parse(&format!("http://{}/", listener.local_addr().unwrap())).unwrap();
         tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
@@ -196,11 +197,21 @@ pub(crate) mod tests {
     #[test]
     fn each_plan_has_the_limits_on_getsuplex_ai() {
         assert_eq!(
-            (FREE.companies, FREE.projects, FREE.running_tasks, FREE.monthly_tasks),
+            (
+                FREE.companies,
+                FREE.projects,
+                FREE.running_tasks,
+                FREE.monthly_tasks
+            ),
             (Some(1), Some(2), Some(3), Some(50))
         );
         assert_eq!(
-            (PRO.companies, PRO.projects, PRO.running_tasks, PRO.monthly_tasks),
+            (
+                PRO.companies,
+                PRO.projects,
+                PRO.running_tasks,
+                PRO.monthly_tasks
+            ),
             (Some(3), Some(10), None, None)
         );
         // The SQL running limit is the same number.
@@ -212,7 +223,10 @@ pub(crate) mod tests {
             monthly_tasks,
         };
         assert_eq!(reached(Plan::Free, &usage(49), Limit::MonthlyTasks), None);
-        assert_eq!(reached(Plan::Free, &usage(50), Limit::MonthlyTasks), Some(50));
+        assert_eq!(
+            reached(Plan::Free, &usage(50), Limit::MonthlyTasks),
+            Some(50)
+        );
         assert_eq!(reached(Plan::Free, &usage(0), Limit::RunningTasks), Some(3));
         assert_eq!(reached(Plan::Free, &usage(0), Limit::Companies), Some(1));
         assert_eq!(reached(Plan::Free, &usage(0), Limit::Projects), None);
@@ -232,12 +246,14 @@ pub(crate) mod tests {
     async fn pro_holds_only_while_confirmed_access_lasts_for_the_linked_account() {
         let f = fixture().await;
         assert_eq!(f.plan(), Plan::Free);
-        f.fake.with(|hosted| hosted.respond("/v1/plan", 200, pro_plan()));
+        f.fake
+            .with(|hosted| hosted.respond("/v1/plan", 200, pro_plan()));
         refresh(&f.state).await.unwrap();
         assert_eq!(f.plan(), Plan::Pro);
 
         // A hosted outage keeps confirmed Pro.
-        f.fake.with(|hosted| hosted.respond("/v1/plan", 503, json!({"error": "down"})));
+        f.fake
+            .with(|hosted| hosted.respond("/v1/plan", 503, json!({"error": "down"})));
         assert!(refresh(&f.state).await.is_err());
         assert_eq!(f.plan(), Plan::Pro);
         // It never extends Pro past its paid access.
@@ -248,14 +264,17 @@ pub(crate) mod tests {
         assert_eq!(f.plan(), Plan::Free);
 
         // A confirmed lapse replaces the snapshot with Free.
-        f.fake.with(|hosted| hosted.respond("/v1/plan", 200, pro_plan()));
+        f.fake
+            .with(|hosted| hosted.respond("/v1/plan", 200, pro_plan()));
         refresh(&f.state).await.unwrap();
-        f.fake.with(|hosted| hosted.respond("/v1/plan", 200, free_plan(false)));
+        f.fake
+            .with(|hosted| hosted.respond("/v1/plan", 200, free_plan(false)));
         refresh(&f.state).await.unwrap();
         assert_eq!(f.plan(), Plan::Free);
 
         // Pro belongs to the account: another linked account starts Free.
-        f.fake.with(|hosted| hosted.respond("/v1/plan", 200, pro_plan()));
+        f.fake
+            .with(|hosted| hosted.respond("/v1/plan", 200, pro_plan()));
         refresh(&f.state).await.unwrap();
         f.sql("UPDATE suplex_account SET account_id = 'user_other'", &[]);
         assert_eq!(f.plan(), Plan::Free);
@@ -279,9 +298,13 @@ pub(crate) mod tests {
         // At the limit and still Free: one read, then the refusal.
         observe(&f.state, Limit::Companies).await;
         assert_eq!(f.reads(), 1);
-        assert_eq!(code(create("Second").unwrap_err()), Some("company_limit_reached"));
+        assert_eq!(
+            code(create("Second").unwrap_err()),
+            Some("company_limit_reached")
+        );
         // A purchase made on another device applies at once.
-        f.fake.with(|hosted| hosted.respond("/v1/plan", 200, pro_plan()));
+        f.fake
+            .with(|hosted| hosted.respond("/v1/plan", 200, pro_plan()));
         observe(&f.state, Limit::Companies).await;
         assert_eq!(f.reads(), 2);
         create("Second").unwrap();
@@ -289,7 +312,10 @@ pub(crate) mod tests {
         // Confirmed Pro needs no read at its own limit.
         observe(&f.state, Limit::Companies).await;
         assert_eq!(f.reads(), 2);
-        assert_eq!(code(create("Fourth").unwrap_err()), Some("company_limit_reached"));
+        assert_eq!(
+            code(create("Fourth").unwrap_err()),
+            Some("company_limit_reached")
+        );
         // An archived company does not count; restoring it counts again.
         let third = f.state.with_database(|database| {
             companies::list_visible_companies(database, &f.admin_id)
@@ -299,14 +325,17 @@ pub(crate) mod tests {
                 .unwrap()
                 .id
         });
-        let status = |status: &str| {
+        let status = |status: companies::CompanyStatus| {
             f.state.with_database(|database| {
                 companies::set_company_status(database, &f.admin_id, &third, status, Utc::now())
             })
         };
-        status("archived").unwrap();
+        status(companies::CompanyStatus::Archived).unwrap();
         create("Fourth").unwrap();
-        assert_eq!(code(status("active").unwrap_err()), Some("company_limit_reached"));
+        assert_eq!(
+            code(status(companies::CompanyStatus::Active).unwrap_err()),
+            Some("company_limit_reached")
+        );
     }
 
     #[tokio::test]
@@ -316,8 +345,14 @@ pub(crate) mod tests {
         assert_eq!(summary["plan"], json!("free"));
         assert_eq!(summary["checked"], json!(true));
         assert_eq!(summary["trialAvailable"], json!(true));
-        assert_eq!(summary["limits"], json!({"companies": 1, "projects": 2, "runningTasks": 3, "monthlyTasks": 50}));
-        assert_eq!(summary["usage"], json!({"companies": 1, "projects": 0, "runningTasks": 0, "monthlyTasks": 0}));
+        assert_eq!(
+            summary["limits"],
+            json!({"companies": 1, "projects": 2, "runningTasks": 3, "monthlyTasks": 50})
+        );
+        assert_eq!(
+            summary["usage"],
+            json!({"companies": 1, "projects": 0, "runningTasks": 0, "monthlyTasks": 0})
+        );
         assert_eq!(
             f.fake.with(|hosted| hosted.calls[0].authorization.clone()),
             Some(format!("Bearer {}", "k".repeat(43)))
@@ -326,11 +361,15 @@ pub(crate) mod tests {
         let mut paying = pro_plan();
         paying["state"]["paymentActionRequired"] = json!(true);
         paying["state"]["paymentActionUrl"] = json!("https://invoice.stripe.com/i/in_1");
-        f.fake.with(|hosted| hosted.respond("/v1/plan", 200, paying));
+        f.fake
+            .with(|hosted| hosted.respond("/v1/plan", 200, paying));
         let summary = f.summary(&f.admin_id).await;
         assert_eq!(summary["plan"], json!("pro"));
         assert_eq!(summary["limits"]["runningTasks"], Value::Null);
-        assert_eq!(summary["paymentActionUrl"], json!("https://invoice.stripe.com/i/in_1"));
+        assert_eq!(
+            summary["paymentActionUrl"],
+            json!("https://invoice.stripe.com/i/in_1")
+        );
         // A member sees the plan but never a billing URL.
         f.user("member-1", "member", "active");
         f.member("member-1", &f.company_id);
@@ -339,9 +378,13 @@ pub(crate) mod tests {
         assert_eq!(summary["paymentActionUrl"], Value::Null);
 
         // suplex.sh does not answer: the last confirmed plan applies.
-        f.fake.with(|hosted| hosted.respond("/v1/plan", 503, json!({})));
+        f.fake
+            .with(|hosted| hosted.respond("/v1/plan", 503, json!({})));
         let summary = f.summary(&f.admin_id).await;
-        assert_eq!((summary["plan"].clone(), summary["checked"].clone()), (json!("pro"), json!(false)));
+        assert_eq!(
+            (summary["plan"].clone(), summary["checked"].clone()),
+            (json!("pro"), json!(false))
+        );
     }
 
     #[tokio::test]
@@ -353,31 +396,53 @@ pub(crate) mod tests {
         assert_eq!(f.fake.with(|hosted| hosted.count("/v1/plan/trial")), 0);
 
         // The trial's answer is remembered even when the next read fails.
-        f.fake.with(|hosted| hosted.respond("/v1/plan", 503, json!({})));
-        let summary = serde_json::to_value(start_trial(&f.state, &f.admin_id).await.unwrap()).unwrap();
+        f.fake
+            .with(|hosted| hosted.respond("/v1/plan", 503, json!({})));
+        let summary =
+            serde_json::to_value(start_trial(&f.state, &f.admin_id).await.unwrap()).unwrap();
         assert_eq!(f.plan(), Plan::Pro);
         assert_eq!(summary["plan"], json!("pro"));
 
         let BillingCheckoutResponse::Redirect { url } =
-            checkout(&f.state, &f.admin_id, "checkout-key-1").await.unwrap()
+            checkout(&f.state, &f.admin_id, "checkout-key-1")
+                .await
+                .unwrap()
         else {
             panic!("checkout did not redirect");
         };
         assert_eq!(url, "https://checkout.stripe.com/c/pay/session_1");
         assert_eq!(
-            f.fake.with(|hosted| hosted.calls.last().unwrap().idempotency_key.clone()),
+            f.fake
+                .with(|hosted| hosted.calls.last().unwrap().idempotency_key.clone()),
             Some("checkout-key-1".into())
         );
         f.fake.with(|hosted| {
-            hosted.respond("/v1/plan/portal", 200, json!({"url": "https://attacker.example/portal"}));
+            hosted.respond(
+                "/v1/plan/portal",
+                200,
+                json!({"url": "https://attacker.example/portal"}),
+            );
         });
-        assert_eq!(code(portal(&f.state, &f.admin_id).await.unwrap_err()), Some("billing_unavailable"));
+        assert_eq!(
+            code(portal(&f.state, &f.admin_id).await.unwrap_err()),
+            Some("billing_unavailable")
+        );
         f.fake.with(|hosted| {
-            hosted.respond("/v1/plan/trial", 409, json!({"error": "used", "code": "trial_used"}));
+            hosted.respond(
+                "/v1/plan/trial",
+                409,
+                json!({"error": "used", "code": "trial_used"}),
+            );
         });
-        assert_eq!(code(start_trial(&f.state, &f.admin_id).await.unwrap_err()), Some("trial_used"));
+        assert_eq!(
+            code(start_trial(&f.state, &f.admin_id).await.unwrap_err()),
+            Some("trial_used")
+        );
 
         f.sql("DELETE FROM suplex_account", &[]);
-        assert_eq!(code(start_trial(&f.state, &f.admin_id).await.unwrap_err()), Some("account_required"));
+        assert_eq!(
+            code(start_trial(&f.state, &f.admin_id).await.unwrap_err()),
+            Some("account_required")
+        );
     }
 }

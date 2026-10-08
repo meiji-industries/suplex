@@ -126,7 +126,7 @@ pub fn issue_text(value: &Value) -> String {
                 .join(separator)
         }
         Value::Object(_) => crate::shared::js_json::stringify(value),
-        other => other.to_string(),
+        other @ Value::Bool(_) | other @ Value::Number(_) => other.to_string(),
     }
 }
 

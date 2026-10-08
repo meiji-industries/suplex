@@ -44,6 +44,7 @@ use crate::{
 };
 
 use super::auth;
+use crate::tasks::control::SessionKind;
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -161,7 +162,7 @@ fn role_label(session: &SessionRow) -> &'static str {
 
 /// Only the delegating turn stores its own input; continuation turns carry none.
 fn worker_assignment(input: Option<&Value>) -> Option<TaskWorkerAssignment> {
-    let input = input.filter(|input| input["kind"] == "worker")?;
+    let input = input.filter(|input| input["kind"] == SessionKind::Worker.as_str())?;
     serde_json::from_value(input.clone()).ok()
 }
 

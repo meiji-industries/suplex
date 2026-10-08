@@ -147,11 +147,11 @@ pub fn evaluate(version: Probe, status: Probe, api_reachable: bool) -> Value {
     }
     let client = match &version {
         Probe::Ok(stdout) => client_version(stdout),
-        _ => "unknown".to_owned(),
+        Probe::Missing | Probe::Ambiguous => "unknown".to_owned(),
     };
     let server = match &status {
         Probe::Ok(stdout) => parse_server_status(stdout),
-        _ => None,
+        Probe::Missing | Probe::Ambiguous => None,
     };
     let diagnostic = server.as_ref();
     let details = json!({

@@ -1,5 +1,6 @@
 use super::config::{Installation, is_tailscale_address};
 use super::database::{OpenMode, SuplexDatabase};
+use crate::http::routes::access::NetworkAccessMode;
 use serde_json::Value;
 use std::{
     env, fs,
@@ -98,7 +99,9 @@ pub fn serve_proxy(installation: &Installation) -> String {
 pub fn configure_serve(
     installation: &Installation,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    if installation.access_mode != "tailscale" || installation.tailscale_exposure != "serve" {
+    if installation.access_mode != NetworkAccessMode::Tailscale.as_str()
+        || installation.tailscale_exposure != "serve"
+    {
         return Ok(());
     }
     let command = env::var("SUPLEX_TAILSCALE_COMMAND").unwrap_or_else(|_| "tailscale".into());

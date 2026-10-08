@@ -168,11 +168,11 @@ pub fn compose_worker_assignment(assignment: &WorkerAssignmentText<'_>) -> Resul
         "Screenshots:\n{}",
         visual_evidence_instruction(assignment.visual_evidence)
     ));
-    if assignment.purpose == "verification" {
+    if assignment.purpose == WorkerAssignmentPurpose::Verification.as_str() {
         if let Some((base, head)) = assignment.verification_range {
             sections.push(format!("Verification source: base {base}, head {head}. Verify this revision without intentional source edits."));
         }
-    } else if assignment.purpose != "implementation" {
+    } else if assignment.purpose != WorkerAssignmentPurpose::Implementation.as_str() {
         return Err("Worker assignment purpose is invalid".into());
     }
     Ok(sections.join("\n\n"))
@@ -263,7 +263,7 @@ pub fn compose_advisor_assignment(input: &AdvisorAssignment<'_>) -> String {
         ),
         format!(
             "Configured project check evidence:\n{CONFIGURED_CHECK_EVIDENCE_POLICY}{}",
-            if input.role == "rater" {
+            if input.role == AdvisorRole::Rater.as_str() {
                 pull_request_ci_evidence(input.configuration)
             } else {
                 String::new()
@@ -291,7 +291,7 @@ pub fn compose_advisor_assignment(input: &AdvisorAssignment<'_>) -> String {
             "Coordinator brief (plan and acceptance criteria):\n{brief}"
         ));
     }
-    if input.role == "rater" {
+    if input.role == AdvisorRole::Rater.as_str() {
         if let Some(findings) = input.prior_findings.filter(|findings| !findings.is_empty()) {
             let findings = findings
                 .iter()
@@ -383,7 +383,7 @@ pub fn worker_result_wake(
             "Compare the result with the accepted assignment and acceptance outcomes. Request coherent repairs or missing checks if necessary, then request the selected delivery target."
         }
     };
-    let kind = if purpose == "verification" {
+    let kind = if purpose == WorkerAssignmentPurpose::Verification.as_str() {
         "Verification result"
     } else {
         "Worker result"
@@ -469,6 +469,7 @@ pub fn with_current_dependency_status(
 }
 
 use super::advisor_bridge::AdvisorRole;
+use crate::http::contracts::task_reads::WorkerAssignmentPurpose;
 pub(crate) fn worker_replacement_prompt(
     reason: &str,
     handoff: Option<&String>,

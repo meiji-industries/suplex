@@ -1,4 +1,5 @@
 use crate::identity::IdentityError;
+use crate::identity::auth::UserRole;
 use crate::shared::time::rfc3339_millis;
 use std::error::Error;
 
@@ -119,7 +120,7 @@ fn profile_id() -> DatabaseResult<String> {
 }
 
 fn actor(database: &SuplexDatabase, user_id: &str, admin: bool) -> DatabaseResult<()> {
-    let role: Option<String> = database
+    let role: Option<UserRole> = database
         .connection()
         .query_row(
             "SELECT role FROM suplex_users WHERE id = ?1 AND status = 'active'",
@@ -130,7 +131,7 @@ fn actor(database: &SuplexDatabase, user_id: &str, admin: bool) -> DatabaseResul
     let Some(role) = role else {
         return Err(IdentityError::auth("Authentication required", 401, "auth_failure").into());
     };
-    if admin && role != "admin" {
+    if admin && role != UserRole::Admin {
         return Err(
             IdentityError::auth("Administrator access required", 403, "auth_failure").into(),
         );

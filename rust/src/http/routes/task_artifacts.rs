@@ -1,5 +1,7 @@
 //! Authenticated bytes for task-owned artifacts, including image previews.
 
+#![cfg_attr(not(test), deny(clippy::disallowed_types, clippy::disallowed_macros))]
+
 use crate::http::access::with_cookies;
 use crate::http::error::ApiError;
 use crate::tasks::TaskError;

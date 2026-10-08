@@ -15,6 +15,7 @@ use std::{
 
 use tokio::sync::mpsc::UnboundedReceiver;
 
+use crate::http::contracts::typed::tasks::TaskPaneRole;
 use crate::{
     coordination::root_session_store,
     integrations::herdr_bridge,
@@ -179,7 +180,7 @@ pub fn task_terminal(
     role: &str,
 ) -> Result<Option<(String, host::Spec)>, Box<dyn Error + Send + Sync>> {
     let (_, worktree) = repository::task_worktree(database, user_id, task_id)?;
-    if role == "shell" {
+    if role == TaskPaneRole::Shell.as_str() {
         let Some(cwd) = worktree.map(PathBuf::from).filter(|path| path.is_dir()) else {
             return Ok(None);
         };
@@ -224,7 +225,7 @@ pub fn task_terminal_id(
     task_id: &str,
     role: &str,
 ) -> Result<Option<String>, Box<dyn Error + Send + Sync>> {
-    if role == "shell" {
+    if role == TaskPaneRole::Shell.as_str() {
         crate::tasks::authorize_task(database, user_id, task_id)?;
         return Ok(Some(shell_id(task_id)));
     }

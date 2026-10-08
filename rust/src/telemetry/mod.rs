@@ -200,7 +200,9 @@ fn event_with_seed(
 ) -> Value {
     let mut properties = match properties {
         Value::Object(map) => map,
-        _ => Map::new(),
+        Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) | Value::Array(_) => {
+            Map::new()
+        }
     };
     let mut groups = json!({"host": config.installation_id});
     if let Some(company_id) = company_id {

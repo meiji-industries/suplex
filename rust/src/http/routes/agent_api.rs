@@ -30,6 +30,7 @@ use crate::{
 };
 
 use super::auth;
+use crate::tasks::control::TaskStatus;
 
 const DELIVERY_COMMANDS: [&str; 6] = [
     "observe_delivery",
@@ -308,7 +309,9 @@ fn move_body(value: &Value) -> Result<(moves::MoveBody, String, Option<String>),
             typed::ContractFailure::Issues(findings) => {
                 Box::new(agent_api_runtime::validation(findings, true))
             }
-            _ => Box::new(agent_api_runtime::failure("contract failed".into(), true)),
+            typed::ContractFailure::Unhandled | typed::ContractFailure::Internal(_) => {
+                Box::new(agent_api_runtime::failure("contract failed".into(), true))
+            }
         })?;
     Ok((parsed, key.unwrap_or_default(), updated))
 }
@@ -737,7 +740,10 @@ async fn update(
     ));
     let result =
         state.with_database(|database| agent_api::update(database, &principal, &id, &request));
-    if result.as_ref().is_ok_and(|task| task["status"] == "active") {
+    if result
+        .as_ref()
+        .is_ok_and(|task| task["status"] == TaskStatus::Active.as_str())
+    {
         wake(&state, &id);
     }
     respond(result, StatusCode::OK, true)

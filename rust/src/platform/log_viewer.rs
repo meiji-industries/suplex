@@ -79,7 +79,10 @@ pub fn format(record: &Value) -> String {
     let text = |name: &str| match &record[name] {
         Value::String(text) => Some(text.clone()),
         Value::Null => None,
-        other => Some(other.to_string()),
+        other @ Value::Bool(_)
+        | other @ Value::Number(_)
+        | other @ Value::Array(_)
+        | other @ Value::Object(_) => Some(other.to_string()),
     };
     let mut line = format!(
         "{}  {} {}",

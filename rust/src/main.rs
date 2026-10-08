@@ -1,4 +1,6 @@
 use serde_json::json;
+use suplex::http::routes::access::NetworkAccessMode;
+use suplex::tasks::control::HarnessKind;
 use suplex::{
     http::{self, AppState, session::SessionConfig},
     platform::{
@@ -55,7 +57,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     }
     if let [display, provider, directory] = command.as_slice()
         && display == "display"
-        && provider == "claude-code"
+        && provider == HarnessKind::ClaudeCode.as_str()
     {
         return Ok(suplex::runtimes::claude_code::display::run_claude_display(
             std::path::Path::new(directory),
@@ -108,7 +110,9 @@ async fn serve() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     system_events::install(installation.logs.clone());
     let mut database = SuplexDatabase::open(&installation.database, OpenMode::Migrate)?;
     suplex::identity::auth::normalize_legacy_users(&database)?;
-    if installation.development_auto_login || installation.access_mode == "local" {
+    if installation.development_auto_login
+        || installation.access_mode == NetworkAccessMode::Local.as_str()
+    {
         development::seed_development_data(&mut database, chrono::Utc::now())?;
     }
     std::fs::create_dir_all(&installation.artifacts)?;

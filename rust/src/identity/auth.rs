@@ -39,9 +39,17 @@ pub struct AuthUser {
     pub title: String,
     pub username: String,
     pub avatar_seed: String,
-    pub role: String,
-    pub status: String,
+    pub role: UserRole,
+    pub status: UserStatus,
     pub company_ids: Vec<String>,
+}
+
+crate::shared::wire_enum! {
+    pub enum UserRole { Admin = "admin", Member = "member" }
+}
+
+crate::shared::wire_enum! {
+    pub enum UserStatus { Pending = "pending", Active = "active", Revoked = "revoked" }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -225,7 +233,7 @@ pub fn development_sign_in(
             [now_iso],
         )?;
         let user = public_user(database, "user_development")?.ok_or("development user missing")?;
-        if user.role != "admin" || user.status != "active" {
+        if user.role != UserRole::Admin || user.status != UserStatus::Active {
             return Err(IdentityError::auth(
                 "Development user is unavailable",
                 409,
@@ -308,7 +316,7 @@ pub fn update_profile(
         let Some(user) = public_user(database, actor_user_id)? else {
             return Err(IdentityError::auth("Authentication required", 401, "auth_failure").into());
         };
-        if user.status != "active" {
+        if user.status != UserStatus::Active {
             return Err(IdentityError::auth("Authentication required", 401, "auth_failure").into());
         }
         let raw_avatar_seed: String = database.connection().query_row(
@@ -460,7 +468,7 @@ mod tests {
             .with_timezone(&Utc);
         let signed_in = development_sign_in(&mut database, now).unwrap();
         assert_eq!(signed_in.user.id, "user_development");
-        assert_eq!(signed_in.user.role, "admin");
+        assert_eq!(signed_in.user.role, UserRole::Admin);
         assert_eq!(
             get_user_by_session(&database, &signed_in.session_token, now).unwrap(),
             Some(signed_in.user.clone())

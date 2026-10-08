@@ -138,7 +138,11 @@ pub(crate) fn garde_findings(report: &garde::Report, request: &impl Serialize) -
                     Value::Array(items) => {
                         raw.parse::<usize>().ok().and_then(|index| items.get(index))
                     }
-                    _ => value.get(&name),
+                    Value::Null
+                    | Value::Bool(_)
+                    | Value::Number(_)
+                    | Value::String(_)
+                    | Value::Object(_) => value.get(&name),
                 });
                 names.push(name);
             }
@@ -179,7 +183,7 @@ fn nest(failure: ContractFailure, prefix: &str) -> ContractFailure {
                 })
                 .collect(),
         ),
-        other => other,
+        other @ ContractFailure::Unhandled | other @ ContractFailure::Internal(_) => other,
     }
 }
 

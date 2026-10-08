@@ -1,3 +1,5 @@
 cognitive-complexity-threshold = 30
 too-many-arguments-threshold = 7
 allow-unwrap-in-tests = true
+disallowed-types = [{ path = "serde_json::Value", reason = "Route handlers return concrete response structs; see AGENTS.md. Keep Value for payloads Suplex stores without interpreting, marked #[ts(type = \"unknown\")]." }]
+disallowed-macros = [{ path = "serde_json::json", reason = "Build HTTP responses from typed structs so ts-rs exports them." }]

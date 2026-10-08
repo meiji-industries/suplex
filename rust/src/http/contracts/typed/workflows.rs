@@ -61,6 +61,8 @@ pub fn strip_input(input: &Map<String, Value>) -> ContractResult<Map<String, Val
     let input = Value::Object(input.clone());
     match input_fields(Some(&input))?.finish()? {
         Value::Object(fields) => Ok(fields),
-        _ => Err(super::ContractFailure::Unhandled),
+        Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) | Value::Array(_) => {
+            Err(super::ContractFailure::Unhandled)
+        }
     }
 }

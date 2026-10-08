@@ -15,6 +15,7 @@ use serde_json::{Map, Value, json};
 
 use crate::{
     delivery::{self, DeliveryOperation},
+    http::contracts::task_reads::{WorkerAssignmentMode, WorkerAssignmentPurpose},
     http::contracts::typed::tasks::TaskWorkerReplacementBody,
     identity::auth::js_trim,
     platform::database::{OpenMode, SuplexDatabase},
@@ -23,6 +24,7 @@ use crate::{
 use crate::tasks::response::HumanQuestionOption;
 
 use super::{
+    advisor_bridge::AdvisorRole,
     root_bridge::{self, RootIdentity},
     root_controller::{self, WorkerAssignment, WorkerEvidenceRequest},
     root_session_store,
@@ -42,7 +44,7 @@ enum RootCall {
     ReadWorkerEvidence(WorkerEvidenceRequest),
     DelegateWorker(WorkerAssignment),
     DelegateAdvisor {
-        role: String,
+        role: AdvisorRole,
         brief: Option<String>,
     },
     DelegatePlanners,
@@ -72,7 +74,7 @@ enum WireCall {
     ReadWorkerEvidence(WorkerEvidenceInput),
     DelegateWorker(Box<WorkerInput>),
     DelegateAdvisor {
-        role: String,
+        role: AdvisorRole,
         #[serde(default, deserialize_with = "present")]
         brief: Option<String>,
     },
@@ -103,9 +105,9 @@ struct WorkerInput {
     acceptance_criteria: Vec<String>,
     instruction: String,
     #[serde(default = "planned")]
-    mode: String,
+    mode: WorkerAssignmentMode,
     #[serde(default = "implementation")]
-    purpose: String,
+    purpose: WorkerAssignmentPurpose,
     #[serde(rename = "advisorTurnId", default, deserialize_with = "present")]
     advisor_turn_id: Option<String>,
     #[serde(rename = "candidateTurnIds", default, deserialize_with = "present")]
@@ -161,12 +163,12 @@ struct DeliveryReview {
     patch_digest: Option<String>,
 }
 
-fn planned() -> String {
-    "planned".into()
+fn planned() -> WorkerAssignmentMode {
+    WorkerAssignmentMode::Planned
 }
 
-fn implementation() -> String {
-    "implementation".into()
+fn implementation() -> WorkerAssignmentPurpose {
+    WorkerAssignmentPurpose::Implementation
 }
 
 fn present<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
@@ -344,12 +346,6 @@ fn parse_call(mut input: Map<String, Value>) -> Result<RootCall, String> {
                 advisor_session_id,
                 candidate_session_ids,
             } = *input;
-            if !matches!(mode.as_str(), "planned" | "direct") {
-                return Err("mode: expected planned or direct".into());
-            }
-            if !matches!(purpose.as_str(), "implementation" | "verification") {
-                return Err("purpose: expected implementation or verification".into());
-            }
             if advisor_turn_id
                 .as_deref()
                 .is_some_and(|id| !root_bridge::valid_opaque_id(id))
@@ -384,7 +380,7 @@ fn parse_call(mut input: Map<String, Value>) -> Result<RootCall, String> {
             if instruction.is_empty() || criteria.is_empty() {
                 return Err("acceptanceCriteria and instruction are required".into());
             }
-            if mode == "planned" && plan.is_none() {
+            if mode == WorkerAssignmentMode::Planned && plan.is_none() {
                 return Err("A planned assignment requires the Coordinator's plan".into());
             }
             Ok(RootCall::DelegateWorker(WorkerAssignment {
@@ -400,9 +396,6 @@ fn parse_call(mut input: Map<String, Value>) -> Result<RootCall, String> {
             }))
         }
         WireCall::DelegateAdvisor { role, brief } => {
-            if !["reviewer", "planner_a", "planner_b", "rater"].contains(&role.as_str()) {
-                return Err("role: expected reviewer, planner_a, planner_b, or rater".into());
-            }
             let brief = brief.map(|brief| js_trim(&brief).to_owned());
             if brief
                 .as_deref()
@@ -534,7 +527,7 @@ impl RootBridgeServer {
                         root_controller::delegate_worker(db, path, &root, &token, &assignment).await
                     }
                     RootCall::DelegateAdvisor { role, brief } => {
-                        root_controller::delegate_advisor(db, path, artifacts, &root, &token, &role, brief.as_deref()).await
+                        root_controller::delegate_advisor(db, path, artifacts, &root, &token, role, brief.as_deref()).await
                     }
                     RootCall::DelegatePlanners => {
                         root_controller::delegate_planners(db, path, artifacts, &root, &token).await
@@ -755,7 +748,7 @@ mod tests {
         assert!(parse(json!({"kind":"delegate_advisor","role":"reviewer","brief":"  "})).is_err());
         assert!(matches!(
             parse(json!({"kind":"delegate_advisor","role":"reviewer","brief":" Plan "})),
-            Ok(RootCall::DelegateAdvisor { role, brief }) if role == "reviewer" && brief.as_deref() == Some("Plan")
+            Ok(RootCall::DelegateAdvisor { role, brief }) if role == AdvisorRole::Reviewer && brief.as_deref() == Some("Plan")
         ));
         assert!(matches!(
             parse(json!({"kind":"delegate_planners"})),
@@ -770,12 +763,12 @@ mod tests {
         assert!(parse(json!({"kind":"request_plan_approval"})).is_err());
         assert!(matches!(
             parse(json!({"kind":"delegate_worker","acceptanceCriteria":["Done"],"instruction":"Build","mode":"direct"})),
-            Ok(RootCall::DelegateWorker(assignment)) if assignment.plan.is_none() && assignment.mode == "direct"
+            Ok(RootCall::DelegateWorker(assignment)) if assignment.plan.is_none() && assignment.mode == WorkerAssignmentMode::Direct
         ));
         assert!(parse(json!({"kind":"delegate_worker","acceptanceCriteria":["Done"],"instruction":"Build"})).is_err());
         assert!(matches!(
             parse(json!({"kind":"delegate_worker","plan":"Check","acceptanceCriteria":["Done"],"instruction":"Run","purpose":"verification","candidateTurnIds":["a","b"]})),
-            Ok(RootCall::DelegateWorker(assignment)) if assignment.purpose == "verification" && assignment.candidate_turn_ids.is_some()
+            Ok(RootCall::DelegateWorker(assignment)) if assignment.purpose == WorkerAssignmentPurpose::Verification && assignment.candidate_turn_ids.is_some()
         ));
         assert!(parse(json!({"kind":"delegate_worker","plan":"P","acceptanceCriteria":["Done"],"instruction":"Run","mode":"fast"})).is_err());
     }

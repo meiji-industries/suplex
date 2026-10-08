@@ -606,6 +606,10 @@ mod tests {
         static TERM: AtomicUsize = AtomicUsize::new(0);
         static KILL: AtomicUsize = AtomicUsize::new(0);
         #[expect(clippy::unnecessary_wraps, reason = "stands in for the signal sender")]
+        #[allow(
+            clippy::wildcard_enum_match_arm,
+            reason = "any other nix signal fails the test"
+        )]
         fn signal(pid: i32, signal: Signal) -> nix::Result<()> {
             assert_eq!(pid, -2);
             match signal {

@@ -1,6 +1,7 @@
 //! Workflow records: named, editable presets over one built-in engine.
 
 use crate::identity::IdentityError;
+use crate::identity::auth::UserRole;
 use crate::shared::ids::random_hex_id;
 use crate::shared::time::now_millis_rfc3339;
 use crate::tasks::TaskError;
@@ -8,6 +9,8 @@ use rusqlite::{OptionalExtension, Row, params};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 
+use crate::coordination::workflows::Workflow;
+use crate::tasks::control::DeliveryTarget;
 use crate::{
     coordination::workflows::{advisor_label, workflow_definition},
     http::contracts::typed::workflows as contracts,
@@ -127,12 +130,12 @@ pub fn normalize_workflow_input(
     }
     raw.insert("workflow".into(), json!(definition.id));
     raw.insert("advisorProfileIds".into(), advisors);
-    if definition.id != "refine_pull_request" {
+    if definition.id != Workflow::RefinePullRequest.as_str() {
         return Ok(());
     }
     if raw
         .get("deliveryTarget")
-        .is_some_and(|value| value != "merged")
+        .is_some_and(|value| value != DeliveryTarget::Merged.as_str())
     {
         return Err("Pull request repair always delivers a merged pull request".into());
     }
@@ -147,7 +150,7 @@ pub fn normalize_workflow_input(
     Ok(())
 }
 
-fn active_role(database: &SuplexDatabase, user_id: &str) -> DatabaseResult<Option<String>> {
+fn active_role(database: &SuplexDatabase, user_id: &str) -> DatabaseResult<Option<UserRole>> {
     Ok(database
         .connection()
         .query_row(
@@ -159,7 +162,7 @@ fn active_role(database: &SuplexDatabase, user_id: &str) -> DatabaseResult<Optio
 }
 
 fn require_admin(database: &SuplexDatabase, user_id: &str) -> DatabaseResult<()> {
-    if active_role(database, user_id)?.as_deref() != Some("admin") {
+    if active_role(database, user_id)? != Some(UserRole::Admin) {
         return Err(
             IdentityError::auth("Administrator access required", 403, "auth_failure").into(),
         );

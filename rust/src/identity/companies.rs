@@ -7,16 +7,20 @@ use serde::Serialize;
 
 use crate::platform::database::{DatabaseResult, SuplexDatabase};
 
-use super::auth;
+use super::auth::{self, UserRole, UserStatus};
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Company {
     pub id: String,
     pub name: String,
-    pub status: String,
+    pub status: CompanyStatus,
     pub issue_code: Option<String>,
     pub created_at: String,
+}
+
+crate::shared::wire_enum! {
+    pub enum CompanyStatus { Active = "active", Paused = "paused", Archived = "archived" }
 }
 
 fn company(row: &Row<'_>) -> rusqlite::Result<Company> {
@@ -29,7 +33,7 @@ fn company(row: &Row<'_>) -> rusqlite::Result<Company> {
     })
 }
 
-fn active_role(database: &SuplexDatabase, user_id: &str) -> DatabaseResult<String> {
+fn active_role(database: &SuplexDatabase, user_id: &str) -> DatabaseResult<UserRole> {
     database
         .connection()
         .query_row(
@@ -42,7 +46,7 @@ fn active_role(database: &SuplexDatabase, user_id: &str) -> DatabaseResult<Strin
 }
 
 pub fn require_admin(database: &SuplexDatabase, user_id: &str) -> DatabaseResult<()> {
-    if active_role(database, user_id)? != "admin" {
+    if active_role(database, user_id)? != UserRole::Admin {
         return Err(IdentityError::not_found().into());
     }
     Ok(())
@@ -53,13 +57,13 @@ pub fn list_visible_companies(
     user_id: &str,
 ) -> DatabaseResult<Vec<Company>> {
     let role = active_role(database, user_id)?;
-    let sql = if role == "admin" {
+    let sql = if role == UserRole::Admin {
         "SELECT id, name, status, issue_code, created_at FROM suplex_companies ORDER BY name ASC"
     } else {
         "SELECT suplex_companies.id, suplex_companies.name, suplex_companies.status, suplex_companies.issue_code, suplex_companies.created_at FROM suplex_companies INNER JOIN suplex_memberships ON suplex_memberships.company_id = suplex_companies.id WHERE suplex_memberships.user_id = ?1 ORDER BY suplex_companies.name ASC"
     };
     let mut statement = database.connection().prepare(sql)?;
-    if role == "admin" {
+    if role == UserRole::Admin {
         Ok(statement
             .query_map([], company)?
             .collect::<rusqlite::Result<Vec<_>>>()?)
@@ -79,7 +83,7 @@ pub fn require_company_access(
         return Err(IdentityError::not_found().into());
     }
     let role = active_role(database, user_id)?;
-    let company = if role == "admin" {
+    let company = if role == UserRole::Admin {
         database
             .connection()
             .query_row(
@@ -114,7 +118,7 @@ pub fn require_membership_target(
     database: &SuplexDatabase,
     target_user_id: &str,
 ) -> DatabaseResult<()> {
-    let target: Option<String> = database
+    let target: Option<UserStatus> = database
         .connection()
         .query_row(
             "SELECT status FROM suplex_users WHERE id = ?1",
@@ -122,7 +126,7 @@ pub fn require_membership_target(
             |row| row.get(0),
         )
         .optional()?;
-    if target.as_deref().is_none_or(|status| status == "revoked") {
+    if target.is_none_or(|status| status == UserStatus::Revoked) {
         return Err(IdentityError::not_found().into());
     }
     Ok(())
@@ -311,12 +315,9 @@ pub fn set_company_status(
     database: &mut SuplexDatabase,
     actor_user_id: &str,
     company_id: &str,
-    status: &str,
+    status: CompanyStatus,
     now: DateTime<Utc>,
 ) -> DatabaseResult<Company> {
-    if !matches!(status, "active" | "paused" | "archived") {
-        return Err(IdentityError::auth("Company status is invalid", 400, "auth_failure").into());
-    }
     if company_id.is_empty() || company_id.encode_utf16().count() > 128 {
         return Err(IdentityError::not_found().into());
     }
@@ -324,7 +325,7 @@ pub fn set_company_status(
         require_admin(database, actor_user_id)?;
         let previous = require_company_access(database, actor_user_id, company_id)?;
         // Restoring an archived company counts toward the plan again.
-        if previous.status == "archived" && status != "archived" {
+        if previous.status == CompanyStatus::Archived && status != CompanyStatus::Archived {
             crate::billing::require(database, crate::billing::Limit::Companies, now)?;
         }
         database.connection().execute(
@@ -541,10 +542,16 @@ mod tests {
             "company_issue_code_locked"
         );
         assert_eq!(
-            set_company_status(&mut database, &admin.id, &created.id, "paused", now)
-                .unwrap()
-                .status,
-            "paused"
+            set_company_status(
+                &mut database,
+                &admin.id,
+                &created.id,
+                CompanyStatus::Paused,
+                now
+            )
+            .unwrap()
+            .status,
+            CompanyStatus::Paused
         );
         add_membership(&mut database, &admin.id, "member_company", &created.id, now).unwrap();
         assert_eq!(

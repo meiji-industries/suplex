@@ -1,4 +1,5 @@
 use super::{config::Installation, setup};
+use crate::http::routes::access::NetworkAccessMode;
 use serde::{Deserialize, Serialize};
 use std::{
     fs, io,
@@ -274,7 +275,7 @@ fn stop_serve_arguments(port: u16, proxy: &str) -> Vec<String> {
     ]
 }
 fn stop_serve(installation: &Installation) -> io::Result<()> {
-    if installation.access_mode != "tailscale"
+    if installation.access_mode != NetworkAccessMode::Tailscale.as_str()
         || installation.tailscale_exposure != "serve"
         || !serve_status(installation)?
     {

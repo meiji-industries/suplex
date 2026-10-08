@@ -5,6 +5,8 @@ pub mod ids;
 pub mod js_json;
 pub mod page;
 pub mod time;
+#[cfg(test)]
+mod vocabulary_check;
 
 pub use failure::{PublicFailure, public_failure};
 
@@ -22,7 +24,7 @@ macro_rules! wire_enum {
         }
 
         impl $name {
-            pub fn as_str(self) -> &'static str {
+            pub const fn as_str(self) -> &'static str {
                 match self {
                     $(Self::$variant => $text),+
                 }

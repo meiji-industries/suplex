@@ -118,7 +118,11 @@ where
 pub fn id_text<'de, D: Deserializer<'de>>(deserializer: D) -> Result<String, D::Error> {
     Ok(match Value::deserialize(deserializer)? {
         Value::String(id) => id,
-        other => other.to_string(),
+        other @ Value::Null
+        | other @ Value::Bool(_)
+        | other @ Value::Number(_)
+        | other @ Value::Array(_)
+        | other @ Value::Object(_) => other.to_string(),
     })
 }
 

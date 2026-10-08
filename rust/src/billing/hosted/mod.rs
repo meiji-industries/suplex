@@ -176,7 +176,10 @@ pub fn canonical_json(value: &Value) -> String {
                         .collect(),
                 )
             }
-            other => other.clone(),
+            other @ Value::Null
+            | other @ Value::Bool(_)
+            | other @ Value::Number(_)
+            | other @ Value::String(_) => other.clone(),
         }
     }
     js_json::stringify(&sorted(value))

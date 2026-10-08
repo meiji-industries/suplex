@@ -375,7 +375,7 @@ async fn observe(
                         current = None;
                         schedule(&mut retry, 250);
                     }
-                    _ => {}
+                    Observed::Line(..) | Observed::Error(..) | Observed::Exit(_) => {}
                 }
                 false
             }

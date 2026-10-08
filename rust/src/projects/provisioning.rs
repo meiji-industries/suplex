@@ -624,7 +624,9 @@ pub fn infer_commands(repository_path: &Path) -> (String, String) {
                 number.as_f64().is_some_and(|number| number != 0.0)
             }
             serde_json::Value::String(value) => !value.is_empty(),
-            _ => true,
+            serde_json::Value::Bool(_)
+            | serde_json::Value::Array(_)
+            | serde_json::Value::Object(_) => true,
         });
     let (manager, setup) = if file(&repository_path.join("pnpm-lock.yaml")) {
         (Some("pnpm"), Some("pnpm install --frozen-lockfile"))

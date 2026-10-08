@@ -262,28 +262,43 @@ fn same_process(identity: IdentityMatch) -> bool {
 }
 
 pub fn running(record: &HeadlessTurnRecord) -> io::Result<bool> {
-    match compare_identity(
+    let identity = compare_identity(
         &record.owned_identity(),
         inspect_process(record.pid).as_ref(),
-    ) {
-        identity if same_process(identity) => Ok(true),
+    );
+    if same_process(identity) {
+        return Ok(true);
+    }
+    match identity {
         IdentityMatch::OwnerUncertain | IdentityMatch::NotRunning => group_alive(record),
         // TypeScript `headlessTurnRunning`: another process now holds the pid, so the recorded one is gone.
-        _ => Ok(false),
+        IdentityMatch::Exact
+        | IdentityMatch::PidReused
+        | IdentityMatch::WrongProcessGroup
+        | IdentityMatch::WrongStartTime
+        | IdentityMatch::WrongExecutable
+        | IdentityMatch::WrongArgv
+        | IdentityMatch::WrongOwner => Ok(false),
     }
 }
 
 fn signal_owned(record: &HeadlessTurnRecord, signal: Signal) -> io::Result<()> {
-    let target = match compare_identity(
+    let identity = compare_identity(
         &record.owned_identity(),
         inspect_process(record.pid).as_ref(),
-    ) {
-        identity if same_process(identity) => {
-            Some(record.process_identity.process_group == record.pid)
-        }
+    );
+    let target = match identity {
+        _ if same_process(identity) => Some(record.process_identity.process_group == record.pid),
         IdentityMatch::NotRunning if group_alive(record)? => Some(true),
         IdentityMatch::NotRunning => None,
-        other => {
+        other @ IdentityMatch::Exact
+        | other @ IdentityMatch::PidReused
+        | other @ IdentityMatch::WrongProcessGroup
+        | other @ IdentityMatch::WrongStartTime
+        | other @ IdentityMatch::WrongExecutable
+        | other @ IdentityMatch::WrongArgv
+        | other @ IdentityMatch::WrongOwner
+        | other @ IdentityMatch::OwnerUncertain => {
             return Err(io::Error::other(format!(
                 "Recorded process ownership is {other:?}"
             )));

@@ -114,7 +114,11 @@ impl NativeSessionReader for ClaudeCodeTaskRuntime {
                                     text,
                                 })
                             }
-                            _ => None,
+                            transcript::Block::ToolUse { .. }
+                            | transcript::Block::ToolResult { .. }
+                            | transcript::Block::Text(_)
+                            | transcript::Block::Thinking(_)
+                            | transcript::Block::Other => None,
                         })
                 })
                 .collect())

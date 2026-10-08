@@ -180,7 +180,7 @@ fn remote_branches(
             commit.author().name().unwrap_or("").to_owned(),
         ));
     }
-    rows.sort_by(|left, right| right.0.cmp(&left.0));
+    rows.sort_by_key(|row| std::cmp::Reverse(row.0));
     Ok(rows
         .into_iter()
         .take(200)
@@ -621,7 +621,13 @@ mod tests {
                     )
                 );
             }
-            other => panic!("unexpected source error: {other:?}"),
+            other @ super::super::TaskError::Failure { .. }
+            | other @ super::super::TaskError::Conflict
+            | other @ super::super::TaskError::Agent { .. }
+            | other @ super::super::TaskError::PullRequestOwned
+            | other @ super::super::TaskError::Internal(_) => {
+                panic!("unexpected source error: {other:?}")
+            }
         }
         server.abort();
     }
@@ -637,7 +643,13 @@ mod tests {
                 assert_eq!(*status, 422);
                 *code
             }
-            other => panic!("unexpected source error: {other:?}"),
+            other @ super::super::TaskError::Failure { .. }
+            | other @ super::super::TaskError::Conflict
+            | other @ super::super::TaskError::Agent { .. }
+            | other @ super::super::TaskError::PullRequestOwned
+            | other @ super::super::TaskError::Internal(_) => {
+                panic!("unexpected source error: {other:?}")
+            }
         };
         let pull = fixture_pull();
         let pinned = pinned_pull_request("owner/repo", "main", &pull).unwrap();
@@ -784,7 +796,13 @@ mod tests {
             .as_ref()
         {
             super::super::TaskError::Source { code, .. } => *code,
-            other => panic!("unexpected source error: {other:?}"),
+            other @ super::super::TaskError::Failure { .. }
+            | other @ super::super::TaskError::Conflict
+            | other @ super::super::TaskError::Agent { .. }
+            | other @ super::super::TaskError::PullRequestOwned
+            | other @ super::super::TaskError::Internal(_) => {
+                panic!("unexpected source error: {other:?}")
+            }
         };
         assert_eq!(
             code(

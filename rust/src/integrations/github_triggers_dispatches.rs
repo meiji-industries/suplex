@@ -12,6 +12,7 @@ use super::{
     github_triggers::get_rule, github_triggers_inspection::validate_protected_paths,
     provider_http::optional_metadata,
 };
+use crate::tasks::control::TaskStatus;
 use crate::{
     coordination::{
         advisor_bridge::AdvisorRole,
@@ -536,7 +537,7 @@ impl LinkedTask {
     /// A live backlog task the authority created from this capture's request.
     fn created_from(&self, dispatch: &Dispatch, hash: &str) -> bool {
         self.archived_at.is_none()
-            && self.status == "backlog"
+            && self.status == TaskStatus::Backlog.as_str()
             && self.company_id == dispatch.company_id
             && self.project_id == dispatch.project_id
             && self.idempotency_key == dispatch.idempotency_key

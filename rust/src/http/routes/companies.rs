@@ -1,3 +1,5 @@
+#![cfg_attr(not(test), deny(clippy::disallowed_types, clippy::disallowed_macros))]
+
 use crate::http::error::ApiError;
 use axum::{
     Json, Router,
@@ -184,7 +186,7 @@ async fn status(
         Some("POST"),
         StatusCode::OK,
         |database, user| {
-            companies::set_company_status(database, &user.id, &company_id, &status, Utc::now())
+            companies::set_company_status(database, &user.id, &company_id, status, Utc::now())
         },
     )
 }

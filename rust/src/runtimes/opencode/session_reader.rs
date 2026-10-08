@@ -111,7 +111,9 @@ pub fn reasoning_from_messages(messages: &[Envelope]) -> Vec<NativeReasoning> {
                             id: format!("{}:{index}", message.info.id()),
                             text: text.to_owned(),
                         }),
-                    _ => None,
+                    Part::Text(_) | Part::Tool(_) | Part::Compaction { .. } | Part::Other(_) => {
+                        None
+                    }
                 })
         })
         .collect()
@@ -173,7 +175,7 @@ pub fn history_from_messages(messages: &[Envelope]) -> Result<Vec<Value>, BoxErr
                         "input": native.input, "output": native.output, "error": native.error,
                     }));
                 }
-                _ => {}
+                Part::Text(_) | Part::Compaction { .. } | Part::Other(_) => {}
             }
         }
         if !content.is_empty() {

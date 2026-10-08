@@ -3,6 +3,8 @@
 use crate::identity::IdentityError;
 use crate::identity::answer_grant_repository;
 pub use crate::identity::answer_grant_repository::AnswerGrant;
+use crate::identity::auth::UserRole;
+use crate::identity::auth::UserStatus;
 use crate::shared::hash::sha256_hex;
 use crate::shared::ids::{random_hex, random_hex_id, random_secret};
 use crate::shared::time::rfc3339_millis;
@@ -114,7 +116,7 @@ pub struct PublicAgent {
     pub avatar_seed: String,
     pub company_id: String,
     pub profile_id: Option<String>,
-    pub status: String,
+    pub status: ExternalAgentStatus,
     pub project_ids: Vec<String>,
     pub paired_at: Option<String>,
     pub last_used_at: Option<String>,
@@ -222,8 +224,8 @@ fn metadata(pairs: &[(&str, &str)]) -> Map<String, Value> {
 /// Admin authority is the live user row; a missing user and a member differ.
 pub(crate) fn require_admin(database: &SuplexDatabase, user_id: &str) -> DatabaseResult<()> {
     match auth::public_user(database, user_id)? {
-        Some(user) if user.status == "active" && user.role == "admin" => Ok(()),
-        Some(user) if user.status == "active" => Err(not_found("not_found")),
+        Some(user) if user.status == UserStatus::Active && user.role == UserRole::Admin => Ok(()),
+        Some(user) if user.status == UserStatus::Active => Err(not_found("not_found")),
         _ => Err(IdentityError::external_agent(
             "Authentication required",
             401,
@@ -482,7 +484,7 @@ pub fn public_agent(database: &SuplexDatabase, agent_id: &str) -> DatabaseResult
         avatar_seed: agent.avatar_seed,
         company_id: agent.company_id,
         profile_id: agent.client_profile_id,
-        status: agent.status.as_str().to_owned(),
+        status: agent.status,
         project_ids: agent.project_ids,
         paired_at: agent.paired_at,
         last_used_at: agent.last_used_at,
@@ -495,7 +497,7 @@ pub fn public_agent(database: &SuplexDatabase, agent_id: &str) -> DatabaseResult
 fn agent_state(
     database: &SuplexDatabase,
     agent_id: &str,
-) -> DatabaseResult<Option<(String, String)>> {
+) -> DatabaseResult<Option<(String, ExternalAgentStatus)>> {
     Ok(database
         .connection()
         .query_row(
@@ -530,7 +532,7 @@ pub fn replace_projects(
         let Some((company_id, status)) = agent_state(database, agent_id)? else {
             return Err(not_found("agent_not_found"));
         };
-        if status == "revoked" {
+        if status == ExternalAgentStatus::Revoked {
             return Err(not_found("agent_not_found"));
         }
         if !unique.is_empty() && matching_projects(database, &company_id, &unique)? != unique.len()
@@ -595,7 +597,7 @@ pub fn set_answer_grant(
     let now_iso = rfc3339_millis(now);
     database.transaction(false, |database| {
         let company_id = match agent_state(database, agent_id)? {
-            Some((company_id, status)) if status != "revoked" => company_id,
+            Some((company_id, status)) if status != ExternalAgentStatus::Revoked => company_id,
             _ => return Err(not_found("agent_not_found")),
         };
         answer_grant_repository::write(
@@ -632,7 +634,7 @@ pub fn set_moves_grant(
     }
     let stamp = rfc3339_millis(now);
     database.transaction(false, |database| {
-        let company_id = match agent_state(database, agent_id)? { Some((company_id, status)) if status != "revoked" => company_id, _ => return Err(not_found("agent_not_found")) };
+        let company_id = match agent_state(database, agent_id)? { Some((company_id, status)) if status != ExternalAgentStatus::Revoked => company_id, _ => return Err(not_found("agent_not_found")) };
         database.connection().execute(
             "UPDATE suplex_external_agents SET moves_granted_by_user_id = ?1, moves_granted_at = ?2, updated_at = ?4 WHERE id = ?3",
             params![granted.then_some(actor_user_id), granted.then_some(&stamp), agent_id, stamp],
@@ -647,7 +649,7 @@ fn issue_pairing(
     actor_user_id: &str,
     agent_id: &str,
     purpose: &str,
-    required_status: &str,
+    required_status: ExternalAgentStatus,
     now: DateTime<Utc>,
 ) -> DatabaseResult<PairingCode> {
     require_admin(database, actor_user_id)?;
@@ -688,7 +690,14 @@ pub fn issue_initial_pairing(
     agent_id: &str,
     now: DateTime<Utc>,
 ) -> DatabaseResult<PairingCode> {
-    issue_pairing(database, actor_user_id, agent_id, "initial", "pending", now)
+    issue_pairing(
+        database,
+        actor_user_id,
+        agent_id,
+        "initial",
+        ExternalAgentStatus::Pending,
+        now,
+    )
 }
 
 pub fn rotate(
@@ -697,7 +706,14 @@ pub fn rotate(
     agent_id: &str,
     now: DateTime<Utc>,
 ) -> DatabaseResult<PairingCode> {
-    issue_pairing(database, actor_user_id, agent_id, "rotation", "paired", now)
+    issue_pairing(
+        database,
+        actor_user_id,
+        agent_id,
+        "rotation",
+        ExternalAgentStatus::Paired,
+        now,
+    )
 }
 
 pub fn exchange(
@@ -735,7 +751,9 @@ pub fn exchange(
         let Some((company_id, status)) = agent_state(database, &agent_id)? else {
             return Err(pairing_failure());
         };
-        if status == "revoked" || (purpose == "rotation" && status != "paired") {
+        if status == ExternalAgentStatus::Revoked
+            || (purpose == "rotation" && status != ExternalAgentStatus::Paired)
+        {
             return Err(pairing_failure());
         }
         if database.connection().execute(
@@ -967,7 +985,7 @@ pub fn revoke(
     let now_iso = rfc3339_millis(now);
     database.transaction(false, |database| {
         let company_id = match agent_state(database, agent_id)? {
-            Some((company_id, status)) if status != "revoked" => company_id,
+            Some((company_id, status)) if status != ExternalAgentStatus::Revoked => company_id,
             _ => return Err(not_found("agent_not_found")),
         };
         for sql in [
@@ -1370,7 +1388,7 @@ pub(crate) mod tests {
             Utc::now(),
         )
         .unwrap();
-        assert_eq!(paired.agent.status, "paired");
+        assert_eq!(paired.agent.status, ExternalAgentStatus::Paired);
         assert!(
             issue_initial_pairing(&mut fixture.database, &admin, &second.agent.id, Utc::now())
                 .is_err()

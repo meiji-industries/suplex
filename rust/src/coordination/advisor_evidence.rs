@@ -15,6 +15,7 @@ use super::{
     workflow_evidence::{self, EvidenceAttachment, WrittenEvidence},
     workflows::{ReviewRange, turn_outcome, turn_workflow_input},
 };
+use crate::tasks::control::SessionKind;
 
 /// TypeScript `parseObservation` fields that describe one Worker turn.
 fn parsed_observation(turn: &TurnRow) -> Value {
@@ -94,7 +95,7 @@ pub fn prepare_advisor_evidence(
     let worker_turns = workers
         .iter()
         .map(|(turn, parsed)| {
-            let input = turn_workflow_input(&rows.sessions, turn).filter(|input| input["kind"] == "worker");
+            let input = turn_workflow_input(&rows.sessions, turn).filter(|input| input["kind"] == SessionKind::Worker.as_str());
             let verification_range = &parsed["verificationRange"];
             json!({
                 "turnId": turn.id, "sessionId": turn.session_id,

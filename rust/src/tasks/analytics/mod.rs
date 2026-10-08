@@ -11,6 +11,8 @@ use rusqlite::{OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 
+use crate::tasks::control::SessionKind;
+use crate::tasks::control::TaskStatus;
 use crate::{
     http::contracts::task_reads::{TaskCost, TaskCostsResponse},
     identity::companies,
@@ -270,7 +272,7 @@ pub fn usage_metrics(usage: &[TaskUsage]) -> UsageMetrics {
         if entry.failed {
             failed.insert(turn.clone());
         }
-        if entry.role == "root" {
+        if entry.role == SessionKind::Root.as_str() {
             root.insert(turn);
         } else {
             worker.insert(turn);
@@ -331,7 +333,7 @@ pub fn task_analytics(
         .max();
     let mut observed_wait_ms = 0.0;
     for (index, event) in events.iter().enumerate() {
-        if event.status != "waiting_human" {
+        if event.status != TaskStatus::WaitingHuman.as_str() {
             continue;
         }
         let end = match events.get(index + 1) {
@@ -348,12 +350,16 @@ pub fn task_analytics(
         || events
             .first()
             .is_some_and(|first| matches!(first.status.as_str(), "backlog" | "queued")))
-    .then(|| events.iter().find(|event| event.status == "active"))
-    .flatten();
-    let delivered = start.and_then(|start| {
+    .then(|| {
         events
             .iter()
-            .find(|event| event.status == "delivered" && event.observed_at >= start.observed_at)
+            .find(|event| event.status == TaskStatus::Active.as_str())
+    })
+    .flatten();
+    let delivered = start.and_then(|start| {
+        events.iter().find(|event| {
+            event.status == TaskStatus::Delivered.as_str() && event.observed_at >= start.observed_at
+        })
     });
     let sessions = native_session_ids
         .iter()

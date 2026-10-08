@@ -1,5 +1,7 @@
 //! Installable web app files: manifest, icons, and the push service worker. They hold no company data.
 
+#![cfg_attr(not(test), deny(clippy::disallowed_types, clippy::disallowed_macros))]
+
 use axum::{
     Router,
     http::header,

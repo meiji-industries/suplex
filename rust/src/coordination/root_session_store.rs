@@ -671,7 +671,12 @@ fn launch_delegate(
     let assignment_hash = sha256_hex(assignment_text.as_bytes());
     let workflow_json = workflow_input.map(serde_json::to_string).transpose()?;
     let slot = advisor_role
-        .filter(|role| matches!(*role, "planner_a" | "planner_b"))
+        .filter(|role| {
+            matches!(
+                AdvisorRole::parse(role),
+                Some(AdvisorRole::PlannerA | AdvisorRole::PlannerB)
+            )
+        })
         .unwrap_or("delegate");
     let time = rfc3339_millis(now);
     database.transaction(true, |database| {
@@ -718,8 +723,8 @@ fn valid_planner_pair(pair_id: &str, input_a: &Value, input_b: &Value) -> bool {
     ) else {
         return false;
     };
-    input_a["role"] == "planner_a"
-        && input_b["role"] == "planner_b"
+    input_a["role"] == AdvisorRole::PlannerA.as_str()
+        && input_b["role"] == AdvisorRole::PlannerB.as_str()
         && input_a["plannerPairId"] == pair_id
         && input_b["plannerPairId"] == pair_id
         && super::workflows::same_range(&a, &b)
@@ -1801,7 +1806,7 @@ fn selection_profile(
     let profile = read_profile(
         database,
         &request.profile_id,
-        if request.role == "worker" {
+        if request.role == SessionKind::Worker.as_str() {
             "worker"
         } else {
             "root"
@@ -2160,7 +2165,7 @@ pub fn select_delegate(
         let rows = root_observation_rows(database, task_id)?;
         let control = &rows.control;
         selection_available(database, task_id, control, "Only active or paused tasks can select an agent.")?;
-        let advisor_role = (request.role != "worker").then_some(request.role.as_str());
+        let advisor_role = (request.role != SessionKind::Worker.as_str()).then_some(request.role.as_str());
         check_selection_role(control, advisor_role)?;
         let state = control.workflow_state.clone();
         let previous_profile = match advisor_role {
@@ -2245,7 +2250,11 @@ fn delivery_continuation(
             repository::assert_task_pull_requests_available(database, task_id)
                 .map_err(|error| conflict(&error.to_string()))?;
         }
-        _ => {
+        TaskStatus::Backlog
+        | TaskStatus::Queued
+        | TaskStatus::WaitingHuman
+        | TaskStatus::Cancelled
+        | TaskStatus::Delivered => {
             return Err(conflict(
                 "Only running tasks and delivered pull request tasks can change the delivery target.",
             ));

@@ -2,6 +2,7 @@
 //! (`src/identity/avatars.ts`, `src/identity/avatar-kinds.ts`).
 
 use crate::identity::IdentityError;
+use crate::identity::auth::UserRole;
 use crate::platform::PlatformError;
 use crate::shared::ids::random_hex_id;
 use crate::shared::time::now_millis_rfc3339;
@@ -60,7 +61,7 @@ pub struct AvatarImage {
 }
 
 /// `AuthService.getUserForAuthority`: the live, active user and its role.
-fn user_role(database: &SuplexDatabase, user_id: &str) -> DatabaseResult<String> {
+fn user_role(database: &SuplexDatabase, user_id: &str) -> DatabaseResult<UserRole> {
     database
         .connection()
         .query_row(
@@ -176,7 +177,7 @@ pub fn update(
             }
         }
         let kind = kind.ok_or_else(IdentityError::not_found)?;
-        let allowed = role == "admin"
+        let allowed = role == UserRole::Admin
             || (kind == "user" && owner_id == user_id)
             || (kind == "project"
                 && database.connection().query_row(

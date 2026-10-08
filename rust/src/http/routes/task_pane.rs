@@ -84,7 +84,7 @@ fn number(value: &Value) -> Option<f64> {
             .or(text.trim().is_empty().then_some(0.0)),
         Value::Bool(flag) => Some(f64::from(u8::from(*flag))),
         Value::Null => Some(0.0),
-        _ => None,
+        Value::Array(_) | Value::Object(_) => None,
     }
     .filter(|number| number.is_finite())
 }
@@ -181,6 +181,7 @@ pub(crate) async fn run_terminal(
     bridge.release();
 }
 
+use crate::http::contracts::typed::tasks::TaskPaneRole;
 use crate::tasks::worktree::{bound_pane, task_shell_pane};
 
 async fn terminal(
@@ -206,7 +207,7 @@ async fn terminal(
         if !origin_allowed(&headers, &state.session_config.reachable_address) {
             return close(&mut socket, 4403, "origin").await;
         }
-        let shell = role == "shell";
+        let shell = role == TaskPaneRole::Shell.as_str();
         if state.with_database(|database| terminals::host_enabled(database)) {
             return host_terminal(socket, state, user_id, task_id, role, (cols, rows)).await;
         }
@@ -268,7 +269,7 @@ async fn host_terminal(
     role: String,
     (cols, rows): (i64, i64),
 ) {
-    let shell = role == "shell";
+    let shell = role == TaskPaneRole::Shell.as_str();
     let binding = state.with_database(|database| {
         terminals::task_terminal(database, &user_id, &task_id, &role)
             .map_err(|error| error.to_string())

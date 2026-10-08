@@ -1,5 +1,6 @@
 //! The Suplex account linked to this installation: read, log in, log out.
 
+use crate::identity::auth::UserRole;
 use crate::{
     http::session,
     shared::{hash::sha256_hex, time::rfc3339_millis},
@@ -92,7 +93,8 @@ async fn read(State(state): State<AppState>, headers: HeaderMap) -> Response {
             Json(AccountResponse {
                 configured: state.accounts.is_some(),
                 can_manage: if local {
-                    user.as_ref().is_some_and(|user| user.role == "admin")
+                    user.as_ref()
+                        .is_some_and(|user| user.role == UserRole::Admin)
                 } else {
                     user.is_none()
                 },

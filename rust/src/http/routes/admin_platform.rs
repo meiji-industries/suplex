@@ -1,6 +1,7 @@
 //! Environment, backup and factory reset routes from `http/routes/administration.ts`.
 
 use crate::http::error::ApiError;
+use crate::identity::auth::UserRole;
 use crate::shared::time::now_millis_rfc3339;
 use std::path::PathBuf;
 
@@ -109,7 +110,7 @@ pub(crate) fn administrator(
             "Authentication required",
         )));
     };
-    if user.role != "admin" {
+    if user.role != UserRole::Admin {
         let mut response = auth::error(StatusCode::FORBIDDEN, message);
         auth::append_cookies(&mut response, session.set_cookies);
         return Err(Box::new(response));
@@ -213,7 +214,8 @@ async fn read_telemetry(
         ))
     });
     let (setting_enabled, acknowledged, account_id) = status.unwrap_or((false, false, None));
-    let required = user.role == "admin" && config.is_some() && setting_enabled && !acknowledged;
+    let required =
+        user.role == UserRole::Admin && config.is_some() && setting_enabled && !acknowledged;
     let enabled = config.is_some() && setting_enabled && acknowledged;
     let (project_key, host, installation_id, app_version, app_revision, user_id, user_role) =
         if enabled {
@@ -225,7 +227,7 @@ async fn read_telemetry(
                 Some(env!("CARGO_PKG_VERSION").to_owned()),
                 Some(env!("SUPLEX_REVISION").to_owned()),
                 Some(user.id),
-                TelemetryUserRole::parse(&user.role),
+                TelemetryUserRole::parse(user.role.as_str()),
             )
         } else {
             (None, None, None, None, None, None, None)

@@ -116,7 +116,7 @@ fn valid_pause(pause: &TaskLimitPause) -> bool {
     let valid_limits = |limits: &TaskLimits| {
         limits.budget_usd.is_finite() && limits.budget_usd >= 0.0 && limits.max_turns >= 0
     };
-    pause.kind == "task_limit"
+    pause.kind == AgentQuestionKind::TaskLimit.as_str()
         && valid_limits(&pause.limits)
         && !pause
             .usage
@@ -413,6 +413,7 @@ pub(crate) fn check_admission(
     }
     Ok(Admission::Allowed)
 }
+use crate::tasks::agent_api::AgentQuestionKind;
 use crate::{
     coordination::root_session_store,
     profiles::model_pricing::ModelsDevCatalogReader,

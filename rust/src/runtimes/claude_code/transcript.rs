@@ -152,7 +152,7 @@ pub fn message_entry(value: &Value) -> Option<ClaudeMessageEntry> {
     let content = match message.get("content")? {
         Value::String(text) => Content::Text(text.clone()),
         Value::Array(blocks) => Content::Blocks(blocks.iter().map(block).collect::<Option<_>>()?),
-        _ => return None,
+        Value::Null | Value::Bool(_) | Value::Number(_) | Value::Object(_) => return None,
     };
     optional(message, "stop_reason", |reason| {
         (reason.is_null() || reason.is_string()).then_some(())
@@ -331,7 +331,7 @@ pub fn history_messages(entries: &[ClaudeMessageEntry]) -> Vec<Value> {
                             "error":if failed { text } else { None },
                         }));
                     }
-                    _ => {}
+                    Block::ToolResult { .. } | Block::Thinking(_) | Block::Other => {}
                 }
             }
             (!content.is_empty()).then(|| {
@@ -386,7 +386,7 @@ pub fn execution(entries: &[ClaudeMessageEntry]) -> (Vec<NativeTool>, Value) {
                         plan = items;
                     }
                 }
-                _ => {}
+                Block::Text(_) | Block::Thinking(_) | Block::Other => {}
             }
         }
     }
@@ -415,7 +415,7 @@ pub fn unsettled_tool_ids(entries: &[ClaudeMessageEntry]) -> Vec<String> {
         .flat_map(blocks)
         .filter_map(|block| match block {
             Block::ToolResult { tool_use_id, .. } => Some(tool_use_id),
-            _ => None,
+            Block::ToolUse { .. } | Block::Text(_) | Block::Thinking(_) | Block::Other => None,
         })
         .collect::<HashSet<_>>();
     entries
@@ -423,7 +423,11 @@ pub fn unsettled_tool_ids(entries: &[ClaudeMessageEntry]) -> Vec<String> {
         .flat_map(blocks)
         .filter_map(|block| match block {
             Block::ToolUse { id, .. } if !settled.contains(&id) => Some(id),
-            _ => None,
+            Block::ToolUse { .. }
+            | Block::ToolResult { .. }
+            | Block::Text(_)
+            | Block::Thinking(_)
+            | Block::Other => None,
         })
         .collect()
 }
@@ -435,7 +439,10 @@ pub fn assistant_text(entries: &[ClaudeMessageEntry]) -> String {
         .flat_map(blocks)
         .filter_map(|block| match block {
             Block::Text(text) => Some(text),
-            _ => None,
+            Block::ToolUse { .. }
+            | Block::ToolResult { .. }
+            | Block::Thinking(_)
+            | Block::Other => None,
         })
         .collect::<Vec<_>>()
         .join("\n")

@@ -1,5 +1,7 @@
 //! Company analytics, task costs, and timeline.
 
+#![cfg_attr(not(test), deny(clippy::disallowed_types, clippy::disallowed_macros))]
+
 use crate::http::error::ApiError;
 use crate::tasks::TaskError;
 use std::{error::Error, path::PathBuf};

@@ -1605,7 +1605,7 @@ pub fn wake_idle_root(
     now: DateTime<Utc>,
 ) -> DatabaseResult<Option<TurnRow>> {
     database.transaction(true, |database| {
-        let blocked: bool = crate::tasks::dependencies::blocked(database, task_id)?;
+        let blocked: bool = crate::tasks::dependencies::dispatch_blocked(database, task_id)?;
         if blocked { return Ok(None); }
         let id = new_turn_id(now)?;
         let time = rfc3339_millis(now);
@@ -1738,8 +1738,12 @@ pub fn refresh_pending_root_dependency_context(
             [turn_id], turn,
         ).optional()?;
         if let Some(current) = current {
-            let dependencies = root_observation_rows(database, &current.task_id)?.dependencies;
-            let prompt = with_current_dependency_status(&current.prompt_text, &dependencies);
+            let rows = root_observation_rows(database, &current.task_id)?;
+            let prompt = with_current_dependency_status(
+                &current.prompt_text,
+                &rows.dependencies,
+                rows.control.workflow_state.manual_start == Some(true),
+            );
             if prompt != current.prompt_text {
                         let hash = sha256_hex(prompt.as_bytes());
                 database.connection().execute(

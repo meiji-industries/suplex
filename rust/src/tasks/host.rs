@@ -423,6 +423,7 @@ async fn sweep_task_once(
         let prompt = root_session_store::with_current_dependency_status(
             root_session_store::IDLE_ROOT_PROMPT,
             &rows.dependencies,
+            rows.control.workflow_state.manual_start == Some(true),
         );
         root_session_store::wake_idle_root(database, task_id, &prompt, Utc::now())?;
     }

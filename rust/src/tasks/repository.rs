@@ -588,6 +588,9 @@ pub fn force_start(
         if !admitted {
             return Ok(None);
         }
+        let mut state = root_session_store::workflow_state(database, task_id)?;
+        state.manual_start = Some(true);
+        root_session_store::write_workflow_state(database, task_id, &state, now)?;
         root_session_store::observe_lifecycle(database, task_id)?;
         root_session_store::observe_admission(database, task_id, "force start", None);
         task_by_id(database, task_id)

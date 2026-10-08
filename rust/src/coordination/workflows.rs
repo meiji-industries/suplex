@@ -144,6 +144,10 @@ pub struct WorkflowState {
     pub initial_root_selection_session_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub plan_approval: Option<PlanApproval>,
+    /// The user started the task before its prerequisites were delivered, so
+    /// prerequisites no longer hold native dispatch. Plan limits still apply.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub manual_start: Option<bool>,
 }
 
 /// Approve then build: the plan the Coordinator last asked the user to
@@ -170,6 +174,7 @@ impl Default for WorkflowState {
             agent_selections: None,
             initial_root_selection_session_id: None,
             plan_approval: None,
+            manual_start: None,
         }
     }
 }

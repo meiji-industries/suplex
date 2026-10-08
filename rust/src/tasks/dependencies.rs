@@ -12,6 +12,13 @@ pub fn blocked(database: &SuplexDatabase, task_id: &str) -> DatabaseResult<bool>
     )?)
 }
 
+/// Prerequisites hold native dispatch unless the user started the task anyway.
+pub fn dispatch_blocked(database: &SuplexDatabase, task_id: &str) -> DatabaseResult<bool> {
+    Ok(blocked(database, task_id)?
+        && crate::coordination::root_session_store::workflow_state(database, task_id)?.manual_start
+            != Some(true))
+}
+
 /// `replaceTaskDependencies`: company scope and acyclicity proven in the writing transaction.
 pub fn replace(
     database: &mut SuplexDatabase,

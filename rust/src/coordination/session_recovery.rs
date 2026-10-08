@@ -506,9 +506,11 @@ fn observe_turn(
 /// TypeScript `dependencyBlockers`: native work waits until every
 /// prerequisite is delivered. `claim_prompt` rechecks this atomically.
 fn dependency_blocked(rows: &root_session_store::RootObservationRows) -> bool {
-    rows.dependencies
-        .iter()
-        .any(|dependency| dependency.status != TaskStatus::Delivered)
+    rows.control.workflow_state.manual_start != Some(true)
+        && rows
+            .dependencies
+            .iter()
+            .any(|dependency| dependency.status != TaskStatus::Delivered)
 }
 
 /// Record native admission. An execution Suplex cannot identify

@@ -117,7 +117,13 @@ pub fn initial_coordinator_prompt(
         .filter(|dependency| dependency.status != TaskStatus::Delivered)
         .map(DependencyRow::describe)
         .collect::<Vec<_>>();
-    if !pending.is_empty() {
+    if !pending.is_empty() && control.workflow_state.manual_start == Some(true) {
+        prompt.push_str(&format!(
+            "\n\nThis task depends on these tasks: {}. The user started this task before they were delivered. Work now. Before you integrate prerequisite work, observe the actual Git and GitHub state for {}. Delivery checks are unchanged.",
+            pending.join(", "),
+            intent.base_branch,
+        ));
+    } else if !pending.is_empty() {
         prompt.push_str(&format!(
             "\n\nThis task depends on these tasks: {}. The dependencies constrain execution and delivery ordering. Suplex does not admit new work for this task until every dependency is delivered. After release, observe the actual Git and GitHub state for {}. Integrate prerequisite work only when the current repository state requires it. Suplex resumes this task when every dependency is delivered.",
             pending.join(", "),
@@ -415,14 +421,22 @@ pub fn advisor_result_wake(
     .replacen("  ", " ", 1)
 }
 
+const DEPENDENCY_STATUS_PREFIX: &str = "\n\n[Suplex prerequisite status]\nCurrent prerequisites: ";
+const DEPENDENCY_STATUS_SUFFIX: &str = ". Prerequisites constrain delivery ordering. Suplex resumes native work when all are delivered. Observe actual Git and GitHub state before integration.\n[/Suplex prerequisite status]";
+const MANUAL_START_DEPENDENCY_STATUS_SUFFIX: &str = ". The user started this task before they were delivered. Observe actual Git and GitHub state before integration.\n[/Suplex prerequisite status]";
+
 pub(crate) fn without_current_dependency_status(prompt: &str) -> &str {
-    const PREFIX: &str = "\n\n[Suplex prerequisite status]\nCurrent prerequisites: ";
-    const SUFFIX: &str = ". Prerequisites constrain delivery ordering. Suplex resumes native work when all are delivered. Observe actual Git and GitHub state before integration.\n[/Suplex prerequisite status]";
-    let Some(start) = prompt.rfind(PREFIX) else {
+    let Some(start) = prompt.rfind(DEPENDENCY_STATUS_PREFIX) else {
         return prompt;
     };
-    let generated = &prompt[start + PREFIX.len()..];
-    if generated.len() > SUFFIX.len() && generated.ends_with(SUFFIX) {
+    let generated = &prompt[start + DEPENDENCY_STATUS_PREFIX.len()..];
+    if [
+        DEPENDENCY_STATUS_SUFFIX,
+        MANUAL_START_DEPENDENCY_STATUS_SUFFIX,
+    ]
+    .iter()
+    .any(|suffix| generated.len() > suffix.len() && generated.ends_with(suffix))
+    {
         &prompt[..start]
     } else {
         prompt
@@ -432,7 +446,11 @@ pub(crate) fn without_current_dependency_status(prompt: &str) -> &str {
 pub const IDLE_ROOT_PROMPT: &str = "Observe the current task, worktree, and GitHub state and continue toward the delivery target. Adopt out-of-band progress. If checks or another external operation are pending, report what you are waiting for. Ask a specific human question only if a necessary decision or external failure requires it.";
 
 /// TypeScript `withCurrentDependencyStatus`.
-pub fn with_current_dependency_status(prompt: &str, dependencies: &[DependencyRow]) -> String {
+pub fn with_current_dependency_status(
+    prompt: &str,
+    dependencies: &[DependencyRow],
+    manual_start: bool,
+) -> String {
     let base = without_current_dependency_status(prompt);
     if dependencies.is_empty() {
         return base.to_owned();
@@ -442,9 +460,12 @@ pub fn with_current_dependency_status(prompt: &str, dependencies: &[DependencyRo
         .map(DependencyRow::describe)
         .collect::<Vec<_>>()
         .join(", ");
-    format!(
-        "{base}\n\n[Suplex prerequisite status]\nCurrent prerequisites: {list}. Prerequisites constrain delivery ordering. Suplex resumes native work when all are delivered. Observe actual Git and GitHub state before integration.\n[/Suplex prerequisite status]"
-    )
+    let suffix = if manual_start {
+        MANUAL_START_DEPENDENCY_STATUS_SUFFIX
+    } else {
+        DEPENDENCY_STATUS_SUFFIX
+    };
+    format!("{base}{DEPENDENCY_STATUS_PREFIX}{list}{suffix}")
 }
 
 use super::advisor_bridge::AdvisorRole;

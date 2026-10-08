@@ -48,6 +48,15 @@ an explicit start. Releasing a prerequisite does not itself copy another
 worktree's files, select commits, or specify how the dependent change should
 build on earlier work. Capture that intent in the task and source selection.
 
+Start anyway admits a queued task before its prerequisites are met and before
+a project slot is free. The task records `manualStart` in its workflow state,
+and its unfinished task prerequisites then no longer hold native dispatch. The
+Coordinator prompt states that the user started the task early. The plan's
+running-task limit and pull request ownership still reject Start anyway, and
+turn and budget limits still apply
+([`force_start`](../../rust/src/tasks/repository.rs),
+[`dispatch_blocked`](../../rust/src/tasks/dependencies.rs)).
+
 The scheduler takes promoted queued tasks first, then other queued tasks by
 queue time. Moving a task to the front changes its order in the Board and Tasks
 list, but still waits for its prerequisites and a project or plan slot. Each

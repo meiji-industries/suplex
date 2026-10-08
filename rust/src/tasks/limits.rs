@@ -385,7 +385,9 @@ pub(crate) fn check_admission(
     let Some((status, budget_usd, max_turns)) = admission_control(database, task_id)? else {
         return Ok(Admission::Blocked);
     };
-    if status != TaskStatus::Active || crate::tasks::dependencies::blocked(database, task_id)? {
+    if status != TaskStatus::Active
+        || crate::tasks::dependencies::dispatch_blocked(database, task_id)?
+    {
         return Ok(Admission::Blocked);
     }
     let defaults = default_limits(database)?;

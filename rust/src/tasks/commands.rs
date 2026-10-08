@@ -2213,6 +2213,85 @@ mod tests {
             )
             .unwrap();
         assert_eq!(audits, 1);
+        // The prerequisite is still recorded but no longer holds native dispatch.
+        assert!(crate::tasks::dependencies::blocked(&database, &queued.id).unwrap());
+        assert!(!crate::tasks::dependencies::dispatch_blocked(&database, &queued.id).unwrap());
+        let rows =
+            crate::coordination::root_session_store::root_observation_rows(&database, &queued.id)
+                .unwrap();
+        assert_eq!(rows.control.workflow_state.manual_start, Some(true));
+        assert!(
+            crate::coordination::root_prompts::initial_coordinator_prompt(
+                &rows.control,
+                &rows.context,
+                &rows.dependencies
+            )
+            .contains("The user started this task before they were delivered. Work now.")
+        );
+        // A task that waits normally stays held by its prerequisite.
+        let waiting = repository::create(
+            &mut database,
+            &PreparedTask {
+                start_queued: true,
+                depends_on: vec![blocker.id.clone()],
+                pull_request_dependencies: vec![],
+                ..another(&prepared, "command-waiting")
+            },
+            now,
+        )
+        .unwrap()
+        .task;
+        assert!(crate::tasks::dependencies::dispatch_blocked(&database, &waiting.id).unwrap());
+        drop(database);
+        let _ = std::fs::remove_file(&filename);
+    }
+
+    #[test]
+    fn force_start_keeps_the_running_task_plan_limit() {
+        let (filename, mut database, user, prepared) = command_fixture();
+        let now = Utc::now();
+        let blocker = repository::create(&mut database, &another(&prepared, "limit-blocker"), now)
+            .unwrap()
+            .task;
+        let queued = repository::create(
+            &mut database,
+            &PreparedTask {
+                start_queued: true,
+                depends_on: vec![blocker.id.clone()],
+                pull_request_dependencies: vec![],
+                ..another(&prepared, "limit-queued")
+            },
+            now,
+        )
+        .unwrap()
+        .task;
+        for index in 0..crate::billing::FREE.running_tasks.unwrap() {
+            let running = repository::create(
+                &mut database,
+                &another(&prepared, &format!("limit-{index}")),
+                now,
+            )
+            .unwrap()
+            .task;
+            database
+                .connection()
+                .execute(
+                    "UPDATE suplex_task_controls SET status = 'active' WHERE task_id = ?1",
+                    [&running.id],
+                )
+                .unwrap();
+        }
+        let error =
+            force_start_user_task(&mut database, &user, &queued.id, now, |_| {}).unwrap_err();
+        let failure = error.downcast::<crate::shared::PublicFailure>().unwrap();
+        assert_eq!(failure.status.as_u16(), 402);
+        assert_eq!(failure.code.as_deref(), Some("running_task_limit_reached"));
+        let rows =
+            crate::coordination::root_session_store::root_observation_rows(&database, &queued.id)
+                .unwrap();
+        assert_eq!(rows.control.status, TaskStatus::Queued);
+        assert_eq!(rows.control.workflow_state.manual_start, None);
+        assert!(crate::tasks::dependencies::dispatch_blocked(&database, &queued.id).unwrap());
         drop(database);
         let _ = std::fs::remove_file(&filename);
     }

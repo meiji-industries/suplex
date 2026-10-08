@@ -218,7 +218,7 @@ function run(argv) {
 }"#;
 
 /// A PNG data URL of the bundle icon, or `None` when extraction fails.
-// ponytail: cached for the process lifetime; an updated app icon shows after a restart.
+// Cached for the process lifetime; an updated app icon shows after a restart.
 pub fn app_icon(bundle: &str) -> Option<String> {
     static ICONS: LazyLock<Mutex<HashMap<String, Option<String>>>> =
         LazyLock::new(Default::default);

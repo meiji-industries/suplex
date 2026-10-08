@@ -13,7 +13,7 @@ export function showRecentTasks(path: string): boolean {
 export const RECENT_DELIVERED_DAYS = 7;
 
 /** Items whose timestamp is within the last `days` of `now`, in their given order. */
-// ponytail: client window only; add a server LIMIT to list_active when the sync snapshot gets slow.
+// Client window only; add a server LIMIT to list_active when the sync snapshot gets slow.
 export function recentItems<T>(items: readonly T[], at: (item: T) => string, now: Date, days = RECENT_DELIVERED_DAYS): T[] {
   const cutoff = now.getTime() - days * 86_400_000;
   return items.filter(item => Date.parse(at(item)) >= cutoff);

@@ -7,7 +7,7 @@ mod tests {
     use crate::{
         accounts::{
             hosted::{
-                fakes::{Fixture, INSTALLATION, ORIGIN, query},
+                fakes::{Fixture, INSTALLATION, ORIGIN, account_config, query},
                 load_config,
             },
             wire::{random_token, token_shape, valid_account_id},
@@ -336,6 +336,25 @@ mod tests {
         assert_eq!(status, 413);
     }
 
+    #[tokio::test]
+    async fn the_review_address_logs_in_without_an_email() {
+        let mut config = account_config();
+        config.review_email = Some("review-k3y@suplex.test".into());
+        let f = Fixture::with(Some(config)).await;
+        let (attempt, verifier) = f.attempt().await;
+        let body = json!({"attemptId": attempt, "email": " Review-K3Y@suplex.test "});
+        assert_eq!(f.post("/v1/auth/email", &body).await.0, 204);
+        assert!(f.calls("/emails").is_empty());
+        let (status, body) = f.poll(&attempt, &verifier).await;
+        assert_eq!(status, 200, "{body}");
+        assert_eq!(body["account"]["email"], "review-k3y@suplex.test");
+        // Every other address still gets an email.
+        let (other, _) = f.attempt().await;
+        let body = json!({"attemptId": other, "email": "review-k3y@suplex.tes"});
+        assert_eq!(f.post("/v1/auth/email", &body).await.0, 204);
+        assert_eq!(f.calls("/emails").len(), 1);
+    }
+
     #[test]
     fn configuration_requires_all_or_none_of_the_account_group() {
         let full = HashMap::from([
@@ -345,6 +364,7 @@ mod tests {
             ("ACCOUNT_GITHUB_CLIENT_SECRET", "d"),
             ("RESEND_API_KEY", "e"),
             ("ACCOUNT_EMAIL_FROM", "f"),
+            ("ACCOUNT_REVIEW_EMAIL", " Review-1@Suplex.test "),
         ]);
         let load = |skip: &[&str]| {
             load_config(&|name| {
@@ -354,6 +374,8 @@ mod tests {
             })
         };
         assert_eq!(load(&[]).unwrap().unwrap().email_from, "f");
+        assert_eq!(load(&[]).unwrap().unwrap().review_email.as_deref(), Some("review-1@suplex.test"));
+        assert_eq!(load(&["ACCOUNT_REVIEW_EMAIL"]).unwrap().unwrap().review_email, None);
         let without = load(&[
             "ACCOUNT_GOOGLE_CLIENT_ID",
             "ACCOUNT_GOOGLE_CLIENT_SECRET",

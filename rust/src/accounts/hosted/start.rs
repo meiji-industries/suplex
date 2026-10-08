@@ -33,7 +33,7 @@ const DOWNLOADS: &str = "<div class=\"stack\"><a class=\"button primary\" href=\
 const TERMS: &str = "<p class=\"terms\">When you continue, you agree to the <a href=\"/terms\" target=\"_blank\" rel=\"noreferrer\">Terms of Service</a> and <a href=\"/privacy\" target=\"_blank\" rel=\"noreferrer\">Privacy Policy</a>.</p>";
 const RETRY: &str = "<a class=\"button primary\" href=\"/start?plan=pro\">Retry</a>";
 
-fn escape(value: &str) -> String {
+pub(super) fn escape(value: &str) -> String {
     value
         .replace('&', "&amp;")
         .replace('<', "&lt;")
@@ -43,7 +43,7 @@ fn escape(value: &str) -> String {
 }
 
 /// Both arguments are HTML: escape untrusted values first.
-fn html(status: StatusCode, title: &str, content: &str) -> Response {
+pub(super) fn html(status: StatusCode, title: &str, content: &str) -> Response {
     let (head, foot) = TEMPLATE
         .split_once("{content}")
         .expect("start template has a content slot");
@@ -52,7 +52,7 @@ fn html(status: StatusCode, title: &str, content: &str) -> Response {
 }
 
 /// A heading and a message, as the app shows a waiting state.
-fn message(heading: &str, text: &str, actions: &str) -> String {
+pub(super) fn message(heading: &str, text: &str, actions: &str) -> String {
     format!("<div class=\"stack center\"><h1>{heading}</h1><p>{text}</p></div>{actions}")
 }
 

@@ -37,7 +37,7 @@ export function TaskActivityTimeline({ taskId, createdAt, checksKey, task }: { t
     ...entry, start: Date.parse(entry.startedAt), end: Math.max(Date.parse(entry.startedAt), entry.finishedAt ? Date.parse(entry.finishedAt) : asOf),
     live: entry.status === "running" && !error && now <= liveUntil,
   }));
-  // ponytail: latest run per check on the current PR head only; earlier pushes need persisted CI history.
+  // Latest run per check on the current PR head only; earlier pushes need persisted CI history.
   // Runs that began before the task existed belong to earlier work on the branch.
   const created = Date.parse(createdAt);
   const ciRuns = (checks?.runs ?? []).flatMap(run => {

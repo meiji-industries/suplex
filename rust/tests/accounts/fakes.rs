@@ -47,6 +47,7 @@ pub fn account_config() -> AccountConfig {
         github_client_secret: "github-secret".into(),
         resend_api_key: "re_test".into(),
         email_from: "Suplex <login@suplex.test>".into(),
+        review_email: None,
     }
 }
 

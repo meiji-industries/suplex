@@ -307,7 +307,7 @@ pub(crate) async fn execution_document(
                     .instance_home_directory()
                     .map(std::path::Path::new),
             };
-            // ponytail: read native logs twice; combine observations if Activity polling becomes costly.
+            // Read native logs twice; combine observations if Activity polling becomes costly.
             if let Ok(execution) = reader.execution(&session).await {
                 observed = Some((
                     execution,

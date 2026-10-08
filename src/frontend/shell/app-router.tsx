@@ -75,7 +75,8 @@ function AppView(): ReactElement {
   if (/^\/companies\/[^/]+\/settings$/.test(pathname)) return <CompanySettingsView />;
   if (pathname === "/profile") return <ProfileView />;
   if (pathname === "/projects") return <ProjectsView />;
-  if (pathname === "/billing") return <BillingSettingsView />;
+  // The app stores allow no purchase outside their own billing.
+  if (pathname === "/billing" && !window.suplexMobile) return <BillingSettingsView />;
   if (/^\/projects\/[^/]+\/templates$/.test(pathname)) return <TaskTemplateSettings key={pathname} projectId={pathname.split("/")[2]!} />;
   if (/^\/projects\/[^/]+$/.test(pathname)) return <ProjectDetails projectId={pathname.split("/")[2]!} />;
   if (pathname === "/templates") return <TaskTemplateSettings />;

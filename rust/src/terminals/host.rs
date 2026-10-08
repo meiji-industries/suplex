@@ -35,7 +35,7 @@ use tokio_util::sync::CancellationToken;
 
 use super::{BridgeEvent, clamp, exit_reason};
 
-// ponytail: fixed scrollback (about 5 MiB at 80 columns, 32 MiB at 500);
+// Fixed scrollback (about 5 MiB at 80 columns, 32 MiB at 500);
 // size it by width if wide terminals use too much memory.
 const SCROLLBACK_LINES: usize = 2_000;
 /// Bounds the output a slow viewer can queue: 256 reads of up to 16 KiB.

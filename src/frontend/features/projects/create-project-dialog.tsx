@@ -197,7 +197,7 @@ export function CreateProjectDialog({
     <Dialog open={open} onOpenChange={closeDialog}>
       <DialogContent showCloseButton>
         <DialogHeader><DialogTitle>Add project</DialogTitle></DialogHeader>
-          {quotaCode ? <Alert><AlertDescription><p>{quotaMessage(quotaCode, isAdmin)}</p>{isAdmin && quotaCode !== "billing_unavailable" ? <a href={billingSettingsPath(companyId)} onClick={() => writeProjectDraft(companyId, { source, repository: source === "create" ? repositoryName : cloneUrl })}>Open billing settings</a> : null}</AlertDescription></Alert> : null}
+          {quotaCode ? <Alert><AlertDescription><p>{quotaMessage(quotaCode, isAdmin)}</p>{isAdmin && !window.suplexMobile && quotaCode !== "billing_unavailable" ? <a href={billingSettingsPath(companyId)} onClick={() => writeProjectDraft(companyId, { source, repository: source === "create" ? repositoryName : cloneUrl })}>Open billing settings</a> : null}</AlertDescription></Alert> : null}
           {companyStatus !== "active" ? (
             <p className="text-xs text-muted-foreground">{companyStatus === "paused" ? "Company paused. New projects are unavailable." : "Company archived. New projects are unavailable."}</p>
           ) : (

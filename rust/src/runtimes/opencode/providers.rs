@@ -10,7 +10,7 @@ use super::{
     session::BoxError,
 };
 
-// ponytail: case-insensitive, then lowercase first; ICU `localeCompare` also orders punctuation and accents.
+// Case-insensitive, then lowercase first; ICU `localeCompare` also orders punctuation and accents.
 fn locale_order(left: &str, right: &str) -> Ordering {
     left.to_lowercase()
         .cmp(&right.to_lowercase())

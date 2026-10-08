@@ -297,7 +297,7 @@ fn publish_watched(subscriptions: &Subscriptions) {
 /// Runs while a company has a subscriber or a socket watches a task. `PRAGMA
 /// data_version` changes when another connection commits, in this process or
 /// another one.
-// ponytail: reads the whole lists on each change. Measured in a release build
+// Reads the whole lists on each change. Measured in a release build
 // (`refresh_time_at_scale`): 4 ms at 500 active tasks, 15 ms at 2,000, 39 ms at
 // 5,000. Add a trigger-fed set of changed task ids when a company has
 // thousands of active tasks.
@@ -429,7 +429,7 @@ fn data_version(database: &SuplexDatabase) -> DatabaseResult<i64> {
 
 /// Runs while a socket watches a task. Native runtime files report no change,
 /// so this task reads them again on a timer, apart from the database pushes.
-// ponytail: parses the native files again on each pass even when they did not
+// Parses the native files again on each pass even when they did not
 // change. The readers resolve their own paths; cache by file time if this
 // shows up in a profile.
 async fn observe(path: PathBuf, subscriptions: Arc<Mutex<Subscriptions>>, wake: Arc<Notify>) {
@@ -618,7 +618,7 @@ fn publish(
 
 /// Reads a company's costs until they come from the newest stored usage the
 /// tail saw.
-// ponytail: reads every task of the company again: 0.08 s at 500 tasks, 0.33 s
+// Reads every task of the company again: 0.08 s at 500 tasks, 0.33 s
 // at 2,000, 0.8 s at 5,000 (release build). Read only the tasks whose usage
 // changed when costs must arrive sooner.
 fn read_costs(path: &Path, subscriptions: &Mutex<Subscriptions>, company_id: &str) {
@@ -671,7 +671,7 @@ fn read_costs(path: &Path, subscriptions: &Mutex<Subscriptions>, company_id: &st
 
 /// Every stored value the task costs of a company read, hashed. The feed only
 /// compares it with the previous one.
-// ponytail: reads every usage snapshot of the company on each commit. Add a
+// Reads every usage snapshot of the company on each commit. Add a
 // usage revision column when a company holds more usage than one read per
 // commit can carry.
 fn usage_state(database: &SuplexDatabase, company_id: &str) -> DatabaseResult<u64> {

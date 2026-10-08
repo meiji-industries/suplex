@@ -15,7 +15,7 @@ export function SetupLog({ taskId, setup }: { taskId: string; setup: TaskSetup }
     const read = async () => {
       let retry = true;
       try {
-        // ponytail: polls the full log. Use byte cursors if setup logs become large.
+        // Polls the full log. Use byte cursors if setup logs become large.
         const result = await readTaskSetupLog(taskId, abort.signal);
         if (abort.signal.aborted) return;
         setLog(result);

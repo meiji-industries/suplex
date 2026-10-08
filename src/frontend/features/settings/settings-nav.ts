@@ -12,7 +12,7 @@ export function buildSettingsGroups(companyId: string, user?: ApiUser): Settings
     { label: "Profile", href: withCompany("/profile", companyId), icon: UserRound },
     ...(admin ? [{ label: "Users", href: withCompany("/admin", companyId), icon: Users }] : []),
     { label: "Projects", href: withCompany("/projects", companyId), icon: FolderGit2 },
-    ...(companyId ? [{ label: "Billing", href: billingSettingsPath(companyId), icon: CreditCard }] : []),
+    ...(companyId && !globalThis.window?.suplexMobile ? [{ label: "Billing", href: billingSettingsPath(companyId), icon: CreditCard }] : []),
     { label: "Templates", href: withCompany("/templates", companyId), icon: FileText },
     ...(admin && companyId ? [{ label: "Workspace", href: companySettingsPath(companyId), icon: Building2 }] : []),
     ...(admin ? [

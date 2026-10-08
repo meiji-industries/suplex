@@ -693,7 +693,7 @@ fn task_status<D: Db>(database: &D, user_id: &str, task_id: &str) -> Result<Stri
     })
 }
 
-// ponytail: one process-wide queue, like the TypeScript promise chain; per-rule queues if checks contend.
+// One process-wide queue, like the TypeScript promise chain; per-rule queues if checks contend.
 static QUEUE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 pub fn list<D: Db>(database: &D, user_id: &str, company_id: &str) -> Result<Vec<Rule>, Failure> {

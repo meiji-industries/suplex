@@ -105,7 +105,7 @@ fn hmac(key: &str, message: &str) -> String {
 }
 
 pub const TASK_COMMANDS: [&str; 11] = crate::http::contracts::typed::agent_api::TASK_COMMANDS;
-/// ponytail: one page of rows feeds upstream dependency lookup; page it if an agent ever owns more.
+/// One page of rows feeds upstream dependency lookup; page it if an agent ever owns more.
 const UPSTREAM_POOL: usize = 200;
 
 /// The lifecycle commands an agent may send; answers need the answer grant.

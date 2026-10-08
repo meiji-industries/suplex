@@ -11,7 +11,7 @@ const SCHEMA: &str = include_str!("schema.sql");
 /// Creates the account tables and adds the columns an older database lacks.
 pub fn apply_schema(db: &Connection) -> rusqlite::Result<()> {
     db.execute_batch(SCHEMA)?;
-    // ponytail: one column, no migration runner. Add one when a second change arrives.
+    // One column, no migration runner. Add one when a second change arrives.
     let has_client = db
         .prepare("SELECT 1 FROM pragma_table_info('account_attempts') WHERE name = 'client'")?
         .exists([])?;
@@ -226,7 +226,7 @@ pub fn delete_token(db: &Connection, token_hash: &str) -> rusqlite::Result<()> {
 }
 
 /// Queues one PostHog event for the hosted telemetry outbox.
-// ponytail: account and site events share billing_telemetry_events with
+// Account and site events share billing_telemetry_events with
 // company_id = ''; give them their own outbox if the billing columns diverge.
 pub fn enqueue_posthog(
     db: &Connection,

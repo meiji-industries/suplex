@@ -114,7 +114,7 @@ pub struct AccountClient {
     base: Url,
     installation_id: String,
     http: reqwest::Client,
-    // ponytail: in memory, a restart means retry
+    // In memory, a restart means retry
     pending: Arc<Mutex<HashMap<String, PendingAttempt>>>,
 }
 

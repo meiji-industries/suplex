@@ -59,7 +59,7 @@ async fn devin_connection() -> Value {
 
 /// One sign-in probe for a harness kind. The Claude Code probe reports the
 /// signed-in account for the provider listing.
-// ponytail: no per-listing memo; a listing calls this once per kind. Add a shared pending map if two callers race.
+// No per-listing memo; a listing calls this once per kind. Add a shared pending map if two callers race.
 pub async fn provider_connection(kind: &str) -> Value {
     match kind {
         "devin" => devin_connection().await,

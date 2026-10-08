@@ -665,7 +665,7 @@ impl<R: Runtime> Shell<R> {
         }
     }
 
-    // ponytail: zoom lasts for this run only; persist it in window-state.json if users ask.
+    // Zoom lasts for this run only; persist it in window-state.json if users ask.
     pub fn zoom_by(&self, step: Option<f64>) {
         let zoom = {
             let mut zoom = self.zoom.lock().unwrap();

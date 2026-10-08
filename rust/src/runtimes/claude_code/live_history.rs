@@ -306,7 +306,7 @@ fn runtime_files(runtime_directory: &Path) -> io::Result<Vec<(PathBuf, i64)>> {
 }
 
 /// TypeScript `ClaudeLiveHistory.read`.
-// ponytail: rereads every file on each call; keep per-file cursors if long sessions make history slow.
+// Rereads every file on each call; keep per-file cursors if long sessions make history slow.
 pub fn read(runtime_directory: &Path, transcript_path: Option<&Path>) -> io::Result<Vec<Value>> {
     let mut sources = Vec::new();
     if let Some(path) = transcript_path {

@@ -333,7 +333,7 @@ fn assistant_evidence(message: &Envelope) -> Option<NativeEvidence> {
     })
 }
 
-// ponytail: byte order for equal timestamps where the source uses localeCompare; native ids are lowercase hex then base62.
+// Byte order for equal timestamps where the source uses localeCompare; native ids are lowercase hex then base62.
 fn ordered(messages: &[Envelope]) -> Vec<&Envelope> {
     let mut history: Vec<&Envelope> = messages.iter().collect();
     history.sort_by(|left, right| {

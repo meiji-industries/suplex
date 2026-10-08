@@ -47,7 +47,7 @@ struct DownloadQuery {
 
 /// Redirects to the file named in the live release manifest, so the link
 /// follows each release.
-// ponytail: reads the manifest on every download; cache it for a minute if
+// Reads the manifest on every download; cache it for a minute if
 // download volume grows.
 async fn download(
     State(accounts): State<Accounts>,

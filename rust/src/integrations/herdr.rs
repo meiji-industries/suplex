@@ -282,7 +282,7 @@ fn classify(status: Option<i32>, stdout: &str, stderr: &str) -> HerdrFailure {
 }
 
 /// East Asian wide characters take two terminal cells. Escape sequences take none.
-// ponytail: small wide-character table instead of the full Unicode width data; add unicode-width when a terminal view shows misaligned columns.
+// Small wide-character table instead of the full Unicode width data; add unicode-width when a terminal view shows misaligned columns.
 fn display_width(line: &str) -> usize {
     let mut width = 0;
     let mut chars = line.chars().peekable();

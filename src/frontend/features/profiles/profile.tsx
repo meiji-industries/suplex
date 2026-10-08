@@ -64,6 +64,9 @@ export function ProfileView(): ReactElement {
       {account?.configured && account.account ? <SettingRow label="Suplex account">
         <Button type="button" variant="destructive" size="sm" onClick={() => void logout()}>Log out</Button>
       </SettingRow> : null}
+      {account?.configured && account.account ? <SettingRow label="Delete Suplex account">
+        <Button variant="outline" size="sm" nativeButton={false} render={<a href="https://suplex.sh/account/delete" target={window.suplexMobile ? undefined : "_blank"} rel="noreferrer" />}>Delete account</Button>
+      </SettingRow> : null}
     </SettingsSection>
     {error ? <Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert> : null}
     </>}

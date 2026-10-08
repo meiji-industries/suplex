@@ -987,7 +987,7 @@ pub async fn start(
             .await?
             .map_err(|reason| TaskError::new(reason, 422))?;
             let (saving, saved_run) = (state.clone(), run_id.clone());
-            // ponytail: the run row is written just after the terminal opens, so a
+            // The run row is written just after the terminal opens, so a
             // command that ends within that moment keeps no transcript.
             let spec = crate::terminals::host::Spec::move_run(&command, worktree).with_transcript(
                 move |transcript| {

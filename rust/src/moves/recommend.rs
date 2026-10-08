@@ -130,7 +130,7 @@ fn command(profile: &TaskProfile) -> Result<String, Box<dyn Error + Send + Sync>
 }
 
 /// The first JSON object with a `moves` list in the text.
-// ponytail: tries a parse at each `{`, quadratic in the worst case; agent
+// Tries a parse at each `{`, quadratic in the worst case; agent
 // replies are small, so a streaming scanner is not worth it yet.
 fn moves_in(text: &str) -> Option<Vec<Draft>> {
     text.match_indices('{').find_map(|(index, _)| {

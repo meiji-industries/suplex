@@ -20,6 +20,7 @@ use crate::{
 };
 use providers::{Endpoints, Profile};
 
+pub mod delete;
 pub mod invitations;
 pub mod providers;
 pub mod server;
@@ -53,6 +54,9 @@ pub struct AccountConfig {
     pub github_client_secret: String,
     pub resend_api_key: String,
     pub email_from: String,
+    /// `ACCOUNT_REVIEW_EMAIL`: an email login for this address completes at
+    /// once, without an email. App Review has no inbox; keep the address secret.
+    pub review_email: Option<String>,
 }
 
 /// Reads the account configuration. `None` until every account variable is
@@ -76,6 +80,7 @@ pub fn load_config(env: &dyn Fn(&str) -> Option<String>) -> Result<Option<Accoun
             github_client_secret,
             resend_api_key,
             email_from,
+            review_email: set("ACCOUNT_REVIEW_EMAIL").and_then(|email| normalize_email(&email)),
         }),
         _ => {
             return Err(format!(
@@ -262,6 +267,16 @@ impl Accounts {
         let email = normalize_email(&body.email)
             .filter(|_| valid_attempt_id(&body.attempt_id))
             .ok_or_else(invalid)?;
+        if config
+            .review_email
+            .as_deref()
+            .is_some_and(|review| bool::from(review.as_bytes().ct_eq(email.as_bytes())))
+        {
+            let profile = Profile { email, name: None };
+            return self
+                .complete(&body.attempt_id, AuthProvider::Email, profile, None)
+                .map(|_| ());
+        }
         let token = random_token().map_err(internal)?;
         let token_hash = sha256_hex(&token);
         let now_ms = self.hosted.now_ms();
@@ -375,6 +390,8 @@ impl Accounts {
             Ok(Some(
                 if attempt.installation_id == start::SITE_INSTALLATION {
                     format!("/start/done?attempt={attempt_id}")
+                } else if attempt.installation_id == delete::DELETE_INSTALLATION {
+                    format!("/account/delete/confirm?attempt={attempt_id}")
                 } else if attempt.client == LoginClient::Web {
                     "/auth/done?client=web".to_owned()
                 } else {

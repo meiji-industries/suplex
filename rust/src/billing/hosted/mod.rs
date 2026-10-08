@@ -220,7 +220,7 @@ pub struct Inner {
     stripe: StripeClient,
     revenuecat: RevenueCatClient,
     clock: Clock,
-    // ponytail: lock map never shrinks; evict when account count matters
+    // Lock map never shrinks; evict when account count matters
     locks: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
     price_verified: AtomicBool,
     processing: tokio::sync::Mutex<()>,

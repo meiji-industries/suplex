@@ -16,7 +16,7 @@ use crate::tasks::control::SessionKind;
 const LOCAL_CONFIG_PATH: &str = ".devin/mcp_config.local.json";
 // The trailing * also hides the pending file written beside the config.
 const EXCLUDE_PATTERN: &str = "/.devin/mcp_config.local.json*";
-// ponytail: process-global lock on info/exclude appends; per-repository locks if this ever contends.
+// Process-global lock on info/exclude appends; per-repository locks if this ever contends.
 static EXCLUDE_LOCK: Mutex<()> = Mutex::new(());
 
 fn read_config(path: &Path) -> Map<String, Value> {

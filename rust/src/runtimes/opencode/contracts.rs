@@ -74,7 +74,7 @@ pub struct ProviderModel {
 pub struct Provider {
     pub id: String,
     pub name: String,
-    // ponytail: sorted keys, not native insertion order; callers sort models by label anyway.
+    // Sorted keys, not native insertion order; callers sort models by label anyway.
     pub models: BTreeMap<String, ProviderModel>,
 }
 

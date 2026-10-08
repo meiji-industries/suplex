@@ -48,7 +48,7 @@ pub async fn run(app: &Path, assume_yes: bool) -> UpdateResult {
         .map_err(|error| format!("Cannot write to {}: {error}", parent.display()))?;
 
     println!("Downloading Suplex {}...", release.version);
-    // ponytail: buffers the ~150 MB archive in memory; stream to disk if that becomes a problem.
+    // Buffers the ~150 MB archive in memory; stream to disk if that becomes a problem.
     let archive = reqwest::get(format!("{feed}{}", release.path))
         .await?
         .error_for_status()?

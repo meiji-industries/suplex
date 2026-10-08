@@ -62,6 +62,7 @@ The wire types are in `rust/src/accounts/wire.rs`.
 | `GET /auth/email/verify?token=` | A one-button form. It does not consume the link, because mail scanners fetch links. |
 | `POST /auth/email/verify` | Consumes the link once, completes the attempt, 303 to `/auth/done`. |
 | `GET /auth/done` | Static: "You are signed in. Return to Suplex." |
+| `GET /account/delete` | Account deletion, linked from Settings > Profile (App Store guideline 5.1.1(v)). The person logs in with an attempt for the installation `suplex.sh-delete`; the callback goes to `GET /account/delete/confirm?attempt=`, and `POST` there deletes the account, its tokens and attempts, and the invitations it sent. Billing records stay. A subscription that renews must be cancelled first; if Suplex cannot read the subscription, the page asks for a retry. |
 | `GET /download?platform=&format=&visitor=` | 302 to the file in the live release manifest, as `src/web/worker.js` did. Unknown platform or format is 404; a missing manifest or file is 502. |
 
 Browser routes answer failures with a page, never with JSON. Auth routes have a
@@ -100,6 +101,7 @@ startup.
 | `ACCOUNT_GITHUB_CLIENT_ID`, `ACCOUNT_GITHUB_CLIENT_SECRET` | GitHub OAuth app. |
 | `RESEND_API_KEY` | Resend API key for the sending domain. |
 | `ACCOUNT_EMAIL_FROM` | Sender, for example `Suplex <login@suplex.sh>`. |
+| `ACCOUNT_REVIEW_EMAIL` | Optional. An email login for this address completes at once and sends no email, so App Review can log in. Use an unguessable address such as `review-<random>@suplex.sh`, keep it in 1Password, and give it only to App Review. It works on `/account/delete` too. |
 
 ### Provider setup
 

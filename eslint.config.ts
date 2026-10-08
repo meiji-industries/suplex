@@ -2,7 +2,7 @@ import tseslint from "typescript-eslint";
 import { createTypeScriptImportResolver } from "eslint-import-resolver-typescript";
 import { importX } from "eslint-plugin-import-x";
 
-const noEnums = { selector: "TSEnumDeclaration", message: "Use an as const tuple and derive the type (see DEFINITIONS.md)." };
+const noEnums = { selector: "TSEnumDeclaration", message: "Use an as const tuple and derive the type." };
 const noUncheckedReads = { selector: "CallExpression[callee.name='readJsonUnchecked']", message: "Call readJsonUnchecked only in a feature *-api.ts module (see AGENTS.md)." };
 const noDoubleCasts = { selector: "TSAsExpression > TSAsExpression.expression > TSUnknownKeyword.typeAnnotation", message: "Do not cast through unknown. Parse the value or fix the type." };
 // Files that called readJsonUnchecked directly before the rule. Move their calls into a *-api.ts module and delete the entry; do not add entries.

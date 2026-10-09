@@ -154,7 +154,7 @@ handoff. It installs no advertising pixel. See the
 
 The `suplex.sh/download` route ([`apps/server/src/hosted/site.rs`](../apps/server/src/hosted/site.rs)) sends `download_started` for download
 requests from the install script and website. Properties are `platform`
-(`macos-arm64`, `macos-x64`, `linux-arm64`, or `linux-x64`), `source`
+(the requested platform, such as `macos-arm64`, `linux-x64`, or `bootstrap-macos-arm64`), `source`
 (`install_script` or `browser`), and `$lib` (`suplex-web`). Each request uses a
 new random `distinct_id`, so it does not link a download to a website browser
 or native installation. A request with `DNT: 1` sends nothing. These service

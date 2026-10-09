@@ -25,8 +25,12 @@ use std::{
 #[derive(Parser)]
 #[command(name = "suplex-bootstrap", version, about = "Run Suplex on a cloud VM")]
 struct Cli {
+    /// Where the answers live (vm.env, and secrets in .env). Default: ~/.config/suplex-bootstrap
+    #[arg(long, env = "SUPLEX_BOOTSTRAP_DIR", global = true)]
+    dir: Option<PathBuf>,
+    /// Without a command, runs the interactive bootstrap
     #[command(subcommand)]
-    command: Cmd,
+    command: Option<Cmd>,
 }
 
 #[derive(Subcommand)]
@@ -154,6 +158,7 @@ impl Config {
                 })
                 .collect::<String>()
         };
+        fs::create_dir_all(&self.dir)?;
         fs::write(self.dir.join("vm.env"), render(PUBLIC_KEYS))?;
         let secrets = self.dir.join(".env");
         fs::write(&secrets, render(SECRET_KEYS))?;
@@ -189,8 +194,8 @@ impl Config {
 
 fn main() {
     let cli = Cli::parse();
-    let dir = std::env::current_dir().expect("cwd");
-    let result = match cli.command {
+    let dir = cli.dir.unwrap_or_else(default_dir);
+    let result = match cli.command.unwrap_or(Cmd::Bootstrap) {
         Cmd::Bootstrap => bootstrap(&dir),
         other => command(other, Config::load(&dir)),
     };
@@ -200,9 +205,22 @@ fn main() {
     }
 }
 
+/// `$XDG_CONFIG_HOME/suplex-bootstrap`, else `~/.config/suplex-bootstrap`.
+fn default_dir() -> PathBuf {
+    std::env::var_os("XDG_CONFIG_HOME")
+        .filter(|dir| !dir.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|home| Path::new(&home).join(".config")))
+        .unwrap_or_default()
+        .join("suplex-bootstrap")
+}
+
 fn command(cmd: Cmd, cfg: Config) -> Result<()> {
     if cfg.host().name.is_empty() {
-        bail!("no vm.env here; run `suplex-bootstrap bootstrap` first");
+        bail!(
+            "no server saved in {}; run `suplex-bootstrap` first",
+            cfg.dir.display()
+        );
     }
     let host = cfg.host();
     let (provider, token, name) = (cfg.provider(), cfg.token(), cfg.get("SERVER_NAME"));
@@ -596,7 +614,10 @@ fn bootstrap(dir: &Path) -> Result<()> {
         .interact()?;
     cfg.set("RECOVER", if recover_link { "y" } else { "n" });
     cfg.save()?;
-    log::success("Saved vm.env and .env (secrets, gitignored)")?;
+    log::success(format!(
+        "Saved your answers in {} (secrets in .env)",
+        cfg.dir.display()
+    ))?;
 
     // --- Phase 1: join the tailnet --------------------------------------------------------------
     let mut host = cfg.host();
@@ -803,7 +824,7 @@ fn bootstrap(dir: &Path) -> Result<()> {
                     .yellow()
                     .bold(),
                 style(link).cyan().bold().underlined(),
-                style("Rerun `mise run bootstrap:recover` for a fresh one.").dim()
+                style("Run `suplex-bootstrap recover` for a fresh one.").dim()
             ),
         )?;
     }

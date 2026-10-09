@@ -157,7 +157,16 @@ one itself.
 
 ### Linux host
 
-Start Suplex as a dedicated non-root user.
+To run Suplex on a new cloud server, run this on your own computer (macOS or Linux):
+
+```sh
+curl -fsSL https://suplex.sh/bootstrap.sh | sh
+```
+
+It installs `suplex-bootstrap` and starts its wizard, which creates or connects to the server, sets up
+everything below, and prints a login link. See [apps/bootstrap](apps/bootstrap/README.md).
+
+To set up a host by hand, start Suplex as a dedicated non-root user.
 Keep its data directory, repository roots, worktree roots, Herdr, and agent tool installs under this user's ownership.
 Provision privileged steps once, without blanket sudo access for this user.
 For a systemd service, set `User=suplex`, `HOME=/home/suplex`, and a `PATH` that includes the user's tool manager shims.

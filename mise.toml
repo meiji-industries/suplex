@@ -311,56 +311,76 @@ op run --env-file apps/mobile/release.env -- bash scripts/release-mobile.sh
 [tasks.bootstrap]
 description = "Interactive, idempotent: ask the essentials (remembered), create or converge the VM, print a login link"
 dir = "apps/bootstrap"
+env = { SUPLEX_BOOTSTRAP_DIR = "." }
 run = "env -u RUSTUP_TOOLCHAIN cargo run -q -p suplex-bootstrap --release -- bootstrap"
 raw = true
 
 [tasks."bootstrap:up"]
 description = "Power on and wait for SSH over the tailnet"
 dir = "apps/bootstrap"
+env = { SUPLEX_BOOTSTRAP_DIR = "." }
 run = "env -u RUSTUP_TOOLCHAIN cargo run -q -p suplex-bootstrap --release -- up"
 
 [tasks."bootstrap:down"]
 description = "Graceful shutdown. Most providers still bill a stopped server; `bootstrap:destroy` stops billing"
 dir = "apps/bootstrap"
+env = { SUPLEX_BOOTSTRAP_DIR = "." }
 run = "env -u RUSTUP_TOOLCHAIN cargo run -q -p suplex-bootstrap --release -- down"
 
 [tasks."bootstrap:destroy"]
 description = "Delete the server. Stops billing. Loses the disk"
 dir = "apps/bootstrap"
+env = { SUPLEX_BOOTSTRAP_DIR = "." }
 run = "env -u RUSTUP_TOOLCHAIN cargo run -q -p suplex-bootstrap --release -- destroy"
 raw = true
 
 [tasks."bootstrap:status"]
 description = "Show provider state, services, service user, exit node, egress IP, direct-interface block, and health"
 dir = "apps/bootstrap"
+env = { SUPLEX_BOOTSTRAP_DIR = "." }
 run = "env -u RUSTUP_TOOLCHAIN cargo run -q -p suplex-bootstrap --release -- status"
 
 [tasks."bootstrap:ssh"]
 description = "Admin shell (root). `ssh suplex@<host>` is the agent user"
 dir = "apps/bootstrap"
+env = { SUPLEX_BOOTSTRAP_DIR = "." }
 run = "env -u RUSTUP_TOOLCHAIN cargo run -q -p suplex-bootstrap --release -- ssh"
 raw = true
 
 [tasks."bootstrap:doctor"]
 description = "Run suplex doctor on the VM as the service user"
 dir = "apps/bootstrap"
+env = { SUPLEX_BOOTSTRAP_DIR = "." }
 run = "env -u RUSTUP_TOOLCHAIN cargo run -q -p suplex-bootstrap --release -- doctor"
 
 [tasks."bootstrap:logs"]
 description = "Follow the Suplex service log on the VM"
 dir = "apps/bootstrap"
+env = { SUPLEX_BOOTSTRAP_DIR = "." }
 run = "env -u RUSTUP_TOOLCHAIN cargo run -q -p suplex-bootstrap --release -- logs"
 raw = true
 
 [tasks."bootstrap:recover"]
 description = "Print a fresh one-time owner login link"
 dir = "apps/bootstrap"
+env = { SUPLEX_BOOTSTRAP_DIR = "." }
 run = "env -u RUSTUP_TOOLCHAIN cargo run -q -p suplex-bootstrap --release -- recover"
 
 [tasks."bootstrap:install"]
 description = "Install or update the suplex binary, then restart the service"
 dir = "apps/bootstrap"
+env = { SUPLEX_BOOTSTRAP_DIR = "." }
 run = "env -u RUSTUP_TOOLCHAIN cargo run -q -p suplex-bootstrap --release -- install-suplex"
+
+[tasks."bootstrap:release"]
+description = "Build, sign, and publish suplex-bootstrap for macOS and Linux, which suplex.sh/bootstrap.sh installs; bump the version in apps/bootstrap/Cargo.toml first"
+run = '''
+source scripts/onepassword.sh
+onepassword_setup_service_account
+docker info >/dev/null 2>&1 || { echo "Start Docker first; the Linux build runs in Docker." >&2; exit 1; }
+sh scripts/build-bootstrap.sh
+op run --env-file apps/desktop/release.env -- bash scripts/publish-bootstrap-release.sh
+'''
 
 # --- release: public tasks, then the hidden steps they run ---
 

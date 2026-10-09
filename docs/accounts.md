@@ -18,12 +18,14 @@ it builds (Stripe return pages, OAuth callbacks, magic links) uses
 | `suplex.sh` | The origin. |
 | `www.suplex.sh` | 301 to `BILLING_PUBLIC_ORIGIN` with the same path and query. |
 
-The site serves `/download`, `/install.sh`, `/install.ps1`, `/terms`,
+The site serves `/download`, `/install.sh`, `/install.ps1`, `/bootstrap.sh`, `/terms`,
 `/privacy`, `/support`, and a 302 to `https://getsuplex.ai/` for every other
 path. Its pages are compiled into the binary from `apps/server/src/hosted`:
-`/install.sh` and `/install.ps1` are `include_str!` of `install.sh` and
-`install.ps1` (`text/plain`, `max-age=300`), and the other pages come from
-`legal/`.
+the three scripts are `include_str!` of `install.sh`, `install.ps1`, and
+`bootstrap.sh` (`text/plain`, `max-age=300`), and the other pages come from
+`legal/`. `bootstrap.sh` installs `suplex-bootstrap` from
+`/download?platform=bootstrap-<macos|linux>-<arm64|x64>`; see
+[apps/bootstrap](../apps/bootstrap/README.md).
 
 ### Login
 

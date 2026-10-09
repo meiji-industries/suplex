@@ -5,8 +5,13 @@ Tailscale exit node at home (so GitHub, package registries, and model providers 
 One interactive command creates or converges the server and ends with a login link.
 
 ```sh
-mise run bootstrap        # from the repository root; the wizard keeps its answers in apps/bootstrap
+curl -fsSL https://suplex.sh/bootstrap.sh | sh
 ```
+
+The script installs `suplex-bootstrap` in `~/.local/bin` (macOS or Linux, arm64 or x64; checksum-verified, and
+on macOS the Developer ID signature is checked too), then starts the wizard. Run it again to update.
+Afterwards, `suplex-bootstrap` alone reruns the wizard. Answers live in `~/.config/suplex-bootstrap`
+(`--dir` or `SUPLEX_BOOTSTRAP_DIR` picks another directory, one per server).
 
 The wizard (Rust, [cliclack](https://github.com/fadeevab/cliclack) prompts) asks for and remembers:
 
@@ -43,16 +48,25 @@ Rerun the wizard any time; every answer defaults to the last one.
 
 | Command | Does |
 | --- | --- |
-| `mise run bootstrap` | the wizard above |
-| `mise run bootstrap:up` / `bootstrap:down` | power on (waits for SSH over the tailnet) / graceful shutdown. Stopped servers still bill. |
-| `mise run bootstrap:destroy` | delete the server; stops billing; loses the disk |
-| `mise run bootstrap:status` | provider state, services, service user, exit node, egress IP, direct-interface block, health |
-| `mise run bootstrap:doctor`, `bootstrap:logs`, `bootstrap:ssh` | `suplex doctor` as the service user, follow the service log, admin shell |
-| `mise run bootstrap:install` | install/update the binary and restart the service |
-| `mise run bootstrap:recover` | a fresh one-time owner login link |
+| `suplex-bootstrap` | the wizard above |
+| `suplex-bootstrap up` / `down` | power on (waits for SSH over the tailnet) / graceful shutdown. Stopped servers still bill. |
+| `suplex-bootstrap destroy` | delete the server; stops billing; loses the disk |
+| `suplex-bootstrap status` | provider state, services, service user, exit node, egress IP, direct-interface block, health |
+| `suplex-bootstrap doctor`, `logs`, `ssh` | `suplex doctor` as the service user, follow the service log, admin shell |
+| `suplex-bootstrap install-suplex` | install/update the Suplex binary on the server and restart the service |
+| `suplex-bootstrap recover` | a fresh one-time owner login link |
 
-Layout: the crate lives in the Suplex repository at `apps/bootstrap`, a member of the root Cargo workspace.
-The `bootstrap:*` tasks in the root `mise.toml` run it in `apps/bootstrap`, where the wizard keeps its answers. `src/main.rs` (wizard and commands), `src/provider.rs` (one match arm per cloud; add a provider there),
+From a checkout, `mise run bootstrap` and `mise run bootstrap:<command>` build and run the same commands, with the
+answers in `apps/bootstrap` (gitignored) instead of `~/.config/suplex-bootstrap`.
+
+Releasing: bump `version` in `apps/bootstrap/Cargo.toml`, start Docker, and run `mise run bootstrap:release`. It
+builds macOS (signed with the Developer ID) and Linux (Docker, glibc 2.31+) binaries for arm64 and x64
+(`scripts/build-bootstrap.sh`), uploads them to R2 at `stable/bootstrap/<platform>/` beside the app releases, and
+points each `latest.yml` at them last (`scripts/publish-bootstrap-release.sh`). `suplex.sh/download?platform=bootstrap-<platform>`
+reads that manifest; `suplex.sh/bootstrap.sh` is `apps/server/src/hosted/bootstrap.sh`, so a change to the script
+ships with `mise run hosted:deploy`. Bootstrap releases are separate from Suplex releases.
+
+Layout: the crate lives in the Suplex repository at `apps/bootstrap`, a member of the root Cargo workspace. `src/main.rs` (wizard and commands), `src/provider.rs` (one match arm per cloud; add a provider there),
 `src/remote.rs` (ssh/scp). `vm/` holds what runs on the VM, embedded into the binary: `join.sh` (first boot,
 over the public IP), `converge.sh` (everything else, over the tailnet), `status.sh`, the nftables rules and
 systemd units. Answers live in `vm.env`; secrets (`TS_AUTHKEY`, provider tokens) in `.env` (0600, gitignored).

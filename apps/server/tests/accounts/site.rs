@@ -36,6 +36,21 @@ mod tests {
             )
         );
         f.answer(
+            "GET /stable/bootstrap/macos-arm64/latest.yml",
+            200,
+            "version: 0.1.0\nfiles:\n  - url: suplex-bootstrap-0.1.0-macos-arm64.tar.gz\n",
+        );
+        assert_eq!(
+            location(&f, "/download?platform=bootstrap-macos-arm64", &[]).await,
+            (
+                302,
+                format!(
+                    "{}/stable/bootstrap/macos-arm64/suplex-bootstrap-0.1.0-macos-arm64.tar.gz",
+                    f.stub
+                )
+            )
+        );
+        f.answer(
             "GET /stable/linux/x64/latest-linux-desktop.yml",
             200,
             "version: 1.2.3\nfiles:\n  - url: Suplex-1.2.3-linux-x64.deb\n  - url: Suplex-1.2.3-linux-x64.rpm\n",
@@ -147,6 +162,15 @@ mod tests {
             "text/plain; charset=utf-8"
         );
         assert!(script.text().await.unwrap().starts_with("#!/bin/sh"));
+        let bootstrap = f.get("/bootstrap.sh", &[]).await;
+        assert_eq!(bootstrap.status(), 200);
+        assert!(
+            bootstrap
+                .text()
+                .await
+                .unwrap()
+                .contains("platform=bootstrap-$OS-$ARCH")
+        );
         let windows = f.get("/install.ps1", &[]).await;
         assert_eq!(windows.status(), 200);
         assert_eq!(

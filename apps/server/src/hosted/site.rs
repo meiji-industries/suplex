@@ -1,4 +1,4 @@
-//! suplex.sh: `/download`, `/install.sh`, `/install.ps1`, `/terms`, `/privacy`, `/support`, and a
+//! suplex.sh: `/download`, `/install.sh`, `/install.ps1`, `/bootstrap.sh`, `/terms`, `/privacy`, `/support`, and a
 //! redirect to the website at getsuplex.ai, a Framer site, for every other
 //! path. The pages are compiled in; nothing is read from disk.
 
@@ -18,6 +18,7 @@ use crate::accounts::hosted::{Accounts, VISITOR_COOKIE, valid_visitor};
 const WEBSITE: &str = "https://getsuplex.ai/";
 const INSTALL_SCRIPT: &str = include_str!("install.sh");
 const WINDOWS_INSTALL_SCRIPT: &str = include_str!("install.ps1");
+const BOOTSTRAP_SCRIPT: &str = include_str!("bootstrap.sh");
 const TERMS_PAGE: &str = include_str!("legal/terms.html");
 const PRIVACY_PAGE: &str = include_str!("legal/privacy.html");
 const SUPPORT_PAGE: &str = include_str!("legal/support.html");
@@ -34,6 +35,11 @@ fn feed(platform: &str) -> Option<(&'static str, &'static str, &'static [&'stati
         "linux-desktop-x64" => ("linux/x64", "latest-linux-desktop.yml", &["deb", "rpm"]),
         "windows-x64" => ("windows/x64", "latest-windows.yml", &["exe"]),
         "windows-arm64" => ("windows/arm64", "latest-windows.yml", &["exe"]),
+        // suplex-bootstrap, the cloud server wizard (scripts/build-bootstrap.sh).
+        "bootstrap-macos-arm64" => ("bootstrap/macos-arm64", "latest.yml", &["tar.gz"]),
+        "bootstrap-macos-x64" => ("bootstrap/macos-x64", "latest.yml", &["tar.gz"]),
+        "bootstrap-linux-arm64" => ("bootstrap/linux-arm64", "latest.yml", &["tar.gz"]),
+        "bootstrap-linux-x64" => ("bootstrap/linux-x64", "latest.yml", &["tar.gz"]),
         _ => return None,
     })
 }
@@ -185,6 +191,7 @@ pub fn router(accounts: Accounts) -> Router {
     Router::new()
         .route("/download", get(download))
         .route("/install.sh", get(|| async { script(INSTALL_SCRIPT) }))
+        .route("/bootstrap.sh", get(|| async { script(BOOTSTRAP_SCRIPT) }))
         .route(
             "/install.ps1",
             get(|| async { script(WINDOWS_INSTALL_SCRIPT) }),

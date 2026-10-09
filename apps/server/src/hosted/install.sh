@@ -141,10 +141,16 @@ install_linux() {
         || error "The download does not match its checksum. Nothing was installed."
     tar -xzf "$TEMP_DIR/suplex.tar.gz" -C "$TEMP_DIR" suplex
 
+    # A dedicated service user has no sudo; install to its own bin directory instead.
+    if [ ! -w "$(dirname "$LINK")" ] && ! sudo -n true 2>/dev/null; then
+        LINK="$HOME/.local/bin/suplex"
+    fi
+    OLD_VERSION=$("$LINK" --version 2>/dev/null || true)
     status "Installing the 'suplex' command to $LINK (your password may be necessary)..."
     as_admin mkdir -p "$(dirname "$LINK")"
     as_admin install -m 0755 "$TEMP_DIR/suplex" "$LINK"
     TARGET="$LINK"
+    [ "$OLD_VERSION" != "$("$TARGET" --version 2>/dev/null)" ] && UPGRADED=1
 
     status "Install complete. Run 'suplex help' for the command line."
     [ -n "${SUPLEX_NO_START:-}" ] && exit 0
@@ -173,7 +179,12 @@ serve_web() {
         SUPLEX_REPOSITORY_ROOT="$HOME/suplex/repos" SUPLEX_WORKTREE_ROOT="$HOME/suplex/worktrees"
 
     if curl -fsS -o /dev/null "$URL/health" 2>/dev/null; then
-        status "Suplex is already running at $URL"
+        if [ -n "${UPGRADED:-}" ]; then
+            status "Restarting Suplex to run the new version..."
+            "$TARGET" restart >&2 || error "Suplex did not restart. Run 'suplex restart'."
+        else
+            status "Suplex is already running at $URL"
+        fi
         open_url "$URL"
         return
     fi

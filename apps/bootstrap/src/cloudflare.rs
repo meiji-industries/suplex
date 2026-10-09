@@ -1,7 +1,8 @@
 //! A remotely managed Cloudflare Tunnel for a hostname in one of the account's zones: the tunnel,
 //! its ingress rule to Suplex on loopback, a proxied CNAME, and a request-header transform rule.
 //! The transform rule matters: Suplex trusts a proxied request as HTTPS only when `X-Forwarded-Host`
-//! names the saved external origin, and cloudflared does not send that header on its own.
+//! names the saved external origin, and cloudflared does not send that header on its own. Cloudflare's
+//! edge sets `X-Forwarded-Proto` itself, and a transform rule may not change it.
 //! Everything is idempotent and keyed on the hostname. API calls go through `curl`.
 
 use anyhow::{Context, Result, bail};
@@ -156,15 +157,14 @@ pub fn ensure(
         }
     }
 
-    // Request headers Suplex needs from a proxy, set at Cloudflare's edge for this hostname only.
+    // The request header Suplex needs from a proxy, set at Cloudflare's edge for this hostname only.
     let description = format!("suplex-bootstrap {hostname}");
     let rule = json!({
         "description": description,
         "expression": format!("http.host eq \"{hostname}\""),
         "action": "rewrite",
         "action_parameters": {"headers": {
-            "X-Forwarded-Host": {"operation": "set", "value": hostname},
-            "X-Forwarded-Proto": {"operation": "set", "value": "https"}
+            "X-Forwarded-Host": {"operation": "set", "value": hostname}
         }}
     });
     let phase = format!("/zones/{zone_id}/rulesets/phases/http_request_late_transform/entrypoint");
@@ -182,13 +182,13 @@ pub fn ensure(
                     &format!("/zones/{zone_id}/rulesets/{}/rules", text(&entry["id"])),
                     Some(rule),
                 )?;
-                step("Header rule added (X-Forwarded-Host, X-Forwarded-Proto)");
+                step("Header rule added (X-Forwarded-Host)");
             }
         }
         Err(_) => {
             // No transform ruleset on this zone yet: this creates it with just our rule.
             call(api_token, "PUT", &phase, Some(json!({"rules": [rule]})))?;
-            step("Header rule added (X-Forwarded-Host, X-Forwarded-Proto)");
+            step("Header rule added (X-Forwarded-Host)");
         }
     }
     Ok(Tunnel { token })

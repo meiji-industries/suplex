@@ -286,6 +286,15 @@ fn command(cmd: Cmd, cfg: Config) -> Result<()> {
 
 fn bootstrap(dir: &Path) -> Result<()> {
     let mut cfg = Config::load(dir);
+    let result = converge(&mut cfg);
+    // Keep the answers from a failed run, so the next run offers them as defaults.
+    if result.is_err() {
+        let _ = cfg.save();
+    }
+    result
+}
+
+fn converge(cfg: &mut Config) -> Result<()> {
     banner();
     intro(style(" suplex-bootstrap ").on_magenta().black().bold())?;
     for tool in ["ssh", "scp"] {
@@ -308,7 +317,7 @@ fn bootstrap(dir: &Path) -> Result<()> {
             bail!("{cli} is not installed. {}", provider.install_hint());
         }
         secret(
-            &mut cfg,
+            cfg,
             provider.token_env(),
             "API token (blank keeps the CLI's own login)",
         )?;
@@ -390,12 +399,12 @@ fn bootstrap(dir: &Path) -> Result<()> {
         }
     } else {
         cfg.set("SERVER_NAME", "");
-        text(&mut cfg, "VM_IP", "Public IP or hostname of the server", "")?;
+        text(cfg, "VM_IP", "Public IP or hostname of the server", "")?;
     }
     if cfg.get("VM_IP").is_empty() {
         bail!("no server address; nothing to connect to");
     }
-    text(&mut cfg, "VM_USER", "Admin SSH user", "root")?;
+    text(cfg, "VM_USER", "Admin SSH user", "root")?;
 
     // --- Access --------------------------------------------------------------------------------
     let access: String = select("How do you reach Suplex?")
@@ -442,7 +451,7 @@ fn bootstrap(dir: &Path) -> Result<()> {
                 .arg("https://dash.cloudflare.com/profile/api-tokens")
                 .status();
         }
-        secret(&mut cfg, "CLOUDFLARE_API_TOKEN", "Cloudflare API token")?;
+        secret(cfg, "CLOUDFLARE_API_TOKEN", "Cloudflare API token")?;
         if cfg.get("CLOUDFLARE_API_TOKEN").is_empty() {
             bail!("a Cloudflare API token is needed to create the tunnel");
         }
@@ -474,7 +483,7 @@ fn bootstrap(dir: &Path) -> Result<()> {
     }
     if tailscale {
         text(
-            &mut cfg,
+            cfg,
             "TS_HOSTNAME",
             "Tailscale hostname for the VM",
             "suplex",
@@ -555,7 +564,7 @@ fn bootstrap(dir: &Path) -> Result<()> {
             })
             .interact()?;
         secret(
-            &mut cfg,
+            cfg,
             "TS_AUTHKEY",
             "Tailscale auth key (tskey-auth-…; only needed before the first join)",
         )?;
@@ -591,8 +600,8 @@ fn bootstrap(dir: &Path) -> Result<()> {
             .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
             .unwrap_or_default()
     };
-    text(&mut cfg, "GIT_NAME", "git user.name", &git("user.name"))?;
-    text(&mut cfg, "GIT_EMAIL", "git user.email", &git("user.email"))?;
+    text(cfg, "GIT_NAME", "git user.name", &git("user.name"))?;
+    text(cfg, "GIT_EMAIL", "git user.email", &git("user.email"))?;
     let backup: String = if confirm("Restore a Suplex backup onto the VM?")
         .initial_value(false)
         .interact()?

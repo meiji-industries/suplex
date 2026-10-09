@@ -1,6 +1,6 @@
 [package]
 name = "suplex-bootstrap"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 description = "Run Suplex on a cloud VM: interactive bootstrap, power control, status"
 license = "MIT"

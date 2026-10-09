@@ -28,8 +28,8 @@ The wizard (Rust, [cliclack](https://github.com/fadeevab/cliclack) prompts) asks
   - *Public HTTPS via Cloudflare Tunnel*: a hostname inside a zone on your Cloudflare account. The wizard uses a
     Cloudflare API token (Account: Cloudflare Tunnel Edit; Zone: DNS Edit and Transform Rules Edit) to create a
     remotely managed tunnel, point it at Suplex on loopback, add a proxied CNAME, and add a request-header
-    transform rule that sets `X-Forwarded-Host` and `X-Forwarded-Proto` for that hostname, which Suplex requires
-    to trust a proxied request as HTTPS. The VM runs `cloudflared` as a service with the tunnel token; no inbound
+    transform rule that sets `X-Forwarded-Host` for that hostname. Suplex trusts a proxied request as HTTPS only
+    with that header and `X-Forwarded-Proto: https`, which Cloudflare's edge sends on its own (a rule cannot set it). The VM runs `cloudflared` as a service with the tunnel token; no inbound
     ports, and the exit node is irrelevant because the tunnel is outbound. Admin SSH uses the public address.
   - *Localhost only*: Suplex on `127.0.0.1:4111`; reach it with `ssh -L 4111:127.0.0.1:4111 root@<ip>`.
   - *All network access* (not recommended): plain HTTP on every interface. Suplex still refuses remote requests

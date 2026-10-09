@@ -130,8 +130,8 @@ pub fn accept(
             "user_development".to_owned()
         } else {
             let mapped: Option<(String, Option<String>)> = database.connection().query_row("SELECT user_id, account_id FROM suplex_account_users WHERE email = ?1 COLLATE NOCASE", [&account.email], |row| Ok((row.get(0)?, row.get(1)?))).optional()?;
-            let (id, saved_account) = mapped.ok_or_else(|| PublicFailure::new(403, "This account has not been invited to this host"))?;
-            if saved_account.as_ref().is_some_and(|saved| saved != &account.id) { return Err(PublicFailure::new(403, "This email is linked to another account").into()); }
+            // suplex.sh keeps one account per email, so a new account for the invited email is the same person after an account deletion.
+            let (id, _) = mapped.ok_or_else(|| PublicFailure::new(403, "This account has not been invited to this host"))?;
             let user = auth::public_user(database, &id)?.ok_or("User missing")?;
             if user.status == UserStatus::Revoked || user.company_ids.is_empty() { return Err(PublicFailure::new(403, "Company access was removed").into()); }
             let timestamp = rfc3339_millis(now);
@@ -255,6 +255,13 @@ mod tests {
             assert_eq!(user.company_ids, vec!["company_test"]);
             assert!(session_verified(db, &token, &user).unwrap());
             assert_eq!(super::super::linked(db).unwrap().unwrap().account_id, owner.id);
+            // After the member deletes the Suplex account, a new account for the same email logs in again; the old session no longer verifies.
+            let recreated = account("member@example.com", "user_67e55044-10b1-426f-9247-bb680e5fe0cb");
+            let again = accept(db, &recreated, now).unwrap();
+            let same = auth::get_user_by_session(db, &again, now).unwrap().unwrap();
+            assert_eq!(same.id, user.id);
+            assert!(session_verified(db, &again, &same).unwrap());
+            assert!(!session_verified(db, &token, &same).unwrap());
             // Current membership remains authoritative even when a session survives restart.
             companies::remove_membership(db, "user_development", &user.id, "company_test", now).unwrap();
             assert!(accept(db, &invited, now).is_err());

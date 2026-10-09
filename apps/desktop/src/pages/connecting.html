@@ -5,13 +5,65 @@
 <title>Initializing</title>
 <link rel="stylesheet" href="pages.css">
 <style>
-  body { display: grid; place-items: center; }
-  main { width: auto; text-align: center; }
-  h1 { letter-spacing: 0.32em; font-size: 12px; font-weight: 500; color: #737373; animation: pulse 1.6s ease-in-out infinite; }
-  @keyframes pulse { 50% { color: #e5e5e5; } }
+  @font-face { font-family: "Geist Mono"; src: url("fonts/GeistMono-Variable.woff2") format("woff2"); font-weight: 100 900; font-display: block; }
+  @font-face { font-family: "Inter Tight"; src: url("fonts/InterTight-Variable.woff2") format("woff2"); font-weight: 100 900; font-display: block; }
+  body { height: 100vh; padding: 0; display: grid; grid-template-rows: 44px 1fr 28px; overflow: hidden; color: #ededed; font-family: "Inter Tight", system-ui, sans-serif; }
+  main { grid-row: 2; width: auto; margin: 0; padding: 0 56px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 40px; }
+  .mark { display: block; width: 220px; height: auto; aspect-ratio: 1876 / 313; }
+  .boot { display: flex; flex-direction: column; align-items: center; gap: 18px; }
+  .line { margin: 0; font: 12px/normal "Geist Mono", ui-monospace, SFMono-Regular, monospace; letter-spacing: 0.12em; text-transform: uppercase; color: #ededed; }
+  .track { width: 240px; height: 3px; background: #3d3d3d; overflow: hidden; }
+  .fill { height: 100%; background: #d8f65c; transform: scaleX(0); transform-origin: left; }
+  footer { grid-row: 3; display: flex; align-items: center; gap: 18px; padding: 0 16px; font-size: 12px; color: #a3a3a3; border-top: 1px solid #1c1c1c; }
+  @media (prefers-reduced-motion: no-preference) {
+    .mark { animation: appear 600ms ease-out both; }
+    .boot { animation: appear 400ms 200ms ease-out both; }
+  }
+  @keyframes appear { from { opacity: 0; } }
 </style>
 </head>
 <body data-tauri-drag-region="deep">
-<main><h1>INITIALIZING</h1></main>
+<main>
+  <img class="mark" src="launch-wordmark.png" alt="Suplex">
+  <div class="boot">
+    <p class="line" id="line" role="status">Initializing…</p>
+    <div class="track" aria-hidden="true"><div class="fill" id="fill"></div></div>
+  </div>
+</main>
+<footer><span id="machine">This Mac</span><span>Starting</span></footer>
+<script>
+  const motion = !matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const line = document.getElementById("line");
+  const fill = document.getElementById("fill");
+  let computer = "Mac";
+  window.suplexDesktop?.snapshot().then(({ platform }) => {
+    if (platform && platform !== "macos") computer = "computer";
+    document.getElementById("machine").textContent = `This ${computer}`;
+  }).catch(() => undefined);
+
+  // The status line steps every 1.4s and holds on the last one. The bar is the only progress indicator:
+  // it eases toward 90% over the steps, then fills when the host answers.
+  const steps = () => ["Initializing…", `Starting Suplex on this ${computer}`, "Checking your tools", "Finding your agents", "Loading workflows", "Almost there"];
+  const STEP_MS = 1400;
+  let step = 0;
+  const timer = setInterval(async () => {
+    step += 1;
+    if (step === steps().length - 1) clearInterval(timer);
+    if (motion) await line.animate([{ opacity: 0 }], { duration: 150, easing: "ease-in", fill: "forwards" }).finished;
+    line.textContent = steps()[step];
+    if (motion) line.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 150, easing: "ease-out", fill: "forwards" });
+  }, STEP_MS);
+  const progress = fill.animate([{ transform: "scaleX(0)" }, { transform: "scaleX(0.9)" }], { duration: STEP_MS * 6, easing: "cubic-bezier(0.3, 0.3, 0.5, 1)", fill: "forwards" });
+
+  // The shell sends `started` and waits briefly before it opens the app: fill the bar, then fade to the window ground.
+  window.suplexDesktop?.on(async (event) => {
+    if (!event.started) return;
+    clearInterval(timer);
+    progress.commitStyles();
+    progress.cancel();
+    await fill.animate([{ transform: "scaleX(1)" }], { duration: 200, easing: "ease-out", fill: "forwards" }).finished;
+    if (motion) document.body.animate([{ opacity: 0 }], { duration: 240, easing: "ease-in", fill: "forwards" });
+  });
+</script>
 </body>
 </html>

@@ -43,6 +43,8 @@ use crate::{
 
 pub const INVALID_TITLE: &str = "The Suplex URL is not valid";
 const LOG_LIMIT: usize = 500;
+/// How long the launch page gets to fill its bar and fade out before the app replaces it.
+const LAUNCH_OUTRO: Duration = Duration::from_millis(500);
 
 /// What the window shows. Labels are never reused, so grants bound to an old label cannot reach a new page.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -899,6 +901,12 @@ impl<R: Runtime> Shell<R> {
                     ActiveNetworkAccess::Owned { port, .. }
                     | ActiveNetworkAccess::Adopted { port } => port,
                 };
+                if let (BootState::Starting, View::Setup { label }) =
+                    (self.boot_state(), self.view())
+                {
+                    self.dispatch(&label, &serde_json::json!({ "started": true }));
+                    tokio::time::sleep(LAUNCH_OUTRO).await;
+                }
                 self.go(BootEvent::Connected {
                     url: format!("http://127.0.0.1:{port}/"),
                 });

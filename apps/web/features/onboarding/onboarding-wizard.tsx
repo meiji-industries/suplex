@@ -193,13 +193,13 @@ export function OnboardingView(): ReactElement {
                 </> : check.summary : id === "herdr-readiness" ? null : check.status === "healthy" ? <span className="flex items-center gap-1"><Check aria-hidden="true" className="size-3" />{id === "git" ? "Git is available" : "CLI tools installed"}</span> : healthCheckPurpose(id)}
               </div>
             </div>
-            {check ? <CheckStatusIndicator check={check} healthyLabel="Done" /> : loading ? <Skeleton className="h-5 w-16 shrink-0" /> : <Badge variant="outline">Not available</Badge>}
+            {id === "gh-auth" && check?.details.method === "device" && check.status !== "healthy" && user?.role === "admin" ? <GithubDeviceSignIn primary onConnected={async () => { await refresh(); await reload(); }} />
+              : check ? <CheckStatusIndicator check={check} healthyLabel="Done" /> : loading ? <Skeleton className="h-5 w-16 shrink-0" /> : <Badge variant="outline">Not available</Badge>}
           </div>
           {id === "herdr-readiness" && check && check.status === "unhealthy" && user?.role === "admin" ? <div className="mt-2"><HerdrInstallButton /></div>
             : check && check.status !== "healthy" && check.remedy ? <div className="mt-2 flex gap-2">
             {check.remedyKind === "link" ? <Button size="xs" variant="outline" nativeButton={false} render={<a href={check.remedy} target="_blank" rel="noreferrer" />}>Open the instructions</Button> : <><code className="min-w-0 flex-1 break-all text-xs">{check.remedy}</code><Button size="xs" variant="outline" onClick={() => void copyToClipboard(check.remedy!, "Copied the setup command to clipboard")}><Copy />Copy</Button></>}
           </div> : null}
-          {id === "gh-auth" && check?.details.method === "device" && check.status !== "healthy" && user?.role === "admin" ? <div className="mt-2"><GithubDeviceSignIn onConnected={async () => { await refresh(); await reload(); }} /></div> : null}
         </div>;
       })}
     </div>
@@ -220,7 +220,7 @@ export function OnboardingView(): ReactElement {
         <p className="font-mono text-xs tracking-widest text-muted-foreground">PLAN. BUILD. REVIEW. SHIP.</p>
       </div>
     </div>;
-  const continueDisabled = saving || (current === "company" ? !user || !name.trim() || !code.trim() || !profile.displayName.trim() || !profile.username.trim() : current === "providers" ? connected.length === 0 : current === "projects" ? state.projects.length === 0 : current === "plan" ? loading || !companyId || Boolean(loadError) : false);
+  const continueDisabled = saving || (current === "company" ? !user || !name.trim() || !code.trim() || !profile.displayName.trim() || !profile.username.trim() : current === "tools" ? !state.checks.some(check => check.id === "gh-auth" && check.status === "healthy") : current === "providers" ? connected.length === 0 : current === "projects" ? state.projects.length === 0 : current === "plan" ? loading || !companyId || Boolean(loadError) : false);
   const heading = current === "company" ? "Add your details" : current === "tools" ? "Check the host tools" : current === "providers" ? "Connect your accounts" : current === "agents" ? "Your team" : current === "projects" ? "Add a project" : current === "plan" ? "Select your plan" : "Onboarding complete";
   const description = current === "company" ? "Review your details, then add your company."
     : current === "tools" ? "Suplex uses tools on your machine to get work done for you"

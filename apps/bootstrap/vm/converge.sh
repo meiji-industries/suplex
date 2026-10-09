@@ -19,6 +19,9 @@ step "service user"
 id suplex >/dev/null 2>&1 || useradd -m -s /bin/bash suplex
 install -d -m 755 -o suplex -g suplex $H/.local $H/.local/bin $H/.local/share $H/.config
 install -d -m 700 -o suplex -g suplex $H/.ssh
+# `ssh suplex@host` works with the keys that already log in as the admin user.
+for k in /root/.ssh/authorized_keys /home/*/.ssh/authorized_keys; do [ "$k" = $H/.ssh/authorized_keys ] || [ ! -f "$k" ] || cat "$k"; done | sort -u > $H/.ssh/authorized_keys
+chown suplex:suplex $H/.ssh/authorized_keys; chmod 600 $H/.ssh/authorized_keys
 if [ "$ACCESS" = tailscale ]; then tailscale set --operator=suplex; echo "user suplex, tailscale operator"   # lets the service run `tailscale serve`
 else echo "user suplex"; fi
 

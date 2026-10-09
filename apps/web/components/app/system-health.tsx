@@ -238,7 +238,7 @@ function DiskSpaceUsage({ roots, minFreeBytes }: { roots: DiskRoot[]; minFreeByt
   );
 }
 
-export function HealthRow({ check, compact = false, flush = false }: { check: HealthCheck; compact?: boolean; flush?: boolean }): ReactElement {
+export function HealthRow({ check, compact = false, flush = false, expandable = true }: { check: HealthCheck; compact?: boolean; flush?: boolean; expandable?: boolean }): ReactElement {
   const { user } = useCompanyContext();
   const { refresh } = useSystemHealth();
   const [copyState, setCopyState] = useState<"idle" | "copied" | "failed">("idle");
@@ -248,12 +248,18 @@ export function HealthRow({ check, compact = false, flush = false }: { check: He
     const timer = window.setTimeout(() => setCopyState("idle"), 1500);
     return () => window.clearTimeout(timer);
   }, [copyState]);
+  const rowContent = <>
+    <HealthCheckIcon check={check} />
+    <span className="min-w-0 flex-1"><span className="block truncate text-sm font-medium text-foreground">{check.label}</span>{!compact ? <span className="block text-xs text-muted-foreground">{healthCheckPurpose(check.id)}</span> : null}</span>
+    <CheckStatusIndicator check={check} />
+  </>;
+  const rowClassName = `flex min-h-9 w-full items-center gap-2.5 py-2 text-left ${flush ? "px-0" : "px-3 sm:px-4"}`;
+  if (!expandable) return <div data-slot="health-row" data-status={check.status} className={rowClassName}>{rowContent}</div>;
+
   return (
     <Collapsible.Root data-slot="health-row" data-status={check.status} className="group">
-      <Collapsible.Trigger className={`flex min-h-9 w-full items-center gap-2.5 py-2 text-left outline-none transition-colors hover:bg-muted/50 focus-visible:bg-muted/70 focus-visible:ring-1 focus-visible:ring-ring/50 ${flush ? "px-0" : "px-3 sm:px-4"}`}>
-        <HealthCheckIcon check={check} />
-        <span className="min-w-0 flex-1"><span className="block truncate text-sm font-medium text-foreground">{check.label}</span>{!compact ? <span className="block text-xs text-muted-foreground">{healthCheckPurpose(check.id)}</span> : null}</span>
-        <CheckStatusIndicator check={check} />
+      <Collapsible.Trigger className={`${rowClassName} outline-none transition-colors hover:bg-muted/50 focus-visible:bg-muted/70 focus-visible:ring-1 focus-visible:ring-ring/50`}>
+        {rowContent}
         <ChevronRight className="size-3.5 shrink-0 text-muted-foreground transition-transform group-data-[panel-open]:rotate-90" />
       </Collapsible.Trigger>
       <Collapsible.Panel className={`bg-muted/20 py-3 ${flush ? "pr-0 pl-7" : "px-4 sm:px-11"}`}>

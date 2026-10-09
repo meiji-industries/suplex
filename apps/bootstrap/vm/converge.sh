@@ -1,6 +1,6 @@
 # Phase 2, over the tailnet as the admin user. Idempotent; rerun any time.
 # Env: ACCESS (tailscale|cloudflare|local|all), EXPOSURE (serve|funnel), DOMAIN + CF_TUNNEL_TOKEN (cloudflare), EXIT_NODE (empty = no egress enforcement), SUPLEX_PORT,
-# GIT_NAME, GIT_EMAIL, RESTORE (y = restore
+# GIT_NAME, GIT_EMAIL, AGENT_TOOLS (claude-code codex devin opencode, or none), RESTORE (y = restore
 # /tmp/suplex-bootstrap/backup.tar.gz). The units and firewall were written to /tmp/suplex-bootstrap by the caller.
 # Root does provisioning only. Suplex and every agent run as the `suplex` user (Claude Code refuses
 # --dangerously-skip-permissions as root).
@@ -74,9 +74,14 @@ step "suplex binary (root-owned, /usr/local/bin)"
 [ -x /usr/local/bin/suplex ] || bash $T/install-suplex.sh
 suplex version
 
-step "tools as suplex: mise (node, pnpm, uv), claude, herdr"
+step "tools as suplex: mise (node, pnpm, uv), herdr, agent tools (${AGENT_TOOLS:-none})"
 as_suplex 'command -v mise >/dev/null || curl -fsSL https://mise.run | sh >/dev/null 2>&1; mise use -g node@24 pnpm@latest uv@latest >/dev/null 2>&1; mise install -q >/dev/null 2>&1; echo "node $(node --version) pnpm $(pnpm --version) uv $(uv --version | cut -d" " -f2)"'
-as_suplex 'command -v claude >/dev/null || curl -fsSL https://claude.ai/install.sh | bash >/dev/null 2>&1; claude --version'
+for tool in $AGENT_TOOLS; do case $tool in
+  claude-code) as_suplex 'command -v claude >/dev/null || curl -fsSL https://claude.ai/install.sh | bash >/dev/null 2>&1; claude --version' ;;
+  codex) as_suplex 'command -v codex >/dev/null || { npm install -g @openai/codex >/dev/null 2>&1; mise reshim; }; codex --version' ;;
+  devin) as_suplex 'command -v devin >/dev/null || curl -fsSL https://cli.devin.ai/install.sh | bash >/dev/null 2>&1; devin --version' ;;
+  opencode) as_suplex '[ -x ~/.opencode/bin/opencode ] || curl -fsSL https://opencode.ai/install | bash >/dev/null 2>&1; ~/.opencode/bin/opencode --version' ;;
+esac; done
 as_suplex 'command -v herdr >/dev/null || curl -fsSL https://herdr.dev/install.sh | sh >/dev/null 2>&1; herdr --version | head -1'
 
 step "github as suplex"

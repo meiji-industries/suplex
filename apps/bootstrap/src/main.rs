@@ -8,7 +8,7 @@ mod remote;
 
 use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand};
-use cliclack::{confirm, input, intro, log, note, outro, password, select, spinner};
+use cliclack::{confirm, input, intro, log, multiselect, note, outro, password, select, spinner};
 use console::style;
 use provider::Provider;
 use remote::{Host, Probe, as_suplex, quote};
@@ -83,12 +83,42 @@ const PUBLIC_KEYS: &[&str] = &[
     "GITHUB_KEY",
     "GIT_NAME",
     "GIT_EMAIL",
+    "COMPANY_NAME",
+    "AGENT_TOOLS",
     "RECOVER",
     "SUPLEX_PORT",
     "ACCESS",
     "EXPOSURE",
     "DOMAIN",
 ];
+/// Agent tools: id, label, signed-in check, and sign-in command, both run as the suplex user.
+const AGENT_TOOLS: &[(&str, &str, &str, &str)] = &[
+    (
+        "claude-code",
+        "Claude Code",
+        "test -f ~/.claude/.credentials.json",
+        "claude auth login",
+    ),
+    (
+        "codex",
+        "Codex CLI",
+        "codex login status",
+        "codex login --device-auth",
+    ),
+    (
+        "devin",
+        "Devin CLI",
+        "s=$(devin auth status 2>&1) && ! printf %s \"$s\" | grep -qiE 'not logged in|logged out|no credentials' && printf %s \"$s\" | grep -qi 'logged in'",
+        "devin auth login",
+    ),
+    (
+        "opencode",
+        "OpenCode",
+        "~/.opencode/bin/opencode auth list 2>&1 | grep -qE '[1-9][0-9]* credentials?'",
+        "~/.opencode/bin/opencode auth login",
+    ),
+];
+
 const SECRET_KEYS: &[&str] = &[
     "TS_AUTHKEY",
     "HCLOUD_TOKEN",
@@ -602,6 +632,29 @@ fn converge(cfg: &mut Config) -> Result<()> {
     };
     text(cfg, "GIT_NAME", "git user.name", &git("user.name"))?;
     text(cfg, "GIT_EMAIL", "git user.email", &git("user.email"))?;
+    let company: String = input("Company name")
+        .default_input(cfg.get("COMPANY_NAME"))
+        .interact()?;
+    cfg.set("COMPANY_NAME", company);
+    let saved = cfg.get("AGENT_TOOLS");
+    let mut pick = multiselect("Which agent tools do you want to set up?");
+    for (id, label, _, _) in AGENT_TOOLS {
+        pick = pick.item(id.to_string(), label, "");
+    }
+    let tools = pick
+        .item("none".to_string(), "None", "I'll do it later")
+        .initial_values(if saved.is_empty() {
+            vec!["claude-code".to_string()]
+        } else {
+            saved.split_whitespace().map(str::to_string).collect()
+        })
+        .interact()?;
+    let tools = if tools.iter().any(|tool| tool == "none") {
+        "none".to_string()
+    } else {
+        tools.join(" ")
+    };
+    cfg.set("AGENT_TOOLS", tools);
     let backup: String = if confirm("Restore a Suplex backup onto the VM?")
         .initial_value(false)
         .interact()?
@@ -776,20 +829,31 @@ fn converge(cfg: &mut Config) -> Result<()> {
             ("SUPLEX_PORT", &port),
             ("GIT_NAME", cfg.get("GIT_NAME")),
             ("GIT_EMAIL", cfg.get("GIT_EMAIL")),
+            ("AGENT_TOOLS", cfg.get("AGENT_TOOLS")),
             ("RESTORE", restore),
         ],
     )?;
 
     // --- Sign-ins only a human can do ------------------------------------------------------------
-    if !host.ok("test -f /home/suplex/.claude/.credentials.json")
-        && confirm("Claude Code is not signed in for the suplex user. Sign in now?")
-            .initial_value(true)
-            .interact()?
+    let chosen = cfg.get("AGENT_TOOLS").to_string();
+    for (_, label, check, login) in AGENT_TOOLS
+        .iter()
+        .filter(|(id, ..)| chosen.split_whitespace().any(|tool| tool == *id))
     {
+        if host.ok(&as_suplex(check)) {
+            continue;
+        }
+        log::step(format!("Sign in to {label} for the suplex user"))?;
         log::info(
-            "Copy the URL it prints into a browser on this Mac, sign in, then paste the code back here.",
+            "Open the URL it prints in a browser on this Mac and sign in. If it asks for a code, paste the code here.",
         )?;
-        let _ = host.interactive(&as_suplex("claude auth login"));
+        let _ = host.interactive(&as_suplex(login));
+    }
+    if !cfg.get("COMPANY_NAME").trim().is_empty() {
+        let _ = host.run(&as_suplex(&format!(
+            "suplex company rename {}",
+            quote(cfg.get("COMPANY_NAME"))
+        )));
     }
     if !host.ok(&as_suplex("gh auth status"))
         && confirm(

@@ -43,6 +43,7 @@ Setup Commands:
   install     Install the tools that Suplex needs
   migrate     Apply database migrations
   recover     Issue an administrator recovery link
+  company     Name the first company before onboarding (company rename NAME)
 
 Diagnostic Commands:
   task        Show the stored state of one task
@@ -75,6 +76,7 @@ pub async fn run(command: &str, arguments: &[String]) -> CliResult {
             Ok(0)
         }
         "recover" => recover(arguments),
+        "company" => company(arguments),
         "desktop" => desktop(),
         "install" => Ok(install::run(arguments).await),
         "start" | "up" => {
@@ -108,6 +110,31 @@ pub async fn run(command: &str, arguments: &[String]) -> CliResult {
         "backup" | "verify-backup" | "restore" => backup(command, arguments),
         _ => Err(format!("Unknown command: {command}. Run 'suplex help'.").into()),
     }
+}
+
+/// `company rename NAME`: names the company that every host start seeds, while
+/// onboarding has not named it yet. A named company keeps its name.
+fn company(arguments: &[String]) -> CliResult {
+    let [action, name] = arguments else {
+        return Err("Usage: suplex company rename NAME".into());
+    };
+    if action != "rename" {
+        return Err("Usage: suplex company rename NAME".into());
+    }
+    let installation = Installation::load()?;
+    let mut database = SuplexDatabase::open(&installation.database, OpenMode::Migrate)?;
+    let now = Utc::now();
+    crate::platform::development::seed_development_data(&mut database, now)?;
+    let user = "user_development";
+    let companies = crate::identity::companies::list_visible_companies(&database, user)?;
+    match companies.as_slice() {
+        [seeded] if seeded.name == "My Company" && seeded.issue_code.is_none() => {
+            crate::identity::companies::rename_company(&mut database, user, &seeded.id, name, now)?;
+            println!("Company name: {}", name.trim());
+        }
+        _ => println!("The company already has a name. Change it in Suplex settings."),
+    }
+    Ok(0)
 }
 
 fn recover(arguments: &[String]) -> CliResult {

@@ -156,33 +156,34 @@ async fn choose_defaults(State(state): State<AppState>, headers: HeaderMap) -> R
         Ok(value) => value,
         Err(error) => return *error,
     };
-    // Signed-in providers win; before any sign-in, installed ones do.
-    use crate::profiles::provider_connection::provider_connection;
-    let providers = ["claude-code", "codex", "devin"];
-    let (claude, codex, devin) = tokio::join!(
-        provider_connection("claude-code"),
-        provider_connection("codex"),
-        provider_connection("devin"),
-    );
-    let connected: Vec<&str> = providers
-        .into_iter()
-        .zip([claude, codex, devin])
-        .filter(|(_, connection)| connection["status"] == "connected")
-        .map(|(provider, _)| provider)
-        .collect();
-    let response = match state.with_database(|database| {
-        agent_profiles::choose_defaults(
-            database,
-            &user_id,
-            |provider| {
-                if connected.is_empty() {
-                    agent_profiles::provider_installed(provider)
+    // Signed-in providers win; before any sign-in, installed ones do. An
+    // OpenCode model must come from a vendor that OpenCode lists.
+    let directory = std::env::current_dir().unwrap_or_default();
+    let observed =
+        crate::profiles::provider_catalog::read_providers(&directory.to_string_lossy(), true).await;
+    let rows = observed["providers"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    let any_connected = rows
+        .iter()
+        .any(|row| row["connection"]["status"] == "connected");
+    let available = |provider: &str, model: &str| {
+        rows.iter().any(|row| {
+            row["id"] == provider
+                && if any_connected {
+                    row["connection"]["status"] == "connected"
                 } else {
-                    connected.contains(&provider)
+                    row["status"] == "configured"
                 }
-            },
-            Utc::now(),
-        )
+                && (provider != "opencode"
+                    || row["models"]
+                        .as_array()
+                        .is_some_and(|models| models.iter().any(|listed| listed["id"] == model)))
+        })
+    };
+    let response = match state.with_database(|database| {
+        agent_profiles::choose_defaults(database, &user_id, available, Utc::now())
     }) {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
         Err(error) => ApiError::response(error),

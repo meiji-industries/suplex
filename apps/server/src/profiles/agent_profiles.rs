@@ -409,7 +409,7 @@ const fn settings(
     }
 }
 
-const PREFERRED_DEFAULTS: [Defaults; 3] = [
+const PREFERRED_DEFAULTS: [Defaults; 5] = [
     Defaults {
         root: settings("claude-code", "claude-opus-5-5", "high"),
         worker: settings("claude-code", "claude-opus-5-5", "medium"),
@@ -421,6 +421,14 @@ const PREFERRED_DEFAULTS: [Defaults; 3] = [
     Defaults {
         root: settings("devin", "swe-2", "high"),
         worker: settings("devin", "swe-2", "medium"),
+    },
+    Defaults {
+        root: settings("opencode", "anthropic/claude-opus-5-5", "high"),
+        worker: settings("opencode", "anthropic/claude-opus-5-5", "medium"),
+    },
+    Defaults {
+        root: settings("opencode", "openai/gpt-6-astra", "medium"),
+        worker: settings("opencode", "openai/gpt-6-sol", "medium"),
     },
 ];
 
@@ -452,24 +460,30 @@ fn matching_defaults(root: &AgentProfile, worker: &AgentProfile, defaults: Defau
     same_settings(root, defaults.root) && same_settings(worker, defaults.worker)
 }
 
-/// Points the untouched default agents at the first preferred provider that
-/// `available` accepts. The Alt Coordinator takes a different available
-/// provider when there is one, so its second opinion comes from another model.
+/// Points the untouched default agents at the first preferred provider and
+/// model that `available` accepts. The Alt Coordinator takes a different
+/// available provider when there is one, so its second opinion comes from
+/// another tool.
 pub fn choose_defaults(
     database: &mut SuplexDatabase,
     user_id: &str,
-    available: impl Fn(&str) -> bool,
+    available: impl Fn(&str, &str) -> bool,
     now: DateTime<Utc>,
 ) -> DatabaseResult<()> {
     actor(database, user_id, true)?;
-    let mut usable = PREFERRED_DEFAULTS
-        .iter()
-        .copied()
-        .filter(|defaults| available(defaults.root.provider));
-    let Some(chosen) = usable.next() else {
+    let usable = || {
+        PREFERRED_DEFAULTS
+            .iter()
+            .copied()
+            .filter(|defaults| available(defaults.root.provider, defaults.root.model))
+    };
+    let Some(chosen) = usable().next() else {
         return Ok(());
     };
-    let alt = usable.next().unwrap_or(chosen).root;
+    let alt = usable()
+        .find(|defaults| defaults.root.provider != chosen.root.provider)
+        .unwrap_or(chosen)
+        .root;
     let known = || {
         std::iter::once(SEEDED_DEFAULTS)
             .chain(PREFERRED_DEFAULTS)
@@ -555,58 +569,6 @@ pub(crate) fn home_directory() -> Option<std::path::PathBuf> {
     std::env::var_os("USERPROFILE").map(Into::into)
 }
 
-pub fn provider_installed(provider: &str) -> bool {
-    let (binary, variable, home_paths): (&str, &str, &[&str]) = match provider {
-        "claude-code" => (
-            "claude",
-            "SUPLEX_CLAUDE_COMMAND",
-            &[".local/bin/claude", ".claude/local/claude"],
-        ),
-        "codex" => (
-            "codex",
-            "SUPLEX_CODEX_COMMAND",
-            &[".local/bin/codex", ".codex/bin/codex"],
-        ),
-        "devin" => (
-            "devin",
-            "SUPLEX_DEVIN_COMMAND",
-            &[".local/bin/devin", ".devin/bin/devin"],
-        ),
-        _ => return false,
-    };
-    provider_installed_with(
-        binary,
-        std::env::var_os(variable),
-        std::env::var_os("PATH"),
-        home_paths,
-        home_directory(),
-    )
-}
-
-fn provider_installed_with(
-    binary: &str,
-    configured: Option<std::ffi::OsString>,
-    search_path: Option<std::ffi::OsString>,
-    home_paths: &[&str],
-    home: Option<std::path::PathBuf>,
-) -> bool {
-    if let Some(configured) = configured {
-        let path = std::path::PathBuf::from(configured);
-        return path.is_absolute() && executable(&path);
-    }
-    if std::env::split_paths(&search_path.unwrap_or_default())
-        .filter(|directory| directory.is_absolute())
-        .any(|directory| executable(&directory.join(binary)))
-    {
-        return true;
-    }
-    home.is_some_and(|home| {
-        home_paths
-            .iter()
-            .any(|relative| executable(&home.join(relative)))
-    })
-}
-
 use crate::projects::ProjectProviderPolicy;
 use crate::tasks::control::TaskProfile;
 pub(crate) fn allowed_profile(
@@ -679,55 +641,6 @@ mod tests {
         assert!(allowed_profile(Some(&instances), &dedicated));
     }
 
-    #[cfg(unix)]
-    #[test]
-    fn executable_resolution_matches_override_path_and_home_precedence() {
-        use std::os::unix::fs::PermissionsExt;
-
-        let root = std::env::temp_dir().join(format!(
-            "suplex-profile-bin-{}-{}",
-            std::process::id(),
-            Utc::now().timestamp_nanos_opt().unwrap()
-        ));
-        let bin = root.join("bin");
-        let home_bin = root.join("home/.local/bin");
-        std::fs::create_dir_all(&bin).unwrap();
-        std::fs::create_dir_all(&home_bin).unwrap();
-        let on_path = bin.join("codex");
-        let at_home = home_bin.join("codex");
-        std::fs::write(&on_path, b"#!/bin/sh\n").unwrap();
-        std::fs::write(&at_home, b"#!/bin/sh\n").unwrap();
-        let mut permissions = std::fs::metadata(&on_path).unwrap().permissions();
-        permissions.set_mode(0o600);
-        std::fs::set_permissions(&on_path, permissions).unwrap();
-        let search = Some(bin.as_os_str().to_owned());
-        let home = Some(root.join("home"));
-        let installed = |configured, path, home| {
-            provider_installed_with("codex", configured, path, &[".local/bin/codex"], home)
-        };
-        assert!(!installed(
-            Some("relative/codex".into()),
-            search.clone(),
-            home.clone()
-        ));
-        assert!(!installed(
-            Some(on_path.as_os_str().to_owned()),
-            search.clone(),
-            home.clone()
-        ));
-        assert!(!installed(None, search.clone(), None));
-        assert!(!installed(None, Some("relative/bin".into()), home.clone()));
-        permissions = std::fs::metadata(&at_home).unwrap().permissions();
-        permissions.set_mode(0o700);
-        std::fs::set_permissions(&at_home, permissions).unwrap();
-        assert!(installed(None, search.clone(), home));
-        permissions = std::fs::metadata(&on_path).unwrap().permissions();
-        permissions.set_mode(0o700);
-        std::fs::set_permissions(&on_path, permissions).unwrap();
-        assert!(installed(None, search, None));
-        let _ = std::fs::remove_dir_all(root);
-    }
-
     #[test]
     fn default_selection_only_changes_untouched_fresh_install_profiles() {
         static NEXT_DATABASE: AtomicU64 = AtomicU64::new(10_000);
@@ -740,7 +653,7 @@ mod tests {
         let now = Utc::now();
         let admin = auth::development_sign_in(&mut database, now).unwrap();
         let seeded = get(&database, "profile_native_root").unwrap();
-        choose_defaults(&mut database, &admin.user.id, |_| false, now).unwrap();
+        choose_defaults(&mut database, &admin.user.id, |_, _| false, now).unwrap();
         assert_eq!(
             get(&database, "profile_native_root").unwrap().model,
             seeded.model
@@ -748,7 +661,7 @@ mod tests {
         choose_defaults(
             &mut database,
             &admin.user.id,
-            |provider| provider == "codex",
+            |provider, _| provider == "codex",
             now,
         )
         .unwrap();
@@ -764,8 +677,13 @@ mod tests {
             get(&database, "profile_native_independent").unwrap().model,
             "gpt-6-astra"
         );
-        choose_defaults(&mut database, &admin.user.id, |provider| provider == "devin", now)
-            .unwrap();
+        choose_defaults(
+            &mut database,
+            &admin.user.id,
+            |provider, _| provider == "devin",
+            now,
+        )
+        .unwrap();
         for id in [
             "profile_native_root",
             "profile_native_worker",
@@ -776,7 +694,7 @@ mod tests {
         choose_defaults(
             &mut database,
             &admin.user.id,
-            |provider| provider == "claude-code" || provider == "devin",
+            |provider, _| provider == "claude-code" || provider == "devin",
             now,
         )
         .unwrap();
@@ -785,14 +703,26 @@ mod tests {
             "claude-code"
         );
         assert_eq!(
-            get(&database, "profile_native_independent").unwrap().provider,
+            get(&database, "profile_native_independent")
+                .unwrap()
+                .provider,
             "devin"
         );
+        choose_defaults(
+            &mut database,
+            &admin.user.id,
+            |provider, model| provider == "opencode" && model.starts_with("openai/"),
+            now,
+        )
+        .unwrap();
+        for id in ["profile_native_root", "profile_native_independent"] {
+            assert_eq!(get(&database, id).unwrap().model, "openai/gpt-6-astra");
+        }
         database.connection().execute("UPDATE suplex_profiles SET model = 'custom/model' WHERE id = 'profile_native_root'", []).unwrap();
         choose_defaults(
             &mut database,
             &admin.user.id,
-            |provider| provider == "claude-code",
+            |provider, _| provider == "claude-code",
             now,
         )
         .unwrap();
@@ -808,7 +738,7 @@ mod tests {
                 |row| row.get(0),
             )
             .unwrap();
-        assert_eq!(audit_count, 9);
+        assert_eq!(audit_count, 12);
         drop(database);
         let _ = std::fs::remove_file(&path);
         let _ = std::fs::remove_file(path.with_extension("sqlite-wal"));

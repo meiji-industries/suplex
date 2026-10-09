@@ -8,6 +8,7 @@ import { HealthSnapshotSchema } from "../../contracts/health-schema.js";
 import { createHealthRefresher, healthContextQuery, type HealthContextSelector } from "../../lib/health-refresh.js";
 import { useCompanyContext } from "../../shell/company-context.js";
 import { relativeTime } from "../../shell/view-shared.js";
+import { ToolActionButton } from "./tool-action-button.js";
 import { Button } from "../ui/button.js";
 import { Alert, AlertDescription, AlertTitle } from "../ui/alert.js";
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "../ui/accordion.js";
@@ -164,7 +165,7 @@ export function HerdrInstallButton(): ReactElement {
   };
   return (
     <div className="space-y-2">
-      <Button size="sm" disabled={pending} onClick={() => void install()}>{pending ? <Spinner /> : <SquareTerminal />}{pending ? "Installing Herdr" : "Install and start Herdr"}</Button>
+      <ToolActionButton disabled={pending} onClick={() => void install()}>{pending ? <Spinner /> : null}{pending ? "Installing Herdr" : "Install and start Herdr"}</ToolActionButton>
       {failure ? <p role="status" className="text-xs text-destructive">{failure.reason}{failure.remedy ? ` ${failure.remedy}` : ""}</p> : null}
     </div>
   );

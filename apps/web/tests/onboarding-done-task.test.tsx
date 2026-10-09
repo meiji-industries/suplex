@@ -3,15 +3,16 @@ import { act, StrictMode, useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
+import type { HealthCheck } from "../contracts/health.js";
 import type * as NavigationState from "../shell/navigation-state.js";
 
 const company = { id: "company-1", name: "Acme", issueCode: "ACME", status: "active" };
-const fixture = vi.hoisted(() => ({ currentCompany: undefined as (Omit<typeof company, "issueCode"> & { issueCode: string | undefined }) | undefined, loading: false, projects: [{ id: "project-1" }], reload: vi.fn(), updateProfile: vi.fn(), renameCompany: vi.fn(), setCompanyIssueCode: vi.fn() }));
+const fixture = vi.hoisted(() => ({ currentCompany: undefined as (Omit<typeof company, "issueCode"> & { issueCode: string | undefined }) | undefined, checks: [] as HealthCheck[], loading: false, projects: [{ id: "project-1" }], reload: vi.fn(), updateProfile: vi.fn(), renameCompany: vi.fn(), setCompanyIssueCode: vi.fn() }));
 vi.mock("../shell/company-context.js", () => ({ useCompanyContext: () => ({ currentCompany: fixture.currentCompany, user: { id: "user_development", role: "admin", displayName: "Operator", username: "operator@suplex.local", avatarSeed: "operator@suplex.local", title: "" }, updateProfile: fixture.updateProfile, reloadCompanies: vi.fn(), renameCompany: fixture.renameCompany, setCompanyIssueCode: fixture.setCompanyIssueCode }), useOptionalCompanyContext: () => fixture.currentCompany ? { currentCompany: fixture.currentCompany } : undefined }));
 vi.mock("../features/account/lib/account-api.js", () => ({ getAccount: vi.fn(async () => ({ configured: true, canManage: true, account: { email: "adam@example.com" } })) }));
 vi.mock("../features/settings/lib/billing-api.js", () => ({ getBillingSummary: vi.fn(), startCheckout: vi.fn(), startTrial: vi.fn() }));
-vi.mock("../features/onboarding/onboarding.js", async importOriginal => ({ ...(await importOriginal()), useOnboardingData: () => ({ state: { company: fixture.currentCompany, checks: [], providers: [], profiles: [], projects: fixture.projects }, loading: fixture.loading, error: "", reload: fixture.reload }) }));
-vi.mock("../components/app/system-health.js", () => ({ useSystemHealth: () => ({ refresh: vi.fn(), freshness: "fresh", refreshing: false }), CheckStatusIndicator: () => null, SystemHealthAlert: () => null, healthCheckPurpose: () => "" }));
+vi.mock("../features/onboarding/onboarding.js", async importOriginal => ({ ...(await importOriginal()), useOnboardingData: () => ({ state: { company: fixture.currentCompany, checks: fixture.checks, providers: [], profiles: [], projects: fixture.projects }, loading: fixture.loading, error: "", reload: fixture.reload }) }));
+vi.mock("../components/app/system-health.js", () => ({ useSystemHealth: () => ({ snapshot: { checks: fixture.checks }, refresh: vi.fn(), freshness: "fresh", refreshing: false }), CheckStatusIndicator: ({ healthyLabel }: { healthyLabel: string }) => <span>{healthyLabel}</span>, HerdrInstallButton: () => <button>Install and start Herdr</button>, SystemHealthAlert: () => null, healthCheckPurpose: () => "" }));
 vi.mock("../shell/company-switcher.js", () => ({ CompanySwitcher: () => null }));
 vi.mock("../shell/experiments-api.js", () => ({ useExperiments: vi.fn() }));
 vi.mock("../components/ui/sidebar.js", () => ({ Sidebar: ({ children }: { children: ReactNode }) => <>{children}</>, SidebarContent: ({ children }: { children: ReactNode }) => <>{children}</>, SidebarFooter: ({ children }: { children: ReactNode }) => <>{children}</>, SidebarHeader: ({ children }: { children: ReactNode }) => <>{children}</>, SidebarInset: ({ children }: { children: ReactNode }) => <>{children}</>, SidebarMenu: ({ children }: { children: ReactNode }) => <>{children}</>, SidebarMenuButton: ({ children }: { children: ReactNode }) => <>{children}</>, SidebarMenuItem: ({ children }: { children: ReactNode }) => <>{children}</>, SidebarProvider: ({ children }: { children: ReactNode }) => <>{children}</>, SidebarTrigger: () => null, useSidebar: () => ({ setOpenMobile: vi.fn() }) }));
@@ -63,6 +64,7 @@ beforeEach(() => { vi.mocked(getBillingSummary).mockResolvedValue(freeSummary); 
 afterEach(() => {
   fixture.currentCompany = undefined;
   fixture.loading = false;
+  fixture.checks = [];
   fixture.projects = [{ id: "project-1" }];
   fixture.reload.mockReset();
   fixture.updateProfile.mockReset();
@@ -309,5 +311,59 @@ test("Projects shares the empty state and refreshes onboarding after creation", 
   expect(fixture.updateProfile).toHaveBeenLastCalledWith({ displayName: "Adam Meghji", username: "adam", title: "CTO", avatarSeed: "adam" });
   expect(fixture.renameCompany).toHaveBeenCalledWith("company-1", "New Company");
   expect(navigate).toHaveBeenCalledWith("/onboarding?step=tools&company=company-1");
+  await act(async () => root.unmount());
+});
+
+test("empty necessary onboarding fields use the input invalid state", async () => {
+  fixture.currentCompany = company;
+  window.history.replaceState({}, "", "/onboarding?step=company");
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  await act(async () => root.render(<OnboardingView />));
+  for (const id of ["display-name", "username", "onboarding-name", "onboarding-code"]) {
+    const input = container.querySelector<HTMLInputElement>(`#${id}`)!;
+    expect(input.required).toBe(true);
+    await act(async () => setInput(input, "Filled"));
+    expect(input.getAttribute("aria-invalid")).toBe("false");
+    await act(async () => setInput(input, "   "));
+    expect(input.getAttribute("aria-invalid")).toBe("true");
+    await act(async () => setInput(input, "Filled"));
+    expect(input.getAttribute("aria-invalid")).toBe("false");
+  }
+  const title = container.querySelector<HTMLInputElement>("#profile-title")!;
+  expect(title.required).toBe(false);
+  expect(title.getAttribute("aria-invalid")).not.toBe("true");
+  await act(async () => root.unmount());
+});
+
+test("GitHub CLI badge shows the signed-in account and falls back without it", async () => {
+  fixture.currentCompany = company;
+  fixture.checks = [{ id: "gh-cli", label: "GitHub CLI", status: "healthy", summary: "Signed in", details: { logins: "adammeghji" } }];
+  window.history.replaceState({}, "", "/onboarding?step=tools");
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  await act(async () => root.render(<OnboardingView />));
+  expect(container.textContent).toContain("@adammeghji");
+  fixture.checks[0]!.details = {};
+  await act(async () => root.render(<OnboardingView />));
+  expect(container.textContent).not.toContain("@adammeghji");
+  expect(container.textContent).toContain("Done");
+  await act(async () => root.unmount());
+});
+
+test("Herdr installation uses the tool row action slot", async () => {
+  fixture.currentCompany = company;
+  fixture.checks = [{ id: "herdr-readiness", label: "Herdr", status: "unhealthy", summary: "Offline", details: {}, remedy: "install herdr" }];
+  window.history.replaceState({}, "", "/onboarding?step=tools");
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  await act(async () => root.render(<OnboardingView />));
+  const install = Array.from(container.querySelectorAll("button")).find(button => button.textContent === "Install and start Herdr")!;
+  expect(install.parentElement?.textContent).toContain("Herdr runs your agents in the background");
+  expect(install.parentElement?.lastElementChild).toBe(install);
+  expect(container.textContent).not.toContain("install herdr");
   await act(async () => root.unmount());
 });

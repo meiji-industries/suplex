@@ -5,7 +5,7 @@ export type AvatarKind = "user" | "company" | "project" | "agent";
 export type AvatarShape = "square" | "circle";
 
 export const AVATAR_DEFAULTS: Record<AvatarKind, { shape: AvatarShape; collection: string }> = {
-  user: { shape: "circle", collection: "pixel-art-neutral" },
+  user: { shape: "circle", collection: "glass" },
   company: { shape: "square", collection: "initials" },
   project: { shape: "square", collection: "shapes" },
   agent: { shape: "square", collection: "bottts-neutral" },

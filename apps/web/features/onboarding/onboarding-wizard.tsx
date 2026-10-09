@@ -1,16 +1,14 @@
-import { copyToClipboard } from "../../lib/clipboard.js";
+import { OnboardingToolRow } from "./onboarding-tool-row.js";
 import { ProfileFields } from "../profiles/profile-fields.js";
 import { SettingsSection, SettingRow } from "../settings/settings-layout.js";
 import { getAccount } from "../account/lib/account-api.js";
 import { useProfileDraft } from "../profiles/lib/profile-draft.js";
 import { ProjectsContent } from "../projects/projects-content.js";
-import { ArrowLeft, Check, Copy, Pencil, RefreshCw } from "lucide-react";
+import { ArrowLeft, Check, Pencil, RefreshCw } from "lucide-react";
 import { useEffect, useRef, useState, type ReactElement } from "react";
 
-import { CheckStatusIndicator, healthCheckPurpose, HealthRow, HerdrInstallButton, useSystemHealth } from "../../components/app/system-health.js";
-import { GithubDeviceSignIn } from "../../components/app/github-device-sign-in.js";
+import { HealthRow, useSystemHealth } from "../../components/app/system-health.js";
 import { ProviderIcon } from "../../components/app/provider-icons.js";
-import { ToolIcon } from "../../components/app/tool-icons.js";
 import { AvatarEditor } from "../../components/app/entity-avatar.js";
 import { StatusLight } from "../../components/app/status-light.js";
 import { Alert, AlertDescription } from "../../components/ui/alert.js";
@@ -159,48 +157,24 @@ export function OnboardingView(): ReactElement {
   const avatarName = name.trim() || currentCompany?.name || "";
   const body = current === "company" ? <div>
     <SettingsSection title="Profile">
-      {user ? <ProfileFields userId={user.id} email={email} value={profile} onChange={changeProfile} disabled={saving} /> : <LoadingState />}
+      {user ? <ProfileFields required userId={user.id} email={email} value={profile} onChange={changeProfile} disabled={saving} /> : <LoadingState />}
     </SettingsSection>
     <SettingsSection title="Company">
       <SettingRow label="Company picture">
         {currentCompany ? <AvatarEditor compact kind="company" id={currentCompany.id} name={avatarName} seed={avatarName} /> : null}
       </SettingRow>
       <SettingRow label="Company name" htmlFor="onboarding-name">
-        <div className="w-full sm:w-60"><Input size="sm" id="onboarding-name" disabled={saving} value={name} onChange={event => setName(event.target.value)} /></div>
+        <div className="w-full sm:w-60"><Input size="sm" id="onboarding-name" required aria-invalid={!name.trim()} disabled={saving} value={name} onChange={event => setName(event.target.value)} /></div>
       </SettingRow>
       <SettingRow label="Company code" htmlFor="onboarding-code">
-        <div className="w-full sm:w-60"><Input size="sm" id="onboarding-code" disabled={saving} maxLength={10} pattern="[A-Z][A-Z0-9]{1,9}" value={code} onChange={event => setCode(event.target.value.toUpperCase())} /></div>
+        <div className="w-full sm:w-60"><Input size="sm" id="onboarding-code" required aria-invalid={!code.trim()} disabled={saving} maxLength={10} pattern="[A-Z][A-Z0-9]{1,9}" value={code} onChange={event => setCode(event.target.value.toUpperCase())} /></div>
       </SettingRow>
     </SettingsSection>
   </div>
     : current === "tools" ? <div className="space-y-3" aria-busy={freshness === "checking" && state.checks.length === 0}>
       {ONBOARDING_TOOL_CHECKS.map(id => {
         const check = state.checks.find(check => check.id === id);
-        const loading = !check && freshness === "checking";
-        return <div key={id} className="border-b pb-3">
-          <div className="flex items-center gap-3">
-            {check || !loading ? <ToolIcon tool={id} /> : <Skeleton className="size-4 shrink-0" />}
-            <div className="min-w-0 flex-1">
-              <span className="text-sm font-medium">{id === "git" ? "Git" : id === "gh-auth" ? "GitHub App" : id === "gh-cli" ? "GitHub CLI" : "Herdr"}</span>{" "}
-              <span className="text-xs text-muted-foreground">{id === "git" ? "for source control" : id === "gh-auth" ? "for branches, pull requests, and merges" : id === "gh-cli" ? "lets agents read pull requests and checks" : "runs your agents in the background"}</span>
-              <div className="text-xs text-muted-foreground">
-                {loading ? <div aria-label="Check in progress">
-                  {id !== "herdr-readiness" ? <Skeleton className="h-4 w-32" /> : null}
-                  {id === "gh-auth" ? <Skeleton className="h-4 w-44" /> : null}
-                </div> : !check ? "Check not available. Select Check again." : id === "gh-auth" && check.details.method === "device" ? check.status === "healthy" ? <span className="flex items-center gap-1"><Check aria-hidden="true" className="size-3" />{check.details.logins ? `Signed in as ${check.details.logins}` : "GitHub is connected"}</span> : check.summary : id === "gh-auth" ? check.status === "healthy" ? <>
-                  <span className="flex items-center gap-1"><Check aria-hidden="true" className="size-3" />CLI tools installed</span>
-                  <span className="flex items-center gap-1"><Check aria-hidden="true" className="size-3" />{check.details.logins ? `Signed in as ${check.details.logins}` : "Signed in"}</span>
-                </> : check.summary : id === "herdr-readiness" ? null : check.status === "healthy" ? <span className="flex items-center gap-1"><Check aria-hidden="true" className="size-3" />{id === "git" ? "Git is available" : "CLI tools installed"}</span> : healthCheckPurpose(id)}
-              </div>
-            </div>
-            {id === "gh-auth" && check?.details.method === "device" && check.status !== "healthy" && user?.role === "admin" ? <GithubDeviceSignIn primary onConnected={async () => { await refresh(); await reload(); }} />
-              : check ? <CheckStatusIndicator check={check} healthyLabel="Done" /> : loading ? <Skeleton className="h-5 w-16 shrink-0" /> : <Badge variant="outline">Not available</Badge>}
-          </div>
-          {id === "herdr-readiness" && check && check.status === "unhealthy" && user?.role === "admin" ? <div className="mt-2"><HerdrInstallButton /></div>
-            : check && check.status !== "healthy" && check.remedy ? <div className="mt-2 flex gap-2">
-            {check.remedyKind === "link" ? <Button size="xs" variant="outline" nativeButton={false} render={<a href={check.remedy} target="_blank" rel="noreferrer" />}>Open the instructions</Button> : <><code className="min-w-0 flex-1 break-all text-xs">{check.remedy}</code><Button size="xs" variant="outline" onClick={() => void copyToClipboard(check.remedy!, "Copied the setup command to clipboard")}><Copy />Copy</Button></>}
-          </div> : null}
-        </div>;
+        return <OnboardingToolRow key={id} id={id} check={check} loading={!check && freshness === "checking"} canManage={user?.role === "admin"} onConnected={async () => { await refresh(); await reload(); }} />;
       })}
     </div>
     : current === "providers" ? <div className="space-y-3"><div className="grid gap-3 sm:grid-cols-2" aria-busy={loading} aria-label="Providers">{loading && state.providers.length === 0 ? [0, 1, 2, 3].map(index => <Card key={index} size="sm" aria-label="Provider check in progress"><CardHeader><CardTitle><Skeleton className="h-5 w-20" /></CardTitle><CardAction><Skeleton className="h-5 w-20" /></CardAction></CardHeader><CardContent><Skeleton className="h-4 w-16" /><div className="space-y-1"><Skeleton className="h-4 w-full" /><Skeleton className="h-4 w-3/4" /></div><Skeleton className="h-8 w-full" /></CardContent></Card>) : state.providers.map(provider => <Card highlighted key={provider.id} size="sm"><CardHeader><CardTitle><span className="flex items-center gap-2.5 text-base"><ProviderIcon provider={provider.id} size="md" />{provider.label}</span></CardTitle><CardAction>{provider.status === "missing" ? <><StatusLight level="red" label="Not installed" /><Badge variant="outline">Not installed</Badge></> : provider.connection.status === "connected" ? <><StatusLight level="green" label="Connected" /><Badge variant="secondary">Connected</Badge></> : <><StatusLight level="amber" label="Needs auth" /><Badge variant="outline">Needs auth</Badge></>}</CardAction></CardHeader><CardContent><div className="flex flex-col text-xs text-muted-foreground [&>*]:border-t [&>*]:border-border/50 [&>*]:py-4 [&>*:last-child]:pb-0">{provider.connection.status === "connected" ? <div><Tooltip><TooltipTrigger><span className="cursor-help underline decoration-dashed underline-offset-4">{provider.modelCount} models available</span></TooltipTrigger><TooltipContent side="bottom" align="start"><ul className="max-h-60 overflow-y-auto font-mono text-xs">{provider.models.length ? provider.models.map(model => <li key={model.id} className="break-all">{model.id}</li>) : <li>No models available</li>}</ul></TooltipContent></Tooltip></div> : null}{provider.connection.status === "connected" ? <p className="flex items-start gap-1"><Check aria-hidden="true" className="mt-0.5 size-3 shrink-0" /><span className="min-w-0 break-words">{provider.connection.account ? `Signed in as ${provider.connection.account}` : "Signed in"}</span></p> : provider.id === "opencode" && provider.connection.status === "not-connected" && provider.status !== "missing" ? null : <p>{provider.connection.summary}</p>}{provider.status === "missing" ? <ProviderInstallationInstructions provider={provider.id} checkLabel="Check again" /> : provider.connection.status !== "connected" ? <div className="grid"><Button size="sm" disabled={loginPending !== null} onClick={() => void startLogin(`provider:${provider.id}`, provider.label, `/api/admin/providers/${provider.id}/login`).catch(reason => setError(reason instanceof Error ? reason.message : "Suplex could not open a sign-in pane."))}>Sign in</Button></div> : null}</div></CardContent></Card>)}</div></div>

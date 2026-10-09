@@ -157,7 +157,7 @@ pub(crate) mod tests {
             headers[header::LOCATION]
                 .to_str()
                 .unwrap()
-                .contains("pixel-art-neutral")
+                .contains("glass")
         );
 
         let (_, _, body) = call(&app, "GET", "/api/avatars", admin_cookie, None).await;

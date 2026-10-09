@@ -4,6 +4,7 @@ import { GitHubDevicePollResponseSchema, GitHubDeviceStartResponseSchema, type G
 import { readJsonUnchecked } from "../../lib/api.js";
 import { copyToClipboard } from "../../lib/clipboard.js";
 import { getGitHubAuthStatus } from "../../features/settings/lib/github-auth-api.js";
+import { ToolActionButton } from "./tool-action-button.js";
 import { Button } from "../ui/button.js";
 import { Spinner } from "../ui/spinner.js";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "../ui/dialog.js";
@@ -115,7 +116,7 @@ export function GithubDeviceSignIn({ onConnected, label, primary = false }: { on
 
   return <Dialog open={open} onOpenChange={setOpen}>
     <div className="space-y-2 text-xs">
-      <DialogTrigger render={<Button type="button" size="xs" variant={primary ? "default" : "outline"} disabled={busy} onClick={() => { if (!flow) void start(); }} />}>
+      <DialogTrigger render={<ToolActionButton type="button" variant={primary ? "default" : "outline"} disabled={busy} onClick={() => { if (!flow) void start(); }} />}>
         {label ?? (flow ? "Continue GitHub sign-in" : "Sign in to GitHub")}
       </DialogTrigger>
       {!open && message ? <p role="status" className="text-muted-foreground">{message}</p> : null}

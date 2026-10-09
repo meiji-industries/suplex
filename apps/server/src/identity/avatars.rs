@@ -37,7 +37,7 @@ const OWNER_TABLES: &[(&str, &str, &str)] = &[
 
 pub fn dicebear_url(kind: &str, seed: &str) -> String {
     let collection = match kind {
-        "user" => "pixel-art-neutral",
+        "user" => "glass",
         "company" => "initials",
         "project" => "shapes",
         _ => "bottts-neutral",

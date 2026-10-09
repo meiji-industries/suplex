@@ -294,13 +294,23 @@ async fn github_cli_check() -> Value {
     )
     .is_ok();
     let mut result = match github::installed_gh_token().await {
-        Ok(Some(_)) => check(
-            "gh-cli",
-            label,
-            "healthy",
-            "GitHub CLI is signed in",
-            json!({"status":"connected"}),
-        ),
+        Ok(Some(token)) => {
+            let login = match github::Access::for_api("https://api.github.com", Some(token)) {
+                Ok(access) => access.current_user_login().await.ok(),
+                Err(_) => None,
+            };
+            let mut details = json!({"status":"connected"});
+            if let Some(login) = login {
+                details["logins"] = json!(login);
+            }
+            check(
+                "gh-cli",
+                label,
+                "healthy",
+                "GitHub CLI is signed in",
+                details,
+            )
+        }
         _ if !installed => check(
             "gh-cli",
             label,
@@ -344,7 +354,7 @@ async fn github_check() -> Value {
                         "gh-auth",
                         "GitHub App",
                         "warning",
-                        "Sign in to GitHub to use branches and pull requests",
+                        "Sign in to GitHub",
                         json!({"method":"device","source":access.source().as_str(),"status":"sign_in_required"}),
                     )
                 }
@@ -361,7 +371,7 @@ async fn github_check() -> Value {
             "gh-auth",
             "GitHub App",
             "warning",
-            "Sign in to GitHub to use branches and pull requests",
+            "Sign in to GitHub",
             json!({"method":"device","source":"none","status":"sign_in_required"}),
         ),
         Err(_) => check(

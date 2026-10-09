@@ -156,11 +156,31 @@ async fn choose_defaults(State(state): State<AppState>, headers: HeaderMap) -> R
         Ok(value) => value,
         Err(error) => return *error,
     };
+    // Signed-in providers win; before any sign-in, installed ones do.
+    use crate::profiles::provider_connection::provider_connection;
+    let providers = ["claude-code", "codex", "devin"];
+    let (claude, codex, devin) = tokio::join!(
+        provider_connection("claude-code"),
+        provider_connection("codex"),
+        provider_connection("devin"),
+    );
+    let connected: Vec<&str> = providers
+        .into_iter()
+        .zip([claude, codex, devin])
+        .filter(|(_, connection)| connection["status"] == "connected")
+        .map(|(provider, _)| provider)
+        .collect();
     let response = match state.with_database(|database| {
         agent_profiles::choose_defaults(
             database,
             &user_id,
-            agent_profiles::provider_installed,
+            |provider| {
+                if connected.is_empty() {
+                    agent_profiles::provider_installed(provider)
+                } else {
+                    connected.contains(&provider)
+                }
+            },
             Utc::now(),
         )
     }) {

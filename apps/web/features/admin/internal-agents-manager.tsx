@@ -10,7 +10,7 @@ import {
   type AgentProviderOption,
 } from "./internal-agent-editor-dialog.js";
 
-export function InternalAgentsManager({ agents, onSaved, renderCards }: { agents: readonly ApiProfile[]; onSaved: () => Promise<void>; renderCards?: (openNewAgent: () => void) => ReactNode }): ReactElement {
+export function InternalAgentsManager({ agents, onSaved, renderCards }: { agents: readonly ApiProfile[]; onSaved: () => Promise<void>; renderCards?: (openNewAgent: () => void, openEditAgent: (agent: ApiProfile) => void) => ReactNode }): ReactElement {
   const [agentName, setAgentName] = useState("");
   const [agentRole, setAgentRole] = useState<"root" | "worker">("root");
   const [agentAvatarSeed, setAgentAvatarSeed] = useState("");
@@ -164,7 +164,7 @@ export function InternalAgentsManager({ agents, onSaved, renderCards }: { agents
       Number(Boolean(left.archivedAt)) - Number(Boolean(right.archivedAt)),
   );
   return <>
-    {renderCards ? renderCards(openNewAgent) : <InternalAgentsSection
+    {renderCards ? renderCards(openNewAgent, openEditAgent) : <InternalAgentsSection
       agents={agents}
       sortedAgents={sortedAgents}
       archiveTarget={archiveTarget}

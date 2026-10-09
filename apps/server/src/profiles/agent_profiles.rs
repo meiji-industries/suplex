@@ -452,19 +452,28 @@ fn matching_defaults(root: &AgentProfile, worker: &AgentProfile, defaults: Defau
     same_settings(root, defaults.root) && same_settings(worker, defaults.worker)
 }
 
+/// Points the untouched default agents at the first preferred provider that
+/// `available` accepts. The Alt Coordinator takes a different available
+/// provider when there is one, so its second opinion comes from another model.
 pub fn choose_defaults(
     database: &mut SuplexDatabase,
     user_id: &str,
-    installed: impl Fn(&str) -> bool,
+    available: impl Fn(&str) -> bool,
     now: DateTime<Utc>,
 ) -> DatabaseResult<()> {
     actor(database, user_id, true)?;
-    let Some(chosen) = PREFERRED_DEFAULTS
+    let mut usable = PREFERRED_DEFAULTS
         .iter()
         .copied()
-        .find(|defaults| installed(defaults.root.provider))
-    else {
+        .filter(|defaults| available(defaults.root.provider));
+    let Some(chosen) = usable.next() else {
         return Ok(());
+    };
+    let alt = usable.next().unwrap_or(chosen).root;
+    let known = || {
+        std::iter::once(SEEDED_DEFAULTS)
+            .chain(PREFERRED_DEFAULTS)
+            .chain(std::iter::once(PREVIOUS_DEFAULTS))
     };
     database.transaction(false, |database| {
         let has_tasks: bool = database.connection().query_row(
@@ -473,23 +482,24 @@ pub fn choose_defaults(
         if has_tasks {
             return Ok(());
         }
-        let root = find(database, "profile_native_root")?;
-        let worker = find(database, "profile_native_worker")?;
-        let (Some(root), Some(worker)) = (root, worker) else {
-            return Ok(());
-        };
-        let untouched = std::iter::once(SEEDED_DEFAULTS)
-            .chain(PREFERRED_DEFAULTS)
-            .chain(std::iter::once(PREVIOUS_DEFAULTS))
-            .any(|defaults| matching_defaults(&root, &worker, defaults));
-        if !untouched || matching_defaults(&root, &worker, chosen) {
-            return Ok(());
+        let mut updates = Vec::new();
+        if let (Some(root), Some(worker)) = (
+            find(database, "profile_native_root")?,
+            find(database, "profile_native_worker")?,
+        ) && known().any(|defaults| matching_defaults(&root, &worker, defaults))
+            && !matching_defaults(&root, &worker, chosen)
+        {
+            updates.push(("profile_native_root", chosen.root));
+            updates.push(("profile_native_worker", chosen.worker));
+        }
+        if let Some(independent) = find(database, "profile_native_independent")?
+            && known().any(|defaults| same_settings(&independent, defaults.root))
+            && !same_settings(&independent, alt)
+        {
+            updates.push(("profile_native_independent", alt));
         }
         let now_iso = rfc3339_millis(now);
-        for (id, values) in [
-            ("profile_native_root", chosen.root),
-            ("profile_native_worker", chosen.worker),
-        ] {
+        for (id, values) in updates {
             database.connection().execute(
                 "UPDATE suplex_profiles SET provider = ?1, model = ?2, reasoning_level = ?3, service_tier = ?4, updated_at = ?5 WHERE id = ?6",
                 params![values.provider, values.model, values.reasoning_level, values.service_tier, now_iso, id],
@@ -750,6 +760,34 @@ mod tests {
             get(&database, "profile_native_worker").unwrap().model,
             "gpt-6-sol"
         );
+        assert_eq!(
+            get(&database, "profile_native_independent").unwrap().model,
+            "gpt-6-astra"
+        );
+        choose_defaults(&mut database, &admin.user.id, |provider| provider == "devin", now)
+            .unwrap();
+        for id in [
+            "profile_native_root",
+            "profile_native_worker",
+            "profile_native_independent",
+        ] {
+            assert_eq!(get(&database, id).unwrap().provider, "devin");
+        }
+        choose_defaults(
+            &mut database,
+            &admin.user.id,
+            |provider| provider == "claude-code" || provider == "devin",
+            now,
+        )
+        .unwrap();
+        assert_eq!(
+            get(&database, "profile_native_root").unwrap().provider,
+            "claude-code"
+        );
+        assert_eq!(
+            get(&database, "profile_native_independent").unwrap().provider,
+            "devin"
+        );
         database.connection().execute("UPDATE suplex_profiles SET model = 'custom/model' WHERE id = 'profile_native_root'", []).unwrap();
         choose_defaults(
             &mut database,
@@ -770,7 +808,7 @@ mod tests {
                 |row| row.get(0),
             )
             .unwrap();
-        assert_eq!(audit_count, 2);
+        assert_eq!(audit_count, 9);
         drop(database);
         let _ = std::fs::remove_file(&path);
         let _ = std::fs::remove_file(path.with_extension("sqlite-wal"));

@@ -17,6 +17,8 @@ const environment: NodeJS.ProcessEnv = {
   SUPLEX_ACCESS_MODE: process.env.SUPLEX_ACCESS_MODE ?? (process.env.SUPLEX_TAILSCALE_EXPOSURE === "serve" && process.env.SUPLEX_TAILSCALE_ADDRESS ? "tailscale" : "local"),
   SUPLEX_BIND_ADDRESS: process.env.SUPLEX_BIND_ADDRESS ?? "127.0.0.1",
   SUPLEX_ACCOUNT_SERVICE_URL: process.env.SUPLEX_ACCOUNT_SERVICE_URL ?? "https://suplex.sh",
+  // Billing follows the account service, so the linked account can start its trial and see its plan.
+  SUPLEX_BILLING_SERVICE_URL: process.env.SUPLEX_BILLING_SERVICE_URL ?? process.env.SUPLEX_ACCOUNT_SERVICE_URL ?? "https://suplex.sh",
   SUPLEX_DEVELOPMENT_AUTO_LOGIN: "1",
   // Vite serves the frontend in this development stack.
   SUPLEX_DEV_EMBED_FRONTEND: "0",

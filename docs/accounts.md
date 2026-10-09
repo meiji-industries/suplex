@@ -229,8 +229,8 @@ GitHub, Resend, Stripe, RevenueCat, 1Password, and Framer.
    domain and API key as described in Provider setup.
 6. Store the six account values in the Suplex 1Password vault: production
    values for Fly, and sandbox values as fields of the `.env.development` item
-   that `scripts/billing-dev.env` reads. `mise run hosted:dev` fails until the
-   sandbox fields exist.
+   that `scripts/billing-dev.env` reads. Until the sandbox fields exist,
+   `mise run hosted:dev` runs with sign-in off.
 7. Run the `fly secrets set` command in Deploy. Fly restarts the machine.
 8. Paste the updated `apps/server/src/hosted/framer-attribution.js` into Framer.
    In a private browser, check that a download link gets `?visitor=` only

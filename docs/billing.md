@@ -117,7 +117,7 @@ The Stripe sandbox and the RevenueCat project send webhooks to
 ```sh
 mise run hosted:tunnel
 mise run hosted:dev     # sandbox secrets from 1Password .env.development
-SUPLEX_BILLING_SERVICE_URL=http://127.0.0.1:4212 mise run dev
+SUPLEX_ACCOUNT_SERVICE_URL=http://127.0.0.1:4212 mise run dev   # billing follows accounts
 ```
 
 Both billing tasks read 1Password through the Suplex service account. The
@@ -170,8 +170,10 @@ Configuration is read only in the hosted process:
 
 Installations use `https://suplex.sh` by default. Set
 `SUPLEX_BILLING_SERVICE_URL` to use another HTTPS origin, or a loopback URL for
-development. Development roots (`SUPLEX_ROOT`) have no default, so development
-data never registers production accounts. An empty value turns billing off:
+development. Development roots (`SUPLEX_ROOT`) have no default. `mise run dev`
+sets it to the account service, `https://suplex.sh` unless
+`SUPLEX_ACCOUNT_SERVICE_URL` says otherwise, so the linked account sees its
+plan and can start its trial. An empty value turns billing off:
 the installation runs Free, a third project in a company returns 402
 `project_limit_reached`, and existing projects are never touched. A company
 with an existing billing binding reports the subscription as unknown, never as

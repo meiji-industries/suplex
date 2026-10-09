@@ -23,7 +23,7 @@ test("defaults to no capture, no replay, and no third-party pixel", () => {
   const window = fixture();
   const win = window as unknown as AnalyticsWindow;
   expect(win.posthog).toBeUndefined();
-  expect(window.document.querySelector("#suplex-analytics-consent")?.textContent).toContain("Allow website analytics?");
+  expect(window.document.querySelector("#suplex-analytics-consent")?.textContent).toContain("Suplex collects usage data to improve the product.");
   expect(Array.from(window.document.scripts).map(script => script.src).filter(Boolean)).toEqual([]);
   expect(win.localStorage.getItem("suplex.analytics.attribution.v1")).toBeNull();
   win.SuplexAnalytics.grantConsent();

@@ -306,7 +306,7 @@
     banner.setAttribute("aria-label", "Website analytics consent");
     banner.style.cssText = "position:fixed;z-index:2147483647;right:16px;bottom:16px;max-width:420px;padding:12px;border:1px solid #d4d4d4;background:#fff;color:#171717;font:14px/1.4 system-ui,sans-serif;display:flex;gap:12px;align-items:center";
     var text = document.createElement("span");
-    text.textContent = "Allow website analytics? We record page visits and approved link clicks. If screen activity is enabled, all text and inputs are masked.";
+    text.textContent = "Suplex collects usage data to improve the product.";
     var reject = document.createElement("button");
     reject.type = "button";
     reject.textContent = "Reject";

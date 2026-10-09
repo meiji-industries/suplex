@@ -41,7 +41,7 @@ export function TelemetryNotice(): ReactElement | null {
 
   return (
     <form data-telemetry-notice aria-label="Usage data" onSubmit={(event) => void submit(event)} className="flex min-h-9 flex-wrap items-center gap-2 border-b px-4 py-1 lg:px-6">
-      <span className="w-full text-xs sm:w-auto sm:min-w-0 sm:flex-1">Suplex sends usage events, app details, and sanitized errors to PostHog. Suplex does not send code, prompts, repository names, or file paths.</span>
+      <span className="w-full text-xs sm:w-auto sm:min-w-0 sm:flex-1">Allow Suplex to collect usage data to improve the product?</span>
       <Button type="submit" size="xs" disabled={sending}>Accept</Button>
       <Button nativeButton={false} render={<a href={withCompany("/admin/environment", companyId)} />} variant="link" size="xs">Open settings</Button>
       {message ? <span role="alert" className="w-full text-xs text-destructive">{message}</span> : null}

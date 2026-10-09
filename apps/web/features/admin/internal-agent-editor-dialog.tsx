@@ -1,3 +1,4 @@
+import { RefreshCw } from "lucide-react";
 import {
   AvatarEditor,
   EntityAvatar,
@@ -149,153 +150,158 @@ export function InternalAgentDialog({
                 )}
                 <Button
                   type="button"
-                  variant="outline"
-                  size="sm"
+                  variant="ghost"
+                  size="icon-xs"
+                  aria-label="Regenerate avatar"
+                  title="Regenerate avatar"
                   onClick={() =>
                     onAgentAvatarSeedChange(
                       crypto.randomUUID().replaceAll("-", ""),
                     )
                   }
                 >
-                  Randomize
+                  <RefreshCw aria-hidden="true" />
                 </Button>
               </span>
             </Field>
-            <Field>
-              <FieldLabel htmlFor="agent-name">Agent name</FieldLabel>
-              <Input
-                id="agent-name"
-                autoFocus
-                value={agentName}
-                onChange={(event) => onAgentNameChange(event.target.value)}
-              />
-            </Field>
-            <Field>
-              <FieldLabel htmlFor="agent-role">Role</FieldLabel>
-              <Select
-                value={agentRole}
-                onValueChange={(value) =>
-                  onAgentRoleChange(value === "worker" ? "worker" : "root")
-                }
-              >
-                <SelectTrigger id="agent-role">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="root">Coordinator</SelectItem>
-                  <SelectItem value="worker">Worker</SelectItem>
-                </SelectContent>
-              </Select>
-            </Field>
-            <Field>
-              <FieldLabel htmlFor="agent-provider">Provider</FieldLabel>
-              <Select
-                value={selectedProviderOption?.id ?? null}
-                onValueChange={(value) => {
-                  const option = providerOptions.find((item) => item.id === value);
-                  if (!option) return;
-                  onAgentProviderChange(option.provider);
-                  onAgentInstanceIdChange(option.providerInstanceId);
-                  if (
-                    !models.some(
-                      (model) =>
-                        model.provider === option.provider && model.id === agentModel,
-                    )
-                  )
-                    onAgentModelChange("");
-                }}
-              >
-                <SelectTrigger id="agent-provider">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {providerOptions.map(({ id, label, status }) => (
-                    <SelectItem key={id} value={id} disabled={status === "missing"}>
-                      {status === "missing" ? `${label} (Missing)` : label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </Field>
-            <Field>
-              <FieldLabel htmlFor="agent-model">Model</FieldLabel>
-              {/* Free text: the provider CLI accepts models that Suplex does not list yet. */}
-              <Combobox
-                items={providerModels}
-                itemToStringLabel={(model: ApiModel) => model.id}
-                value={providerModels.find((model) => model.id === agentModel) ?? null}
-                onValueChange={(model: ApiModel | null) => {
-                  if (model) onAgentModelChange(model.id);
-                }}
-                inputValue={agentModel}
-                onInputValueChange={(value, details) => {
-                  // Closing without a listed selection clears the input. Keep the typed model.
-                  if (details.reason !== "input-clear") onAgentModelChange(value.trim());
-                }}
-                filter={modelMatches}
-              >
-                <ComboboxInput
-                  id="agent-model"
-                  placeholder="Select or type a model"
-                  autoComplete="off"
+            {/* The six fields below sit two to a row. */}
+            <div className="grid gap-x-4 gap-y-7 sm:grid-cols-2">
+              <Field>
+                <FieldLabel htmlFor="agent-name">Agent name</FieldLabel>
+                <Input
+                  id="agent-name"
+                  autoFocus
+                  value={agentName}
+                  onChange={(event) => onAgentNameChange(event.target.value)}
                 />
-                <ComboboxContent>
-                  <ComboboxEmpty>No models listed. Type a model ID.</ComboboxEmpty>
-                  <ComboboxList>
-                    {(model: ApiModel) => (
-                      <ComboboxItem key={model.id} value={model}>
-                        <span className="flex min-w-0 flex-col">
-                          <span className="truncate">{model.displayName}</span>
-                          <span className="truncate text-xs text-muted-foreground">
-                            {modelHint(model.id, `${model.providerLabel} model`)}
+              </Field>
+              <Field>
+                <FieldLabel htmlFor="agent-role">Role</FieldLabel>
+                <Select
+                  value={agentRole}
+                  onValueChange={(value) =>
+                    onAgentRoleChange(value === "worker" ? "worker" : "root")
+                  }
+                >
+                  <SelectTrigger id="agent-role">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="root">Coordinator</SelectItem>
+                    <SelectItem value="worker">Worker</SelectItem>
+                  </SelectContent>
+                </Select>
+              </Field>
+              <Field>
+                <FieldLabel htmlFor="agent-provider">Provider</FieldLabel>
+                <Select
+                  value={selectedProviderOption?.id ?? null}
+                  onValueChange={(value) => {
+                    const option = providerOptions.find((item) => item.id === value);
+                    if (!option) return;
+                    onAgentProviderChange(option.provider);
+                    onAgentInstanceIdChange(option.providerInstanceId);
+                    if (
+                      !models.some(
+                        (model) =>
+                          model.provider === option.provider && model.id === agentModel,
+                      )
+                    )
+                      onAgentModelChange("");
+                  }}
+                >
+                  <SelectTrigger id="agent-provider">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {providerOptions.map(({ id, label, status }) => (
+                      <SelectItem key={id} value={id} disabled={status === "missing"}>
+                        {status === "missing" ? `${label} (Missing)` : label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </Field>
+              <Field>
+                <FieldLabel htmlFor="agent-model">Model</FieldLabel>
+                {/* Free text: the provider CLI accepts models that Suplex does not list yet. */}
+                <Combobox
+                  items={providerModels}
+                  itemToStringLabel={(model: ApiModel) => model.id}
+                  value={providerModels.find((model) => model.id === agentModel) ?? null}
+                  onValueChange={(model: ApiModel | null) => {
+                    if (model) onAgentModelChange(model.id);
+                  }}
+                  inputValue={agentModel}
+                  onInputValueChange={(value, details) => {
+                    // Closing without a listed selection clears the input. Keep the typed model.
+                    if (details.reason !== "input-clear") onAgentModelChange(value.trim());
+                  }}
+                  filter={modelMatches}
+                >
+                  <ComboboxInput
+                    id="agent-model"
+                    placeholder="Select or type a model"
+                    autoComplete="off"
+                  />
+                  <ComboboxContent>
+                    <ComboboxEmpty>No models listed. Type a model ID.</ComboboxEmpty>
+                    <ComboboxList>
+                      {(model: ApiModel) => (
+                        <ComboboxItem key={model.id} value={model}>
+                          <span className="flex min-w-0 flex-col">
+                            <span className="truncate">{model.displayName}</span>
+                            <span className="truncate text-xs text-muted-foreground">
+                              {modelHint(model.id, `${model.providerLabel} model`)}
+                            </span>
                           </span>
-                        </span>
-                      </ComboboxItem>
-                    )}
-                  </ComboboxList>
-                </ComboboxContent>
-              </Combobox>
-            </Field>
-            <Field>
-              <FieldLabel htmlFor="agent-reasoning">Reasoning level</FieldLabel>
-              <Select
-                value={agentReasoning}
-                onValueChange={(value) =>
-                  onAgentReasoningChange(value ?? "medium")
-                }
-              >
-                <SelectTrigger id="agent-reasoning">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="low">Low</SelectItem>
-                  <SelectItem value="medium">Medium</SelectItem>
-                  <SelectItem value="high">High</SelectItem>
-                  <SelectItem value="xhigh">XHigh</SelectItem>
-                  <SelectItem value="max">Max</SelectItem>
-                </SelectContent>
-              </Select>
-            </Field>
-            <Field>
-              <FieldLabel htmlFor="agent-priority">Service priority</FieldLabel>
-              <Select
-                value={agentPriority}
-                onValueChange={(value) =>
-                  onAgentPriorityChange(value ?? "default")
-                }
-              >
-                <SelectTrigger id="agent-priority">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {SERVICE_PRIORITIES.map((value) => (
-                    <SelectItem key={value} value={value}>
-                      {serviceTierLabel(agentProvider, value)}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </Field>
+                        </ComboboxItem>
+                      )}
+                    </ComboboxList>
+                  </ComboboxContent>
+                </Combobox>
+              </Field>
+              <Field>
+                <FieldLabel htmlFor="agent-reasoning">Reasoning level</FieldLabel>
+                <Select
+                  value={agentReasoning}
+                  onValueChange={(value) =>
+                    onAgentReasoningChange(value ?? "medium")
+                  }
+                >
+                  <SelectTrigger id="agent-reasoning">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="low">Low</SelectItem>
+                    <SelectItem value="medium">Medium</SelectItem>
+                    <SelectItem value="high">High</SelectItem>
+                    <SelectItem value="xhigh">XHigh</SelectItem>
+                    <SelectItem value="max">Max</SelectItem>
+                  </SelectContent>
+                </Select>
+              </Field>
+              <Field>
+                <FieldLabel htmlFor="agent-priority">Service priority</FieldLabel>
+                <Select
+                  value={agentPriority}
+                  onValueChange={(value) =>
+                    onAgentPriorityChange(value ?? "default")
+                  }
+                >
+                  <SelectTrigger id="agent-priority">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {SERVICE_PRIORITIES.map((value) => (
+                      <SelectItem key={value} value={value}>
+                        {serviceTierLabel(agentProvider, value)}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </Field>
+            </div>
             <DialogFooter>
               <DialogClose
                 render={<Button type="button" variant="outline" size="sm" />}

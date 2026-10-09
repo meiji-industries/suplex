@@ -20,14 +20,20 @@ interface EntityAvatarProps {
   size?: "default" | "xs" | "sm" | "lg";
 }
 
-/** One renderer for every avatar: uploaded image first, then the DiceBear default, then the initial letter. */
+const INITIAL_SIZE = { xs: "text-[8px]", sm: "text-xs", default: "text-sm", lg: "text-base" } as const;
+
+/** One renderer for every avatar: uploaded image first, then the DiceBear default, then the initial letter.
+ *  A background-only default (see AVATAR_DEFAULTS) carries the initial in black, so a new seed changes only the background. */
 export function EntityAvatar({ kind, id, name, seed, size = "sm" }: EntityAvatarProps): ReactElement {
   const record = useOptionalCompanyContext()?.avatars[id];
+  const [loaded, setLoaded] = useState(false);
   const base = `/api/avatars/${encodeURIComponent(id)}`;
   const src = record?.imageVersion ? `${base}?v=${encodeURIComponent(record.imageVersion)}` : seed ? dicebearUrl(kind, seed) : base;
+  const initial = name.trim()[0]?.toUpperCase() ?? "?";
   return <Avatar size={size} shape={record?.shape ?? AVATAR_DEFAULTS[kind].shape}>
-    <AvatarImage src={src} alt={`${name} avatar`} />
-    <AvatarFallback>{name[0]?.toUpperCase() ?? "?"}</AvatarFallback>
+    <AvatarImage src={src} alt={`${name} avatar`} onLoadingStatusChange={status => setLoaded(status === "loaded")} />
+    <AvatarFallback>{initial}</AvatarFallback>
+    {loaded && AVATAR_DEFAULTS[kind].initial && !record?.imageVersion ? <span aria-hidden="true" className={`absolute inset-0 grid place-items-center font-medium text-black ${INITIAL_SIZE[size]}`}>{initial}</span> : null}
   </Avatar>;
 }
 

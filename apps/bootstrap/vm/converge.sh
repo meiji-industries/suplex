@@ -44,6 +44,8 @@ else
 fi
 
 step "apt: public mirrors, gh"
+# First boot runs apt (cloud-init, unattended upgrades); wait for its lock instead of failing.
+echo 'DPkg::Lock::Timeout "600";' > /etc/apt/apt.conf.d/99lock-wait
 # Hetzner's apt mirror answers only from inside Hetzner (not through an exit node); a no-op elsewhere.
 sed -i "s|https\?://mirror.hetzner.com/ubuntu/packages|http://archive.ubuntu.com/ubuntu|g; s|https\?://mirror.hetzner.com/ubuntu/security|http://security.ubuntu.com/ubuntu|g" /etc/apt/sources.list.d/*.sources 2>/dev/null || true
 command -v gh >/dev/null || { apt-get update -qq && apt-get install -y -qq gh >/dev/null; }

@@ -11,6 +11,7 @@ export const HEALTH_CHECK_IDS = [
   "git",
   "herdr-readiness",
   "gh-auth",
+  "gh-cli",
   "pnpm",
   "tailscale",
   "backup",

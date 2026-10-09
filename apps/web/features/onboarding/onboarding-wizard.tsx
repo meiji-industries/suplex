@@ -181,8 +181,8 @@ export function OnboardingView(): ReactElement {
           <div className="flex items-center gap-3">
             {check || !loading ? <ToolIcon tool={id} /> : <Skeleton className="size-4 shrink-0" />}
             <div className="min-w-0 flex-1">
-              <span className="text-sm font-medium">{id === "git" ? "Git" : id === "gh-auth" ? "GitHub" : "Herdr"}</span>{" "}
-              <span className="text-xs text-muted-foreground">{id === "git" ? "for source control" : id === "gh-auth" ? "for branches, pull requests, and merges" : "runs your agents in the background"}</span>
+              <span className="text-sm font-medium">{id === "git" ? "Git" : id === "gh-auth" ? "GitHub App" : id === "gh-cli" ? "GitHub CLI" : "Herdr"}</span>{" "}
+              <span className="text-xs text-muted-foreground">{id === "git" ? "for source control" : id === "gh-auth" ? "for branches, pull requests, and merges" : id === "gh-cli" ? "lets agents read pull requests and checks" : "runs your agents in the background"}</span>
               <div className="text-xs text-muted-foreground">
                 {loading ? <div aria-label="Check in progress">
                   {id !== "herdr-readiness" ? <Skeleton className="h-4 w-32" /> : null}
@@ -220,7 +220,7 @@ export function OnboardingView(): ReactElement {
         <p className="font-mono text-xs tracking-widest text-muted-foreground">PLAN. BUILD. REVIEW. SHIP.</p>
       </div>
     </div>;
-  const continueDisabled = saving || (current === "company" ? !user || !name.trim() || !code.trim() || !profile.displayName.trim() || !profile.username.trim() : current === "tools" ? !state.checks.some(check => check.id === "gh-auth" && check.status === "healthy") : current === "providers" ? connected.length === 0 : current === "projects" ? state.projects.length === 0 : current === "plan" ? loading || !companyId || Boolean(loadError) : false);
+  const continueDisabled = saving || (current === "company" ? !user || !name.trim() || !code.trim() || !profile.displayName.trim() || !profile.username.trim() : current === "tools" ? !["gh-auth", "gh-cli"].every(id => state.checks.some(check => check.id === id && check.status === "healthy")) : current === "providers" ? connected.length === 0 : current === "projects" ? state.projects.length === 0 : current === "plan" ? loading || !companyId || Boolean(loadError) : false);
   const heading = current === "company" ? "Add your details" : current === "tools" ? "Check the host tools" : current === "providers" ? "Connect your accounts" : current === "agents" ? "Your team" : current === "projects" ? "Add a project" : current === "plan" ? "Select your plan" : "Onboarding complete";
   const description = current === "company" ? "Review your details, then add your company."
     : current === "tools" ? "Suplex uses tools on your machine to get work done for you"

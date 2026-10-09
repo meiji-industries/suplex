@@ -12,7 +12,7 @@ export type ApiProfile = ProfileResponse;
 export type ApiProject = ProjectResponse;
 export type OnboardingStepId = "company" | "tools" | "providers" | "agents" | "projects" | "plan" | "done";
 
-export const ONBOARDING_TOOL_CHECKS: readonly (HealthCheck["id"] & ToolIconId)[] = ["git", "gh-auth", "herdr-readiness"];
+export const ONBOARDING_TOOL_CHECKS: readonly (HealthCheck["id"] & ToolIconId)[] = ["git", "gh-auth", "gh-cli", "herdr-readiness"];
 
 export const ONBOARDING_STEPS: readonly { id: OnboardingStepId; label: string }[] = [
   { id: "company", label: "Profile" },

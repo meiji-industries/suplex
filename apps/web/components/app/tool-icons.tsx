@@ -1,6 +1,7 @@
 export const toolIcons = {
   git: { label: "Git", src: new URL("./tool-icons/git.svg", import.meta.url).href, render: "mask", color: "#F05032" },
   "gh-auth": { label: "GitHub", src: new URL("./tool-icons/github.svg", import.meta.url).href, render: "mask", color: undefined },
+  "gh-cli": { label: "GitHub CLI", src: new URL("./tool-icons/github.svg", import.meta.url).href, render: "mask", color: undefined },
   bitbucket: { label: "Bitbucket", src: new URL("./tool-icons/bitbucket.svg", import.meta.url).href, render: "mask", color: undefined },
   jira: { label: "Jira", src: new URL("./tool-icons/jira.svg", import.meta.url).href, render: "mask", color: undefined },
   linear: { label: "Linear", src: new URL("./tool-icons/linear.svg", import.meta.url).href, render: "mask", color: undefined },

@@ -281,43 +281,92 @@ fn git_check() -> Value {
     )
 }
 
+/// The GitHub CLI sign-in on the host. Agents run read-only `gh` commands with it.
+async fn github_cli_check() -> Value {
+    let label = "GitHub CLI";
+    let environment = std::env::vars().collect();
+    let home = crate::profiles::agent_profiles::home_directory();
+    let installed = crate::runtimes::task_harness::resolve_executable(
+        &crate::runtimes::task_harness::GH_EXECUTABLE,
+        None,
+        &environment,
+        home.as_deref(),
+    )
+    .is_ok();
+    let mut result = match github::installed_gh_token().await {
+        Ok(Some(_)) => check(
+            "gh-cli",
+            label,
+            "healthy",
+            "GitHub CLI is signed in",
+            json!({"status":"connected"}),
+        ),
+        _ if !installed => check(
+            "gh-cli",
+            label,
+            "warning",
+            "GitHub CLI is not installed",
+            json!({"status":"missing"}),
+        ),
+        _ => check(
+            "gh-cli",
+            label,
+            "warning",
+            "Sign in to the GitHub CLI",
+            json!({"status":"sign_in_required"}),
+        ),
+    };
+    if result["status"] != "healthy" {
+        result["remedy"] = json!(if installed {
+            "gh auth login"
+        } else {
+            "https://cli.github.com"
+        });
+        result["remedyKind"] = json!(if installed { "command" } else { "link" });
+    }
+    result
+}
+
 async fn github_check() -> Value {
     match github::Access::load().await {
-        Ok(access) if access.token().is_some() => match access.current_user_login().await {
-            Ok(login) => check(
-                "gh-auth",
-                "GitHub",
-                "healthy",
-                "GitHub is connected",
-                json!({"method":"device","source":access.source().as_str(),"status":"connected","logins":login}),
-            ),
-            Err(error) if matches!(error.downcast_ref::<octocrab::Error>(), Some(octocrab::Error::GitHub { source, .. }) if source.status_code.as_u16() == 401) => {
-                check(
+        // A GitHub CLI token is its own check; this row is Suplex's GitHub App sign-in.
+        Ok(access) if access.source() == github::CredentialSource::Suplex => {
+            match access.current_user_login().await {
+                Ok(login) => check(
                     "gh-auth",
-                    "GitHub",
+                    "GitHub App",
+                    "healthy",
+                    "GitHub is connected",
+                    json!({"method":"device","source":access.source().as_str(),"status":"connected","logins":login}),
+                ),
+                Err(error) if matches!(error.downcast_ref::<octocrab::Error>(), Some(octocrab::Error::GitHub { source, .. }) if source.status_code.as_u16() == 401) => {
+                    check(
+                        "gh-auth",
+                        "GitHub App",
+                        "warning",
+                        "Sign in to GitHub to use branches and pull requests",
+                        json!({"method":"device","source":access.source().as_str(),"status":"sign_in_required"}),
+                    )
+                }
+                Err(_) => check(
+                    "gh-auth",
+                    "GitHub App",
                     "warning",
-                    "Sign in to GitHub to use branches and pull requests",
-                    json!({"method":"device","source":access.source().as_str(),"status":"sign_in_required"}),
-                )
+                    "GitHub could not confirm the account",
+                    json!({"method":"device","source":access.source().as_str(),"status":"unavailable"}),
+                ),
             }
-            Err(_) => check(
-                "gh-auth",
-                "GitHub",
-                "warning",
-                "GitHub could not confirm the account",
-                json!({"method":"device","source":access.source().as_str(),"status":"unavailable"}),
-            ),
-        },
+        }
         Ok(_) => check(
             "gh-auth",
-            "GitHub",
+            "GitHub App",
             "warning",
             "Sign in to GitHub to use branches and pull requests",
             json!({"method":"device","source":"none","status":"sign_in_required"}),
         ),
         Err(_) => check(
             "gh-auth",
-            "GitHub",
+            "GitHub App",
             "warning",
             "GitHub authentication is not available",
             json!({"method":"device","source":"none","status":"unavailable"}),
@@ -376,9 +425,9 @@ pub async fn snapshot(
             ),
         )
     });
-    let github = match github_override {
-        Some(github) => github,
-        None => github_check().await,
+    let (github, github_cli) = match github_override {
+        Some(github) => (github, github_cli_check().await),
+        None => tokio::join!(github_check(), github_cli_check()),
     };
     let mut herdr = crate::integrations::herdr_readiness::check_herdr_readiness(&state.herdr).await;
     // Host terminals do not need Herdr, so a Herdr problem is only a warning.
@@ -395,6 +444,7 @@ pub async fn snapshot(
         git_check(),
         herdr,
         github,
+        github_cli,
     ];
     if state.session_config.tailscale_exposure == "serve" {
         checks.push(tailscale_check().await);

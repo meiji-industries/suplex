@@ -495,7 +495,7 @@ fn keychain_password(service: &str, account: &str) -> AccessResult<Option<String
     }
 }
 
-async fn installed_gh_token() -> AccessResult<Option<String>> {
+pub(crate) async fn installed_gh_token() -> AccessResult<Option<String>> {
     read_gh_token(tokio::process::Command::new("gh")).await
 }
 

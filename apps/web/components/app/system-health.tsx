@@ -44,6 +44,7 @@ const icons: Record<HealthCheckId, LucideIcon> = {
   git: GitBranch,
   "herdr-readiness": LayoutGrid,
   "gh-auth": GitBranch,
+  "gh-cli": GitBranch,
   pnpm: Package,
   tailscale: Network,
   backup: ShieldCheck,
@@ -65,6 +66,7 @@ export function healthCheckPurpose(id: HealthCheckId): string {
     case "git": return "Save code changes";
     case "herdr-readiness": return "Open the agent terminals";
     case "gh-auth": return "Publish pull requests";
+    case "gh-cli": return "Let agents read pull requests and checks";
     case "pnpm": return "Update Suplex";
     case "tailscale": return "Reach this host";
     case "backup": return "Recover your data";
@@ -182,6 +184,7 @@ export function healthyCheckLabel(check: HealthCheck): string {
     case "git": case "pnpm": return text("version") ?? "Healthy";
     case "herdr-readiness": return text("serverVersion") ?? "Healthy";
     case "gh-auth": return text("logins") ?? "Healthy";
+    case "gh-cli": return "Signed in";
     case "tailscale": return text("hostname") ?? "Healthy";
     case "backup": return verifiedAt && verifiedAt !== "never" ? relativeTime(verifiedAt) : "Healthy";
     case "provider:opencode": case "provider:claude-code": case "provider:codex": return text("account") ?? "Signed in";

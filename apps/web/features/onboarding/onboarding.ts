@@ -70,7 +70,6 @@ export async function startTrialIfAvailable(): Promise<boolean> {
   return true;
 }
 
-export function onboardingPath(companyId?: string): string { return withCompany("/onboarding", companyId); }
 export function onboardingSettingsPath(companyId?: string): string { return withCompany("/admin/onboarding", companyId); }
 
 export type OnboardingData = { state: OnboardingState; loading: boolean; error: string; reload: () => Promise<void> };

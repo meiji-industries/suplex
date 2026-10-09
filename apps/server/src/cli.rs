@@ -146,9 +146,10 @@ fn recover(arguments: &[String]) -> CliResult {
     let metadata = json!({"initiationMethod":"local-cli","installationId":installation.installation_id,"confirmedAt":Utc::now().to_rfc3339()}).to_string();
     let token =
         crate::identity::auth::issue_recovery_invitation(&mut database, &metadata, Utc::now())?;
+    let origin = crate::identity::remote_access_repository::external_https_origin(&database)?
+        .unwrap_or(installation.reachable_address);
     println!(
-        "Recovery link (shown once, works once, expires in 72 hours):\n{}/auth?mode=recovery&invite={token}\nOpen it from any browser that reaches this host and log in. That account becomes this host's owner.",
-        installation.reachable_address
+        "Recovery link (shown once, works once, expires in 72 hours):\n{origin}/auth?mode=recovery&invite={token}\nOpen it from any browser that reaches this host and log in. That account becomes this host's owner."
     );
     Ok(0)
 }

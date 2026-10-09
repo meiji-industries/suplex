@@ -307,7 +307,7 @@ fn command(cmd: Cmd, cfg: Config) -> Result<()> {
             &[],
         ),
         Cmd::Recover => {
-            let link = recover(&host)?;
+            let link = recover(&host, &cfg)?;
             println!("{link}");
             Ok(())
         }
@@ -882,13 +882,7 @@ fn converge(cfg: &mut Config) -> Result<()> {
         _ => suplex_url(&fqdn(&host)?, &port),
     };
     if recover_link {
-        let mut link = recover(&host)?;
-        if access == "cloudflare" {
-            // The host prints its loopback address; browsers reach it through the tunnel.
-            if let Some(path) = link.find("/auth") {
-                link = format!("https://{}{}", cfg.get("DOMAIN"), &link[path..]);
-            }
-        }
+        let link = recover(&host, cfg)?;
         note(
             style("Sign in as the owner").magenta().bold(),
             format!(
@@ -1123,13 +1117,20 @@ fn fqdn(host: &Host) -> Result<String> {
         .to_string())
 }
 
-fn recover(host: &Host) -> Result<String> {
+/// A fresh recovery link on the origin browsers use. The host may print its loopback
+/// address, which only works through an SSH tunnel.
+fn recover(host: &Host, cfg: &Config) -> Result<String> {
     let output = host.capture(&as_suplex("suplex recover --confirm-recovery"))?;
-    output
+    let (link, path) = output
         .split_whitespace()
-        .find(|word| word.starts_with("https://"))
-        .map(str::to_string)
-        .with_context(|| format!("suplex recover printed no link:\n{output}"))
+        .find_map(|word| word.find("/auth?").map(|at| (word, &word[at..])))
+        .with_context(|| format!("suplex recover printed no link:\n{output}"))?;
+    let origin = match cfg.get("ACCESS") {
+        "cloudflare" => format!("https://{}", cfg.get("DOMAIN")),
+        "tailscale" => suplex_url(&fqdn(host)?, cfg.get("SUPLEX_PORT")),
+        _ => return Ok(link.to_string()),
+    };
+    Ok(format!("{origin}{path}"))
 }
 
 #[cfg(test)]

@@ -1,18 +1,23 @@
-/* From apps/desktop/src/pages/pages.css and choice.html, sized for a phone. */
-body { margin: 0; min-height: 100dvh; background: #0a0a0a; color: #e5e5e5; font: 13px/1.5 -apple-system, system-ui, sans-serif; padding: calc(48px + env(safe-area-inset-top)) 16px 32px; box-sizing: border-box; }
-main { max-width: 480px; margin: 0 auto; }
+/* The Suplex launch look (apps/desktop/src/pages), sized for a phone. */
+@font-face { font-family: "Geist Mono"; src: url("fonts/GeistMono-Variable.woff2") format("woff2"); font-weight: 100 900; font-display: block; }
+@font-face { font-family: "Inter Tight"; src: url("fonts/InterTight-Variable.woff2") format("woff2"); font-weight: 100 900; font-display: block; }
+body { margin: 0; min-height: 100dvh; background: #0a0a0a; color: #ededed; font: 17px/1.4 "Inter Tight", system-ui, sans-serif; box-sizing: border-box; padding: calc(48px + env(safe-area-inset-top)) 24px calc(24px + env(safe-area-inset-bottom)); }
+main { max-width: 480px; min-height: calc(100dvh - 72px - env(safe-area-inset-top) - env(safe-area-inset-bottom)); margin: 0 auto; }
 h1, p { margin: 0; }
-h1 { font-size: 14px; font-weight: 600; margin-bottom: 20px; }
-form { display: grid; gap: 8px; }
-label { font-size: 13px; font-weight: 600; }
-p { color: #a3a3a3; font-size: 12px; }
-#error { color: #f87171; }
+form { display: flex; flex-direction: column; min-height: inherit; }
+.mark { display: block; width: 96px; height: auto; margin-bottom: 40px; }
+h1 { font-size: 32px; font-weight: 500; line-height: 1.15; letter-spacing: -0.01em; }
+.lede { margin-top: 8px; font-size: 18px; color: #a3a3a3; }
+.eyebrow { margin: 40px 0 8px; font: 12px/normal "Geist Mono", ui-monospace, monospace; letter-spacing: 0.12em; text-transform: uppercase; color: #8a8a8a; }
+.field { display: grid; gap: 12px; padding: 20px 16px 16px; border: 1px solid #262626; border-radius: 16px; background: #111; }
+label { font-size: 16px; font-weight: 500; }
+.hint { margin-top: 16px; color: #a3a3a3; font-size: 16px; }
+#error { margin-top: 12px; color: #f87171; font-size: 15px; }
 #error:empty { display: none; }
-.input-group { display: flex; align-items: center; height: 36px; border: 1px solid oklch(1 0 0 / 15%); border-radius: 9999px; background: oklch(1 0 0 / 4.5%); }
-.input-group:has(:focus-visible) { border-color: oklch(0.556 0 0); box-shadow: 0 0 0 3px oklch(0.556 0 0 / 50%); }
-.input-group input { flex: 1; font: 16px/1.5 -apple-system, system-ui, sans-serif; height: 100%; min-width: 0; padding: 0 12px; border: 0; background: none; color: inherit; outline: none; }
-.input-group input::placeholder { color: oklch(0.708 0 0); }
-.actions { display: flex; justify-content: flex-end; margin-top: 16px; }
-button { font: inherit; display: inline-flex; align-items: center; justify-content: center; min-height: 32px; padding: 0 12px; border: 1px solid #e5e5e5; border-radius: 5px; background: #e5e5e5; color: #171717; }
+.input-group { display: flex; align-items: center; height: 44px; border: 1px solid #2e2e2e; border-radius: 12px; background: #171717; }
+.input-group:has(:focus-visible) { border-color: #d8f65c; }
+.input-group input { flex: 1; font: 16px/1.5 "Inter Tight", system-ui, sans-serif; height: 100%; min-width: 0; padding: 0 16px; border: 0; background: none; color: inherit; outline: none; }
+.input-group input::placeholder { color: #6f6f6f; }
+button { margin-top: auto; font: 600 18px/1 "Inter Tight", system-ui, sans-serif; height: 56px; border: 0; border-radius: 9999px; background: #d8f65c; color: #0a0a0a; }
 button:disabled { opacity: 0.5; }
-button:focus-visible { outline: 2px solid #a3a3a3; outline-offset: 3px; }
+button:focus-visible { outline: 2px solid #ededed; outline-offset: 3px; }

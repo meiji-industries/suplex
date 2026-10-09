@@ -8,13 +8,20 @@
 </head>
 <body>
 <main>
-  <h1>Select a Suplex host</h1>
   <form id="picker" novalidate>
-    <label for="host">Host address</label>
-    <div class="input-group"><input id="host" name="host" type="url" inputmode="url" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="https://studio.tail1234.ts.net" required></div>
-    <p>Your phone must reach the host. If the host uses Tailscale, start Tailscale on this phone.</p>
+    <header>
+      <img class="mark" src="wordmark.svg" alt="Suplex">
+      <h1>Connect to your host.</h1>
+      <p class="lede">Enter the address of the Mac running Suplex.</p>
+    </header>
+    <p class="eyebrow">Suplex host</p>
+    <div class="field">
+      <label for="host">Host address</label>
+      <div class="input-group"><input id="host" name="host" type="url" inputmode="url" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="https://studio.tail1234.ts.net" required></div>
+    </div>
+    <p class="hint">Your phone needs to reach this Mac. If it uses Tailscale, turn on Tailscale on this phone first.</p>
     <p id="error" role="alert"></p>
-    <div class="actions"><button id="connect" class="primary" type="submit">Continue</button></div>
+    <button id="connect" class="primary" type="submit">Continue</button>
   </form>
 </main>
 <script src="picker.js"></script>

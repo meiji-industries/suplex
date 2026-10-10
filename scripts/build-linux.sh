@@ -15,7 +15,7 @@ esac
 version="$(node -p "require('./package.json').version")"
 out="dist/linux/$arch"
 tarball="suplex-$version-linux-$arch.tar.gz"
-commit="$(git rev-parse HEAD)$([ -z "$(git status --porcelain)" ] || echo -dirty)"
+commit="$(sh scripts/release-base.sh)"
 # A release rerun keeps a pack of this same commit instead of building it again.
 if [ -n "${SUPLEX_DESKTOP_REUSE:-}" ] && [ -f "$out/$tarball" ] && [ "$(cat "$out/.commit" 2>/dev/null)" = "$commit" ]; then
   echo "$out/$tarball is already built from $commit; skipping"

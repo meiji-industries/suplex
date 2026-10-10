@@ -81,7 +81,7 @@ else
   echo "Authenticode signing is off: Windows shows Suplex as an unknown publisher. Set the six AZURE_* values to sign." >&2
 fi
 
-commit="$(git rev-parse HEAD)$([ -z "$(git status --porcelain)" ] || echo -dirty)"
+commit="$(sh scripts/release-base.sh)"
 for arch in ${SUPLEX_WINDOWS_ARCHES:-arm64 x64}; do
   case "$arch" in arm64) target=aarch64-pc-windows-msvc ;; x64) target=x86_64-pc-windows-msvc ;; *) echo "SUPLEX_WINDOWS_ARCHES holds arm64 and x64, not $arch" >&2; exit 1 ;; esac
   feed=""
@@ -126,6 +126,6 @@ NODE
   vm_ssh "if not exist S:\\suplex\\test mkdir S:\\suplex\\test"
   vm_put "$release/Suplex-$version-windows-$arch-setup.exe" "S:/suplex/test/setup.exe"
   vm_ssh "powershell -NoProfile -ExecutionPolicy Bypass -File S:\\suplex\\windows\\test-packaged.ps1 -Feed \"$feed\"${sign_command:+ -Signed}"
-  printf '%s%s\n' "$(git rev-parse HEAD)" "$([ -z "$(git status --porcelain)" ] || echo -dirty)" > "$release/.commit"
+  printf '%s\n' "$(sh scripts/release-base.sh)" > "$release/.commit"
   SUPLEX_DESKTOP_PLATFORM=windows SUPLEX_DESKTOP_ARCH="$arch" SUPLEX_DESKTOP_FEED="$feed" sh apps/desktop/scripts/finish-platform-release.sh
 done

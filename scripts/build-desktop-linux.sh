@@ -27,7 +27,7 @@ mode="${1:-build}"
 [ "$mode" = --check ] || pnpm --filter suplex-web build
 # The checkout and its Git directory keep their host paths, so build.rs can stamp the revision.
 common="$(git rev-parse --path-format=absolute --git-common-dir)"
-commit="$(git rev-parse HEAD)$([ -z "$(git status --porcelain)" ] || echo -dirty)"
+commit="$(sh scripts/release-base.sh)"
 . scripts/linux-builder.sh
 for arch in ${SUPLEX_LINUX_ARCHES:-arm64 x64}; do
   case "$arch" in arm64) platform=linux/arm64 ;; x64) platform=linux/amd64 ;; *) echo "SUPLEX_LINUX_ARCHES holds arm64 and x64, not $arch" >&2; exit 1 ;; esac

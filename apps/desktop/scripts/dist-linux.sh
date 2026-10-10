@@ -54,6 +54,6 @@ if [ -n "${SUPLEX_DESKTOP_UPDATER_PUBKEY:-}" ]; then
   grep -aqF "$SUPLEX_DESKTOP_UPDATER_PUBKEY" "$extracted/usr/bin/Suplex" || { echo "The built app does not hold SUPLEX_DESKTOP_UPDATER_PUBKEY." >&2; exit 1; }
   rm -rf "$extracted"
 fi
-printf '%s%s\n' "$(git rev-parse HEAD)" "$([ -z "$(git status --porcelain)" ] || echo -dirty)" > "$release/.commit"
+printf '%s\n' "$(sh ../../scripts/release-base.sh)" > "$release/.commit"
 echo "Built $release:"
 ls -1 "$release"

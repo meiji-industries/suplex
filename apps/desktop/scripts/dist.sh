@@ -120,7 +120,7 @@ NODE
 fi
 
 # The commit this release was built from; dist-signed.sh reuses a stapled release only from the same commit.
-printf '%s%s\n' "$(git rev-parse HEAD)" "$([ -z "$(git status --porcelain)" ] || echo -dirty)" > "$release/.commit"
+printf '%s\n' "$(sh ../../scripts/release-base.sh)" > "$release/.commit"
 
 echo "Built $release:"
 ls -1 "$release"

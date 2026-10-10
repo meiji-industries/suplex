@@ -20,7 +20,7 @@ version="$(node -p "require('./package.json').version")"
 release="release/$arch"
 dmg="$release/Suplex-$version-$arch.dmg"
 # A rerun after a later failure keeps a release that is already notarized and stapled, when it was built from this commit.
-commit="$(git rev-parse HEAD)$([ -z "$(git status --porcelain)" ] || echo -dirty)"
+commit="$(sh ../../scripts/release-base.sh)"
 if xcrun stapler validate -q "$dmg" 2>/dev/null && [ "$(cat "$release/.commit" 2>/dev/null)" = "$commit" ]; then
   echo "$dmg is already stapled; skipping"
   SUPLEX_REQUIRE_UPDATER=1 SUPLEX_DESKTOP_ARCH="$arch" sh scripts/verify-release.sh

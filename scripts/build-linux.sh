@@ -15,6 +15,12 @@ esac
 version="$(node -p "require('./package.json').version")"
 out="dist/linux/$arch"
 tarball="suplex-$version-linux-$arch.tar.gz"
+commit="$(git rev-parse HEAD)$([ -z "$(git status --porcelain)" ] || echo -dirty)"
+# A release rerun keeps a pack of this same commit instead of building it again.
+if [ -n "${SUPLEX_DESKTOP_REUSE:-}" ] && [ -f "$out/$tarball" ] && [ "$(cat "$out/.commit" 2>/dev/null)" = "$commit" ]; then
+  echo "$out/$tarball is already built from $commit; skipping"
+  exit 0
+fi
 pnpm --filter suplex-web build
 rm -rf "$out"
 mkdir -p "$out"
@@ -38,4 +44,5 @@ rm "$out/suplex"
 sha="$(shasum -a 256 "$out/$tarball" | cut -d' ' -f1)"
 printf '%s  %s\n' "$sha" "$tarball" > "$out/$tarball.sha256"
 printf 'version: %s\nfiles:\n  - url: %s\n    sha256: %s\n' "$version" "$tarball" "$sha" > "$out/latest-linux.yml"
+printf '%s\n' "$commit" > "$out/.commit"
 echo "Built $out/$tarball"

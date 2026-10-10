@@ -430,7 +430,7 @@ run = "RELEASE_BUMP=patch mise run _release:run"
 [tasks."_release:run"]
 hide = true
 description = "Run the desktop and Linux release pipeline"
-run = "mise run _release:check && mise run _1password:setup && mise run _release:bump && mise run desktop:dist:signed && mise run server:dist:linux && mise run _release:desktop:platforms && mise run _release:commit && mise run _release:publish"
+run = "mise run _release:check && mise run _1password:setup && mise run _release:bump && mise run desktop:dist:signed && SUPLEX_DESKTOP_REUSE=1 mise run server:dist:linux && mise run _release:desktop:platforms && mise run _release:commit && mise run _release:publish"
 
 [tasks."_release:check"]
 hide = true

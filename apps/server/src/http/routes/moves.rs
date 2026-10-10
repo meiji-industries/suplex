@@ -21,6 +21,7 @@ use crate::{
         session,
         validation::{Valid, ValidPath},
     },
+    identity::companies,
     moves,
     platform::database::SuplexDatabase,
 };
@@ -313,9 +314,11 @@ async fn terminal(
         Err(response) => return *response,
     };
     let id = moves::shell::terminal_id(&run_id);
-    let allowed = state
-        .with_database(|database| moves::get_run(database, &user_id, &run_id))
-        .is_ok();
+    // A run terminal is an interactive host shell, so only an admin attaches.
+    let allowed = state.with_database(|database| {
+        companies::require_admin(database, &user_id).is_ok()
+            && moves::get_run(database, &user_id, &run_id).is_ok()
+    });
     let mut response = upgrade.on_upgrade(move |mut socket| async move {
         let viewer =
             if !origin_allowed(&headers, &state.session_config.reachable_address) || !allowed {

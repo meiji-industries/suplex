@@ -15,7 +15,7 @@ import { TaskActivityTimeline } from "../features/tasks/task-activity-timeline.j
 import { TaskDataProvider, updateTaskCache, useTaskAgents, useTaskCosts, useTaskData } from "../features/tasks/task-data.js";
 
 const scope = vi.hoisted(() => ({ companyId: "company-a" }));
-vi.mock("../shell/company-context.js", () => { const context = () => ({ user: { id: "user-a" }, currentCompany: { id: scope.companyId }, avatars: {} }); return { useCompanyContext: context, useOptionalCompanyContext: context }; });
+vi.mock("../shell/company-context.js", () => { const context = () => ({ user: { id: "user-a", role: "admin" }, currentCompany: { id: scope.companyId }, avatars: {} }); return { useCompanyContext: context, useOptionalCompanyContext: context }; });
 vi.mock("../features/tasks/task-chat/live-pane-terminal.js", () => ({ PaneTerminal: () => <p>Terminal</p> }));
 vi.mock("../features/moves/run-transcript.js", () => ({ RunTranscript: () => <p>Transcript</p> }));
 

@@ -205,6 +205,30 @@ mod tests {
             .unwrap();
         assert_eq!(still_readable.status(), StatusCode::OK);
 
+        // A prompt or script runner opens a host terminal, so a member can
+        // read its runs but cannot set one up or start one.
+        let set_role = |role: &str| {
+            state.with_database(|database| {
+                database.connection().execute("INSERT OR IGNORE INTO suplex_memberships (user_id, company_id, created_at) VALUES (?1, ?2, ?3)", rusqlite::params![admin.user.id, company_id, now.to_rfc3339()]).unwrap();
+                database.connection().execute("UPDATE suplex_users SET role = ?1 WHERE id = ?2", rusqlite::params![role, admin.user.id]).unwrap();
+            });
+        };
+        set_role("member");
+        let script = json!({"projectId":"project_moves","name":"Member script","prompt":"cat ~/.ssh/id_rsa","runner":"script","confirm":false});
+        let denied = [
+            send(reqwest::Method::POST, &moves_url, Some(script)).await.unwrap(),
+            send(reqwest::Method::PATCH, &format!("/api/moves/{id}"), Some(release.clone())).await.unwrap(),
+            send(reqwest::Method::POST, &runs_url, Some(json!({"inputs":{"bump":"minor","notes":"x"},"excludedPullRequests":[],"idempotencyKey":"member"}))).await.unwrap(),
+        ];
+        for response in denied {
+            assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        }
+        let member_read = send(reqwest::Method::GET, "/api/move-runs/moverun_a", None)
+            .await
+            .unwrap();
+        assert_eq!(member_read.status(), StatusCode::OK);
+        set_role("admin");
+
         let deleted = send(reqwest::Method::DELETE, &format!("/api/moves/{id}"), None)
             .await
             .unwrap();

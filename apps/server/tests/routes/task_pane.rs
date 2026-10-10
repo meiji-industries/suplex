@@ -556,4 +556,18 @@ pub(crate) mod tests {
         );
         let _ = std::fs::remove_dir_all(&fixture.root);
     }
+
+    #[tokio::test]
+    async fn only_an_admin_opens_the_shell_and_a_member_still_observes() {
+        let fixture = fixture();
+        fixture.execute("UPDATE suplex_users SET role = 'member'", &[]);
+        fixture.execute("INSERT OR IGNORE INTO suplex_memberships (user_id, company_id, created_at) VALUES ('user_development', 'pane_company', '2026-01-01T00:00:00Z')", &[]);
+        let address = fixture.serve().await;
+        let headers = [("cookie", fixture.cookie.as_str())];
+        let shell = format!("/api/tasks/{}/pane/shell/terminal?cols=80&rows=24", fixture.task_id);
+        let root = format!("/api/tasks/{}/pane/root/terminal?cols=80&rows=24", fixture.task_id);
+        assert_eq!(connect(address, &shell, &headers).await.0, 403);
+        assert_eq!(connect(address, &root, &headers).await.0, 101);
+        let _ = std::fs::remove_dir_all(&fixture.root);
+    }
 }

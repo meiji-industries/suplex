@@ -184,4 +184,35 @@ mod tests {
         assert_eq!(audits(), 1);
         let _ = std::fs::remove_dir_all(&fixture.root);
     }
+
+    #[tokio::test]
+    async fn only_an_admin_lists_or_opens_worktree_apps() {
+        let fixture = fixture();
+        fixture.execute("UPDATE suplex_users SET role = 'member'", &[]);
+        fixture.execute("INSERT OR IGNORE INTO suplex_memberships (user_id, company_id, created_at) VALUES ('user_development', 'pane_company', '2026-01-01T00:00:00Z')", &[]);
+        let address = fixture.serve().await;
+        let client = reqwest::Client::new();
+        let base = format!("http://{address}/api/tasks/{}/worktree", fixture.task_id);
+        let apps = client
+            .get(format!("{base}/apps"))
+            .header("host", "127.0.0.1:4113")
+            .header("cookie", &fixture.cookie)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(apps.status(), 403);
+        let open = client
+            .post(format!("{base}/open"))
+            .header("host", "127.0.0.1:4113")
+            .header("origin", "http://127.0.0.1:4113")
+            .header("cookie", &fixture.cookie)
+            .json(&json!({"app":"finder"}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(open.status(), 403);
+        let error = open.json::<Value>().await.unwrap();
+        assert_eq!(error["error"], "Administrator access required");
+        let _ = std::fs::remove_dir_all(&fixture.root);
+    }
 }

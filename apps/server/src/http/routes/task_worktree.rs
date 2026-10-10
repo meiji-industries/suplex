@@ -71,7 +71,7 @@ async fn apps(
     headers: HeaderMap,
     extensions: Extensions,
 ) -> Response {
-    let (user_id, cookies) = match authorize(&state, &headers, "GET", false) {
+    let (user_id, cookies) = match authorize(&state, &headers, "GET", true) {
         Ok(value) => value,
         Err(response) => return *response,
     };
@@ -135,7 +135,7 @@ pub(crate) async fn open_with(
         Ok(body) => body.app,
         Err(response) => return *response,
     };
-    let (user_id, cookies) = match authorize(&state, &headers, "POST", false) {
+    let (user_id, cookies) = match authorize(&state, &headers, "POST", true) {
         Ok(value) => value,
         Err(response) => return *response,
     };

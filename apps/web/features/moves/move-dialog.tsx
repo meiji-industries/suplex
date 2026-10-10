@@ -24,6 +24,7 @@ import { createMove, deleteMove, listProfiles, updateMove } from "./lib/move-api
 import { Textarea } from "../../components/ui/textarea.js";
 import { PlaceholdersHelp } from "./placeholders-help.js";
 import { ScriptEditor } from "./prompt-editor.js";
+import { useOptionalCompanyContext } from "../../shell/company-context.js";
 
 export const runnerLabels = { prompt: "Prompt", script: "Shell script", pull_request_tasks: "Each pull request", task: "Task" } as const;
 
@@ -50,6 +51,9 @@ const placeholders = {
   task: "Write a description",
 } as const;
 
+/** Prompt and script runners open a host terminal, so only an admin can choose them. */
+const memberRunnerOptions = runnerOptions.filter(option => option.value === "pull_request_tasks" || option.value === "task");
+
 export function MoveDialog({ companyId, projects, move, open, onOpenChange, onSaved, onDeleted }: {
   companyId: string;
   projects: ApiProject[];
@@ -59,19 +63,20 @@ export function MoveDialog({ companyId, projects, move, open, onOpenChange, onSa
   onSaved: (move: MoveResponse) => void;
   onDeleted: (moveId: string) => void;
 }): ReactElement {
-  const [draft, setDraft] = useState<MoveBody>(() => blank(projects));
+  const admin = useOptionalCompanyContext()?.user?.role === "admin";
+  const [draft, setDraft] = useState<MoveBody>(() => blank(projects, admin));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [deleting, setDeleting] = useState(false);
   const [profiles, setProfiles] = useState<ApiProfile[]>([]);
   useEffect(() => {
     if (!open) return;
-    setDraft(move ? { projectId: move.projectId, name: move.name, prompt: move.prompt, runner: move.runner, profileId: move.profileId, confirm: move.confirm, workflow: move.workflow, deliveryTarget: move.deliveryTarget, runProjectTests: move.runProjectTests, visualEvidence: move.visualEvidence } : blank(projects));
+    setDraft(move ? { projectId: move.projectId, name: move.name, prompt: move.prompt, runner: move.runner, profileId: move.profileId, confirm: move.confirm, workflow: move.workflow, deliveryTarget: move.deliveryTarget, runProjectTests: move.runProjectTests, visualEvidence: move.visualEvidence } : blank(projects, admin));
     setError("");
     let current = true;
     listProfiles().then(next => { if (current) setProfiles(next); }, () => { if (current) setProfiles([]); });
     return () => { current = false; };
-  }, [open, move, projects]);
+  }, [open, move, projects, admin]);
   const set = <Key extends keyof MoveBody>(key: Key, value: MoveBody[Key]): void => setDraft(current => ({ ...current, [key]: value }));
   const project = projects.find(candidate => candidate.id === draft.projectId);
   const connection = project?.integration?.repository;
@@ -115,7 +120,7 @@ export function MoveDialog({ companyId, projects, move, open, onOpenChange, onSa
             <div className="flex flex-wrap items-center gap-2 p-6">
               <div className="-m-1 max-w-full overflow-x-auto p-1">
                 <ButtonGroup aria-label="Move options">
-                  <TaskOptionFilter prefix="Run" label="Run" value={draft.runner} disabled={busy} options={runnerOptions} onValueChange={value => setDraft(current => withRunner(current, MoveRunnerSchema.parse(value), profiles))} />
+                  <TaskOptionFilter prefix="Run" label="Run" value={draft.runner} disabled={busy} options={admin ? runnerOptions : memberRunnerOptions} onValueChange={value => setDraft(current => withRunner(current, MoveRunnerSchema.parse(value), profiles))} />
                   {draft.runner === "task" ? <>
                     <TaskOptionFilter prefix="using" label="Workflow" value={draft.workflow ?? "standard"} disabled={busy} options={workflowOptions} onValueChange={value => set("workflow", WorkflowIdSchema.parse(value))} />
                     <TaskChecksOption runProjectTests={draft.runProjectTests ?? true} visualEvidence={draft.visualEvidence ?? "off"} verificationCommand={project?.verificationCommand} disabled={busy} onChange={checks => setDraft(current => ({ ...current, ...checks }))} />
@@ -151,8 +156,8 @@ function withRunner(draft: MoveBody, runner: MoveBody["runner"], profiles: ApiPr
 
 const taskDefaults = { workflow: "standard", deliveryTarget: "pull_request_ready", runProjectTests: true, visualEvidence: "off" } as const;
 
-function blank(projects: ApiProject[]): MoveBody {
-  return { projectId: projects[0]?.id ?? "", name: "", prompt: "", runner: "prompt", profileId: null, confirm: false, ...taskDefaults };
+function blank(projects: ApiProject[], admin: boolean): MoveBody {
+  return { projectId: projects[0]?.id ?? "", name: "", prompt: "", runner: admin ? "prompt" : "task", profileId: null, confirm: false, ...taskDefaults };
 }
 
 /** Asks before it deletes a move and its run history. */

@@ -547,6 +547,19 @@ fn accessible(
     Ok((stored, project))
 }
 
+/// Prompt and script runners open an interactive host terminal, which can
+/// read any repository on the host, so only an admin can set up or run one.
+fn require_terminal_runner_admin(
+    database: &SuplexDatabase,
+    user_id: &str,
+    runner: MoveRunner,
+) -> Result<(), Box<dyn Error + Send + Sync>> {
+    if matches!(runner, MoveRunner::Prompt | MoveRunner::Script) {
+        companies::require_admin(database, user_id)?;
+    }
+    Ok(())
+}
+
 fn company_project(
     database: &SuplexDatabase,
     user_id: &str,
@@ -680,6 +693,7 @@ pub fn create(
     body: MoveBody,
 ) -> Result<MoveResponse, Box<dyn Error + Send + Sync>> {
     let project = company_project(database, user_id, company_id, &body.project_id)?;
+    require_terminal_runner_admin(database, user_id, body.runner)?;
     let body = checked_body(database, &project, body)?;
     let id = random_hex_id("move")?;
     let stamp = now_millis_rfc3339();
@@ -711,6 +725,8 @@ pub fn update(
 ) -> Result<MoveResponse, Box<dyn Error + Send + Sync>> {
     let (stored, _) = accessible(database, user_id, move_id)?;
     let project = company_project(database, user_id, &stored.company_id, &body.project_id)?;
+    require_terminal_runner_admin(database, user_id, stored.runner)?;
+    require_terminal_runner_admin(database, user_id, body.runner)?;
     let body = checked_body(database, &project, body)?;
     database.transaction(false, |database| {
         name_taken(database, &body.project_id, &body.name, move_id)?;
@@ -910,7 +926,11 @@ pub async fn start(
     ));
     let (stored, project, replay) = state.with_database(|database| {
         let (stored, project) = match actor {
-            RunActor::User(user_id) => accessible(database, user_id, move_id)?,
+            RunActor::User(user_id) => {
+                let (stored, project) = accessible(database, user_id, move_id)?;
+                require_terminal_runner_admin(database, user_id, stored.runner)?;
+                (stored, project)
+            }
             RunActor::Agent(principal) => {
                 let stored = agent_stored(database, principal, move_id)?;
                 let project =

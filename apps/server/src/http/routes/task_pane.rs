@@ -199,7 +199,9 @@ async fn terminal(
         Ok(size) => size,
         Err(response) => return *response,
     };
-    let (user_id, cookies) = match authorize(&state, &headers, "GET", false) {
+    // The Shell is an interactive host shell, so only an admin gets one.
+    let shell = role == TaskPaneRole::Shell.as_str();
+    let (user_id, cookies) = match authorize(&state, &headers, "GET", shell) {
         Ok(value) => value,
         Err(response) => return *response,
     };
@@ -207,7 +209,6 @@ async fn terminal(
         if !origin_allowed(&headers, &state.session_config.reachable_address) {
             return close(&mut socket, 4403, "origin").await;
         }
-        let shell = role == TaskPaneRole::Shell.as_str();
         if state.with_database(|database| terminals::host_enabled(database)) {
             return host_terminal(socket, state, user_id, task_id, role, (cols, rows)).await;
         }

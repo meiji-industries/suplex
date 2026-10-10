@@ -10,6 +10,7 @@ import { SetupLog } from "./setup-log.js";
 import suplexMark from "../../../assets/suplex-mark.svg?inline";
 import { SessionHistory } from "./session-history.js";
 import { sessionHistoryLabels } from "./session-history-state.js";
+import { useOptionalCompanyContext } from "../../../shell/company-context.js";
 
 const LivePaneTerminal = lazy(() => import("./live-pane-terminal.js").then(module => ({ default: module.LivePaneTerminal })));
 const storageKey = "suplex.live-pane-height";
@@ -38,7 +39,9 @@ function saveHeight(height: number): void {
 export function LivePaneDock({ taskId, activity }: { taskId: string; activity: TaskActivity }) {
   const setup = activity.setup.state !== "none";
   const sessions = activity.sessions.filter(session => session.nativeSessionId || (session.current && session.paneId));
-  const shell = activity.shellPaneId || sessions.some(session => session.current) ? { id: shellTabId } : null;
+  // The Shell runs on the host and can read any repository there, so only an admin gets it.
+  const admin = useOptionalCompanyContext()?.user?.role === "admin";
+  const shell = admin && (activity.shellPaneId || sessions.some(session => session.current)) ? { id: shellTabId } : null;
   const [selectedSessionId, setSelectedSessionId] = useState<string>();
   const [view, setView] = useState<AgentOutputView>("live");
   const selected = sessions.find(session => session.id === selectedSessionId) ?? sessions.find(session => session.current && session.kind === "worker") ?? sessions.find(session => session.current) ?? sessions.at(-1);

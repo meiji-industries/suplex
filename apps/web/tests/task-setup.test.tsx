@@ -11,9 +11,11 @@ import { readTaskSetupLog } from "../features/tasks/lib/task-api.js";
 vi.mock("../features/tasks/lib/task-api.js", () => ({ readTaskSetupLog: vi.fn() }));
 vi.mock("../features/tasks/task-chat/live-pane-terminal.js", () => ({ LivePaneTerminal: () => null }));
 vi.mock("../features/tasks/task-chat/session-history.js", () => ({ SessionHistory: () => null }));
+const viewer = vi.hoisted(() => ({ role: "admin" }));
+vi.mock("../shell/company-context.js", () => ({ useOptionalCompanyContext: () => ({ user: { id: "user-a", role: viewer.role } }) }));
 
 let cleanup: (() => Promise<void>) | undefined;
-afterEach(async () => { await cleanup?.(); cleanup = undefined; vi.useRealTimers(); vi.clearAllMocks(); });
+afterEach(async () => { await cleanup?.(); cleanup = undefined; vi.useRealTimers(); vi.clearAllMocks(); viewer.role = "admin"; });
 
 async function mount(setup: TaskSetup, shellPaneId: string | null = null) {
   const container = document.createElement("div");
@@ -57,6 +59,14 @@ test("completed setup loads from disk, follows Shell, and leaves the card", asyn
   await act(async () => { tabs[1]!.click(); });
   expect(container.querySelector("pre")?.textContent).toBe("setup finished\n");
   expect(container.querySelector("[data-setup-state]")).toBeNull();
+});
+
+test("a member gets no Shell tab", async () => {
+  viewer.role = "member";
+  const setup: TaskSetup = { state: "succeeded", exitStatus: "0" };
+  vi.mocked(readTaskSetupLog).mockResolvedValue({ setup, output: "setup finished\n" });
+  const { container } = await mount(setup, "shell");
+  expect(Array.from(container.querySelectorAll('[role="tab"]'), tab => tab.textContent)).toEqual(["Setup"]);
 });
 
 test("no setup and no sessions leave the dock and card empty", async () => {

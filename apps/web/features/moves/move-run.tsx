@@ -14,6 +14,7 @@ import { useSyncLive } from "../../shell/sync.js";
 import { relativeTime, type ApiProject } from "../../shell/view-shared.js";
 import { endMoveRun, getMoveRun, moveRunTerminalPath } from "./lib/move-api.js";
 import { useShellRuns } from "./lib/move-runs.js";
+import { useOptionalCompanyContext } from "../../shell/company-context.js";
 
 const RunTranscript = lazy(() => import("./run-transcript.js").then(module => ({ default: module.RunTranscript })));
 const PaneTerminal = lazy(() => import("../tasks/task-chat/live-pane-terminal.js").then(module => ({ default: module.PaneTerminal })));
@@ -29,6 +30,8 @@ export function MoveRunView({ move, runId, project, onClose, onStartAgain }: {
   const [run, setRun] = useState<MoveRunResponse | null>(null);
   const [error, setError] = useState("");
   const [fullscreen, setFullscreen] = useState(false);
+  // A run terminal is a host shell, so only an admin attaches. Others see the saved output.
+  const admin = useOptionalCompanyContext()?.user?.role === "admin";
   // The sync socket pushes every move with its last run. An earlier run polls.
   const pushed = useShellRuns(useSyncLive() ? move.companyId : undefined).find(entry => entry.run.id === runId)?.run;
   const followed = Boolean(pushed);
@@ -70,7 +73,7 @@ export function MoveRunView({ move, runId, project, onClose, onStartAgain }: {
       </div>
     </div>
     <div className="flex min-h-0 flex-1 flex-col p-2">
-      {live ? <Suspense fallback={null}><PaneTerminal path={moveRunTerminalPath(runId)} interactive paneId={runId} label={`Terminal for ${move.name}`} /></Suspense> : readError ? <EmptyState icon={SquareTerminal} title={readError} /> : <Suspense fallback={null}><RunTranscript runId={runId} label={`Saved terminal for ${move.name}`} /></Suspense>}
+      {live && admin ? <Suspense fallback={null}><PaneTerminal path={moveRunTerminalPath(runId)} interactive paneId={runId} label={`Terminal for ${move.name}`} /></Suspense> : readError ? <EmptyState icon={SquareTerminal} title={readError} /> : <Suspense fallback={null}><RunTranscript runId={runId} label={`Saved terminal for ${move.name}`} /></Suspense>}
     </div>
   </div>;
 }

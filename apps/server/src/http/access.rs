@@ -65,19 +65,20 @@ pub async fn remote_access_boundary(
         Err(error) => return ApiError::response(error),
     };
     let external = external.as_deref();
+    // A reverse proxy names the external authority in X-Forwarded-Host or, like
+    // Cloudflare Tunnel, keeps it in Host. A local process can set either one.
+    let forwarded_authority = request
+        .headers()
+        .get("x-forwarded-host")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or(host);
     let forwarded_https = loopback_peer
         && request
             .headers()
             .get("x-forwarded-proto")
             .and_then(|value| value.to_str().ok())
             == Some("https")
-        && request
-            .headers()
-            .get("x-forwarded-host")
-            .and_then(|value| value.to_str().ok())
-            .is_some_and(|forwarded_host| {
-                external.is_some_and(|origin| authority_matches(origin, forwarded_host))
-            });
+        && external.is_some_and(|origin| authority_matches(origin, forwarded_authority));
     let serve_https = loopback_peer
         && state.session_config.tailscale_exposure == "serve"
         && authority_matches(&state.session_config.reachable_address, host)

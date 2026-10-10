@@ -62,8 +62,9 @@ Local recovery is separate from remote policy. It requires an actual loopback
 peer, a loopback Host at the active port, and no forwarding or Tailscale proxy
 indicators. Reverse proxies and Tailscale Serve connect from loopback but are
 classified as remote before session authorization. A configured reverse proxy
-is accepted as HTTPS only when its forwarded HTTPS authority matches the saved
-external origin. Tailscale Serve is accepted only for its configured canonical
+is accepted as HTTPS only when it forwards `X-Forwarded-Proto: https` and its
+authority matches the saved external origin: `X-Forwarded-Host`, or `Host`
+when the proxy keeps it, as Cloudflare Tunnel does. Tailscale Serve is accepted only for its configured canonical
 authority and HTTPS forwarding metadata. Identity headers alone do not prove
 HTTPS or local recovery.
 

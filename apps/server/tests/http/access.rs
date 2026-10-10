@@ -132,6 +132,38 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_tunnel_that_keeps_the_external_host_is_verified_https() {
+        let (state, path) = crate::http::routes::auth::tests::state();
+        state.with_database(|database| {
+            crate::identity::remote_access_repository::set_external_https_origin(
+                database,
+                Some("https://nstx.suplex.test"),
+            )
+        }).unwrap();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(axum::serve(listener, crate::http::router(state.clone()).into_make_service_with_connect_info::<std::net::SocketAddr>()).into_future());
+        let client = reqwest::Client::new();
+        let request = |host: &'static str, proto: &'static str| {
+            client.get(format!("http://{address}/api/auth/me"))
+                .header("host", host)
+                .header("x-forwarded-proto", proto)
+                .header("x-forwarded-for", "203.0.113.9")
+                .send()
+        };
+        // Cloudflare Tunnel sends no X-Forwarded-Host: the external host is in Host.
+        let tunnel = request("nstx.suplex.test", "https").await.unwrap();
+        assert_eq!(tunnel.status(), 401, "a verified remote request needs a session");
+        for (host, proto) in [("nstx.suplex.test", "http"), ("other.suplex.test", "https")] {
+            let rejected = request(host, proto).await.unwrap();
+            assert_eq!(rejected.status(), 403, "{host} {proto}");
+        }
+        server.abort();
+        drop(state);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[tokio::test]
     async fn foreign_origin_without_cookie_cannot_use_automatic_access() {
         let (state, path) = crate::http::routes::auth::tests::state();
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();

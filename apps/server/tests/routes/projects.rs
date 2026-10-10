@@ -996,4 +996,62 @@ mod tests {
         drop(state);
         let _ = fs::remove_dir_all(root);
     }
+
+    #[test]
+    fn an_admin_moves_a_project_with_its_tasks_moves_and_attachments_to_another_company() {
+        use crate::platform::artifacts;
+        let fixture = crate::http::routes::task_pane::tests::fixture();
+        let artifact_root = fixture.root.join("artifacts");
+        let task_id = fixture.task_id.clone();
+        let now = Utc::now();
+        let stamp = now.to_rfc3339();
+        let sql = |statement: &str, values: &[&dyn rusqlite::ToSql]| fixture.execute(statement, values);
+        for (id, name) in [("company_b", "B"), ("company_c", "C")] {
+            sql("INSERT INTO suplex_companies (id,name,status,created_at) VALUES (?1,?2,'active',?3)", &[&id, &name, &stamp]);
+        }
+        for (id, company, name, repository) in [("project_b", "company_b", "B", "/tmp/b"), ("project_c", "company_c", "Pane", "/tmp/c"), ("project_other", "pane_company", "Other", "/tmp/other")] {
+            sql(&format!("INSERT INTO suplex_projects (id,company_id,name,repository_path,worktree_root,repository_identity,base_branch,setup_command,verification_command,root_profile_id,worker_profile_id,created_at,updated_at) VALUES (?1,?2,?3,?4,'{repository}-worktrees',NULL,'main','','','profile_root','profile_worker',?5,?5)"), &[&id, &company, &name, &repository, &stamp]);
+        }
+        // A task in the target already holds issue number 1, like the moved task.
+        let copy = |id: &str, company: &str, project: &str| {
+            sql("CREATE TEMP TABLE copied AS SELECT * FROM suplex_tasks WHERE id = ?1", &[&task_id]);
+            sql("UPDATE copied SET id = ?1, company_id = ?2, project_id = ?3, issue_number = NULL, idempotency_key = ?1", &[&id, &company, &project]);
+            sql("INSERT INTO suplex_tasks SELECT * FROM copied", &[]);
+            sql("DROP TABLE copied", &[]);
+        };
+        copy("task_b", "company_b", "project_b");
+        copy("task_other", "pane_company", "project_other");
+        sql("INSERT INTO suplex_task_dependencies (task_id, depends_on_task_id, created_at) VALUES (?1, 'task_other', ?2)", &[&task_id, &stamp]);
+        sql("INSERT INTO suplex_moves (id, company_id, project_id, name, prompt, runner, profile_id, confirm, workflow, delivery_target, run_project_tests, visual_evidence, created_by_user_id, idempotency_key, created_at, updated_at) VALUES ('move_a','pane_company','pane_project','Repair','','task',NULL,0,'standard','pull_request_ready',1,'off','user_development','move_a',?1,?1)", &[&stamp]);
+        let artifact = fixture.state.with_database(|database| {
+            artifacts::put_in_transaction(database, &artifact_root, "pane_company", "image", &artifacts::ArtifactInput { filename: "a.png", mime_type: "image/png", bytes: b"png", task_id: &task_id }, now).unwrap()
+        });
+
+        let moved = |company: &str| fixture.state.with_database(|database| {
+            service::transfer(database, Some(&artifact_root), "user_development", "pane_project", company, now)
+        });
+        assert_eq!(moved("pane_company").unwrap_err().to_string(), "The project is already in this company");
+        // The target company already has a project with this name.
+        assert!(moved("company_c").is_err());
+        sql("UPDATE suplex_users SET role = 'member'", &[]);
+        sql("INSERT INTO suplex_memberships (user_id, company_id, created_at) VALUES ('user_development','pane_company',?1), ('user_development','company_b',?1)", &[&stamp]);
+        assert!(moved("company_b").is_err());
+        sql("UPDATE suplex_users SET role = 'admin'", &[]);
+
+        assert_eq!(moved("company_b").unwrap().company_id, "company_b");
+        fixture.state.with_database(|database| {
+            let connection = database.connection();
+            let count = |statement: &str| connection.query_row(statement, [], |row| row.get::<_, i64>(0)).unwrap();
+            assert_eq!(count("SELECT issue_number FROM suplex_tasks WHERE id = 'task_b'"), 1);
+            assert_eq!(connection.query_row("SELECT company_id, issue_number FROM suplex_tasks WHERE id = ?1", [&task_id], |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))).unwrap(), ("company_b".into(), 2));
+            assert_eq!(count("SELECT next_issue_number FROM suplex_companies WHERE id = 'company_b'"), 3);
+            assert_eq!(count("SELECT count(*) FROM suplex_moves WHERE id = 'move_a' AND company_id = 'company_b'"), 1);
+            assert_eq!(count("SELECT count(*) FROM suplex_task_dependencies"), 0);
+            assert_eq!(count("SELECT count(*) FROM suplex_audit_events WHERE action = 'project_transferred'"), 2);
+            let (company, path): (String, String) = connection.query_row("SELECT company_id, storage_path FROM suplex_artifacts WHERE id = ?1", [&artifact.id], |row| Ok((row.get(0)?, row.get(1)?))).unwrap();
+            assert_eq!(artifacts::read(&artifact_root, &company, &path).unwrap(), b"png");
+            assert!(!artifact_root.join(&artifact.storage_path).exists());
+        });
+        let _ = fs::remove_dir_all(&fixture.root);
+    }
 }

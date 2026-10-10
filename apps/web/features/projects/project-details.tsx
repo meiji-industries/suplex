@@ -20,6 +20,7 @@ import type { ApiProfile, ApiProject } from "../../shell/view-shared.js";
 import { ProjectRepositoryConnection } from "./project-repository-connection.js";
 import { ProjectConnections } from "./project-connections.js";
 import { ProjectDetailsLayout } from "./project-details-layout.js";
+import { ProjectCompanyTransfer } from "./project-company-transfer.js";
 import { updateProject } from "./lib/project-api.js";
 import { taskDeliveryTargetOptions } from "../tasks/task-delivery-target.js";
 import { DeliveryTargetSchema, VisualEvidenceSchema } from "../../contracts/tasks.js";
@@ -77,7 +78,7 @@ function SectionActions({ status, dirty, invalid = false, onDiscard }: { status:
 }
 
 export function ProjectDetails({ projectId }: { projectId: string }): ReactElement {
-  const { currentCompany, loading: companyLoading, reloadCompanies } = useCompanyContext();
+  const { currentCompany, loading: companyLoading, reloadCompanies, user } = useCompanyContext();
   const companyId = currentCompany?.id ?? "";
   const [project, setProject] = useState<ApiProject>();
   const [agents, setAgents] = useState<ApiProfile[]>([]);
@@ -333,6 +334,7 @@ export function ProjectDetails({ projectId }: { projectId: string }): ReactEleme
         </SettingsSection>
         <SectionActions status={general.status} dirty={generalDirty} onDiscard={() => setGeneral(draftState(general.saved))} />
       </form> : null}
+      {section === "general" && user?.role === "admin" ? <ProjectCompanyTransfer project={project} /> : null}
 
       {section === "agents" ? <form onSubmit={(event) => { event.preventDefault(); void saveAgents(); }}>
         {profileError ? <Alert variant="destructive"><AlertDescription><span>{profileError}. </span><Button type="button" variant="link" size="sm" disabled={profilesLoading} onClick={() => void loadProfiles(loadToken.current)}>Retry</Button></AlertDescription></Alert> : null}

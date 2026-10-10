@@ -251,6 +251,13 @@ pub struct ProjectIdParams {
     pub project_id: String,
 }
 
+/// The company to move a project to.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectTransferBody {
+    pub company_id: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TaskSourceQuery {
     pub kind: String,
@@ -618,6 +625,12 @@ impl Contract for ProjectCreateBody {
                 &nested::<LocalProjectCreate>,
             ],
         )
+    }
+}
+
+impl Contract for ProjectTransferBody {
+    fn schema(input: Option<&Value>) -> ContractResult<Value> {
+        Fields::new(input)?.req("companyId", text(1, 256)).strict()
     }
 }
 

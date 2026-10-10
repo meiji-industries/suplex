@@ -681,6 +681,136 @@ fn audit_update(
     Ok(())
 }
 
+/// Move a project, with its tasks, moves, triggers, and attachments, to another
+/// company. Only an admin can do this, because it changes who can see the
+/// project. Moved tasks get new issue numbers in the target company. External
+/// agent grants and dependencies on tasks outside the project stay behind.
+pub fn transfer(
+    database: &mut SuplexDatabase,
+    artifact_root: Option<&std::path::Path>,
+    actor_user_id: &str,
+    project_id: &str,
+    target_company_id: &str,
+    now: DateTime<Utc>,
+) -> DatabaseResult<Project> {
+    companies::require_admin(database, actor_user_id)?;
+    let from = get(database, actor_user_id, project_id)?.company_id;
+    if from == target_company_id {
+        return Err(failure(
+            "The project is already in this company",
+            409,
+            vec![],
+        ));
+    }
+    let stamp = rfc3339_millis(now);
+    let files = database.transaction(false, |database| {
+        require_active_company(database, actor_user_id, target_company_id)?;
+        let connection = database.connection();
+        connection.execute(
+            "DELETE FROM suplex_external_agent_project_grants WHERE project_id = ?1",
+            [project_id],
+        )?;
+        connection.execute(
+            "DELETE FROM suplex_task_dependencies WHERE (task_id IN (SELECT id FROM suplex_tasks WHERE project_id = ?1)) <> (depends_on_task_id IN (SELECT id FROM suplex_tasks WHERE project_id = ?1))",
+            [project_id],
+        )?;
+        let mut artifacts = connection.prepare(
+            "SELECT id, storage_path FROM suplex_artifacts WHERE company_id = ?1 AND task_id IN (SELECT id FROM suplex_tasks WHERE project_id = ?2)",
+        )?;
+        let artifacts = artifacts
+            .query_map(params![from, project_id], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        let mut files = Vec::new();
+        for (id, old) in artifacts {
+            let Some(rest) = old.strip_prefix(&format!("{from}/")) else {
+                continue;
+            };
+            let new = format!("{target_company_id}/{rest}");
+            connection.execute(
+                "UPDATE suplex_artifacts SET company_id = ?1, storage_path = ?2 WHERE id = ?3",
+                params![target_company_id, new, id],
+            )?;
+            files.push((old, new));
+        }
+        // Issue numbers are unique per company, so moved tasks take the
+        // target company's next numbers in creation order.
+        let mut tasks = connection.prepare(
+            "SELECT id FROM suplex_tasks WHERE project_id = ?1 ORDER BY created_at, id",
+        )?;
+        let tasks = tasks
+            .query_map([project_id], |row| row.get::<_, String>(0))?
+            .collect::<Result<Vec<_>, _>>()?;
+        for task_id in tasks {
+            connection.execute(
+                "UPDATE suplex_tasks SET company_id = ?1, issue_number = (SELECT next_issue_number FROM suplex_companies WHERE id = ?1) WHERE id = ?2",
+                params![target_company_id, task_id],
+            )?;
+            connection.execute(
+                "UPDATE suplex_companies SET next_issue_number = next_issue_number + 1 WHERE id = ?1",
+                [target_company_id],
+            )?;
+        }
+        for table in [
+            "suplex_moves",
+            "suplex_move_runs",
+            "suplex_github_trigger_rules",
+            "suplex_github_trigger_dispatches",
+        ] {
+            connection.execute(
+                &format!("UPDATE {table} SET company_id = ?1 WHERE project_id = ?2"),
+                params![target_company_id, project_id],
+            )?;
+        }
+        connection
+            .execute(
+                "UPDATE suplex_projects SET company_id = ?1, updated_at = ?2 WHERE id = ?3",
+                params![target_company_id, stamp, project_id],
+            )
+            .map_err(|error| already_assigned(error.into()))?;
+        let metadata = crate::shared::js_json::stringify(
+            &json!({"projectId": project_id, "fromCompanyId": from, "toCompanyId": target_company_id}),
+        );
+        for company_id in [from.as_str(), target_company_id] {
+            crate::identity::audit::record(
+                database,
+                &crate::identity::audit::AuditEvent {
+                    id: &random_hex_id("audit")?,
+                    actor_user_id: Some(actor_user_id),
+                    actor_agent_id: None,
+                    action: "project_transferred",
+                    target_user_id: None,
+                    company_id: Some(company_id),
+                    metadata_json: &metadata,
+                    created_at: &stamp,
+                },
+            )?;
+        }
+        Ok(files)
+    })?;
+    // Attachment files live under their company's folder. A file that is
+    // already at its new path was moved by an earlier attempt.
+    if let Some(root) = artifact_root {
+        for (old, new) in files {
+            let (old, new) = (root.join(old), root.join(new));
+            if let Some(parent) = new.parent() {
+                std::os::unix::fs::DirBuilderExt::mode(
+                    std::fs::DirBuilder::new().recursive(true),
+                    0o700,
+                )
+                .create(parent)?;
+            }
+            if let Err(error) = std::fs::rename(&old, &new)
+                && !new.exists()
+            {
+                return Err(error.into());
+            }
+        }
+    }
+    get(database, actor_user_id, project_id)
+}
+
 fn require_active_company(
     database: &SuplexDatabase,
     actor_user_id: &str,

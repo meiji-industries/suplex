@@ -9,7 +9,7 @@ use axum::{
     extract::State,
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
-    routing::get,
+    routing::{get, post},
 };
 use serde_json::{Value, json};
 
@@ -21,7 +21,8 @@ use crate::{
             auth::CompanyIdParams,
             projects::{
                 IssueSearchQuery, LocalProjectCreate, OwnerParams, ProjectCreateBody,
-                ProjectIdParams, ProjectPatch, RecentRepositoriesQuery, TaskSourceQuery,
+                ProjectIdParams, ProjectPatch, ProjectTransferBody, RecentRepositoriesQuery,
+                TaskSourceQuery,
             },
         },
         session,
@@ -52,6 +53,7 @@ pub fn router() -> Router<AppState> {
             get(owner_repositories),
         )
         .route("/api/projects/{project_id}", get(get_one).patch(update))
+        .route("/api/projects/{project_id}/transfer", post(transfer))
         .route(
             "/api/projects/{project_id}/repository-status",
             get(repository_status),
@@ -338,6 +340,34 @@ async fn get_one(
             Ok(project) => axum::Json(service::response_project(&project)).into_response(),
             Err(source) => ApiError::response(source),
         };
+    with_cookies(response, cookies)
+}
+
+/// Move the project to another company. Only an admin can do this.
+async fn transfer(
+    State(state): State<AppState>,
+    ValidPath(ProjectIdParams { project_id }): ValidPath<ProjectIdParams>,
+    headers: HeaderMap,
+    Valid(body): Valid<ProjectTransferBody>,
+) -> Response {
+    let (user_id, cookies) =
+        match crate::http::access::authorize_profile(&state, &headers, "POST", true) {
+            Ok(value) => value,
+            Err(response) => return *response,
+        };
+    let response = match state.with_database(|database| {
+        service::transfer(
+            database,
+            state.artifact_root.as_deref(),
+            &user_id,
+            &project_id,
+            &body.company_id,
+            chrono::Utc::now(),
+        )
+    }) {
+        Ok(project) => axum::Json(service::response_project(&project)).into_response(),
+        Err(error) => ApiError::response(error),
+    };
     with_cookies(response, cookies)
 }
 

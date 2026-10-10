@@ -23,6 +23,11 @@ export function updateProject(projectId: string, body: ProjectPatchBody): Promis
   return readJsonUnchecked<ProjectResponse>(`/api/projects/${encodeURIComponent(projectId)}`, { method: "PATCH", body: JSON.stringify(body) });
 }
 
+/** Move the project, with its tasks, to another company. Only an admin can do this. */
+export function transferProject(projectId: string, companyId: string): Promise<ProjectResponse> {
+  return readJsonUnchecked<ProjectResponse>(`/api/projects/${encodeURIComponent(projectId)}/transfer`, { method: "POST", body: JSON.stringify({ companyId }) });
+}
+
 /** Accessible repositories, newest pushed first. */
 export function listRecentRepositories(companyId: string, page = 1): Promise<RecentRepositories> {
   return readJsonUnchecked<RecentRepositories>(companyPath(companyId, `/recent-repositories?page=${page}`));

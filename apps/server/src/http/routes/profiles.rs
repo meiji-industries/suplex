@@ -176,7 +176,7 @@ async fn choose_defaults(State(state): State<AppState>, headers: HeaderMap) -> R
                 } else {
                     row["status"] == "configured"
                 }
-                && (provider != "opencode"
+                && (provider != crate::tasks::control::HarnessKind::Opencode.as_str()
                     || row["models"]
                         .as_array()
                         .is_some_and(|models| models.iter().any(|listed| listed["id"] == model)))

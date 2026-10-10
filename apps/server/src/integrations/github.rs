@@ -524,9 +524,9 @@ async fn read_gh_token(mut command: tokio::process::Command) -> AccessResult<Opt
 
 impl Access {
     pub async fn load() -> AccessResult<Self> {
-        // The explicit interop build can use an isolated loopback API without
-        // consulting a user's keychain.
-        #[cfg(feature = "github-test-endpoint")]
+        // Debug builds can use an isolated loopback API without consulting a
+        // user's keychain. Release builds never read this variable.
+        #[cfg(debug_assertions)]
         if let Ok(base_uri) = std::env::var("SUPLEX_TEST_GITHUB_API") {
             let parsed = url::Url::parse(&base_uri)?;
             if parsed.scheme() != "http"

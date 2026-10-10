@@ -4,9 +4,6 @@ version = "1.8.0"
 edition = "2024"
 rust-version = "1.93.1"
 
-[features]
-github-test-endpoint = []
-
 [dependencies]
 axum = { version = "0.8", features = ["ws"] }
 tower-http = { version = "0.6", features = ["compression-gzip", "compression-br", "fs"] }

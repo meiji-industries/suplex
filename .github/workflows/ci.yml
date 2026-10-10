@@ -176,7 +176,7 @@ jobs:
           pnpm lint
           pnpm typecheck
           pnpm --filter suplex-web build
-          cargo build --manifest-path apps/server/Cargo.toml --bin suplex --features github-test-endpoint
+          cargo build --manifest-path apps/server/Cargo.toml --bin suplex
 
       - name: Cross-app tests
         run: pnpm exec vitest run --project unit --maxWorkers "$TEST_WORKERS" --reporter=default --reporter=junit --outputFile=test-results/unit-integration.xml

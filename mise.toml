@@ -1,9 +1,15 @@
 [tools]
 node = "26.7.0"
 "npm:pnpm" = "11.22.0"
+"cargo:cargo-sweep" = "0.8.0"
 
 [hooks]
 postinstall = "pnpm install --frozen-lockfile"
+# df is instant; sizing every target/ is not, so only suggest the sweep when space is low.
+enter = """
+free_gb=$(df -k "$HOME" | awk 'NR==2{print int($4/1048576)}')
+[ "$free_gb" -lt 30 ] && echo "⚠  ${free_gb} GB free. Run: mise run clean:target" || true
+"""
 
 [settings]
 experimental = true
@@ -33,6 +39,24 @@ run = "pnpm run dev"
 [tasks."dev:watch"]
 description = "Run native Suplex with Rust rebuilds and Vite HMR"
 run = "pnpm run dev:watch"
+
+[tasks."clean:target"]
+description = "Cap target/ in every suplex worktree by evicting the oldest build files (MAXSIZE=10GB by default)"
+run = '''
+#!/usr/bin/env bash
+set -euo pipefail
+# Cargo never deletes old build files, so each worktree's target/ grows without bound.
+# A clean debug build is about 7 GB; the cap keeps it plus one round of churn.
+before=$(df -k "$HOME" | awk 'NR==2{print $4}')
+git worktree list --porcelain | sed -n 's/^worktree //p' | while read -r dir; do
+  [ -d "$dir/target" ] || continue
+  echo "$dir: $(du -sh "$dir/target" | cut -f1)"
+  (cd "$dir" && cargo sweep --maxsize "${MAXSIZE:-10GB}" >/dev/null)
+done
+after=$(df -k "$HOME" | awk 'NR==2{print $4}')
+awk -v b="$before" -v a="$after" 'BEGIN{printf "Reclaimed %.1f GB. %.0f GB free.\n", (a-b)/1048576, a/1048576}'
+echo "A worktree you are done with: rm -rf <worktree>/target reclaims all of it."
+'''
 
 [tasks."dev:status"]
 description = "Show the process that listens on this checkout's development port"
@@ -110,7 +134,7 @@ description = "Run the deterministic Codex and Claude Code browser journeys, inc
 run = '''
 set -e
 [ -f apps/web/dist/suplex-ui.js ] || pnpm --filter suplex-web build
-(cd apps/server && unset RUSTUP_TOOLCHAIN && cargo build --bin suplex --features github-test-endpoint)
+(cd apps/server && unset RUSTUP_TOOLCHAIN && cargo build --bin suplex)
 export SUPLEX_BIN="${CARGO_TARGET_DIR:-$PWD/target}/debug/suplex"
 export SUPLEX_DETERMINISTIC_CODEX_RUN=1
 for phase in deliver deliver_pr answer restart cancel deliver_claude direct_build independent_review competing_plans refine_pull_request; do
@@ -123,7 +147,7 @@ description = "Run the Rust interop scripts other than the Codex journey"
 run = '''
 set -e
 [ -f apps/web/dist/suplex-ui.js ] || pnpm --filter suplex-web build
-(cd apps/server && unset RUSTUP_TOOLCHAIN && cargo build --bin suplex --features github-test-endpoint)
+(cd apps/server && unset RUSTUP_TOOLCHAIN && cargo build --bin suplex)
 export SUPLEX_BIN="${CARGO_TARGET_DIR:-$PWD/target}/debug/suplex"
 for script in root-delivery-inspection root-image root-worker-evidence root-worker-replacement task-timeline; do
   echo "[interop] $script" >&2

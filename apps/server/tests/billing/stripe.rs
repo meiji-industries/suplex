@@ -508,6 +508,8 @@ mod tests {
                     interval_count: 1,
                     usage_type: "licensed".into(),
                 }),
+                tiers_mode: None,
+                tiers: vec![],
             }
         );
         let session = normalize_checkout_session(&json!({

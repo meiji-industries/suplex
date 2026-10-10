@@ -1,23 +1,35 @@
 # Billing
 
-Suplex Free and Pro match the plans on <https://getsuplex.ai/>. Each
+Suplex Free, Pro, and Team match the plans on <https://getsuplex.ai/>. Each
 installation has one plan: the plan of the Suplex account linked to it
 ([accounts](accounts.md)). A host without a linked account is Free.
 
-| Limit | Free | Pro |
-| --- | --- | --- |
-| Companies that are not archived | 1 | 3 |
-| Projects in all companies | 2 | 25 |
-| Tasks running at once (`active` or `waiting_human`) | 3 | Unlimited |
-| Tasks created each UTC calendar month, archived ones too | 50 | Unlimited |
+| Limit | Free | Pro | Team |
+| --- | --- | --- | --- |
+| Companies that are not archived | 1 | 3 | Unlimited |
+| Projects in all companies | 2 | 25 | Unlimited |
+| Tasks running at once (`active` or `waiting_human`) | 3 | Unlimited | Unlimited |
+| Tasks created each UTC calendar month, archived ones too | 50 | Unlimited | Unlimited |
 
 Pro costs USD 20 each month, or USD 192 each year (20% less), before tax for
 one seat. Each Suplex account gets
 one 14-day Pro trial with no payment method. Without a payment method at the
-trial end, Stripe cancels the subscription and the host returns to Free. The
-Team plan (seats, centralized billing) is not implemented.
+trial end, Stripe cancels the subscription and the host returns to Free.
 
-`FREE` and `PRO` in `apps/server/src/billing/mod.rs` hold the limits.
+Team costs USD 75 each month for 3 seats, then USD 15 for each seat; or USD
+720 each year for 3 seats, then USD 144 for each seat. Team checkout buys a
+seat count, at least 3: Settings > Billing defaults to one seat for each user
+who is not revoked, and shows seats used against seats purchased. Suplex does
+not limit invitations by seats. A Pro subscriber changes to Team, and a Team
+subscriber changes the seat count, in the Stripe portal (Open billing).
+Checkout accepts promotion codes and asks for no card when a code makes it
+free (`payment_method_collection=if_required`).
+
+When a confirmed Team plan lapses, `suplex_plan` keeps `plan = 'team'`, so
+`billing::team_lapsed` tells it from Free: work is read-only until someone
+pays again. A hosted outage never causes a lapse; only a confirmed read does.
+
+`FREE`, `PRO`, and `TEAM` in `apps/server/src/billing/mod.rs` hold the limits.
 `billing::require` decides each limit inside the transaction that writes:
 company creation and restore, project creation, task creation (every path:
 browser, agent API, MCP, GitHub triggers, moves), and Start anyway. Queue
@@ -160,6 +172,7 @@ Configuration is read only in the hosted process:
 | `STRIPE_SECRET_KEY` | Merchant API secret for the matching environment. |
 | `STRIPE_PRO_MONTHLY_PRICE_ID` | The configured USD 20 monthly licensed seat price. |
 | `STRIPE_PRO_ANNUAL_PRICE_ID` | The configured USD 192 yearly licensed seat price. |
+| `STRIPE_TEAM_MONTHLY_PRICE_ID`, `STRIPE_TEAM_ANNUAL_PRICE_ID` | Optional; set both or neither. The Team graduated prices. Without them Team checkout returns `plan_unavailable`. |
 | `STRIPE_PORTAL_CONFIGURATION_ID` | The dedicated Suplex portal configuration. |
 | `STRIPE_WEBHOOK_SECRET` | Signing secret of the Suplex Stripe webhook destination. |
 | `STRIPE_AUTOMATIC_TAX` | `true` (default) or `false`. Stripe Tax on Checkout needs a head office address in the Stripe account. |
@@ -182,7 +195,9 @@ Free.
 The service verifies each configured price before it serves purchase mutations:
 `usd`, `unit_amount` 2000 monthly or 19200 yearly, interval count 1, `licensed` usage,
 `per_unit` billing, no quantity transformation, and a key mode matching
-`BILLING_ENVIRONMENT`. A mismatch returns `billing_setup_invalid`; it never
+`BILLING_ENVIRONMENT`. A Team price is `tiered` with `graduated` tiers: up to
+3 at a flat 7500 (72000 yearly) and 0 per unit, then 1500 (14400 yearly) per
+unit. A mismatch returns `billing_setup_invalid`; it never
 sells an arbitrary price.
 
 ## Ingress requirements
@@ -204,7 +219,10 @@ Production uses a separate Stripe configuration and RevenueCat project with
 1. Connect Stripe to RevenueCat as the RevenueCat project owner.
 2. Create the Stripe product `Suplex Pro` with a USD 20.00 monthly and a
    USD 192.00 yearly per-unit licensed price (tax-exclusive). Enable Stripe Tax for production Checkout
-   and configure the merchant's tax settings before activation.
+   and configure the merchant's tax settings before activation. Create the
+   product `Suplex Team` with a monthly and a yearly graduated tiered price
+   (tax-exclusive): first tier units 0 to 3 with a USD 75.00 (720.00) flat fee
+   and USD 0 per unit, second tier from 4 at USD 15.00 (144.00) per unit.
 3. Import the product into the RevenueCat Stripe configuration and attach both
    prices to the entitlement identifier `pro`. Use the same identifier in the
    sandbox and production projects.
@@ -236,10 +254,8 @@ Production uses a separate Stripe configuration and RevenueCat project with
    from the wrong environment never enter reconciliation.
 8. Configure the Stripe customer portal for payment methods, invoices,
    billing details, cancellation at period end, and resuming a scheduled
-   cancellation. Allow switching only between the monthly and yearly Pro
-   prices, so a trial or monthly subscriber can change to yearly. Disable
-   quantity updates, trials, coupons, and retention discounts there. Seat
-   changes go through Suplex and apply only to the monthly price.
+   cancellation. Allow switching between the Pro and Team prices, and quantity
+   updates for Team. Disable trials, coupons, and retention discounts there.
 9. Configure Stripe payment retries and customer emails in Stripe. Suplex does
    not run dunning or send payment email.
 
@@ -252,9 +268,9 @@ credential created at registration. Only SHA-256 hashes are stored.
 
 | Endpoint | Behavior |
 | --- | --- |
-| `GET /v1/plan` | Bearer Suplex account token. The account's `{state, trialAvailable}`. |
+| `GET /v1/plan` | Bearer Suplex account token. The account's `{state, trialAvailable}`. With `?tier=1`, also `plan: "pro" \| "team"` for an active subscription; hosts before Team reject unknown fields, so only new hosts ask. |
 | `POST /v1/plan/trial` | Bearer Suplex account token. Start the account's one 14-day trial, or return the current plan. 409 `trial_used` after a trial. |
-| `POST /v1/plan/checkout` | Bearer Suplex account token plus `Idempotency-Key`. Optional body `{interval: "month" \| "year"}`; no body is monthly. Checkout for one Pro seat at that price. |
+| `POST /v1/plan/checkout` | Bearer Suplex account token plus `Idempotency-Key`. Optional body `{plan: "pro" \| "team", interval: "month" \| "year", quantity}`; no body is one monthly Pro seat. Pro is one seat; Team buys `quantity` seats, at least 3 (default 3). |
 | `POST /v1/plan/portal` | Bearer Suplex account token. A portal session for the account's customer. |
 | `POST /v1/accounts` | Register or recover the credential-bound empty account (v1.3.0 per-company billing). |
 | `GET /v1/billing` | Read the current provider state for the caller's account. |
@@ -324,7 +340,7 @@ customers retain a working cancellation path.
 When the billing service or providers cannot be read, existing projects,
 tasks, workflows, and delivery continue; Free operations within the allowance
 continue. During an outage, creation beyond the Free allowance uses the last
-confirmed Pro snapshot (its purchased seats) until its paid access ends. A
+confirmed Pro snapshot until its paid access ends. A
 confirmed lapse replaces the snapshot with Free. With no unexpired Pro
 snapshot, creation beyond the Free allowance returns `billing_unavailable`
 until Suplex can verify the subscription.

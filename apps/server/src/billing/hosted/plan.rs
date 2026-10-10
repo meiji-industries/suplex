@@ -7,7 +7,7 @@
 use axum::{
     Json, Router,
     extract::State,
-    http::{HeaderMap, header},
+    http::{HeaderMap, Uri, header},
     routing::{get, post},
 };
 use rusqlite::OptionalExtension;
@@ -22,6 +22,7 @@ use crate::{
     accounts::wire::token_shape,
     billing::wire::{
         BillingInterval, CheckoutBody, HostedCheckoutResult, HostedPlan, HostedPortalResult,
+        PaidPlan, TEAM_INCLUDED_SEATS,
     },
     shared::hash::sha256_hex,
 };
@@ -76,11 +77,19 @@ impl Hosted {
         self.billing_for_user(&user_id.ok_or_else(unauthorized)?)
     }
 
-    pub async fn plan(&self, account: &mut AccountRow) -> HostedResult<HostedPlan> {
+    /// `tier` adds the paid plan of an active subscription; only hosts that
+    /// ask for it can read it.
+    pub async fn plan(&self, account: &mut AccountRow, tier: bool) -> HostedResult<HostedPlan> {
         let inspection = self.inspect_source(account).await?;
+        let plan = inspection
+            .item
+            .as_ref()
+            .filter(|_| tier && inspection.state.active)
+            .and_then(|item| self.config.price_plan(&item.price_id));
         Ok(HostedPlan {
             trial_available: inspection.subscriptions.is_empty(),
             state: inspection.state,
+            plan,
         })
     }
 
@@ -95,6 +104,7 @@ impl Hosted {
                 return Ok(HostedPlan {
                     state: inspection.state,
                     trial_available: false,
+                    plan: None,
                 });
             }
             return Err(HostedError::new(
@@ -133,7 +143,7 @@ impl Hosted {
             )
             .await
             .map_err(fail)?;
-        self.plan(account).await
+        self.plan(account, false).await
     }
 }
 
@@ -143,9 +153,12 @@ fn to_json<T: serde::Serialize>(value: &T) -> Json<Value> {
     Json(serde_json::to_value(value).unwrap_or(Value::Null))
 }
 
-async fn read(State(hosted): State<Hosted>, headers: HeaderMap) -> Reply {
+async fn read(State(hosted): State<Hosted>, uri: Uri, headers: HeaderMap) -> Reply {
     let mut account = hosted.billing_for_token(&headers)?;
-    Ok(to_json(&hosted.plan(&mut account).await?))
+    let tier = uri
+        .query()
+        .is_some_and(|query| query.split('&').any(|pair| pair == "tier=1"));
+    Ok(to_json(&hosted.plan(&mut account, tier).await?))
 }
 
 async fn trial(State(hosted): State<Hosted>, headers: HeaderMap) -> Reply {
@@ -153,7 +166,8 @@ async fn trial(State(hosted): State<Hosted>, headers: HeaderMap) -> Reply {
     Ok(to_json(&hosted.start_trial(&mut account).await?))
 }
 
-/// Pro is one seat. Hosts before annual Pro send no body: monthly.
+/// Hosts before annual Pro send no body: one monthly Pro seat. Pro is one
+/// seat; Team buys at least its included seats.
 async fn checkout(
     State(hosted): State<Hosted>,
     headers: HeaderMap,
@@ -168,7 +182,21 @@ async fn checkout(
             .map_err(|_| HostedError::new(400, None, "Invalid request"))?
     };
     let interval = body.interval.unwrap_or(BillingInterval::Month);
-    let result: HostedCheckoutResult = hosted.checkout(&mut account, 1, interval, &key).await?;
+    let plan = body.plan.unwrap_or(PaidPlan::Pro);
+    let quantity = match plan {
+        PaidPlan::Pro => body.quantity.unwrap_or(1),
+        PaidPlan::Team => body.quantity.unwrap_or(TEAM_INCLUDED_SEATS),
+    };
+    let allowed = match plan {
+        PaidPlan::Pro => quantity == 1,
+        PaidPlan::Team => quantity >= TEAM_INCLUDED_SEATS,
+    };
+    if !allowed {
+        return Err(HostedError::new(400, None, "Invalid request"));
+    }
+    let result: HostedCheckoutResult = hosted
+        .checkout(&mut account, plan, quantity, interval, &key)
+        .await?;
     Ok(to_json(&result))
 }
 

@@ -20,4 +20,17 @@ subscriptionStatus: string | null, renewalAt: string | null, accessUntil: string
 /**
  * Only administrators receive a billing URL.
  */
-paymentActionUrl: string | null, };
+paymentActionUrl: string | null, 
+/**
+ * Seats on the subscription, as suplex.sh reports them. Zero without
+ * one. Team always covers its included seats.
+ */
+purchasedSeats: number, 
+/**
+ * The last paid plan was Team and its access ended: work is read-only.
+ */
+teamLapsed: boolean, 
+/**
+ * Users who are not revoked, the owner included.
+ */
+seatsUsed: number, };

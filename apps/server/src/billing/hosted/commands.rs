@@ -16,7 +16,7 @@ use super::{
 use crate::{
     billing::wire::{
         BillingInterval, HostedCheckoutResult, HostedPortalResult, HostedSeatChangeBody,
-        HostedSeatChangeResult, HostedSeatPreview, SEAT_CURRENCY, SEAT_UNIT_AMOUNT,
+        HostedSeatChangeResult, HostedSeatPreview, PaidPlan, SEAT_CURRENCY, SEAT_UNIT_AMOUNT,
     },
     shared::hash::sha256_hex,
 };
@@ -505,17 +505,20 @@ impl Hosted {
     pub async fn checkout(
         &self,
         account: &mut AccountRow,
+        plan: PaidPlan,
         quantity: i64,
         interval: BillingInterval,
         idempotency_key: &str,
     ) -> HostedResult<HostedCheckoutResult> {
         let _lock = self.account_lock(&account.id).await;
-        self.ensure_price_verified(interval).await?;
-        let price_id = self.config.price_id(interval).to_owned();
-        // A monthly input keeps its original shape, so its hash still matches.
+        let price_id = self.ensure_plan_price_verified(plan, interval).await?;
+        // A monthly Pro input keeps its original shape, so its hash still matches.
         let mut input = json!({"quantity": quantity});
         if interval == BillingInterval::Year {
             input["interval"] = json!(interval);
+        }
+        if plan == PaidPlan::Team {
+            input["plan"] = json!(plan);
         }
         let hash = input_hash("checkout", &input);
 

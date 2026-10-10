@@ -1,10 +1,11 @@
 import { Alert, AlertDescription } from "../../components/ui/alert.js";
 import { Button } from "../../components/ui/button.js";
+import { Input } from "../../components/ui/input.js";
 import { Skeleton } from "../../components/ui/skeleton.js";
 import { Spinner } from "../../components/ui/spinner.js";
 import { Tabs, TabsList, TabsTrigger } from "../../components/ui/tabs.js";
 import { isApiError } from "../../lib/api.js";
-import { PRO_ANNUAL_AMOUNT, PRO_MONTHLY_AMOUNT, type BillingInterval, type BillingSummary } from "../../contracts/billing.js";
+import { PRO_ANNUAL_AMOUNT, PRO_MONTHLY_AMOUNT, TEAM_ANNUAL_AMOUNT, TEAM_ANNUAL_SEAT_AMOUNT, TEAM_INCLUDED_SEATS, TEAM_MONTHLY_AMOUNT, TEAM_MONTHLY_SEAT_AMOUNT, type BillingInterval, type BillingSummary, type PaidPlan } from "../../contracts/billing.js";
 import { getBillingSummary, openBillingPortal, startCheckout, startTrial } from "./lib/billing-api.js";
 import { useOptionalCompanyContext } from "../../shell/company-context.js";
 import { SettingsSection, SettingRow } from "./settings-layout.js";
@@ -34,6 +35,7 @@ function actionMessage(reason: unknown): string {
 }
 
 const PRO_FEATURES = ["3 companies", "25 projects", "Unlimited tasks at a time", "Unlimited tasks each month"];
+const TEAM_FEATURES = ["Unlimited companies", "Unlimited projects", "3 seats included", "Choose what each teammate can see and change"];
 
 // A browser allows a new tab only during the click, so open it before the
 // request and send it to the hosted URL when the answer arrives.
@@ -51,6 +53,11 @@ function limitText(used: number, limit: number | null): string {
 }
 
 function planDetail(summary: BillingSummary): string {
+  if (summary.teamLapsed) return "Team ended. Work is read-only until you select Team again.";
+  if (summary.plan === "team") {
+    if (summary.cancelAtPeriodEnd && summary.accessUntil) return `Team ends on ${formatDate(summary.accessUntil)}.`;
+    return summary.renewalAt ? `Renews on ${formatDate(summary.renewalAt)}.` : "Team is active.";
+  }
   const trial = summary.plan === "pro" && summary.subscriptionStatus === "trialing";
   if (trial) return summary.accessUntil ? `The trial ends on ${formatDate(summary.accessUntil)}. Add a payment method in Open billing to keep Pro.` : "The trial is active.";
   // The summary does not tell monthly from yearly, so the price is not shown.
@@ -78,6 +85,8 @@ export function BillingSection(): ReactElement {
   const [externalOpen, setExternalOpen] = useState(false);
   const checkoutKey = useRef<string | undefined>(undefined);
   const [interval, setCheckoutInterval] = useState<BillingInterval>("month");
+  const [paidPlan, setPaidPlan] = useState<PaidPlan>("pro");
+  const [seats, setSeats] = useState<number>();
   const mounted = useRef(true);
 
   const setPlan = useOptionalCompanyContext()?.setPlan;
@@ -87,7 +96,7 @@ export function BillingSection(): ReactElement {
     if (next.checked) setPlan?.(next.plan);
     setState("ready");
     setErrorText("");
-    if (next.plan === "pro" && !next.paymentActionRequired) setExternalOpen(false);
+    if (next.plan !== "free" && !next.paymentActionRequired) setExternalOpen(false);
   }, [setPlan]);
 
   const load = useCallback(async (silent = false): Promise<void> => {
@@ -134,7 +143,7 @@ export function BillingSection(): ReactElement {
     const tab = pendingTab();
     try {
       checkoutKey.current ??= crypto.randomUUID();
-      const result = await startCheckout(checkoutKey.current, interval);
+      const result = await startCheckout(checkoutKey.current, interval, paidPlan, quantity);
       if (result.status === "redirect") {
         tab.go(result.url);
         setExternalOpen(true);
@@ -184,36 +193,49 @@ export function BillingSection(): ReactElement {
   const ready = summary.canManageBilling && notice === undefined;
   const hasSubscription = summary.subscriptionStatus !== null && summary.subscriptionStatus !== "none";
   const canUpgrade = ready && summary.plan === "free" && !summary.paymentActionRequired;
-  const showPortal = ready && (summary.plan === "pro" || hasSubscription);
+  const showPortal = ready && (summary.plan !== "free" || hasSubscription);
   const { limits, usage } = summary;
+  // Each user who is not revoked uses a seat, so Team checkout buys at least one each.
+  const quantity = seats ?? Math.max(TEAM_INCLUDED_SEATS, summary.seatsUsed);
+  const [teamFlat, teamSeat] = interval === "year" ? [TEAM_ANNUAL_AMOUNT, TEAM_ANNUAL_SEAT_AMOUNT] : [TEAM_MONTHLY_AMOUNT, TEAM_MONTHLY_SEAT_AMOUNT];
+  const period = interval === "year" ? "each year" : "each month";
+  const upgradeDescription = paidPlan === "team"
+    ? `${formatUsd(teamFlat)} ${period} for ${TEAM_INCLUDED_SEATS} seats, then ${formatUsd(teamSeat)} for each seat. ${quantity} seats cost ${formatUsd(teamFlat + Math.max(0, quantity - TEAM_INCLUDED_SEATS) * teamSeat)} ${period}. Taxes are additional.`
+    : interval === "year"
+      ? `${formatUsd(PRO_ANNUAL_AMOUNT)} each year (${formatUsd(PRO_ANNUAL_AMOUNT / 12)} each month) for one seat. Taxes are additional.`
+      : `${summary.trialAvailable ? "No credit card is necessary. Then " : ""}${formatUsd(PRO_MONTHLY_AMOUNT)} each month for one seat. Taxes are additional.`;
+  const planLabel = trialing ? "Pro trial" : summary.teamLapsed ? "Team ended" : `${summary.plan[0]!.toUpperCase()}${summary.plan.slice(1)} plan`;
 
   return (
     <>
       {actionError ? <div className="mb-4"><Alert variant="destructive"><AlertDescription>{actionError}</AlertDescription></Alert></div> : null}
       <SettingsSection>
-        <SettingRow label={trialing ? "Pro trial" : summary.plan === "pro" ? "Pro plan" : "Free plan"} description={notice ? <>{planDetail(summary)}<br />{notice}</> : planDetail(summary)}>
+        <SettingRow label={planLabel} description={notice ? <>{planDetail(summary)}<br />{notice}</> : planDetail(summary)}>
           {showPortal ? <Button size="sm" variant="outline" onClick={() => void portal()} disabled={busy !== ""}>{busy === "portal" ? <Spinner /> : null}Open billing</Button> : null}
         </SettingRow>
       </SettingsSection>
       {canUpgrade ? (
         <SettingsSection>
-          <SettingRow label="Upgrade to Pro" description={interval === "year"
-            ? `${formatUsd(PRO_ANNUAL_AMOUNT)} each year (${formatUsd(PRO_ANNUAL_AMOUNT / 12)} each month). Taxes are additional.`
-            : `${summary.trialAvailable ? "No credit card is necessary. Then " : ""}${formatUsd(PRO_MONTHLY_AMOUNT)} each month. Taxes are additional.`}>
+          <SettingRow label="Upgrade" description={upgradeDescription}>
             <div className="flex flex-wrap items-center justify-end gap-2">
+              <Tabs value={paidPlan} onValueChange={next => { setPaidPlan(next as PaidPlan); checkoutKey.current = undefined; }}>
+                <TabsList aria-label="Plan"><TabsTrigger value="pro">Pro</TabsTrigger><TabsTrigger value="team">Team</TabsTrigger></TabsList>
+              </Tabs>
+              {paidPlan === "team" ? <div className="w-20"><Input size="sm" type="number" min={TEAM_INCLUDED_SEATS} max={9999} aria-label="Seats" title="Seats" value={quantity} onChange={event => { const next = Math.trunc(Number(event.target.value)); setSeats(Math.min(9999, Math.max(TEAM_INCLUDED_SEATS, next || TEAM_INCLUDED_SEATS))); checkoutKey.current = undefined; }} /></div> : null}
               <Tabs value={interval} onValueChange={next => { setCheckoutInterval(next as BillingInterval); checkoutKey.current = undefined; }}>
                 <TabsList aria-label="Billing period"><TabsTrigger value="month">Monthly</TabsTrigger><TabsTrigger value="year">Annual</TabsTrigger></TabsList>
               </Tabs>
-              {summary.trialAvailable ? <Button size="sm" onClick={() => void trial()} disabled={busy !== ""}>{busy === "trial" ? <Spinner /> : null}Start the 14-day trial</Button> : null}
-              <Button size="sm" variant={summary.trialAvailable ? "outline" : "default"} onClick={() => void checkout()} disabled={busy !== ""}>{busy === "checkout" ? <Spinner /> : null}Select Pro</Button>
+              {summary.trialAvailable && paidPlan === "pro" ? <Button size="sm" onClick={() => void trial()} disabled={busy !== ""}>{busy === "trial" ? <Spinner /> : null}Start the 14-day trial</Button> : null}
+              <Button size="sm" variant={summary.trialAvailable && paidPlan === "pro" ? "outline" : "default"} onClick={() => void checkout()} disabled={busy !== ""}>{busy === "checkout" ? <Spinner /> : null}{paidPlan === "team" ? "Select Team" : "Select Pro"}</Button>
             </div>
           </SettingRow>
           <ul className="grid gap-2 border-t py-3 text-xs sm:grid-cols-2">
-            {PRO_FEATURES.map(feature => <li key={feature} className="flex items-center gap-2"><Check aria-hidden="true" className="size-3.5 text-primary" />{feature}</li>)}
+            {(paidPlan === "team" ? TEAM_FEATURES : PRO_FEATURES).map(feature => <li key={feature} className="flex items-center gap-2"><Check aria-hidden="true" className="size-3.5 text-primary" />{feature}</li>)}
           </ul>
         </SettingsSection>
       ) : null}
       <SettingsSection title="Usage">
+        {summary.purchasedSeats > 0 ? <SettingRow label="Seats" description="Each user who is not revoked uses a seat."><span className="text-xs text-muted-foreground">{summary.seatsUsed} of {summary.purchasedSeats}</span></SettingRow> : null}
         <SettingRow label="Companies" description="Archived companies do not count."><span className="text-xs text-muted-foreground">{limitText(usage.companies, limits.companies)}</span></SettingRow>
         <SettingRow label="Projects" description="Projects in all companies count."><span className="text-xs text-muted-foreground">{limitText(usage.projects, limits.projects)}</span></SettingRow>
         <SettingRow label="Tasks at a time" description="Other tasks wait in the queue."><span className="text-xs text-muted-foreground">{limitText(usage.runningTasks, limits.runningTasks)}</span></SettingRow>

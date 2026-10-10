@@ -4,6 +4,7 @@ import { flushSync } from "react-dom";
 
 import { companySettingsPath, readJsonUnchecked, withCompany, type ApiCompany, type ApiUser, type CompanyStatus } from "../lib/api.js";
 import type { AvatarRecord, AvatarUpdateBody } from "../contracts/avatars.js";
+import type { Plan } from "../contracts/billing.js";
 import { navigate } from "./navigation-state.js";
 
 const activeCompanyStorageKey = "suplex.activeCompanyId";
@@ -22,7 +23,7 @@ export type CompanyContextValue = {
   setCompanyIssueCode: (companyId: string, issueCode: string | null) => Promise<ApiCompany>;
   setCompanyStatus: (companyId: string, status: CompanyStatus) => Promise<ApiCompany>;
   /** Updates the plan label after a live billing read, without reloading companies. The plan belongs to the installation. */
-  setPlan: (plan: "free" | "pro") => void;
+  setPlan: (plan: Plan) => void;
   updateProfile: (profile: { displayName: string; username: string; avatarSeed: string; title: string }) => Promise<ApiUser>;
   avatars: Record<string, AvatarRecord>;
   saveAvatar: (ownerId: string, patch: AvatarUpdateBody) => Promise<AvatarRecord>;
@@ -167,7 +168,7 @@ export function CompanyProvider({ children }: { children: ReactNode }): ReactEle
     return updated;
   }, [reloadCompanies]);
 
-  const setPlan = useCallback((plan: "free" | "pro"): void => {
+  const setPlan = useCallback((plan: Plan): void => {
     const label = (company: ApiCompany): ApiCompany => ({ ...company, plan });
     setCompanies((current) => current.map(label));
     setCurrentCompany((current) => current && label(current));

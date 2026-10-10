@@ -150,7 +150,11 @@ async fn renewing_subscription(accounts: &Accounts, account_id: &str) -> Result<
     let Some(mut billing) = billing else {
         return Ok(false);
     };
-    let state = hosted.plan(&mut billing).await.map_err(|_| ())?.state;
+    let state = hosted
+        .plan(&mut billing, false)
+        .await
+        .map_err(|_| ())?
+        .state;
     Ok(state.active && !state.cancel_at_period_end && state.subscription_status != "trialing")
 }
 

@@ -9,6 +9,12 @@ pub const SEAT_UNIT_AMOUNT: i64 = 2000;
 pub const ANNUAL_UNIT_AMOUNT: i64 = 19200;
 pub const SEAT_CURRENCY: &str = "usd";
 pub const MAX_SEATS: i64 = 9999;
+/// Team: one flat fee covers the first seats, then each seat costs extra.
+pub const TEAM_INCLUDED_SEATS: i64 = 3;
+pub const TEAM_MONTHLY_FLAT: i64 = 7500;
+pub const TEAM_MONTHLY_SEAT: i64 = 1500;
+pub const TEAM_ANNUAL_FLAT: i64 = 72000;
+pub const TEAM_ANNUAL_SEAT: i64 = 14400;
 const MAX_URL: usize = 2048;
 const MAX_ID: usize = 128;
 
@@ -21,12 +27,26 @@ crate::shared::wire_enum! {
     pub enum BillingInterval { Month = "month", Year = "year" }
 }
 
-/// The body of a Pro checkout request.
+crate::shared::wire_enum! {
+    /// The paid plan a subscription buys. Pro is one seat; Team is per seat.
+    pub enum PaidPlan { Pro = "pro", Team = "team" }
+}
+
+/// The body of a checkout request. Without a plan it buys Pro; without a
+/// quantity Team buys its included seats.
 #[derive(Clone, Copy, Debug, Default, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct CheckoutBody {
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub plan: Option<PaidPlan>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub interval: Option<BillingInterval>,
+    #[serde(
+        default,
+        deserialize_with = "optional_quantity",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub quantity: Option<i64>,
 }
 
 /// `z.number().int().min(1).max(9999)`: any integral JSON number.
@@ -46,6 +66,10 @@ pub fn valid_idempotency_key(key: &str) -> bool {
 fn quantity<'de, D: Deserializer<'de>>(deserializer: D) -> Result<i64, D::Error> {
     seat_quantity(&serde_json::Value::deserialize(deserializer)?)
         .ok_or_else(|| D::Error::custom("invalid seat quantity"))
+}
+
+fn optional_quantity<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Option<i64>, D::Error> {
+    quantity(deserializer).map(Some)
 }
 
 /// `z.literal(true)`.
@@ -151,6 +175,10 @@ impl HostedBillingState {
 pub struct HostedPlan {
     pub state: HostedBillingState,
     pub trial_available: bool,
+    /// The paid plan of an active subscription. Only a host that asks for it
+    /// with `?tier=1` receives it: older hosts reject unknown fields.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plan: Option<PaidPlan>,
 }
 
 /// POST /v1/checkout and POST /v1/seats/preview.

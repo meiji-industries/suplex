@@ -281,6 +281,46 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
+    async fn team_lifts_every_limit_and_a_confirmed_team_lapse_is_remembered_until_paid() {
+        let f = fixture().await;
+        let team = || {
+            let mut plan = pro_plan();
+            plan["plan"] = json!("team");
+            plan["state"]["purchasedSeats"] = json!(4);
+            plan
+        };
+        f.fake.with(|hosted| hosted.respond("/v1/plan", 200, team()));
+        refresh(&f.state).await.unwrap();
+        assert_eq!(f.plan(), Plan::Team);
+        assert_eq!(limits(Plan::Team), TEAM);
+        assert_eq!((TEAM.companies, TEAM.projects), (None, None));
+        let lapsed = |f: &Fixture| f.state.with_database(|database| team_lapsed(database).unwrap());
+        assert!(!lapsed(&f));
+        assert_eq!(f.summary(&f.admin_id).await["purchasedSeats"], json!(4));
+
+        // A confirmed lapse keeps Team in the snapshot: work stays read-only.
+        f.fake.with(|hosted| hosted.respond("/v1/plan", 200, free_plan(false)));
+        refresh(&f.state).await.unwrap();
+        assert_eq!(f.plan(), Plan::Free);
+        assert!(lapsed(&f));
+        assert_eq!(f.summary(&f.admin_id).await["teamLapsed"], json!(true));
+
+        // Paying again restores it; a host that receives no tier records Pro.
+        f.fake.with(|hosted| hosted.respond("/v1/plan", 200, pro_plan()));
+        refresh(&f.state).await.unwrap();
+        assert_eq!(f.plan(), Plan::Pro);
+        assert!(!lapsed(&f));
+
+        // A lapse belongs to its account: another linked account is not read-only.
+        f.fake.with(|hosted| hosted.respond("/v1/plan", 200, team()));
+        refresh(&f.state).await.unwrap();
+        f.fake.with(|hosted| hosted.respond("/v1/plan", 200, free_plan(false)));
+        refresh(&f.state).await.unwrap();
+        f.sql("UPDATE suplex_account SET account_id = 'user_other'", &[]);
+        assert!(!lapsed(&f));
+    }
+
+    #[tokio::test]
     async fn a_free_limit_reads_suplex_sh_before_it_refuses() {
         let f = fixture().await;
         let create = |name: &str| {
@@ -411,7 +451,7 @@ pub(crate) mod tests {
             Some("checkout-key-1".into())
         );
         assert_eq!(f.fake.with(|hosted| hosted.calls.last().unwrap().body.clone()), "{}");
-        let annual = CheckoutBody { interval: Some(crate::billing::wire::BillingInterval::Year) };
+        let annual = CheckoutBody { plan: None, interval: Some(crate::billing::wire::BillingInterval::Year), quantity: None };
         checkout(&f.state, &f.admin_id, "checkout-key-2", annual).await.unwrap();
         assert_eq!(
             f.fake.with(|hosted| hosted.calls.last().unwrap().body.clone()),

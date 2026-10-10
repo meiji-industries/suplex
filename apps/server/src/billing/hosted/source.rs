@@ -9,11 +9,12 @@ use super::{
     Hosted, HostedError, HostedResult, ProviderError, backoff_at, iso, parse_ms,
     revenuecat::{Subscriber, pro_entitlement_window},
     store::{self, AccountRow},
-    stripe::{Customer, Invoice, InvoiceLine, Item, Subscription},
+    stripe::{Customer, Invoice, InvoiceLine, Item, PriceTier, Subscription},
 };
 use crate::billing::wire::{
-    ANNUAL_UNIT_AMOUNT, BillingEnvironment, BillingInterval, HostedBillingState, SEAT_CURRENCY,
-    SEAT_UNIT_AMOUNT,
+    ANNUAL_UNIT_AMOUNT, BillingEnvironment, BillingInterval, HostedBillingState, PaidPlan,
+    SEAT_CURRENCY, SEAT_UNIT_AMOUNT, TEAM_ANNUAL_FLAT, TEAM_ANNUAL_SEAT, TEAM_INCLUDED_SEATS,
+    TEAM_MONTHLY_FLAT, TEAM_MONTHLY_SEAT,
 };
 
 pub const TERMINAL_STATUSES: [&str; 2] = ["canceled", "incomplete_expired"];
@@ -113,49 +114,109 @@ impl Hosted {
         HostedError::unavailable()
     }
 
-    /// Cached on success only.
+    /// The Pro price for `interval`. Cached on success only.
     pub(super) async fn ensure_price_verified(
         &self,
         interval: BillingInterval,
     ) -> HostedResult<()> {
-        let (verified, amount) = match interval {
-            BillingInterval::Month => (&self.price_verified[0], SEAT_UNIT_AMOUNT),
-            BillingInterval::Year => (&self.price_verified[1], ANNUAL_UNIT_AMOUNT),
+        self.ensure_plan_price_verified(PaidPlan::Pro, interval)
+            .await
+            .map(|_| ())
+    }
+
+    /// The configured price of `plan` and `interval`, after checking that it
+    /// is the Suplex price: it never sells an arbitrary price. Pro is a USD
+    /// per-unit seat price. Team is a graduated price whose first tier is a
+    /// flat fee for the included seats and whose second tier is per seat.
+    pub(super) async fn ensure_plan_price_verified(
+        &self,
+        plan: PaidPlan,
+        interval: BillingInterval,
+    ) -> HostedResult<String> {
+        let price_id = self
+            .config
+            .plan_price_id(plan, interval)
+            .ok_or_else(|| {
+                HostedError::new(409, Some("plan_unavailable"), "Team is not available")
+            })?
+            .to_owned();
+        let slot = match (plan, interval) {
+            (PaidPlan::Pro, BillingInterval::Month) => 0,
+            (PaidPlan::Pro, BillingInterval::Year) => 1,
+            (PaidPlan::Team, BillingInterval::Month) => 2,
+            (PaidPlan::Team, BillingInterval::Year) => 3,
         };
+        let verified = &self.price_verified[slot];
         if verified.load(Ordering::Acquire) {
-            return Ok(());
+            return Ok(price_id);
         }
         let price = self
             .stripe
-            .retrieve_price(self.config.price_id(interval))
+            .retrieve_price(&price_id)
             .await
             .map_err(|_| HostedError::unavailable())?;
-        let valid = price.currency == SEAT_CURRENCY
-            && price.unit_amount == Some(amount)
+        let amounts = match plan {
+            PaidPlan::Pro => {
+                let amount = match interval {
+                    BillingInterval::Month => SEAT_UNIT_AMOUNT,
+                    BillingInterval::Year => ANNUAL_UNIT_AMOUNT,
+                };
+                price.unit_amount == Some(amount)
+                    && price.billing_scheme.as_deref() == Some("per_unit")
+            }
+            PaidPlan::Team => {
+                let (flat, seat) = match interval {
+                    BillingInterval::Month => (TEAM_MONTHLY_FLAT, TEAM_MONTHLY_SEAT),
+                    BillingInterval::Year => (TEAM_ANNUAL_FLAT, TEAM_ANNUAL_SEAT),
+                };
+                price.billing_scheme.as_deref() == Some("tiered")
+                    && price.tiers_mode.as_deref() == Some("graduated")
+                    && price.tiers
+                        == [
+                            PriceTier {
+                                up_to: Some(TEAM_INCLUDED_SEATS),
+                                flat_amount: Some(flat),
+                                unit_amount: Some(0),
+                            },
+                            PriceTier {
+                                up_to: None,
+                                flat_amount: Some(0),
+                                unit_amount: Some(seat),
+                            },
+                        ]
+            }
+        };
+        let valid = amounts
+            && price.currency == SEAT_CURRENCY
             && price.recurring.as_ref().is_some_and(|recurring| {
                 recurring.interval == interval.as_str()
                     && recurring.interval_count == 1
                     && recurring.usage_type == "licensed"
             })
-            && price.billing_scheme.as_deref() == Some("per_unit")
             && !price.transform_quantity
             && price.livemode == (self.config.environment == BillingEnvironment::Production);
         if !valid {
             return Err(HostedError::new(
                 503,
                 Some("billing_setup_invalid"),
-                match interval {
-                    BillingInterval::Month => {
+                match (plan, interval) {
+                    (PaidPlan::Pro, BillingInterval::Month) => {
                         "The configured Stripe price is not the Suplex Pro monthly seat price"
                     }
-                    BillingInterval::Year => {
+                    (PaidPlan::Pro, BillingInterval::Year) => {
                         "The configured Stripe price is not the Suplex Pro annual seat price"
+                    }
+                    (PaidPlan::Team, BillingInterval::Month) => {
+                        "The configured Stripe price is not the Suplex Team monthly price"
+                    }
+                    (PaidPlan::Team, BillingInterval::Year) => {
+                        "The configured Stripe price is not the Suplex Team annual price"
                     }
                 },
             ));
         }
         verified.store(true, Ordering::Release);
-        Ok(())
+        Ok(price_id)
     }
 
     fn persist_customer_hint(
@@ -227,7 +288,7 @@ impl Hosted {
         Ok(None)
     }
 
-    /// The live subscription with a Pro price, newest first.
+    /// The live subscription with a Pro or Team price, newest first.
     fn select_subscription(&self, subscriptions: &[Subscription]) -> Option<(Subscription, Item)> {
         let mut candidates = subscriptions
             .iter()
@@ -235,7 +296,7 @@ impl Hosted {
                 let item = subscription
                     .items
                     .iter()
-                    .find(|item| self.config.is_pro_price(&item.price_id))?;
+                    .find(|item| self.config.price_plan(&item.price_id).is_some())?;
                 Some((subscription, item))
             })
             .collect::<Vec<_>>();

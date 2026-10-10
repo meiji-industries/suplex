@@ -23,7 +23,7 @@ use super::{
 };
 use crate::{
     billing::wire::{
-        BillingEnvironment, BillingInterval, HostedSeatChangeBody, QuantityBody,
+        BillingEnvironment, BillingInterval, HostedSeatChangeBody, PaidPlan, QuantityBody,
         RegistrationResponse, seat_quantity, valid_idempotency_key,
     },
     shared::{hash::sha256_hex, page, time::now_millis_rfc3339},
@@ -47,6 +47,7 @@ pub struct ServiceConfig {
     pub stripe_secret_key: String,
     pub stripe_price_id: String,
     pub stripe_annual_price_id: String,
+    pub stripe_team_price_ids: Option<(String, String)>,
     pub stripe_portal_configuration_id: String,
     pub stripe_webhook_secret: String,
     /// Stripe Tax on Checkout. It needs a head office address in Stripe.
@@ -65,6 +66,7 @@ impl ServiceConfig {
             environment: self.environment,
             stripe_price_id: self.stripe_price_id.clone(),
             stripe_annual_price_id: self.stripe_annual_price_id.clone(),
+            stripe_team_price_ids: self.stripe_team_price_ids.clone(),
             stripe_portal_configuration_id: self.stripe_portal_configuration_id.clone(),
             stripe_webhook_secret: self.stripe_webhook_secret.clone(),
             automatic_tax: self.automatic_tax,
@@ -155,6 +157,19 @@ pub fn load_config(env: &dyn Fn(&str) -> Option<String>) -> Result<ServiceConfig
         stripe_secret_key: require("STRIPE_SECRET_KEY")?,
         stripe_price_id: require("STRIPE_PRO_MONTHLY_PRICE_ID")?,
         stripe_annual_price_id: require("STRIPE_PRO_ANNUAL_PRICE_ID")?,
+        stripe_team_price_ids: match (
+            env("STRIPE_TEAM_MONTHLY_PRICE_ID").filter(|id| !id.is_empty()),
+            env("STRIPE_TEAM_ANNUAL_PRICE_ID").filter(|id| !id.is_empty()),
+        ) {
+            (Some(month), Some(year)) => Some((month, year)),
+            (None, None) => None,
+            _ => {
+                return Err(
+                    "Set both STRIPE_TEAM_MONTHLY_PRICE_ID and STRIPE_TEAM_ANNUAL_PRICE_ID, or neither"
+                        .into(),
+                );
+            }
+        },
         stripe_portal_configuration_id: require("STRIPE_PORTAL_CONFIGURATION_ID")?,
         stripe_webhook_secret: require("STRIPE_WEBHOOK_SECRET")?,
         automatic_tax,
@@ -293,7 +308,13 @@ async fn checkout(
     let quantity = quantity_body(&body)?;
     Ok(to_json(
         &hosted
-            .checkout(&mut account, quantity, BillingInterval::Month, &key)
+            .checkout(
+                &mut account,
+                PaidPlan::Pro,
+                quantity,
+                BillingInterval::Month,
+                &key,
+            )
             .await?,
     ))
 }

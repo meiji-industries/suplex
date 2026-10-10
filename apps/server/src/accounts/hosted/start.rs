@@ -195,7 +195,7 @@ async fn done(State(accounts): State<Accounts>, Query(query): Query<DoneQuery>) 
     let hosted = &accounts.hosted;
     let plan = match hosted.billing_for_user(&account.id) {
         Ok(mut billing) => match hosted.start_trial(&mut billing).await {
-            Err(error) if error.has_code("trial_used") => hosted.plan(&mut billing).await,
+            Err(error) if error.has_code("trial_used") => hosted.plan(&mut billing, false).await,
             other => other,
         },
         Err(error) => Err(error),

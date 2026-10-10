@@ -19,6 +19,7 @@ export function planLabel(billing: BillingSummary | undefined, now = Date.now())
     return `Pro trial · ${days} ${days === 1 ? "day" : "days"}`;
   }
   if (billing.plan === "pro") return "Pro";
+  if (billing.plan === "team") return "Team";
   return billing.trialAvailable ? "Pro trial · 14 days" : "Free";
 }
 

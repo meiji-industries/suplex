@@ -32,6 +32,27 @@ use crate::billing::wire::BillingEnvironment;
 
 pub const PRICE_ID: &str = "price_pro_monthly";
 pub const ANNUAL_PRICE_ID: &str = "price_pro_annual";
+pub const TEAM_PRICE_ID: &str = "price_team_monthly";
+pub const TEAM_ANNUAL_PRICE_ID: &str = "price_team_annual";
+
+/// A Stripe Team price as a retrieve with `expand[0]=tiers` returns it.
+pub fn team_price(id: &str, interval: &str, flat: i64, seat: i64) -> Value {
+    json!({
+        "id": id,
+        "object": "price",
+        "currency": "usd",
+        "unit_amount": null,
+        "billing_scheme": "tiered",
+        "tiers_mode": "graduated",
+        "tiers": [
+            {"up_to": 3, "flat_amount": flat, "unit_amount": 0},
+            {"up_to": null, "flat_amount": null, "unit_amount": seat},
+        ],
+        "livemode": false,
+        "transform_quantity": null,
+        "recurring": {"interval": interval, "interval_count": 1, "usage_type": "licensed"},
+    })
+}
 pub const WEBHOOK_SECRET: &str = "whsec_fake";
 pub const RC_AUTHORIZATION: &str = "rc-hook-auth";
 pub const RC_APP_ID: &str = "app_suplex";
@@ -266,6 +287,8 @@ pub struct StripeState {
     clock: TestClock,
     pub price: Value,
     pub annual_price: Value,
+    pub team_price: Value,
+    pub team_annual_price: Value,
     pub customers: IndexMap<String, FakeCustomer>,
     pub subscriptions: IndexMap<String, FakeSubscription>,
     pub sessions: IndexMap<String, FakeSession>,
@@ -330,6 +353,8 @@ impl StripeState {
                 "transform_quantity": null,
                 "recurring": {"interval": "year", "interval_count": 1, "usage_type": "licensed"},
             }),
+            team_price: team_price(TEAM_PRICE_ID, "month", 7500, 1500),
+            team_annual_price: team_price(TEAM_ANNUAL_PRICE_ID, "year", 72000, 14400),
             customers: IndexMap::new(),
             subscriptions: IndexMap::new(),
             sessions: IndexMap::new(),
@@ -793,6 +818,10 @@ impl StripeState {
             ["v1", "prices", id] if get && *id == ANNUAL_PRICE_ID => {
                 (200, self.annual_price.clone())
             }
+            ["v1", "prices", id] if get && *id == TEAM_PRICE_ID => (200, self.team_price.clone()),
+            ["v1", "prices", id] if get && *id == TEAM_ANNUAL_PRICE_ID => {
+                (200, self.team_annual_price.clone())
+            }
             ["v1", "prices", _] if get => (200, self.price.clone()),
             ["v1", "customers"] => {
                 self.create_customer_keys.push(key);
@@ -999,6 +1028,7 @@ pub fn hosted_config(environment: BillingEnvironment) -> HostedConfig {
         environment,
         stripe_price_id: PRICE_ID.into(),
         stripe_annual_price_id: ANNUAL_PRICE_ID.into(),
+        stripe_team_price_ids: Some((TEAM_PRICE_ID.into(), TEAM_ANNUAL_PRICE_ID.into())),
         stripe_portal_configuration_id: "bpc_fake".into(),
         stripe_webhook_secret: WEBHOOK_SECRET.into(),
         automatic_tax: true,

@@ -89,6 +89,55 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn team_checkout_buys_seats_and_the_plan_reports_team_to_hosts_that_ask() {
+        use crate::billing::hosted::fakes::{TEAM_PRICE_ID, team_price};
+        let f = Fixture::new().await;
+        let token = login(&f, "user_1");
+        // Pro is one seat; Team buys at least its 3 included seats.
+        for (key, body) in [
+            ("key-seats-0", json!({"quantity": 4})),
+            ("key-seats-1", json!({"plan": "team", "quantity": 2})),
+        ] {
+            let (status, _) = f.post("/v1/plan/checkout", Some(&token), Some(key), &body).await;
+            assert_eq!(status, 400, "{body}");
+        }
+        let (status, body) = f
+            .post(
+                "/v1/plan/checkout",
+                Some(&token),
+                Some("key-seats-4"),
+                &json!({"plan": "team", "quantity": 4}),
+            )
+            .await;
+        assert_eq!((status, body["status"].clone()), (200, json!("redirect")), "{body}");
+        let customer = f.stripe.with(|stripe| {
+            assert_eq!(stripe.sessions[0].line_items, [(TEAM_PRICE_ID.to_owned(), 4)]);
+            stripe.sessions[0].customer_id.clone()
+        });
+
+        // Only a host that asks with `tier=1` receives the plan field.
+        f.stripe.with(|stripe| {
+            let subscription = stripe.add_subscription(&customer, 4);
+            stripe.subscription(&subscription).items[0].price_id = TEAM_PRICE_ID.into();
+        });
+        let (_, old) = f.get("/v1/plan", Some(&token)).await;
+        assert_eq!((old["state"]["active"].clone(), old.get("plan")), (json!(true), None), "{old}");
+        let (_, new) = f.get("/v1/plan?tier=1", Some(&token)).await;
+        assert_eq!(new["plan"], json!("team"), "{new}");
+        assert_eq!(new["state"]["purchasedSeats"], json!(4));
+
+        // A Team price with other tiers never sells.
+        let f = Fixture::new().await;
+        let token = login(&f, "user_2");
+        f.stripe
+            .with(|stripe| stripe.team_price = team_price(TEAM_PRICE_ID, "month", 7500, 1000));
+        let (status, body) = f
+            .post("/v1/plan/checkout", Some(&token), Some("key-seats-5"), &json!({"plan": "team"}))
+            .await;
+        assert_eq!((status, body["code"].clone()), (503, json!("billing_setup_invalid")));
+    }
+
+    #[tokio::test]
     async fn checkout_buys_the_requested_pro_price() {
         use crate::billing::hosted::fakes::{ANNUAL_PRICE_ID, PRICE_ID};
         let f = Fixture::new().await;

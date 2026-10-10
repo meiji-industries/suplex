@@ -24,8 +24,10 @@ function StatusBadge({ status }: { status: "active" | "paused" | "archived" }): 
   return <Badge variant="secondary" className="ml-auto text-xs">{status[0]!.toUpperCase() + status.slice(1)}</Badge>;
 }
 
-function PlanBadge({ plan }: { plan: "free" | "pro" | null | undefined }): ReactElement | null {
-  return plan ? <Badge variant="secondary">{plan === "pro" ? "Pro" : "Free"}</Badge> : null;
+const planLabels = { free: "Free", pro: "Pro", team: "Team" } as const;
+
+function PlanBadge({ plan }: { plan: keyof typeof planLabels | null | undefined }): ReactElement | null {
+  return plan ? <Badge variant="secondary">{planLabels[plan]}</Badge> : null;
 }
 
 function CreateCompanyDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }): ReactElement {

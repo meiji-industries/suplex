@@ -6,7 +6,7 @@ import { registerApiFailureCapture } from "../lib/analytics-capture.js";
 
 export type BrowserAnalyticsContext = {
   companyId?: string;
-  companyPlan?: "free" | "pro" | null;
+  companyPlan?: "free" | "pro" | "team" | null;
   platform: "desktop" | "mobile" | "browser";
 };
 

@@ -1,5 +1,5 @@
-//! Suplex Free and Pro. Pro belongs to the Suplex account linked to this
-//! installation. The hosted service at suplex.sh owns subscription evidence;
+//! Suplex Free, Pro, and Team. A paid plan belongs to the Suplex account
+//! linked to this installation. The hosted service at suplex.sh owns subscription evidence;
 //! this module reads it, keeps the last confirmed Pro access in `suplex_plan`,
 //! forwards money commands, and enforces each plan's limits.
 //!
@@ -24,13 +24,16 @@ use crate::{
     platform::database::{DatabaseResult, SuplexDatabase},
     shared::{PublicFailure, time::rfc3339_millis},
 };
-use wire::{CheckoutBody, HostedCheckoutResult, HostedErrorBody, HostedPlan, HostedPortalResult};
+use wire::{
+    CheckoutBody, HostedCheckoutResult, HostedErrorBody, HostedPlan, HostedPortalResult, PaidPlan,
+    TEAM_INCLUDED_SEATS,
+};
 
 pub mod hosted;
 pub mod wire;
 
 crate::shared::wire_enum! {
-    pub enum Plan { Free = "free", Pro = "pro" }
+    pub enum Plan { Free = "free", Pro = "pro", Team = "team" }
 }
 
 /// A `None` limit is unlimited.
@@ -57,6 +60,13 @@ pub const PRO: PlanLimits = PlanLimits {
     monthly_tasks: None,
 };
 
+pub const TEAM: PlanLimits = PlanLimits {
+    companies: None,
+    projects: None,
+    running_tasks: None,
+    monthly_tasks: None,
+};
+
 /// The number in `running_limited_sql!`.
 const FREE_RUNNING_TASKS: i64 = 3;
 
@@ -64,12 +74,13 @@ pub fn limits(plan: Plan) -> PlanLimits {
     match plan {
         Plan::Free => FREE,
         Plan::Pro => PRO,
+        Plan::Team => TEAM,
     }
 }
 
-/// SQL: confirmed Pro access for the linked account has not ended.
+/// SQL: confirmed paid access for the linked account has not ended.
 #[macro_export]
-macro_rules! pro_sql {
+macro_rules! paid_sql {
     () => {
         "EXISTS(SELECT 1 FROM suplex_plan p JOIN suplex_account a ON a.account_id = p.account_id WHERE p.id = 'host' AND p.access_until > strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))"
     };
@@ -89,7 +100,7 @@ macro_rules! running_limited_sql {
     () => {
         concat!(
             "(NOT ",
-            $crate::pro_sql!(),
+            $crate::paid_sql!(),
             " AND ",
             $crate::running_tasks_sql!(),
             " >= 3)"
@@ -98,10 +109,34 @@ macro_rules! running_limited_sql {
 }
 
 pub fn plan(database: &SuplexDatabase) -> DatabaseResult<Plan> {
-    let pro: bool = database
-        .connection()
-        .query_row(concat!("SELECT ", pro_sql!()), [], |row| row.get(0))?;
-    Ok(if pro { Plan::Pro } else { Plan::Free })
+    let (paid, team): (bool, bool) = database.connection().query_row(
+        concat!(
+            "SELECT ",
+            paid_sql!(),
+            ", EXISTS(SELECT 1 FROM suplex_plan WHERE id = 'host' AND plan = 'team')"
+        ),
+        [],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )?;
+    Ok(match (paid, team) {
+        (false, _) => Plan::Free,
+        (true, false) => Plan::Pro,
+        (true, true) => Plan::Team,
+    })
+}
+
+/// The linked account's last confirmed plan was Team and its paid access has
+/// ended. Work is read-only until someone pays again.
+pub fn team_lapsed(database: &SuplexDatabase) -> DatabaseResult<bool> {
+    Ok(database.connection().query_row(
+        concat!(
+            "SELECT NOT ",
+            paid_sql!(),
+            " AND EXISTS(SELECT 1 FROM suplex_plan p JOIN suplex_account a ON a.account_id = p.account_id WHERE p.id = 'host' AND p.plan = 'team')"
+        ),
+        [],
+        |row| row.get(0),
+    )?)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -169,7 +204,8 @@ pub fn limit_failure(plan: Plan, limit: Limit, allowed: i64) -> PublicFailure {
     };
     let message = match plan {
         Plan::Free => format!("Free includes {what}. Select Pro in Settings > Billing."),
-        Plan::Pro => format!("Pro includes {what}."),
+        Plan::Pro => format!("Pro includes {what}. Select Team in Settings > Billing."),
+        Plan::Team => format!("Team includes {what}."),
     };
     PublicFailure::new(402, message).with_code(code)
 }
@@ -326,16 +362,25 @@ pub fn parse_service_url(value: &str, name: &str) -> Result<Url, String> {
     Ok(url)
 }
 
+/// Keeps the last paid plan after access ends, so a lapsed Team plan stays
+/// distinct from Free. A different account starts over.
 fn remember(state: &AppState, account_id: &str, plan: &HostedPlan) -> DatabaseResult<()> {
     let access_until = plan
         .state
         .active
         .then(|| plan.state.access_until.clone())
         .flatten();
+    let paid = plan
+        .state
+        .active
+        .then(|| plan.plan.unwrap_or(PaidPlan::Pro).as_str());
     state.with_database(|database| {
         database.connection().execute(
-            "INSERT OR REPLACE INTO suplex_plan (id, account_id, access_until, checked_at) VALUES ('host', ?1, ?2, ?3)",
-            params![account_id, access_until, rfc3339_millis(Utc::now())],
+            "INSERT INTO suplex_plan (id, account_id, access_until, checked_at, plan) VALUES ('host', ?1, ?2, ?3, ?4)
+             ON CONFLICT(id) DO UPDATE SET access_until = excluded.access_until, checked_at = excluded.checked_at,
+               plan = CASE WHEN suplex_plan.account_id = excluded.account_id THEN COALESCE(excluded.plan, suplex_plan.plan) ELSE excluded.plan END,
+               account_id = excluded.account_id",
+            params![account_id, access_until, rfc3339_millis(Utc::now()), paid],
         )?;
         Ok(())
     })
@@ -354,7 +399,7 @@ pub async fn refresh(state: &AppState) -> Result<Option<HostedPlan>, Box<dyn Err
     };
     let plan = valid(
         client
-            .call(Method::GET, "/v1/plan", &account.token, None, None)
+            .call(Method::GET, "/v1/plan?tier=1", &account.token, None, None)
             .await?,
     )?;
     remember(state, &account.account_id, &plan)?;
@@ -384,6 +429,13 @@ pub struct BillingSummary {
     pub payment_action_required: bool,
     /// Only administrators receive a billing URL.
     pub payment_action_url: Option<String>,
+    /// Seats on the subscription, as suplex.sh reports them. Zero without
+    /// one. Team always covers its included seats.
+    pub purchased_seats: i64,
+    /// The last paid plan was Team and its access ended: work is read-only.
+    pub team_lapsed: bool,
+    /// Users who are not revoked, the owner included.
+    pub seats_used: i64,
 }
 
 pub async fn summary(
@@ -399,8 +451,18 @@ pub async fn summary(
     } else {
         None
     };
-    let (plan, usage) = state.with_database(|database| {
-        Ok::<_, Box<dyn Error + Send + Sync>>((plan(database)?, usage(database, Utc::now())?))
+    let (plan, usage, seats_used, team_lapsed) = state.with_database(|database| {
+        let seats_used = database.connection().query_row(
+            "SELECT count(*) FROM suplex_users WHERE status <> 'revoked'",
+            [],
+            |row| row.get(0),
+        )?;
+        Ok::<_, Box<dyn Error + Send + Sync>>((
+            plan(database)?,
+            usage(database, Utc::now())?,
+            seats_used,
+            team_lapsed(database)?,
+        ))
     })?;
     let payment_action_url = match (&remote, &state.billing) {
         (Some(remote), Some(client)) if can_manage_billing => remote
@@ -436,6 +498,12 @@ pub async fn summary(
             .as_ref()
             .is_some_and(|remote| remote.state.payment_action_required),
         payment_action_url,
+        purchased_seats: remote.as_ref().map_or(0, |remote| match remote.plan {
+            Some(PaidPlan::Team) => remote.state.purchased_seats.max(TEAM_INCLUDED_SEATS),
+            _ => remote.state.purchased_seats,
+        }),
+        seats_used,
+        team_lapsed,
     })
 }
 

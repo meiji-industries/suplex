@@ -22,10 +22,11 @@ import { BillingSection, formatUsd } from "../features/settings/billing-section.
 const free: BillingSummary = {
   plan: "free", limits: { companies: 1, projects: 2, runningTasks: 3, monthlyTasks: 50 }, usage: { companies: 1, projects: 1, runningTasks: 2, monthlyTasks: 12 },
   checked: true, accountLinked: true, canManageBilling: true, purchaseConfigured: true, trialAvailable: true,
-  subscriptionStatus: "none", renewalAt: null, accessUntil: null, cancelAtPeriodEnd: false, paymentActionRequired: false, paymentActionUrl: null,
+  subscriptionStatus: "none", renewalAt: null, accessUntil: null, cancelAtPeriodEnd: false, paymentActionRequired: false, paymentActionUrl: null, purchasedSeats: 0, seatsUsed: 4, teamLapsed: false,
 };
 const trial: BillingSummary = { ...free, plan: "pro", limits: { companies: 3, projects: 10, runningTasks: null, monthlyTasks: null }, trialAvailable: false, subscriptionStatus: "trialing", accessUntil: "2026-11-03T00:00:00.000Z" };
-const pro: BillingSummary = { ...trial, subscriptionStatus: "active", renewalAt: "2026-11-03T00:00:00.000Z" };
+const pro: BillingSummary = { ...trial, subscriptionStatus: "active", renewalAt: "2026-11-03T00:00:00.000Z", purchasedSeats: 1 };
+const team: BillingSummary = { ...pro, plan: "team", limits: { companies: null, projects: null, runningTasks: null, monthlyTasks: null }, purchasedSeats: 4 };
 
 let roots: Root[] = [];
 let tab: { opener: unknown; location: { href: string }; close: ReturnType<typeof vi.fn> };
@@ -102,7 +103,7 @@ test("Annual shows the yearly price and buys it with a new key", async () => {
   const container = await mount();
   await act(async () => button(container, "Select Pro")!.click());
   await act(async () => button(container, "Annual")!.click());
-  expect(container.textContent).toContain("$192 each year ($16 each month).");
+  expect(container.textContent).toContain("$192 each year ($16 each month) for one seat.");
   await act(async () => button(container, "Select Pro")!.click());
   const [monthly, annual] = posts("/api/billing/checkout").map(([, init]) => init);
   expect(annual.body).toBe(JSON.stringify({ interval: "year" }));
@@ -117,6 +118,27 @@ test("Pro offers the billing portal and shows the renewal", async () => {
   expect(button(container, "Select Pro")).toBeUndefined();
   await act(async () => button(container, "Open billing")!.click());
   expect(tab.location.href).toBe("https://billing.stripe.com/p/1");
+});
+
+test("Team buys a seat for each user, at least 3, and shows seats in use", async () => {
+  api.readJson.mockImplementation(async (url: string) => url === "/api/billing" ? free : { status: "redirect", url: "https://checkout.stripe.com/c/pay/1" });
+  const container = await mount();
+  await act(async () => button(container, "Team")!.click());
+  expect(button(container, "Start the 14-day trial")).toBeUndefined();
+  expect(container.textContent).toContain("$75 each month for 3 seats, then $15 for each seat. 4 seats cost $90 each month.");
+  await act(async () => button(container, "Select Team")!.click());
+  expect(posts("/api/billing/checkout")[0]![1].body).toBe(JSON.stringify({ plan: "team", interval: "month", quantity: 4 }));
+  api.readJson.mockImplementation(async () => team);
+  const teamView = await mount();
+  expect(teamView.textContent).toContain("Team plan");
+  expect(teamView.querySelector('[data-setting-row="Seats"]')?.textContent).toContain("4 of 4");
+});
+
+test("a lapsed Team says that work is read-only", async () => {
+  api.readJson.mockImplementation(async () => ({ ...free, teamLapsed: true, trialAvailable: false }));
+  const container = await mount();
+  expect(container.textContent).toContain("Team ended");
+  expect(container.textContent).toContain("Work is read-only until you select Team again.");
 });
 
 test("a member or a host without a Suplex account sees the plan without actions", async () => {

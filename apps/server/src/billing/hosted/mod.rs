@@ -15,7 +15,9 @@ use serde_json::Value;
 use subtle::ConstantTimeEq;
 
 use crate::{
-    billing::wire::{BillingEnvironment, BillingInterval, HostedSeatPreview, RegistrationBody},
+    billing::wire::{
+        BillingEnvironment, BillingInterval, HostedSeatPreview, PaidPlan, RegistrationBody,
+    },
     shared::{hash::sha256_hex, js_json, time::rfc3339_millis},
 };
 use revenuecat::RevenueCatClient;
@@ -49,6 +51,8 @@ pub struct HostedConfig {
     /// The monthly Pro price; legacy seat commands use only this one.
     pub stripe_price_id: String,
     pub stripe_annual_price_id: String,
+    /// The Team prices, monthly and annual. Without them Team is not sold.
+    pub stripe_team_price_ids: Option<(String, String)>,
     pub stripe_portal_configuration_id: String,
     pub stripe_webhook_secret: String,
     pub automatic_tax: bool,
@@ -67,8 +71,24 @@ impl HostedConfig {
         }
     }
 
-    pub fn is_pro_price(&self, price_id: &str) -> bool {
-        price_id == self.stripe_price_id || price_id == self.stripe_annual_price_id
+    pub fn plan_price_id(&self, plan: PaidPlan, interval: BillingInterval) -> Option<&str> {
+        match (plan, &self.stripe_team_price_ids) {
+            (PaidPlan::Pro, _) => Some(self.price_id(interval)),
+            (PaidPlan::Team, Some((month, _))) if interval == BillingInterval::Month => Some(month),
+            (PaidPlan::Team, Some((_, year))) => Some(year),
+            (PaidPlan::Team, None) => None,
+        }
+    }
+
+    /// The paid plan a configured price buys, or `None` for another price.
+    pub fn price_plan(&self, price_id: &str) -> Option<PaidPlan> {
+        if price_id == self.stripe_price_id || price_id == self.stripe_annual_price_id {
+            return Some(PaidPlan::Pro);
+        }
+        self.stripe_team_price_ids
+            .as_ref()
+            .filter(|(month, year)| price_id == month || price_id == year)
+            .map(|_| PaidPlan::Team)
     }
 }
 
@@ -237,8 +257,8 @@ pub struct Inner {
     clock: Clock,
     // Lock map never shrinks; evict when account count matters
     locks: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
-    /// Monthly and annual price verification, cached on success.
-    price_verified: [AtomicBool; 2],
+    /// Pro and Team, monthly and annual, price verification cached on success.
+    price_verified: [AtomicBool; 4],
     processing: tokio::sync::Mutex<()>,
 }
 

@@ -31,6 +31,17 @@ pub struct Price {
     pub livemode: bool,
     pub transform_quantity: bool,
     pub recurring: Option<Recurring>,
+    pub tiers_mode: Option<String>,
+    /// Only a retrieve that expands `tiers` returns them.
+    pub tiers: Vec<PriceTier>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct PriceTier {
+    /// `None` is the last, unbounded tier.
+    pub up_to: Option<i64>,
+    pub flat_amount: Option<i64>,
+    pub unit_amount: Option<i64>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -220,6 +231,19 @@ pub fn normalize_price(price: &Value) -> Price {
                 interval_count: number(recurring, "interval_count"),
                 usage_type: text(recurring, "usage_type").unwrap_or_default(),
             }),
+        tiers_mode: text(price, "tiers_mode"),
+        tiers: price
+            .get("tiers")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .map(|tier| PriceTier {
+                up_to: tier.get("up_to").and_then(Value::as_i64),
+                // The dashboard stores a blank amount as null: it charges nothing.
+                flat_amount: tier.get("flat_amount").and_then(Value::as_i64).or(Some(0)),
+                unit_amount: tier.get("unit_amount").and_then(Value::as_i64).or(Some(0)),
+            })
+            .collect(),
     }
 }
 
@@ -493,7 +517,10 @@ impl StripeClient {
     pub async fn retrieve_price(&self, price_id: &str) -> Result<Price, ProviderError> {
         Ok(normalize_price(
             &self
-                .get(&format!("/v1/prices/{price_id}"), &Pairs::new())
+                .get(
+                    &format!("/v1/prices/{price_id}"),
+                    &pairs([("expand[0]", "tiers".into())]),
+                )
                 .await?,
         ))
     }
@@ -748,6 +775,8 @@ impl StripeClient {
             ("line_items[0][quantity]", params.quantity.to_string()),
             ("automatic_tax[enabled]", params.automatic_tax.to_string()),
             ("allow_promotion_codes", "true".into()),
+            // A promotion code can make the checkout free; then Stripe asks for no card.
+            ("payment_method_collection", "if_required".into()),
             ("billing_address_collection", "auto".into()),
             ("customer_update[address]", "auto".into()),
             ("customer_update[name]", "auto".into()),

@@ -1,5 +1,8 @@
 #!/bin/sh
-set -eu
+# mise renders this into every command's environment, so it must never fail.
+# Without a MagicDNS name (Tailscale stopped, logged out, or missing), print
+# SUPLEX_TAILSCALE_ADDRESS, which may be empty.
+set -u
 
 tailscale_command="${SUPLEX_TAILSCALE_COMMAND:-tailscale}"
 macos_tailscale_command="/Applications/Tailscale.app/Contents/MacOS/Tailscale"
@@ -8,10 +11,7 @@ if [ "$tailscale_command" = "tailscale" ] && [ -x "$macos_tailscale_command" ]; 
   tailscale_command="$macos_tailscale_command"
 fi
 
-if ! tailscale_status=$("$tailscale_command" status --json 2>/dev/null); then
-  printf '%s\n' "${SUPLEX_TAILSCALE_ADDRESS:-}"
-  exit 0
-fi
+address=$("$tailscale_command" status --json 2>/dev/null \
+  | jq -r '.Self.DNSName | strings | rtrimstr(".") | select(endswith(".ts.net"))' 2>/dev/null)
 
-printf '%s\n' "$tailscale_status" \
-  | jq -er '.Self.DNSName | strings | rtrimstr(".") | select(endswith(".ts.net"))'
+printf '%s\n' "${address:-${SUPLEX_TAILSCALE_ADDRESS:-}}"

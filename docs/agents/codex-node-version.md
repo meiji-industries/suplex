@@ -18,11 +18,11 @@ directory-specific version from `mise.toml`.
 This also means every non-interactive `node`, `pnpm`, or other mise-managed
 command evaluates the repository's `mise.toml` before the command starts. In
 Suplex, that evaluation runs `scripts/resolve-magicdns.sh` to populate
-`SUPLEX_TAILSCALE_ADDRESS`. If Tailscale exits successfully but prints something
-other than JSON, `jq` fails and the requested command never starts. This is a
-local environment-rendering failure, not a TypeScript or test failure. To
-diagnose the project independently, invoke the pinned Node binary directly;
-fix the Tailscale/MagicDNS response before returning to the normal mise shim.
+`SUPLEX_TAILSCALE_ADDRESS`. The script always exits successfully: when Tailscale
+is missing, stopped, logged out, or prints no MagicDNS name, it falls back to
+the inherited `SUPLEX_TAILSCALE_ADDRESS`, which can be empty. If a mise command
+still fails while rendering `mise.toml`, invoke the pinned Node binary directly
+to diagnose the project independently.
 
 Git fixture tests have a separate inherited-state hazard: a global
 `commit.gpgsign=true` applies inside temporary repositories unless the fixture

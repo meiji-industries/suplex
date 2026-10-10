@@ -528,6 +528,17 @@ fn response(
     })
 }
 
+/// The run, after checking that the user can change work in its company.
+pub fn require_run_edit(
+    database: &SuplexDatabase,
+    user_id: &str,
+    run_id: &str,
+) -> Result<MoveRunResponse, Box<dyn Error + Send + Sync>> {
+    let run = get_run(database, user_id, run_id)?;
+    editable(database, user_id, &run.move_id)?;
+    Ok(run)
+}
+
 /// The move, after checking that the user can access its project.
 fn accessible(
     database: &SuplexDatabase,
@@ -560,13 +571,24 @@ fn require_terminal_runner_admin(
     Ok(())
 }
 
+/// `accessible` for a change: the user can also change work in the company.
+fn editable(
+    database: &SuplexDatabase,
+    user_id: &str,
+    move_id: &str,
+) -> Result<(StoredMove, Project), Box<dyn Error + Send + Sync>> {
+    let (stored, project) = accessible(database, user_id, move_id)?;
+    companies::require_company_edit(database, user_id, &stored.company_id)?;
+    Ok((stored, project))
+}
+
 fn company_project(
     database: &SuplexDatabase,
     user_id: &str,
     company_id: &str,
     project_id: &str,
 ) -> Result<Project, Box<dyn Error + Send + Sync>> {
-    companies::require_company_access(database, user_id, company_id)?;
+    companies::require_company_edit(database, user_id, company_id)?;
     let project = projects::get(database, user_id, project_id)?;
     if project.company_id != company_id {
         return Err(TaskError::not_found().into());
@@ -744,7 +766,7 @@ pub fn delete(
     user_id: &str,
     move_id: &str,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
-    accessible(database, user_id, move_id)?;
+    editable(database, user_id, move_id)?;
     database
         .connection()
         .execute("DELETE FROM suplex_moves WHERE id = ?1", [move_id])?;
@@ -927,7 +949,7 @@ pub async fn start(
     let (stored, project, replay) = state.with_database(|database| {
         let (stored, project) = match actor {
             RunActor::User(user_id) => {
-                let (stored, project) = accessible(database, user_id, move_id)?;
+                let (stored, project) = editable(database, user_id, move_id)?;
                 require_terminal_runner_admin(database, user_id, stored.runner)?;
                 (stored, project)
             }
@@ -1129,7 +1151,7 @@ pub fn archive_run(
     user_id: &str,
     run_id: &str,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
-    get_run(database, user_id, run_id)?;
+    require_run_edit(database, user_id, run_id)?;
     database.connection().execute(
         "UPDATE suplex_move_runs SET archived_at = ?1 WHERE id = ?2 AND archived_at IS NULL",
         params![now_millis_rfc3339(), run_id],

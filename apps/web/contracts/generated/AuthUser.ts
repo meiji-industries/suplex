@@ -2,4 +2,8 @@
 import type { UserRole } from "./UserRole.js";
 import type { UserStatus } from "./UserStatus.js";
 
-export type AuthUser = { id: string, displayName: string, title: string, username: string, avatarSeed: string, role: UserRole, status: UserStatus, companyIds: Array<string>, };
+export type AuthUser = { id: string, displayName: string, title: string, username: string, avatarSeed: string, role: UserRole, status: UserStatus, companyIds: Array<string>, 
+/**
+ * Companies where this member can only read. A subset of `company_ids`.
+ */
+readCompanyIds: Array<string>, };

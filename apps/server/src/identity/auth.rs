@@ -42,6 +42,8 @@ pub struct AuthUser {
     pub role: UserRole,
     pub status: UserStatus,
     pub company_ids: Vec<String>,
+    /// Companies where this member can only read. A subset of `company_ids`.
+    pub read_company_ids: Vec<String>,
 }
 
 crate::shared::wire_enum! {
@@ -104,6 +106,7 @@ pub(crate) fn public_user(
                     status: row.get(5)?,
                     title: row.get(6)?,
                     company_ids: Vec::new(),
+                    read_company_ids: Vec::new(),
                 })
             },
         )
@@ -115,11 +118,17 @@ pub(crate) fn public_user(
         user.avatar_seed = user.username.clone();
     }
     let mut statement = database.connection().prepare(
-        "SELECT company_id FROM suplex_memberships WHERE user_id = ?1 ORDER BY company_id ASC",
+        "SELECT company_id, access = 'read' FROM suplex_memberships WHERE user_id = ?1 ORDER BY company_id ASC",
     )?;
-    user.company_ids = statement
-        .query_map([user_id], |row| row.get(0))?
-        .collect::<rusqlite::Result<Vec<String>>>()?;
+    for membership in statement.query_map([user_id], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, bool>(1)?))
+    })? {
+        let (company_id, read) = membership?;
+        if read {
+            user.read_company_ids.push(company_id.clone());
+        }
+        user.company_ids.push(company_id);
+    }
     Ok(Some(user))
 }
 

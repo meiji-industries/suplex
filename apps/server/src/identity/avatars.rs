@@ -181,7 +181,7 @@ pub fn update(
             || (kind == "user" && owner_id == user_id)
             || (kind == "project"
                 && database.connection().query_row(
-                    "SELECT EXISTS(SELECT 1 FROM suplex_projects p JOIN suplex_memberships m ON m.company_id = p.company_id WHERE p.id = ?1 AND m.user_id = ?2)",
+                    "SELECT EXISTS(SELECT 1 FROM suplex_projects p JOIN suplex_memberships m ON m.company_id = p.company_id WHERE p.id = ?1 AND m.user_id = ?2 AND m.access = 'edit')",
                     params![owner_id, user_id],
                     |row| row.get::<_, bool>(0),
                 )?);

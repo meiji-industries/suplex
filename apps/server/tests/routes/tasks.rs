@@ -1561,4 +1561,47 @@ mod tests {
         drop(state);
         fs::remove_dir_all(root).unwrap();
     }
+
+    #[tokio::test]
+    async fn a_read_only_member_reads_a_task_but_cannot_change_it() {
+        let fixture = crate::http::routes::task_pane::tests::fixture();
+        for statement in [
+            "UPDATE suplex_users SET role = 'member'",
+            "INSERT INTO suplex_memberships (user_id, company_id, created_at, access) VALUES ('user_development', 'pane_company', '2026-09-24', 'read')",
+        ] {
+            fixture.execute(statement, &[]);
+        }
+        let address = fixture.serve().await;
+        let client = reqwest::Client::new();
+        let url = |path: &str| format!("http://{address}/api/tasks/{}{path}", fixture.task_id);
+        let read = client.get(url("")).header("cookie", &fixture.cookie)
+            .header("host", "127.0.0.1:4113").send().await.unwrap();
+        let status = read.status();
+        assert_eq!(status, 200, "{}", read.text().await.unwrap());
+        let renamed = client
+            .post(url("/rename"))
+            .header("cookie", &fixture.cookie)
+            .header("host", "127.0.0.1:4113")
+            .header("origin", "http://127.0.0.1:4113")
+            .json(&json!({"title": "Renamed"}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(renamed.status(), 403);
+        let body: Value = renamed.json().await.unwrap();
+        assert_eq!(body["code"], "company_read_only");
+        fixture.execute("UPDATE suplex_memberships SET access = 'edit'", &[]);
+        let renamed = client
+            .post(url("/rename"))
+            .header("cookie", &fixture.cookie)
+            .header("host", "127.0.0.1:4113")
+            .header("origin", "http://127.0.0.1:4113")
+            .json(&json!({"title": "Renamed"}))
+            .send()
+            .await
+            .unwrap();
+        let status = renamed.status();
+        assert_eq!(status, 200, "{}", renamed.text().await.unwrap());
+        let _ = fs::remove_dir_all(&fixture.root);
+    }
 }

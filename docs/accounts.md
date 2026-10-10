@@ -206,6 +206,29 @@ the app never asks for a login.
   service downtime does not block ongoing work. New logins and invitation
   emails require the hosted service.
 
+### Member access
+
+Each membership has an access level, `edit` or `read`
+(`suplex_memberships.access`). A read-only member sees the company's work but
+cannot change it: every write path calls `companies::require_company_edit`,
+which returns 403 `company_read_only`. Admins always edit.
+
+Choosing which companies a member sees, and making a member read-only, are
+Team features (`team_required` on Free and Pro). On Free and Pro an invitation
+and a new company include every member, and removing a user revokes the
+account. When a confirmed Team plan lapses, everyone, admins too, is read-only
+(403 `team_lapsed`) until someone selects Team again; scoping stays enforced, so
+a lapse never widens access. Administrators can still manage billing and users.
+External agents keep their own grants. When Pro ends, the host is Free and
+nothing becomes read-only ([downgrades](billing.md#downgrades)).
+
+In the web app, a banner under the header says why work is read-only: "Team
+ended", with Select Team for an administrator, or "You can read work in …" for
+a read-only member. Settings > Users marks read-only members and offers Make
+read-only or Allow edits. `/api/companies` returns each company's `access` and
+`teamLapsed`; `PATCH /api/admin/companies/{companyId}/members/{userId}` with
+`{access}` changes it.
+
 ## Setup checklist
 
 These steps need a person with access to Cloudflare, Fly, Google Cloud,

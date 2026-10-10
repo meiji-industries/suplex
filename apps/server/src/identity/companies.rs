@@ -105,6 +105,88 @@ pub fn require_company_access(
     company.ok_or_else(|| IdentityError::not_found().into())
 }
 
+crate::shared::wire_enum! {
+    /// What a member can do in a company. Admins always edit.
+    pub enum CompanyAccess { Edit = "edit", Read = "read" }
+}
+
+/// The user's access in a company they can see. A lapsed Team plan makes
+/// everyone read-only.
+pub fn company_access(
+    database: &SuplexDatabase,
+    user_id: &str,
+    company_id: &str,
+) -> DatabaseResult<CompanyAccess> {
+    if crate::billing::team_lapsed(database)? {
+        return Ok(CompanyAccess::Read);
+    }
+    if active_role(database, user_id)? == UserRole::Admin {
+        return Ok(CompanyAccess::Edit);
+    }
+    Ok(database
+        .connection()
+        .query_row(
+            "SELECT access FROM suplex_memberships WHERE user_id = ?1 AND company_id = ?2",
+            params![user_id, company_id],
+            |row| row.get(0),
+        )
+        .optional()?
+        .unwrap_or(CompanyAccess::Read))
+}
+
+/// Choosing which companies a member sees and making a member read-only are
+/// Team features. A lapsed Team keeps them, so an administrator can still
+/// narrow access.
+fn require_scoping(database: &SuplexDatabase) -> DatabaseResult<()> {
+    if crate::billing::plan(database)? == crate::billing::Plan::Team
+        || crate::billing::team_lapsed(database)?
+    {
+        return Ok(());
+    }
+    Err(crate::shared::PublicFailure::new(
+        402,
+        "Select Team in Settings > Billing to choose what each user can see and change",
+    )
+    .with_code("team_required")
+    .into())
+}
+
+/// On Free and Pro every member sees every company: invitations and new
+/// companies include all of them. A lapsed Team never widens access.
+pub fn grants_every_company(database: &SuplexDatabase) -> DatabaseResult<bool> {
+    Ok(
+        crate::billing::plan(database)? != crate::billing::Plan::Team
+            && !crate::billing::team_lapsed(database)?,
+    )
+}
+
+/// `require_company_access` for an action that changes work in the company.
+/// Someone who cannot see the company still gets 404.
+pub fn require_company_edit(
+    database: &SuplexDatabase,
+    user_id: &str,
+    company_id: &str,
+) -> DatabaseResult<Company> {
+    let company = require_company_access(database, user_id, company_id)?;
+    if company_access(database, user_id, company_id)? == CompanyAccess::Read {
+        if crate::billing::team_lapsed(database)? {
+            return Err(IdentityError::auth(
+                "Team ended. Work is read-only until an administrator selects Team again.",
+                403,
+                "team_lapsed",
+            )
+            .into());
+        }
+        return Err(IdentityError::auth(
+            "You have read-only access to this company",
+            403,
+            "company_read_only",
+        )
+        .into());
+    }
+    Ok(company)
+}
+
 pub fn require_admin_company(
     database: &SuplexDatabase,
     user_id: &str,
@@ -185,6 +267,12 @@ pub fn create_company(
             return Err(IdentityError::auth("Company name is already in use", 400, "auth_failure").into());
         }
         audit(database, actor_user_id, "company_created", None, &company_id, "{}", now)?;
+        if grants_every_company(database)? {
+            database.connection().execute(
+                "INSERT OR IGNORE INTO suplex_memberships (user_id, company_id, created_at) SELECT id, ?1, ?2 FROM suplex_users WHERE role = 'member' AND status != 'revoked'",
+                params![company_id, created_at],
+            )?;
+        }
         require_company_access(database, actor_user_id, &company_id)
     })
 }
@@ -379,6 +467,7 @@ pub fn remove_membership(
 ) -> DatabaseResult<()> {
     database.transaction(false, |database| {
         require_admin(database, actor_user_id)?;
+        require_scoping(database)?;
         if database.connection().execute(
             "DELETE FROM suplex_memberships WHERE user_id = ?1 AND company_id = ?2",
             params![target_user_id, company_id],
@@ -399,11 +488,150 @@ pub fn remove_membership(
     })
 }
 
+/// Sets what a member can do in a company. Making a member read-only is a
+/// Team feature; giving back edit access is always allowed.
+pub fn set_membership_access(
+    database: &mut SuplexDatabase,
+    actor_user_id: &str,
+    target_user_id: &str,
+    company_id: &str,
+    access: CompanyAccess,
+    now: DateTime<Utc>,
+) -> DatabaseResult<()> {
+    database.transaction(false, |database| {
+        require_admin(database, actor_user_id)?;
+        if access == CompanyAccess::Read {
+            require_scoping(database)?;
+        }
+        if database.connection().execute(
+            "UPDATE suplex_memberships SET access = ?3 WHERE user_id = ?1 AND company_id = ?2",
+            params![target_user_id, company_id, access],
+        )? != 1
+        {
+            return Err(IdentityError::not_found().into());
+        }
+        audit(
+            database,
+            actor_user_id,
+            "membership_access_changed",
+            Some(target_user_id),
+            company_id,
+            &crate::shared::js_json::stringify(&serde_json::json!({"access": access})),
+            now,
+        )
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::{identity::auth, platform::database::OpenMode};
     use chrono::{DateTime, Utc};
+
+    #[test]
+    fn team_scopes_and_restricts_members_and_a_team_lapse_makes_everyone_read_only() {
+        let filename = std::env::temp_dir().join(format!(
+            "{}.sqlite",
+            random_hex_id("suplex_company").unwrap()
+        ));
+        let mut database = SuplexDatabase::open(&filename, OpenMode::Migrate).unwrap();
+        let now = DateTime::parse_from_rfc3339("2026-09-24T12:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let admin = auth::development_sign_in(&mut database, now).unwrap().user;
+        let sql = |database: &SuplexDatabase, statement: &str| {
+            database.connection().execute(statement, []).unwrap();
+        };
+        sql(
+            &database,
+            "INSERT INTO suplex_users (id, display_name, username, role, status, created_at, updated_at, identity_version) VALUES ('member', 'Member', 'member', 'member', 'active', '2026-09-24', '2026-09-24', 1)",
+        );
+        sql(
+            &database,
+            "INSERT INTO suplex_companies (id, name, status, created_at) VALUES ('company_one', 'One', 'active', '2026-09-24')",
+        );
+        sql(
+            &database,
+            "INSERT INTO suplex_memberships (user_id, company_id, created_at) VALUES ('member', 'company_one', '2026-09-24')",
+        );
+        sql(
+            &database,
+            "INSERT INTO suplex_account (id, account_id, email, token, linked_at) VALUES ('host', 'acct', 'owner@example.com', 't', '2026-09-24')",
+        );
+        let paid = |database: &SuplexDatabase, plan: &str, until: &str| {
+            database.connection().execute(
+                "INSERT OR REPLACE INTO suplex_plan (id, account_id, access_until, checked_at, plan) VALUES ('host', 'acct', ?1, '2026-09-24', ?2)",
+                params![until, plan],
+            ).unwrap();
+        };
+        let code = |error: Box<dyn std::error::Error + Send + Sync>| {
+            crate::shared::public_failure(error).code
+        };
+
+        // Pro has no scoping: a new company includes every member, and
+        // narrowing access needs Team. Giving edit access is always allowed.
+        paid(&database, "pro", "2099-01-01T00:00:00.000Z");
+        let two = create_company(&mut database, &admin.id, "Two", now).unwrap();
+        assert!(require_company_access(&database, "member", &two.id).is_ok());
+        let read = set_membership_access(
+            &mut database,
+            &admin.id,
+            "member",
+            "company_one",
+            CompanyAccess::Read,
+            now,
+        );
+        assert_eq!(code(read.unwrap_err()), Some("team_required"));
+        let removed = remove_membership(&mut database, &admin.id, "member", &two.id, now);
+        assert_eq!(code(removed.unwrap_err()), Some("team_required"));
+        set_membership_access(
+            &mut database,
+            &admin.id,
+            "member",
+            "company_one",
+            CompanyAccess::Edit,
+            now,
+        )
+        .unwrap();
+
+        // Team: a read-only member sees the company but cannot change work.
+        paid(&database, "team", "2099-01-01T00:00:00.000Z");
+        set_membership_access(
+            &mut database,
+            &admin.id,
+            "member",
+            "company_one",
+            CompanyAccess::Read,
+            now,
+        )
+        .unwrap();
+        assert!(require_company_access(&database, "member", "company_one").is_ok());
+        let denied = require_company_edit(&database, "member", "company_one");
+        assert_eq!(code(denied.unwrap_err()), Some("company_read_only"));
+        assert!(require_company_edit(&database, "member", &two.id).is_ok());
+        let three = create_company(&mut database, &admin.id, "Three", now).unwrap();
+        assert!(require_company_access(&database, "member", &three.id).is_err());
+        remove_membership(&mut database, &admin.id, "member", &two.id, now).unwrap();
+
+        // A confirmed Team lapse makes everyone read-only, admins too, and
+        // never widens access.
+        paid(&database, "team", "2000-01-01T00:00:00.000Z");
+        let lapsed = require_company_edit(&database, &admin.id, "company_one");
+        assert_eq!(code(lapsed.unwrap_err()), Some("team_lapsed"));
+        assert_eq!(
+            company_access(&database, &admin.id, "company_one").unwrap(),
+            CompanyAccess::Read
+        );
+        assert!(require_company_access(&database, "member", "company_one").is_ok());
+        assert!(!grants_every_company(&database).unwrap());
+        // Paying again restores edit access.
+        paid(&database, "team", "2099-01-01T00:00:00.000Z");
+        assert!(require_company_edit(&database, &admin.id, "company_one").is_ok());
+        drop(database);
+        let _ = std::fs::remove_file(&filename);
+        let _ = std::fs::remove_file(filename.with_extension("sqlite-wal"));
+        let _ = std::fs::remove_file(filename.with_extension("sqlite-shm"));
+    }
 
     #[test]
     fn company_visibility_uses_live_membership_and_admin_role() {
@@ -467,7 +695,7 @@ mod tests {
             random_hex_id("suplex_company_mutations").unwrap()
         ));
         let mut database = SuplexDatabase::open(&filename, OpenMode::Migrate).unwrap();
-        crate::billing::tests::grant_pro(&database);
+        crate::billing::tests::grant_team(&database);
         let now = DateTime::parse_from_rfc3339("2026-09-24T12:00:00Z")
             .unwrap()
             .with_timezone(&Utc);

@@ -204,6 +204,7 @@ pub async fn recommend(
 ) -> Result<MoveRecommendationsResponse, Box<dyn Error + Send + Sync>> {
     let (project, profile, existing) = state.with_database(|database| {
         let project = projects::get(database, user_id, project_id)?;
+        crate::identity::companies::require_company_edit(database, user_id, &project.company_id)?;
         let profile = crate::tasks::commands::selected_profile(
             database,
             &project,

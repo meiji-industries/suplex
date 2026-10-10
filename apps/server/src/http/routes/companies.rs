@@ -15,7 +15,7 @@ use crate::{
     http::{
         contracts::typed::auth::{
             CompanyIdParams, CompanyIssueCodeBody, CompanyNameBody, CompanyStatusParams,
-            MembershipBody, MembershipParams,
+            MembershipAccessBody, MembershipBody, MembershipParams,
         },
         validation::{Valid, ValidPath},
     },
@@ -32,12 +32,16 @@ struct CompanyList {
     companies: Vec<CompanyItem>,
 }
 
-/// A company with the installation's plan for the switcher, from local data.
+/// A company with the installation's plan and the user's access for the
+/// switcher, from local data. `teamLapsed` makes every company read-only.
 #[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 struct CompanyItem {
     #[serde(flatten)]
     company: companies::Company,
     plan: crate::billing::Plan,
+    access: companies::CompanyAccess,
+    team_lapsed: bool,
 }
 
 pub fn router() -> Router<AppState> {
@@ -63,7 +67,7 @@ pub fn router() -> Router<AppState> {
         )
         .route(
             "/api/admin/companies/{company_id}/members/{user_id}",
-            axum::routing::delete(remove_membership),
+            axum::routing::delete(remove_membership).patch(set_membership_access),
         )
 }
 
@@ -102,10 +106,18 @@ fn respond<T: Serialize>(
 async fn list(State(state): State<AppState>, headers: HeaderMap) -> Response {
     respond(&state, &headers, None, StatusCode::OK, |database, user| {
         let plan = crate::billing::plan(database)?;
+        let team_lapsed = crate::billing::team_lapsed(database)?;
         let companies = companies::list_visible_companies(database, &user.id)?
             .into_iter()
-            .map(|company| CompanyItem { company, plan })
-            .collect();
+            .map(|company| {
+                Ok(CompanyItem {
+                    access: companies::company_access(database, &user.id, &company.id)?,
+                    company,
+                    plan,
+                    team_lapsed,
+                })
+            })
+            .collect::<crate::platform::database::DatabaseResult<Vec<_>>>()?;
         Ok(CompanyList { companies })
     })
 }
@@ -228,6 +240,33 @@ async fn remove_membership(
         StatusCode::NO_CONTENT,
         |database, user| {
             companies::remove_membership(database, &user.id, &user_id, &company_id, Utc::now())
+        },
+    )
+}
+
+async fn set_membership_access(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    ValidPath(MembershipParams {
+        company_id,
+        user_id,
+    }): ValidPath<MembershipParams>,
+    Valid(body): Valid<MembershipAccessBody>,
+) -> Response {
+    respond(
+        &state,
+        &headers,
+        Some("PATCH"),
+        StatusCode::NO_CONTENT,
+        |database, user| {
+            companies::set_membership_access(
+                database,
+                &user.id,
+                &user_id,
+                &company_id,
+                body.access,
+                Utc::now(),
+            )
         },
     )
 }

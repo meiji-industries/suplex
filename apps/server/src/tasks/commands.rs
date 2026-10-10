@@ -459,7 +459,7 @@ fn require_creator_scope(
     actor_user_id: &str,
     prepared: &PreparedTask,
 ) -> DatabaseResult<()> {
-    let company = companies::require_company_access(database, actor_user_id, &prepared.company_id)?;
+    let company = companies::require_company_edit(database, actor_user_id, &prepared.company_id)?;
     if company.status != CompanyStatus::Active {
         return Err(TaskError::new("The company is not active", 409).into());
     }
@@ -560,7 +560,7 @@ pub fn start_user_task(
             )
             .optional()?
             .ok_or_else(TaskError::not_found)?;
-        companies::require_company_access(database, actor_user_id, &scope.0)?;
+        companies::require_company_edit(database, actor_user_id, &scope.0)?;
         if archive::in_progress(task_id) {
             return Err(TaskError::new("Archive cleanup is in progress", 409).into());
         }
@@ -602,14 +602,14 @@ pub fn force_start_user_task(
     Ok(task)
 }
 
-/// TypeScript `getTask`: the task exists and the live user can read its company.
+/// TypeScript `getTask`: the task exists and the live user can change work in its company.
 fn require_user_task(
     database: &SuplexDatabase,
     actor_user_id: &str,
     task_id: &str,
 ) -> DatabaseResult<TaskRecord> {
     let task = repository::task_by_id(database, task_id)?.ok_or_else(TaskError::not_found)?;
-    companies::require_company_access(database, actor_user_id, &task.company_id)?;
+    companies::require_company_edit(database, actor_user_id, &task.company_id)?;
     Ok(task)
 }
 
@@ -793,7 +793,8 @@ pub fn user_task_configuration(
     actor_user_id: &str,
     task_id: &str,
 ) -> DatabaseResult<Value> {
-    require_user_task(database, actor_user_id, task_id)?;
+    let task = repository::task_by_id(database, task_id)?.ok_or_else(TaskError::not_found)?;
+    companies::require_company_access(database, actor_user_id, &task.company_id)?;
     let raw: String = database.connection().query_row(
         "SELECT configuration_json FROM suplex_tasks WHERE id = ?1",
         [task_id],
@@ -843,7 +844,7 @@ pub fn cancel_user_task(
 ) -> DatabaseResult<TaskRecord> {
     let cancelled = database.transaction(true, |database| {
         let task = repository::task_by_id(database, task_id)?.ok_or_else(TaskError::not_found)?;
-        companies::require_company_access(database, actor_user_id, &task.company_id)?;
+        companies::require_company_edit(database, actor_user_id, &task.company_id)?;
         if task.status == TaskStatus::Delivered {
             return Err(TaskError::new("Delivered tasks cannot be cancelled", 409).into());
         }
@@ -872,7 +873,7 @@ pub fn send_user_note(
 ) -> DatabaseResult<TaskRecord> {
     database.transaction(true, |database| {
         let task = repository::task_by_id(database, task_id)?.ok_or_else(TaskError::not_found)?;
-        companies::require_company_access(database, actor_user_id, &task.company_id)?;
+        companies::require_company_edit(database, actor_user_id, &task.company_id)?;
         let archived: bool = database.connection().query_row(
             "SELECT archived_at IS NOT NULL FROM suplex_tasks WHERE id = ?1",
             [task_id],
@@ -970,7 +971,7 @@ pub fn answer_user_task(
 ) -> DatabaseResult<TaskRecord> {
     let answered = database.transaction(true, |database| {
         let task = repository::task_by_id(database, task_id)?.ok_or_else(TaskError::not_found)?;
-        companies::require_company_access(database, actor_user_id, &task.company_id)?;
+        companies::require_company_edit(database, actor_user_id, &task.company_id)?;
         require_answerable(database, task_id, answer)?;
         root_session_store::answer_human(
             database,
@@ -1004,7 +1005,7 @@ pub fn replace_user_worker(
 ) -> DatabaseResult<TaskRecord> {
     database.transaction(true, |database| {
         let task = repository::task_by_id(database, task_id)?.ok_or_else(TaskError::not_found)?;
-        companies::require_company_access(database, actor_user_id, &task.company_id)?;
+        companies::require_company_edit(database, actor_user_id, &task.company_id)?;
         root_session_store::replace_worker(database, task_id, request, now)
             .map_err(|error| TaskError::new(error.to_string(), 409))?;
         let task = repository::task_by_id(database, task_id)?.ok_or_else(TaskError::not_found)?;
@@ -1026,7 +1027,7 @@ pub fn replace_user_coordinator(
 ) -> DatabaseResult<TaskRecord> {
     database.transaction(true, |database| {
         let task = repository::task_by_id(database, task_id)?.ok_or_else(TaskError::not_found)?;
-        companies::require_company_access(database, actor_user_id, &task.company_id)?;
+        companies::require_company_edit(database, actor_user_id, &task.company_id)?;
         let rows = root_session_store::root_observation_rows(database, task_id)?;
         let initial = root_prompts::initial_coordinator_prompt(
             &rows.control,
@@ -1054,7 +1055,7 @@ pub fn answer_user_task_limit(
     let answered = database.transaction(true, |database| {
         let task = repository::task_by_id(database, task_id)?
             .ok_or_else(TaskError::not_found)?;
-        companies::require_company_access(database, actor_user_id, &task.company_id)?;
+        companies::require_company_edit(database, actor_user_id, &task.company_id)?;
         let (archived, status, question, has_limit_pause): (bool, TaskStatus, Option<String>, bool) = database
             .connection()
             .query_row(
@@ -1303,7 +1304,7 @@ pub fn update_user_task_details(
     }
     database.transaction(true, |database| {
         let scope = repository::task_by_id(database, task_id)?.ok_or_else(TaskError::not_found)?;
-        companies::require_company_access(database, actor_user_id, &scope.company_id)?;
+        companies::require_company_edit(database, actor_user_id, &scope.company_id)?;
         let task = update_task_details(database, task_id, input, now)?;
         audit(database, actor_user_id, "task_details_updated", &task, now)?;
         Ok(task)
@@ -1410,7 +1411,7 @@ pub fn rename_user_task(
     database.transaction(true, |database| {
         let current =
             repository::task_by_id(database, task_id)?.ok_or_else(TaskError::not_found)?;
-        companies::require_company_access(database, actor_user_id, &current.company_id)?;
+        companies::require_company_edit(database, actor_user_id, &current.company_id)?;
         if !repository::rename(database, task_id, &input.title, now)? {
             return Err(TaskError::new("Open archived tasks before renaming them.", 409).into());
         }

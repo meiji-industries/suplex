@@ -24,7 +24,7 @@ pub async fn create_browser(
     let (project, existing) = {
         let admission =
             state.with_database(|database| -> Result<_, Box<dyn Error + Send + Sync>> {
-                let company = companies::require_company_access(database, &user_id, &company_id)?;
+                let company = companies::require_company_edit(database, &user_id, &company_id)?;
                 if company.status != CompanyStatus::Active {
                     return Err(TaskError::new("The company is not active", 409).into());
                 }

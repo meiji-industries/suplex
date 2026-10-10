@@ -236,7 +236,7 @@ async fn end(
         Method::DELETE,
         StatusCode::NO_CONTENT,
         |database, user_id| {
-            moves::get_run(database, user_id, &run_id)?;
+            moves::require_run_edit(database, user_id, &run_id)?;
             state
                 .host_terminals
                 .close(&moves::shell::terminal_id(&run_id));

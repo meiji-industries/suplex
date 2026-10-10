@@ -110,6 +110,10 @@ pub fn prepare(
             id
         };
         database.connection().execute("INSERT OR IGNORE INTO suplex_memberships (user_id, company_id, created_at) VALUES (?1, ?2, ?3)", params![user_id, company_id, timestamp])?;
+        // Free and Pro have no company scoping: a new member sees every company.
+        if companies::grants_every_company(database)? {
+            database.connection().execute("INSERT OR IGNORE INTO suplex_memberships (user_id, company_id, created_at) SELECT ?1, id, ?2 FROM suplex_companies WHERE status != 'archived'", params![user_id, timestamp])?;
+        }
         database.connection().execute("INSERT INTO suplex_company_invitations (id, company_id, user_id, email, full_name, host_origin, owner_account_id, created_at, expires_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)", params![body.id, company_id, user_id, body.email, full_name, host_origin, owner.account_id, timestamp, rfc3339_millis(now + Duration::days(7))])?;
         Ok(())
     })?;
@@ -263,6 +267,7 @@ mod tests {
             assert!(session_verified(db, &again, &same).unwrap());
             assert!(!session_verified(db, &token, &same).unwrap());
             // Current membership remains authoritative even when a session survives restart.
+            crate::billing::tests::grant_team(db);
             companies::remove_membership(db, "user_development", &user.id, "company_test", now).unwrap();
             assert!(accept(db, &invited, now).is_err());
             let current = auth::get_user_by_session(db, &token, now).unwrap().unwrap();

@@ -97,7 +97,7 @@ fn user_authority(
     actor_user_id: &str,
 ) -> impl Fn(&SuplexDatabase, &TaskRecord) -> DatabaseResult<()> + Sync + '_ {
     move |database, task| {
-        companies::require_company_access(database, actor_user_id, &task.company_id).map(|_| ())
+        companies::require_company_edit(database, actor_user_id, &task.company_id).map(|_| ())
     }
 }
 

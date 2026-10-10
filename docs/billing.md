@@ -12,9 +12,12 @@ installation has one plan: the plan of the Suplex account linked to it
 | Tasks created each UTC calendar month, archived ones too | 50 | Unlimited | Unlimited |
 
 Pro costs USD 20 each month, or USD 192 each year (20% less), before tax for
-one seat. Each Suplex account gets
-one 14-day Pro trial with no payment method. Without a payment method at the
-trial end, Stripe cancels the subscription and the host returns to Free.
+one seat. Each Suplex account gets one 14-day Pro trial with no payment
+method. Onboarding starts it when the owner joins: the "You" step calls
+`startTrialIfAvailable` (`apps/web/features/onboarding/onboarding.ts`), which
+starts the trial for an administrator on Free whose account has not used one.
+Settings > Billing also offers it. Without a payment method at the trial end,
+Stripe cancels the subscription and the host returns to Free.
 
 Team costs USD 75 each month for 3 seats, then USD 15 for each seat; or USD
 720 each year for 3 seats, then USD 144 for each seat. Team checkout buys a
@@ -25,9 +28,40 @@ subscriber changes the seat count, in the Stripe portal (Open billing).
 Checkout accepts promotion codes and asks for no card when a code makes it
 free (`payment_method_collection=if_required`).
 
-When a confirmed Team plan lapses, `suplex_plan` keeps `plan = 'team'`, so
-`billing::team_lapsed` tells it from Free: work is read-only until someone
-pays again. A hosted outage never causes a lapse; only a confirmed read does.
+### Plan changes
+
+Checkout buys a first subscription only. With a live subscription, checkout
+reports it (`subscribed`) and buys nothing. Every later change happens in the
+Stripe customer portal (Open billing), on the same subscription:
+
+- Upgrades (Pro to Team, monthly to yearly, more Team seats) prorate: the
+  customer gets a credit for the unused part of the period and pays for the
+  new price for the rest of it, invoiced at once.
+- Downgrades (fewer seats, a shorter interval) apply at the end of the period,
+  with no credit. Team to Pro is a change between products, so Stripe applies
+  it at once and credits the unused Team time.
+- A trial ends when the subscription changes: choosing Team during the Pro
+  trial starts payment.
+
+suplex.sh reads the new price on its next read, so the host shows the new plan
+without other action.
+
+### Downgrades
+
+A host never loses work when its plan ends:
+
+- **Pro ends** (the trial ends without a card, a cancellation takes effect, or
+  payment fails past its grace): the host is Free. Everything it has stays
+  editable. Free's limits stop only new companies, projects, and tasks, and
+  queued tasks wait for one of 3 running slots.
+- **Team ends**: `suplex_plan` keeps `plan = 'team'`, so `billing::team_lapsed`
+  tells it from Free. Work in every company is read-only for everyone, admins
+  too, until someone selects Team again; a banner says so and links an
+  administrator to Settings > Billing. Company scoping stays, so a lapse never
+  shows a member more. Administrators can still manage billing and users.
+  Paying again restores edit access. See [member access](accounts.md#member-access).
+
+A hosted outage never causes either downgrade; only a confirmed read does.
 
 `FREE`, `PRO`, and `TEAM` in `apps/server/src/billing/mod.rs` hold the limits.
 `billing::require` decides each limit inside the transaction that writes:
@@ -39,20 +73,22 @@ project task concurrency, so a fourth Free task waits in the queue with
 over a limit after a downgrade keeps everything it has; only new work stops.
 
 `suplex_plan` remembers the last plan suplex.sh confirmed for the linked
-account: its account ID and the end of its paid access. Pro applies while that
-access has not ended and the same account is linked. Suplex reads the plan
+account: its account ID, the end of its paid access, and the paid plan (`pro`
+or `team`, from `GET /v1/plan?tier=1`). The paid plan applies while that access
+has not ended and the same account is linked. Suplex reads the plan
 again:
 
 - before a Free limit refuses an action (`billing::observe`), so a purchase
   made on another device applies at once;
 - on every visit to Settings > Billing, after a login, and every 15 minutes.
 
-A hosted outage keeps confirmed Pro until its paid access ends. It never
-grants or extends Pro. A confirmed lapse replaces the snapshot with Free.
+A hosted outage keeps the confirmed paid plan until its paid access ends. It
+never grants or extends one. A confirmed lapse ends paid access but keeps the
+paid plan, so a lapsed Team stays read-only.
 
 Members and administrators read the plan in Settings > Billing. Only active
-administrators can start the trial, select Pro, or open the billing portal,
-and only when a Suplex account is linked.
+administrators can start the trial, select Pro or Team, or open the billing
+portal, and only when a Suplex account is linked.
 
 ## Start free and Start 14-day trial
 
@@ -252,10 +288,19 @@ Production uses a separate Stripe configuration and RevenueCat project with
    and production with `PRODUCTION`; the service validates this against
    `BILLING_ENVIRONMENT`, just as it validates Stripe `livemode`, so events
    from the wrong environment never enter reconciliation.
-8. Configure the Stripe customer portal for payment methods, invoices,
-   billing details, cancellation at period end, and resuming a scheduled
-   cancellation. Allow switching between the Pro and Team prices, and quantity
-   updates for Team. Disable trials, coupons, and retention discounts there.
+8. Configure the Stripe customer portal (the account has one configuration,
+   `STRIPE_PORTAL_CONFIGURATION_ID`) for payment methods, invoices, billing
+   details, cancellation at period end, and resuming a scheduled cancellation.
+   Under Subscriptions:
+   - Customers can switch plans: the Pro monthly and yearly prices and the
+     Team monthly and yearly prices.
+   - Customers can change quantity: Pro limited to 1, Team from 3 to 9999.
+   - End trials on subscription updates: on.
+   - When customers change plans or quantities: prorate charges and credits,
+     invoiced immediately.
+   - Downgrades: apply at the end of the billing period.
+   Disable retention coupons and retention rules. These are not the Suplex
+   trial, which suplex.sh starts itself.
 9. Configure Stripe payment retries and customer emails in Stripe. Suplex does
    not run dunning or send payment email.
 
@@ -340,7 +385,7 @@ customers retain a working cancellation path.
 When the billing service or providers cannot be read, existing projects,
 tasks, workflows, and delivery continue; Free operations within the allowance
 continue. During an outage, creation beyond the Free allowance uses the last
-confirmed Pro snapshot until its paid access ends. A
-confirmed lapse replaces the snapshot with Free. With no unexpired Pro
+confirmed paid snapshot until its paid access ends. A
+confirmed lapse ends it. With no unexpired paid
 snapshot, creation beyond the Free allowance returns `billing_unavailable`
 until Suplex can verify the subscription.

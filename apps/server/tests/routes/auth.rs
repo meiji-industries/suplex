@@ -173,7 +173,7 @@ pub(crate) mod tests {
         let current_body = to_bytes(current.into_body(), 4096).await.unwrap();
         assert_eq!(
             current_body,
-            r#"{"user":{"id":"user_development","displayName":"Operator","title":"","username":"operator@suplex.local","avatarSeed":"operator@suplex.local","role":"admin","status":"active","companyIds":[]}}"#
+            r#"{"user":{"id":"user_development","displayName":"Operator","title":"","username":"operator@suplex.local","avatarSeed":"operator@suplex.local","role":"admin","status":"active","companyIds":[],"readCompanyIds":[]}}"#
         );
         let wrong_origin = sign_out(State(state.clone()), headers.clone()).await;
         assert_eq!(wrong_origin.status(), StatusCode::FORBIDDEN);
@@ -292,7 +292,7 @@ pub(crate) mod tests {
         let body = to_bytes(updated.into_body(), 4096).await.unwrap();
         assert_eq!(
             body,
-            r#"{"user":{"id":"user_development","displayName":"Updated Operator","title":"CTO","username":"updated-operator","avatarSeed":"updated-avatar","role":"admin","status":"active","companyIds":[]}}"#
+            r#"{"user":{"id":"user_development","displayName":"Updated Operator","title":"CTO","username":"updated-operator","avatarSeed":"updated-avatar","role":"admin","status":"active","companyIds":[],"readCompanyIds":[]}}"#
         );
         headers.remove("cookie");
         headers.remove("origin");

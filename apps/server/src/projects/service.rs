@@ -493,7 +493,7 @@ pub fn create_local(
         })
         .map_or_else(|| root_profile_id.to_owned(), |profile| profile.profile_id)
     };
-    let company = companies::require_company_access(database, actor_user_id, company_id)?;
+    let company = companies::require_company_edit(database, actor_user_id, company_id)?;
     if company.status != CompanyStatus::Active {
         return Err(failure(
             "Company is not active",
@@ -512,7 +512,7 @@ pub fn create_local(
     let execution_json = execution.as_ref().map(json_text).transpose()?;
     let provider_policy_json = provider_policy.as_ref().map(json_text).transpose()?;
     let result = database.transaction(false, |database| {
-        let company = companies::require_company_access(database, actor_user_id, company_id)?;
+        let company = companies::require_company_edit(database, actor_user_id, company_id)?;
         if company.status != CompanyStatus::Active {
             return Err(failure("Company is not active", 409, vec![]));
         }
@@ -816,7 +816,7 @@ fn require_active_company(
     actor_user_id: &str,
     company_id: &str,
 ) -> DatabaseResult<()> {
-    if companies::require_company_access(database, actor_user_id, company_id)?.status
+    if companies::require_company_edit(database, actor_user_id, company_id)?.status
         != CompanyStatus::Active
     {
         return Err(failure("Company is not active", 409, vec![]));
@@ -1479,7 +1479,7 @@ pub(crate) fn admit_configuration(
     user_id: &str,
     company_id: &str,
 ) -> DatabaseResult<()> {
-    let company = companies::require_company_access(database, user_id, company_id)?;
+    let company = companies::require_company_edit(database, user_id, company_id)?;
     if company.status != CompanyStatus::Active {
         return Err(ProjectError::new(
             "Company is not active",

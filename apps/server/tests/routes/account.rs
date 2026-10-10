@@ -430,7 +430,10 @@ mod tests {
         assert_eq!(profile["user"]["companyIds"], json!(["company_test"]));
         assert_eq!(f.state.with_database(|db| linked(db).unwrap().unwrap().account_id), owner.id);
         assert_eq!(f.fake.with(|hosted| hosted.logouts.len()), 1);
-        f.state.with_database(|db| crate::identity::companies::remove_membership(db, "user_development", profile["user"]["id"].as_str().unwrap(), "company_test", Utc::now()).unwrap());
+        f.state.with_database(|db| {
+            crate::billing::tests::grant_team(db);
+            crate::identity::companies::remove_membership(db, "user_development", profile["user"]["id"].as_str().unwrap(), "company_test", Utc::now()).unwrap();
+        });
         assert_eq!(remote(&app, "GET", "/api/auth/me", Some(session), None).await.0, StatusCode::UNAUTHORIZED);
     }
 

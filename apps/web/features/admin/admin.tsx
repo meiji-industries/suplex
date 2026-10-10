@@ -210,6 +210,18 @@ export function AdminView(): ReactElement {
       setError("Unable to change membership");
     }
   };
+  // Team chooses what each member can see and change. On Free and Pro every
+  // member sees every company, so removing a user revokes the account.
+  const canScope = currentCompany?.plan === "team" || currentCompany?.teamLapsed === true;
+  const setAccess = async (candidate: ApiUser, access: "edit" | "read"): Promise<void> => {
+    if (!currentCompany) return;
+    try {
+      await readJsonUnchecked(`/api/admin/companies/${currentCompany.id}/members/${candidate.id}`, { method: "PATCH", body: JSON.stringify({ access }) });
+      await reload();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Unable to change access");
+    }
+  };
   const revokeUser = async (candidate: ApiUser): Promise<void> => {
     if (!currentCompany) return;
     const action = `user:${candidate.id}`;
@@ -218,7 +230,7 @@ export function AdminView(): ReactElement {
       return;
     }
     try {
-      await readJsonUnchecked(`/api/admin/companies/${currentCompany.id}/members/${candidate.id}`, { method: "DELETE" });
+      await readJsonUnchecked(canScope ? `/api/admin/companies/${currentCompany.id}/members/${candidate.id}` : `/api/admin/users/${candidate.id}/revoke`, { method: canScope ? "DELETE" : "POST" });
       setPendingAction("");
       await reload();
     } catch {
@@ -283,6 +295,9 @@ export function AdminView(): ReactElement {
           <UsersSection
             users={users.filter(candidate => candidate.role === "admin" || candidate.companyIds.includes(currentCompany?.id ?? ""))}
             pendingAction={pendingAction}
+            companyId={currentCompany?.id ?? ""}
+            canScope={canScope}
+            onSetAccess={(candidate, access) => void setAccess(candidate, access)}
             onRevokeUser={(candidate) => void revokeUser(candidate)}
             onClearPendingAction={() => setPendingAction("")}
           />

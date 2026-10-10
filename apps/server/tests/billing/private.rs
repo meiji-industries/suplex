@@ -70,6 +70,16 @@ pub(crate) mod tests {
         ).unwrap();
     }
 
+    /// Confirmed Team for the linked account: company scoping and read-only
+    /// members, for tests that narrow access.
+    pub(crate) fn grant_team(database: &SuplexDatabase) {
+        grant_pro(database);
+        database
+            .connection()
+            .execute("UPDATE suplex_plan SET plan = 'team'", [])
+            .unwrap();
+    }
+
     pub(crate) struct FakeHosted {
         pub url: Url,
         pub hosted: Arc<Mutex<Hosted>>,

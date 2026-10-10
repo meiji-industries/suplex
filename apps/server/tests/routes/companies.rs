@@ -101,7 +101,7 @@ mod tests {
         database.connection().execute("INSERT INTO suplex_account_sessions (token_hash, account_id) VALUES (?1, 'test_verified_account')", [crate::shared::hash::sha256_hex("member_route_token")]).unwrap();
         database.connection().execute("INSERT INTO suplex_companies (id, name, status, created_at) VALUES ('other_member_company', 'Other', 'active', '2026-10-03T00:00:00.000Z')", []).unwrap();
         database.connection().execute("INSERT INTO suplex_memberships (user_id, company_id, created_at) VALUES ('member_route', 'other_member_company', '2026-10-03T00:00:00.000Z')", []).unwrap();
-        crate::billing::tests::grant_pro(&database);
+        crate::billing::tests::grant_team(&database);
         let state = AppState::new(
             database,
             session::SessionConfig {

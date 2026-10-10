@@ -17,10 +17,12 @@ use crate::{
 
 use super::response;
 
+/// The project's company is visible to the user; `edit` also needs edit access.
 fn require_project(
     database: &SuplexDatabase,
     user_id: &str,
     project_id: &str,
+    edit: bool,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
     let company_id: Option<String> = database
         .connection()
@@ -31,7 +33,11 @@ fn require_project(
         )
         .optional()?;
     let company_id = company_id.ok_or_else(TaskError::not_found)?;
-    companies::require_company_access(database, user_id, &company_id)?;
+    if edit {
+        companies::require_company_edit(database, user_id, &company_id)?;
+    } else {
+        companies::require_company_access(database, user_id, &company_id)?;
+    }
     Ok(())
 }
 
@@ -69,7 +75,7 @@ pub fn list(
     user_id: &str,
     project_id: &str,
 ) -> Result<Vec<TemplateResponse>, Box<dyn Error + Send + Sync>> {
-    require_project(database, user_id, project_id)?;
+    require_project(database, user_id, project_id, false)?;
     let mut statement = database.connection().prepare(&format!(
         "{COLUMNS} WHERE project_id = ?1 ORDER BY name COLLATE NOCASE, id"
     ))?;
@@ -110,7 +116,7 @@ pub fn create(
     project_id: &str,
     input: Map<String, Value>,
 ) -> Result<TemplateResponse, Box<dyn Error + Send + Sync>> {
-    require_project(database, user_id, project_id)?;
+    require_project(database, user_id, project_id, true)?;
     let configuration = normalized(input)?;
     let id = random_hex_id("template")?;
     let stamp = now_millis_rfc3339();
@@ -146,7 +152,7 @@ pub fn create_from_task(
             |row| row.get(0),
         )
         .optional()?;
-    companies::require_company_access(
+    companies::require_company_edit(
         database,
         user_id,
         &company_id.ok_or_else(TaskError::not_found)?,
@@ -190,7 +196,7 @@ fn get(
         .optional()?
         .ok_or_else(TaskError::not_found)?;
     let current = template(stored)?;
-    require_project(database, user_id, &current.project_id)?;
+    require_project(database, user_id, &current.project_id, true)?;
     Ok(current)
 }
 

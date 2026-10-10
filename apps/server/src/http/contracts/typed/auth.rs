@@ -3,7 +3,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use super::{Contract, ContractResult, Fields, MAX, nullable, one_of, params, text};
+use super::{Contract, ContractResult, Fields, MAX, choice, nullable, one_of, params, text};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CompanyNameBody {
@@ -114,6 +114,21 @@ impl Contract for CompanyStatusParams {
 pub struct MembershipParams {
     pub company_id: String,
     pub user_id: String,
+}
+/// What a member can do in a company.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MembershipAccessBody {
+    pub access: crate::identity::companies::CompanyAccess,
+}
+impl Contract for MembershipAccessBody {
+    fn schema(input: Option<&Value>) -> ContractResult<Value> {
+        Fields::new(input)?
+            .req(
+                "access",
+                choice::<crate::identity::companies::CompanyAccess>,
+            )
+            .strict()
+    }
 }
 impl Contract for MembershipParams {
     fn schema(input: Option<&Value>) -> ContractResult<Value> {

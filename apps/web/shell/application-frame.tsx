@@ -7,6 +7,7 @@ import { AppSidebar } from "./navigation.js";
 import { SystemHealthAlert } from "../components/app/system-health.js";
 import { UpdateNotice } from "../components/app/update-notice.js";
 import { TelemetryNotice } from "./telemetry-notice.js";
+import { ReadOnlyNotice } from "./read-only-notice.js";
 import { ThemeToggle } from "../components/app/theme.js";
 import { GlobalNewTaskDialog } from "./global-new-task-dialog.js"; import { QuickShell } from "./quick-shell.js"; import { Search } from "lucide-react"; import { Button } from "../components/ui/button.js";
 
@@ -37,6 +38,7 @@ export function ApplicationFrame({ title, documentTitle, headerActions, headerRi
         </header>
         <UpdateNotice />
         <TelemetryNotice />
+        <ReadOnlyNotice />
         <SystemHealthAlert />
         {children}
       </SidebarInset>;

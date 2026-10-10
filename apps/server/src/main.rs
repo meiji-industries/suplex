@@ -10,16 +10,17 @@ use suplex::{
 };
 use tokio::net::TcpListener;
 
-#[tokio::main]
-async fn main() {
-    if let Err(error) = run().await {
+fn main() {
+    // PATH changes before the runtime starts its worker threads.
+    suplex::platform::user_path::extend();
+    let runtime = tokio::runtime::Runtime::new().expect("Failed building the Runtime");
+    if let Err(error) = runtime.block_on(run()) {
         eprintln!("{error}");
         std::process::exit(1);
     }
 }
 
 async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    suplex::platform::user_path::extend();
     let command = std::env::args().skip(1).collect::<Vec<_>>();
     if command == ["github-store-credential"] {
         suplex::integrations::github::use_installation(&Installation::load()?.database);

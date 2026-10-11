@@ -252,7 +252,7 @@ description = "Build the Linux desktop app (deb and rpm with the bundled host) i
 run = "sh scripts/build-desktop-linux.sh"
 
 [tasks."desktop:dist:windows"]
-description = "Build the Windows desktop installer on the Windows build VM for arm64 and x64 under apps/desktop/release/windows-<arch>, then install and launch each on the VM (SUPLEX_WINDOWS_ARCHES limits the architectures; see apps/desktop/windows/README.md)"
+description = "Cross-compile the Windows desktop installer in Docker for arm64 and x64 under apps/desktop/release/windows-<arch>; the build runs on the build-host tailnet host when it answers (SUPLEX_BUILD_HOST picks another host, empty builds here; SUPLEX_WINDOWS_ARCHES limits the architectures)"
 run = "bash scripts/build-desktop-windows.sh"
 
 [tasks."desktop:check:linux"]
@@ -260,7 +260,7 @@ description = "Run the desktop shell's clippy and tests on Linux in Docker"
 run = "sh scripts/build-desktop-linux.sh --check"
 
 [tasks."desktop:check:windows"]
-description = "Run the desktop shell's clippy and tests on the Windows build VM"
+description = "Run the desktop shell's clippy for the Windows targets in Docker (its tests need a Windows machine)"
 run = "bash scripts/build-desktop-windows.sh --check"
 
 [tasks."desktop:verify:release"]
@@ -434,13 +434,12 @@ run = "mise run _release:check && mise run _1password:setup && mise run _release
 
 [tasks."_release:check"]
 hide = true
-description = "Verify the checkout, Docker, and the Windows build VM are ready for a release"
+description = "Verify the checkout and Docker are ready for a release"
 run = '''
 git --no-pager diff --check
 # Version files may be dirty from an earlier failed run; _release:bump resumes that version.
 [[ -z "$(git status --porcelain -- . ':!package.json' ':!apps/desktop/package.json' ':!apps/mobile/package.json' ':!apps/server/Cargo.toml' ':!apps/desktop/src-tauri/Cargo.toml' ':!Cargo.lock')" ]] || { echo "Commit or remove working-tree changes before releasing." >&2; exit 1; }
 docker info >/dev/null 2>&1 || { echo "Start Docker before releasing; the Linux build runs in Docker." >&2; exit 1; }
-bash -c 'source apps/desktop/windows/vm.sh; [ -f "$(vm_setting VMX_PATH)" ]' || { echo "Set up the Windows build VM before releasing; see apps/desktop/windows/README.md." >&2; exit 1; }
 node --input-type=module <<'NODE'
 import { readFileSync } from "node:fs";
 const version = JSON.parse(readFileSync("package.json", "utf8")).version;

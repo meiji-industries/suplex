@@ -19,6 +19,9 @@ table inet egress {
   }
   chain forward {
     type filter hook forward priority filter; policy drop;
+    # Containers sit on 1500-byte bridges; the tunnel is 1280. Clamp their MSS so peers never send segments
+    # that die in the tunnel (Azure, among others, never recovers from that blackhole).
+    oifname "tailscale0" tcp flags syn tcp option maxseg size set rt mtu
     oifname "tailscale0" accept
     oifname { "docker0", "br-*" } accept comment "to containers"
     ct state established,related accept

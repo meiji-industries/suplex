@@ -206,8 +206,8 @@ newer, and install the app as `/usr/bin/Suplex` with its resources in
 and an AppImage mounts at a new path on every launch.
 
 `mise run desktop:dist:windows` builds the Windows installer (NSIS, per-user,
-no administrator) for arm64 and x64 on the Windows build VM, and installs and
-launches each there. See [the build VM](../apps/desktop/windows/README.md). The
+no administrator) for arm64 and x64 by cross-compiling in Docker. See
+[the Windows build](../apps/desktop/windows/README.md). The
 Windows app connects to Suplex hosts on other computers only; it has no local
 host, because the host does not run on Windows.
 
@@ -218,7 +218,7 @@ own feed folder beside the Mac ones: `stable/linux/<arch>/` and
 package (`apps/desktop/scripts/finish-platform-release.sh`) and writes
 `latest-tauri.json`, with one entry per package type
 (`linux-<arch>-deb`, `linux-<arch>-rpm`, `windows-<arch>-nsis`). The private
-key never enters the container or the VM. `latest-linux-desktop.yml` and
+key never enters the container. `latest-linux-desktop.yml` and
 `latest-windows.yml` list the files for `suplex.sh/download`
 (`platform=linux-desktop-x64`, `linux-desktop-arm64`, `windows-x64`,
 `windows-arm64`).
@@ -228,7 +228,7 @@ same immutable-file and manifest-last rules as the Mac publisher. The deb and
 rpm updates install through `pkexec`, so Linux asks for an administrator
 password. The release Authenticode signs the Windows app and installer with
 Azure Trusted Signing, from the `Azure Trusted Signing` item in the Suplex
-vault ([build VM](../apps/desktop/windows/README.md#authenticode-signing)). A build
+vault ([Windows build](../apps/desktop/windows/README.md#authenticode-signing)). A build
 without that item is unsigned, and Windows SmartScreen shows an unknown
 publisher.
 

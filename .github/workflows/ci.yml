@@ -213,7 +213,7 @@ jobs:
   desktop-linux:
     name: Desktop shell (Linux)
     # Clippy and tests for the shell on Linux. Packaging runs in Docker in the release (mise run desktop:dist:linux),
-    # and Windows checks run on the Windows build VM (mise run desktop:check:windows).
+    # and Windows checks run in Docker (mise run desktop:check:windows).
     runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 30
     steps:

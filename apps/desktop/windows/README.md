@@ -1,54 +1,32 @@
-# Windows build VM
+# Windows desktop build
 
-`mise run desktop:dist:windows` builds the Windows installers on a Windows 11 Arm VM in VMware Fusion,
-over SSH. `mise run desktop:check:windows` runs the shell's clippy and tests there. The release
+`mise run desktop:dist:windows` cross-compiles the Windows installers (NSIS, per-user) for arm64 and x64 in
+Docker, from Linux, with [cargo-xwin](https://github.com/rust-cross/cargo-xwin). x64 builds run on the
+`build-host` tailnet host when it answers, as the Linux builds do (`scripts/linux-builder.sh`). The release
 (`mise run release:*`) runs the same build with the production update feed and key.
+`mise run desktop:check:windows` runs the shell's clippy for both Windows targets.
 
-Suplex uses the VM that the VM provisioning repository provisions. Its settings file
-`~/.cache/vm-provisioning/windows/vm.conf` names the VM, the guest user, and the SSH key. Set
-`SUPLEX_WINDOWS_VM_CONFIG` to use another file in the same format.
+- `Dockerfile` is the build image: Rust with both MSVC targets, `cargo-xwin`, the Tauri CLI, NSIS, and `jsign`.
+- `apps/desktop/scripts/dist-windows.sh` runs inside it and writes `apps/desktop/release/windows-<arch>/`.
+- `sign-linux.sh` signs one file; Tauri calls it through `bundle.windows.signCommand`.
 
-## One-time setup
+The updater private key never enters the container: `scripts/build-desktop-windows.sh` signs the update
+files on the Mac (`apps/desktop/scripts/finish-platform-release.sh`).
 
-1. Provision the VM with `windows/setup.sh` and `windows/provision.sh` in the VM provisioning
-   repository. That installs Visual Studio Build Tools, Rust with the `x86_64-pc-windows-msvc`
-   target, Git, Python, and OpenSSH.
-2. Add a build disk. The VM's `C:` disk has little free space, so Suplex keeps its checkout, Cargo
-   cache, and build output on `S:`. With the VM stopped:
+## Limits
 
-   ```sh
-   vm="$HOME/Virtual Machines.localized/Windows 11 64-bit Arm.vmwarevm"
-   "/Applications/VMware Fusion.app/Contents/Library/vmware-vdiskmanager" -c -s 80GB -a nvme -t 1 "$vm/Suplex Build.vmdk"
-   printf 'nvme0:1.fileName = "Suplex Build.vmdk"\nnvme0:1.present = "TRUE"\n' >> "$vm/Windows 11 64-bit Arm.vmx"
-   ```
-
-   Start the VM, then format the disk as `S:` in an administrator PowerShell:
-
-   ```powershell
-   Initialize-Disk -Number 1 -PartitionStyle GPT
-   New-Partition -DiskNumber 1 -UseMaximumSize -DriveLetter S | Format-Volume -FileSystem NTFS -NewFileSystemLabel SuplexBuild
-   ```
-
-The first build installs the Tauri CLI on `S:` (`install-tools.bat`).
-
-## How a build runs
-
-`scripts/build-desktop-windows.sh` starts the VM when it is off, copies `apps/desktop/` to
-`S:\suplex\checkout`, and runs `build.bat <arch>`. The VM is Arm, so the x64 build uses the Arm-hosted
-cross compiler, and the x64 installer runs under emulation in the install check
-(`test-packaged.ps1`). The installers come back to `apps/desktop/release/windows-<arch>/`, where the Mac signs
-the update files: the updater private key never reaches the VM.
+- Cross-compiling is experimental in Tauri and supports the NSIS installer only (no MSI).
+- No install or launch check runs. Install the installer on a Windows machine before a release that changes
+  the shell, the installer, or signing.
+- Clippy runs for the Windows targets. The shell's tests need a Windows machine.
+- `ring` forces gnu-style `clang` on Windows arm64, while `cargo-xwin` passes `clang-cl` flags. The `clang`
+  wrapper in the `Dockerfile` bridges them. Remove it when `ring` or `cargo-xwin` fixes this.
 
 ## Authenticode signing
 
-The release reads the six `AZURE_*` values from the `Azure Trusted Signing` item in the Suplex
-1Password vault and signs the app, the installer, and its plugins with Azure Trusted Signing
-(publisher "Meiji Heavy Industries, Inc."). The item holds the Entra app `release-signing`,
-which has only the Artifact Signing Certificate Profile Signer role on the `vm-provisioning` profile in
-the `codesigning` resource group. Its secret expires periodically; create a new one with
-`az ad app credential reset` before then and update the item. Without the item the installers are
-unsigned, and Windows SmartScreen shows an unknown publisher.
-
-signtool needs Windows DPAPI, which an SSH key logon cannot unlock, so each signature runs in a
-scheduled task that logs on with the VM user's password (`sign-task.ps1`). The build copies the
-service principal and that password to the VM as files and deletes them when it ends.
+The release reads the six `AZURE_*` values from the `Azure Trusted Signing` item in the Suplex 1Password
+vault and signs the app and installer with Azure Trusted Signing (publisher "Meiji Heavy Industries, Inc."),
+through `jsign`. The item holds the Entra app `release-signing`, which has only the Artifact Signing
+Certificate Profile Signer role on the `vm-provisioning` profile in the `codesigning` resource group. Its
+secret expires on 2028-10-06; create a new one with `az ad app credential reset` before then and update the
+item. Without the item the installers are unsigned, and Windows SmartScreen shows an unknown publisher.

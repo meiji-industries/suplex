@@ -366,7 +366,7 @@ crate::shared::wire_enum! {
     }
 }
 
-const LABELLED_PULL_REQUESTS: &str = "query($owner:String!,$name:String!,$label:String!,$after:String,$direction:OrderDirection!){repository(owner:$owner,name:$name){pullRequests(states:OPEN,labels:[$label],first:100,after:$after,orderBy:{field:CREATED_AT,direction:$direction}){pageInfo{hasNextPage endCursor}nodes{number createdAt timelineItems(itemTypes:LABELED_EVENT,last:100){nodes{...on LabeledEvent{createdAt label{name}}}}}}}}";
+const LABELLED_PULL_REQUESTS: &str = "query($owner:String!,$name:String!,$label:String!,$after:String,$direction:OrderDirection!){repository(owner:$owner,name:$name){pullRequests(states:OPEN,labels:[$label],first:100,after:$after,orderBy:{field:CREATED_AT,direction:$direction}){pageInfo{hasNextPage endCursor}nodes{number url baseRefName isDraft isCrossRepository createdAt timelineItems(itemTypes:LABELED_EVENT,last:100){nodes{...on LabeledEvent{createdAt label{name}}}}}}}}";
 
 #[derive(Deserialize)]
 struct LabelledPage {
@@ -404,6 +404,15 @@ struct LabelledPullRequest {
     number: i64,
     created_at: String,
     timeline_items: LabelEvents,
+    // The enumeration carries enough to exclude most candidates without a REST inspection.
+    #[serde(default)]
+    url: Option<String>,
+    #[serde(default)]
+    base_ref_name: Option<String>,
+    #[serde(default)]
+    is_draft: Option<bool>,
+    #[serde(default)]
+    is_cross_repository: Option<bool>,
 }
 
 #[derive(Deserialize)]
@@ -441,6 +450,31 @@ pub async fn list_open_pull_requests_by_label(
     label: &str,
     order: TriggerSortOrder,
 ) -> GithubResult<Vec<i64>> {
+    Ok(list_labelled_candidates(github, name, label, order)
+        .await?
+        .into_iter()
+        .map(|pull| pull.number)
+        .collect())
+}
+
+/// What the labelled enumeration knows about one pull request. A `None`
+/// field was not in the response and needs the REST inspection.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LabelledCandidate {
+    pub number: i64,
+    pub url: Option<String>,
+    pub base_branch: Option<String>,
+    pub is_draft: Option<bool>,
+    pub is_cross_repository: Option<bool>,
+}
+
+/// Open pull requests with `label`, in admission order, with the enumeration fields.
+pub async fn list_labelled_candidates(
+    github: &Github,
+    name: &str,
+    label: &str,
+    order: TriggerSortOrder,
+) -> GithubResult<Vec<LabelledCandidate>> {
     label_valid(label)?;
     let repo = repository(name)?;
     let (owner, name) = repo.split_once('/').ok_or_else(|| invalid("repository"))?;
@@ -496,6 +530,10 @@ struct Candidate {
     number: i64,
     created: Time,
     labelled: Time,
+    url: Option<String>,
+    base_branch: Option<String>,
+    is_draft: Option<bool>,
+    is_cross_repository: Option<bool>,
 }
 
 fn candidate(pull: LabelledPullRequest, label: &str) -> Option<Candidate> {
@@ -511,10 +549,14 @@ fn candidate(pull: LabelledPullRequest, label: &str) -> Option<Candidate> {
         number: pull.number,
         created,
         labelled: labelled.unwrap_or(created),
+        url: pull.url,
+        base_branch: pull.base_ref_name,
+        is_draft: pull.is_draft,
+        is_cross_repository: pull.is_cross_repository,
     })
 }
 
-fn order_candidates(mut pulls: Vec<Candidate>, order: TriggerSortOrder) -> Vec<i64> {
+fn order_candidates(mut pulls: Vec<Candidate>, order: TriggerSortOrder) -> Vec<LabelledCandidate> {
     use std::cmp::Reverse;
     match order {
         TriggerSortOrder::CreatedAsc => pulls.sort_by_key(|pull| (pull.created, pull.number)),
@@ -526,7 +568,16 @@ fn order_candidates(mut pulls: Vec<Candidate>, order: TriggerSortOrder) -> Vec<i
             pulls.sort_by_key(|pull| (Reverse(pull.labelled), pull.number));
         }
     }
-    pulls.into_iter().map(|pull| pull.number).collect()
+    pulls
+        .into_iter()
+        .map(|pull| LabelledCandidate {
+            number: pull.number,
+            url: pull.url,
+            base_branch: pull.base_branch,
+            is_draft: pull.is_draft,
+            is_cross_repository: pull.is_cross_repository,
+        })
+        .collect()
 }
 
 pub async fn inspect_pull_request(
@@ -656,7 +707,12 @@ mod tests {
             pull(3, "2026-01-03T00:00:00Z", json!([])),
             pull(4, "2026-01-03T00:00:00Z", json!([])),
         ];
-        let order = |order| order_candidates(pulls.clone(), order);
+        let order = |order| {
+            order_candidates(pulls.clone(), order)
+                .into_iter()
+                .map(|pull| pull.number)
+                .collect::<Vec<_>>()
+        };
         assert_eq!(order(TriggerSortOrder::CreatedAsc), [1, 2, 3, 4]);
         assert_eq!(order(TriggerSortOrder::CreatedDesc), [3, 4, 2, 1]);
         assert_eq!(order(TriggerSortOrder::LabeledAsc), [3, 4, 1, 2]);

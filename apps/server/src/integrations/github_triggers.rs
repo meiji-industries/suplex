@@ -33,8 +33,8 @@ use super::{
     },
     github_triggers_inspection::{
         PullRequestInspection, TriggerSortOrder, inspect_pull_request, labelled_change_path,
-        list_open_pull_requests_by_label, observe_repository, validate_label,
-        validate_protected_paths,
+        list_labelled_candidates, list_open_pull_requests_by_label, observe_repository,
+        validate_label, validate_protected_paths,
     },
 };
 use crate::coordination::workflows::Workflow;
@@ -1545,16 +1545,39 @@ impl<D: Db> Pass<'_, D> {
 
     /// Admit each labelled pull request this rule has not processed.
     async fn admit_candidates(&mut self) -> Result<(), Failure> {
-        let candidates = list_open_pull_requests_by_label(
+        let candidates = list_labelled_candidates(
             self.github,
             &self.rule.repository_name,
             &self.rule.label,
             self.rule.sort_order,
         )
         .await?;
-        for number in candidates {
-            let result = self.candidate(number).await;
-            self.outcome(number, result);
+        for pull in candidates {
+            // The enumeration already shows these exclusions; a REST inspection
+            // of every labelled pull request each minute exhausts the API limit.
+            let reason = if pull.is_draft == Some(true) {
+                Some("The pull request is a draft.")
+            } else if pull.is_cross_repository == Some(true) {
+                Some("The pull request comes from a fork.")
+            } else if pull
+                .base_branch
+                .as_ref()
+                .is_some_and(|base| *base != self.expected.dependencies.base_branch)
+            {
+                Some("The pull request targets a different base branch.")
+            } else {
+                None
+            };
+            let result = match reason {
+                Some(reason) => Ok(Activity::new(
+                    pull.number,
+                    pull.url.as_deref(),
+                    "excluded",
+                    reason,
+                )),
+                None => self.candidate(pull.number).await,
+            };
+            self.outcome(pull.number, result);
         }
         Ok(())
     }
@@ -3059,6 +3082,37 @@ mod tests {
         assert!(
             saved.iter().any(|entry| entry.outcome == "excluded"
                 && entry.reason == "GitHub trigger pull request is no longer eligible"),
+            "{saved:?}"
+        );
+        server.abort();
+        let _ = std::fs::remove_file(f.filename);
+    }
+
+    #[tokio::test]
+    async fn the_enumeration_excludes_a_different_base_branch_without_inspecting_it() {
+        let f = fixture();
+        let replies = replies(&[]);
+        let mut page = labelled_page(&[9], None);
+        page["data"]["repository"]["pullRequests"]["nodes"][0]["baseRefName"] = json!("develop");
+        page["data"]["repository"]["pullRequests"]["nodes"][0]["url"] =
+            json!("https://github.com/owner/repo/pull/9");
+        // No `/repos/owner/repo/pulls/9` reply: a REST inspection would fail the pass.
+        replies
+            .lock()
+            .unwrap()
+            .insert("/graphql".into(), (200, page));
+        let (github, _, server) = fake_github(replies).await;
+        let rule = enabled_rule(&f, &github).await;
+        process_enabled_rules(&f.state, &github, &|_| {}).await;
+        let stored = stored_rule(&f, &rule);
+        assert_eq!((stored.failure_count, stored.latest_error), (0, None));
+        let saved = activity(&f.state, &f.admin, "c", &rule.id).unwrap();
+        assert!(
+            saved
+                .iter()
+                .any(|entry| entry.pull_request_number == Some(9)
+                    && entry.outcome == "excluded"
+                    && entry.reason == "The pull request targets a different base branch."),
             "{saved:?}"
         );
         server.abort();

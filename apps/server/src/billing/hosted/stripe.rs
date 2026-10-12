@@ -44,6 +44,21 @@ pub struct PriceTier {
     pub unit_amount: Option<i64>,
 }
 
+/// A portal deep link to one change; Stripe prorates, collects payment, and
+/// asks the customer to confirm.
+#[derive(Clone, Copy, Debug)]
+pub enum PortalFlow<'a> {
+    Cancel {
+        subscription_id: &'a str,
+    },
+    Update {
+        subscription_id: &'a str,
+        item_id: &'a str,
+        price_id: &'a str,
+        quantity: i64,
+    },
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Customer {
     pub id: String,
@@ -927,17 +942,62 @@ impl StripeClient {
         }
     }
 
+    /// A portal session; with `flow`, a deep link to that one change.
     pub async fn create_portal_session(
         &self,
         customer_id: &str,
         configuration_id: &str,
         return_url: &str,
+        flow: Option<PortalFlow<'_>>,
     ) -> Result<Option<String>, ProviderError> {
-        let form = pairs([
+        let mut form = pairs([
             ("customer", customer_id.to_owned()),
             ("configuration", configuration_id.to_owned()),
             ("return_url", return_url.to_owned()),
         ]);
+        match flow {
+            None => {}
+            Some(PortalFlow::Cancel { subscription_id }) => form.extend(pairs([
+                ("flow_data[type]", "subscription_cancel".into()),
+                (
+                    "flow_data[subscription_cancel][subscription]",
+                    subscription_id.to_owned(),
+                ),
+            ])),
+            Some(PortalFlow::Update {
+                subscription_id,
+                item_id,
+                price_id,
+                quantity,
+            }) => form.extend(pairs([
+                ("flow_data[type]", "subscription_update_confirm".into()),
+                (
+                    "flow_data[subscription_update_confirm][subscription]",
+                    subscription_id.to_owned(),
+                ),
+                (
+                    "flow_data[subscription_update_confirm][items][0][id]",
+                    item_id.to_owned(),
+                ),
+                (
+                    "flow_data[subscription_update_confirm][items][0][price]",
+                    price_id.to_owned(),
+                ),
+                (
+                    "flow_data[subscription_update_confirm][items][0][quantity]",
+                    quantity.to_string(),
+                ),
+            ])),
+        }
+        if flow.is_some() {
+            form.extend(pairs([
+                ("flow_data[after_completion][type]", "redirect".into()),
+                (
+                    "flow_data[after_completion][redirect][return_url]",
+                    return_url.to_owned(),
+                ),
+            ]));
+        }
         Ok(text(
             &self
                 .post("/v1/billing_portal/sessions", &form, None)

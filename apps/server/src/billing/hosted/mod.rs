@@ -80,6 +80,21 @@ impl HostedConfig {
         }
     }
 
+    /// The billing period of a configured price.
+    pub fn price_interval(&self, price_id: &str) -> Option<BillingInterval> {
+        let (team_month, team_year) = self
+            .stripe_team_price_ids
+            .as_ref()
+            .map_or(("", ""), |(month, year)| (month.as_str(), year.as_str()));
+        if price_id == self.stripe_price_id || price_id == team_month {
+            Some(BillingInterval::Month)
+        } else if price_id == self.stripe_annual_price_id || price_id == team_year {
+            Some(BillingInterval::Year)
+        } else {
+            None
+        }
+    }
+
     /// The paid plan a configured price buys, or `None` for another price.
     pub fn price_plan(&self, price_id: &str) -> Option<PaidPlan> {
         if price_id == self.stripe_price_id || price_id == self.stripe_annual_price_id {

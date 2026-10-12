@@ -30,9 +30,22 @@ free (`payment_method_collection=if_required`).
 
 ### Plan changes
 
+Settings > Billing shows Free, Pro, and Team side by side, with a Monthly /
+Annual switch and the current plan's column shaded. Administrators change the
+plan there (`apps/web/features/settings/plan-table.tsx`):
+
+- Without a live subscription, Pro starts the 14-day trial (monthly, when the
+  account has one) or Checkout, and Team starts Checkout for its seat count.
+- With a live subscription, including a trial, each other choice opens the
+  Stripe page that confirms that exact change (`POST /api/billing/change`,
+  hosted `POST /v1/plan/change`): a customer portal deep link
+  (`subscription_update_confirm` with the new price and seats, or
+  `subscription_cancel` for Free). Stripe shows the amount, collects payment,
+  and applies the portal settings below.
+
 Checkout buys a first subscription only. With a live subscription, checkout
 reports it (`subscribed`) and buys nothing. Every later change happens in the
-Stripe customer portal (Open billing), on the same subscription:
+Stripe customer portal, on the same subscription:
 
 - Upgrades (Pro to Team, monthly to yearly, more Team seats) prorate: the
   customer gets a credit for the unused part of the period and pays for the
@@ -313,10 +326,11 @@ credential created at registration. Only SHA-256 hashes are stored.
 
 | Endpoint | Behavior |
 | --- | --- |
-| `GET /v1/plan` | Bearer Suplex account token. The account's `{state, trialAvailable}`. With `?tier=1`, also `plan: "pro" \| "team"` for an active subscription; hosts before Team reject unknown fields, so only new hosts ask. |
+| `GET /v1/plan` | Bearer Suplex account token. The account's `{state, trialAvailable}`. With `?tier=1`, also `plan: "pro" \| "team"` and `interval` for an active subscription; hosts before Team reject unknown fields, so only new hosts ask. |
 | `POST /v1/plan/trial` | Bearer Suplex account token. Start the account's one 14-day trial, or return the current plan. 409 `trial_used` after a trial. |
 | `POST /v1/plan/checkout` | Bearer Suplex account token plus `Idempotency-Key`. Optional body `{plan: "pro" \| "team", interval: "month" \| "year", quantity}`; no body is one monthly Pro seat. Pro is one seat; Team buys `quantity` seats, at least 3 (default 3). |
 | `POST /v1/plan/portal` | Bearer Suplex account token. A portal session for the account's customer. |
+| `POST /v1/plan/change` | Bearer Suplex account token. Body `{plan: "free" \| "pro" \| "team", interval?, quantity?}`. A portal deep link that confirms changing the live subscription to that plan; Free cancels it. `no_subscription` without a live subscription, `plan_unchanged` for the current price and seats. |
 | `POST /v1/accounts` | Register or recover the credential-bound empty account (v1.3.0 per-company billing). |
 | `GET /v1/billing` | Read the current provider state for the caller's account. |
 | `POST /v1/checkout` | Body `{quantity}` plus `Idempotency-Key`; create or reuse a Checkout session, or return the existing subscription's recovery action. |

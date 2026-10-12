@@ -22,7 +22,7 @@ import { BillingSection, formatUsd } from "../features/settings/billing-section.
 const free: BillingSummary = {
   plan: "free", limits: { companies: 1, projects: 2, runningTasks: 3, monthlyTasks: 50 }, usage: { companies: 1, projects: 1, runningTasks: 2, monthlyTasks: 12 },
   checked: true, accountLinked: true, canManageBilling: true, purchaseConfigured: true, trialAvailable: true,
-  subscriptionStatus: "none", renewalAt: null, accessUntil: null, cancelAtPeriodEnd: false, paymentActionRequired: false, paymentActionUrl: null, purchasedSeats: 0, seatsUsed: 4, teamLapsed: false,
+  subscriptionStatus: "none", renewalAt: null, accessUntil: null, cancelAtPeriodEnd: false, paymentActionRequired: false, paymentActionUrl: null, purchasedSeats: 0, seatsUsed: 4, teamLapsed: false, interval: null,
 };
 const trial: BillingSummary = { ...free, plan: "pro", limits: { companies: 3, projects: 10, runningTasks: null, monthlyTasks: null }, trialAvailable: false, subscriptionStatus: "trialing", accessUntil: "2026-11-03T00:00:00.000Z" };
 const pro: BillingSummary = { ...trial, subscriptionStatus: "active", renewalAt: "2026-11-03T00:00:00.000Z", purchasedSeats: 1 };
@@ -70,9 +70,9 @@ test("Free shows usage against each limit and starts the trial without a tab", a
   const text = container.textContent ?? "";
   expect(text).toContain("Free plan");
   for (const usage of ["1 / 1", "2 / 3", "12 / 50"]) expect(text).toContain(usage);
-  expect(text).toContain("No credit card is necessary.");
+  expect(text).toContain("The 14-day Pro trial needs no credit card.");
   expect(button(container, "Open billing")).toBeUndefined();
-  await act(async () => button(container, "Start the 14-day trial")!.click());
+  await act(async () => button(container, "Start 14-day trial")!.click());
   expect(posts("/api/billing/trial")).toHaveLength(1);
   expect(window.open).not.toHaveBeenCalled();
   expect(container.textContent).toContain("Pro trial");
@@ -87,7 +87,7 @@ test("Select Pro opens Checkout in a tab and keeps its key after a failure", asy
     return { status: "redirect", url: "https://checkout.stripe.com/c/pay/1" };
   });
   const container = await mount();
-  expect(button(container, "Start the 14-day trial")).toBeUndefined();
+  expect(button(container, "Start 14-day trial")).toBeUndefined();
   await act(async () => button(container, "Select Pro")!.click());
   expect(container.textContent).toContain("Suplex cannot check the subscription.");
   expect(tab.close).toHaveBeenCalledOnce();
@@ -99,38 +99,46 @@ test("Select Pro opens Checkout in a tab and keeps its key after a failure", asy
 });
 
 test("Annual shows the yearly price and buys it with a new key", async () => {
-  api.readJson.mockImplementation(async (url: string) => url === "/api/billing" ? free : { status: "redirect", url: "https://checkout.stripe.com/c/pay/1" });
+  api.readJson.mockImplementation(async (url: string) => url === "/api/billing" ? { ...free, trialAvailable: false } : { status: "redirect", url: "https://checkout.stripe.com/c/pay/1" });
   const container = await mount();
   await act(async () => button(container, "Select Pro")!.click());
-  await act(async () => button(container, "Annual")!.click());
-  expect(container.textContent).toContain("$192 each year ($16 each month) for one seat.");
+  await act(async () => button(container, "Annual (save 20%)")!.click());
+  expect(container.textContent).toContain("$192/yr");
   await act(async () => button(container, "Select Pro")!.click());
   const [monthly, annual] = posts("/api/billing/checkout").map(([, init]) => init);
   expect(annual.body).toBe(JSON.stringify({ interval: "year" }));
   expect(annual.headers["Idempotency-Key"]).not.toBe(monthly.headers["Idempotency-Key"]);
 });
 
-test("Pro offers the billing portal and shows the renewal", async () => {
-  api.readJson.mockImplementation(async (url: string) => url === "/api/billing/portal" ? { url: "https://billing.stripe.com/p/1" } : pro);
+test("Pro offers the billing portal and opens Stripe to confirm a switch to Team", async () => {
+  api.readJson.mockImplementation(async (url: string) => url === "/api/billing/portal" ? { url: "https://billing.stripe.com/p/1" } : url === "/api/billing/change" ? { url: "https://billing.stripe.com/p/2" } : { ...pro, interval: "month" });
   const container = await mount();
   expect(container.textContent).toContain("Pro plan");
   expect(container.textContent).toContain("Renews on");
+  expect(container.textContent).toContain("Current plan");
   expect(button(container, "Select Pro")).toBeUndefined();
   await act(async () => button(container, "Open billing")!.click());
   expect(tab.location.href).toBe("https://billing.stripe.com/p/1");
+  await act(async () => button(container, "Switch to Team")!.click());
+  expect(posts("/api/billing/change")[0]![1].body).toBe(JSON.stringify({ plan: "team", interval: "month", quantity: 4 }));
+  expect(tab.location.href).toBe("https://billing.stripe.com/p/2");
+  await act(async () => button(container, "Annual (save 20%)")!.click());
+  await act(async () => button(container, "Switch to annual")!.click());
+  expect(posts("/api/billing/change")[1]![1].body).toBe(JSON.stringify({ plan: "pro", interval: "year" }));
+  await act(async () => button(container, "Cancel plan")!.click());
+  expect(posts("/api/billing/change")[2]![1].body).toBe(JSON.stringify({ plan: "free" }));
 });
 
 test("Team buys a seat for each user, at least 3, and shows seats in use", async () => {
   api.readJson.mockImplementation(async (url: string) => url === "/api/billing" ? free : { status: "redirect", url: "https://checkout.stripe.com/c/pay/1" });
   const container = await mount();
-  await act(async () => button(container, "Team")!.click());
-  expect(button(container, "Start the 14-day trial")).toBeUndefined();
-  expect(container.textContent).toContain("$75 each month for 3 seats, then $15 for each seat. 4 seats cost $90 each month.");
+  expect(container.textContent).toContain("$90/mo for 4 seats");
   await act(async () => button(container, "Select Team")!.click());
   expect(posts("/api/billing/checkout")[0]![1].body).toBe(JSON.stringify({ plan: "team", interval: "month", quantity: 4 }));
   api.readJson.mockImplementation(async () => team);
   const teamView = await mount();
   expect(teamView.textContent).toContain("Team plan");
+  expect(teamView.textContent).toContain("Current plan");
   expect(teamView.querySelector('[data-setting-row="Seats"]')?.textContent).toContain("4 of 4");
 });
 

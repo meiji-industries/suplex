@@ -1,22 +1,16 @@
 import { Alert, AlertDescription } from "../../components/ui/alert.js";
 import { Button } from "../../components/ui/button.js";
-import { Input } from "../../components/ui/input.js";
 import { Skeleton } from "../../components/ui/skeleton.js";
 import { Spinner } from "../../components/ui/spinner.js";
-import { Tabs, TabsList, TabsTrigger } from "../../components/ui/tabs.js";
 import { isApiError } from "../../lib/api.js";
-import { PRO_ANNUAL_AMOUNT, PRO_MONTHLY_AMOUNT, TEAM_ANNUAL_AMOUNT, TEAM_ANNUAL_SEAT_AMOUNT, TEAM_INCLUDED_SEATS, TEAM_MONTHLY_AMOUNT, TEAM_MONTHLY_SEAT_AMOUNT, type BillingInterval, type BillingSummary, type PaidPlan } from "../../contracts/billing.js";
-import { getBillingSummary, openBillingPortal, startCheckout, startTrial } from "./lib/billing-api.js";
+import type { BillingSummary } from "../../contracts/billing.js";
+import { changePlan, getBillingSummary, openBillingPortal, startCheckout, startTrial } from "./lib/billing-api.js";
+import { PlanTable, type PlanTarget } from "./plan-table.js";
 import { useOptionalCompanyContext } from "../../shell/company-context.js";
 import { SettingsSection, SettingRow } from "./settings-layout.js";
-import { Check } from "lucide-react";
 import { useCallback, useEffect, useRef, useState, type ReactElement } from "react";
 
-// USD has two minor-unit digits. Whole dollars read "$20"; any cents are exact: "$13.33".
-export function formatUsd(minorUnits: number): string {
-  const digits = minorUnits % 100 === 0 ? 0 : 2;
-  return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", minimumFractionDigits: digits, maximumFractionDigits: digits }).format(minorUnits / 100);
-}
+export { formatUsd } from "./plan-table.js";
 
 function formatDate(timestamp: string): string {
   return new Date(timestamp).toLocaleDateString();
@@ -34,8 +28,6 @@ function actionMessage(reason: unknown): string {
   return reason instanceof Error ? reason.message : "Suplex cannot check the subscription.";
 }
 
-const PRO_FEATURES = ["3 companies", "25 projects", "Unlimited tasks at a time", "Unlimited tasks each month"];
-const TEAM_FEATURES = ["Unlimited companies", "Unlimited projects", "3 seats included", "Choose what each teammate can see and change"];
 
 // A browser allows a new tab only during the click, so open it before the
 // request and send it to the hosted URL when the answer arrives.
@@ -84,9 +76,7 @@ export function BillingSection(): ReactElement {
   const [busy, setBusy] = useState("");
   const [externalOpen, setExternalOpen] = useState(false);
   const checkoutKey = useRef<string | undefined>(undefined);
-  const [interval, setCheckoutInterval] = useState<BillingInterval>("month");
-  const [paidPlan, setPaidPlan] = useState<PaidPlan>("pro");
-  const [seats, setSeats] = useState<number>();
+  const checkoutChoice = useRef("");
   const mounted = useRef(true);
 
   const setPlan = useOptionalCompanyContext()?.setPlan;
@@ -139,11 +129,16 @@ export function BillingSection(): ReactElement {
 
   const trial = (): Promise<void> => run("trial", async () => { applySummary(await startTrial()); });
 
-  const checkout = (): Promise<void> => run("checkout", async () => {
+  const checkout = ({ plan, interval, quantity }: PlanTarget): Promise<void> => run(`plan:${plan}`, async () => {
+    if (plan === "free") return;
     const tab = pendingTab();
     try {
+      // One key per plan, period, and seats: a retry of the same choice reuses it.
+      const choice = `${plan}:${interval}:${quantity}`;
+      if (checkoutChoice.current !== choice) checkoutKey.current = undefined;
+      checkoutChoice.current = choice;
       checkoutKey.current ??= crypto.randomUUID();
-      const result = await startCheckout(checkoutKey.current, interval, paidPlan, quantity);
+      const result = await startCheckout(checkoutKey.current, interval, plan, quantity);
       if (result.status === "redirect") {
         tab.go(result.url);
         setExternalOpen(true);
@@ -157,6 +152,17 @@ export function BillingSection(): ReactElement {
       tab.close();
       // The hosted service ended this checkout command. A new key starts a fresh one.
       if (isApiError(reason) && reason.code === "billing_operation_not_applied") checkoutKey.current = undefined;
+      throw reason;
+    }
+  });
+
+  const change = ({ plan, interval, quantity }: PlanTarget): Promise<void> => run(`plan:${plan}`, async () => {
+    const tab = pendingTab();
+    try {
+      tab.go((await changePlan(plan, interval, quantity)).url);
+      setExternalOpen(true);
+    } catch (reason) {
+      tab.close();
       throw reason;
     }
   });
@@ -192,18 +198,8 @@ export function BillingSection(): ReactElement {
   const notice = planNotice(summary);
   const ready = summary.canManageBilling && notice === undefined;
   const hasSubscription = summary.subscriptionStatus !== null && summary.subscriptionStatus !== "none";
-  const canUpgrade = ready && summary.plan === "free" && !summary.paymentActionRequired;
   const showPortal = ready && (summary.plan !== "free" || hasSubscription);
   const { limits, usage } = summary;
-  // Each user who is not revoked uses a seat, so Team checkout buys at least one each.
-  const quantity = seats ?? Math.max(TEAM_INCLUDED_SEATS, summary.seatsUsed);
-  const [teamFlat, teamSeat] = interval === "year" ? [TEAM_ANNUAL_AMOUNT, TEAM_ANNUAL_SEAT_AMOUNT] : [TEAM_MONTHLY_AMOUNT, TEAM_MONTHLY_SEAT_AMOUNT];
-  const period = interval === "year" ? "each year" : "each month";
-  const upgradeDescription = paidPlan === "team"
-    ? `${formatUsd(teamFlat)} ${period} for ${TEAM_INCLUDED_SEATS} seats, then ${formatUsd(teamSeat)} for each seat. ${quantity} seats cost ${formatUsd(teamFlat + Math.max(0, quantity - TEAM_INCLUDED_SEATS) * teamSeat)} ${period}. Taxes are additional.`
-    : interval === "year"
-      ? `${formatUsd(PRO_ANNUAL_AMOUNT)} each year (${formatUsd(PRO_ANNUAL_AMOUNT / 12)} each month) for one seat. Taxes are additional.`
-      : `${summary.trialAvailable ? "No credit card is necessary. Then " : ""}${formatUsd(PRO_MONTHLY_AMOUNT)} each month for one seat. Taxes are additional.`;
   const planLabel = trialing ? "Pro trial" : summary.teamLapsed ? "Team ended" : `${summary.plan[0]!.toUpperCase()}${summary.plan.slice(1)} plan`;
 
   return (
@@ -214,28 +210,11 @@ export function BillingSection(): ReactElement {
           {showPortal ? <Button size="sm" variant="outline" onClick={() => void portal()} disabled={busy !== ""}>{busy === "portal" ? <Spinner /> : null}Open billing</Button> : null}
         </SettingRow>
       </SettingsSection>
-      {canUpgrade ? (
-        <SettingsSection>
-          <SettingRow label="Upgrade" description={upgradeDescription}>
-            <div className="flex flex-wrap items-center justify-end gap-2">
-              <Tabs value={paidPlan} onValueChange={next => { setPaidPlan(next as PaidPlan); checkoutKey.current = undefined; }}>
-                <TabsList aria-label="Plan"><TabsTrigger value="pro">Pro</TabsTrigger><TabsTrigger value="team">Team</TabsTrigger></TabsList>
-              </Tabs>
-              {paidPlan === "team" ? <div className="w-20"><Input size="sm" type="number" min={TEAM_INCLUDED_SEATS} max={9999} aria-label="Seats" title="Seats" value={quantity} onChange={event => { const next = Math.trunc(Number(event.target.value)); setSeats(Math.min(9999, Math.max(TEAM_INCLUDED_SEATS, next || TEAM_INCLUDED_SEATS))); checkoutKey.current = undefined; }} /></div> : null}
-              <Tabs value={interval} onValueChange={next => { setCheckoutInterval(next as BillingInterval); checkoutKey.current = undefined; }}>
-                <TabsList aria-label="Billing period"><TabsTrigger value="month">Monthly</TabsTrigger><TabsTrigger value="year">Annual</TabsTrigger></TabsList>
-              </Tabs>
-              {summary.trialAvailable && paidPlan === "pro" ? <Button size="sm" onClick={() => void trial()} disabled={busy !== ""}>{busy === "trial" ? <Spinner /> : null}Start the 14-day trial</Button> : null}
-              <Button size="sm" variant={summary.trialAvailable && paidPlan === "pro" ? "outline" : "default"} onClick={() => void checkout()} disabled={busy !== ""}>{busy === "checkout" ? <Spinner /> : null}{paidPlan === "team" ? "Select Team" : "Select Pro"}</Button>
-            </div>
-          </SettingRow>
-          <ul className="grid gap-2 border-t py-3 text-xs sm:grid-cols-2">
-            {(paidPlan === "team" ? TEAM_FEATURES : PRO_FEATURES).map(feature => <li key={feature} className="flex items-center gap-2"><Check aria-hidden="true" className="size-3.5 text-primary" />{feature}</li>)}
-          </ul>
-        </SettingsSection>
-      ) : null}
+      <SettingsSection title="Plans">
+        <PlanTable summary={summary} canChange={ready && !summary.paymentActionRequired} busy={busy} onTrial={() => void trial()} onCheckout={target => void checkout(target)} onChange={target => void change(target)} />
+      </SettingsSection>
       <SettingsSection title="Usage">
-        {summary.purchasedSeats > 0 ? <SettingRow label="Seats" description="Each user who is not revoked uses a seat."><span className="text-xs text-muted-foreground">{summary.seatsUsed} of {summary.purchasedSeats}</span></SettingRow> : null}
+        {summary.plan === "team" ? <SettingRow label="Seats" description="Each user who is not revoked uses a seat."><span className="text-xs text-muted-foreground">{summary.seatsUsed} of {summary.purchasedSeats}</span></SettingRow> : null}
         <SettingRow label="Companies" description="Archived companies do not count."><span className="text-xs text-muted-foreground">{limitText(usage.companies, limits.companies)}</span></SettingRow>
         <SettingRow label="Projects" description="Projects in all companies count."><span className="text-xs text-muted-foreground">{limitText(usage.projects, limits.projects)}</span></SettingRow>
         <SettingRow label="Tasks at a time" description="Other tasks wait in the queue."><span className="text-xs text-muted-foreground">{limitText(usage.runningTasks, limits.runningTasks)}</span></SettingRow>

@@ -179,6 +179,26 @@ pub struct HostedPlan {
     /// with `?tier=1` receives it: older hosts reject unknown fields.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub plan: Option<PaidPlan>,
+    /// The billing period of that plan, with `plan`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub interval: Option<BillingInterval>,
+}
+
+/// POST /v1/plan/change: the plan an existing subscription should become.
+/// Free cancels it at the end of the period. Pro is one seat; Team without a
+/// quantity keeps the current seats, at least the included seats.
+#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct PlanChangeBody {
+    pub plan: crate::billing::Plan,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub interval: Option<BillingInterval>,
+    #[serde(
+        default,
+        deserialize_with = "optional_quantity",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub quantity: Option<i64>,
 }
 
 /// POST /v1/checkout and POST /v1/seats/preview.

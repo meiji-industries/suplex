@@ -478,6 +478,29 @@ pub(crate) mod tests {
             code(portal(&f.state, &f.admin_id).await.unwrap_err()),
             Some("billing_unavailable")
         );
+        // A plan change forwards the target and returns the Stripe confirmation page.
+        let change = crate::billing::wire::PlanChangeBody {
+            plan: Plan::Team,
+            interval: None,
+            quantity: Some(4),
+        };
+        assert!(change_plan(&f.state, "member-1", change).await.is_err());
+        f.fake.with(|hosted| {
+            hosted.respond("/v1/plan/change", 200, json!({"url": "https://billing.stripe.com/p/session_2"}));
+        });
+        let response = change_plan(&f.state, &f.admin_id, change).await.unwrap();
+        assert_eq!(response.url, "https://billing.stripe.com/p/session_2");
+        assert_eq!(
+            f.fake.with(|hosted| hosted.calls.last().unwrap().body.clone()),
+            r#"{"plan":"team","quantity":4}"#
+        );
+        f.fake.with(|hosted| {
+            hosted.respond("/v1/plan/change", 409, json!({"error": "same", "code": "plan_unchanged"}));
+        });
+        assert_eq!(
+            code(change_plan(&f.state, &f.admin_id, change).await.unwrap_err()),
+            Some("plan_unchanged")
+        );
         f.fake.with(|hosted| {
             hosted.respond(
                 "/v1/plan/trial",

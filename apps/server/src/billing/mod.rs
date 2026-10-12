@@ -257,7 +257,12 @@ pub struct BillingClient {
 
 /// Hosted 4xx codes that keep their meaning for the caller. Any other
 /// failure is a sanitized `billing_unavailable`.
-const KNOWN_HOSTED_FAILURES: [(&str, u16, &str); 5] = [
+const KNOWN_HOSTED_FAILURES: [(&str, u16, &str); 6] = [
+    (
+        "plan_unchanged",
+        409,
+        "The subscription already has this plan",
+    ),
     (
         "idempotency_conflict",
         409,
@@ -434,6 +439,8 @@ pub struct BillingSummary {
     pub purchased_seats: i64,
     /// The last paid plan was Team and its access ended: work is read-only.
     pub team_lapsed: bool,
+    /// The billing period of the active subscription.
+    pub interval: Option<wire::BillingInterval>,
     /// Users who are not revoked, the owner included.
     pub seats_used: i64,
 }
@@ -504,6 +511,7 @@ pub async fn summary(
         }),
         seats_used,
         team_lapsed,
+        interval: remote.as_ref().and_then(|remote| remote.interval),
     })
 }
 
@@ -589,6 +597,28 @@ pub async fn checkout(
                 summary: summary(state, user_id).await?,
             }
         }
+    })
+}
+
+/// A Stripe portal link that changes the live subscription to `change`;
+/// Stripe asks the administrator to confirm it.
+pub async fn change_plan(
+    state: &AppState,
+    user_id: &str,
+    change: wire::PlanChangeBody,
+) -> Result<BillingPortalResponse, Box<dyn Error + Send + Sync>> {
+    let (client, account) = administered(state, user_id)?;
+    let result: HostedPortalResult = client
+        .call(
+            Method::POST,
+            "/v1/plan/change",
+            &account.token,
+            None,
+            Some(&serde_json::to_value(change)?),
+        )
+        .await?;
+    Ok(BillingPortalResponse {
+        url: client.forwarded_url(&result.url)?,
     })
 }
 

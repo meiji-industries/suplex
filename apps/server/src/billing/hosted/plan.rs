@@ -22,7 +22,7 @@ use crate::{
     accounts::wire::token_shape,
     billing::wire::{
         BillingInterval, CheckoutBody, HostedCheckoutResult, HostedPlan, HostedPortalResult,
-        PaidPlan, TEAM_INCLUDED_SEATS,
+        PaidPlan, PlanChangeBody, TEAM_INCLUDED_SEATS,
     },
     shared::hash::sha256_hex,
 };
@@ -81,15 +81,15 @@ impl Hosted {
     /// ask for it can read it.
     pub async fn plan(&self, account: &mut AccountRow, tier: bool) -> HostedResult<HostedPlan> {
         let inspection = self.inspect_source(account).await?;
-        let plan = inspection
+        let item = inspection
             .item
             .as_ref()
-            .filter(|_| tier && inspection.state.active)
-            .and_then(|item| self.config.price_plan(&item.price_id));
+            .filter(|_| tier && inspection.state.active);
         Ok(HostedPlan {
             trial_available: inspection.subscriptions.is_empty(),
+            plan: item.and_then(|item| self.config.price_plan(&item.price_id)),
+            interval: item.and_then(|item| self.config.price_interval(&item.price_id)),
             state: inspection.state,
-            plan,
         })
     }
 
@@ -105,6 +105,7 @@ impl Hosted {
                     state: inspection.state,
                     trial_available: false,
                     plan: None,
+                    interval: None,
                 });
             }
             return Err(HostedError::new(
@@ -200,6 +201,18 @@ async fn checkout(
     Ok(to_json(&result))
 }
 
+async fn change(
+    State(hosted): State<Hosted>,
+    headers: HeaderMap,
+    JsonBody(body): JsonBody,
+) -> Reply {
+    let mut account = hosted.billing_for_token(&headers)?;
+    let body = serde_json::from_value::<PlanChangeBody>(body)
+        .map_err(|_| HostedError::new(400, None, "Invalid request"))?;
+    let result: HostedPortalResult = hosted.change_plan(&mut account, body).await?;
+    Ok(Json(json!(result)))
+}
+
 async fn portal(State(hosted): State<Hosted>, headers: HeaderMap) -> Reply {
     let mut account = hosted.billing_for_token(&headers)?;
     let result: HostedPortalResult = hosted.portal(&mut account).await?;
@@ -212,6 +225,7 @@ pub fn router() -> Router<Hosted> {
         .route("/v1/plan/trial", post(trial))
         .route("/v1/plan/checkout", post(checkout))
         .route("/v1/plan/portal", post(portal))
+        .route("/v1/plan/change", post(change))
 }
 
 #[cfg(test)]

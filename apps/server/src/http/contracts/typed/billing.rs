@@ -6,7 +6,7 @@ use serde_json::Value;
 
 use super::{Contract, ContractResult, Fields, MAX, choice, fail, int, text};
 use crate::billing::wire::{
-    BillingInterval, CheckoutBody, MAX_SEATS, PaidPlan, valid_idempotency_key,
+    BillingInterval, CheckoutBody, MAX_SEATS, PaidPlan, PlanChangeBody, valid_idempotency_key,
 };
 
 /// Money mutations require an `Idempotency-Key` header.
@@ -28,6 +28,17 @@ impl Contract for IdempotencyHeader {
                 }
             })
             .finish()
+    }
+}
+
+/// The plan an existing subscription becomes; Free cancels it.
+impl Contract for PlanChangeBody {
+    fn schema(input: Option<&Value>) -> ContractResult<Value> {
+        Fields::new(input)?
+            .req("plan", choice::<crate::billing::Plan>)
+            .opt("interval", choice::<BillingInterval>)
+            .opt("quantity", int(1.0, MAX_SEATS as f64))
+            .strict()
     }
 }
 

@@ -294,6 +294,8 @@ pub struct StripeState {
     pub sessions: IndexMap<String, FakeSession>,
     pub invoices: IndexMap<String, FakeInvoice>,
     pub portal_requests: Vec<String>,
+    /// The `flow_data[...]` fields of each portal session request.
+    pub portal_flows: Vec<Pairs>,
     pub create_customer_keys: Vec<String>,
     pub create_session_keys: Vec<String>,
     pub expire_calls: Vec<String>,
@@ -360,6 +362,7 @@ impl StripeState {
             sessions: IndexMap::new(),
             invoices: IndexMap::new(),
             portal_requests: Vec::new(),
+            portal_flows: Vec::new(),
             create_customer_keys: Vec::new(),
             create_session_keys: Vec::new(),
             expire_calls: Vec::new(),
@@ -921,6 +924,12 @@ impl StripeState {
                     field(form, "configuration").unwrap_or_default(),
                     field(form, "return_url").unwrap_or_default(),
                 ));
+                self.portal_flows.push(
+                    form.iter()
+                        .filter(|(name, _)| name.starts_with("flow_data["))
+                        .cloned()
+                        .collect(),
+                );
                 let url = format!(
                     "https://billing.stripe.com/p/session_{}",
                     self.portal_requests.len()

@@ -138,6 +138,72 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_plan_change_is_a_portal_link_to_confirm_that_change() {
+        use crate::billing::hosted::fakes::{ANNUAL_PRICE_ID, PRICE_ID, TEAM_ANNUAL_PRICE_ID};
+        let f = Fixture::new().await;
+        let token = login(&f, "user_1");
+        let (status, body) = f.post("/v1/plan/change", Some(&token), None, &json!({"plan": "team"})).await;
+        assert_eq!((status, body["code"].clone()), (409, json!("no_subscription")));
+
+        // A Pro trial subscriber; the plan read reports the period too.
+        let (_, _) = f.post("/v1/plan/trial", Some(&token), None, &json!({})).await;
+        let (_, plan) = f.get("/v1/plan?tier=1", Some(&token)).await;
+        assert_eq!((plan["plan"].clone(), plan["interval"].clone()), (json!("pro"), json!("month")), "{plan}");
+        let (subscription, item) = f.stripe.with(|stripe| {
+            let subscription = stripe.subscriptions.values().next().unwrap();
+            (subscription.id.clone(), subscription.items[0].id.clone())
+        });
+
+        let (status, body) = f.post("/v1/plan/change", Some(&token), None, &json!({"plan": "team", "interval": "year", "quantity": 4})).await;
+        assert_eq!(status, 200, "{body}");
+        assert!(body["url"].as_str().unwrap().starts_with("https://billing.stripe.com/"));
+        let field = |flow: &Vec<(String, String)>, name: &str| {
+            flow.iter().find(|(key, _)| key == name).map(|(_, value)| value.clone())
+        };
+        f.stripe.with(|stripe| {
+            let flow = stripe.portal_flows.last().unwrap();
+            assert_eq!(field(flow, "flow_data[type]").as_deref(), Some("subscription_update_confirm"));
+            let confirm = |key: &str| field(flow, &format!("flow_data[subscription_update_confirm]{key}"));
+            assert_eq!(confirm("[subscription]"), Some(subscription.clone()));
+            assert_eq!(confirm("[items][0][id]"), Some(item.clone()));
+            assert_eq!(confirm("[items][0][price]").as_deref(), Some(TEAM_ANNUAL_PRICE_ID));
+            assert_eq!(confirm("[items][0][quantity]").as_deref(), Some("4"));
+            assert_eq!(field(flow, "flow_data[after_completion][type]").as_deref(), Some("redirect"));
+        });
+
+        // Pro is one seat, Team at least 3; the current price is no change.
+        for body in [
+            json!({"plan": "pro", "quantity": 2}),
+            json!({"plan": "team", "quantity": 2}),
+            json!({"plan": "team", "seats": 4}),
+        ] {
+            let (status, _) = f.post("/v1/plan/change", Some(&token), None, &body.clone()).await;
+            assert_eq!(status, 400, "{body}");
+        }
+        let (status, body) = f.post("/v1/plan/change", Some(&token), None, &json!({"plan": "pro"})).await;
+        assert_eq!((status, body["code"].clone()), (409, json!("plan_unchanged")));
+        let (status, _) = f.post("/v1/plan/change", Some(&token), None, &json!({"plan": "pro", "interval": "year"})).await;
+        assert_eq!(status, 200);
+        f.stripe.with(|stripe| {
+            let flow = stripe.portal_flows.last().unwrap();
+            assert_eq!(
+                field(flow, "flow_data[subscription_update_confirm][items][0][price]").as_deref(),
+                Some(ANNUAL_PRICE_ID)
+            );
+        });
+
+        // Free cancels through the portal.
+        let (status, _) = f.post("/v1/plan/change", Some(&token), None, &json!({"plan": "free"})).await;
+        assert_eq!(status, 200);
+        f.stripe.with(|stripe| {
+            let flow = stripe.portal_flows.last().unwrap();
+            assert_eq!(field(flow, "flow_data[type]").as_deref(), Some("subscription_cancel"));
+            assert_eq!(field(flow, "flow_data[subscription_cancel][subscription]"), Some(subscription.clone()));
+            assert_ne!(PRICE_ID, ANNUAL_PRICE_ID);
+        });
+    }
+
+    #[tokio::test]
     async fn checkout_buys_the_requested_pro_price() {
         use crate::billing::hosted::fakes::{ANNUAL_PRICE_ID, PRICE_ID};
         let f = Fixture::new().await;

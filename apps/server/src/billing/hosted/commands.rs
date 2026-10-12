@@ -9,14 +9,18 @@ use super::{
     source::{SourceInspection, latest, require_stripe_url, safe_stripe_url, terminal, unpaid},
     store::{self, AccountRow, NewOperation, OperationRow},
     stripe::{
-        CheckoutParams, CheckoutSession, Invoice, InvoicePreviewParams, Item, SeatDirection,
-        SeatUpdate, Subscription,
+        CheckoutParams, CheckoutSession, Invoice, InvoicePreviewParams, Item, PortalFlow,
+        SeatDirection, SeatUpdate, Subscription,
     },
 };
 use crate::{
-    billing::wire::{
-        BillingInterval, HostedCheckoutResult, HostedPortalResult, HostedSeatChangeBody,
-        HostedSeatChangeResult, HostedSeatPreview, PaidPlan, SEAT_CURRENCY, SEAT_UNIT_AMOUNT,
+    billing::{
+        Plan,
+        wire::{
+            BillingInterval, HostedCheckoutResult, HostedPortalResult, HostedSeatChangeBody,
+            HostedSeatChangeResult, HostedSeatPreview, PaidPlan, PlanChangeBody, SEAT_CURRENCY,
+            SEAT_UNIT_AMOUNT, TEAM_INCLUDED_SEATS,
+        },
     },
     shared::hash::sha256_hex,
 };
@@ -1343,6 +1347,83 @@ impl Hosted {
                 &customer.id,
                 &self.config.stripe_portal_configuration_id,
                 &format!("{}/portal/return", self.config.origin),
+                None,
+            )
+            .await
+            .map_err(|error| self.provider_failure("stripe request", error))?;
+        Ok(HostedPortalResult {
+            url: require_stripe_url(url.as_deref(), "billing.stripe.com")?,
+        })
+    }
+
+    /// A portal deep link that changes the live subscription to `change`, or
+    /// cancels it for Free. Stripe confirms, prorates, and collects payment
+    /// with the portal settings; suplex.sh reads the result like any other.
+    pub async fn change_plan(
+        &self,
+        account: &mut AccountRow,
+        change: PlanChangeBody,
+    ) -> HostedResult<HostedPortalResult> {
+        let invalid = || HostedError::new(400, None, "Invalid request");
+        let inspection = self.inspect_source(account).await?;
+        let (Some(customer), Some(subscription), Some(item)) = (
+            inspection.customer.as_ref(),
+            inspection
+                .subscription
+                .as_ref()
+                .filter(|subscription| !terminal(&subscription.status)),
+            inspection.item.as_ref(),
+        ) else {
+            return Err(no_subscription(
+                "This account has no subscription to change",
+            ));
+        };
+        let price_id;
+        let flow = match change.plan {
+            Plan::Free => PortalFlow::Cancel {
+                subscription_id: &subscription.id,
+            },
+            Plan::Pro | Plan::Team => {
+                let (plan, quantity) = if change.plan == Plan::Pro {
+                    (PaidPlan::Pro, change.quantity.unwrap_or(1))
+                } else {
+                    let current = item.quantity.max(TEAM_INCLUDED_SEATS);
+                    (PaidPlan::Team, change.quantity.unwrap_or(current))
+                };
+                let allowed = match plan {
+                    PaidPlan::Pro => quantity == 1,
+                    PaidPlan::Team => quantity >= TEAM_INCLUDED_SEATS,
+                };
+                if !allowed {
+                    return Err(invalid());
+                }
+                let interval = change
+                    .interval
+                    .or_else(|| self.config.price_interval(&item.price_id))
+                    .unwrap_or(BillingInterval::Month);
+                price_id = self.ensure_plan_price_verified(plan, interval).await?;
+                if price_id == item.price_id && quantity == item.quantity {
+                    return Err(HostedError::new(
+                        409,
+                        Some("plan_unchanged"),
+                        "The subscription already has this plan",
+                    ));
+                }
+                PortalFlow::Update {
+                    subscription_id: &subscription.id,
+                    item_id: &item.id,
+                    price_id: &price_id,
+                    quantity,
+                }
+            }
+        };
+        let url = self
+            .stripe
+            .create_portal_session(
+                &customer.id,
+                &self.config.stripe_portal_configuration_id,
+                &format!("{}/portal/return", self.config.origin),
+                Some(flow),
             )
             .await
             .map_err(|error| self.provider_failure("stripe request", error))?;

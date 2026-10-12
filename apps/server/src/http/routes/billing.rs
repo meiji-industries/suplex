@@ -14,7 +14,10 @@ use serde::Serialize;
 use serde_json::json;
 
 use crate::{
-    billing::{self, wire::CheckoutBody},
+    billing::{
+        self,
+        wire::{CheckoutBody, PlanChangeBody},
+    },
     http::{
         AppState,
         access::{authorize, authorize_method, with_cookies},
@@ -30,6 +33,7 @@ pub fn router() -> Router<AppState> {
         .route("/api/billing/trial", post(trial))
         .route("/api/billing/checkout", post(checkout))
         .route("/api/billing/portal", post(portal))
+        .route("/api/billing/change", post(change))
 }
 
 fn respond<T: Serialize>(
@@ -94,6 +98,18 @@ async fn portal(State(state): State<AppState>, headers: HeaderMap) -> Response {
         Err(response) => return *response,
     };
     respond(billing::portal(&state, &user_id).await, cookies)
+}
+
+async fn change(State(state): State<AppState>, headers: HeaderMap, body: Bytes) -> Response {
+    let body = match body_contract::<PlanChangeBody>(&headers, &body) {
+        Ok(body) => body,
+        Err(response) => return *response,
+    };
+    let (user_id, cookies) = match authorize_method(&state, &headers, "POST") {
+        Ok(value) => value,
+        Err(response) => return *response,
+    };
+    respond(billing::change_plan(&state, &user_id, body).await, cookies)
 }
 
 #[cfg(test)]

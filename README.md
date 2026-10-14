@@ -1,159 +1,119 @@
-# Suplex
+<h1 align="center">Suplex</h1>
 
-[![CI](https://github.com/meiji-industries/suplex/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/meiji-industries/suplex/actions/workflows/ci.yml)
-[![Node](https://img.shields.io/badge/node-26.7.0-brightgreen)](package.json)
-[![pnpm](https://img.shields.io/badge/pnpm-11.22.0-orange)](package.json)
+<!-- Image slot. Capture: the task board of a demo company with tasks in several states (queued, active, waiting for input, delivered), desktop width, light theme. Use no client names. -->
+![Suplex task board with tasks in several states](docs/images/readme/board.png)
 
-Suplex coordinates software-development tasks through existing coding agents,
-Git, and repository services. A Coordinator plans and reviews; a Worker implements
-in a task worktree. Suplex is a copilot: you can intervene directly, and it
-adapts to the work you change or merge.
+<p align="center">
+ <strong>Your agents do the work. Suplex runs the workflow.</strong>
+</p>
 
-Start with the [product guide](docs/product.md) for current capabilities,
-integration limits, and positioning. [CONTEXT.md](CONTEXT.md) defines the terms.
-[Current architecture](docs/architecture/README.md) records how the system works.
-[Architecture decisions](docs/adr/) explain why.
-See [billing setup and recovery](docs/billing.md) for Suplex Free and Pro operations.
+<p align="center">
+ <a href="docs/product.md">Product guide</a> •
+ <a href="docs/architecture/README.md">Architecture</a> •
+ <a href="docs/">Docs</a> •
+ <a href="docs/install.md">Install</a> •
+ <a href="docs/agents/machine-discovery.md">Agent discovery</a>
+</p>
 
-An agent that never opens the web application starts at
-[machine discovery and the operator handoff](docs/agents/machine-discovery.md).
-Suplex serves `/llms.txt`, `/.well-known/suplex/api-catalog.json`, and
-`/.well-known/suplex/agent-skills.json` without authentication. That document also
-holds the operator handoff: issue, rotate, and revoke a pairing, restrict project
-grants, and verify an agent integration after an upgrade.
+<p align="center">
+ <a href="https://github.com/meiji-industries/suplex/actions/workflows/ci.yml"><img src="https://github.com/meiji-industries/suplex/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI" /></a>
+ <img src="https://img.shields.io/badge/core-Rust-dea584" alt="Rust core" />
+ <img src="https://img.shields.io/badge/agent-OpenCode-555555" alt="OpenCode" />
+ <img src="https://img.shields.io/badge/agent-Claude%20Code-d97757" alt="Claude Code" />
+ <img src="https://img.shields.io/badge/agent-Devin%20CLI-2f6feb" alt="Devin CLI" />
+ <img src="https://img.shields.io/badge/agent-Codex%20CLI-10a37f" alt="Codex CLI" />
+ <img src="https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey" alt="macOS, Linux, and Windows" />
+ <a href="https://suplex.sh"><img src="https://img.shields.io/badge/download-suplex.sh-blue" alt="Download at suplex.sh" /></a>
+</p>
 
-## State ownership
+> **Under active development.** Suplex ships versioned releases while the product grows.
+> It is for owner-controlled repositories and trusted local tools. Coordinator's
+> read-only policy and Worker's Git command guard are native tool policies, not an
+> operating-system sandbox. Projects do not isolate one client from another on the same host.
 
-| Owner | Authoritative state |
-| --- | --- |
-| Suplex | Task objective, configuration, start and cancel intent, questions, session assignment, prompt dispatch ownership |
-| Native agent provider | Sessions, admitted messages, tool execution, and turn results |
-| Git | Worktrees, branches, commits, and uncommitted changes |
-| GitHub | Remote branches, pull requests, checks, reviews, and merges |
-| Herdr | The visible attachment to a native session |
+<!-- Recorded on an isolated host with a demo company (Acme) and a scripted stand-in
+for the agents. Keep each animation under 10 MB. -->
+<table>
+  <tr>
+    <td width="50%" valign="top">
+      <img src="docs/media/readme/new-task.webp" width="100%" alt="Recording. On the board, New task opens. A title and description are typed, the workflow menu shows the six workflows, and Plan and build with a draft pull request is chosen. Create task opens the task with the Coordinator working, and the card is in Active on the board.">
+      <br><b>Start a task in one sentence</b>
+      <br><sub>Write what you want, pick a workflow, and Suplex makes the worktree, branch, and agents.</sub>
+    </td>
+    <td width="50%" valign="top">
+      <img src="docs/media/readme/coordinator-worker.webp" width="100%" alt="Recording. Start task is clicked. The Coordinator reads the refunds code, writes a plan, and assigns it. In the Worker pane, the Worker changes getRefund, adds a test, and runs npm test. The Coordinator reviews the change and opens a draft pull request.">
+      <br><b>Coordinator plans, Worker builds</b>
+      <br><sub>No copy and paste between agents. Coordinator delegates, reviews, and asks Worker for repairs.</sub>
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top">
+      <img src="docs/media/readme/answer.webp" width="100%" alt="Recording. A desktop and a phone show the same task. The Coordinator asks which status an unknown refund ID should return. On the phone, the task list marks the task, a tap opens the question, and 404 Not Found is chosen. On the desktop, the Coordinator continues and the Worker starts.">
+      <br><b>Answer from your phone</b>
+      <br><sub>An agent's question waits on every device. Web Push tells you when one arrives.</sub>
+    </td>
+    <td width="50%" valign="top">
+      <img src="docs/media/readme/delivery.webp" width="100%" alt="Recording. A Review and repair task starts on pull request #14, Add partial refunds. Rater round 1 scores 6/10 with 2 blocking findings. The Worker adds the missing check and a test. Rater round 2 scores 9/10 and passes, and Suplex merges the pull request.">
+      <br><b>Repair a pull request until it merges</b>
+      <br><sub>Review and repair rates a pull request, sends the findings to Worker, and merges at 9/10 or more.</sub>
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top">
+      <img src="docs/media/readme/double-plans.webp" width="100%" alt="Recording. A Double plans task starts. Plan A and Plan B write independent plans in their own panes. The Coordinator combines them into one assignment, the Worker builds it, and the task is delivered.">
+      <br><b>Two independent plans, one build</b>
+      <br><sub>Double plans asks two agents for separate plans. Coordinator combines the best of both before Worker starts.</sub>
+    </td>
+    <td width="50%" valign="top">
+      <img src="docs/media/readme/copilot.webp" width="100%" alt="Recording. While the Worker finishes, the quick shell opens. In the task's worktree, a line is added to README.md and committed by hand. The Coordinator reviews both commits, including the manual one, and opens a draft pull request.">
+      <br><b>Edit it yourself, Suplex continues</b>
+      <br><sub>Change the code, push, or merge by hand. Suplex keeps your work and continues from the actual state.</sub>
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top">
+      <img src="docs/media/readme/moves.webp" width="100%" alt="Recording. The Moves page lists three saved moves. Run one test suite opens, Start asks which suite to run, and refunds is chosen. The run opens a terminal in a fresh worktree, and node --test passes.">
+      <br><b>Save a prompt, run it in one click</b>
+      <br><sub>Moves are saved prompts and scripts with inputs. Each run opens your agent or script in a fresh worktree.</sub>
+    </td>
+    <td width="50%" valign="top">
+      <img src="docs/media/readme/quick-shell.webp" width="100%" alt="Recording. On the task board, Ctrl+` drops the quick shell from the top of the window. In checkout-api, git log and git status run on the host. Ctrl+` closes the shell, and the next Ctrl+` shows the same session with its history.">
+      <br><b>A host shell, one keystroke away</b>
+      <br><sub>Press Ctrl+` on any page for a login shell on the host. Close it and it keeps running.</sub>
+    </td>
+  </tr>
+</table>
 
-Suplex runs a native API and task host beside a SQLite database. Database records
-preserve Suplex-owned intent and correlate native observations. Delivery decisions read
-current Git and repository-provider state.
+# Install
 
-Coordinator delegates work and ends its turn. Results wake the same session;
-Combined planning runs two independent Advisors before combining their results. Coordinator can request a normal push,
-pull request creation,
-review readiness, or an exact-head merge. GitHub enforces its own merge policy.
-Delivery targets also include a local worktree and a remote branch.
+Download the app from [suplex.sh](https://suplex.sh), or use a direct link:
 
-An out-of-band edit, commit, push, or matching pull request is observed and
-retained. Restart does not discard the worktree or replay an admitted prompt.
-A lost prompt acknowledgment is retried only after the old dispatch process
-is stopped and native history proves that the message was not admitted.
+| Platform | Download | Notes |
+| --- | --- | --- |
+| macOS, Apple silicon | [suplex.sh/download?platform=macos-arm64](https://suplex.sh/download?platform=macos-arm64) | Choose **Run locally**. The app installs Herdr, and Apple's developer tools if Git is missing. |
+| macOS, Intel | [suplex.sh/download?platform=macos-x64](https://suplex.sh/download?platform=macos-x64) | Same as Apple silicon. |
+| Linux x64, deb or rpm | [deb](https://suplex.sh/download?platform=linux-desktop-x64&format=deb), [rpm](https://suplex.sh/download?platform=linux-desktop-x64&format=rpm) | Install Git first. Data stays in `~/.local/share/Suplex`. |
+| Linux Arm64, deb or rpm | [deb](https://suplex.sh/download?platform=linux-desktop-arm64&format=deb), [rpm](https://suplex.sh/download?platform=linux-desktop-arm64&format=rpm) | Same as Linux x64. |
+| Windows x64 or Arm64 | [x64](https://suplex.sh/download?platform=windows-x64), [Arm64](https://suplex.sh/download?platform=windows-arm64) | Connects to a Suplex host on another computer. It cannot run a host itself. |
 
-## Recovery limits
-
-Herdr display failures do not stop native work. Suplex retries the attachment.
-Provider observation failures do not turn into failed CI checks.
-
-OpenCode can launch shell commands in separate process groups. A hard server
-crash during a tool call can leave a command alive. Suplex retains that turn and
-asks you to stop the old commands before explicitly confirming cleanup. It does
-not infer tool completion from server death. A restart without unfinished tool
-execution resumes automatically.
-
-Coordinator's read-only policy and Worker's Git command guard are native tool
-policies, not an operating-system sandbox. MCP access depends on the provider
-and project configuration; see [project execution](docs/project-execution.md).
-This installation is for owner-controlled repositories and trusted local tools.
-
-## Providers and defaults
-
-A provider is one of the four agent tools Suplex runs: OpenCode, Claude Code,
-Devin CLI, and Codex CLI. Each owns its own sign-in. Sign in as the OS user that
-runs Suplex; a Codex login does not establish OpenCode access.
-
-OpenCode reaches several model vendors, so its models carry the vendor in the
-id, such as `openai/gpt-5.6-sol`. The other three name their models directly.
-
-`/admin/providers` shows all four rows without making a paid model request.
-**Configured** means the executable is present, not that inference was tested.
-Agent dialogs and project defaults use that same catalog. New installations seed
-Codex CLI GPT-5.6 Sol with medium reasoning for Coordinator and GPT-5.6 Luna with max
-reasoning and priority service for Worker. An installation with task history
-keeps its OpenCode profiles, converted to the vendor-qualified model id.
-
-Suplex discovers OpenCode on its process PATH or at `~/.opencode/bin/opencode`.
-`SUPLEX_OPENCODE_COMMAND`, `SUPLEX_CLAUDE_COMMAND`, `SUPLEX_DEVIN_COMMAND`, and
-`SUPLEX_CODEX_COMMAND` can each specify an absolute executable path. GitHub
-delivery uses Suplex's GitHub sign-in or the host's available GitHub credentials.
-Suplex does not copy provider credentials into task records.
-
-## Develop locally
-
-```sh
-mise run worktree
-mise run dev:status
-mise run dev
-```
-
-Reuse an existing stack when `dev:status` reports one. Frontend changes use Vite
-HMR. Native host changes require a restart under `mise run dev`; `mise run dev:watch`
-rebuilds and restarts the native host on changes. `mise run down` stops this
-checkout's owned development processes. The default development port is 14111; 4111 stays free for the desktop app and installed hosts.
-Conductor's Run command uses `http://127.0.0.1:<port>` with its assigned port.
-Other development launches keep the default Tailscale access mode.
-
-The repository root is one Cargo workspace for the crates in `apps/`. Mise keeps Rust build artifacts
-in each checkout's root `target/` and uses
-`sccache` when it is on `PATH` to reuse compiled dependencies across worktrees.
-Install it with `cargo install sccache --locked`; without it, builds use rustc
-directly. Cargo downloads remain in the normal shared `CARGO_HOME` cache.
-Leave `CARGO_TARGET_DIR` unset for cross-worktree cache hits: sccache hashes
-that variable, so a different absolute path in every checkout causes misses.
-The compiler cache uses sccache's machine-wide configuration and defaults to
-a 10 GiB limit. Run `sccache --show-stats` to inspect hits and storage.
-Development and test builds keep backtrace line numbers but omit full debugger
-data. Rustc keeps incremental artifacts in each checkout for faster rebuilds
-after edits. The wrapper sends incremental compilations directly to rustc and
-uses sccache for eligible dependencies. The first build warms these caches;
-new worktrees still link their own binaries.
-Check the wrapper with `mise run test:sccache-wrapper`.
-
-The Vite development stack sets `SUPLEX_DEV_EMBED_FRONTEND=0` so changes to
-`apps/web/dist` do not trigger Rust rebuilds. Other builds embed the frontend by
-default, and release builds always embed it. Migrations remain embedded in
-every build.
-
-Loopback and tailnet requests receive the Operator administrator session.
-An empty development database receives a company, native profiles, and a project
-for this checkout.
-
-## Set up an installation
-
-See [instances, clients, and distribution](docs/architecture/deployment.md) for
-the host model, development-server access, and desktop and Linux binary options.
-
-The simplest install is the desktop app: open `Suplex-<version>-arm64.dmg`
-(Apple silicon) or `Suplex-<version>-x64.dmg` (Intel),
-drag Suplex to Applications, and choose **Run locally**. The app
-ships the native server and web assets inside the bundle. It
-checks the Mac, installs Apple's developer tools if Git is missing, installs
-Herdr if it is missing, prepares a database under `~/Library/Application Support/Suplex`,
-and starts Suplex on `127.0.0.1`. You do not need to install Git before setup.
-Homebrew, a GitHub account, and Tailscale are optional. Install and connect
-Tailscale only if you select **Tailscale** under **Network access**. See the
-[Desktop app](#desktop-app) section below.
-
-On Linux, install the deb or rpm from
-`https://suplex.sh/download?platform=linux-desktop-x64&format=deb` (or `rpm`, or
-`linux-desktop-arm64`), for example `sudo apt install ./Suplex-<version>-linux-x64.deb`.
-It works like the Mac app, keeps its data in `~/.local/share/Suplex`, and needs
-Git installed first. On Windows, run this in PowerShell, or download the installer from
-`https://suplex.sh/download?platform=windows-x64` (or `windows-arm64`):
+On Windows, you can also run this in PowerShell:
 
 ```powershell
 irm https://suplex.sh/install.ps1 | iex
 ```
 
-The Windows app connects to a Suplex host on another computer; it cannot run
-one itself.
+Each agent tool owns its own sign-in. Sign in to OpenCode, Claude Code, Devin CLI,
+or Codex CLI as the OS user that runs Suplex. The [install guide](docs/install.md)
+covers providers, network access, the desktop app, lifecycle commands, and telemetry.
+
+## Set up an installation
+
+The desktop app ships the native server and web assets. On first open, an
+administrator logs in to a Suplex account. Then you configure companies,
+projects, and native profiles in the web application. Project creation copies a
+GitHub repository into the configured repository root. To run a host from a
+checkout, or to set up Tailscale or local-only access, read
+[set up an installation](docs/install.md#set-up-an-installation).
 
 ### Linux host
 
@@ -163,136 +123,15 @@ To run Suplex on a new cloud server, run this on your own computer (macOS or Lin
 curl -fsSL https://suplex.sh/bootstrap.sh | sh
 ```
 
-It installs `suplex-bootstrap` and starts its wizard, which creates or connects to the server, sets up
-everything below, and prints a login link. See [apps/bootstrap](apps/bootstrap/README.md).
+It installs `suplex-bootstrap` and starts its wizard, which creates or connects
+to the server, sets up the host, and prints a login link. See
+[apps/bootstrap](apps/bootstrap/README.md).
 
-To set up a host by hand, start Suplex as a dedicated non-root user.
-Keep its data directory, repository roots, worktree roots, Herdr, and agent tool installs under this user's ownership.
-Provision privileged steps once, without blanket sudo access for this user.
-For a systemd service, set `User=suplex`, `HOME=/home/suplex`, and a `PATH` that includes the user's tool manager shims.
-For example, include `/home/suplex/.local/share/mise/shims` and `/home/suplex/.local/bin` before `/usr/local/bin:/usr/bin:/bin`.
-Check `pnpm --version` with that service user's environment before task setup.
-The Linux installer and the `suplex up`, `restart`, `down`, and `serve` commands refuse to run as root.
-
-To run Suplex on a host from a checkout instead:
-
-```sh
-corepack enable
-pnpm install --frozen-lockfile
-pnpm run build
-pnpm run suplex setup          # Tailscale access; add --local for a 127.0.0.1-only host
-pnpm run suplex start
-```
-
-Setup writes protected local configuration. In Tailscale mode the service supports Tailscale Serve HTTPS or
-a direct Tailscale HTTP bind and rejects public and LAN bindings. In local mode
-(`SUPLEX_ACCESS_MODE=local`) the service binds only `127.0.0.1` and every
-request from the loopback host is the built-in Operator administrator. Local
-administration and recovery use `pnpm run suplex recover --confirm-recovery`.
-
-When switching from the retired TypeScript server, sign in to GitHub again. Existing task data and the SQL migration history are
-preserved; credential formats are not shared between the two implementations.
-
-`pnpm run suplex install --manifest` lists the install stages the desktop app
-runs, and `pnpm run suplex install --stage <name> --json` runs one of them. Each
-stage is idempotent and prints one JSON result on stdout.
-
-On first open, Suplex asks an administrator to log in to a Suplex account with
-Google, GitHub, or email. The login runs in the system browser against
-`suplex.sh`. One account covers the host and everyone on it. **Profile → Log out**
-unlinks it. Set `SUPLEX_ACCOUNT_SERVICE_URL=` (empty) to turn the requirement off
-for a self-hosted checkout; development roots never ask. See
-[Suplex accounts](docs/accounts.md).
-
-Configure companies, projects, and native profiles in the web application.
-Project creation copies a GitHub repository into the configured repository root.
-`SUPLEX_REPOSITORY_ROOT` and `SUPLEX_WORKTREE_ROOT` override the default paths.
-Task Details shows an **Open in** menu when the task has a worktree; it can copy
-the worktree path. Suplex
-lists local launchers only for a direct loopback request with the configured Host.
-Forwarding does not automatically make Suplex copy-only: it is an unsupported
-locality assumption because the browser and Suplex can have different filesystems.
-Suplex uses no desktop bridge for these actions. On macOS, Suplex discovers Finder,
-Terminal, and editor app bundles in system, standard, and user application directories.
-Xcode, iTerm, Devin, and Antigravity have no verified local directory-opening mechanism,
-so Suplex does not list them. On Linux, Suplex lists executable PATH entries only; Terminal
-uses `x-terminal-emulator`.
-Set `SUPLEX_EDITOR_COMMAND` to an executable editor command when the default
-`code` command is not suitable. Suplex passes the worktree path as its argument.
-
-The tailnet is the login boundary. A request from the loopback host, a request
-that Tailscale Serve stamped with a `Tailscale-User-Login` identity, or, in
-direct Tailscale mode, a request addressed to the Tailscale hostname receives
-the built-in Operator administrator session. Funnel traffic and tagged devices
-carry no identity header and see the account login instead.
-
-### Desktop app
-
-Suplex.app is a Tauri 2 shell written in Rust (`apps/desktop/src-tauri`, crate
-`suplex-desktop`) around the bundled `suplex` host. Its window is the system
-WKWebView, so the app needs macOS 14 or later. The window shows either the
-bundled setup pages or the web app served by the selected host; the host keeps
-serving all data, sessions, and terminals over HTTP and WebSockets. A browser
-needs no desktop app and works as before.
-
-On first launch the app offers two choices. **Run locally** runs the install
-stages of the bundled host under `Contents/Resources/runtime`, shows each
-stage's progress and log, and then starts that host on `127.0.0.1` each time
-the app opens. Closing the window keeps the app, its menu-bar item, and the host
-running; **Quit Suplex** stops the host that the app started. Use **Suplex >
-Settings > Network access** or the menu-bar item to select **This Mac only**,
-**Tailscale**, or **All networks**, then select **Restart** to apply it. The
-Tailscale option keeps the host on loopback and creates an HTTPS Serve route;
-the menu can copy the active Tailscale URL. **Remote access** takes the URL of a
-Suplex host elsewhere, tests it, and installs nothing.
-
-Data, the env file, logs, the install record, saved hosts, window size, and
-network access files live under `~/Library/Application Support/Suplex`, the same
-directory the earlier Electron app used; delete it to start over. Web sign-ins
-are not carried over from the Electron app, so sign in again once. If a running
-host reports this installation's identity, the app adopts it and leaves it
-running on quit. A host of another installation, or another program, on the
-preferred port is left alone, and the app starts its own host on a free port.
-
-The host bar at the bottom of the window and **Suplex > Settings** list the
-remembered hosts (at most eight origins); select one to switch, or select
-**Manage Suplex hosts…** to add or remove one. `--url` and `SUPLEX_DESKTOP_URL`
-override the remembered choice for a launch, and a second launch with `--url`
-switches the open window. A company invitation link, `suplex://join?url=<https URL>`,
-opens that host. Other `suplex://` links only bring the app to the front.
-
-| Command | Result |
-| --- | --- |
-| `mise run desktop:dev` | Runs the shell against this checkout's dev stack. Reuses the stack when it is running, or starts `pnpm dev:watch` and stops it on exit. React edits use Vite HMR; edits under `apps/desktop/src-tauri` or the setup pages rebuild and restart only the shell. Uses the bundle ID `dev.suplex.desktop.dev` and data under `.context/tauri-migration/desktop-dev-data`. |
-| `pnpm desktop:typecheck`, `pnpm desktop:test` | `cargo check` and the Rust behavior and IPC authorization tests of the shell. |
-| `pnpm desktop:test:native` | The macOS WKWebView smoke tests, against an app built with a test-only driver and isolated data. |
-| `mise run desktop:dist` | Builds `apps/desktop/release/<arch>/Suplex.app`, the DMG, and the ZIP (`SUPLEX_DESKTOP_ARCH=arm64`, the default, or `x64`). Never publishes. |
-| `pnpm test:packaged` | Checks the built app, its bundled host, and its archives. |
-| `mise run desktop:install` | Builds this checkout and replaces `/Applications/Suplex.app` without a release. It quits, swaps, and relaunches the app, keeps its data, and refuses uncommitted changes unless `SUPLEX_INSTALL_DIRTY=1`. |
-| `mise run desktop:dist:signed` | Builds both architectures signed, notarized, and stapled, with both update feeds, from the credentials in 1Password. |
-| `pnpm desktop:verify:release` | Checks the built release files and runs the publisher without uploads. |
-| `mise run desktop:open`, `suplex desktop` | Opens the installed app at this host's `http://localhost:<port>`. |
-
-A bundled host updates only with a new Suplex.app; its self-update is disabled.
-**Check for updates** in the app menu and the menu-bar item uses the app's own
-update feed. Local builds have no feed. See [docs/updates.md](docs/updates.md)
-for the feeds and the signing requirements.
-
-Create a task with **Start immediately** selected to queue it. Suplex starts
-it when its prerequisites are complete. Clear the option to keep it in Backlog. Backlog tasks support title
-and description edits. Active tasks accept notes and question-specific answers.
-Cancellation stops Suplex's work but preserves local and published work.
-
-```sh
-pnpm run suplex stop
-pnpm run suplex restart
-```
-
-Lifecycle commands inspect recorded process identities before signaling them.
-They do not kill processes by broad name or port. `/health` reports host checks.
-Checkout installations use the native supervisor. Restart the development
-stack after native host changes; the runtime recovers native session work from its
-own evidence.
+To set up a host by hand, start Suplex as a dedicated non-root user. That user owns the data directory,
+repository roots, worktree roots, Herdr, and agent tool installs. The Linux
+installer and the `suplex up`, `restart`, `down`, and `serve` commands refuse to
+run as root. Read [Linux host](docs/install.md#linux-host) for the systemd
+settings and the checkout install commands.
 
 ## Back up and restore
 
@@ -302,50 +141,206 @@ pnpm run suplex verify-backup /path/to/suplex-backup.tar.gz
 pnpm run suplex restore /path/to/suplex-backup.tar.gz /path/to/empty-restore-directory
 ```
 
-Backups contain Suplex's database, artifacts, and non-secret configuration.
-They exclude provider credentials, and generated environment files. Restore requires an empty destination and fresh authentication.
-OpenCode's native storage and Git repositories are separate host data. A Suplex
-backup alone cannot restore missing native sessions or repository contents.
+Backups exclude provider credentials. Restore requires an empty destination.
+Read [back up and restore](docs/install.md#back-up-and-restore) for what a
+backup holds and what it cannot restore.
 
-## Telemetry
+# What is Suplex?
 
-Release builds send event names and counts to PostHog after an administrator
-answers the first-use notice. Suplex never sends code, prompts, names,
-repository names, or file paths. Turn it off in **Settings → Environment**, or
-set `DO_NOT_TRACK=1`. [docs/telemetry.md](docs/telemetry.md) lists every event
-and property.
+Suplex coordinates software-development tasks through the coding agents, Git,
+and repository services you already use. It reduces the work of copying plans
+between agents, brokering revisions, and shepherding branches and checks through
+delivery.
 
-## Verify changes
+A Coordinator plans and reviews. A Worker implements in a task worktree. Suplex
+is a copilot: you can edit code, change a branch, or merge a pull request
+yourself. Suplex observes what happened, keeps your work, and continues from the
+actual state.
 
-Run the frontend, desktop and protocol tests, then the native engine tests:
+Suplex runs a native API and task host beside a SQLite database. Each system
+owns its own facts:
+
+| Owner | Authoritative state |
+| --- | --- |
+| Suplex | Task objective, configuration, start and cancel intent, questions, session assignment, prompt dispatch ownership |
+| Native agent provider | Sessions, admitted messages, tool execution, and turn results |
+| Git | Worktrees, branches, commits, and uncommitted changes |
+| GitHub | Remote branches, pull requests, checks, reviews, and merges |
+| Herdr | The visible attachment to a native session |
+
+Database records keep Suplex-owned intent and correlate native observations.
+Delivery decisions read current Git and repository-provider state. A restart
+does not discard the worktree or replay an admitted prompt.
+
+## Coordinator and Worker
+
+<!-- Image slot. Capture: Task Details for one active task, with the Coordinator conversation and the Worker pane visible side by side, desktop width. -->
+![Task Details with the Coordinator conversation and the Worker pane](docs/images/readme/task-detail.png)
+
+Coordinator investigates and specifies a task, delegates implementation to
+Worker, reviews the result, and requests delivery operations. Worker edits and
+verifies. Each role can use a different agent profile.
+
+Coordinator delegates work and ends its turn. Results wake the same session.
+Advisors (Reviewer, Plan A, Plan B, and Rater) are read-only and report to Coordinator. The code and wire
+fields call Coordinator `root`. That is the same role, not another agent.
+
+## Six workflows
+
+<!-- Image slot. Capture: the New Task dialog with the workflow menu open, showing the six built-in workflows. -->
+![New Task dialog with the workflow menu open](docs/images/readme/new-task.png)
+
+- **Plan and build**: Coordinator plans, Worker implements, Coordinator reviews.
+- **Simple task**: Worker chooses the approach from the task instructions. Coordinator reviews the result.
+- **Double reviews**: a read-only Reviewer checks the current change before delivery.
+- **Double plans**: Plan A and Plan B produce independent plans. Coordinator combines them before implementation.
+- **Review and repair**: a Rater reviews an open pull request and Worker repairs it until the change earns at least 9 with no blocking findings.
+- **Approve then build**: Coordinator plans and you approve the plan or request changes before the first build.
+
+Named presets select a built-in workflow with agent, delivery, and check
+defaults. Project instructions and task descriptions customize the work. There
+is no arbitrary step-graph editor. Read
+[workflows and templates](docs/architecture/workflows-and-templates.md).
+
+## Parallel worktrees and dependency-aware chains
+
+Each task gets its own Git worktree and branch, so independent tasks progress in
+parallel. Double plans gives Plan A and Plan B separate slots. Worktrees
+separate files. They do not separate host credentials or shared services.
+
+Queued tasks wait for prerequisite tasks or GitHub pull requests. Backlog tasks
+do not start automatically. A pull request prerequisite must merge before the
+dependent task starts. Read
+[parallel work and dependencies](docs/architecture/parallel-work-and-dependencies.md).
+
+## Delivery targets
+
+Each task has a delivery target: local worktree, remote branch, draft pull
+request, ready pull request, or merged pull request. GitHub supports all five.
+Bitbucket Cloud supports the first three.
+
+Coordinator can request a push, pull request creation, review readiness, or an
+exact-head merge. Suplex observes CI. Agents can repair code and integration
+conflicts. GitHub enforces its own merge policy. A completed task means its
+target was reached. It does not mean a production deployment.
+
+A delivery target guides agent work. It does not limit what you do. An edit,
+commit, push, or matching pull request that you make outside Suplex is observed
+and kept.
+
+## Moves, templates, and triggers
+
+- **Moves** are project-scoped saved prompts and scripts with typed inputs. A
+  prompt opens the Worker agent (Claude Code or Codex) in a host terminal at a
+  fresh worktree. A script runs in that terminal. A move can also start a Pull
+  request repair task for each open pull request you do not exclude. Moves have
+  no schedule.
+- **Task templates** save task configuration for a project. You can create one
+  from an existing task.
+- **GitHub triggers** create tasks from labelled open pull requests with a
+  selected workflow. Suplex checks for newly labelled pull requests every 15
+  seconds. This is a pull request label trigger, not a general GitHub event system.
+- **Quick shell** opens a persistent login shell on the host for an admin.
+  Press Ctrl+` or use the sidebar button.
+
+## Phone access, push, and dictation
+
+<!-- Image slot. Capture: the Home Screen web app on an iPhone, showing a task that waits for an answer, with the push notification visible. -->
+![Suplex on a phone with a task that needs input](docs/images/readme/phone.png)
+
+The web app installs to the Home Screen from any host that serves it over HTTPS
+or loopback. Web Push tells the task creator and admins when a task needs input.
+It works on iOS and iPadOS 16.4 or later from the Home Screen app, and in Chrome,
+Edge, and Firefox on Android and desktop. The desktop app and the iOS and Android
+shells do not receive Web Push.
+
+In a browser with speech recognition, a microphone button appends spoken text to
+the Coordinator message and the New Task description. The browser vendor, not
+Suplex, processes the audio.
+
+## Paired agents and MCP
+
+A paired external agent can create and follow tasks within its grants. A bot can
+supply meeting notes as task input. Suplex does not capture or transcribe meetings.
+
+Suplex serves an HTTP MCP endpoint at `/mcp` with OAuth 2.1 browser approval,
+and an advanced local stdio bridge. MCP task tools do not expose delivery or
+merge commands. An agent that never opens the web application starts at
+[machine discovery and the operator handoff](docs/agents/machine-discovery.md).
+Suplex serves `/llms.txt`, `/.well-known/suplex/api-catalog.json`, and
+`/.well-known/suplex/agent-skills.json` without authentication. That document
+also holds the operator handoff: issue, rotate, and revoke a pairing, restrict
+project grants, and verify an agent integration after an upgrade. See the
+[MCP guide](docs/agent-mcp.md) and the [agent API guide](docs/agent-api.md).
+
+# Integrations
+
+| Integration | What Suplex does | Limits |
+| --- | --- | --- |
+| OpenCode, Claude Code, Devin CLI, Codex CLI | Runs each as a native runtime for Coordinator, Worker, and Advisors. | Each tool owns its sign-in. Login detection does not prove model access. Other tools need a runtime integration. |
+| Git | Repository and task worktree operations. | Git transport authentication is separate from repository API credentials. |
+| GitHub | Repository onboarding, issues, pull requests, check observation, delivery, and pull request label triggers. | Repository permissions, required checks, reviews, and merge policy still apply. |
+| Bitbucket Cloud | Repository and pull request API access. Delivery to a local worktree, remote branch, or draft pull request. | Ready and merged targets are not available. |
+| Jira Cloud | Reads issue context and publishes task artifacts and comments. | Publication does not change issue status, Sprint, or Fix Version. |
+| Linear | Searches and reads issues for one team and publishes comments and screenshot uploads. | Uses a personal API key. Publication does not change issue state. |
+| MCP clients | Connect to Suplex over HTTP MCP or a local stdio bridge to use task tools. | Task tools do not expose delivery or merge commands. |
+| Project MCP tools | Grants exact MCP tools to agents by role. | Claude Code agents only. |
+| Herdr | Shows native sessions in task panes. | A missing pane does not block task progress. |
+
+The [product guide](docs/product.md#integrations) lists each implementation and boundary.
+
+# By hand vs. Suplex
+
+|  | By hand | Suplex |
+| --- | --- | --- |
+| **Plan handoff** | ⚠️ You copy the plan from one agent to the next | ✅ Coordinator delegates to Worker |
+| **Revisions** | ⚠️ You relay review comments back and forth | ✅ Coordinator reviews and asks Worker for repairs |
+| **Independent plans** | ❌ You run two agents and merge the plans yourself | ✅ Double plans combines Plan A and Plan B |
+| **Parallel tasks** | ⚠️ You create and track worktrees yourself | ✅ One worktree and branch per task |
+| **Task order** | ❌ You remember which task waits for which | ✅ Queued tasks wait for prerequisites |
+| **CI and conflicts** | ⚠️ You watch checks and rebase | ✅ Agents can repair code and integration conflicts |
+| **Your agents and accounts** | ✅ Yes | ✅ Yes, through each tool's own sign-in |
+| **Direct edits and merges** | ✅ Yes | ✅ Yes, Suplex observes them and continues |
+| **Input alerts on a phone** | ❌ No | ✅ Web Push when a task needs input |
+| **Host isolation between clients** | ❌ No | ❌ No, use owner-controlled repositories and trusted tools |
+
+# Contributing from source
+
+Read [AGENTS.md](AGENTS.md) before you change code. It holds the engineering
+rules, the UI stack, and where new code goes. The short path:
 
 ```sh
-pnpm test
-pnpm run test:rust
+mise run worktree
+mise run dev:status
+mise run dev
 ```
 
-Use the narrower projects when you need them:
+Reuse a stack that `dev:status` reports. Run `pnpm check` before you send a
+change. [Development](docs/development.md) covers build caches, desktop app
+commands, and the full verification suite.
 
-```sh
-pnpm desktop:dist
-pnpm test:packaged
-```
+| Path | What it holds |
+| --- | --- |
+| `apps/server` | The `suplex` crate: the native host, the hosted `suplex.sh` service, the MCP bridges, and the CLI. |
+| `apps/web` | The React web application. |
+| `apps/desktop` | The Tauri 2 desktop app. |
+| `apps/mobile` | The iOS and Android shells. |
+| `apps/bootstrap` | The `suplex-bootstrap` cloud server wizard. |
+| `apps/server/migrations` | Timestamped SQL migrations. Read [the migration guide](docs/database-migrations.md). |
+| `apps/server/skills/suplex` | The agent skill and client for paired external agents. |
+| `tests` | Cross-app interop, parity, migration, and browser tests. |
+| `docs` | Product guide, architecture, ADRs, and operator guides. |
 
-`test:packaged` requires the desktop package from `desktop:dist`.
-`pnpm test:guarded` runs the default suite inside the production Worker Git
-guard and confirms that the guard remains active after the suite exits.
+[CONTEXT.md](CONTEXT.md) defines the terms. [Current architecture](docs/architecture/README.md)
+records how the system works. [Architecture decisions](docs/adr/) explain why.
+[Billing setup and recovery](docs/billing.md) covers Suplex Free and Pro operations.
 
-```sh
-pnpm verify
-```
+# Where this is heading
 
-Verification runs typecheck, lint, TypeScript and native tests, a production frontend build, a native test build, and Playwright
-browser smoke tests for session setup, project creation, and the task lifecycle.
-Task creation and start run at desktop and narrow widths. Follow the
-[browser test budget](AGENTS.md#browser-test-budget) when adding coverage or
-choosing which browser tests to run during development.
-
-The native tests and deterministic interop journeys exercise native session and
-delivery behavior. Real provider sign-in, installed services, GitHub writes,
-and packaged desktop behavior require separate verification.
-Database migrations are append-only. Follow [the migration guide](docs/database-migrations.md).
+The [product guide](docs/product.md#market-questions-and-positioning-to-test)
+lists the themes under test: less agent babysitting, explicit planning and
+review, parallel tasks with prerequisites, existing tools and accounts, and
+project credential controls. Agency use keeps the owner-controlled trust
+boundary. Unfinished design ideas live in [proposals](docs/proposals.md) and
+[unresolved work](docs/architecture/unknowns.md). None of that is a commitment.
+It is where the questions are.

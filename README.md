@@ -1,7 +1,6 @@
 <h1 align="center">Suplex</h1>
 
-<!-- Image slot. Capture: the task board of a demo company with tasks in several states (queued, active, waiting for input, delivered), desktop width, light theme. Use no client names. -->
-![Suplex task board with tasks in several states](docs/images/readme/board.png)
+![Suplex task board with Backlog, Active, and Delivered tasks](docs/images/readme/board.png)
 
 <p align="center">
  <strong>Your agents do the work. Suplex runs the workflow.</strong>
@@ -174,8 +173,7 @@ does not discard the worktree or replay an admitted prompt.
 
 ## Coordinator and Worker
 
-<!-- Image slot. Capture: Task Details for one active task, with the Coordinator conversation and the Worker pane visible side by side, desktop width. -->
-![Task Details with the Coordinator conversation and the Worker pane](docs/images/readme/task-detail.png)
+![Task Details for an active task, with the workflow, the agent timeline, and the Worker pane](docs/images/readme/task-detail.png)
 
 Coordinator investigates and specifies a task, delegates implementation to
 Worker, reviews the result, and requests delivery operations. Worker edits and
@@ -187,8 +185,7 @@ fields call Coordinator `root`. That is the same role, not another agent.
 
 ## Six workflows
 
-<!-- Image slot. Capture: the New Task dialog with the workflow menu open, showing the six built-in workflows. -->
-![New Task dialog with the workflow menu open](docs/images/readme/new-task.png)
+![New Task dialog with the workflow menu open on the six workflows](docs/images/readme/new-task.png)
 
 - **Plan and build**: Coordinator plans, Worker implements, Coordinator reviews.
 - **Simple task**: Worker chooses the approach from the task instructions. Coordinator reviews the result.
@@ -245,8 +242,7 @@ and kept.
 
 ## Phone access, push, and dictation
 
-<!-- Image slot. Capture: the Home Screen web app on an iPhone, showing a task that waits for an answer, with the push notification visible. -->
-![Suplex on a phone with a task that needs input](docs/images/readme/phone.png)
+<p align="center"><img src="docs/images/readme/phone.png" width="300" alt="Suplex on a phone with a Coordinator question and 404 Not Found chosen"></p>
 
 The web app installs to the Home Screen from any host that serves it over HTTPS
 or loopback. Web Push tells the task creator and admins when a task needs input.

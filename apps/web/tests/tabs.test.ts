@@ -34,9 +34,9 @@ test("the line variant remains transparent and uses the active underline without
   }
 });
 
-test("Timeline, task source picker, and list view tabs use the pill variant", () => {
+test("Date range, task source picker, and list view tabs use the pill variant", () => {
   for (const path of [
-    "../features/timeline/timeline.tsx",
+    "../components/app/date-range-filter.tsx",
     "../features/tasks/task-source-picker.tsx",
     "../components/app/data-list.tsx",
   ]) {

@@ -9,7 +9,7 @@ import type * as usageMetricsModule from "../features/analytics/lib/usage-metric
 
 const api = vi.hoisted(() => ({ readJsonUnchecked: vi.fn(), withCompany: (path: string) => path }));
 vi.mock("../lib/api.js", () => api);
-vi.mock("../shell/company-context.js", () => ({ useCompanyContext: () => ({ currentCompany: { id: "company-1" } }) }));
+vi.mock("../shell/company-context.js", () => ({ useCompanyContext: () => ({ currentCompany: { id: "company-1" } }), useOptionalCompanyContext: () => null }));
 vi.mock("../shell/application-frame.js", () => ({ ApplicationFrame: ({ children }: { children: ReactNode }) => children }));
 vi.mock("../features/tasks/task-status.js", () => ({ TaskStatus: ({ status }: { status: string }) => status, taskStatusLabels: { delivered: "Delivered", active: "Active" } }));
 vi.mock("../features/analytics/lib/usage-metrics.js", async importOriginal => {
@@ -33,6 +33,7 @@ vi.mock("../components/ui/select.js", () => {
 });
 
 import { AnalyticsView } from "../features/analytics/analytics.js";
+import { dateInputValue } from "../components/app/date-range.js";
 import { usageIsUnpriced, usageMetrics } from "../features/analytics/lib/usage-metrics.js";
 
 function usage(overrides: Partial<TaskUsage> = {}): TaskUsage {
@@ -124,5 +125,53 @@ test.each([
     }
   } finally {
     await act(async () => root.unmount());
+  }
+});
+
+test("narrows every analytics cohort to tasks created in the date range and project", async () => {
+  Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+  const daysAgo = (days: number) => { const date = new Date(); date.setDate(date.getDate() - days); return date.toISOString(); };
+  const tasks = [
+    task("Recent", { createdAt: daysAgo(0), usage: [usage()] }),
+    task("Last week", { createdAt: daysAgo(5), projectId: "project-2", usage: [usage({ messageId: "second", cost: 3 })] }),
+    task("Old", { createdAt: daysAgo(40), usage: [usage({ messageId: "third", cost: 5 })] }),
+  ];
+  api.readJsonUnchecked.mockImplementation(async (path: string) => path.endsWith("/projects") ? { projects: [{ id: "project-1", name: "Project" }, { id: "project-2", name: "Other" }] } : { tasks, generatedAt: new Date().toISOString() });
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  const metric = (label: string) => Array.from(container.querySelectorAll("dt")).find(item => item.textContent === label)?.nextElementSibling;
+  const ledgerTitles = () => Array.from(container.querySelectorAll('section[aria-label="Task analytics"] tbody tr td:first-child a')).map(item => item.textContent);
+  const setDate = async (label: string, value: string) => {
+    const input = container.querySelector<HTMLInputElement>(`input[aria-label="${label}"]`)!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, value);
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+  };
+  const dateValue = (days: number) => dateInputValue(new Date(daysAgo(days)));
+  try {
+    await act(async () => root.render(<AnalyticsView />));
+    expect(container.querySelector('[aria-label="Creation period"]')).toBeNull();
+    expect(container.querySelector<HTMLInputElement>('input[aria-label="Creation start date"]')?.value).toBe(dateValue(29));
+    expect(container.querySelector<HTMLInputElement>('input[aria-label="Creation end date"]')?.value).toBe(dateValue(0));
+    expect(ledgerTitles()).toEqual(["Last week", "Recent"]);
+    expect(metric("Estimated spend")?.textContent).toBe("$5.00");
+
+    await setDate("Creation start date", dateValue(45));
+    expect(ledgerTitles()).toEqual(["Old", "Last week", "Recent"]);
+    expect(metric("Estimated spend")?.textContent).toBe("$10.00");
+
+    await setDate("Creation end date", dateValue(1));
+    expect(ledgerTitles()).toEqual(["Old", "Last week"]);
+    expect(metric("Estimated spend")?.textContent).toBe("$8.00");
+
+    await act(async () => container.querySelector<HTMLButtonElement>('[data-value="project-2"]')!.click());
+    expect(ledgerTitles()).toEqual(["Last week"]);
+    await act(async () => container.querySelectorAll<HTMLButtonElement>('[data-value="all"]')[0]!.click());
+    expect(ledgerTitles()).toEqual(["Old", "Last week"]);
+  } finally {
+    await act(async () => root.unmount());
+    container.remove();
   }
 });

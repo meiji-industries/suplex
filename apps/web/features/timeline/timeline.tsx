@@ -11,9 +11,7 @@ import {
 import { Alert, AlertDescription } from "../../components/ui/alert.js";
 import { Button } from "../../components/ui/button.js";
 import { Checkbox } from "../../components/ui/checkbox.js";
-import { Input } from "../../components/ui/input.js";
 import { Skeleton } from "../../components/ui/skeleton.js";
-import { Tabs, TabsList, TabsTrigger } from "../../components/ui/tabs.js";
 import { ApplicationFrame } from "../../shell/application-frame.js";
 import { useCompanyContext } from "../../shell/company-context.js";
 import { TimelineTotals } from "./timeline-totals.js";
@@ -21,11 +19,7 @@ import { WorkChart } from "./timeline-chart.js";
 import {
   clampTimelineRange,
   agentRoleLabel,
-  customRange,
-  dateFromInput,
-  dateInputValue,
   minimumVisibleMs,
-  presetRange,
   summarizeAgentTime,
   trimTimelineRange,
   type AgentRole,
@@ -34,9 +28,9 @@ import {
 import { readJsonUnchecked } from "../../lib/api.js";
 import { TaskTimelineResponseSchema, type TimelineTask } from "../../contracts/timeline.js";
 import type { ApiProject } from "../../shell/view-shared.js";
-import { addDays, formatDuration } from "./timeline-format.js";
-
-type RangePreset = "today" | "7-days" | "30-days" | "custom";
+import { formatDuration } from "./timeline-format.js";
+import { DateRangeFilter } from "../../components/app/date-range-filter.js";
+import { dateInputValue, initialDateRange, resolveDateRange } from "../../components/app/date-range.js";
 
 const roleColors: Record<AgentRole, string> = {
   root: "bg-blue-500",
@@ -52,11 +46,7 @@ export function TimelineView(): ReactElement {
   const [error, setError] = useState("");
   const [unavailableSessions, setUnavailableSessions] = useState(0);
   const [now, setNow] = useState(() => Date.now());
-  const [preset, setPreset] = useState<RangePreset>("7-days");
-  const [customStart, setCustomStart] = useState(() =>
-    dateInputValue(addDays(new Date(), -6)),
-  );
-  const [customEnd, setCustomEnd] = useState(() => dateInputValue(new Date()));
+  const [dateRange, setDateRange] = useState(() => initialDateRange("7-days"));
   const [zoomRange, setZoomRange] = useState<TimelineRange | null>(null);
   const [groupByProject, setGroupByProject] = useState(false);
   const requestToken = useRef(0);
@@ -110,11 +100,8 @@ export function TimelineView(): ReactElement {
 
   const today = dateInputValue(new Date(now));
   const sourceRange = useMemo(
-    () =>
-      preset === "custom"
-        ? customRange(customStart, customEnd)
-        : presetRange(preset, dateFromInput(today)),
-    [customEnd, customStart, preset, today],
+    () => resolveDateRange(dateRange, today),
+    [dateRange, today],
   );
   const overview = useMemo(
     () => summarizeAgentTime(tasks, projects, sourceRange, now),
@@ -154,26 +141,6 @@ export function TimelineView(): ReactElement {
     [now, projects, tasks, visibleRange],
   );
   const scopeLoaded = Boolean(companyId) && loadedCompanyId === companyId;
-  const displayedStart =
-    preset === "custom"
-      ? customStart
-      : dateInputValue(new Date(sourceRange.start));
-  const displayedEnd =
-    preset === "custom"
-      ? customEnd
-      : dateInputValue(new Date(sourceRange.end - 1));
-  const changeStart = (value: string): void => {
-    if (!value) return;
-    setCustomStart(value);
-    setCustomEnd(value > displayedEnd ? value : displayedEnd);
-    setPreset("custom");
-  };
-  const changeEnd = (value: string): void => {
-    if (!value) return;
-    setCustomEnd(value);
-    setCustomStart(value < displayedStart ? value : displayedStart);
-    setPreset("custom");
-  };
   const fullRangeVisible =
     visibleRange.start === sourceRange.start &&
     visibleRange.end === sourceRange.end;
@@ -195,41 +162,12 @@ export function TimelineView(): ReactElement {
     >
       <div className="min-h-[calc(100vh-2.5rem)] bg-background text-foreground">
         <div className="flex min-h-11 flex-wrap items-center justify-between gap-2 border-b border-border p-3">
-          <Tabs
-            value={preset}
-            onValueChange={(value) => setPreset(value as RangePreset)}
-          >
-            <TabsList variant="pill">
-              <TabsTrigger className="font-normal" value="today">Today</TabsTrigger>
-              <TabsTrigger className="font-normal" value="7-days">7 days</TabsTrigger>
-              <TabsTrigger className="font-normal" value="30-days">30 days</TabsTrigger>
-              <TabsTrigger className="font-normal" value="custom">Custom</TabsTrigger>
-            </TabsList>
-          </Tabs>
-          <div className="flex items-center gap-2 text-xs text-muted-foreground">
-            <label className="w-36">
-              <span className="sr-only">Timeline start date</span>
-              <Input
-                aria-label="Timeline start date"
-                type="date"
-                max={displayedEnd}
-                value={displayedStart}
-                onChange={(event) => changeStart(event.target.value)}
-              />
-            </label>
-            <span>to</span>
-            <label className="w-36">
-              <span className="sr-only">Timeline end date</span>
-              <Input
-                aria-label="Timeline end date"
-                type="date"
-                min={displayedStart}
-                max={dateInputValue(new Date(now))}
-                value={displayedEnd}
-                onChange={(event) => changeEnd(event.target.value)}
-              />
-            </label>
-          </div>
+          <DateRangeFilter
+            value={dateRange}
+            onChange={setDateRange}
+            today={today}
+            label="Timeline"
+          />
         </div>
         <div className="flex min-h-8 flex-wrap items-center gap-x-4 gap-y-2 border-b border-border px-3 py-1 text-xs text-muted-foreground">
           {(Object.keys(roleColors) as AgentRole[]).map((role) => (

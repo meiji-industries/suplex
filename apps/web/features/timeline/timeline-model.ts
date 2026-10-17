@@ -1,11 +1,12 @@
 import type { TimelineTask } from "../../contracts/timeline.js";
-import { addDays } from "./timeline-format.js";
+import { addDays, dateInputValue, startOfDay, type DateRange } from "../../components/app/date-range.js";
 import type { ApiProject } from "../../shell/view-shared.js";
 import { roleLabel } from "../tasks/workflow-presentation.js";
 
 export type { TimelineTask } from "../../contracts/timeline.js";
+export { customRange, dateFromInput, dateInputValue, presetRange } from "../../components/app/date-range.js";
 export type AgentRole = "root" | "worker";
-export type TimelineRange = { start: number; end: number };
+export type TimelineRange = DateRange;
 
 export type WorkInterval = {
   id: string;
@@ -122,42 +123,6 @@ export function clampTimelineRange(
   return {
     start: Math.max(bounds.start, start),
     end: Math.min(bounds.end, end),
-  };
-}
-
-function startOfDay(value: Date): Date {
-  return new Date(value.getFullYear(), value.getMonth(), value.getDate());
-}
-
-export function dateInputValue(value: Date): string {
-  const year = value.getFullYear();
-  const month = String(value.getMonth() + 1).padStart(2, "0");
-  const day = String(value.getDate()).padStart(2, "0");
-  return `${year}-${month}-${day}`;
-}
-
-export function dateFromInput(value: string): Date {
-  const [year, month, day] = value.split("-").map(Number);
-  return new Date(year!, month! - 1, day!);
-}
-
-export function presetRange(
-  preset: "today" | "7-days" | "30-days",
-  now: Date,
-): { start: number; end: number } {
-  const end = addDays(startOfDay(now), 1);
-  const days = preset === "today" ? 1 : preset === "7-days" ? 7 : 30;
-  return { start: addDays(end, -days).getTime(), end: end.getTime() };
-}
-
-export function customRange(
-  start: string,
-  end: string,
-): { start: number; end: number } {
-  const rangeStart = startOfDay(dateFromInput(start));
-  return {
-    start: rangeStart.getTime(),
-    end: addDays(startOfDay(dateFromInput(end)), 1).getTime(),
   };
 }
 

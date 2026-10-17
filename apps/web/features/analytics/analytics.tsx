@@ -5,6 +5,9 @@ import { percentile, usageMetrics } from "./lib/usage-metrics.js";
 import { ApplicationFrame } from "../../shell/application-frame.js";
 import { useCompanyContext } from "../../shell/company-context.js";
 import { CostValue } from "../../components/app/cost-value.js";
+import { DateRangeFilter } from "../../components/app/date-range-filter.js";
+import { dateInputValue, dateRangeIncludes, initialDateRange, resolveDateRange } from "../../components/app/date-range.js";
+import { ProjectSelect } from "../../components/app/project-select.js";
 import { TaskStatus } from "../tasks/task-status.js";
 import { taskDeliveryTargetOptions } from "../tasks/task-delivery-target.js";
 import { Alert, AlertDescription } from "../../components/ui/alert.js";
@@ -38,7 +41,7 @@ export function AnalyticsView() {
   const [error, setError] = useState("");
   const [refresh, setRefresh] = useState(0);
   const [project, setProject] = useState("all");
-  const [period, setPeriod] = useState("30");
+  const [dateRange, setDateRange] = useState(() => initialDateRange("30-days"));
   const [delivery, setDelivery] = useState("all");
   const [query, setQuery] = useState("");
   const [sort, setSort] = useState("cost");
@@ -58,9 +61,11 @@ export function AnalyticsView() {
     void load(); const timer = setInterval(() => void load(), 30_000);
     return () => { closed = true; clearInterval(timer); };
   }, [companyId, refresh]);
+  const today = dateInputValue(new Date());
+  const createdRange = useMemo(() => resolveDateRange(dateRange, today), [dateRange, today]);
   const tasks = useMemo(() => (data?.tasks ?? []).filter(task => (project === "all" || task.projectId === project)
     && (delivery === "all" || task.deliveryTarget === delivery)
-    && (period === "all" || Date.parse(task.createdAt) >= Date.now() - Number(period) * 86_400_000)), [data, project, delivery, period]);
+    && dateRangeIncludes(createdRange, Date.parse(task.createdAt))), [data, project, delivery, createdRange]);
   const activityTasks = useMemo(() => (data?.tasks ?? []).filter(task => (project === "all" || task.projectId === project)
     && (delivery === "all" || task.deliveryTarget === delivery)), [data, project, delivery]);
   const {
@@ -109,8 +114,8 @@ export function AnalyticsView() {
   return <ApplicationFrame title="Analytics" headerRight={<><Button size="sm" variant="outline" onClick={exportRows} disabled={!rows.length}><ArrowDownToLine />Export CSV</Button><Button size="icon-sm" variant="ghost" aria-label="Refresh analytics" onClick={() => setRefresh(value => value + 1)}><RefreshCw /></Button></>}>
     <main className="min-w-0 flex-1 overflow-auto" data-analytics>
       <div className="flex flex-wrap items-center gap-2 border-b px-4 py-3 pt-[12px] pb-[12px] pl-[12px] pr-[12px]">
-        <Filter label="Creation period" value={period} onChange={setPeriod} options={[{ value: "7", label: "Created in last 7 days" }, { value: "30", label: "Created in last 30 days" }, { value: "90", label: "Created in last 90 days" }, { value: "all", label: "Created at any time" }]} />
-        <Filter label="Project" value={project} onChange={setProject} options={[{ value: "all", label: "All projects" }, ...projects.map(item => ({ value: item.id, label: item.name }))]} />
+        <DateRangeFilter value={dateRange} onChange={setDateRange} today={today} label="Creation" />
+        <ProjectSelect projects={projects} value={project} onChange={setProject} label="Project" allLabel="All projects" />
         <Filter label="Delivery target" value={delivery} onChange={setDelivery} options={[{ value: "all", label: "All delivery targets" }, ...taskDeliveryTargetOptions]} />
       </div>
       {error ? <Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert> : null}

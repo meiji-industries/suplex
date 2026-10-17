@@ -1,9 +1,3 @@
-export function addDays(value: Date, days: number): Date {
-  const next = new Date(value);
-  next.setDate(next.getDate() + days);
-  return next;
-}
-
 export function formatDuration(durationMs: number): string {
   if (durationMs <= 0) return "0m";
   const minutes = Math.max(1, Math.round(durationMs / 60_000));

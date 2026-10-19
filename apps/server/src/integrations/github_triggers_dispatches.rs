@@ -321,6 +321,16 @@ pub fn list_by_rule(
     )
 }
 
+/// Forget a dispatch so its pull request can be admitted again: one whose
+/// task was cancelled and whose label was re-applied, or one that never got a
+/// task because its pull request closed.
+pub fn release(database: &SuplexDatabase, id: &str) -> DatabaseResult<bool> {
+    Ok(database.connection().execute(
+        "DELETE FROM suplex_github_trigger_dispatches WHERE id = ?1",
+        [id],
+    )? == 1)
+}
+
 pub fn unfinished(database: &SuplexDatabase) -> DatabaseResult<Vec<Dispatch>> {
     query(
         database,

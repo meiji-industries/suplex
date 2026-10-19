@@ -32,9 +32,9 @@ use super::{
         TaskBinding,
     },
     github_triggers_inspection::{
-        PullRequestInspection, TriggerSortOrder, inspect_pull_request, labelled_change_path,
-        list_labelled_candidates, list_open_pull_requests_by_label, observe_repository,
-        validate_label, validate_protected_paths,
+        LabelledCandidate, PullRequestInspection, TriggerSortOrder, inspect_pull_request,
+        labelled_change_path, list_labelled_candidates, list_open_pull_requests_by_label,
+        observe_repository, validate_label, validate_protected_paths,
     },
 };
 use crate::coordination::workflows::Workflow;
@@ -1491,6 +1491,13 @@ impl<D: Db> Pass<'_, D> {
             eligible(database, rule, &self.expected, &pull, Some(&pending.policy))
         })?;
         if let Some(reason) = reason {
+            // A closed pull request never gets its task; forget the dispatch so
+            // the pass stops re-inspecting it each minute.
+            if pull.state != "open" {
+                db(database, |database| {
+                    dispatches::release(database, &pending.id)
+                })?;
+            }
             return Ok(Activity {
                 matching_paths: matching,
                 ..Activity::new(pull.number, Some(&pull.url), "excluded", reason)
@@ -1575,28 +1582,42 @@ impl<D: Db> Pass<'_, D> {
                     "excluded",
                     reason,
                 )),
-                None => self.candidate(pull.number).await,
+                None => self.candidate(&pull).await,
             };
             self.outcome(pull.number, result);
         }
         Ok(())
     }
 
-    async fn candidate(&self, number: i64) -> Result<Activity, Failure> {
+    async fn candidate(&self, labelled: &LabelledCandidate) -> Result<Activity, Failure> {
         let (database, rule, expected) = (self.database, self.rule, &self.expected);
-        let pull = inspect_pull_request(self.github, &rule.repository_name, number).await?;
+        let pull =
+            inspect_pull_request(self.github, &rule.repository_name, labelled.number).await?;
         let (reason, matching) = db(database, |database| {
             eligible(database, rule, expected, &pull, None)
         })?;
-        let prior = db(database, |database| {
+        let mut prior = db(database, |database| {
             dispatches::find(database, &rule.id, pull.base_repository.id, pull.number)
         })?;
+        let mut task_status = prior
+            .as_ref()
+            .and_then(|prior| prior.task_id.as_deref())
+            .map(|id| task_status(database, &rule.authority_user_id, id))
+            .transpose()?;
+        // A cancelled task releases its pull request: a label applied after
+        // that dispatch asks for the workflow again.
+        if let Some(dispatch) = &prior
+            && task_status.as_deref() == Some("cancelled")
+            && millis(&labelled.labelled_at) > millis(&dispatch.created_at)
+        {
+            db(database, |database| {
+                dispatches::release(database, &dispatch.id)
+            })?;
+            prior = None;
+            task_status = None;
+        }
         if reason.is_some() || prior.is_some() {
             let task_id = prior.as_ref().and_then(|prior| prior.task_id.clone());
-            let task_status = task_id
-                .as_deref()
-                .map(|id| task_status(database, &rule.authority_user_id, id))
-                .transpose()?;
             let reason = if prior.is_some() {
                 "This pull request was previously processed."
             } else {
@@ -2923,13 +2944,12 @@ mod tests {
     }
 
     /// Link pull request 7 to `task_x` with `status`, as an earlier pass would have.
-    fn linked_task(f: &Fixture, rule: &Rule, status: &str) {
+    fn prepared_dispatch(f: &Fixture, rule: &Rule) -> Dispatch {
         let expected = f
             .state
             .with_database(|database| local(database, &f.admin, "c", &Config::from(rule)))
             .unwrap();
-        let prepared = f
-            .state
+        f.state
             .with_database(|database| {
                 dispatches::prepare(
                     database,
@@ -2959,7 +2979,11 @@ mod tests {
                     },
                 )
             })
-            .unwrap();
+            .unwrap()
+    }
+
+    fn linked_task(f: &Fixture, rule: &Rule, status: &str) {
+        let prepared = prepared_dispatch(f, rule);
         let configuration = json!({"repository": "owner/repo", "source": {"kind": "pull_request", "number": 7},
             "branch": "feature", "baseBranch": "main", "startingSha": "a".repeat(40), "baselineSha": "b".repeat(40)})
         .to_string();
@@ -2973,6 +2997,98 @@ mod tests {
             database.connection().execute("INSERT INTO suplex_task_controls (task_id,objective,delivery_target,delivery_intent_json,status,root_profile_json,worker_profile_json,workflow,advisor_profiles_json,workflow_state_json,status_changed_at,created_at,updated_at) VALUES ('task_x','T','pull_request_draft',?3,?1,'{}','{}','standard','{}','{}',?2,?2,?2)", params![status, time, intent]).unwrap();
             database.connection().execute("UPDATE suplex_github_trigger_dispatches SET task_id = 'task_x' WHERE id = ?1", [&prepared.id]).unwrap();
         });
+    }
+
+    fn relabelled_page(number: i64, labelled_at: &str) -> Value {
+        json!({"data": {"repository": {"pullRequests": {
+            "pageInfo": {"hasNextPage": false, "endCursor": null},
+            "nodes": [{"number": number, "createdAt": "2026-01-01T00:00:00Z",
+                "timelineItems": {"nodes": [{"createdAt": labelled_at, "label": {"name": "ready"}}]}}],
+        }}}})
+    }
+
+    fn dispatch_rows(f: &Fixture, rule: &Rule) -> Vec<Option<String>> {
+        f.state.with_database(|database| {
+            dispatches::list_by_rule(database, "c", &rule.id)
+                .unwrap()
+                .into_iter()
+                .map(|dispatch| dispatch.task_id)
+                .collect()
+        })
+    }
+
+    #[tokio::test]
+    async fn a_label_applied_after_a_cancelled_task_admits_the_pull_request_again() {
+        for (labelled_at, released) in [
+            ("2026-01-01T00:00:00Z", false),
+            ("2099-01-01T00:00:00Z", true),
+        ] {
+            let f = fixture();
+            let replies = replies(&[7]);
+            eligible_pull(&replies);
+            replies
+                .lock()
+                .unwrap()
+                .insert("/graphql".into(), (200, relabelled_page(7, labelled_at)));
+            let (github, _, server) = fake_github(replies).await;
+            let rule = enabled_rule(&f, &github).await;
+            linked_task(&f, &rule, "cancelled");
+            process_enabled_rules(&f.state, &github, &|_| {}).await;
+            let listed = activity(&f.state, &f.admin, "c", &rule.id).unwrap();
+            let seven = listed
+                .iter()
+                .find(|entry| entry.pull_request_number == Some(7))
+                .unwrap();
+            let rows = dispatch_rows(&f, &rule);
+            if released {
+                // The fake host cannot create the task; the release itself is under test.
+                assert_ne!(
+                    seven.reason, "This pull request was previously processed.",
+                    "{listed:?}"
+                );
+                assert_eq!(rows.len(), 1);
+                assert_ne!(
+                    rows[0].as_deref(),
+                    Some("task_x"),
+                    "a new dispatch replaces the cancelled one"
+                );
+            } else {
+                assert_eq!(seven.reason, "This pull request was previously processed.");
+                assert_eq!(rows, vec![Some("task_x".to_owned())]);
+            }
+            server.abort();
+        }
+    }
+
+    #[tokio::test]
+    async fn a_closed_pull_request_releases_its_unfinished_dispatch() {
+        let f = fixture();
+        let replies = replies(&[]);
+        eligible_pull(&replies);
+        let mut closed = pull(7, "main", 0);
+        closed["state"] = json!("closed");
+        replies
+            .lock()
+            .unwrap()
+            .insert("/repos/owner/repo/pulls/7".into(), (200, closed));
+        let (github, _, server) = fake_github(replies).await;
+        let rule = enabled_rule(&f, &github).await;
+        prepared_dispatch(&f, &rule);
+        assert_eq!(dispatch_rows(&f, &rule).len(), 1);
+        process_enabled_rules(&f.state, &github, &|_| {}).await;
+        let listed = activity(&f.state, &f.admin, "c", &rule.id).unwrap();
+        assert!(
+            listed
+                .iter()
+                .any(|entry| entry.pull_request_number == Some(7)
+                    && entry.reason == "The pull request is closed."),
+            "{listed:?}"
+        );
+        assert!(
+            dispatch_rows(&f, &rule).is_empty(),
+            "the dispatch is forgotten"
+        );
+        server.abort();
     }
 
     fn stored_rule(f: &Fixture, rule: &Rule) -> Rule {

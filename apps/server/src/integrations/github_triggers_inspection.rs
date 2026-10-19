@@ -462,6 +462,8 @@ pub async fn list_open_pull_requests_by_label(
 #[derive(Debug, Clone, PartialEq)]
 pub struct LabelledCandidate {
     pub number: i64,
+    /// The latest time the label was applied (RFC 3339), or the creation time.
+    pub labelled_at: String,
     pub url: Option<String>,
     pub base_branch: Option<String>,
     pub is_draft: Option<bool>,
@@ -572,6 +574,7 @@ fn order_candidates(mut pulls: Vec<Candidate>, order: TriggerSortOrder) -> Vec<L
         .into_iter()
         .map(|pull| LabelledCandidate {
             number: pull.number,
+            labelled_at: pull.labelled.to_rfc3339(),
             url: pull.url,
             base_branch: pull.base_branch,
             is_draft: pull.is_draft,

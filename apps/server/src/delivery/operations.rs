@@ -1374,6 +1374,20 @@ impl DeliveryOperations {
             owner_token: None,
         })?;
         let control = self.get(task_id)?;
+        // A review-only trigger task stops at its draft pull request until a promotion.
+        if operation == DeliveryOperation::RequestReview
+            && control.delivery_target == DeliveryTarget::PullRequestDraft
+            && github_triggers_dispatches::trigger_delivery_policy(
+                &self.open(OpenMode::ReadOnly)?,
+                task_id,
+            )?
+            .is_some()
+        {
+            return Err(delivery_failure(
+                "merge_not_eligible",
+                "The delivery target is the draft pull request. Do not request review.",
+            ));
+        }
         match operation {
             DeliveryOperation::InspectDeliveryDiff => {
                 return self.inspect_delivery_diff(&control).await;
@@ -2335,6 +2349,12 @@ impl DeliveryOperations {
         let trigger = self
             .inspect_trigger_policy(control, Some(&head), true)
             .await?;
+        if trigger.as_ref().is_some_and(|(_, pull)| pull.is_draft) {
+            return Err(delivery_failure(
+                "merge_not_eligible",
+                "The pull request is a draft. Suplex does not merge a draft pull request.",
+            ));
+        }
         if (trigger.is_some() || control.workflow != Workflow::Standard)
             && let Some(wait) = self.confirm_merge_base(control, &head, actual).await?
         {
@@ -2461,8 +2481,8 @@ fn target_reached(
                 || (target == DeliveryTarget::PullRequestReady && is_draft == Some(false))))
 }
 
-/// The trigger pull request is still the open, reviewable, same-repository
-/// pull request the dispatch recorded.
+/// The trigger pull request is still the open, same-repository pull request the
+/// dispatch recorded, and ready unless the dispatch admitted a draft.
 fn trigger_identity_holds(policy: &DeliveryPolicy, pull: &PullRequestInspection) -> bool {
     let same_repository = |repository: &github_triggers_inspection::Repository| {
         repository.id == policy.repository_id
@@ -2470,7 +2490,7 @@ fn trigger_identity_holds(policy: &DeliveryPolicy, pull: &PullRequestInspection)
     };
     pull.number == policy.pull_request_number
         && pull.state == "open"
-        && !pull.is_draft
+        && (!pull.is_draft || policy.admitted_draft)
         && !pull.is_cross_repository
         && same_repository(&pull.base_repository)
         && pull.head_repository.as_ref().is_some_and(same_repository)
@@ -3005,6 +3025,53 @@ pub(crate) mod tests {
         let mut github = Github::new(access);
         github.retry_pauses.clear();
         github
+    }
+
+    #[test]
+    fn trigger_identity_accepts_a_draft_only_for_a_dispatch_that_admitted_a_draft() {
+        use github_triggers_inspection::{PullRequestInspection, Repository};
+        let repository = Repository {
+            id: 9,
+            full_name: "owner/repo".into(),
+        };
+        let pull = |is_draft: bool| PullRequestInspection {
+            number: 7,
+            url: "https://github.com/owner/repo/pull/7".into(),
+            title: "Candidate".into(),
+            state: "open".into(),
+            is_draft,
+            labels: vec!["ready".into()],
+            head_sha: "a".repeat(40),
+            head_branch: "feature".into(),
+            base_sha: "b".repeat(40),
+            base_branch: "main".into(),
+            head_repository: Some(repository.clone()),
+            base_repository: repository.clone(),
+            is_cross_repository: false,
+            files: vec![],
+        };
+        let policy = |admitted_draft: bool| DeliveryPolicy {
+            dispatch_id: "dispatch_1".into(),
+            repository_id: 9,
+            repository_name: "owner/repo".into(),
+            pull_request_number: 7,
+            head_sha: "a".repeat(40),
+            base_sha: "b".repeat(40),
+            head_branch: "feature".into(),
+            base_branch: "main".into(),
+            protected_paths: vec![],
+            admitted_draft,
+            review_only: admitted_draft,
+        };
+        assert!(trigger_identity_holds(&policy(true), &pull(true)));
+        assert!(trigger_identity_holds(&policy(true), &pull(false)));
+        assert!(!trigger_identity_holds(&policy(false), &pull(true)));
+        assert!(trigger_identity_holds(&policy(false), &pull(false)));
+        let closed = PullRequestInspection {
+            state: "closed".into(),
+            ..pull(true)
+        };
+        assert!(!trigger_identity_holds(&policy(true), &closed));
     }
 
     #[tokio::test]

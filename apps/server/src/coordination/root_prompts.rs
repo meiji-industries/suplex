@@ -81,6 +81,19 @@ pub fn initial_coordinator_prompt(
         }
         Workflow::ApproveThenBuild => Some(include_str!("prompts/workflow_approve_then_build.txt")),
     };
+    // A review-only trigger task repairs the pull request without requesting review or merge.
+    let instructions = instructions.map(|text| {
+        if control.workflow == Workflow::RefinePullRequest
+            && control.delivery_target == crate::tasks::control::DeliveryTarget::PullRequestDraft
+        {
+            format!(
+                "{text}\n\n{}",
+                include_str!("prompts/workflow_refine_pull_request_draft_target.txt")
+            )
+        } else {
+            text.to_owned()
+        }
+    });
     let mut prompt = if let Some(instructions) = instructions {
         let base_branch = &intent.base_branch;
         let pull = intent
@@ -795,6 +808,18 @@ mod tests {
             initial_coordinator_prompt(&control, &context, &[dependency]),
             include_str!("prompts/example_initial_refine.txt")
         );
+        let draft_target = include_str!("prompts/workflow_refine_pull_request_draft_target.txt");
+        assert!(!initial_coordinator_prompt(&control, &context, &[]).contains(draft_target));
+        let review_only = TaskControlRow {
+            delivery_target: crate::tasks::control::DeliveryTarget::PullRequestDraft,
+            ..control.clone()
+        };
+        let prompt = initial_coordinator_prompt(&review_only, &context, &[]);
+        assert!(prompt.contains(&format!(
+            "{}\n\n{draft_target}",
+            include_str!("prompts/workflow_refine_pull_request.txt")
+        )));
+        assert!(draft_target.contains("Do not request review and do not merge."));
         let range = range();
         let attachments = [
             crate::coordination::workflow_evidence::ManifestAttachment {

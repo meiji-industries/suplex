@@ -7,7 +7,9 @@
     "workflowId": "x",
     "deliveryTarget": "local_worktree",
     "protectedPaths": [],
-    "sortOrder": "created_asc"
+    "sortOrder": "created_asc",
+    "draftPullRequests": "review_only",
+    "readyPullRequests": "deliver"
   },
   "expected": {
     "accepted": false,

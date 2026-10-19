@@ -366,6 +366,26 @@ crate::shared::wire_enum! {
     }
 }
 
+crate::shared::wire_enum! {
+    /// How a trigger handles labelled pull requests in one draft state.
+    pub enum TriggerPullRequestHandling {
+        Ignore = "ignore",
+        ReviewOnly = "review_only",
+        Deliver = "deliver",
+    }
+}
+
+impl TriggerPullRequestHandling {
+    /// The exclusion reason for an ignored pull request in this draft state, if any.
+    pub const fn exclusion(self, is_draft: bool) -> Option<&'static str> {
+        match (self, is_draft) {
+            (Self::Ignore, true) => Some("The pull request is a draft."),
+            (Self::Ignore, false) => Some("The pull request is ready."),
+            _ => None,
+        }
+    }
+}
+
 const LABELLED_PULL_REQUESTS: &str = "query($owner:String!,$name:String!,$label:String!,$after:String,$direction:OrderDirection!){repository(owner:$owner,name:$name){pullRequests(states:OPEN,labels:[$label],first:100,after:$after,orderBy:{field:CREATED_AT,direction:$direction}){pageInfo{hasNextPage endCursor}nodes{number url baseRefName isDraft isCrossRepository createdAt timelineItems(itemTypes:LABELED_EVENT,last:100){nodes{...on LabeledEvent{createdAt label{name}}}}}}}}";
 
 #[derive(Deserialize)]

@@ -92,6 +92,17 @@ pub fn normalize_workflow_input(
     raw: &mut Map<String, Value>,
     require_source: bool,
 ) -> Result<(), String> {
+    normalize_workflow_input_for(raw, require_source, &[DeliveryTarget::Merged])
+}
+
+/// `normalize_workflow_input` where Pull request repair may deliver to one of
+/// `repair_targets`; the first is its default. Only a review-only trigger task
+/// allows more than the merged pull request.
+pub fn normalize_workflow_input_for(
+    raw: &mut Map<String, Value>,
+    require_source: bool,
+    repair_targets: &[DeliveryTarget],
+) -> Result<(), String> {
     let workflow = raw
         .get("workflow")
         .filter(|value| !value.is_null())
@@ -135,7 +146,7 @@ pub fn normalize_workflow_input(
     }
     if raw
         .get("deliveryTarget")
-        .is_some_and(|value| value != DeliveryTarget::Merged.as_str())
+        .is_some_and(|value| !repair_targets.iter().any(|target| value == target.as_str()))
     {
         return Err("Pull request repair always delivers a merged pull request".into());
     }
@@ -146,7 +157,10 @@ pub fn normalize_workflow_input(
     if require_source && source_kind != Some("pull_request") {
         return Err("Select a pull request source for Pull request repair".into());
     }
-    raw.insert("deliveryTarget".into(), json!("merged"));
+    if !raw.contains_key("deliveryTarget") {
+        let target = repair_targets.first().unwrap_or(&DeliveryTarget::Merged);
+        raw.insert("deliveryTarget".into(), json!(target.as_str()));
+    }
     Ok(())
 }
 

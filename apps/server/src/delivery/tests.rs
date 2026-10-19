@@ -17,7 +17,7 @@ use git2::{Repository, Signature};
 use serde_json::{Value, json};
 
 use super::{
-    DeliveryOperation,
+    DeliveryError, DeliveryOperation,
     inspection::ReviewRange,
     operations::{DeliveryOperations, DeliveryRequest},
 };
@@ -544,6 +544,50 @@ async fn standard_task_pushes_and_opens_a_draft_pull_request() {
         serde_json::json!(control.workflow_state)["acceptedDelivery"]["headSha"],
         head.as_str()
     );
+    std::fs::remove_dir_all(&fixture.base).unwrap();
+}
+
+#[tokio::test]
+async fn a_review_only_trigger_task_cannot_request_review() {
+    let fixture = fixture("pull_request_draft");
+    let (operations, _) = operations(&fixture).await;
+    let request = DeliveryRequest {
+        operation: DeliveryOperation::RequestReview,
+        expected_head: None,
+        review: None,
+        pull_request_title: None,
+        pull_request_body: None,
+    };
+    let code = |error: Box<dyn std::error::Error + Send + Sync>| {
+        DeliveryError::code_of(error.as_ref()).unwrap()
+    };
+    let user_task = operations
+        .execute(&fixture.root, None, &request)
+        .await
+        .unwrap_err();
+    assert_eq!(code(user_task), "delivery_review_required");
+    let database = SuplexDatabase::open(&fixture.database_path, OpenMode::ReadWrite).unwrap();
+    database
+        .connection()
+        .execute_batch("PRAGMA foreign_keys = OFF")
+        .unwrap();
+    let policy = json!({"headSha": "a".repeat(40), "baseSha": "b".repeat(40), "headBranch": "feature", "baseBranch": "main", "protectedPaths": [], "repositoryId": 9, "repositoryName": "owner/repo", "deliveryTarget": "pull_request_draft", "finalDeliveryTarget": "merged", "admittedDraft": true, "handling": "review_only"});
+    database.connection().execute(
+        "INSERT INTO suplex_github_trigger_dispatches (id, rule_id, company_id, project_id, repository_id, repository_name, pull_request_number, authority_user_id, request_json, policy_json, preset_json, profiles_json, idempotency_key, task_id, created_at, updated_at) VALUES ('dispatch_1', 'rule_1', 'delivery_company', 'delivery_project', 9, 'owner/repo', 7, 'user', '{}', ?1, '{}', '{}', 'key_1', ?2, 'now', 'now')",
+        rusqlite::params![policy.to_string(), fixture.task_id],
+    ).unwrap();
+    drop(database);
+    let trigger_task = operations
+        .execute(&fixture.root, None, &request)
+        .await
+        .unwrap_err();
+    assert!(
+        trigger_task
+            .to_string()
+            .contains("The delivery target is the draft pull request. Do not request review."),
+        "{trigger_task}"
+    );
+    assert_eq!(code(trigger_task), "merge_not_eligible");
     std::fs::remove_dir_all(&fixture.base).unwrap();
 }
 

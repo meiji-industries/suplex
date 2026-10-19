@@ -236,7 +236,9 @@ and kept.
   from an existing task.
 - **GitHub triggers** create tasks from labelled open pull requests with a
   selected workflow. Suplex checks for newly labelled pull requests every 15
-  seconds. This is a pull request label trigger, not a general GitHub event system.
+  seconds. Each rule can ignore, review, or deliver draft and ready pull
+  requests separately. This is a pull request label trigger, not a general
+  GitHub event system.
 - **Quick shell** opens a persistent login shell on the host for an admin.
   Press Ctrl+` or use the sidebar button.
 

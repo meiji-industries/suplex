@@ -1135,6 +1135,7 @@ fn has_detail_edits(input: &TaskDetailsBody) -> bool {
 fn normalized_edit(
     input: &TaskDetailsBody,
     current: &repository::TaskEditSnapshot,
+    review_only_trigger: bool,
 ) -> DatabaseResult<Map<String, Value>> {
     let workflow = input
         .workflow
@@ -1159,33 +1160,43 @@ fn normalized_edit(
     if let Some(tests) = input.run_project_tests {
         normalized.insert("runProjectTests".into(), json!(tests));
     }
-    crate::coordination::workflow_records::normalize_workflow_input(&mut normalized, true)
-        .map_err(|message| {
-            // A named role outside the workflow is the first rule that fails.
-            let ids = input.advisor_profile_ids.clone().unwrap_or_default();
-            let extra = [
-                ("reviewer", ids.reviewer),
-                ("planner_a", ids.planner_a),
-                ("planner_b", ids.planner_b),
-                ("rater", ids.rater),
-            ]
-            .into_iter()
-            .find_map(|(role, id)| {
-                id.filter(|_| {
-                    !workflows::advisor_roles(workflow).any(|allowed| allowed.as_str() == role)
-                })
-                .map(|id| (role, id))
-            });
-            match extra {
-                Some((role, id)) => TaskError::field(
-                    "advisor_role_not_in_workflow",
-                    message,
-                    &format!("advisorProfileIds.{role}"),
-                    &id,
-                ),
-                None => TaskError::new(message, 422),
-            }
-        })?;
+    // A review-only trigger task keeps its draft pull request target until a promotion.
+    let repair_targets: &[DeliveryTarget] = if review_only_trigger {
+        &[DeliveryTarget::PullRequestDraft, DeliveryTarget::Merged]
+    } else {
+        &[DeliveryTarget::Merged]
+    };
+    crate::coordination::workflow_records::normalize_workflow_input_for(
+        &mut normalized,
+        true,
+        repair_targets,
+    )
+    .map_err(|message| {
+        // A named role outside the workflow is the first rule that fails.
+        let ids = input.advisor_profile_ids.clone().unwrap_or_default();
+        let extra = [
+            ("reviewer", ids.reviewer),
+            ("planner_a", ids.planner_a),
+            ("planner_b", ids.planner_b),
+            ("rater", ids.rater),
+        ]
+        .into_iter()
+        .find_map(|(role, id)| {
+            id.filter(|_| {
+                !workflows::advisor_roles(workflow).any(|allowed| allowed.as_str() == role)
+            })
+            .map(|id| (role, id))
+        });
+        match extra {
+            Some((role, id)) => TaskError::field(
+                "advisor_role_not_in_workflow",
+                message,
+                &format!("advisorProfileIds.{role}"),
+                &id,
+            ),
+            None => TaskError::new(message, 422),
+        }
+    })?;
     Ok(normalized)
 }
 
@@ -1324,7 +1335,12 @@ pub fn update_task_details(
         let scope = repository::task_by_id(database, task_id)?.ok_or_else(TaskError::not_found)?;
         let current =
             repository::edit_snapshot(database, task_id)?.ok_or_else(TaskError::not_found)?;
-        let normalized = normalized_edit(input, &current)?;
+        let review_only_trigger =
+            crate::integrations::github_triggers_dispatches::trigger_delivery_policy(
+                database, task_id,
+            )?
+            .is_some_and(|policy| policy.review_only);
+        let normalized = normalized_edit(input, &current, review_only_trigger)?;
         let workflow = normalized["workflow"].as_str().unwrap_or("standard");
         let root_id = input
             .root_profile_id
@@ -1967,6 +1983,49 @@ mod tests {
                 422,
                 "Pull request repair always delivers a merged pull request".into()
             )
+        );
+        // A review-only trigger task keeps its draft pull request target; other targets stay refused.
+        database
+            .connection()
+            .execute_batch("PRAGMA foreign_keys = OFF")
+            .unwrap();
+        let policy = json!({"headSha": "a".repeat(40), "baseSha": "b".repeat(40), "headBranch": "feature", "baseBranch": "main", "protectedPaths": [], "repositoryId": 9, "repositoryName": "owner/repo", "deliveryTarget": "pull_request_draft", "finalDeliveryTarget": "merged", "admittedDraft": true, "handling": "review_only"});
+        database.connection().execute(
+            "INSERT INTO suplex_github_trigger_dispatches (id, rule_id, company_id, project_id, repository_id, repository_name, pull_request_number, authority_user_id, request_json, policy_json, preset_json, profiles_json, idempotency_key, task_id, created_at, updated_at) VALUES ('dispatch_1', 'rule_1', 'command_company', 'command_project', 9, 'owner/repo', 7, ?3, '{}', ?1, '{}', '{}', 'key_1', ?2, 'now', 'now')",
+            params![policy.to_string(), task.id, user_id],
+        ).unwrap();
+        let target = |database: &SuplexDatabase| -> String {
+            database
+                .connection()
+                .query_row(
+                    "SELECT delivery_target FROM suplex_task_controls WHERE task_id = ?1",
+                    [&task.id],
+                    |row| row.get(0),
+                )
+                .unwrap()
+        };
+        update_user_task_details(&mut database, &user_id, &task.id, &edit(json!({"workflow":"refine_pull_request","deliveryTarget":"pull_request_draft","runProjectTests":false})), Utc::now()).unwrap();
+        assert_eq!(target(&database), "pull_request_draft");
+        update_user_task_details(
+            &mut database,
+            &user_id,
+            &task.id,
+            &edit(json!({"runProjectTests":true})),
+            Utc::now(),
+        )
+        .unwrap();
+        assert_eq!(target(&database), "pull_request_draft");
+        let refused = update_user_task_details(
+            &mut database,
+            &user_id,
+            &task.id,
+            &edit(json!({"workflow":"refine_pull_request","deliveryTarget":"remote_branch"})),
+            Utc::now(),
+        )
+        .unwrap_err();
+        assert_eq!(
+            failure(refused).1,
+            "Pull request repair always delivers a merged pull request"
         );
         drop(database);
         std::fs::remove_file(filename).unwrap();

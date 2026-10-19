@@ -32,9 +32,10 @@ use super::{
         TaskBinding,
     },
     github_triggers_inspection::{
-        LabelledCandidate, PullRequestInspection, TriggerSortOrder, inspect_pull_request,
-        labelled_change_path, list_labelled_candidates, list_open_pull_requests_by_label,
-        observe_repository, validate_label, validate_protected_paths,
+        LabelledCandidate, PullRequestInspection, TriggerPullRequestHandling, TriggerSortOrder,
+        inspect_pull_request, labelled_change_path, list_labelled_candidates,
+        list_open_pull_requests_by_label, observe_repository, validate_label,
+        validate_protected_paths,
     },
 };
 use crate::coordination::workflows::Workflow;
@@ -155,6 +156,8 @@ pub struct Rule {
     pub delivery_target: String,
     pub protected_paths: Vec<String>,
     pub sort_order: TriggerSortOrder,
+    pub draft_pull_requests: TriggerPullRequestHandling,
+    pub ready_pull_requests: TriggerPullRequestHandling,
     pub repository_id: i64,
     pub repository_name: String,
     pub authority_user_id: String,
@@ -202,6 +205,28 @@ impl Activity {
     }
 }
 
+fn handling(row: &Row<'_>, column: &str) -> rusqlite::Result<TriggerPullRequestHandling> {
+    let text: String = row.get(column)?;
+    TriggerPullRequestHandling::parse(&text).ok_or_else(|| {
+        rusqlite::Error::FromSqlConversionFailure(
+            0,
+            rusqlite::types::Type::Text,
+            format!("unknown trigger pull request handling {text}").into(),
+        )
+    })
+}
+
+impl Rule {
+    /// How this rule handles a pull request in its current draft state.
+    pub fn handling(&self, is_draft: bool) -> TriggerPullRequestHandling {
+        if is_draft {
+            self.draft_pull_requests
+        } else {
+            self.ready_pull_requests
+        }
+    }
+}
+
 fn rule(row: &Row<'_>) -> rusqlite::Result<Rule> {
     let paths: String = row.get("protected_paths_json")?;
     Ok(Rule {
@@ -229,6 +254,8 @@ fn rule(row: &Row<'_>) -> rusqlite::Result<Rule> {
                 )
             })?
         },
+        draft_pull_requests: handling(row, "draft_pull_requests")?,
+        ready_pull_requests: handling(row, "ready_pull_requests")?,
         repository_id: row.get("repository_id")?,
         repository_name: row.get("repository_name")?,
         authority_user_id: row.get("authority_user_id")?,
@@ -342,8 +369,8 @@ fn update_rule(
     expected_revision: i64,
 ) -> DatabaseResult<bool> {
     Ok(database.connection().execute(
-        "UPDATE suplex_github_trigger_rules SET project_id=?1, name=?2, label=?3, workflow_id=?4, delivery_target=?5, protected_paths_json=?6, repository_id=?7, repository_name=?8, authority_user_id=?9, enabled=?10, archived_at=?11, revision=?12, last_successful_check_at=?13, next_retry_at=?14, latest_error=?15, failure_count=?16, updated_at=?17, sort_order=?21 WHERE id=?18 AND company_id=?19 AND revision=?20",
-        params![next.project_id, next.name, next.label, next.workflow_id, next.delivery_target, serde_json::to_string(&next.protected_paths)?, next.repository_id, next.repository_name, next.authority_user_id, i64::from(next.enabled), next.archived_at, next.revision, next.last_successful_check_at, next.next_retry_at, next.latest_error, next.failure_count, next.updated_at, next.id, next.company_id, expected_revision, next.sort_order.as_str()],
+        "UPDATE suplex_github_trigger_rules SET project_id=?1, name=?2, label=?3, workflow_id=?4, delivery_target=?5, protected_paths_json=?6, repository_id=?7, repository_name=?8, authority_user_id=?9, enabled=?10, archived_at=?11, revision=?12, last_successful_check_at=?13, next_retry_at=?14, latest_error=?15, failure_count=?16, updated_at=?17, sort_order=?21, draft_pull_requests=?22, ready_pull_requests=?23 WHERE id=?18 AND company_id=?19 AND revision=?20",
+        params![next.project_id, next.name, next.label, next.workflow_id, next.delivery_target, serde_json::to_string(&next.protected_paths)?, next.repository_id, next.repository_name, next.authority_user_id, i64::from(next.enabled), next.archived_at, next.revision, next.last_successful_check_at, next.next_retry_at, next.latest_error, next.failure_count, next.updated_at, next.id, next.company_id, expected_revision, next.sort_order.as_str(), next.draft_pull_requests.as_str(), next.ready_pull_requests.as_str()],
     )? == 1)
 }
 
@@ -808,6 +835,8 @@ pub async fn create<D: Db>(
         delivery_target: config.delivery_target.clone(),
         protected_paths: config.protected_paths.clone(),
         sort_order: input.sort_order,
+        draft_pull_requests: input.draft_pull_requests,
+        ready_pull_requests: input.ready_pull_requests,
         repository_id,
         repository_name,
         authority_user_id: user_id.to_owned(),
@@ -825,8 +854,8 @@ pub async fn create<D: Db>(
         database.transaction(true, |database| {
             same_local(database, user_id, company_id, &config, &expected)?;
             database.connection().execute(
-                "INSERT INTO suplex_github_trigger_rules (id, company_id, project_id, name, label, workflow_id, delivery_target, protected_paths_json, repository_id, repository_name, authority_user_id, enabled, archived_at, revision, last_successful_check_at, next_retry_at, latest_error, failure_count, recent_activity_json, created_at, updated_at, sort_order) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 0, NULL, 1, NULL, NULL, NULL, 0, '[]', ?12, ?13, ?14)",
-                params![created.id, created.company_id, created.project_id, created.name, created.label, created.workflow_id, created.delivery_target, serde_json::to_string(&created.protected_paths)?, created.repository_id, created.repository_name, created.authority_user_id, created.created_at, created.updated_at, created.sort_order.as_str()],
+                "INSERT INTO suplex_github_trigger_rules (id, company_id, project_id, name, label, workflow_id, delivery_target, protected_paths_json, repository_id, repository_name, authority_user_id, enabled, archived_at, revision, last_successful_check_at, next_retry_at, latest_error, failure_count, recent_activity_json, created_at, updated_at, sort_order, draft_pull_requests, ready_pull_requests) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 0, NULL, 1, NULL, NULL, NULL, 0, '[]', ?12, ?13, ?14, ?15, ?16)",
+                params![created.id, created.company_id, created.project_id, created.name, created.label, created.workflow_id, created.delivery_target, serde_json::to_string(&created.protected_paths)?, created.repository_id, created.repository_name, created.authority_user_id, created.created_at, created.updated_at, created.sort_order.as_str(), created.draft_pull_requests.as_str(), created.ready_pull_requests.as_str()],
             )?;
             audit(database, user_id, "github_trigger_created", &created)
         })
@@ -905,7 +934,9 @@ pub async fn update<D: Db>(
         || patch.workflow_id.is_some()
         || patch.delivery_target.is_some()
         || patch.protected_paths.is_some()
-        || patch.sort_order.is_some();
+        || patch.sort_order.is_some()
+        || patch.draft_pull_requests.is_some()
+        || patch.ready_pull_requests.is_some();
     let time = now_millis_rfc3339();
     if patch.enabled == Some(false) || patch.archived == Some(true) {
         if configures || patch.archived == Some(false) {
@@ -985,6 +1016,12 @@ pub async fn update<D: Db>(
         delivery_target: config.delivery_target.clone(),
         protected_paths: config.protected_paths.clone(),
         sort_order: patch.sort_order.unwrap_or(current.sort_order),
+        draft_pull_requests: patch
+            .draft_pull_requests
+            .unwrap_or(current.draft_pull_requests),
+        ready_pull_requests: patch
+            .ready_pull_requests
+            .unwrap_or(current.ready_pull_requests),
         authority_user_id: config.authority_user_id.clone(),
         repository_id,
         repository_name,
@@ -1167,8 +1204,8 @@ async fn preview_candidate<D: Db>(
         "The pull request repository does not match this rule."
     } else if pull.state != "open" {
         "The pull request is closed."
-    } else if pull.is_draft {
-        "The pull request is a draft."
+    } else if let Some(reason) = rule.handling(pull.is_draft).exclusion(pull.is_draft) {
+        reason
     } else if pull.is_cross_repository {
         "The pull request comes from a fork."
     } else if pull.base_branch != expected.dependencies.base_branch {
@@ -1242,8 +1279,8 @@ fn eligible(
         Some("The pull request repository does not match this rule.")
     } else if pull.state != "open" {
         Some("The pull request is closed.")
-    } else if pull.is_draft {
-        Some("The pull request is a draft.")
+    } else if let Some(reason) = rule.handling(pull.is_draft).exclusion(pull.is_draft) {
+        Some(reason)
     } else if pull.is_cross_repository {
         Some("The pull request comes from a fork.")
     } else if pull.base_branch != local.dependencies.base_branch {
@@ -1403,6 +1440,7 @@ async fn admit<D: Db>(
     };
     pass.resume_pending().await?;
     pass.start_linked().await?;
+    pass.promote_linked().await?;
     pass.admit_candidates().await?;
     pass.finish()
 }
@@ -1550,6 +1588,103 @@ impl<D: Db> Pass<'_, D> {
         Ok(())
     }
 
+    /// Continue each linked task toward the target its pull request's current state allows.
+    async fn promote_linked(&mut self) -> Result<(), Failure> {
+        let (company, rule_id) = (self.rule.company_id.as_str(), self.rule.id.as_str());
+        let linked = db(self.database, |database| {
+            dispatches::list_by_rule(database, company, rule_id)
+        })?;
+        for linked in linked {
+            let Some(task_id) = linked.task_id.clone() else {
+                continue;
+            };
+            match self.promote(&linked, &task_id).await {
+                Ok(Some(activity)) => self.activity.push(activity),
+                Ok(None) => {}
+                Err(error) => {
+                    self.fail(error, linked.pull_request_number, Some(task_id));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Promote one running or delivered task once per state change: a review-only draft
+    /// that becomes ready continues to the rule's target while the label is present.
+    async fn promote(&self, linked: &Dispatch, task_id: &str) -> Result<Option<Activity>, Failure> {
+        let (status, current) = db(self.database, |database| linked_delivery(database, task_id))?;
+        if !matches!(status, TaskStatus::Active | TaskStatus::Delivered) {
+            return Ok(None);
+        }
+        let policy = &linked.policy;
+        let reached = DeliveryTarget::parse(&policy.delivery_target)
+            .map_or(current, |recorded| recorded.max(current));
+        let Some(final_target) =
+            DeliveryTarget::parse(policy.final_target()).filter(|target| *target > reached)
+        else {
+            return Ok(None);
+        };
+        let pull = inspect_pull_request(
+            self.github,
+            &linked.repository_name,
+            linked.pull_request_number,
+        )
+        .await?;
+        if pull.state != "open"
+            || pull.number != linked.pull_request_number
+            || pull.is_cross_repository
+            || pull.base_repository.id != linked.repository_id
+            || pull.head_branch != policy.head_branch
+            || pull.base_branch != policy.base_branch
+        {
+            return Ok(None);
+        }
+        let ceiling = match self.rule.handling(pull.is_draft) {
+            TriggerPullRequestHandling::Ignore => return Ok(None),
+            TriggerPullRequestHandling::ReviewOnly => DeliveryTarget::PullRequestDraft,
+            TriggerPullRequestHandling::Deliver => final_target,
+        };
+        if ceiling <= reached {
+            return Ok(None);
+        }
+        if !pull.labels.contains(&self.rule.label) {
+            return Ok(Some(Activity {
+                task_id: Some(task_id.to_owned()),
+                task_status: Some(status.to_string()),
+                previously_processed: true,
+                ..Activity::new(
+                    pull.number,
+                    Some(&pull.url),
+                    "excluded",
+                    "The pull request does not have the required label.",
+                )
+            }));
+        }
+        let status = db(self.database, |database| {
+            database.transaction(true, |database| {
+                crate::coordination::root_session_store::continue_delivery(
+                    database, task_id, ceiling,
+                )?;
+                dispatches::record_promotion(database, linked, task_id, ceiling.as_str())?;
+                Ok(linked_delivery(database, task_id)?.0)
+            })
+        })?;
+        if status == TaskStatus::Active {
+            (self.wake)(task_id.to_owned());
+        }
+        let reason = if pull.is_draft {
+            "The pull request is a draft. Continuing review."
+        } else {
+            "The pull request is ready. Continuing delivery."
+        };
+        Ok(Some(Activity {
+            task_id: Some(task_id.to_owned()),
+            task_status: Some(status.to_string()),
+            previously_processed: true,
+            ..Activity::new(pull.number, Some(&pull.url), "eligible", reason)
+        }))
+    }
+
     /// Admit each labelled pull request this rule has not processed.
     async fn admit_candidates(&mut self) -> Result<(), Failure> {
         let candidates = list_labelled_candidates(
@@ -1562,8 +1697,11 @@ impl<D: Db> Pass<'_, D> {
         for pull in candidates {
             // The enumeration already shows these exclusions; a REST inspection
             // of every labelled pull request each minute exhausts the API limit.
-            let reason = if pull.is_draft == Some(true) {
-                Some("The pull request is a draft.")
+            let draft = pull
+                .is_draft
+                .and_then(|draft| self.rule.handling(draft).exclusion(draft));
+            let reason = if draft.is_some() {
+                draft
             } else if pull.is_cross_repository == Some(true) {
                 Some("The pull request comes from a fork.")
             } else if pull
@@ -1675,10 +1813,17 @@ impl<D: Db> Pass<'_, D> {
             .iter()
             .map(|(role, profile)| (*role, profile.profile_id.as_str()))
             .collect::<std::collections::BTreeMap<_, _>>();
+        // A review-only admission stops at the draft pull request; the policy keeps the rule's target.
+        let handling = rule.handling(pull.is_draft);
+        let delivery_target = if handling == TriggerPullRequestHandling::ReviewOnly {
+            DeliveryTarget::PullRequestDraft.as_str()
+        } else {
+            rule.delivery_target.as_str()
+        };
         let request = json!({
             "projectId": rule.project_id, "title": pull.title, "description": "Apply the selected workflow to this pull request.", "images": [],
             "rootProfileId": profiles.root.profile_id, "workerProfileId": profiles.worker.profile_id, "advisorProfileIds": advisor_ids,
-            "workflow": local.engine, "deliveryTarget": rule.delivery_target, "runProjectTests": local.run_project_tests, "visualEvidence": local.visual_evidence,
+            "workflow": local.engine, "deliveryTarget": delivery_target, "runProjectTests": local.run_project_tests, "visualEvidence": local.visual_evidence,
             "source": {"kind": "pull_request", "number": pull.number},
         });
         DispatchPrepare {
@@ -1698,7 +1843,10 @@ impl<D: Db> Pass<'_, D> {
                 protected_paths: rule.protected_paths.clone(),
                 repository_id: rule.repository_id,
                 repository_name: rule.repository_name.clone(),
-                delivery_target: rule.delivery_target.clone(),
+                delivery_target: delivery_target.to_owned(),
+                final_delivery_target: Some(rule.delivery_target.clone()),
+                admitted_draft: pull.is_draft,
+                handling: Some(handling),
             },
             preset: self.expected.preset.clone(),
             profiles: profiles.clone(),
@@ -1938,6 +2086,23 @@ fn create_captured(
     Ok((task.id, task.status.to_string()))
 }
 
+/// The linked task's status and delivery target.
+fn linked_delivery(
+    database: &SuplexDatabase,
+    task_id: &str,
+) -> DatabaseResult<(TaskStatus, DeliveryTarget)> {
+    let (status, target) = database.connection().query_row(
+        "SELECT status, delivery_target FROM suplex_task_controls WHERE task_id = ?1",
+        [task_id],
+        |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+    )?;
+    let invalid = || -> Box<dyn Error + Send + Sync> { "Stored task delivery is invalid".into() };
+    Ok((
+        TaskStatus::parse(&status).ok_or_else(invalid)?,
+        DeliveryTarget::parse(&target).ok_or_else(invalid)?,
+    ))
+}
+
 /// The task status and whether a live backlog or queued task may start.
 fn startable(database: &SuplexDatabase, task_id: &str) -> DatabaseResult<(String, bool)> {
     let (status, live) = database.connection().query_row(
@@ -1950,14 +2115,16 @@ fn startable(database: &SuplexDatabase, task_id: &str) -> DatabaseResult<(String
     Ok((status, can_start))
 }
 
-/// The pull request keeps its captured identity and branches, carries the label, and changes
-/// no protected path. New commits and an advanced base do not count; the start rebinds to them.
-fn still_eligible(dispatch: &Dispatch, pull: &PullRequestInspection, label: &str) -> bool {
+/// The pull request keeps its captured identity and branches, carries the rule's label, has
+/// an accepted draft state, and changes no protected path. New commits and an advanced base
+/// do not count; the start rebinds to them.
+fn still_eligible(dispatch: &Dispatch, pull: &PullRequestInspection, rule: &Rule) -> bool {
     let policy = &dispatch.policy;
     let repository = dispatch.repository_name.as_str();
+    let label = rule.label.as_str();
     pull.number == dispatch.pull_request_number
         && pull.state == "open"
-        && !pull.is_draft
+        && rule.handling(pull.is_draft) != TriggerPullRequestHandling::Ignore
         && !pull.is_cross_repository
         && pull.base_repository.id == dispatch.repository_id
         && pull.base_repository.full_name == repository
@@ -2034,12 +2201,11 @@ pub async fn start_task_from_trigger<D: Db>(
         dispatch.pull_request_number,
     )
     .await?;
-    let label = db(database, |database| {
+    let rule = db(database, |database| {
         get_rule(database, &dispatch.company_id, &dispatch.rule_id)
     })?
-    .map(|rule| rule.label)
     .ok_or_else(|| task_failure("GitHub trigger rule is not available", 409))?;
-    if !still_eligible(&dispatch, &pull, &label) {
+    if !still_eligible(&dispatch, &pull, &rule) {
         return Err(task_failure(
             "GitHub trigger pull request is no longer eligible",
             409,
@@ -2309,6 +2475,8 @@ mod tests {
             delivery_target: crate::tasks::control::DeliveryTarget::PullRequestDraft,
             protected_paths: paths.iter().map(|path| (*path).to_owned()).collect(),
             sort_order: TriggerSortOrder::LabeledAsc,
+            draft_pull_requests: TriggerPullRequestHandling::Ignore,
+            ready_pull_requests: TriggerPullRequestHandling::Deliver,
         }
     }
 
@@ -2516,7 +2684,7 @@ mod tests {
             .unwrap() = Some(base);
         let app = crate::http::router(f.state.clone());
         let cookie = Some(f.cookie.as_str());
-        let payload = json!({"projectId":"p","name":" Ready ","label":"ready","workflowId":"workflow_native_standard","deliveryTarget":"pull_request_draft","protectedPaths":["src/"],"sortOrder":"labeled_asc"});
+        let payload = json!({"projectId":"p","name":" Ready ","label":"ready","workflowId":"workflow_native_standard","deliveryTarget":"pull_request_draft","protectedPaths":["src/"],"sortOrder":"labeled_asc","draftPullRequests":"review_only","readyPullRequests":"ignore"});
         let mut missing = payload.clone();
         missing["label"] = json!("missing");
         let (status, _, body) = call(
@@ -2584,14 +2752,18 @@ mod tests {
                 created["authorityUserId"].clone(),
                 created["repositoryId"].clone(),
                 created["name"].clone(),
-                created["sortOrder"].clone()
+                created["sortOrder"].clone(),
+                created["draftPullRequests"].clone(),
+                created["readyPullRequests"].clone()
             ),
             (
                 json!(false),
                 json!(f.admin),
                 json!(9),
                 json!("Ready"),
-                json!("labeled_asc")
+                json!("labeled_asc"),
+                json!("review_only"),
+                json!("ignore")
             )
         );
         let id = created["id"].as_str().unwrap().to_owned();
@@ -2944,7 +3116,21 @@ mod tests {
     }
 
     /// Link pull request 7 to `task_x` with `status`, as an earlier pass would have.
+    fn linked_task(f: &Fixture, rule: &Rule, status: &str) {
+        linked_task_with(f, rule, status, "pull_request_draft", |_| {});
+    }
+
     fn prepared_dispatch(f: &Fixture, rule: &Rule) -> Dispatch {
+        prepared_dispatch_with(f, rule, "pull_request_draft", |_| {})
+    }
+
+    /// `prepared_dispatch` with a task delivery target and an adjusted dispatch policy.
+    fn prepared_dispatch_with(
+        f: &Fixture,
+        rule: &Rule,
+        target: &str,
+        adjust: impl FnOnce(&mut DispatchPolicy),
+    ) -> Dispatch {
         let expected = f
             .state
             .with_database(|database| local(database, &f.admin, "c", &Config::from(rule)))
@@ -2963,8 +3149,9 @@ mod tests {
                         authority_user_id: f.admin.clone(),
                         request: json!({"projectId":"p","title":"Candidate","description":"","images":[],
                             "rootProfileId":"profile_native_root","workerProfileId":"profile_native_worker","advisorProfileIds":{},"workflow":"standard",
-                            "deliveryTarget":"pull_request_draft","runProjectTests":true,"visualEvidence":"off","source":{"kind":"pull_request","number":7}}),
-                        policy: DispatchPolicy {
+                            "deliveryTarget":target,"runProjectTests":true,"visualEvidence":"off","source":{"kind":"pull_request","number":7}}),
+                        policy: {
+                            let mut policy = DispatchPolicy {
                             head_sha: "a".repeat(40),
                             base_sha: "b".repeat(40),
                             head_branch: "feature".into(),
@@ -2972,7 +3159,13 @@ mod tests {
                             protected_paths: vec![],
                             repository_id: 9,
                             repository_name: "owner/repo".into(),
-                            delivery_target: "pull_request_draft".into(),
+                            delivery_target: target.into(),
+                            final_delivery_target: None,
+                            admitted_draft: false,
+                            handling: None,
+                        };
+                            adjust(&mut policy);
+                            policy
                         },
                         preset: expected.preset.clone(),
                         profiles: expected.dependencies.profiles.clone(),
@@ -2982,8 +3175,16 @@ mod tests {
             .unwrap()
     }
 
-    fn linked_task(f: &Fixture, rule: &Rule, status: &str) {
-        let prepared = prepared_dispatch(f, rule);
+    /// `linked_task` with a task delivery target and an adjusted dispatch policy.
+    fn linked_task_with(
+        f: &Fixture,
+        rule: &Rule,
+        status: &str,
+        target: &str,
+        adjust: impl FnOnce(&mut DispatchPolicy),
+    ) {
+        let prepared = prepared_dispatch_with(f, rule, target, adjust);
+        let profiles = &prepared.profiles;
         let configuration = json!({"repository": "owner/repo", "source": {"kind": "pull_request", "number": 7},
             "branch": "feature", "baseBranch": "main", "startingSha": "a".repeat(40), "baselineSha": "b".repeat(40)})
         .to_string();
@@ -2994,7 +3195,7 @@ mod tests {
         f.state.with_database(|database| {
             let time = now_millis_rfc3339();
             database.connection().execute("INSERT INTO suplex_tasks (id,company_id,project_id,title,description,configuration_json,idempotency_key,request_hash,creator_user_id,created_at,updated_at) VALUES ('task_x','c','p','T','',?3,'k','h',?1,?2,?2)", params![f.admin, time, configuration]).unwrap();
-            database.connection().execute("INSERT INTO suplex_task_controls (task_id,objective,delivery_target,delivery_intent_json,status,root_profile_json,worker_profile_json,workflow,advisor_profiles_json,workflow_state_json,status_changed_at,created_at,updated_at) VALUES ('task_x','T','pull_request_draft',?3,?1,'{}','{}','standard','{}','{}',?2,?2,?2)", params![status, time, intent]).unwrap();
+            database.connection().execute("INSERT INTO suplex_task_controls (task_id,objective,delivery_target,delivery_intent_json,status,root_profile_json,worker_profile_json,workflow,advisor_profiles_json,workflow_state_json,status_changed_at,created_at,updated_at) VALUES ('task_x','T',?4,?3,?1,?5,?6,'standard','{}',?7,?2,?2,?2)", params![status, time, intent, target, serde_json::to_string(&profiles.root).unwrap(), serde_json::to_string(&profiles.worker).unwrap(), serde_json::to_string(&crate::coordination::workflows::WorkflowState::default()).unwrap()]).unwrap();
             database.connection().execute("UPDATE suplex_github_trigger_dispatches SET task_id = 'task_x' WHERE id = ?1", [&prepared.id]).unwrap();
         });
     }
@@ -3327,6 +3528,409 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn pull_request_handling_defaults_existing_rules_to_ready_delivery_and_round_trips() {
+        let f = fixture();
+        let default = |column: &str| -> String {
+            f.state.with_database(|database| {
+                database
+                    .connection()
+                    .query_row(
+                        "SELECT dflt_value FROM pragma_table_info('suplex_github_trigger_rules') WHERE name = ?1",
+                        [column],
+                        |row| row.get(0),
+                    )
+                    .unwrap()
+            })
+        };
+        assert_eq!(
+            (
+                default("draft_pull_requests"),
+                default("ready_pull_requests")
+            ),
+            ("'ignore'".into(), "'deliver'".into())
+        );
+        let (github, _, server) = fake_github(replies(&[])).await;
+        let rule = create(
+            &f.state,
+            &github,
+            &f.admin,
+            "c",
+            GithubTriggerCreate {
+                draft_pull_requests: TriggerPullRequestHandling::ReviewOnly,
+                ..create_input(&[])
+            },
+        )
+        .await
+        .unwrap();
+        let updated = update(
+            &f.state,
+            &github,
+            &f.admin,
+            "c",
+            &rule.id,
+            GithubTriggerPatch {
+                draft_pull_requests: Some(TriggerPullRequestHandling::Deliver),
+                ready_pull_requests: Some(TriggerPullRequestHandling::Ignore),
+                ..patch(rule.revision)
+            },
+        )
+        .await
+        .unwrap();
+        let unchanged = update(
+            &f.state,
+            &github,
+            &f.admin,
+            "c",
+            &rule.id,
+            GithubTriggerPatch {
+                name: Some("Renamed".into()),
+                ..patch(updated.revision)
+            },
+        )
+        .await
+        .unwrap();
+        let stored = stored_rule(&f, &rule);
+        let pair = |rule: &Rule| (rule.draft_pull_requests, rule.ready_pull_requests);
+        use TriggerPullRequestHandling::{Deliver, Ignore, ReviewOnly};
+        assert_eq!(
+            [pair(&rule), pair(&updated), pair(&unchanged), pair(&stored)],
+            [
+                (ReviewOnly, Deliver),
+                (Deliver, Ignore),
+                (Deliver, Ignore),
+                (Deliver, Ignore)
+            ]
+        );
+        server.abort();
+        let _ = std::fs::remove_file(f.filename);
+    }
+
+    #[tokio::test]
+    async fn admission_uses_the_setting_for_the_pull_request_state_and_caps_review_only() {
+        let f = fixture();
+        let replies = replies(&[]);
+        eligible_pull(&replies);
+        let mut draft = pull(8, "main", 0);
+        draft["draft"] = json!(true);
+        replies
+            .lock()
+            .unwrap()
+            .insert("/repos/owner/repo/pulls/8".into(), (200, draft));
+        replies.lock().unwrap().insert(
+            "/repos/owner/repo/pulls/8/files?per_page=100&page=1".into(),
+            (200, json!([])),
+        );
+        let (github, _, server) = fake_github(replies).await;
+        let rule = enabled_rule(&f, &github).await;
+        let expected = f
+            .state
+            .with_database(|database| local(database, &f.admin, "c", &Config::from(&rule)))
+            .unwrap();
+        let ready = inspect_pull_request(&github, "owner/repo", 7)
+            .await
+            .unwrap();
+        let draft = inspect_pull_request(&github, "owner/repo", 8)
+            .await
+            .unwrap();
+        let rule = Rule {
+            delivery_target: "merged".into(),
+            ..rule
+        };
+        use TriggerPullRequestHandling::{Deliver, Ignore, ReviewOnly};
+        // (pull, handling, exclusion, captured task target, admitted draft)
+        let cases = [
+            (&draft, Ignore, Some("The pull request is a draft."), None),
+            (&draft, ReviewOnly, None, Some("pull_request_draft")),
+            (&draft, Deliver, None, Some("merged")),
+            (&ready, Ignore, Some("The pull request is ready."), None),
+            (&ready, ReviewOnly, None, Some("pull_request_draft")),
+            (&ready, Deliver, None, Some("merged")),
+        ];
+        for (pull, handling, exclusion, target) in cases {
+            let rule = if pull.is_draft {
+                Rule {
+                    draft_pull_requests: handling,
+                    ..rule.clone()
+                }
+            } else {
+                Rule {
+                    ready_pull_requests: handling,
+                    ..rule.clone()
+                }
+            };
+            let reason = f
+                .state
+                .with_database(|database| eligible(database, &rule, &expected, pull, None))
+                .unwrap()
+                .0;
+            assert_eq!(reason, exclusion, "{handling} {}", pull.is_draft);
+            let Some(target) = target else {
+                continue;
+            };
+            let mut activity = Vec::new();
+            let pass = Pass {
+                database: &f.state,
+                github: &github,
+                rule: &rule,
+                wake: &|_| {},
+                config: Config::from(&rule),
+                expected: expected.clone(),
+                activity: &mut activity,
+                failed: false,
+                provider_retry: None,
+            };
+            let capture = pass.capture(pull);
+            assert_eq!(
+                (
+                    capture.request["deliveryTarget"].clone(),
+                    capture.policy.delivery_target.as_str(),
+                    capture.policy.final_target(),
+                    capture.policy.admitted_draft,
+                    capture.policy.handling
+                ),
+                (
+                    json!(target),
+                    target,
+                    "merged",
+                    pull.is_draft,
+                    Some(handling)
+                ),
+                "{handling} {}",
+                pull.is_draft
+            );
+        }
+        server.abort();
+        let _ = std::fs::remove_file(f.filename);
+    }
+
+    #[tokio::test]
+    async fn the_enumeration_excludes_only_an_ignored_pull_request_state() {
+        use TriggerPullRequestHandling::{Deliver, Ignore, ReviewOnly};
+        let inspected = "The pull request targets a different base branch.";
+        for (draft, ready, is_draft, reason) in [
+            (Ignore, Deliver, true, "The pull request is a draft."),
+            (Ignore, Deliver, false, inspected),
+            (ReviewOnly, Deliver, true, inspected),
+            (Deliver, Deliver, true, inspected),
+            (ReviewOnly, Ignore, false, "The pull request is ready."),
+            (ReviewOnly, Ignore, true, inspected),
+        ] {
+            let f = fixture();
+            let replies = replies(&[]);
+            let mut page = labelled_page(&[9], None);
+            page["data"]["repository"]["pullRequests"]["nodes"][0]["isDraft"] = json!(is_draft);
+            page["data"]["repository"]["pullRequests"]["nodes"][0]["url"] =
+                json!("https://github.com/owner/repo/pull/9");
+            replies
+                .lock()
+                .unwrap()
+                .insert("/graphql".into(), (200, page));
+            // Only an admitted pull request has a REST reply; an inspection of an
+            // excluded one would fail the pass. Its base branch stops the admission.
+            if reason == inspected {
+                let mut rest = pull(9, "develop", 0);
+                rest["draft"] = json!(is_draft);
+                replies
+                    .lock()
+                    .unwrap()
+                    .insert("/repos/owner/repo/pulls/9".into(), (200, rest));
+                replies.lock().unwrap().insert(
+                    "/repos/owner/repo/pulls/9/files?per_page=100&page=1".into(),
+                    (200, json!([])),
+                );
+            }
+            let (github, _, server) = fake_github(replies).await;
+            let rule = create(
+                &f.state,
+                &github,
+                &f.admin,
+                "c",
+                GithubTriggerCreate {
+                    draft_pull_requests: draft,
+                    ready_pull_requests: ready,
+                    ..create_input(&[])
+                },
+            )
+            .await
+            .unwrap();
+            update(
+                &f.state,
+                &github,
+                &f.admin,
+                "c",
+                &rule.id,
+                GithubTriggerPatch {
+                    enabled: Some(true),
+                    ..patch(rule.revision)
+                },
+            )
+            .await
+            .unwrap();
+            process_enabled_rules(&f.state, &github, &|_| {}).await;
+            let stored = stored_rule(&f, &rule);
+            let case = format!("{draft} {ready} {is_draft}");
+            assert_eq!(
+                (stored.failure_count, stored.latest_error),
+                (0, None),
+                "{case}"
+            );
+            let saved = activity(&f.state, &f.admin, "c", &rule.id).unwrap();
+            assert!(
+                saved
+                    .iter()
+                    .any(|entry| entry.pull_request_number == Some(9)
+                        && entry.outcome == "excluded"
+                        && entry.reason == reason),
+                "{case}: {saved:?}"
+            );
+            server.abort();
+            let _ = std::fs::remove_file(f.filename);
+        }
+    }
+
+    /// An enabled rule that reviews drafts and delivers ready pull requests to a merge,
+    /// with pull request 7 linked to an active review-only `task_x`.
+    async fn review_only_linked_task(f: &Fixture, github: &Github) -> Rule {
+        let rule = create(
+            &f.state,
+            github,
+            &f.admin,
+            "c",
+            GithubTriggerCreate {
+                delivery_target: crate::tasks::control::DeliveryTarget::Merged,
+                draft_pull_requests: TriggerPullRequestHandling::ReviewOnly,
+                ..create_input(&[])
+            },
+        )
+        .await
+        .unwrap();
+        let rule = update(
+            &f.state,
+            github,
+            &f.admin,
+            "c",
+            &rule.id,
+            GithubTriggerPatch {
+                enabled: Some(true),
+                ..patch(rule.revision)
+            },
+        )
+        .await
+        .unwrap();
+        linked_task_with(f, &rule, "active", "pull_request_draft", |policy| {
+            policy.final_delivery_target = Some("merged".into());
+            policy.admitted_draft = true;
+            policy.handling = Some(TriggerPullRequestHandling::ReviewOnly);
+        });
+        rule
+    }
+
+    /// `task_x`'s delivery target, status, and pending turns that continue delivery to a merge.
+    fn task_x_delivery(f: &Fixture) -> (String, String, i64) {
+        f.state.with_database(|database| {
+            database
+                .connection()
+                .query_row(
+                    "SELECT c.delivery_target, c.status, (SELECT count(*) FROM suplex_task_turns WHERE task_id = 'task_x' AND status = 'pending_prompt' AND prompt_text LIKE '%toward the NEW target merged%') FROM suplex_task_controls c WHERE c.task_id = 'task_x'",
+                    [],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                )
+                .unwrap()
+        })
+    }
+
+    #[tokio::test]
+    async fn a_review_only_draft_that_becomes_ready_continues_delivery_once() {
+        let f = fixture();
+        let replies = replies(&[]);
+        eligible_pull(&replies);
+        let (github, _, server) = fake_github(replies).await;
+        let rule = review_only_linked_task(&f, &github).await;
+        let (_, _, turns) = task_x_delivery(&f);
+        let woken = std::sync::Mutex::new(Vec::new());
+        let wake = |id: String| woken.lock().unwrap().push(id);
+        process_enabled_rules(&f.state, &github, &wake).await;
+        let (target, status, promoted_turns) = task_x_delivery(&f);
+        assert_eq!(
+            (target.as_str(), status.as_str(), promoted_turns),
+            ("merged", "active", turns + 1),
+            "{:?}",
+            activity(&f.state, &f.admin, "c", &rule.id)
+        );
+        assert_eq!(*woken.lock().unwrap(), ["task_x"]);
+        let policy = f
+            .state
+            .with_database(|database| dispatches::list_by_rule(database, "c", &rule.id))
+            .unwrap()
+            .remove(0)
+            .policy;
+        assert_eq!(
+            (policy.delivery_target.as_str(), policy.final_target()),
+            ("merged", "merged")
+        );
+        let continued = |f: &Fixture| {
+            activity(&f.state, &f.admin, "c", &rule.id)
+                .unwrap()
+                .into_iter()
+                .filter(|entry| {
+                    entry.outcome == "eligible"
+                        && entry.reason == "The pull request is ready. Continuing delivery."
+                        && entry.task_id.as_deref() == Some("task_x")
+                })
+                .count()
+        };
+        assert_eq!(continued(&f), 1);
+        process_enabled_rules(&f.state, &github, &wake).await;
+        assert_eq!(task_x_delivery(&f), (target, status, promoted_turns));
+        assert_eq!(continued(&f), 1, "an unchanged state promotes once");
+        assert_eq!(woken.lock().unwrap().len(), 1);
+        server.abort();
+        let _ = std::fs::remove_file(f.filename);
+    }
+
+    #[tokio::test]
+    async fn promotion_needs_the_label_an_open_pull_request_and_a_state_change() {
+        type Change = fn(&mut Value);
+        let cases: [(&str, Change); 3] = [
+            ("label removed", |pull| pull["labels"] = json!([])),
+            ("closed", |pull| pull["state"] = json!("closed")),
+            ("still a draft", |pull| pull["draft"] = json!(true)),
+        ];
+        for (case, change) in cases {
+            let f = fixture();
+            let replies = replies(&[]);
+            eligible_pull(&replies);
+            let mut changed = pull(7, "main", 0);
+            change(&mut changed);
+            replies
+                .lock()
+                .unwrap()
+                .insert("/repos/owner/repo/pulls/7".into(), (200, changed));
+            let (github, _, server) = fake_github(replies).await;
+            let rule = review_only_linked_task(&f, &github).await;
+            let before = task_x_delivery(&f);
+            process_enabled_rules(&f.state, &github, &|_| {}).await;
+            assert_eq!(task_x_delivery(&f), before, "{case}");
+            assert_eq!(before.0, "pull_request_draft", "{case}");
+            let saved = activity(&f.state, &f.admin, "c", &rule.id).unwrap();
+            assert!(
+                !saved.iter().any(|entry| entry
+                    .reason
+                    .starts_with("The pull request is ready. Continuing")),
+                "{case}: {saved:?}"
+            );
+            assert_eq!(
+                saved.iter().any(|entry| entry.outcome == "excluded"
+                    && entry.reason == "The pull request does not have the required label."),
+                case == "label removed",
+                "{case}: {saved:?}"
+            );
+            server.abort();
+            let _ = std::fs::remove_file(f.filename);
+        }
+    }
+
+    #[tokio::test]
     async fn unavailable_github_access_records_the_provider_error_on_every_due_rule() {
         let f = fixture();
         let (github, _, server) = fake_github(replies(&[])).await;
@@ -3405,6 +4009,9 @@ mod tests {
                 repository_id: 9,
                 repository_name: "owner/repo".into(),
                 delivery_target: "pull_request_draft".into(),
+                final_delivery_target: None,
+                admitted_draft: false,
+                handling: None,
             },
             preset: expected.preset.clone(),
             profiles: expected.dependencies.profiles.clone(),
@@ -3748,8 +4355,27 @@ mod tests {
             profiles,
             r#"{"root":{"profileId":"profile_native_root","provider":"codex","model":"gpt-5.6-sol","reasoningLevel":"medium","serviceTier":"default"},"worker":{"profileId":"profile_native_worker","provider":"codex","model":"gpt-5.6-luna","reasoningLevel":"max","serviceTier":"priority"},"advisors":{"planner_a":{"profileId":"profile_native_root","provider":"codex","model":"gpt-5.6-sol","reasoningLevel":"medium","serviceTier":"default"},"planner_b":{"profileId":"profile_native_root","provider":"codex","model":"gpt-5.6-sol","reasoningLevel":"medium","serviceTier":"default"}}}"#
         );
-        assert!(still_eligible(&dispatch, &pull, "ready"));
-        assert!(!still_eligible(&dispatch, &pull, "other"));
+        assert!(still_eligible(&dispatch, &pull, &rule));
+        let other = Rule {
+            label: "other".into(),
+            ..rule.clone()
+        };
+        assert!(!still_eligible(&dispatch, &pull, &other));
+        let ignores_ready = Rule {
+            ready_pull_requests: TriggerPullRequestHandling::Ignore,
+            ..rule.clone()
+        };
+        assert!(!still_eligible(&dispatch, &pull, &ignores_ready));
+        let draft = PullRequestInspection {
+            is_draft: true,
+            ..pull.clone()
+        };
+        assert!(!still_eligible(&dispatch, &draft, &rule));
+        let reviews_drafts = Rule {
+            draft_pull_requests: TriggerPullRequestHandling::ReviewOnly,
+            ..rule.clone()
+        };
+        assert!(still_eligible(&dispatch, &draft, &reviews_drafts));
         // A backlog task created from exactly this capture links; another profile does not.
         let hash =
             commands::task_request_hash(&dispatch.request_body().unwrap(), &f.admin).unwrap();

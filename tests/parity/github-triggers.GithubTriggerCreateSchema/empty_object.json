@@ -39,6 +39,16 @@
         "code": "invalid-invalid_value",
         "field": ".sortOrder",
         "message": "Request value is invalid"
+      },
+      {
+        "code": "invalid-invalid_value",
+        "field": ".draftPullRequests",
+        "message": "Request value is invalid"
+      },
+      {
+        "code": "invalid-invalid_value",
+        "field": ".readyPullRequests",
+        "message": "Request value is invalid"
       }
     ]
   }

@@ -1,0 +1,1 @@
+The delivery target of this task is the draft pull request. Push amendments to the pull request branch and observe checks. Do not request review and do not merge. Request delivery when checks pass on the pushed head. If Suplex continues delivery to a later target, follow that target.

@@ -1,6 +1,8 @@
 //! GitHub trigger request contracts.
 
-use crate::integrations::github_triggers_inspection::TriggerSortOrder;
+use crate::integrations::github_triggers_inspection::{
+    TriggerPullRequestHandling, TriggerSortOrder,
+};
 use crate::tasks::control::DeliveryTarget;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -17,6 +19,8 @@ pub struct GithubTriggerCreate {
     pub delivery_target: DeliveryTarget,
     pub protected_paths: Vec<String>,
     pub sort_order: TriggerSortOrder,
+    pub draft_pull_requests: TriggerPullRequestHandling,
+    pub ready_pull_requests: TriggerPullRequestHandling,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -36,6 +40,10 @@ pub struct GithubTriggerPatch {
     pub protected_paths: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sort_order: Option<TriggerSortOrder>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub draft_pull_requests: Option<TriggerPullRequestHandling>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ready_pull_requests: Option<TriggerPullRequestHandling>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub enabled: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -59,7 +67,7 @@ pub struct GithubTriggerCompanyParams {
 type Parse = fn(Option<&Value>) -> ContractResult<Value>;
 
 /// `(name, parser)` in schema order; every field is required on create.
-fn fields() -> [(&'static str, Parse); 7] {
+fn fields() -> [(&'static str, Parse); 9] {
     [
         ("projectId", |input| text(1, 128)(input)),
         ("name", |input| trimmed(1, 120)(input)),
@@ -68,6 +76,8 @@ fn fields() -> [(&'static str, Parse); 7] {
         ("deliveryTarget", choice::<DeliveryTarget>),
         ("protectedPaths", |input| list(text(1, 512), 0, 100)(input)),
         ("sortOrder", choice::<TriggerSortOrder>),
+        ("draftPullRequests", choice::<TriggerPullRequestHandling>),
+        ("readyPullRequests", choice::<TriggerPullRequestHandling>),
     ]
 }
 

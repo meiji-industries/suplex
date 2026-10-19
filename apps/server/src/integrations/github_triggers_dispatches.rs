@@ -9,7 +9,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use super::{
-    github_triggers::get_rule, github_triggers_inspection::validate_protected_paths,
+    github_triggers::get_rule,
+    github_triggers_inspection::{TriggerPullRequestHandling, validate_protected_paths},
     provider_http::optional_metadata,
 };
 use crate::tasks::control::TaskStatus;
@@ -58,10 +59,29 @@ pub struct DispatchPolicy {
     pub protected_paths: Vec<String>,
     pub repository_id: i64,
     pub repository_name: String,
+    /// The task's delivery target: the draft pull request while the rule reviews only,
+    /// raised when a promotion continues delivery.
     pub delivery_target: String,
+    /// The rule's delivery target. Absent in a policy captured before review-only
+    /// admission, where it equals `delivery_target`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub final_delivery_target: Option<String>,
+    /// The admitted pull request was a draft.
+    #[serde(default)]
+    pub admitted_draft: bool,
+    /// The rule handling admission applied to the pull request's state.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub handling: Option<TriggerPullRequestHandling>,
 }
 
 impl DispatchPolicy {
+    /// The rule's delivery target that a promotion may continue to.
+    pub fn final_target(&self) -> &str {
+        self.final_delivery_target
+            .as_deref()
+            .unwrap_or(&self.delivery_target)
+    }
+
     /// `GithubTriggerDispatchPolicySchema.parse`: validate and lower-case the repository.
     pub fn parse(value: Value) -> DatabaseResult<Self> {
         let mut policy: Self = serde_json::from_value(value)?;
@@ -72,6 +92,9 @@ impl DispatchPolicy {
             || policy.repository_id <= 0
             || !REPOSITORY.is_match(&policy.repository_name)
             || crate::http::contracts::typed::delivery_target(&policy.delivery_target, &()).is_err()
+            || policy.final_delivery_target.as_ref().is_some_and(|target| {
+                crate::http::contracts::typed::delivery_target(target, &()).is_err()
+            })
         {
             return Err(fail("GitHub trigger dispatch policy is invalid"));
         }
@@ -366,7 +389,7 @@ fn matches_rule(
             && rule.repository_name.to_lowercase() == input.repository_name.to_lowercase()
             && rule.authority_user_id == input.authority_user_id
             && preset.id == rule.workflow_id
-            && rule.delivery_target == policy.delivery_target
+            && rule.delivery_target == policy.final_target()
             && rule.protected_paths == policy.protected_paths
     }))
 }
@@ -611,6 +634,25 @@ pub fn rebind_revisions(
     Ok(())
 }
 
+/// Record the delivery target a promotion continued the linked task to.
+pub fn record_promotion(
+    database: &SuplexDatabase,
+    dispatch: &Dispatch,
+    task_id: &str,
+    delivery_target: &str,
+) -> DatabaseResult<()> {
+    let policy = DispatchPolicy {
+        delivery_target: delivery_target.to_owned(),
+        final_delivery_target: Some(dispatch.policy.final_target().to_owned()),
+        ..dispatch.policy.clone()
+    };
+    database.connection().execute(
+        "UPDATE suplex_github_trigger_dispatches SET policy_json = ?1, updated_at = ?2 WHERE id = ?3 AND task_id = ?4",
+        params![serde_json::to_string(&policy)?, crate::shared::time::now_millis_rfc3339(), dispatch.id, task_id],
+    )?;
+    Ok(())
+}
+
 /// Bind the dispatch to the task created from its exact capture.
 pub fn link_task(
     database: &mut SuplexDatabase,
@@ -658,6 +700,10 @@ pub struct DeliveryPolicy {
     pub head_branch: String,
     pub base_branch: String,
     pub protected_paths: Vec<String>,
+    /// The dispatch admitted a draft pull request, so delivery accepts a draft.
+    pub admitted_draft: bool,
+    /// The rule reviewed the pull request only, so the task targets its draft pull request.
+    pub review_only: bool,
 }
 
 fn policy(
@@ -692,6 +738,8 @@ fn policy(
         head_branch: parsed.head_branch,
         base_branch: parsed.base_branch,
         protected_paths: parsed.protected_paths,
+        admitted_draft: parsed.admitted_draft,
+        review_only: parsed.handling == Some(TriggerPullRequestHandling::ReviewOnly),
     }))
 }
 

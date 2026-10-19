@@ -443,7 +443,7 @@ pub(crate) fn without_current_dependency_status(prompt: &str) -> &str {
     }
 }
 
-pub const IDLE_ROOT_PROMPT: &str = "Observe the current task, worktree, and GitHub state and continue toward the delivery target. Adopt out-of-band progress. If checks or another external operation are pending, report what you are waiting for. Ask a specific human question only if a necessary decision or external failure requires it.";
+pub const IDLE_ROOT_PROMPT: &str = "Observe the current task, worktree, and GitHub state and continue toward the delivery target. Adopt out-of-band progress. If checks or another external operation are pending, report what you are waiting for. Ask a specific human question only if a necessary decision or external failure requires it. If progress needs a person to act first, ask that person as a human question instead of reporting the same state again.";
 
 /// TypeScript `withCurrentDependencyStatus`.
 pub fn with_current_dependency_status(

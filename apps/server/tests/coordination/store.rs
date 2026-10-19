@@ -466,6 +466,43 @@ mod tests {
     }
 
     #[test]
+    fn idle_root_wakes_back_off_after_repeated_idle_turns() {
+        let filename =
+            std::env::temp_dir().join(format!("suplex_idle_wake_{}.sqlite", Uuid::new_v4()));
+        let database = SuplexDatabase::open(&filename, OpenMode::Migrate).unwrap();
+        database.connection().execute_batch("PRAGMA foreign_keys = OFF").unwrap();
+        let base = DateTime::parse_from_rfc3339("2026-09-25T12:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let insert = |id: &str, prompt: &str, completed_at: DateTime<Utc>| {
+            database.connection().execute(
+                "INSERT INTO suplex_task_turns (id,task_id,session_id,generation,prompt_hash,prompt_text,status,created_at,completed_at,updated_at) VALUES (?1,'task','root',1,'h',?2,'completed',?3,?3,?3)",
+                params![id, prompt, rfc3339_millis(completed_at)],
+            ).unwrap();
+        };
+        let at = |seconds: i64| base + chrono::Duration::seconds(seconds);
+        let deferred = |now| idle_wake_deferred(&database, "root", now).unwrap();
+
+        assert!(!deferred(base), "no turns: wake");
+        insert("t1", "Worker result", at(0));
+        assert!(!deferred(at(1)), "a real turn: wake");
+        insert("t2", IDLE_ROOT_PROMPT, at(10));
+        assert!(deferred(at(20)), "one idle turn: wait 30 s");
+        assert!(!deferred(at(41)));
+        insert("t3", IDLE_ROOT_PROMPT, at(41));
+        insert("t4", IDLE_ROOT_PROMPT, at(100));
+        assert!(deferred(at(100 + 119)), "three idle turns: wait 120 s");
+        assert!(!deferred(at(100 + 121)));
+        insert("t5", "You: answered the question", at(130));
+        assert!(!deferred(at(131)), "a user answer resets the delay");
+        for n in 0..12 {
+            insert(&format!("i{n}"), IDLE_ROOT_PROMPT, at(200 + n));
+        }
+        assert!(deferred(at(211 + 29 * 60)), "capped at 30 min");
+        assert!(!deferred(at(211 + 31 * 60)));
+    }
+
+    #[test]
     fn lifecycle_events_follow_start_queue_wait_and_prerequisite_release() {
         let filename =
             std::env::temp_dir().join(format!("suplex_events_{}.sqlite", Uuid::new_v4()));

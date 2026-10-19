@@ -1621,11 +1621,43 @@ pub fn wake_idle_root(
             [task_id], |row| Ok((row.get(0)?, row.get(1)?)),
         ).optional()?;
         let Some((session_id, generation)) = eligible else { return Ok(None); };
+        if idle_wake_deferred(database, &session_id, now)? { return Ok(None); }
         insert_pending_turn(database, &NewTurn { id: &id, task_id, session_id: &session_id, generation, assignment_hash: None, prompt, workflow_input: None }, &time)?;
         Ok(Some(database.connection().query_row(
             "SELECT * FROM suplex_task_turns WHERE id = ?1", [&id], turn,
         )?))
     })
+}
+
+/// A Root whose last turns were all idle wakes is woken with a growing delay
+/// (15 s doubling to 30 min) measured from its last completed turn. Any other
+/// turn (a Worker result, a user answer, a delegation) resets the delay.
+fn idle_wake_deferred(
+    database: &SuplexDatabase,
+    session_id: &str,
+    now: DateTime<Utc>,
+) -> DatabaseResult<bool> {
+    let idle = |prompt: &str| without_current_dependency_status(prompt) == IDLE_ROOT_PROMPT;
+    let mut statement = database.connection().prepare(
+        "SELECT prompt_text, completed_at FROM suplex_task_turns WHERE session_id = ?1 AND status = 'completed' AND completed_at IS NOT NULL ORDER BY completed_at DESC LIMIT 12",
+    )?;
+    let recent = statement
+        .query_map([session_id], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    let streak = recent.iter().take_while(|(prompt, _)| idle(prompt)).count() as u32;
+    let Some((_, last)) = recent.first() else {
+        return Ok(false);
+    };
+    if streak == 0 {
+        return Ok(false);
+    }
+    let delay = (15_i64 << streak.min(11)).min(30 * 60);
+    let Ok(last) = DateTime::parse_from_rfc3339(last) else {
+        return Ok(false);
+    };
+    Ok(now < last + chrono::Duration::seconds(delay))
 }
 
 // WP3a admission sweep

@@ -1,6 +1,6 @@
 [package]
 name = "suplex"
-version = "1.9.2"
+version = "1.10.0"
 edition = "2024"
 rust-version = "1.93.1"
 

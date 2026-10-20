@@ -39,6 +39,9 @@ served document after you pair, and treat it as authoritative when the two diffe
 
 ## Connect through OAuth
 
+Settings > API & MCP has a client picker. Select a client to see its setup
+command or configuration with the canonical `/mcp` address.
+
 1. Add the canonical `/mcp` resource to the MCP client.
 2. Start the client login flow.
 3. Sign in to Suplex when Suplex asks you to sign in.

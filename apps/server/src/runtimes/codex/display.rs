@@ -41,9 +41,17 @@ fn shell_quote(value: &str) -> String {
 }
 
 pub fn display_command(runtime_directory: &Path) -> io::Result<DisplayCommand> {
+    command_for(SUBCOMMAND, runtime_directory)
+}
+
+/// The passive display command a headless runtime's `subcommand` serves.
+pub(crate) fn command_for(
+    subcommand: &str,
+    runtime_directory: &Path,
+) -> io::Result<DisplayCommand> {
     let executable = std::env::current_exe()?.to_string_lossy().into_owned();
     let args = vec![
-        SUBCOMMAND.to_owned(),
+        subcommand.to_owned(),
         runtime_directory.to_string_lossy().into_owned(),
     ];
     let mut command = vec!["/usr/bin/env".to_owned()];
@@ -70,7 +78,11 @@ pub fn display_command(runtime_directory: &Path) -> io::Result<DisplayCommand> {
 }
 
 pub fn display_attached(runtime_directory: &Path, argv: &[String]) -> bool {
-    display_command(runtime_directory).is_ok_and(|expected| {
+    attached_for(SUBCOMMAND, runtime_directory, argv)
+}
+
+pub(crate) fn attached_for(subcommand: &str, runtime_directory: &Path, argv: &[String]) -> bool {
+    command_for(subcommand, runtime_directory).is_ok_and(|expected| {
         argv.len() == expected.args.len() + 1
             && argv[0] == expected.executable
             && argv[1..] == expected.args[..]
@@ -88,6 +100,15 @@ fn safe_terminal_text(text: &str) -> String {
 
 fn text<'a>(value: &'a Value, key: &str) -> Option<&'a str> {
     value.get(key).and_then(Value::as_str)
+}
+
+/// Renders one complete log line, or `None` when it is not a native event.
+pub(crate) type RenderLine = fn(&str) -> Option<String>;
+
+fn render_line(line: &str) -> Option<String> {
+    transcript::parse_events(line)
+        .first()
+        .map(|event| render_event(event.value()))
 }
 
 pub fn render_event(event: &Value) -> String {
@@ -182,7 +203,7 @@ fn decode(cursor: &mut Cursor, bytes: &[u8]) -> String {
 }
 
 /// Renders the complete lines in `text`; a partial trailing line waits for the next append.
-fn render_appended(cursor: &mut Cursor, text: &str) -> String {
+fn render_appended(cursor: &mut Cursor, text: &str, render: RenderLine) -> String {
     let remaining = std::mem::take(&mut cursor.pending_line) + text;
     let mut rendered = String::new();
     let mut lines = remaining.split('\n').collect::<Vec<_>>();
@@ -191,8 +212,8 @@ fn render_appended(cursor: &mut Cursor, text: &str) -> String {
         if line.trim().is_empty() {
             continue;
         }
-        match transcript::parse_events(line).first() {
-            Some(event) => rendered.push_str(&render_event(event.value())),
+        match render(line) {
+            Some(text) => rendered.push_str(&text),
             None => {
                 rendered.push_str(line);
                 rendered.push('\n');
@@ -265,6 +286,7 @@ fn scan(
     runtime_directory: &Path,
     cursors: &mut HashMap<PathBuf, Cursor>,
     output: &mut impl Write,
+    render: RenderLine,
 ) -> io::Result<bool> {
     let mut wrote = false;
     for (path, events) in output_files(runtime_directory)? {
@@ -274,7 +296,7 @@ fn scan(
             continue;
         }
         let text = safe_terminal_text(&if events {
-            render_appended(cursor, &appended)
+            render_appended(cursor, &appended, render)
         } else {
             appended
         });
@@ -296,10 +318,29 @@ pub fn run_display(
     poll_interval: Duration,
     stopped: impl Fn() -> bool,
 ) -> io::Result<()> {
+    follow(
+        runtime_directory,
+        output,
+        poll_interval,
+        stopped,
+        WAITING_LABEL,
+        render_line,
+    )
+}
+
+/// Follows every turn output file with one runtime's line renderer.
+pub(crate) fn follow(
+    runtime_directory: &Path,
+    output: &mut impl Write,
+    poll_interval: Duration,
+    stopped: impl Fn() -> bool,
+    waiting_label: &str,
+    render: RenderLine,
+) -> io::Result<()> {
     let mut cursors = HashMap::new();
     let mut seen = false;
-    if !scan(runtime_directory, &mut cursors, output)? {
-        output.write_all(WAITING_LABEL.as_bytes())?;
+    if !scan(runtime_directory, &mut cursors, output, render)? {
+        output.write_all(waiting_label.as_bytes())?;
         output.flush()?;
     }
     while !stopped() {
@@ -307,13 +348,21 @@ pub fn run_display(
         if stopped() || task_display::runtime_removed(runtime_directory, &mut seen) {
             break;
         }
-        scan(runtime_directory, &mut cursors, output)?;
+        scan(runtime_directory, &mut cursors, output, render)?;
     }
     Ok(())
 }
 
 /// Entry point for `suplex codex-display <runtime directory>`.
 pub async fn serve(runtime_directory: &str) -> Result<(), Box<dyn Error + Send + Sync>> {
+    serve_with(runtime_directory, WAITING_LABEL, render_line).await
+}
+
+pub(crate) async fn serve_with(
+    runtime_directory: &str,
+    waiting_label: &'static str,
+    render: RenderLine,
+) -> Result<(), Box<dyn Error + Send + Sync>> {
     let directory = PathBuf::from(runtime_directory);
     if !directory.is_absolute() {
         return Err("A private runtime directory is required".into());
@@ -329,11 +378,13 @@ pub async fn serve(runtime_directory: &str) -> Result<(), Box<dyn Error + Send +
         flag.store(true, Ordering::Relaxed);
     });
     tokio::task::spawn_blocking(move || {
-        run_display(
+        follow(
             &directory,
             &mut io::stdout(),
             Duration::from_millis(250),
             || stopped.load(Ordering::Relaxed),
+            waiting_label,
+            render,
         )
     })
     .await??;
@@ -343,11 +394,30 @@ pub async fn serve(runtime_directory: &str) -> Result<(), Box<dyn Error + Send +
 /// Dispatch shows the session in Herdr first. The display is an observation;
 /// its failure never blocks native work.
 pub fn show(database_path: &Path, session: &str, native: &str, worktree: &Path, model: &str) {
+    show_with(
+        ("codex", SUBCOMMAND),
+        database_path,
+        session,
+        native,
+        worktree,
+        model,
+    );
+}
+
+/// `show` for a headless runtime's provider and display subcommand.
+pub(crate) fn show_with(
+    (provider, subcommand): (&str, &str),
+    database_path: &Path,
+    session: &str,
+    native: &str,
+    worktree: &Path,
+    model: &str,
+) {
     let Ok(runtime_directory) = crate::runtimes::native::session_directory(database_path, session)
     else {
         return;
     };
-    let Ok(display) = display_command(&runtime_directory) else {
+    let Ok(display) = command_for(subcommand, &runtime_directory) else {
         return;
     };
     let _ = task_display::attach_session(
@@ -358,9 +428,9 @@ pub fn show(database_path: &Path, session: &str, native: &str, worktree: &Path, 
             native_session_id: native,
             worktree,
             model,
-            provider: "codex",
+            provider,
             command: &display.command,
-            is_attached: &|argv| display_attached(&runtime_directory, argv),
+            is_attached: &|argv| attached_for(subcommand, &runtime_directory, argv),
         },
     );
 }
@@ -452,19 +522,19 @@ mod tests {
         fs::create_dir_all(&directory).unwrap();
         let mut output = Vec::new();
         let mut cursors = HashMap::new();
-        assert!(!scan(&directory, &mut cursors, &mut output).unwrap());
+        assert!(!scan(&directory, &mut cursors, &mut output, render_line).unwrap());
         let events = directory.join("turn-1.jsonl");
         fs::write(&events, "{\"type\":\"item.started\",\"item\":{\"id\":\"item_0\",\"type\":\"command_execution\",\"command\":\"pnpm test\",\"status\":\"in_progress\"}}\n{\"type\":\"item.completed\",\"item\":{\"id\":\"item_2\",\"type\":\"agent_").unwrap();
         fs::write(directory.join("turn-1.stderr.log"), "plain stderr line\n").unwrap();
         fs::write(directory.join("other.txt"), "ignored\n").unwrap();
-        assert!(scan(&directory, &mut cursors, &mut output).unwrap());
+        assert!(scan(&directory, &mut cursors, &mut output, render_line).unwrap());
         let mut file = fs::OpenOptions::new().append(true).open(&events).unwrap();
         file.write_all(
             "message\",\"text\":\"Reviewed the change. 界\"}}\n{\"type\":\"turn.completed\"}\n"
                 .as_bytes(),
         )
         .unwrap();
-        scan(&directory, &mut cursors, &mut output).unwrap();
+        scan(&directory, &mut cursors, &mut output, render_line).unwrap();
         let output = String::from_utf8(output).unwrap();
         assert!(output.contains("$ pnpm test\n"));
         assert!(output.contains("plain stderr line\n"));

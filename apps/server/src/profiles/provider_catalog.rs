@@ -64,6 +64,18 @@ const CODEX_MODELS: &[(&str, &str)] = &[
     ("gpt-6-sol", "GPT-6 Sol"),
     ("gpt-5.5", "GPT-5.5"),
 ];
+/// Pi selects `provider/id`; these cover a host where the listing is unavailable.
+const PI_MODELS: &[(&str, &str)] = &[
+    ("anthropic/claude-opus-5-5", "Claude Opus 5.5 (anthropic)"),
+    (
+        "anthropic/claude-sonnet-5-5",
+        "Claude Sonnet 5.5 (anthropic)",
+    ),
+    ("anthropic/claude-haiku-5-5", "Claude Haiku 5.5 (anthropic)"),
+    ("openai/gpt-6-sol", "gpt-6-sol (openai)"),
+    ("openai/gpt-5.6-sol", "gpt-5.6-sol (openai)"),
+    ("google/gemini-3.5-flash", "gemini-3.5-flash (google)"),
+];
 
 fn models(list: &[(&str, &str)]) -> Vec<Value> {
     list.iter()
@@ -109,6 +121,41 @@ pub fn read_codex_models(codex_home: &Path) -> Vec<Value> {
     }
 }
 
+/// The models Pi lists for its current credentials, including the
+/// `models.json` providers of a local server; the static list otherwise.
+pub fn pi_models(listing: Option<&str>) -> Vec<Value> {
+    let listed = listing
+        .map(crate::runtimes::pi::models::parse_model_list)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|id| {
+            let (provider, model) = id.split_once('/').unwrap_or(("", id.as_str()));
+            json!({"label": format!("{model} ({provider})"), "id": id})
+        })
+        .collect::<Vec<_>>();
+    if listed.is_empty() {
+        models(PI_MODELS)
+    } else {
+        listed
+    }
+}
+
+async fn read_pi_models(environment: &HashMap<String, String>) -> Vec<Value> {
+    let listing = match crate::runtimes::pi::executable::resolve_pi_executable(None, environment) {
+        Ok(pi) => crate::profiles::provider_readiness::probe_command(
+            &pi,
+            crate::runtimes::pi::models::LIST_MODELS_ARGS,
+            None,
+        )
+        .await
+        .ok()
+        .filter(|result| result.exit_code == Some(0))
+        .map(|result| result.stdout),
+        Err(_) => None,
+    };
+    pi_models(listing.as_deref())
+}
+
 /// `readProviders`. OpenCode's own vendors fold into its row as vendor-qualified
 /// model ids; neither observation sends a model request. `probe` checks each sign-in.
 pub async fn read_providers(directory: &str, probe: bool) -> Value {
@@ -142,6 +189,11 @@ pub async fn read_providers(directory: &str, probe: bool) -> Value {
         (&CLAUDE, "claude-code", models(CLAUDE_CODE_MODELS)),
         (&DEVIN, "devin", models(DEVIN_MODELS)),
         (&CODEX, "codex", read_codex_models(&codex_home)),
+        (
+            &crate::runtimes::pi::executable::PI_EXECUTABLE,
+            "pi",
+            read_pi_models(&environment).await,
+        ),
     ];
     let mut providers = Vec::new();
     for (spec, id, models) in rows {
@@ -199,6 +251,24 @@ mod tests {
         fs::remove_dir_all(home).unwrap();
     }
 
+    #[test]
+    fn pi_models_come_from_its_listing_and_fall_back_to_the_static_list() {
+        let listed = pi_models(Some(concat!(
+            "provider   model        context  max-out  thinking  images\n",
+            "llama-server  qwen3-coder-30b  128K  16.4K  yes  no\n",
+            "anthropic  claude-sonnet-5  1M  128K  yes  yes\n",
+        )));
+        assert_eq!(
+            listed,
+            vec![
+                json!({"id":"llama-server/qwen3-coder-30b","label":"qwen3-coder-30b (llama-server)"}),
+                json!({"id":"anthropic/claude-sonnet-5","label":"claude-sonnet-5 (anthropic)"}),
+            ]
+        );
+        assert_eq!(pi_models(Some("No models available.")), models(PI_MODELS));
+        assert_eq!(pi_models(None), models(PI_MODELS));
+    }
+
     #[tokio::test]
     async fn provider_routes_require_an_administrator_and_models_any_session() {
         use crate::http::routes::avatars::tests::{call, json_body};
@@ -222,7 +292,7 @@ mod tests {
             (status, headers["cache-control"].to_str().unwrap()),
             (StatusCode::OK, "private, no-store")
         );
-        assert_eq!(json_body(&body)["providers"].as_array().unwrap().len(), 4);
+        assert_eq!(json_body(&body)["providers"].as_array().unwrap().len(), 5);
         for (method, path) in [
             ("PUT", "/api/admin/providers/openrouter/credential"),
             ("DELETE", "/api/admin/providers/openrouter/credential"),
@@ -266,7 +336,7 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(
             labels,
-            ["Claude Code", "Codex CLI", "Devin CLI", "OpenCode"]
+            ["Claude Code", "Codex CLI", "Devin CLI", "OpenCode", "Pi"]
         );
         assert_eq!(providers["providers"][0]["modelCount"], 9);
         assert_eq!(providers["providers"][0]["connection"]["status"], "unknown");

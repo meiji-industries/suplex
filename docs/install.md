@@ -111,14 +111,18 @@ See [billing setup and recovery](billing.md) for Suplex Free and Pro operations.
 
 ## Providers and defaults
 
-A provider is one of the four agent tools Suplex runs: OpenCode, Claude Code,
-Devin CLI, and Codex CLI. Each owns its own sign-in. Sign in as the OS user that
+A provider is one of the five agent tools Suplex runs: OpenCode, Claude Code,
+Devin CLI, Codex CLI, and Pi. Each owns its own sign-in. Sign in as the OS user that
 runs Suplex; a Codex login does not establish OpenCode access.
 
-OpenCode reaches several model vendors, so its models carry the vendor in the
-id, such as `openai/gpt-5.6-sol`. The other three name their models directly.
+OpenCode and Pi reach several model vendors, so their models carry the vendor
+in the id, such as `openai/gpt-5.6-sol`. The other three name their models
+directly. Pi lists the models its credentials and `~/.pi/agent/models.json`
+make available, so a local OpenAI-compatible server configured there appears as
+`<provider>/<id>`. Sign in to Pi by running `pi` and typing `/login`, or by
+setting a provider API key in the environment.
 
-`/admin/providers` shows all four rows without making a paid model request.
+`/admin/providers` shows all five rows without making a paid model request.
 **Configured** means the executable is present, not that inference was tested.
 Agent dialogs and project defaults use that same catalog. New installations seed
 Codex CLI GPT-5.6 Sol with medium reasoning for Coordinator and GPT-5.6 Luna with max
@@ -126,8 +130,9 @@ reasoning and priority service for Worker. An installation with task history
 keeps its OpenCode profiles, converted to the vendor-qualified model id.
 
 Suplex discovers OpenCode on its process PATH or at `~/.opencode/bin/opencode`.
-`SUPLEX_OPENCODE_COMMAND`, `SUPLEX_CLAUDE_COMMAND`, `SUPLEX_DEVIN_COMMAND`, and
-`SUPLEX_CODEX_COMMAND` can each specify an absolute executable path. GitHub
+`SUPLEX_OPENCODE_COMMAND`, `SUPLEX_CLAUDE_COMMAND`, `SUPLEX_DEVIN_COMMAND`,
+`SUPLEX_CODEX_COMMAND`, and `SUPLEX_PI_COMMAND` can each specify an absolute
+executable path. GitHub
 delivery uses Suplex's GitHub sign-in or the host's available GitHub credentials.
 Suplex does not copy provider credentials into task records.
 

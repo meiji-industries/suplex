@@ -89,7 +89,7 @@ The Advisor in Pull request repair that rates the current pull request from 1 to
 _Avoid_: Score oracle, automatic approval.
 
 **Native session**
-The OpenCode, Claude Code, Devin CLI, or Codex CLI conversation that owns admitted messages, tool
+The OpenCode, Claude Code, Devin CLI, Codex CLI, or Pi conversation that owns admitted messages, tool
 calls, and results. Suplex selects the harness from the agent profile provider.
 _Avoid_: Herdr session, completion receipt file.
 
@@ -130,8 +130,8 @@ _Avoid_: Integrator turn, mirrored release.
 **Agent profile**
 A named provider, model, reasoning level, and service tier selection. The
 provider is the agent tool that runs the turn: `opencode`, `claude-code`,
-`devin`, or `codex`. An OpenCode model names its vendor, as in
-`openai/gpt-5.6-sol`; Suplex splits it only when it calls OpenCode. Projects
+`devin`, `codex`, or `pi`. An OpenCode or Pi model names its vendor, as in
+`openai/gpt-5.6-sol`; Suplex splits an OpenCode model only when it calls OpenCode. Projects
 choose Coordinator and Worker defaults. Tasks capture the chosen settings.
 _Avoid_: Vendor as provider, separate Suplex model catalog.
 

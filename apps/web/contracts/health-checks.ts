@@ -1,6 +1,6 @@
 import type { HarnessKind } from "./harness-kind.js";
 
-export const PROVIDER_HARNESS_KINDS = ["opencode", "claude-code", "codex"] as const satisfies readonly HarnessKind[];
+export const PROVIDER_HARNESS_KINDS = ["opencode", "claude-code", "codex", "pi"] as const satisfies readonly HarnessKind[];
 
 export type ProviderHarnessKind = (typeof PROVIDER_HARNESS_KINDS)[number];
 
@@ -18,6 +18,7 @@ export const HEALTH_CHECK_IDS = [
   "provider:opencode",
   "provider:claude-code",
   "provider:codex",
+  "provider:pi",
 ] as const;
 
 export type HealthCheckId = (typeof HEALTH_CHECK_IDS)[number];

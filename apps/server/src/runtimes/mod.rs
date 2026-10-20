@@ -5,6 +5,7 @@ pub mod git_guard;
 pub mod headless;
 pub mod native;
 pub mod opencode;
+pub mod pi;
 pub mod process;
 pub mod project_mcp;
 pub mod task_display;

@@ -137,7 +137,7 @@ impl ReaderSession<'_> {
 pub struct UsageEntry {
     pub message_id: String,
     pub turn_id: String,
-    pub provider: &'static str,
+    pub provider: String,
     pub model: String,
     pub started_at_ms: i64,
     pub completed_at_ms: Option<i64>,

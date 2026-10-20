@@ -51,12 +51,13 @@ pub fn provider_login_command(
         |_| binary_name(provider).to_owned(),
         |path| quoted(&path.to_string_lossy()),
     );
-    let login = if provider == HarnessKind::Codex.as_str() {
-        "login"
-    } else {
-        "auth login"
+    let login = match HarnessKind::parse(provider) {
+        Some(HarnessKind::Codex) => " login",
+        // Pi has no sign-in subcommand; `/login` runs inside its session.
+        Some(HarnessKind::Pi) => "",
+        _ => " auth login",
     };
-    scoped_command(provider, home_directory, format!("{binary} {login}"))
+    scoped_command(provider, home_directory, format!("{binary}{login}"))
 }
 
 /// The provider executable for a shell command line, quoted when it resolves.
@@ -316,6 +317,11 @@ pub(crate) mod tests {
             provider_login_command("opencode", None, missing()),
             "opencode auth login"
         );
+        assert_eq!(
+            provider_login_command("pi", None, resolved("/opt/pi/pi")),
+            "'/opt/pi/pi'"
+        );
+        assert_eq!(provider_login_command("pi", None, missing()), "pi");
     }
 
     #[test]

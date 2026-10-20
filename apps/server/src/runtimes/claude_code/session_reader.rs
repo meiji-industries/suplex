@@ -170,7 +170,7 @@ impl NativeSessionReader for ClaudeCodeTaskRuntime {
                 .map(|record| UsageEntry {
                     message_id: record.message_id,
                     turn_id: record.turn_id,
-                    provider: "anthropic",
+                    provider: "anthropic".to_owned(),
                     model: record.model,
                     started_at_ms: record.started_at_ms,
                     completed_at_ms: Some(record.started_at_ms),

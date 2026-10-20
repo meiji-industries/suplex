@@ -48,7 +48,7 @@ test("the guide shows Claude Code by default and switches to the selected client
   api.readJsonUnchecked.mockResolvedValue({ resource: mcpUrl });
   const container = await mount();
 
-  expect(api.readJsonUnchecked).toHaveBeenCalledWith("/.well-known/oauth-protected-resource/mcp");
+  expect(api.readJsonUnchecked).toHaveBeenCalledWith("/.well-known/oauth-protected-resource/mcp", { cache: "no-cache" });
   expect(container.querySelector("[data-select-value]")?.textContent).toBe("claude-code");
   const options = Array.from(container.querySelectorAll<HTMLButtonElement>('[data-select="Client"]'));
   expect(options.slice(0, 2).map((option) => option.textContent)).toEqual(["Claude Code", "Codex"]);

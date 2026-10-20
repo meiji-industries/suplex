@@ -9,7 +9,7 @@ provides history, execution detail, and usage. The
 provider. The host consumes a common prompt observation, including admission,
 result state, running processes, unsettled tools, and whether retry is safe.
 The Live history reader includes native reasoning for Claude Code, Codex CLI,
-and OpenCode when their transcripts contain visible reasoning text.
+OpenCode, and Pi when their transcripts contain visible reasoning text.
 
 | Provider | Execution and session data | Display implementation |
 | --- | --- | --- |
@@ -17,11 +17,12 @@ and OpenCode when their transcripts contain visible reasoning text.
 | Claude Code | Headless turns use the reserved native session ID and resume the provider transcript. | A Suplex viewer follows headless turn logs; it does not start an interactive Claude session. |
 | Codex CLI | Headless turns record native JSON events. A Suplex routing ID maps to the native thread ID used for resume. | A Suplex viewer renders turn events and stderr. |
 | Devin CLI | Headless turns record output and export data used to discover the resumable native session identity. | A Suplex output viewer exists; it does not take interactive ownership of the native session. See the attachment limitation after this table. |
+| Pi | Headless turns record native JSON events. The Suplex session ID is also the Pi session ID, and Pi keeps its session file in the Suplex runtime directory, so later turns resume it. History reads that session file. Coordinator and Advisor bridges load from a per-turn extension file. See [ADR 14](../adr/0014-pi-cli-provider.md). | A Suplex viewer renders turn events and stderr. |
 
-Claude and Codex dispatch call the shared display attachment path.
+Claude, Codex, and Pi dispatch call the shared display attachment path.
 OpenCode has attach matching and Devin has a viewer, but the inspected runtime
 paths do not call that attachment path. Do not infer automatic pane attachment
-for all four providers from the presence of their modules. This is a source
+for every provider from the presence of its module. This is a source
 limitation to investigate when working on those providers, not a new launch gate.
 
 The runtime does not require a model warm-up turn merely to open a log

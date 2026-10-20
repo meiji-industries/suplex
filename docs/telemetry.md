@@ -76,7 +76,7 @@ Native usage events have these properties: `app_version` (the semantic version),
 Task context contains the built-in `workflow`, `delivery_target`,
 `coordinator_provider`, `worker_provider`, and `advisor_count`. Unavailable task
 context is omitted. Provider profile counts are `profiles_opencode`,
-`profiles_claude_code`, `profiles_devin`, and `profiles_codex`.
+`profiles_claude_code`, `profiles_devin`, `profiles_codex`, and `profiles_pi`.
 
 ## Browser analytics
 

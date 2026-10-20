@@ -5,7 +5,8 @@ use std::path::Path;
 
 use super::{
     claude_code::task_runtime::ClaudeCodeTaskRuntime, codex::harness::CodexTaskRuntime,
-    opencode::task_runtime::OpenCodeTaskRuntime, task_harness::TaskHarness,
+    opencode::task_runtime::OpenCodeTaskRuntime, pi::harness::PiTaskRuntime,
+    task_harness::TaskHarness,
 };
 use crate::tasks::control::HarnessKind;
 
@@ -16,6 +17,7 @@ pub fn harness(kind: &str) -> Option<&'static dyn TaskHarness> {
         "claude-code" => Some(&ClaudeCodeTaskRuntime),
         "devin" => Some(&super::devin::harness::DevinTaskRuntime),
         "opencode" => Some(&OpenCodeTaskRuntime),
+        "pi" => Some(&PiTaskRuntime),
         _ => None,
     }
 }
@@ -24,13 +26,13 @@ pub fn harness(kind: &str) -> Option<&'static dyn TaskHarness> {
 /// migration ran on OpenCode.
 pub fn profile_harness(provider: &str) -> &str {
     match provider {
-        "opencode" | "claude-code" | "devin" | "codex" => provider,
+        "opencode" | "claude-code" | "devin" | "codex" | "pi" => provider,
         _ => "opencode",
     }
 }
 
-/// Suplex reserves Devin and Codex identities with a prefix, because a Codex
-/// thread id is itself a UUID. OpenCode uses "ses…" and Claude Code uses UUIDs.
+/// Suplex reserves Devin, Codex, and Pi identities with a prefix, because a
+/// Codex thread id is itself a UUID. OpenCode uses "ses…" and Claude Code uses UUIDs.
 pub fn session_harness(native_session_id: &str) -> &'static str {
     let hyphenated_uuid = native_session_id.len() == 36
         && native_session_id.char_indices().all(|(index, character)| {
@@ -44,6 +46,8 @@ pub fn session_harness(native_session_id: &str) -> &'static str {
         "devin"
     } else if native_session_id.starts_with("codex-") {
         "codex"
+    } else if native_session_id.starts_with("pi-") {
+        "pi"
     } else if hyphenated_uuid {
         "claude-code"
     } else {
@@ -64,6 +68,9 @@ pub fn display_command(provider: HarnessKind, runtime_directory: &Path) -> Optio
             .ok()
             .map(|display| display.command),
         HarnessKind::Devin => super::devin::display::display_command(runtime_directory)
+            .ok()
+            .map(|display| display.command),
+        HarnessKind::Pi => super::pi::display::display_command(runtime_directory)
             .ok()
             .map(|display| display.command),
         HarnessKind::Opencode => None,
@@ -109,6 +116,17 @@ mod tests {
             "codex"
         );
         assert_eq!(session_harness("devin-1"), "devin");
+        assert_eq!(profile_harness("pi"), "pi");
+        assert_eq!(
+            session_harness("pi-71618050-0d31-428e-a547-d6c4a2eca88f"),
+            "pi"
+        );
+        let pi = for_profile("pi").unwrap();
+        let pi_session = pi.new_session_id();
+        assert!(pi_session.starts_with("pi-"));
+        assert_eq!(session_harness(&pi_session), "pi");
+        assert!(native_session_reader(&pi_session).is_some());
+        assert!(for_session(Some(&pi_session)).is_some());
         let codex = for_profile("codex").unwrap();
         assert!(codex.new_session_id().starts_with("codex-"));
         assert!(for_session(Some("codex-1")).is_some());
@@ -126,6 +144,7 @@ mod tests {
             HarnessKind::ClaudeCode,
             HarnessKind::Codex,
             HarnessKind::Devin,
+            HarnessKind::Pi,
         ] {
             assert!(
                 display_command(provider, directory)

@@ -79,7 +79,7 @@ pub async fn read_native_usage(
             message_id: entry.message_id,
             turn_id: entry.turn_id,
             role: session.kind.clone(),
-            provider: entry.provider.to_owned(),
+            provider: entry.provider.clone(),
             model: entry.model,
             started_at: entry.started_at_ms as f64,
             failed: entry.failed,
@@ -204,7 +204,7 @@ pub async fn collect(
                 let refresh_ms = if startup
                     && matches!(
                         HarnessKind::parse(harness),
-                        Some(HarnessKind::Codex | HarnessKind::Devin)
+                        Some(HarnessKind::Codex | HarnessKind::Devin | HarnessKind::Pi)
                     ) {
                     0
                 } else if previous.is_some_and(|value| value.error_at.is_some()) {

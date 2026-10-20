@@ -1,5 +1,5 @@
 import { copyToClipboard } from "../../lib/clipboard.js";
-import { Activity, Bot, Check, CheckCircle2, ChevronRight, CircleAlert, Copy, Database, GitBranch, HardDrive, LayoutGrid, Network, Package, RefreshCw, ShieldCheck, SquareTerminal, Terminal, XCircle, type LucideIcon } from "lucide-react";
+import { Activity, Bot, Check, CheckCircle2, ChevronRight, CircleAlert, Copy, Database, GitBranch, HardDrive, LayoutGrid, Network, Package, Pi, RefreshCw, ShieldCheck, SquareTerminal, Terminal, XCircle, type LucideIcon } from "lucide-react";
 import { createContext, useContext, useEffect, useId, useState, type ReactElement, type ReactNode } from "react";
 
 import type { HealthCheck, HealthSnapshot } from "../../contracts/health.js";
@@ -52,6 +52,7 @@ const icons: Record<HealthCheckId, LucideIcon> = {
   "provider:opencode": Terminal,
   "provider:claude-code": Bot,
   "provider:codex": SquareTerminal,
+  "provider:pi": Pi,
 };
 
 export function HealthCheckIcon({ check }: { check: HealthCheck }): ReactElement {
@@ -74,6 +75,7 @@ export function healthCheckPurpose(id: HealthCheckId): string {
     case "provider:opencode": return "Run tasks with OpenCode";
     case "provider:claude-code": return "Run tasks with Claude Code";
     case "provider:codex": return "Run tasks with Codex CLI";
+    case "provider:pi": return "Run tasks with Pi";
   }
 }
 
@@ -188,7 +190,7 @@ export function healthyCheckLabel(check: HealthCheck): string {
     case "gh-cli": return "Signed in";
     case "tailscale": return text("hostname") ?? "Healthy";
     case "backup": return verifiedAt && verifiedAt !== "never" ? relativeTime(verifiedAt) : "Healthy";
-    case "provider:opencode": case "provider:claude-code": case "provider:codex": return text("account") ?? "Signed in";
+    case "provider:opencode": case "provider:claude-code": case "provider:codex": case "provider:pi": return text("account") ?? "Signed in";
   }
 }
 

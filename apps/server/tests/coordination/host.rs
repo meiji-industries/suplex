@@ -1442,7 +1442,7 @@ mod host_tests {
         let entry = |message: &str, cost_usd: f64, input: f64| UsageEntry {
             message_id: message.into(),
             turn_id: message.into(),
-            provider: "openai",
+            provider: "openai".into(),
             model: "gpt-5.6-luna".into(),
             started_at_ms: 1,
             completed_at_ms: Some(2),
@@ -2374,7 +2374,7 @@ mod host_tests {
                     usage: vec![UsageEntry {
                         message_id: "msg-usage".into(),
                         turn_id: "msg-usage".into(),
-                        provider: "openai",
+                        provider: "openai".into(),
                         model: "gpt-6-sol".into(),
                         started_at_ms: 1_234_567,
                         completed_at_ms: None,
@@ -2414,7 +2414,7 @@ mod host_tests {
                     usage: vec![UsageEntry {
                         message_id: "msg-usage".into(),
                         turn_id: "msg-usage".into(),
-                        provider: "openai",
+                        provider: "openai".into(),
                         model: "gpt-6-sol".into(),
                         started_at_ms: 1_234_567,
                         completed_at_ms: Some(1_234_567),

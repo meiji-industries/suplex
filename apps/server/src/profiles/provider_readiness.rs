@@ -48,6 +48,12 @@ fn spec(
             "SUPLEX_CODEX_COMMAND",
             &[".local/bin/codex", ".codex/bin/codex"],
         ),
+        "pi" => (
+            "Pi",
+            "pi",
+            "SUPLEX_PI_COMMAND",
+            crate::runtimes::pi::executable::PI_EXECUTABLE.home_paths,
+        ),
         _ => return None,
     })
 }
@@ -228,6 +234,22 @@ fn classify(kind: &str, result: &ProbeResult) -> Classified {
                 None => state("unknown"),
             }
         }
+        // Pi has no sign-in status command. `--list-models` lists only the
+        // models whose provider has credentials and never prints a key.
+        "pi" => {
+            if result.exit_code != Some(0) || result.timed_out {
+                return state("unknown");
+            }
+            let output = strip_ansi(&result.stdout);
+            if output.contains("No models available") {
+                return state("signed-out");
+            }
+            if crate::runtimes::pi::models::parse_model_list(&output).is_empty() {
+                state("present")
+            } else {
+                state("signed-in")
+            }
+        }
         _ => {
             let output =
                 strip_ansi(&format!("{}\n{}", result.stdout, result.stderr)).to_lowercase();
@@ -271,7 +293,7 @@ fn label(kind: &str) -> &'static str {
     spec(kind).map_or("", |(label, _, _, _)| label)
 }
 
-// Sources: official OpenCode, Claude Code, Devin CLI, and Codex installation guides.
+// Sources: official OpenCode, Claude Code, Devin CLI, Codex, and Pi installation guides.
 fn install_remedy(kind: &str) -> (&'static str, &'static str) {
     match kind {
         "opencode" => ("curl -fsSL https://opencode.ai/install | bash", "command"),
@@ -281,6 +303,7 @@ fn install_remedy(kind: &str) -> (&'static str, &'static str) {
             "command",
         ),
         "codex" => ("npm install -g @openai/codex", "command"),
+        "pi" => ("curl -fsSL https://pi.dev/install.sh | sh", "command"),
         _ => ("", "command"),
     }
 }
@@ -289,6 +312,8 @@ fn login_remedy(kind: &str) -> &'static str {
     match kind {
         "opencode" => "opencode auth login",
         "claude-code" => "claude auth login",
+        // `/login` inside Pi stores a credential in its agent directory.
+        "pi" => "pi",
         _ => "codex login",
     }
 }
@@ -297,6 +322,7 @@ pub fn auth_args(kind: &str) -> &'static [&'static str] {
     match kind {
         "opencode" => &["auth", "list"],
         "claude-code" => &["auth", "status", "--json"],
+        "pi" => crate::runtimes::pi::models::LIST_MODELS_ARGS,
         _ => &["login", "status"],
     }
 }
@@ -589,6 +615,59 @@ mod tests {
         assert_eq!(auth_args("opencode"), ["auth", "list"]);
         assert_eq!(auth_args("claude-code"), ["auth", "status", "--json"]);
         assert_eq!(auth_args("codex"), ["login", "status"]);
+    }
+
+    #[test]
+    fn pi_reports_credentials_from_its_model_listing_without_exposing_them() {
+        let pi = present("/private/bin/pi");
+        assert_eq!(
+            evaluate("pi", &absent(), None, false)["remedy"],
+            "curl -fsSL https://pi.dev/install.sh | sh"
+        );
+        let signed_out = evaluate(
+            "pi",
+            &pi,
+            ok(
+                "No models available. Use /login to log into a provider via OAuth or API key. See:\n  /private/docs/providers.md\n",
+            ),
+            false,
+        );
+        assert_eq!(
+            (
+                signed_out["status"].as_str(),
+                signed_out["summary"].as_str(),
+                signed_out["remedy"].as_str()
+            ),
+            (Some("unhealthy"), Some("Pi is not signed in"), Some("pi"))
+        );
+        let signed_in = evaluate(
+            "pi",
+            &pi,
+            ok(
+                "provider  model  context  max-out  thinking  images\nollama  qwen3-coder  128K  16.4K  yes  no\n",
+            ),
+            false,
+        );
+        assert_eq!(
+            signed_in,
+            json!({"id":"provider:pi","label":"Pi","provider":"pi","status":"healthy","summary":"Pi is signed in. Model access is not tested.","details":{"command":"pi","state":"signed-in"}})
+        );
+        assert_eq!(
+            evaluate("pi", &pi, ok("unexpected"), false)["details"]["state"],
+            "present"
+        );
+        let failed = Some(Ok(ProbeResult {
+            stderr: "boom /private/agent/auth.json".into(),
+            exit_code: Some(1),
+            ..ProbeResult::default()
+        }));
+        let unknown = evaluate("pi", &pi, failed, false);
+        assert_eq!(unknown["summary"], "Suplex could not check the Pi sign-in");
+        for check in [signed_out, signed_in, unknown] {
+            assert!(!check.to_string().contains("private"));
+        }
+        assert_eq!(auth_args("pi"), ["--offline", "--list-models"]);
+        assert_eq!(binary_name("pi"), "pi");
     }
 
     #[test]

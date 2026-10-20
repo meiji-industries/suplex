@@ -28,6 +28,8 @@ const ALLOWED: &[(&str, &[&str])] = &[
         "runtimes/opencode/",
         &["idle", "pending", "running", "completed", "error"],
     ),
+    // Pi assistant message stopReason protocol.
+    ("runtimes/pi/", &["error"]),
     // Herdr pane state and client name.
     ("integrations/herdr_readiness.rs", &["running", "unknown"]),
     // Model name for usage that has no model.

@@ -3,4 +3,4 @@
 /**
  * TypeScript `HarnessKind`: the agent provider a profile runs on.
  */
-export type HarnessKind = "opencode" | "claude-code" | "devin" | "codex";
+export type HarnessKind = "opencode" | "claude-code" | "devin" | "codex" | "pi";

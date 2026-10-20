@@ -11,7 +11,6 @@ use std::{
     error::Error,
     fs, io,
     path::{Path, PathBuf},
-    sync::Mutex,
 };
 
 use serde_json::{Value, json};
@@ -485,20 +484,6 @@ fn dispatch_state(dispatch: DispatchState) -> Dispatch {
     }
 }
 
-// Interns each distinct native provider name once; widen `UsageEntry.provider` to `String` to drop this.
-fn provider_name(name: &str) -> &'static str {
-    static NAMES: Mutex<Vec<&'static str>> = Mutex::new(Vec::new());
-    let mut names = NAMES
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    if let Some(found) = names.iter().find(|known| **known == name) {
-        return found;
-    }
-    let leaked: &'static str = Box::leak(name.to_owned().into_boxed_str());
-    names.push(leaked);
-    leaked
-}
-
 fn reader(session: &ReaderSession<'_>) -> OpenCodeSessionReader {
     OpenCodeSessionReader {
         database_path: session.database_path.to_owned(),
@@ -652,7 +637,7 @@ impl NativeSessionReader for OpenCodeTaskRuntime {
                     .map(|entry| UsageEntry {
                         message_id: entry["messageId"].as_str().unwrap_or_default().to_owned(),
                         turn_id: entry["turnId"].as_str().unwrap_or_default().to_owned(),
-                        provider: provider_name(entry["provider"].as_str().unwrap_or_default()),
+                        provider: entry["provider"].as_str().unwrap_or_default().to_owned(),
                         model: entry["model"].as_str().unwrap_or_default().to_owned(),
                         started_at_ms: number(&entry["startedAt"]) as i64,
                         completed_at_ms: entry["completedAt"].as_f64().map(|value| value as i64),

@@ -34,7 +34,7 @@ test("a necessary tool failure makes system health red without changing owned re
 });
 
 test("provider failures never turn system health red", () => {
-  for (const [id, provider] of [["provider:opencode", "opencode"], ["provider:claude-code", "claude-code"], ["provider:codex", "codex"]] as const) {
+  for (const [id, provider] of [["provider:opencode", "opencode"], ["provider:claude-code", "claude-code"], ["provider:codex", "codex"], ["provider:pi", "pi"]] as const) {
     const unhealthy: HealthSnapshot = { ...snapshot, checks: [...snapshot.checks, { id, label: id, status: "unhealthy", summary: "Not signed in", details: {}, provider }] };
     expect(getSystemHealthLevel(unhealthy, "current")).toBe("amber");
   }

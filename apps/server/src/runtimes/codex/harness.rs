@@ -184,7 +184,7 @@ impl NativeSessionReader for CodexTaskRuntime {
                             .then_some(turn.updated_at_ms),
                         message_id: turn.turn_id.clone(),
                         turn_id: turn.turn_id,
-                        provider: "openai",
+                        provider: "openai".to_owned(),
                         model: turn.model,
                         started_at_ms: turn.started_at_ms,
                         failed: turn.failed,

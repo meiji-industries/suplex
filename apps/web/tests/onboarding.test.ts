@@ -6,6 +6,9 @@ import type { ApiProfile, OnboardingState } from "../features/onboarding/onboard
 import { connectedProviders, firstStep, ONBOARDING_STEPS, setupComplete, stepComplete } from "../features/onboarding/onboarding.js";
 import { planLabel } from "../features/onboarding/onboarding-you.js";
 import type { BillingSummary } from "../contracts/billing.js";
+import { HARNESS_KIND_IDS } from "../contracts/harness-kind.js";
+import { providerIcons } from "../components/app/provider-icons.js";
+import { PROVIDER_INSTALLATIONS } from "../components/app/provider-installation.js";
 
 const provider = (id = "codex", status: ProviderSummary["connection"]["status"] = "connected", models = [{ id: "gpt-5.6-sol", label: "GPT" }]): ProviderSummary => ({ id, label: id, status: "configured", connection: { status, summary: status }, modelCount: models.length, models }) as ProviderSummary;
 const profile = (role: "root" | "worker", providerId = "codex"): ApiProfile => ({ id: role, role, provider: providerId, model: "gpt-5.6-sol", archivedAt: null }) as ApiProfile;
@@ -44,6 +47,17 @@ test("a new company starts at the intro; a named one resumes at the first unfini
 
 test("connected providers keep configured API order", () => {
   expect(connectedProviders([provider("codex"), { ...provider("devin"), status: "missing" }, provider("claude-code", "not-connected")]).map(item => item.id)).toEqual(["codex"]);
+});
+
+test("Pi lists in Your stack like the other agent tools, with a local model", () => {
+  const pi = provider("pi", "connected", [{ id: "llama-server/qwen3-coder", label: "qwen3-coder (llama-server)" }]);
+  expect(connectedProviders([provider("codex", "not-connected"), pi]).map(item => item.id)).toEqual(["pi"]);
+  expect(stepComplete(state({ providers: [pi], profiles: [profile("root", "pi"), profile("worker", "pi")] }), "stack")).toBe(true);
+  for (const id of HARNESS_KIND_IDS) {
+    expect(providerIcons[id].label).not.toBe("");
+    expect(PROVIDER_INSTALLATIONS[id].command).not.toBe("");
+  }
+  expect(providerIcons.pi.label).toBe("Pi");
 });
 
 test("archived agents do not complete Your team", () => {

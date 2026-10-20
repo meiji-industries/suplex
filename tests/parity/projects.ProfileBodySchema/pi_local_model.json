@@ -1,0 +1,25 @@
+{
+  "contract": "projects.ProfileBodySchema",
+  "case": "pi_local_model",
+  "input": {
+    "provider": "pi",
+    "model": "llama-server/qwen3-coder-30b",
+    "reasoningLevel": "high",
+    "serviceTier": "default",
+    "name": "Local Pi",
+    "role": "worker",
+    "avatarSeed": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "provider": "pi",
+      "model": "llama-server/qwen3-coder-30b",
+      "reasoningLevel": "high",
+      "serviceTier": "default",
+      "name": "Local Pi",
+      "role": "worker",
+      "avatarSeed": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    }
+  }
+}

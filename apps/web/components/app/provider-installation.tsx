@@ -34,6 +34,11 @@ export const PROVIDER_INSTALLATIONS: Record<HarnessKind, ProviderInstallation> =
     guideUrl: "https://docs.devin.ai/cli/index",
     os: "macOS, Linux, or WSL",
   },
+  pi: {
+    command: "curl -fsSL https://pi.dev/install.sh | sh",
+    guideUrl: "https://pi.dev/docs/latest/quickstart",
+    os: "macOS, Linux, or WSL",
+  },
 };
 
 export function ProviderInstallationInstructions({ provider, checkLabel }: { provider: HarnessKind; checkLabel: "Check again" | "Refresh" }): ReactElement {

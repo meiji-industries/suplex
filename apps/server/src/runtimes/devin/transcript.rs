@@ -38,7 +38,7 @@ pub fn usage(turns: &[DevinTurn]) -> Vec<UsageEntry> {
         .map(|turn| UsageEntry {
             message_id: turn.id.clone(),
             turn_id: turn.id.clone(),
-            provider: "devin",
+            provider: "devin".to_owned(),
             model: "unknown".into(),
             started_at_ms: turn.started_at,
             completed_at_ms: turn.completed_at,

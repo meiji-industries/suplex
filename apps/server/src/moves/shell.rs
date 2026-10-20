@@ -30,7 +30,7 @@ fn unsupported() -> TaskError {
 pub fn check_provider(profile: &TaskProfile) -> Result<(), TaskError> {
     match profile.provider {
         HarnessKind::ClaudeCode | HarnessKind::Codex => Ok(()),
-        HarnessKind::Opencode | HarnessKind::Devin => Err(unsupported()),
+        HarnessKind::Opencode | HarnessKind::Devin | HarnessKind::Pi => Err(unsupported()),
     }
 }
 
@@ -54,7 +54,9 @@ pub fn command(
             "-c".to_owned(),
             format!("model_reasoning_effort=\"{effort}\""),
         ],
-        HarnessKind::Opencode | HarnessKind::Devin => return Err(unsupported().into()),
+        HarnessKind::Opencode | HarnessKind::Devin | HarnessKind::Pi => {
+            return Err(unsupported().into());
+        }
     };
     let provider = profile.provider.as_str();
     let line = std::iter::once(shell_binary(provider))

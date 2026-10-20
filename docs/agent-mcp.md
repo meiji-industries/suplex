@@ -15,7 +15,7 @@ You can also run `/mcp` in Claude Code and select **Authenticate**. Suplex opens
 
 The client name comes from dynamic client registration. Suplex does not verify that name. Check the callback before you select **Approve**.
 
-Remote web clients need a reachable HTTPS Suplex origin. Loopback HTTP works for local development. Suplex does not enable OAuth on a remote HTTP origin.
+Remote web clients need a reachable HTTPS Suplex origin. Loopback HTTP works for local development. Suplex does not enable OAuth on a remote HTTP origin. When a reverse proxy serves Suplex, set the HTTPS address in Settings > Remote Access. Suplex uses that address as the OAuth issuer and the MCP address.
 
 See the [Claude Code MCP guide](https://code.claude.com/docs/en/mcp) and the [MCP authorization specification](https://modelcontextprotocol.io/specification/latest/basic/authorization).
 

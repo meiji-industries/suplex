@@ -190,7 +190,7 @@ fn throttle(
 }
 
 async fn register(State(state): State<AppState>, request: Request) -> Response {
-    let oauth = OAuth::new(&state.session_config.reachable_address);
+    let oauth = state.oauth();
     let source = source_address(&request);
     let (parts, body) = request.into_parts();
     let body = axum::body::to_bytes(body, 1024 * 1024)
@@ -247,7 +247,7 @@ async fn authorize(
     headers: HeaderMap,
     RawQuery(query): RawQuery,
 ) -> Response {
-    let oauth = OAuth::new(&state.session_config.reachable_address);
+    let oauth = state.oauth();
     let query = typed::agent_api::query_object(query.as_deref());
     let text = |name: &str| query.get(name).and_then(Value::as_str);
     let required = [
@@ -321,7 +321,7 @@ async fn consent(
     ValidPath(ConsentParams { request_id: id }): ValidPath<ConsentParams>,
     headers: HeaderMap,
 ) -> Response {
-    let oauth = OAuth::new(&state.session_config.reachable_address);
+    let oauth = state.oauth();
     let (user, cookies) = match session_user(&state, &headers) {
         Ok(value) => value,
         Err(error) => return oauth_error(error.as_ref(), &oauth),
@@ -379,7 +379,7 @@ enum Decision {
 }
 
 async fn decide(state: AppState, id: String, headers: HeaderMap, decision: Decision) -> Response {
-    let oauth = OAuth::new(&state.session_config.reachable_address);
+    let oauth = state.oauth();
     if !session::csrf_allowed(&state.session_config, &headers, "POST", false) {
         return auth::error(StatusCode::FORBIDDEN, "request_origin_invalid");
     }
@@ -437,7 +437,7 @@ async fn deny(
 }
 
 async fn token(State(state): State<AppState>, headers: HeaderMap, body: Bytes) -> Response {
-    let oauth = OAuth::new(&state.session_config.reachable_address);
+    let oauth = state.oauth();
     let result = (|| {
         let fields = form(&headers, &body)?;
         let get = |name: &str| fields.get(name).map(String::as_str);
@@ -514,7 +514,7 @@ async fn token(State(state): State<AppState>, headers: HeaderMap, body: Bytes) -
 }
 
 async fn revoke(State(state): State<AppState>, headers: HeaderMap, body: Bytes) -> Response {
-    let oauth = OAuth::new(&state.session_config.reachable_address);
+    let oauth = state.oauth();
     let result = form(&headers, &body).and_then(|fields| {
         let token = fields
             .get("token")

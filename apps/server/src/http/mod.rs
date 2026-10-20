@@ -14,6 +14,7 @@ use sha2::{Digest, Sha256};
 use tokio_util::sync::CancellationToken;
 use tower_http::compression::CompressionLayer;
 
+use crate::identity::{oauth::OAuth, remote_access_repository};
 use crate::integrations::{github_device::DeviceAuth, herdr::Herdr};
 use crate::platform::{config::Installation, database::SuplexDatabase, embedded};
 use crate::profiles::provider_login::ProviderLogins;
@@ -181,6 +182,25 @@ impl AppState {
     pub fn with_dev_assets_dir(mut self, directory: PathBuf) -> Self {
         self.dev_assets_dir = Some(directory);
         self
+    }
+
+    /// The OAuth issuer and MCP resource that external clients use. The admin
+    /// HTTPS address wins over the derived reachable address, so a reverse proxy
+    /// in front of a loopback bind advertises its public origin.
+    pub fn oauth(&self) -> OAuth {
+        let external = self
+            .with_database(|database| remote_access_repository::external_https_origin(database))
+            .ok()
+            .flatten();
+        let origin = remote_access_repository::effective_https_origin(
+            external.as_deref(),
+            &self.session_config.reachable_address,
+        );
+        OAuth::new(
+            origin
+                .as_deref()
+                .unwrap_or(&self.session_config.reachable_address),
+        )
     }
 
     pub fn with_database<T>(&self, operation: impl FnOnce(&mut SuplexDatabase) -> T) -> T {

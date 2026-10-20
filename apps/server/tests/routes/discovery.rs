@@ -67,4 +67,46 @@ mod tests {
             assert_eq!(status, 401, "{method} {path}");
         }
     }
+
+    /// A reverse proxy in front of a loopback bind: the admin HTTPS address is the
+    /// OAuth issuer, the MCP resource, and the authority `/mcp` accepts.
+    #[tokio::test]
+    async fn the_external_https_origin_is_the_oauth_issuer_and_mcp_authority() {
+        let server = server(None).await;
+        server
+            .state
+            .with_database(|database| {
+                crate::identity::remote_access_repository::set_external_https_origin(
+                    database,
+                    Some("https://nstx.suplex.test"),
+                )
+            })
+            .unwrap();
+        let (_, resource) = server
+            .send(reqwest::Method::GET, "/.well-known/oauth-protected-resource/mcp", None, None)
+            .await;
+        assert_eq!(resource["resource"], "https://nstx.suplex.test/mcp");
+        assert_eq!(resource["authorization_servers"], json!(["https://nstx.suplex.test"]));
+        let (_, authorization) = server
+            .send(reqwest::Method::GET, "/.well-known/oauth-authorization-server", None, None)
+            .await;
+        assert_eq!(authorization["issuer"], "https://nstx.suplex.test");
+        assert_eq!(authorization["registration_endpoint"], "https://nstx.suplex.test/oauth/register");
+        let mcp = |host: &'static str| {
+            server
+                .client
+                .post(format!("{}/mcp", server.base))
+                .header("host", host)
+                .header("x-forwarded-proto", "https")
+                .json(&json!({}))
+                .send()
+        };
+        let proxied = mcp("nstx.suplex.test").await.unwrap();
+        assert_eq!(proxied.status(), 401);
+        assert_eq!(
+            proxied.headers()["www-authenticate"],
+            "Bearer resource_metadata=\"https://nstx.suplex.test/.well-known/oauth-protected-resource/mcp\", scope=\"suplex:mcp\""
+        );
+        assert_eq!(mcp("attacker.test").await.unwrap().status(), 403);
+    }
 }

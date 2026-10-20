@@ -16,9 +16,7 @@ use rmcp::transport::streamable_http_server::{
 };
 use serde_json::json;
 
-use crate::{
-    http::AppState, identity::oauth::OAuth, integrations::suplex::runtime::SuplexMcpRuntime,
-};
+use crate::{http::AppState, integrations::suplex::runtime::SuplexMcpRuntime};
 
 use super::{agent_api, oauth::challenge};
 
@@ -60,14 +58,10 @@ fn authority_allowed(reachable: &str, host: Option<&str>, origin: Option<&str>) 
 }
 
 async fn mcp(State(state): State<AppState>, request: Request) -> Response {
-    let oauth = OAuth::new(&state.session_config.reachable_address);
+    let oauth = state.oauth();
     let headers = request.headers();
     let text = |name: header::HeaderName| headers.get(name).and_then(|value| value.to_str().ok());
-    if !authority_allowed(
-        &state.session_config.reachable_address,
-        text(header::HOST),
-        text(header::ORIGIN),
-    ) {
+    if !authority_allowed(&oauth.issuer, text(header::HOST), text(header::ORIGIN)) {
         return (
             StatusCode::FORBIDDEN,
             Json(json!({"error": "request_origin_invalid"})),

@@ -13,7 +13,7 @@ use axum::{
 };
 use serde_json::{Value, json};
 
-use crate::{http::AppState, identity::oauth::OAuth, shared::js_json};
+use crate::{http::AppState, shared::js_json};
 
 const LLMS: &str = include_str!("discovery/llms.txt");
 
@@ -89,14 +89,14 @@ fn metadata(value: Value) -> Response {
 }
 
 async fn protected_resource(State(state): State<AppState>) -> Response {
-    let oauth = OAuth::new(&state.session_config.reachable_address);
+    let oauth = state.oauth();
     metadata(
         json!({"resource": oauth.resource, "authorization_servers": [oauth.issuer], "scopes_supported": ["suplex:mcp"], "bearer_methods_supported": ["header"]}),
     )
 }
 
 async fn authorization_server(State(state): State<AppState>) -> Response {
-    let issuer = OAuth::new(&state.session_config.reachable_address).issuer;
+    let issuer = state.oauth().issuer;
     metadata(json!({
         "issuer": issuer,
         "authorization_endpoint": format!("{issuer}/oauth/authorize"),

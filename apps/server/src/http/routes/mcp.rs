@@ -67,7 +67,16 @@ async fn mcp(State(state): State<AppState>, request: Request) -> Response {
     };
     let headers = request.headers();
     let text = |name: header::HeaderName| headers.get(name).and_then(|value| value.to_str().ok());
-    if !authority_allowed(&oauth.issuer, text(header::HOST), text(header::ORIGIN)) {
+    // A client that followed discovery to the external origin can still post to
+    // the reachable address, such as a script on the host itself.
+    let authorities = [
+        oauth.issuer.as_str(),
+        state.session_config.reachable_address.as_str(),
+    ];
+    if !authorities
+        .iter()
+        .any(|authority| authority_allowed(authority, text(header::HOST), text(header::ORIGIN)))
+    {
         return (
             StatusCode::FORBIDDEN,
             Json(json!({"error": "request_origin_invalid"})),

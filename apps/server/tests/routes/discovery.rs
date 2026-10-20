@@ -1,7 +1,7 @@
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::http::routes::external_agent_administration::tests::server;
+    use crate::http::routes::external_agent_administration::tests::{HOST, server};
 
     /// Ports `tests/discovery-artifacts.test.ts` and the public half of the machine-discovery journey.
     #[tokio::test]
@@ -97,6 +97,7 @@ mod tests {
                 .client
                 .post(format!("{}/mcp", server.base))
                 .header("host", host)
+                .header("x-forwarded-host", host)
                 .header("x-forwarded-proto", "https")
                 .json(&json!({}))
                 .send()
@@ -107,6 +108,7 @@ mod tests {
             proxied.headers()["www-authenticate"],
             "Bearer resource_metadata=\"https://nstx.suplex.test/.well-known/oauth-protected-resource/mcp\", scope=\"suplex:mcp\""
         );
+        assert_eq!(mcp(HOST).await.unwrap().status(), 401);
         assert_eq!(mcp("attacker.test").await.unwrap().status(), 403);
     }
 

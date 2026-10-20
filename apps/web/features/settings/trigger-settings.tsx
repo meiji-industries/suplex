@@ -164,7 +164,7 @@ export function TriggerSettingsView(): ReactElement {
         <SettingsTableGroup label="Triggers" count={visible.length} columnCount={columns.length}>
           {visible.map((rule) => {
             const ruleStatus = status(rule); const checkStatus = lastCheck(rule);
-            return <SettingsTableRow key={rule.id} aria-label={`Edit ${rule.name}`} tabIndex={0} onClick={(event) => { if (!busy && !(event.target as HTMLElement).closest("button, input, label, [data-base-ui-portal]")) { setError(""); setEditor({ kind: "edit", rule, draft: draftFor(rule) }); } }}>
+            return <SettingsTableRow key={rule.id} aria-label={`Edit ${rule.name}`} tabIndex={0} onClick={(event) => { if (!busy && !(event.target as HTMLElement).closest("button, input, label, [data-base-ui-portal]")) { setError(""); setEditor({ kind: "edit", rule, draft: draftFor(rule) }); } }} onKeyDown={(event) => { if (busy || event.target !== event.currentTarget || event.key !== "Enter" && event.key !== " ") return; event.preventDefault(); setError(""); setEditor({ kind: "edit", rule, draft: draftFor(rule) }); }}>
               <SettingsTableCell><span className="flex items-center gap-1.5 text-muted-foreground"><span className={`size-1.5 rounded-full ${ruleStatus.color}`} />{ruleStatus.text}</span></SettingsTableCell>
               <SettingsTableCell className="font-medium">{rule.name}</SettingsTableCell>
               <SettingsTableCell className="truncate text-muted-foreground">{projects.find((project) => project.id === rule.projectId)?.name ?? rule.projectId}</SettingsTableCell>

@@ -1,4 +1,4 @@
-import { CalendarDays, ChartNoAxesGantt, Columns3, ClipboardList, EllipsisVertical, LogOut, Plus, Settings, Shield, UserRound, Zap, type LucideIcon } from "lucide-react";
+import { CalendarDays, ChartNoAxesGantt, Columns3, ClipboardList, EllipsisVertical, Keyboard, LogOut, Plus, Settings, Shield, UserRound, Zap, type LucideIcon } from "lucide-react";
 import { useEffect, useMemo, useState, type ReactElement } from "react";
 import { BarChart3 } from "lucide-react"; import { cn } from "../lib/utils.js"; import { PhosphorTerminalIcon, toggleQuickShell } from "./quick-shell.js";
 
@@ -19,7 +19,8 @@ import { EntityAvatar } from "../components/app/entity-avatar.js";
 import { RecentTasks } from "../features/tasks/recent-tasks.js";
 import { SystemHealthIndicator } from "../components/app/system-health.js";
 import { requestNewTask, useHasProjects } from "./global-new-task-dialog.js";
-import { inFieldOrDialog, opensCommandMenu, opensSettings, settingsShortcutLabel } from "./shortcuts.js";
+import { requestShortcutReference, settingsShortcutLabel, useGlobalShortcuts } from "./shortcuts.js";
+import { ShortcutReference } from "./shortcut-reference.js";
 import { useSignOut } from "./server-state.js";
 import wordmark from "../assets/suplex-wordmark.svg?inline";
 
@@ -89,7 +90,7 @@ function NavigationSearch({ close }: { close?: () => void }): ReactElement {
     window.addEventListener("suplex:command-menu", openMenu);
     return () => window.removeEventListener("suplex:command-menu", openMenu);
   }, []);
-  return <><Dialog open={open} onOpenChange={setOpen}><DialogContent><DialogHeader><DialogTitle>Command menu</DialogTitle></DialogHeader><Input autoFocus aria-label="Search Suplex" placeholder="Search the views" value={query} onChange={(event) => setQuery(event.target.value)} /><div className="space-y-1 -ml-[11px] -mr-[11px]"><button type="button" className={cn(buttonVariants({ variant: "ghost", className: "w-full justify-start focus-visible:border-foreground/25 focus-visible:ring-0 text-sm gap-x-[12px]" }))} onClick={() => { setOpen(false); close?.(); requestNewTask(); }}><Plus />{hasProjects === false ? "Add project" : "New task"} <kbd className="ml-auto text-xs text-muted-foreground">C</kbd></button>{visible.map(({ href, label, icon: Icon, shortcut }) => <a className={cn(buttonVariants({ variant: "ghost", className: "w-full justify-start focus-visible:border-foreground/25 focus-visible:ring-0 text-sm gap-x-[12px]" }))} href={href} onClick={() => { setOpen(false); close?.(); }} key={href}><Icon />{label}{shortcut ? <kbd className="ml-auto text-xs text-muted-foreground">{shortcut}</kbd> : null}</a>)}</div><p className="text-xs text-muted-foreground">⌘K or / search. G then H, T, B, or M navigates. C starts a new task.{context?.user ? ` ${settingsShortcut} opens Settings.` : ""}</p></DialogContent></Dialog></>;
+  return <><Dialog open={open} onOpenChange={setOpen}><DialogContent><DialogHeader><DialogTitle>Command menu</DialogTitle></DialogHeader><Input autoFocus aria-label="Search Suplex" placeholder="Search the views" value={query} onChange={(event) => setQuery(event.target.value)} /><div className="space-y-1 -ml-[11px] -mr-[11px]"><button type="button" className={cn(buttonVariants({ variant: "ghost", className: "w-full justify-start focus-visible:border-foreground/25 focus-visible:ring-0 text-sm gap-x-[12px]" }))} onClick={() => { setOpen(false); close?.(); requestNewTask(); }}><Plus />{hasProjects === false ? "Add project" : "New task"} <kbd className="ml-auto text-xs text-muted-foreground">C</kbd></button>{visible.map(({ href, label, icon: Icon, shortcut }) => <a className={cn(buttonVariants({ variant: "ghost", className: "w-full justify-start focus-visible:border-foreground/25 focus-visible:ring-0 text-sm gap-x-[12px]" }))} href={href} onClick={() => { setOpen(false); close?.(); }} key={href}><Icon />{label}{shortcut ? <kbd className="ml-auto text-xs text-muted-foreground">{shortcut}</kbd> : null}</a>)}{"keyboard shortcuts".includes(query.trim().toLowerCase()) ? <button type="button" className={cn(buttonVariants({ variant: "ghost", className: "w-full justify-start focus-visible:border-foreground/25 focus-visible:ring-0 text-sm gap-x-[12px]" }))} onClick={() => { setOpen(false); close?.(); requestShortcutReference(); }}><Keyboard />Keyboard shortcuts <kbd className="ml-auto text-xs text-muted-foreground">?</kbd></button> : null}</div><p className="text-xs text-muted-foreground">⌘K or / opens the search. G then H, T, B, M, L, or A opens a view. C starts a new task.{context?.user ? ` ${settingsShortcut} opens Settings.` : ""} ? shows all shortcuts.</p></DialogContent></Dialog></>;
 }
 
 function SecondaryNavigation(): ReactElement {
@@ -120,40 +121,23 @@ export function AppSidebar(): ReactElement {
   const { setOpenMobile } = useSidebar();
   const close = (): void => setOpenMobile(false);
   const todayPage = useExperiments()?.todayPage ?? false;
-  useEffect(() => {
-    let goPending = false;
-    let goTimer: number | undefined;
-    const handleShortcut = (event: KeyboardEvent): void => {
-      if (opensSettings(event)) {
-        if (!inFieldOrDialog(event.target)) { event.preventDefault(); navigate(settingsHref); }
-        return;
-      }
-      const target = event.target instanceof HTMLElement ? event.target : null;
-      if (target?.matches("input, textarea, select, button, [contenteditable=true]")) return;
-      const key = event.key.toLowerCase();
-      if (opensCommandMenu(event)) {
-        event.preventDefault(); window.dispatchEvent(new Event("suplex:command-menu")); return;
-      }
-      if (!event.metaKey && !event.ctrlKey && !event.altKey && key === "c" && context?.currentCompany?.status === "active") {
-        event.preventDefault(); requestNewTask(); return;
-      }
-      if (!event.metaKey && !event.ctrlKey && !event.altKey && key === "g") {
-        goPending = true; window.clearTimeout(goTimer); goTimer = window.setTimeout(() => { goPending = false; }, 750); return;
-      }
-      if (goPending && !event.metaKey && !event.ctrlKey && !event.altKey) {
-        const path = key === "h" ? (todayPage ? "/today" : "/tasks") : key === "t" ? "/tasks" : key === "b" ? "/board" : key === "m" ? "/moves" : key === "l" ? "/timeline" : undefined;
-        goPending = false; window.clearTimeout(goTimer);
-        if (path) { event.preventDefault(); navigate(path === "/today" ? path : withCompany(path, context?.currentCompany?.id)); }
-      }
-    };
-    window.addEventListener("keydown", handleShortcut);
-    return () => { window.removeEventListener("keydown", handleShortcut); window.clearTimeout(goTimer); };
-  }, [context?.currentCompany?.id, context?.currentCompany?.status, settingsHref, todayPage]);
+  useGlobalShortcuts({
+    companyId: context?.currentCompany?.id,
+    companyActive: context?.currentCompany?.status === "active",
+    todayPage,
+    navigate,
+    withCompany,
+    newTask: () => requestNewTask(),
+    openCommandMenu: () => window.dispatchEvent(new Event("suplex:command-menu")),
+    openReference: requestShortcutReference,
+    openSettings: () => navigate(settingsHref),
+  });
   return (
     <Sidebar variant="inset" collapsible="offcanvas">
       <SidebarHeader data-tauri-drag-region="deep" className="titlebar-top"><div className="flex h-8 items-center gap-1 pl-2 -mr-2"><img src={wordmark} alt="Suplex" className="w-auto invert dark:invert-0 h-5" />{context?.user ? <span className="ml-auto flex"><Button variant="ghost" size="icon-sm" nativeButton={false} render={<a href={settingsHref} onClick={close} aria-label="Settings" title="Settings" />}><Settings /></Button></span> : null}<span className="md:hidden"><SidebarTrigger aria-label="Close navigation" title="Close navigation" /></span></div><CompanySwitcher /></SidebarHeader>
       <SidebarContent><MainNavigation close={close} /><RecentTasks close={close} /><SecondaryNavigation /></SidebarContent>
       <NavigationSearch close={close} />
+      <ShortcutReference />
       <SidebarFooter><UserMenu /></SidebarFooter>
     </Sidebar>
   );

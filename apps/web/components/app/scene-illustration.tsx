@@ -80,7 +80,7 @@ export function SceneIllustration({ scenes, icon: Icon, label }: { scenes: reado
     aria-roledescription="carousel"
     aria-label={label}
     tabIndex={0}
-    className="flex w-full max-w-sm touch-pan-y select-none flex-col items-center gap-3 outline-none"
+    className="flex w-full max-w-sm touch-pan-y select-none flex-col items-center gap-3"
     onKeyDown={event => { if (event.key === "ArrowRight") choose(stage.index + 1); if (event.key === "ArrowLeft") choose(stage.index - 1); }}
     onPointerDown={event => { swipe.current = event.clientX; }}
     onPointerUp={event => {

@@ -77,6 +77,37 @@ test.each([1280, 390])("tasks can be created, started and viewed on the board at
       expect((await started).status()).toBe(200);
       expect((await value.api("GET", `/api/tasks/${backlog.id}`)).body).not.toMatchObject({ status: "backlog" });
       expect(new URL(page.url()).pathname).toBe("/board");
+      // Keyboard only: G then B opens the board, J or Down moves to a card, Enter opens it, and Tab reaches the message field.
+      // A delivered task accepts a message without a running agent.
+      const target = (await value.createTask({ title: "Keyboard example", description: "Open by keyboard", startImmediately: false, idempotencyKey: "board-keyboard" })).id;
+      value.database.prepare("UPDATE suplex_task_controls SET status = 'delivered' WHERE task_id = ?").run(target);
+      await page.goto(`${value.base}/tasks?company=${value.company.id}`);
+      await page.locator("[data-task-list] [data-shortcut-item]").first().waitFor();
+      await page.keyboard.press("g");
+      await page.keyboard.press("b");
+      await page.waitForURL(url => url.pathname === "/board");
+      await page.locator(`[data-task-board] a[href*="/board/${target}"]`).waitFor();
+      const focused = (): Promise<string> => page.evaluate(() => `${document.activeElement?.getAttribute("href") ?? ""}|${document.activeElement?.getAttribute("aria-label") ?? ""}`);
+      for (let step = 0; step < 20 && !(await focused()).includes(`/board/${target}`); step++) await page.keyboard.press(step % 2 ? "ArrowDown" : "j");
+      expect(await focused()).toContain(`/board/${target}`);
+      await page.keyboard.press("Enter");
+      await page.waitForURL(url => url.pathname === `/board/${target}`);
+      await page.locator("[data-task-detail-header] h2").waitFor();
+      for (let step = 0; step < 150 && !(await focused()).endsWith("|Message Coordinator"); step++) await page.keyboard.press("Tab");
+      expect(await focused()).toMatch(/\|Message Coordinator$/);
+      await page.keyboard.type("Keep the change small.");
+      const sent = page.waitForResponse(candidate => candidate.request().method() === "POST" && candidate.url().endsWith(`/api/tasks/${target}/note`));
+      await page.keyboard.press("Enter");
+      const note = await sent;
+      expect(note.status(), await note.text()).toBe(200);
+      expect(note.request().postDataJSON()).toEqual({ note: "Keep the change small." });
+      // ? types into the field, so leave it first.
+      await page.keyboard.press("Shift+Tab");
+      await page.keyboard.press("?");
+      const reference = page.getByRole("dialog", { name: "Keyboard shortcuts", exact: true });
+      await reference.waitFor();
+      await page.keyboard.press("Escape");
+      await reference.waitFor({ state: "hidden" });
     }
     expect(value.errors).toEqual([]);
   } finally { await value.close(); }

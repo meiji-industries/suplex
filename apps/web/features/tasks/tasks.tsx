@@ -176,7 +176,7 @@ const BoardTaskCard = memo(function BoardTaskCard({ task, project, pending, heal
   const ref = useRef<HTMLLIElement>(null);
   useBoardLanding(ref, task.id, lifted, task.status);
   // While you hold the card, its slot stays as a faint outline.
-  return <li ref={ref} className={`relative min-w-0${lifted ? " opacity-30" : ""}`} aria-busy={pending || undefined}><a href={withCompany(`/board/${task.id}`, task.companyId)} {...moves.length && !pending ? { onDragStart: event => {
+  return <li ref={ref} className={`relative min-w-0${lifted ? " opacity-30" : ""}`} aria-busy={pending || undefined}><a data-shortcut-item href={withCompany(`/board/${task.id}`, task.companyId)} {...moves.length && !pending ? { onDragStart: event => {
     event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("text/plain", task.id);
     if (animated) hideNativeDragImage(event.dataTransfer);
     const rect = event.currentTarget.getBoundingClientRect();
@@ -185,13 +185,13 @@ const BoardTaskCard = memo(function BoardTaskCard({ task, project, pending, heal
 });
 
 function BoardRunCard({ move, run, project }: { move: MoveResponse; run: MoveRunResponse; project: ApiProject | undefined }): ReactElement {
-  return <li className="min-w-0"><a href={withCompany(`/moves/${move.id}/runs/${run.id}`, move.companyId)} className="block min-w-0 rounded-md border bg-card p-3 text-xs hover:bg-background focus-visible:outline-2 focus-visible:outline-ring"><span className="flex min-w-0 items-center gap-2 font-medium leading-5"><Zap aria-hidden="true" className={`size-3.5 shrink-0 ${run.live ? "text-primary motion-safe:animate-pulse" : "text-muted-foreground"}`} /><span className="min-w-0 truncate">{move.name}</span></span><p className="mt-1 truncate text-muted-foreground">{run.live ? "Live" : "Ended"} · {relativeTime(run.startedAt)}</p><span className="mt-2 flex min-w-0 items-center gap-1.5 text-muted-foreground"><ProjectLabel project={project} fallback="Not available" /></span></a></li>;
+  return <li className="min-w-0"><a data-shortcut-item href={withCompany(`/moves/${move.id}/runs/${run.id}`, move.companyId)} className="block min-w-0 rounded-md border bg-card p-3 text-xs hover:bg-background focus-visible:outline-2 focus-visible:outline-ring"><span className="flex min-w-0 items-center gap-2 font-medium leading-5"><Zap aria-hidden="true" className={`size-3.5 shrink-0 ${run.live ? "text-primary motion-safe:animate-pulse" : "text-muted-foreground"}`} /><span className="min-w-0 truncate">{move.name}</span></span><p className="mt-1 truncate text-muted-foreground">{run.live ? "Live" : "Ended"} · {relativeTime(run.startedAt)}</p><span className="mt-2 flex min-w-0 items-center gap-1.5 text-muted-foreground"><ProjectLabel project={project} fallback="Not available" /></span></a></li>;
 }
 
 export const TaskRow = memo(function TaskRow({ task, project, cost }: { task: TaskListTask; project: ApiProject | undefined; cost: ReturnType<typeof useTaskCosts> extends Map<string, infer Value> ? Value | undefined : never }): ReactElement {
   const settled = task.status === "delivered" || task.status === "cancelled";
   return <DataListRow data-task-row>
-    <a className="col-span-full row-start-1 grid min-w-0 grid-cols-subgrid items-center focus-visible:outline-2 focus-visible:outline-ring" href={withCompany(`/tasks/${task.id}`, task.companyId)}>
+    <a data-shortcut-item className="col-span-full row-start-1 grid min-w-0 grid-cols-subgrid items-center focus-visible:outline-2 focus-visible:outline-ring" href={withCompany(`/tasks/${task.id}`, task.companyId)}>
       <span data-task-title className="flex min-w-0 items-center gap-2.5"><TaskStatusIcon status={task.status} pullRequestState={task.pullRequest?.state} /><span className="flex min-w-0 flex-col"><span className="flex min-w-0 items-baseline gap-2">{task.issueKey ? <span className="shrink-0 text-muted-foreground">{task.issueKey}</span> : null}<span className={`truncate ${settled ? "text-muted-foreground" : "text-foreground"} not-dark:font-medium`}>{task.title}</span></span></span></span>
       <span data-task-project className="hidden min-w-0 items-center gap-2 text-muted-foreground lg:flex"><ProjectLabel project={project} fallback="Not available" /></span>
       <span data-task-status className="hidden lg:block"><TaskStatus status={task.status} pullRequestState={task.pullRequest?.state} /></span>

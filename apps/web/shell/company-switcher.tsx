@@ -1,4 +1,4 @@
-import { Check, CircleAlert, CircleGauge, CirclePlus, RefreshCw, Settings2 } from "lucide-react";
+import { CircleAlert, CircleGauge, CirclePlus, RefreshCw, Settings2 } from "lucide-react";
 import { useState, type FormEvent, type ReactElement } from "react";
 
 import { Button } from "../components/ui/button.js";
@@ -90,7 +90,6 @@ export function CompanySwitcher(): ReactElement {
                     <span className="min-w-0 flex-1 truncate">{company.name}</span>
                     <PlanBadge plan={company.plan} />
                     <StatusBadge status={company.status} />
-                    {company.id === currentCompany?.id ? <Check className="ml-1 size-3.5 shrink-0 text-primary" /> : null}
                   </DropdownMenuItem></span>) : <div className="px-2 py-2 text-xs text-muted-foreground">{user?.role === "admin" ? "No companies yet" : "No company access"}</div>}
               </DropdownMenuGroup>
               <DropdownMenuSeparator />

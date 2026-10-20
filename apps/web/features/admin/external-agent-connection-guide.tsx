@@ -29,7 +29,7 @@ export function ExternalAgentConnectionGuide(): ReactElement {
   const baseUrl = window.location.origin;
   const [address, setAddress] = useState<McpAddress>();
   useEffect(() => {
-    void readJsonUnchecked<{ resource?: unknown }>("/.well-known/oauth-protected-resource/mcp")
+    void readJsonUnchecked<{ resource?: unknown }>("/.well-known/oauth-protected-resource/mcp", { cache: "no-cache" })
       .then((metadata) => setAddress(mcpAddress(metadata, window.location.hostname)))
       .catch(() => setAddress({ kind: "not_available" }));
   }, []);

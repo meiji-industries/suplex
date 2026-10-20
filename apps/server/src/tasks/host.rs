@@ -3,7 +3,11 @@
 pub use super::worktree::prepare_task_worktree;
 pub use crate::coordination::session_recovery::{recover_prepared_root, recover_prepared_worker};
 use crate::{
-    coordination::{root_session_store, session_recovery::stop_retired_sessions},
+    coordination::{
+        dispatch_notice::{self, DispatchNotice, DispatchNoticeKind},
+        root_session_store,
+        session_recovery::stop_retired_sessions,
+    },
     integrations::herdr::Herdr,
     platform::database::{DatabaseResult, OpenMode, SuplexDatabase},
     shared::time::now_millis_rfc3339,
@@ -277,6 +281,21 @@ pub(crate) async fn sweep_task_with_herdr(
         herdr,
     )
     .await;
+    // The tail only logs a failed sweep; the task view shows it until a sweep succeeds.
+    match &swept {
+        Err(error) => dispatch_notice::observe(
+            &database,
+            task_id,
+            &DispatchNotice::sweep_failed(&error.to_string(), Utc::now()),
+        ),
+        Ok(()) => {
+            if let Err(error) =
+                dispatch_notice::clear(&database, task_id, Some(DispatchNoticeKind::Sweep))
+            {
+                eprintln!("Task {task_id} dispatch notice was not cleared: {error}");
+            }
+        }
+    }
     super::repository::schedule_next_sweep(&database, task_id, Utc::now())?;
     swept
 }

@@ -1057,10 +1057,14 @@ pub fn mark_prompted(
     now: DateTime<Utc>,
 ) -> DatabaseResult<bool> {
     database.transaction(true, |database| {
-        Ok(database.connection().execute(
+        let prompted = database.connection().execute(
             "UPDATE suplex_task_turns SET status = 'prompted', native_turn_id = COALESCE(?1, native_turn_id), prompted_at = ?2, updated_at = ?2 WHERE id = ?3 AND generation = ?4 AND status IN ('pending_prompt', 'unknown') AND EXISTS (SELECT 1 FROM suplex_task_sessions s WHERE s.id = suplex_task_turns.session_id AND s.is_current = 1 AND s.generation = suplex_task_turns.generation)",
             params![native_turn_id, rfc3339_millis(now), turn.id, turn.generation],
-        )? == 1)
+        )? == 1;
+        if prompted {
+            super::dispatch_notice::clear(database, &turn.task_id, None)?;
+        }
+        Ok(prompted)
     })
 }
 
@@ -1612,17 +1616,30 @@ pub fn wake_idle_root(
     prompt: &str,
     now: DateTime<Utc>,
 ) -> DatabaseResult<Option<TurnRow>> {
+    use super::dispatch_notice::{self, DispatchNotice, DispatchNoticeKind};
+    // The idle wait notice describes only a wake that is deferred now.
+    let not_waiting = |database: &SuplexDatabase| {
+        if let Err(error) =
+            dispatch_notice::clear(database, task_id, Some(DispatchNoticeKind::IdleWait))
+        {
+            eprintln!("Task {task_id} dispatch notice was not cleared: {error}");
+        }
+    };
     database.transaction(true, |database| {
         let blocked: bool = crate::tasks::dependencies::dispatch_blocked(database, task_id)?;
-        if blocked { return Ok(None); }
+        if blocked { not_waiting(database); return Ok(None); }
         let id = new_turn_id(now)?;
         let time = rfc3339_millis(now);
         let eligible: Option<(String, i64)> = database.connection().query_row(
             "SELECT s.id,s.generation FROM suplex_task_controls c JOIN suplex_task_sessions s ON s.id = c.root_session_id WHERE c.task_id = ?1 AND c.status = 'active' AND json_extract(c.workflow_state_json,'$.deliveryWait') IS NULL AND s.is_current = 1 AND s.lifecycle = 'live' AND s.native_session_id IS NOT NULL AND s.launch_owner IS NULL AND NOT EXISTS (SELECT 1 FROM suplex_task_turns t WHERE t.session_id = s.id AND t.status IN ('pending_prompt','prompted','unknown')) AND NOT EXISTS (SELECT 1 FROM suplex_task_sessions w JOIN suplex_task_turns wt ON wt.session_id = w.id AND wt.generation = w.generation WHERE w.task_id = c.task_id AND w.kind = 'worker' AND w.is_current = 1 AND wt.status IN ('pending_prompt','prompted','unknown'))",
             [task_id], |row| Ok((row.get(0)?, row.get(1)?)),
         ).optional()?;
-        let Some((session_id, generation)) = eligible else { return Ok(None); };
-        if idle_wake_deferred(database, &session_id, now)? { return Ok(None); }
+        let Some((session_id, generation)) = eligible else { not_waiting(database); return Ok(None); };
+        if let Some((delay, next_wake)) = idle_wake_deferral(database, &session_id, now)? {
+            dispatch_notice::observe(database, task_id, &DispatchNotice::idle_wait(delay, next_wake, now));
+            return Ok(None);
+        }
+        not_waiting(database);
         insert_pending_turn(database, &NewTurn { id: &id, task_id, session_id: &session_id, generation, assignment_hash: None, prompt, workflow_input: None }, &time)?;
         Ok(Some(database.connection().query_row(
             "SELECT * FROM suplex_task_turns WHERE id = ?1", [&id], turn,
@@ -1633,11 +1650,12 @@ pub fn wake_idle_root(
 /// A Root whose last turns were all idle wakes is woken with a growing delay
 /// (15 s doubling to 30 min) measured from its last completed turn. Any other
 /// turn (a Worker result, a user answer, a delegation) resets the delay.
-fn idle_wake_deferred(
+/// Returns the delay in seconds and the next wake time while the wake waits.
+fn idle_wake_deferral(
     database: &SuplexDatabase,
     session_id: &str,
     now: DateTime<Utc>,
-) -> DatabaseResult<bool> {
+) -> DatabaseResult<Option<(i64, DateTime<Utc>)>> {
     let idle = |prompt: &str| without_current_dependency_status(prompt) == IDLE_ROOT_PROMPT;
     let mut statement = database.connection().prepare(
         "SELECT prompt_text, completed_at FROM suplex_task_turns WHERE session_id = ?1 AND status = 'completed' AND completed_at IS NOT NULL ORDER BY completed_at DESC LIMIT 12",
@@ -1649,16 +1667,17 @@ fn idle_wake_deferred(
         .collect::<rusqlite::Result<Vec<_>>>()?;
     let streak = recent.iter().take_while(|(prompt, _)| idle(prompt)).count() as u32;
     let Some((_, last)) = recent.first() else {
-        return Ok(false);
+        return Ok(None);
     };
     if streak == 0 {
-        return Ok(false);
+        return Ok(None);
     }
     let delay = (15_i64 << streak.min(11)).min(30 * 60);
     let Ok(last) = DateTime::parse_from_rfc3339(last) else {
-        return Ok(false);
+        return Ok(None);
     };
-    Ok(now < last + chrono::Duration::seconds(delay))
+    let next_wake = last.with_timezone(&Utc) + chrono::Duration::seconds(delay);
+    Ok((now < next_wake).then_some((delay, next_wake)))
 }
 
 // WP3a admission sweep

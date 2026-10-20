@@ -481,13 +481,17 @@ mod tests {
             ).unwrap();
         };
         let at = |seconds: i64| base + chrono::Duration::seconds(seconds);
-        let deferred = |now| idle_wake_deferred(&database, "root", now).unwrap();
+        let deferred = |now| idle_wake_deferral(&database, "root", now).unwrap().is_some();
 
         assert!(!deferred(base), "no turns: wake");
         insert("t1", "Worker result", at(0));
         assert!(!deferred(at(1)), "a real turn: wake");
         insert("t2", IDLE_ROOT_PROMPT, at(10));
         assert!(deferred(at(20)), "one idle turn: wait 30 s");
+        assert_eq!(
+            idle_wake_deferral(&database, "root", at(20)).unwrap(),
+            Some((30, at(40)))
+        );
         assert!(!deferred(at(41)));
         insert("t3", IDLE_ROOT_PROMPT, at(41));
         insert("t4", IDLE_ROOT_PROMPT, at(100));

@@ -13,6 +13,7 @@ use crate::{
 
 use super::{
     advisor_bridge::{self, AdvisorReportOutcome, AdvisorRole},
+    dispatch_notice::{self, DispatchAgent, DispatchNotice},
     root_controller,
     root_prompts::{self, WorkerResult},
     root_session_store::{self, StandardWorkerResult},
@@ -864,15 +865,23 @@ fn recoverable_session(
 }
 
 /// Claim the session operation for this process. None when another live
-/// owner runs it or this process cannot identify itself.
+/// owner runs it or this process cannot identify itself; the task view shows why.
 fn claim_operation(
     database: &mut SuplexDatabase,
     session: &SessionRow,
+    agent: DispatchAgent,
 ) -> DatabaseResult<Option<String>> {
+    let held = DispatchNotice::session_held(agent, Utc::now());
     if current_owner_still_running(session) {
+        dispatch_notice::observe(database, &session.task_id, &held);
         return Ok(None);
     }
     let Some(self_identity) = inspect_process(std::process::id()) else {
+        dispatch_notice::observe(
+            database,
+            &session.task_id,
+            &DispatchNotice::process_unknown(agent, Utc::now()),
+        );
         return Ok(None);
     };
     let owner = Uuid::new_v4().to_string();
@@ -884,6 +893,9 @@ fn claim_operation(
         &self_identity.start_time,
         Utc::now(),
     )?;
+    if !claimed {
+        dispatch_notice::observe(database, &session.task_id, &held);
+    }
     Ok(claimed.then_some(owner))
 }
 
@@ -1087,7 +1099,20 @@ async fn dispatch_claimed(
     if refused {
         return Ok(before);
     }
-    bound.record(database, &turn, dispatched?).await
+    let dispatched = dispatched?;
+    if dispatched.retry_allowed && !dispatched.admission_observed {
+        let agent = if launch.delegate.is_some() {
+            DispatchAgent::Worker
+        } else {
+            DispatchAgent::Coordinator
+        };
+        dispatch_notice::observe(
+            database,
+            task_id,
+            &DispatchNotice::not_admitted(agent, profile.provider, dispatched.reason, Utc::now()),
+        );
+    }
+    bound.record(database, &turn, dispatched).await
 }
 
 async fn recover_session(
@@ -1110,7 +1135,12 @@ async fn recover_session(
     // TypeScript `HarnessRouter.forScope`.
     let harness = task_harness_registry::for_profile(provider)
         .ok_or_else(|| TaskError::internal(format!("No task harness for {provider}")))?;
-    let Some(owner) = claim_operation(database, &session)? else {
+    let agent = if delegate.is_some() {
+        DispatchAgent::Worker
+    } else {
+        DispatchAgent::Coordinator
+    };
+    let Some(owner) = claim_operation(database, &session, agent)? else {
         return Ok(None);
     };
     let launch = SessionLaunch {

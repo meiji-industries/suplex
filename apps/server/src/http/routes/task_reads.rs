@@ -281,6 +281,7 @@ pub(crate) fn activity_document(
             rows.control.worktree_path(),
             rows.control.shell_pane_id.as_ref(),
         ),
+        dispatch_notice: crate::coordination::dispatch_notice::read(database, task_id)?,
     })
 }
 

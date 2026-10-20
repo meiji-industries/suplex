@@ -478,6 +478,7 @@ mod migration_regressions {
         );
         for control in expected.as_array_mut().unwrap() {
             control["queue_priority"] = json!(0);
+            control["dispatch_notice_json"] = json!(null);
             if control["task_id"] == "queued" {
                 control["status"] = json!("queued");
             }

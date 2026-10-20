@@ -329,6 +329,18 @@ mod tests {
         assert_eq!(pushed["activity"], rest(address, &format!("{base}/activity")).await);
         assert!(pushed.get("execution").is_none() && pushed.get("timeline").is_none());
 
+        // A dispatch notice the host stores is pushed as the activity body shows it.
+        let notice = json!({"kind": "idle_wait", "agent": "coordinator", "text": "The Coordinator is idle. Suplex waits 2 minutes between idle Coordinator wakes.", "observedAt": "2026-10-20T12:00:00.000Z", "nextWakeAt": "2026-10-20T12:02:00.000Z"});
+        other
+            .execute(
+                "UPDATE suplex_task_controls SET dispatch_notice_json = ?1 WHERE task_id = ?2",
+                rusqlite::params![notice.to_string(), task_id],
+            )
+            .unwrap();
+        let pushed = next_of(&mut client, "openTask").await;
+        assert_eq!(pushed["activity"]["dispatchNotice"], notice);
+        assert_eq!(pushed["activity"], rest(address, &format!("{base}/activity")).await);
+
         // A foreign open task is ignored, and the new watch ends the old one.
         client.send_text(&watch(&[], Some(&foreign))).await;
         client.send_text(&watch(&[], Some(&second))).await;

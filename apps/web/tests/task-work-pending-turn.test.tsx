@@ -11,6 +11,7 @@ vi.mock("../lib/api.js", () => api);
 vi.mock("../shell/company-context.js", () => ({ useOptionalCompanyContext: () => undefined, useCompanyContext: () => ({ user: { id: "user" }, currentCompany: { id: "company-1" } }) }));
 
 import { TaskWork, type TaskActivity } from "../features/tasks/task-work.js";
+import { timeUntil } from "../features/tasks/dispatch-notice.js";
 
 const profile = { profileId: "profile", provider: "opencode", model: "model", reasoningLevel: "medium", serviceTier: "default" } as const;
 const task = {
@@ -112,6 +113,44 @@ test("the conversation shows a paired agent's note under the agent's name", asyn
   await view.render(activityWith({ ...note, prompt: "Agent note (agent_1):\nSkip the tests", status: "completed", noteAgentName: "Hermes" }));
   const article = Array.from(view.container.querySelectorAll("article")).find(element => element.textContent?.includes("Skip the tests"));
   expect(article?.querySelector("header")?.textContent).toBe("HermesSent to Coordinator");
+});
+
+test("the Chat and Activity tabs show why the host has not dispatched the turn, with the next wake", async () => {
+  const view = mount();
+  const failure = { kind: "dispatch", agent: "coordinator", text: "Suplex could not start the Coordinator. OpenCode is not connected. Suplex tries again.", observedAt: "2026-09-08T00:01:00.000Z", nextWakeAt: null } as const;
+  await view.render({ ...activityWith({ ...note, status: "pending_prompt" }), dispatchNotice: failure });
+  const notices = () => Array.from(view.container.querySelectorAll<HTMLElement>("[data-dispatch-notice]"));
+  // The notice follows the pending spinner in Chat; the inactive Activity panel is not rendered.
+  const pending = view.container.querySelector("[data-task-turn-pending]");
+  expect(notices()).toHaveLength(1);
+  expect(pending?.nextElementSibling).toBe(notices()[0]!);
+  expect(notices()[0]?.dataset.dispatchNotice).toBe("dispatch");
+  expect(notices()[0]?.textContent).toBe(failure.text);
+  expect(notices()[0]?.querySelector("time")).toBeNull();
+
+  const nextWakeAt = new Date(Date.now() + 125_000).toISOString();
+  const waiting = { kind: "idle_wait", agent: "coordinator", text: "The Coordinator is idle. Suplex waits 4 minutes between idle Coordinator wakes.", observedAt: "2026-09-08T00:02:00.000Z", nextWakeAt } as const;
+  await view.render({ ...activityWith({ ...done, id: "turn-2" }), dispatchNotice: waiting });
+  expect(view.container.querySelector("[data-task-turn-pending]")).toBeNull();
+  expect(notices()[0]?.dataset.dispatchNotice).toBe("idle_wait");
+  expect(notices()[0]?.textContent).toContain(waiting.text);
+  const time = notices()[0]?.querySelector("time");
+  expect(time?.getAttribute("dateTime")).toBe(nextWakeAt);
+  expect(time?.textContent).toMatch(/^in 2m 0[45]s$/);
+
+  await act(async () => { view.container.querySelector<HTMLElement>('[role="tab"]:nth-child(2)')?.click(); await Promise.resolve(); });
+  const activityPanel = view.container.querySelector('[aria-label="Task activity"]');
+  expect(activityPanel?.querySelector("[data-dispatch-notice]")?.textContent).toContain(waiting.text);
+
+  await view.render(activityWith({ ...done, id: "turn-2" }));
+  expect(notices()).toHaveLength(0);
+});
+
+test("timeUntil counts down to the next wake", () => {
+  const now = Date.parse("2026-09-08T00:00:00.000Z");
+  expect(timeUntil("2026-09-08T00:00:42.000Z", now)).toBe("in 42s");
+  expect(timeUntil("2026-09-08T00:08:05.000Z", now)).toBe("in 8m 05s");
+  expect(timeUntil("2026-09-07T23:59:00.000Z", now)).toBe("now");
 });
 
 test("each turn label shows the full local date and time on hover", async () => {

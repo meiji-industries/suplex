@@ -27,6 +27,14 @@ with periodic sweeps. Sweeps recover work after startup or a lost notification.
 Separate background work refreshes PR prerequisites, GitHub trigger rules, and
 analytics. Native execution is not driven by terminal text or pane status.
 
+When a sweep cannot dispatch a Coordinator or Worker turn, or the idle
+Coordinator wake waits for its backoff delay, the host stores one
+[dispatch notice](../../apps/server/src/coordination/dispatch_notice.rs) for
+the task. The task activity read shows it, so the Chat and Activity tabs say
+why no turn starts. The notice is a display observation. Dispatch never reads
+it, retries continue, and the task status does not change. A prompt admission
+or a task status change clears it.
+
 The desktop app starts a bundled local host on a loopback address after its
 install stages finish. It waits for `/health` before opening the application.
 It adopts an existing host only when that host reports the same installation

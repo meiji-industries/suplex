@@ -188,6 +188,10 @@ pub struct TaskActivityResponse {
     pub sessions: Vec<TaskActivitySession>,
     pub turns: Vec<TaskActivityTurn>,
     pub shell_pane_id: Option<String>,
+    /// Why the host has not dispatched the next turn. A display observation only.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub dispatch_notice: Option<crate::coordination::dispatch_notice::DispatchNotice>,
 }
 
 #[derive(Serialize, TS)]

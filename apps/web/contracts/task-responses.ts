@@ -35,9 +35,17 @@ export const TaskDiffSummaryResponseSchema = z.object({ available: z.boolean(), 
 
 export const TaskAgentStatusSchema = z.enum(["queued", "working", "retrying", "idle", "waiting_human", "stopped", "unknown"]);
 
-export const TaskAgentsResponseSchema = z.object({ setup: TaskSetupSchema, agents: z.array(z.object({ id: z.string(), role: TaskSessionKindSchema, advisorRole: AdvisorRoleSchema.nullable().optional(), label: z.string().optional(), paneId: z.string().nullable(), status: TaskAgentStatusSchema, statusChangedAt: z.string().datetime().nullable() })) });
+/** Display observations of a task that does not advance. They never gate a command. */
+export const TaskHealthSchema = z.object({
+  providers: z.array(z.object({ provider: HarnessKindSchema, status: z.enum(["connected", "not-connected", "unknown"]), summary: z.string(), observedAt: z.string().datetime() })),
+  retries: z.number().int().nonnegative(),
+  lastProgressAt: z.string().datetime().nullable(),
+  usualTurnSeconds: z.number().int().nonnegative().nullable(),
+});
 
-export const TaskAgentsBatchResponseSchema = z.object({ tasks: z.array(z.object({ taskId: z.string(), setup: TaskSetupSchema, agents: TaskAgentsResponseSchema.shape.agents })) });
+export const TaskAgentsResponseSchema = z.object({ setup: TaskSetupSchema, agents: z.array(z.object({ id: z.string(), role: TaskSessionKindSchema, advisorRole: AdvisorRoleSchema.nullable().optional(), label: z.string().optional(), paneId: z.string().nullable(), status: TaskAgentStatusSchema, statusChangedAt: z.string().datetime().nullable() })), health: TaskHealthSchema.optional() });
+
+export const TaskAgentsBatchResponseSchema = z.object({ tasks: z.array(z.object({ taskId: z.string(), setup: TaskSetupSchema, agents: TaskAgentsResponseSchema.shape.agents, health: TaskHealthSchema.optional() })) });
 
 export const TaskChecksResponseSchema = z.object({
   available: z.boolean(),

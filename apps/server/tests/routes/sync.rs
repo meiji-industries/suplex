@@ -302,6 +302,10 @@ mod tests {
         )
         .await;
         assert_eq!(agents, json!({"type": "agents", "tasks": batch["tasks"]}));
+        // The task health travels in the same frame as the agents.
+        let health = &agents["tasks"][0]["health"];
+        assert!(health["providers"].as_array().is_some_and(|providers| !providers.is_empty()), "{health}");
+        assert_eq!(health["retries"], 0);
         let open = next_of(&mut client, "openTask").await;
         assert_eq!(open["taskId"], task_id);
         let base = format!("/api/tasks/{task_id}");

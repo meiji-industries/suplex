@@ -1,5 +1,6 @@
-import { replaceEqualDeep, skipToken, useQuery, useQueryClient, type QueryClient, type QueryKey, type UseQueryResult } from "@tanstack/react-query";
+import { queryOptions, replaceEqualDeep, skipToken, useQueries, useQuery, useQueryClient, type QueryClient, type QueryKey, type UseQueryResult } from "@tanstack/react-query";
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import type { z } from "zod";
 import { readTaskCosts } from "../analytics/lib/analytics-api.js";
 import type { SyncMessage } from "../../contracts/generated/SyncMessage.js";
 import type { TaskAgents } from "../../contracts/generated/TaskAgents.js";
@@ -15,6 +16,7 @@ import { projectsKey } from "../projects/lib/projects.js";
 import { taskObservationKey } from "./lib/task-queries.js";
 import { readTaskList, showRecentTasks } from "./lib/task-list.js";
 import { openTaskSync } from "./lib/task-sync-api.js";
+import type { TaskHealth } from "./task-health.js";
 
 const emptyCosts = new Map<string, TaskCostsResponse["tasks"][number]>();
 const TaskCostsContext = createContext<{ companyId: string | undefined; costs: typeof emptyCosts }>({ companyId: undefined, costs: emptyCosts });
@@ -147,21 +149,53 @@ export function useTaskCosts(companyId: string | undefined) {
   return companyId && companyId === context.companyId ? context.costs : emptyCosts;
 }
 
-export function useTaskAgents(taskIds: string[]) {
-  const { user, currentCompany } = useCompanyContext();
-  const companyId = currentCompany?.id;
-  const ids = [...new Set(taskIds)].sort();
-  useSyncWatch(ids, null);
-  return useQuery({
-    queryKey: ["task-agents", user?.id, companyId, ids],
+/** One batch read of task agents. The sync frame fills every batch that holds a pushed task. */
+function taskAgentsQuery(userId: string | undefined, companyId: string | undefined, ids: string[], live: boolean) {
+  return queryOptions({
+    queryKey: ["task-agents", userId, companyId, ids],
     queryFn: companyId ? async ({ signal }) => TaskAgentsBatchResponseSchema.parse(await readJsonUnchecked(
       `/api/companies/${encodeURIComponent(companyId)}/task-agents?${new URLSearchParams(ids.map(id => ["taskId", id]))}`, { signal },
     )).tasks : skipToken,
     placeholderData: (previous, previousQuery) =>
-      previousQuery?.queryKey[1] === user?.id && previousQuery?.queryKey[2] === companyId ? previous : undefined,
-    enabled: Boolean(user && companyId && ids.length),
-    ...syncedPolling(useSyncLive()),
+      previousQuery?.queryKey[1] === userId && previousQuery?.queryKey[2] === companyId ? previous : undefined,
+    enabled: Boolean(userId && companyId && ids.length),
+    ...syncedPolling(live),
   });
+}
+
+type TaskAgentsBatch = z.infer<typeof TaskAgentsBatchResponseSchema>["tasks"];
+
+export function useTaskAgents(taskIds: string[]) {
+  const { user, currentCompany } = useCompanyContext();
+  const ids = [...new Set(taskIds)].sort();
+  useSyncWatch(ids, null);
+  return useQuery(taskAgentsQuery(user?.id, currentCompany?.id, ids, useSyncLive()));
+}
+
+/** The sync socket reads agents for at most this many watched tasks. */
+const WATCH_LIMIT = 50;
+/** `GET /api/companies/{id}/task-agents` reads at most this many tasks. */
+const BATCH_LIMIT = 10;
+const noHealth = new Map<string, TaskHealth>();
+
+/**
+ * The health of each task, from its pushed agents value, for the first 50 ids. Without the socket, batches of 10 poll
+ * the agents route. A display observation: never gate a command on it.
+ */
+export function useTaskHealth(taskIds: string[]): ReadonlyMap<string, TaskHealth> {
+  const { user, currentCompany } = useCompanyContext();
+  const ids = [...new Set(taskIds)].sort().slice(0, WATCH_LIMIT);
+  useSyncWatch(ids, null);
+  const live = useSyncLive();
+  const batches = [];
+  for (let index = 0; index < ids.length; index += BATCH_LIMIT) batches.push(ids.slice(index, index + BATCH_LIMIT));
+  return useQueries({ queries: batches.map(batch => taskAgentsQuery(user?.id, currentCompany?.id, batch, live)), combine: healthByTask });
+}
+
+/** Stable, so the map changes only when a batch changes. */
+function healthByTask(results: { data?: TaskAgentsBatch | undefined }[]): ReadonlyMap<string, TaskHealth> {
+  const entries = results.flatMap(result => result.data ?? []).flatMap(entry => entry.health ? [[entry.taskId, entry.health] as const] : []);
+  return entries.length ? new Map(entries) : noHealth;
 }
 
 export async function updateTaskCache(client: QueryClient, userId: string, task: Task): Promise<void> {

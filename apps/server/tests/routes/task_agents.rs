@@ -57,6 +57,26 @@ mod tests {
         })
     }
 
+    /// The frozen bodies predate the task health. Each health holds the
+    /// provider logins of the fixture task profiles and no retries.
+    fn without_health(mut value: Value) -> Value {
+        let body = &mut value["body"];
+        let entries: Vec<&mut Value> = match body.get("tasks") {
+            Some(Value::Array(_)) => body["tasks"].as_array_mut().unwrap().iter_mut().collect(),
+            _ => vec![body],
+        };
+        for entry in entries {
+            if let Some(object) = entry.as_object_mut()
+                && object.contains_key("agents")
+            {
+                let health = object.remove("health").expect("task health");
+                assert!(!health["providers"].as_array().unwrap().is_empty(), "{health}");
+                assert_eq!(health["retries"], 0, "{health}");
+            }
+        }
+        value
+    }
+
     #[tokio::test]
     async fn batch_authority_is_rechecked_after_native_observation() {
         for change in ["archive", "revoke", "database"] {
@@ -145,47 +165,63 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn an_opencode_session_reports_its_native_busy_status() {
-        let root =
-            std::env::temp_dir().join(format!("suplex-task-agents-{}", uuid::Uuid::new_v4()));
-        let (url, _) = crate::runtimes::opencode::client::fake::serve(|request| {
-            match request.path.as_str() {
-                "/session/ses_live" => (200, json!({"id":"ses_live","projectID":"p","directory":"/repo","title":"t","version":"1","time":{"created":1,"updated":9}}).to_string()),
-                "/session/status" => (200, json!({"ses_live":{"type":"busy"}}).to_string()),
-                _ => (404, "{}".into()),
-            }
-        })
-        .await;
-        let database = root.join("suplex.sqlite");
-        let runtime = crate::runtimes::task_harness::task_session_runtime_directory(
-            &database,
-            "session-opencode",
-        )
-        .unwrap();
-        std::fs::create_dir_all(&runtime).unwrap();
-        let reference = json!({"pid":4321,"baseUrl":url,"password":"a".repeat(64),"directory":"/repo","executable":"/bin/opencode","generation":"b775df17-718a-4cb2-8e23-6912b8aa0d39","configHash":"a".repeat(64),"processIdentity":{"command":"opencode serve","executable":"/bin/opencode","argv":["opencode","serve"],"processGroup":4321,"startTime":"start","ownerUid":501}});
-        std::fs::write(runtime.join("server.json"), reference.to_string()).unwrap();
-        let task = AgentTask {
-            id: "task".into(),
-            status: TaskStatus::Active,
-            rows: RootObservationRows {
-                control: crate::tasks::control::TaskControlRow::fixture(),
-                context: Value::Null,
-                dependencies: Vec::new(),
-                root: None,
-                worker: None,
-                workers: Vec::new(),
-                sessions: vec![SessionRow {
-                    lifecycle: SessionLifecycle::Live,
-                    native_session_id: Some("ses_live".into()),
-                    ..SessionRow::fixture("session-opencode", SessionKind::Root)
-                }],
-                turns: Vec::new(),
-            },
-        };
-        let agents = agents(&task, &database, false).await.unwrap();
-        assert_eq!(agents.agents[0].status, TaskAgentStatus::Working);
-        std::fs::remove_dir_all(root).unwrap();
+    async fn an_opencode_session_reports_its_native_status_and_retry_attempt() {
+        for (native, status, retries) in [
+            (json!({"type":"busy"}), TaskAgentStatus::Working, 0),
+            (
+                json!({"type":"retry","attempt":3,"message":"rate limited","next":5}),
+                TaskAgentStatus::Retrying,
+                3,
+            ),
+        ] {
+            let root =
+                std::env::temp_dir().join(format!("suplex-task-agents-{}", uuid::Uuid::new_v4()));
+            let (url, _) = crate::runtimes::opencode::client::fake::serve(move |request| {
+                match request.path.as_str() {
+                    "/session/ses_live" => (200, json!({"id":"ses_live","projectID":"p","directory":"/repo","title":"t","version":"1","time":{"created":1,"updated":90_000}}).to_string()),
+                    "/session/status" => (200, json!({"ses_live":native}).to_string()),
+                    _ => (404, "{}".into()),
+                }
+            })
+            .await;
+            let database = root.join("suplex.sqlite");
+            let runtime = crate::runtimes::task_harness::task_session_runtime_directory(
+                &database,
+                "session-opencode",
+            )
+            .unwrap();
+            std::fs::create_dir_all(&runtime).unwrap();
+            let reference = json!({"pid":4321,"baseUrl":url,"password":"a".repeat(64),"directory":"/repo","executable":"/bin/opencode","generation":"b775df17-718a-4cb2-8e23-6912b8aa0d39","configHash":"a".repeat(64),"processIdentity":{"command":"opencode serve","executable":"/bin/opencode","argv":["opencode","serve"],"processGroup":4321,"startTime":"start","ownerUid":501}});
+            std::fs::write(runtime.join("server.json"), reference.to_string()).unwrap();
+            let task = AgentTask {
+                id: "task".into(),
+                status: TaskStatus::Active,
+                rows: RootObservationRows {
+                    control: crate::tasks::control::TaskControlRow::fixture(),
+                    context: Value::Null,
+                    dependencies: Vec::new(),
+                    root: None,
+                    worker: None,
+                    workers: Vec::new(),
+                    sessions: vec![SessionRow {
+                        lifecycle: SessionLifecycle::Live,
+                        native_session_id: Some("ses_live".into()),
+                        ..SessionRow::fixture("session-opencode", SessionKind::Root)
+                    }],
+                    turns: Vec::new(),
+                },
+                health: health::StoredHealth::fixture(),
+            };
+            let agents = agents(&task, &database, false).await.unwrap();
+            assert_eq!(agents.agents[0].status, status);
+            assert_eq!(agents.health.retries, retries);
+            // The native update time, to the minute.
+            assert_eq!(
+                agents.health.last_progress_at.as_deref(),
+                Some("1970-01-01T00:01:00.000Z")
+            );
+            std::fs::remove_dir_all(root).unwrap();
+        }
     }
 
     #[tokio::test]
@@ -287,16 +323,16 @@ mod tests {
             headers.clone(),
         )
         .await;
-        assert_eq!(response_value(batch).await, initial["batch"]);
+        assert_eq!(without_health(response_value(batch).await), initial["batch"]);
         let first = task_agents(
             State(state.clone()),
             Path(first_id.clone()),
             headers.clone(),
         )
         .await;
-        assert_eq!(response_value(first).await, initial["first"]);
+        assert_eq!(without_health(response_value(first).await), initial["first"]);
         let idle = task_agents(State(state.clone()), Path(idle_id.clone()), headers.clone()).await;
-        assert_eq!(response_value(idle).await, initial["idle"]);
+        assert_eq!(without_health(response_value(idle).await), initial["idle"]);
         let empty = company_task_agents(
             State(state.clone()),
             Path(company_id.clone()),
@@ -304,7 +340,7 @@ mod tests {
             headers.clone(),
         )
         .await;
-        assert_eq!(response_value(empty).await, initial["empty"]);
+        assert_eq!(without_health(response_value(empty).await), initial["empty"]);
         let invalid = company_task_agents(
             State(state.clone()),
             Path(company_id.clone()),
@@ -312,7 +348,7 @@ mod tests {
             headers.clone(),
         )
         .await;
-        assert_eq!(response_value(invalid).await, initial["invalid"]);
+        assert_eq!(without_health(response_value(invalid).await), initial["invalid"]);
         let too_many = url::form_urlencoded::Serializer::new(String::new())
             .extend_pairs((0..11).map(|index| ("taskId", index.to_string())))
             .finish();
@@ -323,7 +359,7 @@ mod tests {
             headers.clone(),
         )
         .await;
-        assert_eq!(response_value(invalid_many).await, initial["tooMany"]);
+        assert_eq!(without_health(response_value(invalid_many).await), initial["tooMany"]);
         state.with_database(|database| {
             database.connection().execute("UPDATE suplex_tasks SET archived_at = '2026-09-25T12:34:56.000Z' WHERE id = ?1", [&first_id]).unwrap();
         });
@@ -336,9 +372,9 @@ mod tests {
             headers.clone(),
         )
         .await;
-        assert_eq!(response_value(batch).await, refreshed["batch"]);
+        assert_eq!(without_health(response_value(batch).await), refreshed["batch"]);
         let idle = task_agents(State(state.clone()), Path(idle_id.clone()), headers.clone()).await;
-        assert_eq!(response_value(idle).await, refreshed["idle"]);
+        assert_eq!(without_health(response_value(idle).await), refreshed["idle"]);
         state.with_database(|database| {
             database
                 .connection()
@@ -356,9 +392,9 @@ mod tests {
             headers.clone(),
         )
         .await;
-        assert_eq!(response_value(batch).await, revoked["batch"]);
+        assert_eq!(without_health(response_value(batch).await), revoked["batch"]);
         let idle = task_agents(State(state), Path(idle_id), headers).await;
-        assert_eq!(response_value(idle).await, revoked["idle"]);
+        assert_eq!(without_health(response_value(idle).await), revoked["idle"]);
         fs::remove_dir_all(root).unwrap();
     }
 }

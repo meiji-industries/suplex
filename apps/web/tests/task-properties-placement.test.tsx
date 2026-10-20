@@ -14,6 +14,7 @@ vi.mock("../features/tasks/task-chat/live-pane-dock.js", () => ({ LivePaneDock: 
 vi.mock("../features/tasks/pull-request-card.js", () => ({ TaskPullRequestCard: () => null }));
 
 import { TaskDetailsPage } from "../features/tasks/task-details.js";
+import type { TaskHealth } from "../features/tasks/task-health.js";
 
 const issue = { kind: "github", repository: "client/repo", number: 420, id: "500", key: "#420", title: "Linked issue", url: "https://github.com/client/repo/issues/420" };
 const taskBlocker = { id: "task-first", title: "First prerequisite", status: "backlog" };
@@ -89,4 +90,23 @@ test("each property moves when the current task data sets or clears its value", 
   await render(task({ issue }));
   expect(labels().main.slice(0, 3)).toEqual(["Status", "Issue", "Project"]);
   expect(labels().panel[0]).toBe("Blocked by");
+});
+
+test("the header shows the task health in one badge row, and a healthy task shows none", async () => {
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  cleanup = async () => { await act(async () => { root.unmount(); }); container.remove(); };
+  const observedAt = new Date().toISOString();
+  const health: TaskHealth = { providers: [{ provider: "codex", status: "not-connected", summary: "Codex is not signed in", observedAt }], retries: 2, lastProgressAt: new Date(Date.now() - 3 * 3_600_000).toISOString(), usualTurnSeconds: 600 };
+  const render = async (value: TaskHealth | undefined) => { await act(async () => { root.render(<TaskDetailsPage task={task()} project={undefined} onChange={() => undefined} health={value} />); }); };
+  const header = () => container.querySelector("[data-task-detail-header]")!;
+  await render(health);
+  expect(Array.from(header().querySelectorAll('[data-slot="badge"]')).map(badge => [badge.textContent, badge.getAttribute("title")?.startsWith("Last progress") ? "Last progress" : badge.getAttribute("title")])).toEqual([
+    ["Codex is not connected", "Codex is not signed in"], ["Retried 2 times", null], ["No progress for 3 h", "Last progress"],
+  ]);
+  await render({ providers: [{ ...health.providers[0]!, status: "connected" }], retries: 0, lastProgressAt: new Date().toISOString(), usualTurnSeconds: null });
+  expect(header().querySelector("[data-task-health]")).toBeNull();
+  await render(undefined);
+  expect(header().querySelector("[data-task-health]")).toBeNull();
 });

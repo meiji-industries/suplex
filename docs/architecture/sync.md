@@ -38,6 +38,7 @@ of every subscribed company and the stored values of every open task.
 | Task costs | Company | Change of the stored usage rows that the costs read. The recompute runs apart from the tail thread. | `costs`, whole | `taskCostsKey(user, company)` |
 | Projects | Company | Commit that changes a project of the company | `projects`, whole | `projectsKey(user, company)` |
 | Agents of watched tasks | Watch | Each observer pass (1 s) | `agents`, one entry per changed task | Each `["task-agents", user, company, ids]` batch that holds the task |
+| Task health of watched tasks: `health.providers` (provider, sign-in status, summary, and probe time of each login that the task's profiles use), `health.retries`, `health.lastProgressAt`, and `health.usualTurnSeconds` | Watch | Each observer pass (1 s), in the same entry as the agents. A provider probe runs at most once per login in 60 s. | `agents[].health` | Same batches as the agents |
 | Open task | Watch | Commit | `openTask.task` | `taskObservationKey(...)` + `"task"` |
 | Open task activity | Watch | Commit, its task Shell opens or closes, or setup state changes | `openTask.activity` | `+ "activity"` |
 | Open task execution and timeline | Watch | Every second observer pass (2 s) | `openTask.execution`, `openTask.timeline` | `+ "execution"`, `+ "timeline"` |
@@ -46,6 +47,24 @@ Each pushed value is the body of its HTTP endpoint; the route tests compare
 them. A published value keeps its allocation while it does not change, so a
 socket compares pointers to decide what to send. The feed test asserts that a
 turn committed by another connection reaches the watch within 500 ms.
+
+**Task health.** [`tasks::health`](../../apps/server/src/tasks/health.rs)
+defines each value. `retries` adds the requeues of each current session's
+newest turn, its run of interrupted-execution continuations, the Worker and
+Advisor replacements of the same assignment, and the native OpenCode retry
+attempt. `lastProgressAt` is the newest turn completion or native update of an
+active task, to the minute, so a busy session does not send a frame each
+second. `usualTurnSeconds` is the median turn time. The browser shows no
+progress when the time since `lastProgressAt` is more than 10 minutes and more
+than twice `usualTurnSeconds`. The sign-in comes from one host-wide cache in
+[`connection_cache`](../../apps/server/src/profiles/connection_cache.rs) that
+calls the probe of Settings. Tasks on one login share one probe. A read never
+waits for a probe: before the first probe ends it returns `unknown`, and after
+60 s it starts one probe in the background and returns the previous
+observation. A later observer pass sends the result.
+These values are display observations. No command, control, or task status
+depends on them. Active board cards (at most 50) and the open active task watch
+them; without the socket they poll the agents route in batches of 10.
 
 **Watches.** Components declare what they show with `useSyncWatch`.
 `TaskDataProvider` sends one `watch` request with every declared agent task and

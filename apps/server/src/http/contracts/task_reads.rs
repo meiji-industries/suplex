@@ -8,6 +8,7 @@ use crate::{
     coordination::advisor_bridge::AdvisorRole,
     http::contracts::typed::projects::ProjectResponse,
     moves::MoveResponse,
+    profiles::connection_cache::ProviderConnectionStatus,
     runtimes::opencode::session_reader::PlanItem,
     tasks::{
         control::{HarnessKind, SessionKind, SessionReplacement, TurnStatus},
@@ -127,6 +128,7 @@ pub struct TaskAgent {
 pub struct TaskAgentsResponse {
     pub setup: crate::tasks::preparation::TaskSetup,
     pub agents: Vec<TaskAgent>,
+    pub health: TaskHealth,
 }
 
 #[derive(Clone, PartialEq, Serialize, TS)]
@@ -135,6 +137,34 @@ pub struct TaskAgents {
     pub setup: crate::tasks::preparation::TaskSetup,
     pub task_id: String,
     pub agents: Vec<TaskAgent>,
+    pub health: TaskHealth,
+}
+
+/// Display observations that tell a task that does not advance from a task
+/// that works. They never gate a command. `tasks::health` defines each value.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct TaskHealth {
+    /// The sign-in of each provider login that the task's profiles use.
+    pub providers: Vec<TaskProviderConnection>,
+    /// The retries and continuations of the current work; 0 when nothing was
+    /// retried.
+    pub retries: u32,
+    /// The newest progress of an active task, to the minute (RFC 3339).
+    /// `null` when the task is not active or has no progress yet.
+    pub last_progress_at: Option<String>,
+    /// The median time of the task's completed turns, in whole minutes as
+    /// seconds. `null` with fewer than 2 completed turns.
+    pub usual_turn_seconds: Option<u32>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct TaskProviderConnection {
+    pub provider: HarnessKind,
+    pub status: ProviderConnectionStatus,
+    pub summary: String,
+    pub observed_at: String,
 }
 
 #[derive(Serialize, TS)]

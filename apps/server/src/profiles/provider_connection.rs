@@ -2,19 +2,22 @@
 
 use serde_json::{Map, Value, json};
 
-use super::provider_readiness::{self, ProbeResult, strip_ansi};
+use super::{
+    connection_cache::ProviderConnectionStatus,
+    provider_readiness::{self, ProbeResult, strip_ansi},
+};
 
 /// Maps a health-check outcome onto the provider sign-in vocabulary.
 pub fn connection_from_health(check: &Value) -> Value {
     let status = match check["status"].as_str() {
-        Some("healthy") => "connected",
-        Some("unhealthy") => "not-connected",
-        _ => "unknown",
+        Some("healthy") => ProviderConnectionStatus::Connected,
+        Some("unhealthy") => ProviderConnectionStatus::NotConnected,
+        _ => ProviderConnectionStatus::Unknown,
     };
     let mut connection = Map::new();
-    connection.insert("status".into(), json!(status));
+    connection.insert("status".into(), json!(status.as_str()));
     connection.insert("summary".into(), check["summary"].clone());
-    if status == "connected"
+    if status == ProviderConnectionStatus::Connected
         && let Some(account) = check["details"]["account"].as_str()
     {
         connection.insert("account".into(), json!(account));

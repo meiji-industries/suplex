@@ -665,7 +665,8 @@ async fn complete_root_if_terminal(
     let text = harness.result_text(&directory, &turn.id).await?;
     let native = native_observation(harness, &directory, &rows, "root", turn).await?;
     let terminal_observation = terminal_observation(observation, native, &text, &directory, turn)?;
-    let continuation = (observation.state == PromptState::Interrupted).then_some("The previous execution stopped before a final response. Its admitted message will not be replayed. Observe current task, worktree and GitHub state, preserve any partial work, and continue from that evidence.");
+    let continuation = (observation.state == PromptState::Interrupted)
+        .then_some(root_prompts::INTERRUPTED_CONTINUATION);
     let completed = root_session_store::complete_root_turn(
         database,
         &turn.id,

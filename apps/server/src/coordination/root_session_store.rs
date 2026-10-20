@@ -1066,7 +1066,8 @@ pub fn mark_prompted(
 
 /// Clear a dispatch claim only after the native runtime proves the attempted
 /// turn absent. Match the exact attempt and current operation owner so an old
-/// observer cannot requeue a newer admitted prompt.
+/// observer cannot requeue a newer admitted prompt. `dispatch_requeues` counts
+/// each requeue for the task health display.
 pub fn requeue_fenced_prompt(
     database: &mut SuplexDatabase,
     turn: &TurnRow,
@@ -1077,7 +1078,7 @@ pub fn requeue_fenced_prompt(
     let attempt_json = serde_json::to_string(attempt)?;
     database.transaction(true, |database| {
         Ok(database.connection().execute(
-            "UPDATE suplex_task_turns SET status = 'pending_prompt', dispatch_attempt_json = NULL, updated_at = ?1 WHERE id = ?2 AND status = 'unknown' AND dispatch_attempt_json = ?3 AND EXISTS (SELECT 1 FROM suplex_task_sessions s JOIN suplex_task_controls c ON c.task_id = s.task_id WHERE s.id = suplex_task_turns.session_id AND s.generation = suplex_task_turns.generation AND s.launch_owner = ?4 AND s.is_current = 1 AND s.lifecycle <> 'cancelled' AND c.status = 'active')",
+            "UPDATE suplex_task_turns SET status = 'pending_prompt', dispatch_attempt_json = NULL, dispatch_requeues = dispatch_requeues + 1, updated_at = ?1 WHERE id = ?2 AND status = 'unknown' AND dispatch_attempt_json = ?3 AND EXISTS (SELECT 1 FROM suplex_task_sessions s JOIN suplex_task_controls c ON c.task_id = s.task_id WHERE s.id = suplex_task_turns.session_id AND s.generation = suplex_task_turns.generation AND s.launch_owner = ?4 AND s.is_current = 1 AND s.lifecycle <> 'cancelled' AND c.status = 'active')",
             params![rfc3339_millis(now), turn.id, attempt_json, owner],
         )? == 1)
     })

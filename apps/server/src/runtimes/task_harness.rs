@@ -188,15 +188,14 @@ pub trait NativeSessionReader: Sync {
         pricing: Option<&'a ModelPricingCatalog>,
     ) -> HarnessFuture<'a, io::Result<NativeTimeline>>;
     fn busy<'a>(&'a self, session: &'a ReaderSession<'_>) -> HarnessFuture<'a, io::Result<bool>>;
-    /// TypeScript `status`: `busy`, `retry`, or `idle`, and when the native
-    /// session last changed (Unix ms). Headless runtimes read `turn.json`.
+    /// TypeScript `status`. Headless runtimes read `turn.json`.
     fn status<'a>(
         &'a self,
         session: &'a ReaderSession<'_>,
-    ) -> HarnessFuture<'a, io::Result<(&'static str, f64)>> {
+    ) -> HarnessFuture<'a, io::Result<NativeStatus>> {
         Box::pin(async move {
             let path = session.runtime_directory()?.join("turn.json");
-            Ok((
+            Ok(NativeStatus::new(
                 if self.busy(session).await? {
                     "busy"
                 } else {
@@ -205,6 +204,27 @@ pub trait NativeSessionReader: Sync {
                 modified_ms(&path)?,
             ))
         })
+    }
+}
+
+/// What a native session reports about itself now.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct NativeStatus {
+    /// `busy`, `retry`, or `idle`.
+    pub kind: &'static str,
+    /// When the native session last changed (Unix ms).
+    pub updated_ms: f64,
+    /// The native retry attempt while `kind` is `retry`; 0 otherwise.
+    pub retry_attempt: u64,
+}
+
+impl NativeStatus {
+    pub fn new(kind: &'static str, updated_ms: f64) -> Self {
+        Self {
+            kind,
+            updated_ms,
+            retry_attempt: 0,
+        }
     }
 }
 

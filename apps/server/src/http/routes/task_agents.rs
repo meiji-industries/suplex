@@ -43,8 +43,11 @@ use crate::{
     },
     identity::companies,
     platform::database::SuplexDatabase,
-    runtimes::{task_harness::ReaderSession, task_harness_registry},
-    tasks::repository,
+    runtimes::{
+        task_harness::{NativeStatus, ReaderSession},
+        task_harness_registry,
+    },
+    tasks::{health, repository},
 };
 
 use super::auth;
@@ -81,6 +84,7 @@ pub(crate) struct AgentTask {
     id: String,
     status: TaskStatus,
     rows: RootObservationRows,
+    health: health::StoredHealth,
 }
 
 fn task(
@@ -98,10 +102,12 @@ pub(crate) fn saved_task(
     task_id: &str,
 ) -> Result<AgentTask, Box<dyn Error + Send + Sync>> {
     let record = repository::task_by_id(database, task_id)?.ok_or_else(TaskError::not_found)?;
+    let rows = root_session_store::root_observation_rows(database, task_id)?;
     Ok(AgentTask {
+        health: health::stored(database, &rows, record.status)?,
         id: record.id,
         status: record.status,
-        rows: root_session_store::root_observation_rows(database, task_id)?,
+        rows,
     })
 }
 
@@ -141,7 +147,7 @@ fn label(session: &SessionRow) -> &'static str {
 async fn native_status(
     database_path: &std::path::Path,
     session: &SessionRow,
-) -> Option<(&'static str, f64)> {
+) -> Option<NativeStatus> {
     let native_session_id = session.native_session_id.as_deref()?;
     task_harness_registry::native_session_reader(native_session_id)?
         .status(&ReaderSession {
@@ -165,13 +171,16 @@ fn iso_timestamp(value: f64) -> Option<String> {
         .map(rfc3339_millis)
 }
 
-/// `host` derives terminal ids for host terminals instead of stored Herdr panes.
+/// The agents and health of a task, for the sync feed and the HTTP routes.
+/// The caller authorizes. `host` derives terminal ids for host terminals
+/// instead of stored Herdr panes.
 pub(crate) async fn agents(
     task: &AgentTask,
     database_path: &std::path::Path,
     host: bool,
 ) -> std::io::Result<TaskAgents> {
     let mut agents = Vec::new();
+    let (mut native_retries, mut native_updates) = (0_u64, Vec::new());
     for session in task.rows.sessions.iter().filter(|session| session.current) {
         let (status, status_changed_at) = if matches!(
             session.lifecycle,
@@ -185,7 +194,12 @@ pub(crate) async fn agents(
         } else if session.native_session_id.is_none() {
             (TaskAgentStatus::Queued, None)
         } else {
-            match native_status(database_path, session).await {
+            let native = native_status(database_path, session).await;
+            if let Some(native) = native {
+                native_retries = native_retries.saturating_add(native.retry_attempt);
+                native_updates.push(native.updated_ms);
+            }
+            match native.map(|native| (native.kind, native.updated_ms)) {
                 Some(("busy", _)) => (TaskAgentStatus::Working, None),
                 Some(("retry", _)) => (TaskAgentStatus::Retrying, None),
                 Some(_)
@@ -216,6 +230,7 @@ pub(crate) async fn agents(
         setup: crate::tasks::preparation::read_setup(database_path, &task.id)?,
         task_id: task.id.clone(),
         agents,
+        health: health::observe(&task.health, native_retries, native_updates),
     })
 }
 
@@ -252,6 +267,7 @@ async fn task_agents(
         .map(|result| TaskAgentsResponse {
             agents: result.agents,
             setup: result.setup,
+            health: result.health,
         });
     let result = state
         .with_database(|database| task(database, &user_id, &task_id))

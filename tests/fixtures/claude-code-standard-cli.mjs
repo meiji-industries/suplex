@@ -99,6 +99,12 @@ async function worker() {
   return "README line committed after pnpm test passed.";
 }
 
+// The host probes the sign-in with `claude auth status --json`, as Settings does. Claude Code answers it without a session.
+if (args[0] === "auth" && args[1] === "status") {
+  print({ loggedIn: true, authMethod: "claude.ai", email: "suplex-fixture@example.invalid" });
+  process.exit(0);
+}
+
 try {
   if (!sessionId) throw new Error("A session identity is necessary");
   await mkdir(join(transcript, ".."), { recursive: true });

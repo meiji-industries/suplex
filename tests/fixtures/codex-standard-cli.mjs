@@ -225,6 +225,12 @@ async function worker() {
   line({ type: "turn.completed", usage: { input_tokens: 1, cached_input_tokens: 0, cache_write_input_tokens: 0, output_tokens: 1, reasoning_output_tokens: 0 } });
 }
 
+// The host probes the sign-in with `codex login status`, as Settings does. Codex answers it without a turn.
+if (process.argv[2] === "login" && process.argv[3] === "status") {
+  process.stdout.write("Logged in using ChatGPT\n");
+  process.exit(0);
+}
+
 try {
   const prompt = await inputPrompt();
   // The Rust harness passes Root capability only to Root, including on resume.

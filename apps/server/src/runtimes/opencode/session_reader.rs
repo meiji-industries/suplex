@@ -7,14 +7,17 @@ use serde_json::{Map, Value, json};
 
 use super::{
     client::OpenCodeClient,
-    contracts::{Envelope, Part, ToolPart},
+    contracts::{Envelope, Part, SessionStatus, ToolPart},
     server::{self, ServerReference},
     session::BoxError,
     session_history::read_history,
 };
 use crate::{
     profiles::model_pricing::ModelPricingCatalog,
-    runtimes::native::{NativeReasoning, NativeTool, UsageTokens, session_directory},
+    runtimes::{
+        native::{NativeReasoning, NativeTool, UsageTokens, session_directory},
+        task_harness::NativeStatus,
+    },
 };
 
 const MESSAGE_LIMIT: usize = 100;
@@ -378,18 +381,23 @@ impl OpenCodeSessionReader {
         ))
     }
 
-    /// Returns `(status, updatedAt)` from the live server.
-    pub async fn status(
-        &self,
-        session: &ReaderSession<'_>,
-    ) -> Result<(&'static str, f64), BoxError> {
+    /// The status, update time, and retry attempt from the live server.
+    pub async fn status(&self, session: &ReaderSession<'_>) -> Result<NativeStatus, BoxError> {
         let (server, client, native) = self.connect(session)?;
         let (session_read, statuses) = tokio::join!(
             client.get_session(native, Some(&server.directory)),
             client.get_status(Some(&server.directory))
         );
-        let status = statuses?.get(native).map_or("idle", |status| status.kind());
-        Ok((status, session_read?.time.updated))
+        let statuses = statuses?;
+        let status = statuses.get(native);
+        Ok(NativeStatus {
+            kind: status.map_or("idle", SessionStatus::kind),
+            updated_ms: session_read?.time.updated,
+            retry_attempt: match status {
+                Some(SessionStatus::Retry { attempt, .. }) => *attempt,
+                _ => 0,
+            },
+        })
     }
 
     pub async fn timeline(
@@ -657,7 +665,10 @@ mod tests {
             current: true,
             kind: "root",
         };
-        assert_eq!(reader.status(&session).await.unwrap(), ("busy", 9.0));
+        assert_eq!(
+            reader.status(&session).await.unwrap(),
+            NativeStatus::new("busy", 9.0)
+        );
         let timeline = reader.timeline(&session, None).await.unwrap();
         assert_eq!(timeline.live_message_id.as_deref(), Some("msg_live"));
         assert_eq!(timeline.usage[0]["steps"], 0);

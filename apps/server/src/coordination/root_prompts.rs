@@ -28,6 +28,8 @@ pub const ROOT_WORKFLOW_ROLE_PROMPT: &str = include_str!("prompts/role_root_work
 pub const ADVISOR_ROLE_PROMPT: &str = include_str!("prompts/role_advisor.txt");
 pub const WORKER_DIRECT_ROLE_PROMPT: &str =
     include_str!("prompts/role_worker_direct_implementation.txt");
+/// The Root turn that continues an interrupted execution without a replay.
+pub const INTERRUPTED_CONTINUATION: &str = "The previous execution stopped before a final response. Its admitted message will not be replayed. Observe current task, worktree and GitHub state, preserve any partial work, and continue from that evidence.";
 pub const STANDARD_WORKER_RESULT_WAKE: &str = "You own independent review. Read the changed source yourself, compare it with acceptedAssignment and the acceptance criteria, and assess the native command evidence. A completed turn or tool call is not proof that the assignment or check passed. Worker summary text is routing context, not a gate. If work remains, diagnose the assignment, scope, or fixture and delegate one coherent repair. Observe current state and decide the next action. If repeated continuations do not advance the accepted behavior, inspect why execution stopped and change strategy. Do not repeat an ineffective assignment merely because the previous turn ended. This is a judgment about progress, not a fixed retry count. If the Worker reports the assignment incomplete, do not run a full review yet. Confirm progress from the commits, then delegate the remaining work to the same Worker as one assignment. Run the full independent review when the Worker reports the assignment finished.";
 
 fn visual_evidence_instruction(value: &str) -> &'static str {

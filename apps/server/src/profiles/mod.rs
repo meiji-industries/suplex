@@ -1,4 +1,5 @@
 pub mod agent_profiles;
+pub mod connection_cache;
 pub mod local_endpoints;
 pub mod model_pricing;
 pub mod provider_catalog;

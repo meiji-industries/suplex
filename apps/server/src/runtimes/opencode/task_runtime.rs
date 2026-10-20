@@ -40,9 +40,9 @@ use crate::{
         git_guard, headless,
         native::{NativeReasoning, NativeTool, UsageTokens},
         task_harness::{
-            DispatchClaim, DispatchState, HarnessFuture, NativeSessionReader, NativeTimeline,
-            PromptObservation, PromptState, ReaderSession, TaskHarness, TaskRole, TaskScope,
-            UsageEntry, WorkflowLaunch, task_scope_environment,
+            DispatchClaim, DispatchState, HarnessFuture, NativeSessionReader, NativeStatus,
+            NativeTimeline, PromptObservation, PromptState, ReaderSession, TaskHarness, TaskRole,
+            TaskScope, UsageEntry, WorkflowLaunch, task_scope_environment,
         },
     },
 };
@@ -687,7 +687,7 @@ impl NativeSessionReader for OpenCodeTaskRuntime {
     fn status<'a>(
         &'a self,
         session: &'a ReaderSession<'_>,
-    ) -> HarnessFuture<'a, io::Result<(&'static str, f64)>> {
+    ) -> HarnessFuture<'a, io::Result<NativeStatus>> {
         Box::pin(async move {
             let native =
                 resolved(session)?.ok_or_else(|| io::Error::other("Session is not available"))?;

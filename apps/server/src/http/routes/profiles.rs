@@ -20,7 +20,10 @@ use crate::{
         },
         validation::{Valid, valid},
     },
-    profiles::agent_profiles::{self, AgentProfile, ProfileInput, ProfilePatch},
+    profiles::{
+        agent_profiles::{self, AgentProfile, ProfileInput, ProfilePatch},
+        connection_cache::ProviderConnectionStatus,
+    },
 };
 
 pub fn router() -> Router<AppState> {
@@ -169,12 +172,12 @@ async fn choose_defaults(State(state): State<AppState>, headers: HeaderMap) -> R
         .unwrap_or_default();
     let any_connected = rows
         .iter()
-        .any(|row| row["connection"]["status"] == "connected");
+        .any(|row| row["connection"]["status"] == ProviderConnectionStatus::Connected.as_str());
     let available = |provider: &str, model: &str| {
         rows.iter().any(|row| {
             row["id"] == provider
                 && if any_connected {
-                    row["connection"]["status"] == "connected"
+                    row["connection"]["status"] == ProviderConnectionStatus::Connected.as_str()
                 } else {
                     row["status"] == "configured"
                 }

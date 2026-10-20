@@ -15,8 +15,8 @@ use crate::{
         headless::busy,
         native::{NativeReasoning, NativeTool},
         task_harness::{
-            HarnessFuture, NativeSessionReader, NativeTimeline, ReaderSession, UsageEntry,
-            modified_ms,
+            HarnessFuture, NativeSessionReader, NativeStatus, NativeTimeline, ReaderSession,
+            UsageEntry, modified_ms,
         },
     },
 };
@@ -204,14 +204,14 @@ impl NativeSessionReader for ClaudeCodeTaskRuntime {
     fn status<'a>(
         &'a self,
         session: &'a ReaderSession<'_>,
-    ) -> HarnessFuture<'a, io::Result<(&'static str, f64)>> {
+    ) -> HarnessFuture<'a, io::Result<NativeStatus>> {
         Box::pin(async move {
             let path = match transcript_path(session)? {
                 Some(path) => path,
                 None => session.runtime_directory()?.join("turn.json"),
             };
             let updated_at = modified_ms(&path)?;
-            Ok((
+            Ok(NativeStatus::new(
                 if self.busy(session).await? {
                     "busy"
                 } else {

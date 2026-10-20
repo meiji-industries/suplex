@@ -38,6 +38,8 @@ const ALLOWED: &[(&str, &[&str])] = &[
     ("identity/oauth.rs", &["none"]),
     // Log record state.
     ("platform/log_viewer.rs", &["error"]),
+    // GitHub repository connection state of a project.
+    ("projects/connection.rs", &["connected"]),
     // Update status kind.
     ("platform/update.rs", &["failed"]),
 ];

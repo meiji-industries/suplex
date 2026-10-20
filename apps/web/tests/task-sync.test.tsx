@@ -12,7 +12,8 @@ import { useProjects } from "../features/projects/lib/projects.js";
 import { useTaskChecks } from "../features/tasks/lib/task-checks.js";
 import { useTask, useTaskActivity, useTaskDiff, useTaskDiffSummary, useTaskExecutionQuery, useTaskTimeline } from "../features/tasks/lib/task-queries.js";
 import { TaskActivityTimeline } from "../features/tasks/task-activity-timeline.js";
-import { TaskDataProvider, updateTaskCache, useTaskAgents, useTaskCosts, useTaskData } from "../features/tasks/task-data.js";
+import { TaskDataProvider, updateTaskCache, useTaskAgents, useTaskCosts, useTaskData, useTaskHealth } from "../features/tasks/task-data.js";
+import type { TaskHealth } from "../features/tasks/task-health.js";
 
 const scope = vi.hoisted(() => ({ companyId: "company-a" }));
 vi.mock("../shell/company-context.js", () => { const context = () => ({ user: { id: "user-a", role: "admin" }, currentCompany: { id: scope.companyId }, avatars: {} }); return { useCompanyContext: context, useOptionalCompanyContext: context }; });
@@ -454,4 +455,44 @@ test("while the socket is open, an unchanged running timeline stays current", as
   }
   expect(read("/timeline")).toBe(1);
   expect(container.querySelector('[data-task-timing="root"]')?.getAttribute("data-task-timing-active")).toBe("true");
+});
+
+const health = (retries: number): TaskHealth => ({ providers: [{ provider: "codex", status: "connected", summary: "Signed in", observedAt: "2026-09-08T00:00:00.000Z" }], retries, lastProgressAt: null, usualTurnSeconds: null });
+let healthSeen: ReadonlyMap<string, TaskHealth> = new Map();
+function Health({ ids }: { ids: string[] }) {
+  healthSeen = useTaskHealth(ids);
+  return null;
+}
+function serveHealth(retries: () => number) {
+  fetch.mockImplementation(async (url: string) => {
+    if (!url.includes("/task-agents?")) return new Response(JSON.stringify({ tasks: [], moves: [], projects: [] }));
+    const ids = new URL(url, "https://suplex.test").searchParams.getAll("taskId");
+    return new Response(JSON.stringify({ tasks: ids.map(taskId => ({ taskId, setup: { state: "none", exitStatus: null }, agents: [], health: health(retries()) })) }));
+  });
+}
+const renderHealth = (ids: string[]) => act(async () => root.render(<QueryClientProvider client={client}><TaskDataProvider><Health ids={ids} /></TaskDataProvider></QueryClientProvider>));
+
+test("task health watches at most 50 tasks, reads them in batches of 10, and applies a pushed agents frame", async () => {
+  serveHealth(() => 0);
+  const ids = Array.from({ length: 60 }, (_, index) => `t${String(index).padStart(2, "0")}`);
+  await renderHealth(ids);
+  await act(async () => sockets()[0]?.open());
+  await act(async () => vi.advanceTimersByTimeAsync(50));
+  expect(sockets()[0]?.sent).toEqual([watch(ids.slice(0, 50), null)]);
+  const batches = fetch.mock.calls.map(([url]) => url).filter(url => url.includes("/task-agents?")).map(url => new URL(url, "https://suplex.test").searchParams.getAll("taskId").length);
+  expect(batches).toEqual([10, 10, 10, 10, 10]);
+  expect([healthSeen.size, healthSeen.get("t00")?.retries]).toEqual([50, 0]);
+  await emit(sockets()[0], { type: "agents", tasks: [{ taskId: "t12", setup: { state: "none", exitStatus: null }, agents: [], health: health(2) }] });
+  expect([healthSeen.get("t12")?.retries, healthSeen.get("t13")?.retries]).toEqual([2, 0]);
+});
+
+test("without a socket the task health loads and polls over HTTP", async () => {
+  vi.stubGlobal("WebSocket", undefined);
+  let retries = 0;
+  serveHealth(() => retries);
+  await renderHealth(["a"]);
+  expect(healthSeen.get("a")?.retries).toBe(0);
+  retries = 4;
+  await act(async () => vi.advanceTimersByTimeAsync(3000));
+  expect(healthSeen.get("a")?.retries).toBe(4);
 });

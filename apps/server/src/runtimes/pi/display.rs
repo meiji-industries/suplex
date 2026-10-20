@@ -1,19 +1,17 @@
-//! Passive Pi display. The Herdr pane runs `suplex pi-display <dir>`, which
-//! follows the turn output files in the private runtime directory with the
-//! Codex display loop. It never owns or replays the native turn.
+//! Passive Pi and omp display. The Herdr pane runs `suplex pi-display <dir>`
+//! or `suplex omp-display <dir>`, which follows the turn output files in the
+//! private runtime directory with the Codex display loop. It never owns or
+//! replays the native turn.
 
 use std::{error::Error, io, path::Path};
 
 use serde_json::Value;
 
-use super::transcript;
+use super::{cli::PiCli, tool_evidence::device_call, transcript};
 use crate::runtimes::codex::display::{self as follower, DisplayCommand};
 
-const WAITING_LABEL: &str = "Waiting for Pi output...\n";
-pub const SUBCOMMAND: &str = "pi-display";
-
-pub fn display_command(runtime_directory: &Path) -> io::Result<DisplayCommand> {
-    follower::command_for(SUBCOMMAND, runtime_directory)
+pub fn display_command(cli: &PiCli, runtime_directory: &Path) -> io::Result<DisplayCommand> {
+    follower::command_for(cli.display_subcommand, runtime_directory)
 }
 
 fn text<'a>(value: &'a Value, key: &str) -> Option<&'a str> {
@@ -38,7 +36,13 @@ pub fn render_event(event: &Value) -> String {
             "retry: {}\n",
             text(event, "errorMessage").unwrap_or_default()
         ),
-        "tool_execution_start" => match text(event, "toolName") {
+        "tool_execution_start" => match text(event, "toolName")
+            .map(|name| {
+                device_call(name, event["args"].as_object(), &Value::Null)
+                    .map_or_else(|| name.to_owned(), |(device, _)| device)
+            })
+            .as_deref()
+        {
             Some("bash") => event["args"]["command"]
                 .as_str()
                 .map_or_else(|| "$ bash\n".into(), |command| format!("$ {command}\n")),
@@ -76,7 +80,7 @@ pub fn render_event(event: &Value) -> String {
             if message["stopReason"] == "error" {
                 rendered.push_str(&format!(
                     "error: {}\n",
-                    text(message, "errorMessage").unwrap_or("Pi reported an error")
+                    text(message, "errorMessage").unwrap_or("The agent reported an error")
                 ));
             }
             rendered
@@ -91,16 +95,33 @@ fn render_line(line: &str) -> Option<String> {
         .map(|event| render_event(event.value()))
 }
 
-/// Entry point for `suplex pi-display <runtime directory>`.
-pub async fn serve(runtime_directory: &str) -> Result<(), Box<dyn Error + Send + Sync>> {
-    follower::serve_with(runtime_directory, WAITING_LABEL, render_line).await
+/// Entry point for `suplex pi-display <runtime directory>` and its omp twin.
+pub async fn serve(
+    cli: &'static PiCli,
+    runtime_directory: &str,
+) -> Result<(), Box<dyn Error + Send + Sync>> {
+    follower::serve_with(runtime_directory, cli.waiting_label, render_line).await
+}
+
+/// The CLI whose display `subcommand` names.
+pub fn for_subcommand(subcommand: &str) -> Option<&'static PiCli> {
+    super::cli::ALL
+        .into_iter()
+        .find(|cli| cli.display_subcommand == subcommand)
 }
 
 /// Dispatch shows the session in Herdr first. The display is an observation;
 /// its failure never blocks native work.
-pub fn show(database_path: &Path, session: &str, native: &str, worktree: &Path, model: &str) {
+pub fn show(
+    cli: &PiCli,
+    database_path: &Path,
+    session: &str,
+    native: &str,
+    worktree: &Path,
+    model: &str,
+) {
     follower::show_with(
-        ("pi", SUBCOMMAND),
+        (cli.provider, cli.display_subcommand),
         database_path,
         session,
         native,
@@ -114,6 +135,7 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+    use crate::runtimes::pi::cli::{OMP, PI};
 
     #[test]
     fn renders_pi_events_for_the_passive_display() {
@@ -155,6 +177,10 @@ mod tests {
                 "",
             ),
             (json!({"type":"agent_settled","aborted":false}), "\n"),
+            (
+                json!({"type":"tool_execution_start","toolCallId":"c","toolName":"write","args":{"path":"xd://mcp__suplex_root_observe","content":"{}"}}),
+                "tool mcp__suplex_root_observe\n",
+            ),
             (json!({"type":"session","id":"pi-1"}), ""),
         ];
         for (event, expected) in cases {
@@ -163,14 +189,21 @@ mod tests {
     }
 
     #[test]
-    fn the_display_command_runs_the_pi_viewer_for_its_directory() {
-        let display = display_command(Path::new("/private/runtime/session")).unwrap();
+    fn the_display_command_runs_each_cli_viewer_for_its_directory() {
+        let display = display_command(&PI, Path::new("/private/runtime/session")).unwrap();
         assert!(display.command.contains("'-u' 'SUPLEX_ROOT_TOKEN'"));
         assert!(
             display
                 .command
                 .ends_with("'pi-display' '/private/runtime/session'")
         );
+        let omp = display_command(&OMP, Path::new("/private/runtime/session")).unwrap();
+        assert!(
+            omp.command
+                .ends_with("'omp-display' '/private/runtime/session'")
+        );
+        assert_eq!(for_subcommand("omp-display").unwrap().provider, "omp");
+        assert!(for_subcommand("codex-display").is_none());
         assert_eq!(render_line("not json"), None);
     }
 }

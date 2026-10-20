@@ -1,11 +1,16 @@
-//! Pi behind the shared task harness seam. Turn logs are the execution
-//! evidence; the Pi session file is the conversation.
+//! Pi and omp behind the shared task harness seam. Turn logs are the
+//! execution evidence; the native session file is the conversation.
 
 use std::{error::Error, io, path::Path};
 
 use serde_json::Value;
 
-use super::{runtime, session_reader, task_runtime, tool_evidence::pi_tools, usage};
+use super::{
+    cli::{self, PiCli},
+    runtime, session_reader, task_runtime,
+    tool_evidence::pi_tools,
+    usage,
+};
 use crate::{
     profiles::model_pricing::ModelPricingCatalog,
     runtimes::{
@@ -19,7 +24,12 @@ use crate::{
     },
 };
 
-pub struct PiTaskRuntime;
+pub struct PiTaskRuntime {
+    pub cli: &'static PiCli,
+}
+
+pub static PI_TASK_RUNTIME: PiTaskRuntime = PiTaskRuntime { cli: &cli::PI };
+pub static OMP_TASK_RUNTIME: PiTaskRuntime = PiTaskRuntime { cli: &cli::OMP };
 
 impl NativeSessionReader for PiTaskRuntime {
     fn history<'a>(
@@ -28,6 +38,7 @@ impl NativeSessionReader for PiTaskRuntime {
     ) -> HarnessFuture<'a, io::Result<Vec<Value>>> {
         Box::pin(async move {
             Ok(session_reader::history(&session_reader::session_entries(
+                self.cli,
                 &session.runtime_directory()?,
                 session.native_session_id,
             )?))
@@ -59,6 +70,7 @@ impl NativeSessionReader for PiTaskRuntime {
     ) -> HarnessFuture<'a, io::Result<Vec<NativeReasoning>>> {
         Box::pin(async move {
             Ok(session_reader::reasoning(&session_reader::session_entries(
+                self.cli,
                 &session.runtime_directory()?,
                 session.native_session_id,
             )?))
@@ -122,9 +134,10 @@ impl NativeSessionReader for PiTaskRuntime {
 }
 
 impl TaskHarness for PiTaskRuntime {
-    // The prefix routes the session back to Pi; Pi accepts it as its own id.
+    // The prefix routes the session back to its CLI. Pi accepts the id as its
+    // own; omp makes its own id and Suplex finds the session by directory.
     fn new_session_id(&self) -> String {
-        format!("pi-{}", uuid::Uuid::new_v4())
+        format!("{}{}", self.cli.session_prefix, uuid::Uuid::new_v4())
     }
 
     fn observe<'a>(
@@ -152,7 +165,7 @@ impl TaskHarness for PiTaskRuntime {
         prompt: &'a str,
         claim: DispatchClaim<'a>,
     ) -> HarnessFuture<'a, Result<PromptObservation, Box<dyn Error + Send + Sync>>> {
-        Box::pin(async move { task_runtime::dispatch(scope, turn_id, prompt, claim) })
+        Box::pin(async move { task_runtime::dispatch(self.cli, scope, turn_id, prompt, claim) })
     }
 
     fn recover_dispatch<'a>(
@@ -216,40 +229,39 @@ mod tests {
                 .unwrap();
         let session = reader(&database);
         // Before Pi writes anything the session is empty, not an error.
-        assert!(PiTaskRuntime.history(&session).await.unwrap().is_empty());
-        fs::create_dir_all(directory.join(session_reader::SESSION_DIRECTORY)).unwrap();
+        assert!(PI_TASK_RUNTIME.history(&session).await.unwrap().is_empty());
+        let sessions = session_reader::session_directory(&cli::PI, &directory);
+        fs::create_dir_all(&sessions).unwrap();
         fs::write(
-            directory
-                .join(session_reader::SESSION_DIRECTORY)
-                .join("2026-10-20T16-46-06-320Z_pi-1234-abcd.jsonl"),
+            sessions.join("2026-10-20T16-46-06-320Z_pi-1234-abcd.jsonl"),
             SESSION,
         )
         .unwrap();
         fs::write(directory.join("turn-msg_2.jsonl"), TURN).unwrap();
-        let history = PiTaskRuntime.history(&session).await.unwrap();
+        let history = PI_TASK_RUNTIME.history(&session).await.unwrap();
         assert_eq!(history.len(), 3);
         assert_eq!(history[2]["content"][1]["text"], "Done.");
-        let reasoning = PiTaskRuntime.reasoning(&session).await.unwrap();
+        let reasoning = PI_TASK_RUNTIME.reasoning(&session).await.unwrap();
         assert_eq!(reasoning[0].text, "Thinking about it.");
-        let (tools, plan) = PiTaskRuntime.execution(&session).await.unwrap();
+        let (tools, plan) = PI_TASK_RUNTIME.execution(&session).await.unwrap();
         assert_eq!(plan, Value::Null);
         assert_eq!(tools.len(), 1);
         assert_eq!(tools[0].id, "msg_2:call_1");
         assert_eq!(tools[0].output.as_deref(), Some("2 passed\n"));
-        let evidence = PiTaskRuntime
+        let evidence = PI_TASK_RUNTIME
             .turn_evidence(&session, "msg_2")
             .await
             .unwrap()
             .unwrap();
         assert_eq!(evidence[0].id, "call_1");
         assert!(
-            PiTaskRuntime
+            PI_TASK_RUNTIME
                 .turn_evidence(&session, "msg_missing")
                 .await
                 .unwrap()
                 .is_none()
         );
-        let timeline = PiTaskRuntime.timeline(&session, None).await.unwrap();
+        let timeline = PI_TASK_RUNTIME.timeline(&session, None).await.unwrap();
         assert_eq!(timeline.live_message_id, None);
         let entry = &timeline.usage[0];
         assert_eq!(
@@ -259,9 +271,9 @@ mod tests {
         assert!(entry.completed_at_ms.is_some());
         assert_eq!(entry.tokens.cache_read, 40.0);
         assert!(entry.cost_usd > 0.0 && entry.subsidized);
-        assert!(!PiTaskRuntime.busy(&session).await.unwrap());
+        assert!(!PI_TASK_RUNTIME.busy(&session).await.unwrap());
         assert_eq!(
-            PiTaskRuntime
+            PI_TASK_RUNTIME
                 .result_text(&directory, "msg_2")
                 .await
                 .unwrap(),
@@ -272,12 +284,90 @@ mod tests {
 
     #[test]
     fn new_sessions_are_valid_pi_session_ids_with_the_routing_prefix() {
-        let id = PiTaskRuntime.new_session_id();
+        let id = PI_TASK_RUNTIME.new_session_id();
         assert!(id.starts_with("pi-"));
         assert!(
             id.bytes()
                 .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
         );
         assert!(id.as_bytes().last().unwrap().is_ascii_alphanumeric());
+    }
+
+    #[tokio::test]
+    async fn the_omp_reader_finds_its_own_session_file_and_projects_device_calls() {
+        let root =
+            std::env::temp_dir().join(format!("suplex-omp-harness-{}", uuid::Uuid::new_v4()));
+        let database = root.join("suplex.sqlite");
+        let directory =
+            crate::runtimes::task_harness::task_session_runtime_directory(&database, "session-1")
+                .unwrap();
+        // The Suplex id routes to omp; omp's own id names the file.
+        let session = ReaderSession {
+            native_session_id: "omp-71618050-0d31-428e-a547-d6c4a2eca88f",
+            ..reader(&database)
+        };
+        assert!(OMP_TASK_RUNTIME.history(&session).await.unwrap().is_empty());
+        let sessions = session_reader::session_directory(&cli::OMP, &directory);
+        fs::create_dir_all(&sessions).unwrap();
+        fs::write(
+            sessions.join("2026-10-20T18-19-45-455Z_01a15a8a-73af-72db-a071-b9a2de33ee11.jsonl"),
+            include_str!("fixtures/omp-session.jsonl"),
+        )
+        .unwrap();
+        fs::write(
+            directory.join("turn-msg_2.jsonl"),
+            include_str!("fixtures/omp-turn.jsonl"),
+        )
+        .unwrap();
+        fs::write(
+            directory.join("turn-msg_3.jsonl"),
+            include_str!("fixtures/omp-advisor-turn.jsonl"),
+        )
+        .unwrap();
+        assert_eq!(OMP_TASK_RUNTIME.history(&session).await.unwrap().len(), 5);
+        // Pi reads only its own directory and session id.
+        assert!(PI_TASK_RUNTIME.history(&session).await.unwrap().is_empty());
+        let reasoning = OMP_TASK_RUNTIME.reasoning(&session).await.unwrap();
+        assert_eq!(reasoning[0].text, "Thinking about it.");
+        let (tools, _) = OMP_TASK_RUNTIME.execution(&session).await.unwrap();
+        assert_eq!(
+            tools
+                .iter()
+                .map(|tool| (tool.id.as_str(), tool.name.as_str(), tool.status))
+                .collect::<Vec<_>>(),
+            [
+                ("msg_2:call_1", "bash", "completed"),
+                (
+                    "msg_3:call_2",
+                    "mcp__suplex_advisor__submit_report",
+                    "completed"
+                ),
+            ]
+        );
+        let timeline = OMP_TASK_RUNTIME.timeline(&session, None).await.unwrap();
+        assert_eq!(timeline.usage.len(), 2);
+        let entry = &timeline.usage[0];
+        assert_eq!(
+            (entry.provider.as_str(), entry.model.as_str()),
+            ("localfake", "fake-model")
+        );
+        assert_eq!(entry.tokens.input, 200.0);
+        assert_eq!(entry.tokens.cache_read, 40.0);
+        assert!(entry.cost_usd > 0.0);
+        assert_eq!(
+            OMP_TASK_RUNTIME
+                .result_text(&directory, "msg_3")
+                .await
+                .unwrap(),
+            "Done."
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn new_omp_sessions_carry_the_omp_routing_prefix() {
+        let id = OMP_TASK_RUNTIME.new_session_id();
+        assert!(id.starts_with("omp-"));
+        assert_ne!(id, OMP_TASK_RUNTIME.new_session_id());
     }
 }

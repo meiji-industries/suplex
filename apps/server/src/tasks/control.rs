@@ -104,6 +104,7 @@ wire_enum! {
         Devin = "devin",
         Codex = "codex",
         Pi = "pi",
+        Omp = "omp",
     }
 }
 
@@ -439,6 +440,7 @@ mod tests {
             HarnessKind::Devin,
             HarnessKind::Codex,
             HarnessKind::Pi,
+            HarnessKind::Omp,
         ]
         .into_iter()
         .map(HarnessKind::as_str)

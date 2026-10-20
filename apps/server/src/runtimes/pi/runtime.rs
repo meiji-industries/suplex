@@ -8,8 +8,9 @@ use std::error::Error;
 use std::io;
 use std::path::Path;
 
-use super::invocation::{self, Role};
-use super::session_reader::SESSION_DIRECTORY;
+use super::cli::{PiCli, SessionIdentity};
+use super::invocation::{self, Role, SessionArgument};
+use super::session_reader;
 use super::transcript;
 use crate::runtimes::headless::{self, DispatchInput};
 
@@ -69,17 +70,17 @@ pub fn observe(
             let pid = i32::try_from(record.pid).map_err(io::Error::other)?;
             match kill(Pid::from_raw(pid), None) {
                 Ok(()) | Err(Errno::EPERM) => {
-                    return Err(io::Error::other("Pi process liveness is uncertain"));
+                    return Err(io::Error::other("Native process liveness is uncertain"));
                 }
                 Err(Errno::ESRCH) => {}
                 Err(error) => return Err(io::Error::other(error)),
             }
         }
-        // A tool's command can outlive the Pi process; stop it either way.
+        // A tool's command can outlive the native process; stop it either way.
         headless::stop_execution(directory, &record.generation)?;
     }
-    // Pi settles a failed response normally and exits 0, so the final
-    // response decides before completion does.
+    // Pi settles a failed response normally and exits 0, and omp exits 1,
+    // so the final response decides before completion and exit status do.
     (result.state, result.reason) = if transcript::failure(&events).is_some() {
         (PromptState::Error, "native_error")
     } else if transcript::aborted(&events) {
@@ -100,6 +101,7 @@ pub fn observe(
 }
 
 pub struct PiDispatch<'a> {
+    pub cli: &'a PiCli,
     pub directory: &'a Path,
     pub worktree: &'a Path,
     pub executable: &'a Path,
@@ -114,8 +116,9 @@ pub struct PiDispatch<'a> {
     pub excluded_environment_keys: &'a [String],
 }
 
-/// One detached `pi --mode json` process per turn. Every turn names the same
-/// session id and directory, so Pi resumes the conversation itself.
+/// One detached `--mode json` process per turn. A Pi turn names the session
+/// id, so Pi resumes the conversation itself. An omp turn resumes the
+/// session file that its private directory already holds, if any.
 pub fn dispatch<F>(
     input: PiDispatch<'_>,
     claim: F,
@@ -131,15 +134,33 @@ where
         None,
     )?;
     if !before.retry_allowed {
-        return Err(io::Error::other("Pi prompt was not proven absent; replay is blocked").into());
+        return Err(io::Error::other(format!(
+            "{} prompt was not proven absent; replay is blocked",
+            input.cli.executable.label
+        ))
+        .into());
     }
+    let existing = match input.cli.session_identity {
+        SessionIdentity::Named => None,
+        SessionIdentity::Resumed => {
+            session_reader::session_file(input.cli, input.directory, input.session_id)?
+        }
+    };
+    let session = match (input.cli.session_identity, existing.as_deref()) {
+        (SessionIdentity::Named, _) => SessionArgument::Id(input.session_id),
+        (SessionIdentity::Resumed, Some(file)) => SessionArgument::Resume(file),
+        (SessionIdentity::Resumed, None) => SessionArgument::New,
+    };
     let args = invocation::pi_arguments(
-        input.model,
-        input.reasoning_effort,
-        input.role,
-        &input.directory.join(SESSION_DIRECTORY),
-        input.session_id,
-        input.bridge_extension,
+        input.cli,
+        &invocation::TurnArguments {
+            model: input.model,
+            reasoning_effort: input.reasoning_effort,
+            role: input.role,
+            session_directory: &session_reader::session_directory(input.cli, input.directory),
+            session,
+            bridge: input.bridge_extension,
+        },
     );
     let record = headless::dispatch_with_exclusions(
         DispatchInput {
@@ -319,6 +340,19 @@ mod tests {
             result_text(&directory, "msg_1").unwrap(),
             "Connection error."
         );
+        // A real omp turn ends at `agent_end` without `agent_settled`.
+        fs::write(
+            headless::turn_file(&directory, "msg_1", "jsonl"),
+            include_str!("fixtures/omp-turn.jsonl"),
+        )
+        .unwrap();
+        fs::write(headless::turn_file(&directory, "msg_1", "exit"), "0").unwrap();
+        let omp = observed(&directory);
+        assert_eq!(
+            (omp.state, omp.reason),
+            (PromptState::Completed, "native_turn_completed")
+        );
+        assert_eq!(result_text(&directory, "msg_1").unwrap(), "Done.");
         fs::remove_dir_all(directory).unwrap();
     }
 }

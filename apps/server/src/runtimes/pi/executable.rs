@@ -4,27 +4,16 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use crate::{
-    profiles::agent_profiles::home_directory,
-    runtimes::task_harness::{ExecutableSpec, resolve_executable},
-};
-
-/// `npm install -g` puts `pi` beside `node` on PATH; the pi.dev installer
-/// uses `~/.local/bin`, `~/bin`, its agent directory, or a Homebrew bin.
-pub const PI_EXECUTABLE: ExecutableSpec = ExecutableSpec {
-    label: "Pi",
-    binary: "pi",
-    env_var: "SUPLEX_PI_COMMAND",
-    home_paths: &[".local/bin/pi", ".pi/agent/bin/pi", "bin/pi"],
-    fallback_paths: &["/opt/homebrew/bin/pi", "/usr/local/bin/pi"],
-};
+use super::cli::PiCli;
+use crate::{profiles::agent_profiles::home_directory, runtimes::task_harness::resolve_executable};
 
 pub fn resolve_pi_executable(
+    cli: &PiCli,
     override_path: Option<&Path>,
     environment: &HashMap<String, String>,
 ) -> io::Result<PathBuf> {
     resolve_executable(
-        &PI_EXECUTABLE,
+        &cli.executable,
         override_path,
         environment,
         home_directory().as_deref(),
@@ -34,6 +23,7 @@ pub fn resolve_pi_executable(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::runtimes::pi::cli::{OMP, PI};
     use std::{fs, os::unix::fs::PermissionsExt};
 
     #[test]
@@ -50,18 +40,23 @@ mod tests {
             "PATH".to_owned(),
             on_path.parent().unwrap().to_string_lossy().into_owned(),
         )]);
-        assert_eq!(resolve_pi_executable(None, &path).unwrap(), on_path);
+        assert_eq!(resolve_pi_executable(&PI, None, &path).unwrap(), on_path);
         let mut pinned_environment = path.clone();
         pinned_environment.insert(
             "SUPLEX_PI_COMMAND".into(),
             pinned.to_string_lossy().into_owned(),
         );
         assert_eq!(
-            resolve_pi_executable(None, &pinned_environment).unwrap(),
+            resolve_pi_executable(&PI, None, &pinned_environment).unwrap(),
             pinned
         );
+        // omp has its own pin, so a Pi pin never selects it.
+        assert_ne!(
+            resolve_pi_executable(&OMP, None, &pinned_environment).ok(),
+            Some(pinned.clone())
+        );
         pinned_environment.insert("SUPLEX_PI_COMMAND".into(), "relative/pi".into());
-        assert!(resolve_pi_executable(None, &pinned_environment).is_err());
+        assert!(resolve_pi_executable(&PI, None, &pinned_environment).is_err());
         fs::remove_dir_all(root).unwrap();
     }
 }

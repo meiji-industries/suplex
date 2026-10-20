@@ -1,9 +1,12 @@
-//! Pi Coordinator, Worker, and Advisor launches over the shared headless
-//! turn runtime.
+//! Pi and omp Coordinator, Worker, and Advisor launches over the shared
+//! headless turn runtime.
 
 use std::{collections::HashMap, error::Error, io, path::PathBuf};
 
-use super::{display, executable, invocation, runtime};
+use super::{
+    cli::{BridgeRegistration, PiCli},
+    display, executable, invocation, runtime,
+};
 use crate::{
     coordination::{advisor_bridge, bridge_auth, root_bridge},
     runtimes::{
@@ -13,13 +16,16 @@ use crate::{
     },
 };
 
-/// The extension file that registers the role's bridge, in the private
-/// session runtime directory.
+/// The extension file that registers the role's bridge for Pi, in the
+/// private session runtime directory.
 pub const BRIDGE_EXTENSION: &str = "suplex-bridge.ts";
+/// The extension directory whose `.mcp.json` declares the bridge for omp.
+pub const BRIDGE_DIRECTORY: &str = "suplex-bridge";
 
 /// Prepare the role's bridge capability and guarded shell, then make the
 /// durable prompt claim inside the native dispatch operation before spawning.
 pub fn dispatch<F>(
+    cli: &PiCli,
     scope: &TaskScope<'_>,
     turn_id: &str,
     prompt: &str,
@@ -37,9 +43,13 @@ where
         None,
     )?;
     if !before.retry_allowed {
-        return Err(io::Error::other("Pi prompt was not proven absent; replay is blocked").into());
+        return Err(io::Error::other(format!(
+            "{} prompt was not proven absent; replay is blocked",
+            cli.executable.label
+        ))
+        .into());
     }
-    let pi = executable::resolve_pi_executable(scope.executable, scope.inherited_environment)?;
+    let pi = executable::resolve_pi_executable(cli, scope.executable, scope.inherited_environment)?;
     let (git, gh) = git_guard::resolve_guard_binaries(scope.inherited_environment)?;
     let guard = git_guard::create_git_command_guard(
         &directory,
@@ -114,20 +124,30 @@ where
         };
     let extension: Option<PathBuf> = match role.bridge_name() {
         Some(name) => {
-            let path = directory.join(BRIDGE_EXTENSION);
-            crate::shared::fs::write_private(
-                &path,
-                invocation::bridge_extension(
-                    name,
-                    &invocation::BridgeServer {
-                        command: suplex,
-                        args: &server_args,
-                        environment_names: &server_names,
-                    },
-                )
-                .as_bytes(),
-            )?;
-            Some(path)
+            let bridge = invocation::BridgeServer {
+                command: suplex,
+                args: &server_args,
+                environment_names: &server_names,
+            };
+            Some(match cli.bridge {
+                BridgeRegistration::Extension => {
+                    let path = directory.join(BRIDGE_EXTENSION);
+                    crate::shared::fs::write_private(
+                        &path,
+                        invocation::bridge_extension(name, &bridge).as_bytes(),
+                    )?;
+                    path
+                }
+                BridgeRegistration::McpDirectory => {
+                    let path = directory.join(BRIDGE_DIRECTORY);
+                    std::fs::create_dir_all(&path)?;
+                    crate::shared::fs::write_private(
+                        &path.join(".mcp.json"),
+                        invocation::bridge_mcp_config(name, &bridge).as_bytes(),
+                    )?;
+                    path
+                }
+            })
         }
         None => None,
     };
@@ -141,10 +161,11 @@ where
         scope.worktree,
         scope.project_environment,
     );
-    // The host already prepended the project context to `prompt`. Pi reads
-    // AGENTS.md itself, and the role prompt leads the private prompt file.
+    // The host already prepended the project context to `prompt`. Pi and omp
+    // read AGENTS.md themselves, and the role prompt leads the prompt file.
     let prompt = format!("{}\n\n{prompt}", scope.workflow.role_prompt(scope.role));
     display::show(
+        cli,
         scope.database_path,
         scope.session_id,
         scope.native_session_id,
@@ -153,6 +174,7 @@ where
     );
     runtime::dispatch(
         runtime::PiDispatch {
+            cli,
             directory: &directory,
             worktree: scope.worktree,
             executable: &pi,
@@ -173,6 +195,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::runtimes::pi::cli::{OMP, PI};
     use crate::{
         coordination::advisor_bridge::AdvisorRole,
         runtimes::{
@@ -323,14 +346,20 @@ mod tests {
             &excluded,
         );
         let claimed = AtomicBool::new(false);
-        let observed = dispatch(&launch, "msg_root", "Inspect the worktree", |generation| {
-            assert!(!generation.is_empty());
-            let directory = launch.runtime_directory()?;
-            assert!(directory.join("root.binding.json").exists());
-            assert!(!directory.join("turn.json").exists());
-            claimed.store(true, Ordering::SeqCst);
-            Ok(true)
-        })
+        let observed = dispatch(
+            &PI,
+            &launch,
+            "msg_root",
+            "Inspect the worktree",
+            |generation| {
+                assert!(!generation.is_empty());
+                let directory = launch.runtime_directory()?;
+                assert!(directory.join("root.binding.json").exists());
+                assert!(!directory.join("turn.json").exists());
+                claimed.store(true, Ordering::SeqCst);
+                Ok(true)
+            },
+        )
         .unwrap();
         assert!(claimed.load(Ordering::SeqCst));
         assert!(observed.admission_observed);
@@ -357,7 +386,7 @@ mod tests {
             WorkflowLaunch::default(),
             &[],
         );
-        assert!(dispatch(&launch, "msg_refusal", "Inspect", |_| Ok(false)).is_err());
+        assert!(dispatch(&PI, &launch, "msg_refusal", "Inspect", |_| Ok(false)).is_err());
         thread::sleep(Duration::from_millis(100));
         assert!(!fixture.base.join("pi.launched").exists());
         assert!(
@@ -395,7 +424,10 @@ mod tests {
             },
             &[],
         );
-        let observed = dispatch(&launch, "msg_advisor", "Review the change", |_| Ok(true)).unwrap();
+        let observed = dispatch(&PI, &launch, "msg_advisor", "Review the change", |_| {
+            Ok(true)
+        })
+        .unwrap();
         assert!(observed.admission_observed);
         let directory = launch.runtime_directory().unwrap();
         let extension = fs::read_to_string(directory.join(BRIDGE_EXTENSION)).unwrap();
@@ -428,14 +460,75 @@ mod tests {
             WorkflowLaunch::default(),
             &[],
         );
-        let observed = dispatch(&launch, "msg_worker", "Implement the assignment", |_| {
-            Ok(true)
-        })
+        let observed = dispatch(
+            &PI,
+            &launch,
+            "msg_worker",
+            "Implement the assignment",
+            |_| Ok(true),
+        )
         .unwrap();
         assert!(observed.admission_observed);
         let directory = launch.runtime_directory().unwrap();
         assert!(!directory.join(BRIDGE_EXTENSION).exists());
         wait_for_completion(&directory, "msg_worker");
+        fs::remove_dir_all(&fixture.base).unwrap();
+    }
+
+    #[test]
+    fn omp_turns_load_the_bridge_directory_and_resume_the_session_file() {
+        let fixture = fixture(
+            "omp",
+            concat!(
+                "printf '%s\\n' \"$*\" >> \"$0.argv\"\n",
+                "test -n \"$SUPLEX_ROOT_TOKEN\" || exit 21\n",
+                "eval \"bridge=\\${$#}\"\n",
+                "grep -q '\"suplex_root\"' \"$bridge/.mcp.json\" || exit 22\n",
+                "grep -q \"$SUPLEX_ROOT_TOKEN\" \"$bridge/.mcp.json\" && exit 23\n",
+                "dir=; prev=; for arg in \"$@\"; do [ \"$prev\" = --session-dir ] && dir=$arg; prev=$arg; done\n",
+                "mkdir -p \"$dir\" && touch \"$dir/2026-10-20T18-19-45-455Z_019c.jsonl\"\n",
+            ),
+            &[],
+        );
+        let identity = root_bridge::RootIdentity {
+            task_id: "task_pi".into(),
+            session_id: "session_omp".into(),
+            generation: 1,
+        };
+        let launch = scope(
+            &fixture,
+            "session_omp",
+            TaskRole::Root(&identity),
+            WorkflowLaunch::default(),
+            &[],
+        );
+        let directory = launch.runtime_directory().unwrap();
+        for turn in ["msg_1", "msg_2"] {
+            dispatch(&OMP, &launch, turn, "Inspect the worktree", |_| Ok(true)).unwrap();
+            wait_for_completion(&directory, turn);
+        }
+        let argv = fs::read_to_string(fixture.base.join("pi.argv")).unwrap();
+        let turns = argv.lines().collect::<Vec<_>>();
+        let sessions = directory.join("omp-sessions");
+        let bridge = directory.join(BRIDGE_DIRECTORY);
+        let tail = format!(
+            "--no-title --tools read,grep,glob -e {}",
+            bridge.to_string_lossy()
+        );
+        assert_eq!(
+            turns[0],
+            format!(
+                "--mode json --model ollama/qwen3-coder --thinking high --session-dir {} {tail}",
+                sessions.to_string_lossy()
+            )
+        );
+        assert!(turns[1].ends_with(&format!(
+            "--resume {} {tail}",
+            sessions
+                .join("2026-10-20T18-19-45-455Z_019c.jsonl")
+                .to_string_lossy()
+        )));
+        assert!(!directory.join(BRIDGE_EXTENSION).exists());
         fs::remove_dir_all(&fixture.base).unwrap();
     }
 }

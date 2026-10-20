@@ -39,6 +39,11 @@ export const PROVIDER_INSTALLATIONS: Record<HarnessKind, ProviderInstallation> =
     guideUrl: "https://pi.dev/docs/latest/quickstart",
     os: "macOS, Linux, or WSL",
   },
+  omp: {
+    command: "curl -fsSL https://omp.sh/install | sh",
+    guideUrl: "https://github.com/can1357/oh-my-pi#install",
+    os: "macOS, Linux, or WSL",
+  },
 };
 
 export function ProviderInstallationInstructions({ provider, checkLabel }: { provider: HarnessKind; checkLabel: "Check again" | "Refresh" }): ReactElement {

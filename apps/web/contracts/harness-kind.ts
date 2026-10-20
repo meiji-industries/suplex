@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-export const HARNESS_KIND_IDS = ["opencode", "claude-code", "devin", "codex", "pi"] as const;
+export const HARNESS_KIND_IDS = ["opencode", "claude-code", "devin", "codex", "pi", "omp"] as const;
 
 export const HarnessKindSchema = z.enum(HARNESS_KIND_IDS);
 

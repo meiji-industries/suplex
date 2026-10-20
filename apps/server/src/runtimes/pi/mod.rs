@@ -1,3 +1,7 @@
+//! Pi and its fork omp (oh-my-pi). One runtime serves both; `cli` holds
+//! what differs between them.
+
+pub mod cli;
 pub mod display;
 pub mod executable;
 pub mod harness;

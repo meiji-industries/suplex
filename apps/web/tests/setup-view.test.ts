@@ -16,9 +16,9 @@ const project = { id: "project-1", name: "Site" } as ProjectResponse;
 test("the setup checklist is Git, Herdr, and the context providers only", () => {
   const list = setupChecklist(snapshot([
     check("database"), check("git"), check("herdr-readiness"), check("gh-auth"),
-    check("provider:opencode", "opencode"), check("provider:claude-code", "claude-code"), check("provider:codex", "codex"), check("provider:pi", "pi"),
+    check("provider:opencode", "opencode"), check("provider:claude-code", "claude-code"), check("provider:codex", "codex"), check("provider:pi", "pi"), check("provider:omp", "omp"),
   ]));
-  expect(list.map(({ id }) => id)).toEqual(["git", "herdr-readiness", "provider:opencode", "provider:claude-code", "provider:codex", "provider:pi"]);
+  expect(list.map(({ id }) => id)).toEqual(["git", "herdr-readiness", "provider:opencode", "provider:claude-code", "provider:codex", "provider:pi", "provider:omp"]);
   // With no provider context the checklist is only the host tools.
   expect(setupChecklist(snapshot([check("git"), check("herdr-readiness")])).map(({ id }) => id)).toEqual(["git", "herdr-readiness"]);
   expect(setupChecklist(undefined)).toEqual([]);

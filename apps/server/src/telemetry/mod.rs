@@ -538,6 +538,7 @@ fn collect_daily(
             "profiles_devin": count(database, "SELECT COUNT(*) FROM suplex_profiles WHERE provider = 'devin' AND archived_at IS NULL")?,
             "profiles_codex": count(database, "SELECT COUNT(*) FROM suplex_profiles WHERE provider = 'codex' AND archived_at IS NULL")?,
             "profiles_pi": count(database, "SELECT COUNT(*) FROM suplex_profiles WHERE provider = 'pi' AND archived_at IS NULL")?,
+            "profiles_omp": count(database, "SELECT COUNT(*) FROM suplex_profiles WHERE provider = 'omp' AND archived_at IS NULL")?,
         }),
     ));
     let mut statement = database.connection().prepare(

@@ -1,5 +1,5 @@
-//! One Pi `--mode json` turn log: a session header, then agent, message,
-//! and tool execution events.
+//! One Pi or omp `--mode json` turn log: a session header, then agent,
+//! message, and tool execution events.
 
 use serde_json::Value;
 use std::collections::HashSet;
@@ -52,14 +52,20 @@ pub fn session_id(events: &[PiEvent]) -> Option<&str> {
     })
 }
 
-/// `agent_settled` ends automatic work; an `agent_end` that will not retry
-/// is final too.
+/// Pi's `agent_settled` ends automatic work. An `agent_end` that will not
+/// retry is final too. omp sends no `agent_settled` and no `willRetry`; it
+/// starts a retry with `auto_retry_start` after the failed `agent_end`.
 pub fn completed(events: &[PiEvent]) -> bool {
-    events.iter().any(|event| event.kind() == "agent_settled")
-        || events
+    if events.iter().any(|event| event.kind() == "agent_settled") {
+        return true;
+    }
+    let Some(end) = events.iter().rposition(|event| event.kind() == "agent_end") else {
+        return false;
+    };
+    events[end].0["willRetry"] != true
+        && !events[end..]
             .iter()
-            .rfind(|event| event.kind() == "agent_end")
-            .is_some_and(|event| event.0["willRetry"] != true)
+            .any(|event| event.kind() == "auto_retry_start")
 }
 
 pub fn aborted(events: &[PiEvent]) -> bool {
@@ -185,5 +191,30 @@ mod tests {
         assert_eq!(failure(&exhausted), Some("529 overloaded"));
         let stopped = parse_events("{\"type\":\"agent_settled\",\"aborted\":true}\n");
         assert!(aborted(&stopped));
+    }
+
+    #[test]
+    fn an_omp_turn_completes_at_agent_end_unless_a_retry_follows() {
+        let turn = parse_events(include_str!("fixtures/omp-turn.jsonl"));
+        assert!(session_id(&turn).is_some_and(|id| id.starts_with("01a15a8a")));
+        assert!(completed(&turn));
+        assert_eq!(result_text(&turn), "Done.");
+        assert!(unsettled_tool_ids(&turn).is_empty());
+        let retrying = parse_events(concat!(
+            "{\"type\":\"message_end\",\"message\":{\"role\":\"assistant\",\"content\":[],\"stopReason\":\"error\",\"errorMessage\":\"529\"}}\n",
+            "{\"type\":\"agent_end\",\"messages\":[]}\n",
+            "{\"type\":\"auto_retry_start\",\"attempt\":1,\"maxAttempts\":3,\"delayMs\":2000,\"errorMessage\":\"529\"}\n",
+        ));
+        assert!(!completed(&retrying));
+        let recovered = parse_events(concat!(
+            "{\"type\":\"agent_end\",\"messages\":[]}\n",
+            "{\"type\":\"auto_retry_start\",\"attempt\":1}\n",
+            "{\"type\":\"agent_start\"}\n",
+            "{\"type\":\"message_end\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"Done.\"}],\"stopReason\":\"stop\"}}\n",
+            "{\"type\":\"agent_end\",\"messages\":[]}\n",
+            "{\"type\":\"auto_retry_end\",\"success\":true,\"attempt\":1}\n",
+        ));
+        assert!(completed(&recovered));
+        assert_eq!(failure(&recovered), None);
     }
 }

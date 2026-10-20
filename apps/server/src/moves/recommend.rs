@@ -104,7 +104,11 @@ fn command(profile: &TaskProfile) -> Result<String, Box<dyn Error + Send + Sync>
             "Read,Glob,Grep".to_owned(),
             "--strict-mcp-config".to_owned(),
         ],
-        HarnessKind::Opencode | HarnessKind::Devin | HarnessKind::Codex | HarnessKind::Pi => vec![
+        HarnessKind::Opencode
+        | HarnessKind::Devin
+        | HarnessKind::Codex
+        | HarnessKind::Pi
+        | HarnessKind::Omp => vec![
             "exec".to_owned(),
             "--skip-git-repo-check".to_owned(),
             "-m".to_owned(),

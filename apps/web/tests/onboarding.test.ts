@@ -60,6 +60,14 @@ test("Pi lists in Your stack like the other agent tools, with a local model", ()
   expect(providerIcons.pi.label).toBe("Pi");
 });
 
+test("OMP lists in Your stack as its own agent tool", () => {
+  const omp = provider("omp", "connected", [{ id: "localfake/fake-model", label: "fake-model (localfake)" }]);
+  expect(connectedProviders([provider("pi", "not-connected"), omp]).map(item => item.id)).toEqual(["omp"]);
+  expect(stepComplete(state({ providers: [omp], profiles: [profile("root", "omp"), profile("worker", "omp")] }), "stack")).toBe(true);
+  expect(providerIcons.omp.label).toBe("OMP");
+  expect(PROVIDER_INSTALLATIONS.omp.command).toBe("curl -fsSL https://omp.sh/install | sh");
+});
+
 test("archived agents do not complete Your team", () => {
   expect(stepComplete(state({ profiles: [profile("root"), { ...profile("worker"), archivedAt: "2026-09-16T00:00:00Z" }] }), "team")).toBe(false);
 });

@@ -7,6 +7,7 @@ use chrono::Utc;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
+use crate::runtimes::pi::cli::{self as pi_cli, PiCli};
 use crate::runtimes::task_harness::{ExecutableSpec, resolve_executable};
 
 const OPENCODE: ExecutableSpec = ExecutableSpec {
@@ -64,7 +65,8 @@ const CODEX_MODELS: &[(&str, &str)] = &[
     ("gpt-6-sol", "GPT-6 Sol"),
     ("gpt-5.5", "GPT-5.5"),
 ];
-/// Pi selects `provider/id`; these cover a host where the listing is unavailable.
+/// Pi and omp select `provider/id`; these cover a host where the listing is
+/// not available.
 const PI_MODELS: &[(&str, &str)] = &[
     ("anthropic/claude-opus-5-5", "Claude Opus 5.5 (anthropic)"),
     (
@@ -121,11 +123,11 @@ pub fn read_codex_models(codex_home: &Path) -> Vec<Value> {
     }
 }
 
-/// The models Pi lists for its current credentials, including the
-/// `models.json` providers of a local server; the static list otherwise.
-pub fn pi_models(listing: Option<&str>) -> Vec<Value> {
+/// The models Pi or omp lists for its current credentials, including the
+/// custom providers of a local server; the static list otherwise.
+pub fn pi_models(cli: &PiCli, listing: Option<&str>) -> Vec<Value> {
     let listed = listing
-        .map(crate::runtimes::pi::models::parse_model_list)
+        .map(|listing| crate::runtimes::pi::models::parse_model_list(cli, listing))
         .unwrap_or_default()
         .into_iter()
         .map(|id| {
@@ -140,20 +142,19 @@ pub fn pi_models(listing: Option<&str>) -> Vec<Value> {
     }
 }
 
-async fn read_pi_models(environment: &HashMap<String, String>) -> Vec<Value> {
-    let listing = match crate::runtimes::pi::executable::resolve_pi_executable(None, environment) {
-        Ok(pi) => crate::profiles::provider_readiness::probe_command(
-            &pi,
-            crate::runtimes::pi::models::LIST_MODELS_ARGS,
-            None,
-        )
-        .await
-        .ok()
-        .filter(|result| result.exit_code == Some(0))
-        .map(|result| result.stdout),
-        Err(_) => None,
-    };
-    pi_models(listing.as_deref())
+async fn read_pi_models(cli: &PiCli, environment: &HashMap<String, String>) -> Vec<Value> {
+    let listing =
+        match crate::runtimes::pi::executable::resolve_pi_executable(cli, None, environment) {
+            Ok(pi) => {
+                crate::profiles::provider_readiness::probe_command(&pi, cli.list_models_args, None)
+                    .await
+                    .ok()
+                    .filter(|result| result.exit_code == Some(0))
+                    .map(|result| result.stdout)
+            }
+            Err(_) => None,
+        };
+    pi_models(cli, listing.as_deref())
 }
 
 /// `readProviders`. OpenCode's own vendors fold into its row as vendor-qualified
@@ -190,9 +191,14 @@ pub async fn read_providers(directory: &str, probe: bool) -> Value {
         (&DEVIN, "devin", models(DEVIN_MODELS)),
         (&CODEX, "codex", read_codex_models(&codex_home)),
         (
-            &crate::runtimes::pi::executable::PI_EXECUTABLE,
-            "pi",
-            read_pi_models(&environment).await,
+            &pi_cli::PI.executable,
+            pi_cli::PI.provider,
+            read_pi_models(&pi_cli::PI, &environment).await,
+        ),
+        (
+            &pi_cli::OMP.executable,
+            pi_cli::OMP.provider,
+            read_pi_models(&pi_cli::OMP, &environment).await,
         ),
     ];
     let mut providers = Vec::new();
@@ -253,11 +259,14 @@ mod tests {
 
     #[test]
     fn pi_models_come_from_its_listing_and_fall_back_to_the_static_list() {
-        let listed = pi_models(Some(concat!(
-            "provider   model        context  max-out  thinking  images\n",
-            "llama-server  qwen3-coder-30b  128K  16.4K  yes  no\n",
-            "anthropic  claude-sonnet-5  1M  128K  yes  yes\n",
-        )));
+        let listed = pi_models(
+            &pi_cli::PI,
+            Some(concat!(
+                "provider   model        context  max-out  thinking  images\n",
+                "llama-server  qwen3-coder-30b  128K  16.4K  yes  no\n",
+                "anthropic  claude-sonnet-5  1M  128K  yes  yes\n",
+            )),
+        );
         assert_eq!(
             listed,
             vec![
@@ -265,8 +274,26 @@ mod tests {
                 json!({"id":"anthropic/claude-sonnet-5","label":"claude-sonnet-5 (anthropic)"}),
             ]
         );
-        assert_eq!(pi_models(Some("No models available.")), models(PI_MODELS));
-        assert_eq!(pi_models(None), models(PI_MODELS));
+        assert_eq!(
+            pi_models(&pi_cli::PI, Some("No models available.")),
+            models(PI_MODELS)
+        );
+        assert_eq!(pi_models(&pi_cli::PI, None), models(PI_MODELS));
+        assert_eq!(
+            pi_models(
+                &pi_cli::OMP,
+                Some(
+                    r#"{"models":[{"provider":"llama-server","kind":"chat","id":"qwen3-coder-30b","selector":"llama-server/qwen3-coder-30b"}]}"#
+                )
+            ),
+            vec![
+                json!({"id":"llama-server/qwen3-coder-30b","label":"qwen3-coder-30b (llama-server)"})
+            ]
+        );
+        assert_eq!(
+            pi_models(&pi_cli::OMP, Some("{\"models\":[]}")),
+            models(PI_MODELS)
+        );
     }
 
     #[tokio::test]
@@ -292,7 +319,7 @@ mod tests {
             (status, headers["cache-control"].to_str().unwrap()),
             (StatusCode::OK, "private, no-store")
         );
-        assert_eq!(json_body(&body)["providers"].as_array().unwrap().len(), 5);
+        assert_eq!(json_body(&body)["providers"].as_array().unwrap().len(), 6);
         for (method, path) in [
             ("PUT", "/api/admin/providers/openrouter/credential"),
             ("DELETE", "/api/admin/providers/openrouter/credential"),
@@ -336,7 +363,14 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(
             labels,
-            ["Claude Code", "Codex CLI", "Devin CLI", "OpenCode", "Pi"]
+            [
+                "Claude Code",
+                "Codex CLI",
+                "Devin CLI",
+                "OMP",
+                "OpenCode",
+                "Pi"
+            ]
         );
         assert_eq!(providers["providers"][0]["modelCount"], 9);
         assert_eq!(providers["providers"][0]["connection"]["status"], "unknown");

@@ -42,9 +42,9 @@ async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         return suplex::runtimes::codex::display::serve(directory).await;
     }
     if let [subcommand, directory] = command.as_slice()
-        && subcommand == suplex::runtimes::pi::display::SUBCOMMAND
+        && let Some(cli) = suplex::runtimes::pi::display::for_subcommand(subcommand)
     {
-        return suplex::runtimes::pi::display::serve(directory).await;
+        return suplex::runtimes::pi::display::serve(cli, directory).await;
     }
     if command == ["mcp", "root"] {
         // The Root bridge forwards its events to the server's system log.

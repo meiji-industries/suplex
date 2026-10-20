@@ -51,10 +51,15 @@ pub fn provider_login_command(
         |_| binary_name(provider).to_owned(),
         |path| quoted(&path.to_string_lossy()),
     );
-    let login = match HarnessKind::parse(provider) {
-        Some(HarnessKind::Codex) => " login",
-        // Pi has no sign-in subcommand; `/login` runs inside its session.
-        Some(HarnessKind::Pi) => "",
+    // Pi has no sign-in subcommand; `/login` runs inside its session.
+    let pi_login = crate::runtimes::pi::cli::for_provider(provider).map(|cli| {
+        cli.login_command
+            .strip_prefix(cli.executable.binary)
+            .unwrap_or_default()
+    });
+    let login = match (HarnessKind::parse(provider), pi_login) {
+        (_, Some(login)) => login,
+        (Some(HarnessKind::Codex), _) => " login",
         _ => " auth login",
     };
     scoped_command(provider, home_directory, format!("{binary}{login}"))
@@ -322,6 +327,11 @@ pub(crate) mod tests {
             "'/opt/pi/pi'"
         );
         assert_eq!(provider_login_command("pi", None, missing()), "pi");
+        assert_eq!(
+            provider_login_command("omp", None, resolved("/opt/omp/omp")),
+            "'/opt/omp/omp' login"
+        );
+        assert_eq!(provider_login_command("omp", None, missing()), "omp login");
     }
 
     #[test]

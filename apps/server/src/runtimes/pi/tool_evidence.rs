@@ -1,4 +1,4 @@
-//! Tool observations projected from an immutable Pi turn log.
+//! Tool observations projected from an immutable Pi or omp turn log.
 
 use serde_json::{Map, Value, json};
 
@@ -18,12 +18,58 @@ pub fn result_text(result: &Value) -> Option<String> {
     )
 }
 
+/// omp calls a mounted MCP tool by writing its JSON arguments to the
+/// `xd://<tool>` device. Such a call reads as the MCP tool, named
+/// `mcp__<server>__<tool>` as Pi names it. `details` is the tool result's,
+/// which names the server and tool; before it exists the device name stands.
+pub fn device_call(
+    name: &str,
+    input: Option<&Map<String, Value>>,
+    details: &Value,
+) -> Option<(String, Map<String, Value>)> {
+    if name != "write" {
+        return None;
+    }
+    let device = &details["xdev"];
+    let path = input
+        .and_then(|input| input.get("path"))
+        .and_then(Value::as_str);
+    let device_name = match path {
+        Some(path) => path.strip_prefix("xd://")?,
+        None => device["tool"].as_str()?,
+    };
+    let inner = &device["inner"];
+    let name = match (inner["serverName"].as_str(), inner["mcpToolName"].as_str()) {
+        (Some(server), Some(tool)) => format!("mcp__{server}__{tool}"),
+        _ => device_name.to_owned(),
+    };
+    let input = device["args"].as_object().cloned().or_else(|| {
+        input?
+            .get("content")?
+            .as_str()
+            .and_then(|content| serde_json::from_str::<Map<String, Value>>(content).ok())
+    });
+    Some((name, input.unwrap_or_default()))
+}
+
 /// An MCP tool keeps its `CallToolResult` envelope, which the Advisor report
-/// reader accepts. A turn log carries it whole in `structuredContent`; a
-/// session file keeps only its content. A built-in tool shows its text.
+/// reader accepts. A Pi turn log carries it whole in `structuredContent`; a
+/// Pi session file keeps only its content. omp keeps the server's own result
+/// in the device details of both. A built-in tool shows its text.
 pub fn tool_output(name: &str, result: &Value) -> Option<String> {
     if result.is_null() {
         return None;
+    }
+    let inner = &result["details"]["xdev"]["inner"];
+    if name.starts_with("mcp__") && inner["rawContent"].is_array() {
+        let mut envelope = json!({
+            "content": inner["rawContent"],
+            "isError": inner["isError"] == true,
+        });
+        if !inner["structuredContent"].is_null() {
+            envelope["structuredContent"] = inner["structuredContent"].clone();
+        }
+        return Some(crate::shared::js_json::stringify(&envelope));
     }
     if name.starts_with("mcp__") {
         let envelope = result
@@ -55,11 +101,16 @@ pub fn pi_tools(events: &[PiEvent]) -> Vec<NativeTool> {
             continue;
         }
         let position = tools.iter().position(|tool| tool.id == id);
-        let input = value["args"]
-            .as_object()
-            .cloned()
-            .or_else(|| position.map(|index| tools[index].input.clone()))
-            .unwrap_or_else(Map::new);
+        let args = value["args"].as_object();
+        let (name, input) = match device_call(name, args, &value["result"]["details"]) {
+            Some(call) => call,
+            // An end event repeats no arguments, so the started call stands.
+            None => match (args, position) {
+                (None, Some(index)) => (tools[index].name.clone(), tools[index].input.clone()),
+                _ => (name.to_owned(), args.cloned().unwrap_or_else(Map::new)),
+            },
+        };
+        let name = name.as_str();
         let failed = finished && value["isError"] == true;
         let output = if finished {
             tool_output(name, &value["result"])
@@ -117,6 +168,41 @@ mod tests {
             advisor_report_from_turn(AdvisorRole::PlannerA, &[session_tool], "").unwrap()["summary"],
             "Plan"
         );
+    }
+
+    #[test]
+    fn a_real_omp_advisor_device_call_yields_a_submission_the_report_reader_accepts() {
+        use crate::coordination::advisor_bridge::{AdvisorRole, advisor_report_from_turn};
+        let tools = pi_tools(&parse_events(include_str!(
+            "fixtures/omp-advisor-turn.jsonl"
+        )));
+        assert_eq!(tools.len(), 1);
+        assert_eq!(tools[0].name, "mcp__suplex_advisor__submit_report");
+        assert_eq!(tools[0].input["summary"], "The change is correct.");
+        let tools = tools
+            .iter()
+            .map(|tool| serde_json::to_value(tool).unwrap())
+            .collect::<Vec<_>>();
+        let report = advisor_report_from_turn(AdvisorRole::Reviewer, &tools, "").unwrap();
+        assert_eq!(report["summary"], "The change is correct.");
+        assert_eq!(report["approved"], true);
+        // Before its result, a device call keeps omp's device name and arguments.
+        let started = pi_tools(&parse_events(
+            "{\"type\":\"tool_execution_start\",\"toolCallId\":\"c\",\"toolName\":\"write\",\"args\":{\"path\":\"xd://mcp__suplex_root_observe\",\"content\":\"{\\\"taskId\\\":\\\"t\\\"}\"}}\n",
+        ));
+        assert_eq!(
+            (started[0].name.as_str(), started[0].status),
+            ("mcp__suplex_root_observe", "running")
+        );
+        assert_eq!(started[0].input["taskId"], "t");
+        // A file write is an ordinary write.
+        let file = pi_tools(&parse_events(concat!(
+            "{\"type\":\"tool_execution_start\",\"toolCallId\":\"w\",\"toolName\":\"write\",\"args\":{\"path\":\"a.rs\",\"content\":\"x\"}}\n",
+            "{\"type\":\"tool_execution_end\",\"toolCallId\":\"w\",\"toolName\":\"write\",\"result\":{\"content\":[{\"type\":\"text\",\"text\":\"Wrote a.rs\"}],\"details\":{}},\"isError\":false}\n",
+        )));
+        assert_eq!(file[0].name, "write");
+        assert_eq!(file[0].input["path"], "a.rs");
+        assert_eq!(file[0].output.as_deref(), Some("Wrote a.rs"));
     }
 
     #[test]

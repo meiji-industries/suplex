@@ -111,18 +111,23 @@ See [billing setup and recovery](billing.md) for Suplex Free and Pro operations.
 
 ## Providers and defaults
 
-A provider is one of the five agent tools Suplex runs: OpenCode, Claude Code,
-Devin CLI, Codex CLI, and Pi. Each owns its own sign-in. Sign in as the OS user that
+A provider is one of the six agent tools Suplex runs: OpenCode, Claude Code,
+Devin CLI, Codex CLI, Pi, and OMP. Each owns its own sign-in. Sign in as the OS user that
 runs Suplex; a Codex login does not establish OpenCode access.
 
-OpenCode and Pi reach several model vendors, so their models carry the vendor
-in the id, such as `openai/gpt-5.6-sol`. The other three name their models
-directly. Pi lists the models its credentials and `~/.pi/agent/models.json`
+OpenCode, Pi, and OMP reach several model vendors, so their models carry the
+vendor in the id, such as `openai/gpt-5.6-sol`. The other three name their
+models directly. Pi lists the models its credentials and `~/.pi/agent/models.json`
 make available, so a local OpenAI-compatible server configured there appears as
 `<provider>/<id>`. Sign in to Pi by running `pi` and typing `/login`, or by
 setting a provider API key in the environment.
 
-`/admin/providers` shows all five rows without making a paid model request.
+Install OMP with `curl -fsSL https://omp.sh/install | sh`. OMP lists the models
+that its credentials and `~/.omp/agent/models.yml` make available, and Suplex
+reads that list with `omp models --json`. Sign in to OMP with `omp login`, or set
+a provider API key in the environment.
+
+`/admin/providers` shows all six rows without making a paid model request.
 **Configured** means the executable is present, not that inference was tested.
 Agent dialogs and project defaults use that same catalog. New installations seed
 Codex CLI GPT-5.6 Sol with medium reasoning for Coordinator and GPT-5.6 Luna with max
@@ -131,8 +136,8 @@ keeps its OpenCode profiles, converted to the vendor-qualified model id.
 
 Suplex discovers OpenCode on its process PATH or at `~/.opencode/bin/opencode`.
 `SUPLEX_OPENCODE_COMMAND`, `SUPLEX_CLAUDE_COMMAND`, `SUPLEX_DEVIN_COMMAND`,
-`SUPLEX_CODEX_COMMAND`, and `SUPLEX_PI_COMMAND` can each specify an absolute
-executable path. GitHub
+`SUPLEX_CODEX_COMMAND`, `SUPLEX_PI_COMMAND`, and `SUPLEX_OMP_COMMAND` can each
+specify an absolute executable path. GitHub
 delivery uses Suplex's GitHub sign-in or the host's available GitHub credentials.
 Suplex does not copy provider credentials into task records.
 

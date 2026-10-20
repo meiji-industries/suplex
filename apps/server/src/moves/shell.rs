@@ -30,7 +30,9 @@ fn unsupported() -> TaskError {
 pub fn check_provider(profile: &TaskProfile) -> Result<(), TaskError> {
     match profile.provider {
         HarnessKind::ClaudeCode | HarnessKind::Codex => Ok(()),
-        HarnessKind::Opencode | HarnessKind::Devin | HarnessKind::Pi => Err(unsupported()),
+        HarnessKind::Opencode | HarnessKind::Devin | HarnessKind::Pi | HarnessKind::Omp => {
+            Err(unsupported())
+        }
     }
 }
 
@@ -54,7 +56,7 @@ pub fn command(
             "-c".to_owned(),
             format!("model_reasoning_effort=\"{effort}\""),
         ],
-        HarnessKind::Opencode | HarnessKind::Devin | HarnessKind::Pi => {
+        HarnessKind::Opencode | HarnessKind::Devin | HarnessKind::Pi | HarnessKind::Omp => {
             return Err(unsupported().into());
         }
     };

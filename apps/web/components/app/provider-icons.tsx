@@ -6,6 +6,7 @@ export const providerIcons = {
   opencode: { label: "OpenCode", src: new URL("./provider-icons/opencode.svg", import.meta.url).href },
   devin: { label: "Devin", src: new URL("./provider-icons/devin.svg", import.meta.url).href },
   pi: { label: "Pi", src: new URL("./provider-icons/pi.svg", import.meta.url).href },
+  omp: { label: "OMP", src: new URL("./provider-icons/omp.svg", import.meta.url).href },
 } satisfies Record<HarnessKind, { label: string; src: string }>;
 
 const colorIcons = {

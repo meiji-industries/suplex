@@ -22,6 +22,7 @@
  <img src="https://img.shields.io/badge/agent-Devin%20CLI-2f6feb" alt="Devin CLI" />
  <img src="https://img.shields.io/badge/agent-Codex%20CLI-10a37f" alt="Codex CLI" />
  <img src="https://img.shields.io/badge/agent-Pi-555555" alt="Pi" />
+ <img src="https://img.shields.io/badge/agent-OMP-555555" alt="OMP" />
  <img src="https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey" alt="macOS, Linux, and Windows" />
  <a href="https://suplex.sh"><img src="https://img.shields.io/badge/download-suplex.sh-blue" alt="Download at suplex.sh" /></a>
 </p>
@@ -103,7 +104,7 @@ irm https://suplex.sh/install.ps1 | iex
 ```
 
 Each agent tool owns its own sign-in. Sign in to OpenCode, Claude Code, Devin CLI,
-Codex CLI, or Pi as the OS user that runs Suplex. The [install guide](docs/install.md)
+Codex CLI, Pi, or OMP as the OS user that runs Suplex. The [install guide](docs/install.md)
 covers providers, network access, the desktop app, lifecycle commands, and telemetry.
 
 ## Set up an installation
@@ -276,7 +277,7 @@ project grants, and verify an agent integration after an upgrade. See the
 
 | Integration | What Suplex does | Limits |
 | --- | --- | --- |
-| OpenCode, Claude Code, Devin CLI, Codex CLI, Pi | Runs each as a native runtime for Coordinator, Worker, and Advisors. | Each tool owns its sign-in. Login detection does not prove model access. Other tools need a runtime integration. |
+| OpenCode, Claude Code, Devin CLI, Codex CLI, Pi, OMP | Runs each as a native runtime for Coordinator, Worker, and Advisors. | Each tool owns its sign-in. Login detection does not prove model access. Other tools need a runtime integration. |
 | Git | Repository and task worktree operations. | Git transport authentication is separate from repository API credentials. |
 | GitHub | Repository onboarding, issues, pull requests, check observation, delivery, and pull request label triggers. | Repository permissions, required checks, reviews, and merge policy still apply. |
 | Bitbucket Cloud | Repository and pull request API access. Delivery to a local worktree, remote branch, or draft pull request. | Ready and merged targets are not available. |

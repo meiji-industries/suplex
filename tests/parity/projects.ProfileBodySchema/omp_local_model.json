@@ -1,0 +1,25 @@
+{
+  "contract": "projects.ProfileBodySchema",
+  "case": "omp_local_model",
+  "input": {
+    "provider": "omp",
+    "model": "llama-server/qwen3-coder-30b",
+    "reasoningLevel": "high",
+    "serviceTier": "default",
+    "name": "Local OMP",
+    "role": "worker",
+    "avatarSeed": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "provider": "omp",
+      "model": "llama-server/qwen3-coder-30b",
+      "reasoningLevel": "high",
+      "serviceTier": "default",
+      "name": "Local OMP",
+      "role": "worker",
+      "avatarSeed": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    }
+  }
+}

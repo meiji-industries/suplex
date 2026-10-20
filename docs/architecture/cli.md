@@ -34,7 +34,7 @@ start a server. The server starts only through an explicit command:
 | `backup`, `verify-backup`, `restore` | See [Backup and restore](backup-and-restore.md). |
 
 Help omits internal commands: `mcp`, `mcp root`, `mcp advisor`, `display …`,
-`codex-display`, `pi-display`, `update-apply`, and `github-store-credential`. Agent runtimes,
+`codex-display`, `pi-display`, `omp-display`, `update-apply`, and `github-store-credential`. Agent runtimes,
 the supervisor, and the updater start them.
 
 ## Finding the installation

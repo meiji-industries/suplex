@@ -12,6 +12,7 @@ use std::{
 use serde_json::{Map, Value, json};
 
 use crate::profiles::agent_profiles::{executable, home_directory};
+use crate::runtimes::pi::{cli as pi_cli, models as pi_models};
 use crate::tasks::control::HarnessKind;
 
 /// Label, binary, pinning variable, and home install paths per provider CLI.
@@ -48,13 +49,15 @@ fn spec(
             "SUPLEX_CODEX_COMMAND",
             &[".local/bin/codex", ".codex/bin/codex"],
         ),
-        "pi" => (
-            "Pi",
-            "pi",
-            "SUPLEX_PI_COMMAND",
-            crate::runtimes::pi::executable::PI_EXECUTABLE.home_paths,
-        ),
-        _ => return None,
+        _ => {
+            let cli = pi_cli::for_provider(kind)?;
+            (
+                cli.executable.label,
+                cli.executable.binary,
+                cli.executable.env_var,
+                cli.executable.home_paths,
+            )
+        }
     })
 }
 
@@ -190,6 +193,21 @@ fn state(state: &'static str) -> Classified {
 }
 
 fn classify(kind: &str, result: &ProbeResult) -> Classified {
+    // Pi and omp have no sign-in status command. Their model listing shows
+    // only models whose provider has credentials, and no key.
+    if let Some(cli) = pi_cli::for_provider(kind) {
+        if result.exit_code != Some(0) || result.timed_out {
+            return state("unknown");
+        }
+        let output = strip_ansi(&result.stdout);
+        return if pi_models::signed_out(cli, &output) {
+            state("signed-out")
+        } else if pi_models::parse_model_list(cli, &output).is_empty() {
+            state("present")
+        } else {
+            state("signed-in")
+        };
+    }
     match kind {
         "opencode" => {
             if result.exit_code != Some(0) || result.timed_out {
@@ -232,22 +250,6 @@ fn classify(kind: &str, result: &ProbeResult) -> Classified {
                 Some(false) => state("signed-out"),
                 None if result.exit_code == Some(0) => state("present"),
                 None => state("unknown"),
-            }
-        }
-        // Pi has no sign-in status command. `--list-models` lists only the
-        // models whose provider has credentials and never prints a key.
-        "pi" => {
-            if result.exit_code != Some(0) || result.timed_out {
-                return state("unknown");
-            }
-            let output = strip_ansi(&result.stdout);
-            if output.contains("No models available") {
-                return state("signed-out");
-            }
-            if crate::runtimes::pi::models::parse_model_list(&output).is_empty() {
-                state("present")
-            } else {
-                state("signed-in")
             }
         }
         _ => {
@@ -293,7 +295,7 @@ fn label(kind: &str) -> &'static str {
     spec(kind).map_or("", |(label, _, _, _)| label)
 }
 
-// Sources: official OpenCode, Claude Code, Devin CLI, Codex, and Pi installation guides.
+// Sources: official OpenCode, Claude Code, Devin CLI, Codex, Pi, and omp installation guides.
 fn install_remedy(kind: &str) -> (&'static str, &'static str) {
     match kind {
         "opencode" => ("curl -fsSL https://opencode.ai/install | bash", "command"),
@@ -303,8 +305,10 @@ fn install_remedy(kind: &str) -> (&'static str, &'static str) {
             "command",
         ),
         "codex" => ("npm install -g @openai/codex", "command"),
-        "pi" => ("curl -fsSL https://pi.dev/install.sh | sh", "command"),
-        _ => ("", "command"),
+        _ => (
+            pi_cli::for_provider(kind).map_or("", |cli| cli.install_command),
+            "command",
+        ),
     }
 }
 
@@ -312,9 +316,7 @@ fn login_remedy(kind: &str) -> &'static str {
     match kind {
         "opencode" => "opencode auth login",
         "claude-code" => "claude auth login",
-        // `/login` inside Pi stores a credential in its agent directory.
-        "pi" => "pi",
-        _ => "codex login",
+        _ => pi_cli::for_provider(kind).map_or("codex login", |cli| cli.login_command),
     }
 }
 
@@ -322,8 +324,7 @@ pub fn auth_args(kind: &str) -> &'static [&'static str] {
     match kind {
         "opencode" => &["auth", "list"],
         "claude-code" => &["auth", "status", "--json"],
-        "pi" => crate::runtimes::pi::models::LIST_MODELS_ARGS,
-        _ => &["login", "status"],
+        _ => pi_cli::for_provider(kind).map_or(&["login", "status"], |cli| cli.list_models_args),
     }
 }
 
@@ -668,6 +669,51 @@ mod tests {
         }
         assert_eq!(auth_args("pi"), ["--offline", "--list-models"]);
         assert_eq!(binary_name("pi"), "pi");
+    }
+
+    #[test]
+    fn omp_reports_credentials_from_its_json_model_listing() {
+        let omp = present("/private/bin/omp");
+        assert_eq!(
+            evaluate("omp", &absent(), None, false)["remedy"],
+            "curl -fsSL https://omp.sh/install | sh"
+        );
+        // `omp models --json` 18.12.3 without credentials.
+        let signed_out = evaluate("omp", &omp, ok("{\"models\":[]}\n"), false);
+        assert_eq!(
+            (
+                signed_out["status"].as_str(),
+                signed_out["summary"].as_str(),
+                signed_out["remedy"].as_str()
+            ),
+            (
+                Some("unhealthy"),
+                Some("OMP is not signed in"),
+                Some("omp login")
+            )
+        );
+        let signed_in = evaluate(
+            "omp",
+            &omp,
+            ok(
+                r#"{"models":[{"provider":"localfake","kind":"chat","id":"fake-model","selector":"localfake/fake-model"}]}"#,
+            ),
+            false,
+        );
+        assert_eq!(
+            signed_in,
+            json!({"id":"provider:omp","label":"OMP","provider":"omp","status":"healthy","summary":"OMP is signed in. Model access is not tested.","details":{"command":"omp","state":"signed-in"}})
+        );
+        assert_eq!(
+            evaluate("omp", &omp, ok("unexpected"), false)["details"]["state"],
+            "present"
+        );
+        for check in [signed_out, signed_in] {
+            assert!(!check.to_string().contains("private"));
+        }
+        assert_eq!(auth_args("omp"), ["models", "--json"]);
+        assert_eq!(binary_name("omp"), "omp");
+        assert_eq!(auth_args("codex"), ["login", "status"]);
     }
 
     #[test]

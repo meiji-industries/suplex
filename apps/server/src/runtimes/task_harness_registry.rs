@@ -3,9 +3,12 @@
 
 use std::path::Path;
 
+use super::pi::cli;
 use super::{
-    claude_code::task_runtime::ClaudeCodeTaskRuntime, codex::harness::CodexTaskRuntime,
-    opencode::task_runtime::OpenCodeTaskRuntime, pi::harness::PiTaskRuntime,
+    claude_code::task_runtime::ClaudeCodeTaskRuntime,
+    codex::harness::CodexTaskRuntime,
+    opencode::task_runtime::OpenCodeTaskRuntime,
+    pi::harness::{OMP_TASK_RUNTIME, PI_TASK_RUNTIME},
     task_harness::TaskHarness,
 };
 use crate::tasks::control::HarnessKind;
@@ -17,7 +20,8 @@ pub fn harness(kind: &str) -> Option<&'static dyn TaskHarness> {
         "claude-code" => Some(&ClaudeCodeTaskRuntime),
         "devin" => Some(&super::devin::harness::DevinTaskRuntime),
         "opencode" => Some(&OpenCodeTaskRuntime),
-        "pi" => Some(&PiTaskRuntime),
+        "pi" => Some(&PI_TASK_RUNTIME),
+        "omp" => Some(&OMP_TASK_RUNTIME),
         _ => None,
     }
 }
@@ -26,13 +30,13 @@ pub fn harness(kind: &str) -> Option<&'static dyn TaskHarness> {
 /// migration ran on OpenCode.
 pub fn profile_harness(provider: &str) -> &str {
     match provider {
-        "opencode" | "claude-code" | "devin" | "codex" | "pi" => provider,
+        "opencode" | "claude-code" | "devin" | "codex" | "pi" | "omp" => provider,
         _ => "opencode",
     }
 }
 
-/// Suplex reserves Devin, Codex, and Pi identities with a prefix, because a
-/// Codex thread id is itself a UUID. OpenCode uses "ses…" and Claude Code uses UUIDs.
+/// Suplex reserves Devin, Codex, Pi, and omp identities with a prefix, because
+/// a Codex thread id is itself a UUID. OpenCode uses "ses…" and Claude Code uses UUIDs.
 pub fn session_harness(native_session_id: &str) -> &'static str {
     let hyphenated_uuid = native_session_id.len() == 36
         && native_session_id.char_indices().all(|(index, character)| {
@@ -46,8 +50,10 @@ pub fn session_harness(native_session_id: &str) -> &'static str {
         "devin"
     } else if native_session_id.starts_with("codex-") {
         "codex"
-    } else if native_session_id.starts_with("pi-") {
+    } else if native_session_id.starts_with(cli::PI.session_prefix) {
         "pi"
+    } else if native_session_id.starts_with(cli::OMP.session_prefix) {
+        "omp"
     } else if hyphenated_uuid {
         "claude-code"
     } else {
@@ -70,7 +76,10 @@ pub fn display_command(provider: HarnessKind, runtime_directory: &Path) -> Optio
         HarnessKind::Devin => super::devin::display::display_command(runtime_directory)
             .ok()
             .map(|display| display.command),
-        HarnessKind::Pi => super::pi::display::display_command(runtime_directory)
+        HarnessKind::Pi => super::pi::display::display_command(&cli::PI, runtime_directory)
+            .ok()
+            .map(|display| display.command),
+        HarnessKind::Omp => super::pi::display::display_command(&cli::OMP, runtime_directory)
             .ok()
             .map(|display| display.command),
         HarnessKind::Opencode => None,
@@ -127,6 +136,21 @@ mod tests {
         assert_eq!(session_harness(&pi_session), "pi");
         assert!(native_session_reader(&pi_session).is_some());
         assert!(for_session(Some(&pi_session)).is_some());
+        assert_eq!(profile_harness("omp"), "omp");
+        assert_eq!(
+            session_harness("omp-71618050-0d31-428e-a547-d6c4a2eca88f"),
+            "omp"
+        );
+        let omp = for_profile("omp").unwrap();
+        let omp_session = omp.new_session_id();
+        assert!(omp_session.starts_with("omp-"));
+        assert_eq!(session_harness(&omp_session), "omp");
+        assert!(std::ptr::addr_eq(
+            native_session_reader(&omp_session).unwrap(),
+            omp
+        ));
+        assert!(!std::ptr::addr_eq(pi, omp));
+        assert!(for_session(Some(&omp_session)).is_some());
         let codex = for_profile("codex").unwrap();
         assert!(codex.new_session_id().starts_with("codex-"));
         assert!(for_session(Some("codex-1")).is_some());
@@ -145,6 +169,7 @@ mod tests {
             HarnessKind::Codex,
             HarnessKind::Devin,
             HarnessKind::Pi,
+            HarnessKind::Omp,
         ] {
             assert!(
                 display_command(provider, directory)

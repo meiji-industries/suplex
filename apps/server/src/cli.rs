@@ -609,7 +609,7 @@ pub async fn run_doctor(
         "references",
         format!("{references} invalid references"),
     ));
-    let providers = ["opencode", "claude-code", "codex", "pi"]
+    let providers = ["opencode", "claude-code", "codex", "pi", "omp"]
         .map(str::to_owned)
         .to_vec();
     let snapshot = health::snapshot(state, providers, None).await;

@@ -2,6 +2,8 @@ use std::path::Path;
 
 use serde_json::json;
 
+use super::cli::{BridgeRegistration, PiCli};
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Role {
     Root,
@@ -26,14 +28,11 @@ pub struct BridgeServer<'a> {
     pub environment_names: &'a [String],
 }
 
-/// Pi's read-only built-in tools. Coordinator and Advisor turns get these
-/// and their bridge; a Worker keeps Pi's default `read,bash,edit,write`.
-pub const READ_ONLY_TOOLS: &str = "read,grep,find,ls";
-
-/// Delivery calls through the Root bridge can outlast Pi's 60 second default.
+/// Delivery calls through the Root bridge can outlast the 60 second
+/// default of Pi and the 30 second default of omp.
 const BRIDGE_TIMEOUT_SECONDS: u64 = 3600;
 
-/// Pi has the same level names as a Suplex profile.
+/// Pi has the same level names as a Suplex profile, and omp adds only `auto`.
 pub fn thinking_level(reasoning_effort: &str) -> &str {
     match reasoning_effort {
         "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" => reasoning_effort,
@@ -41,19 +40,22 @@ pub fn thinking_level(reasoning_effort: &str) -> &str {
     }
 }
 
+fn bridge_environment(bridge: &BridgeServer<'_>) -> serde_json::Map<String, serde_json::Value> {
+    bridge
+        .environment_names
+        .iter()
+        .map(|name| (name.clone(), json!(format!("${{{name}}}"))))
+        .collect()
+}
+
 /// An extension file that registers the role's bridge for one Pi process.
 /// It holds no secret: `env` names variables that Pi resolves from its own
 /// environment when it starts the server.
 pub fn bridge_extension(name: &str, bridge: &BridgeServer<'_>) -> String {
-    let environment = bridge
-        .environment_names
-        .iter()
-        .map(|name| (name.clone(), json!(format!("${{{name}}}"))))
-        .collect::<serde_json::Map<_, _>>();
     let config = json!({
         "command": bridge.command,
         "args": bridge.args,
-        "env": environment,
+        "env": bridge_environment(bridge),
         "exposure": "direct",
         "timeout": BRIDGE_TIMEOUT_SECONDS,
         "description": "Suplex task bridge",
@@ -64,37 +66,76 @@ pub fn bridge_extension(name: &str, bridge: &BridgeServer<'_>) -> String {
     )
 }
 
+/// The `.mcp.json` of the extension directory that declares the role's
+/// bridge for one omp process. omp expands each `${NAME}` from its own
+/// environment, so the file holds no secret. Its timeout is milliseconds.
+pub fn bridge_mcp_config(name: &str, bridge: &BridgeServer<'_>) -> String {
+    json!({
+        "mcpServers": {
+            name: {
+                "type": "stdio",
+                "command": bridge.command,
+                "args": bridge.args,
+                "env": bridge_environment(bridge),
+                "timeout": BRIDGE_TIMEOUT_SECONDS * 1000,
+            }
+        }
+    })
+    .to_string()
+}
+
+/// How one turn reaches its native session.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SessionArgument<'a> {
+    /// `--session-id`: creates or continues the named session.
+    Id(&'a str),
+    /// `--resume <file>`: continues the session file.
+    Resume(&'a Path),
+    /// The first turn of a CLI that makes its own session id.
+    New,
+}
+
+pub struct TurnArguments<'a> {
+    pub model: &'a str,
+    pub reasoning_effort: &'a str,
+    pub role: Role,
+    pub session_directory: &'a Path,
+    pub session: SessionArgument<'a>,
+    /// The role's bridge extension file or directory.
+    pub bridge: Option<&'a Path>,
+}
+
 /// The prompt comes from standard input, so it never reaches argv.
-pub fn pi_arguments(
-    model: &str,
-    reasoning_effort: &str,
-    role: Role,
-    session_directory: &Path,
-    session_id: &str,
-    bridge_extension: Option<&Path>,
-) -> Vec<String> {
-    let session_directory = session_directory.to_string_lossy();
+pub fn pi_arguments(cli: &PiCli, turn: &TurnArguments<'_>) -> Vec<String> {
+    let session_directory = turn.session_directory.to_string_lossy();
     let mut args = [
         "--mode",
         "json",
         "--model",
-        model,
+        turn.model,
         "--thinking",
-        thinking_level(reasoning_effort),
+        thinking_level(turn.reasoning_effort),
         "--session-dir",
         session_directory.as_ref(),
-        "--session-id",
-        session_id,
     ]
     .map(str::to_owned)
     .to_vec();
-    if let Some(name) = role.bridge_name() {
-        args.extend([
-            "--tools".to_owned(),
-            format!("{READ_ONLY_TOOLS},mcp__{name}__*"),
-        ]);
-        if let Some(extension) = bridge_extension {
-            args.extend(["-e".to_owned(), extension.to_string_lossy().into_owned()]);
+    match turn.session {
+        SessionArgument::Id(id) => args.extend(["--session-id".to_owned(), id.to_owned()]),
+        SessionArgument::Resume(file) => {
+            args.extend(["--resume".to_owned(), file.to_string_lossy().into_owned()]);
+        }
+        SessionArgument::New => {}
+    }
+    args.extend(cli.turn_args.iter().map(|arg| (*arg).to_owned()));
+    if let Some(name) = turn.role.bridge_name() {
+        args.push("--tools".to_owned());
+        args.push(match cli.bridge {
+            BridgeRegistration::Extension => format!("{},mcp__{name}__*", cli.read_only_tools),
+            BridgeRegistration::McpDirectory => cli.read_only_tools.to_owned(),
+        });
+        if let Some(bridge) = turn.bridge {
+            args.extend(["-e".to_owned(), bridge.to_string_lossy().into_owned()]);
         }
     }
     args
@@ -103,16 +144,34 @@ pub fn pi_arguments(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::runtimes::pi::cli::{OMP, PI};
+
+    fn turn<'a>(
+        role: Role,
+        reasoning_effort: &'a str,
+        session: SessionArgument<'a>,
+        bridge: Option<&'a Path>,
+    ) -> TurnArguments<'a> {
+        TurnArguments {
+            model: "anthropic/claude-sonnet-5",
+            reasoning_effort,
+            role,
+            session_directory: Path::new("/runtime/session/pi-sessions"),
+            session,
+            bridge,
+        }
+    }
 
     #[test]
     fn coordinator_is_read_only_with_its_bridge_and_resumes_its_session() {
         let args = pi_arguments(
-            "anthropic/claude-sonnet-5",
-            "xhigh",
-            Role::Root,
-            Path::new("/runtime/session/pi-sessions"),
-            "pi-1",
-            Some(Path::new("/runtime/session/suplex-bridge.ts")),
+            &PI,
+            &turn(
+                Role::Root,
+                "xhigh",
+                SessionArgument::Id("pi-1"),
+                Some(Path::new("/runtime/session/suplex-bridge.ts")),
+            ),
         );
         assert_eq!(
             args,
@@ -138,40 +197,88 @@ mod tests {
     #[test]
     fn worker_keeps_default_tools_and_advisor_gets_only_its_report_bridge() {
         let worker = pi_arguments(
-            "ollama/qwen3-coder",
-            "max",
-            Role::Worker,
-            Path::new("/s"),
-            "pi-2",
-            None,
+            &PI,
+            &turn(Role::Worker, "max", SessionArgument::Id("pi-2"), None),
         );
         assert!(!worker.iter().any(|arg| arg == "--tools" || arg == "-e"));
         assert_eq!(worker[5], "max");
         let advisor = pi_arguments(
-            "m",
-            "unexpected",
-            Role::Advisor,
-            Path::new("/s"),
-            "pi-3",
-            Some(Path::new("/s/bridge.ts")),
+            &PI,
+            &turn(
+                Role::Advisor,
+                "unexpected",
+                SessionArgument::Id("pi-3"),
+                Some(Path::new("/s/bridge.ts")),
+            ),
         );
         assert_eq!(advisor[5], "medium");
         assert!(advisor.contains(&"read,grep,find,ls,mcp__suplex_advisor__*".to_owned()));
     }
 
     #[test]
-    fn bridge_extension_names_variables_without_their_values() {
-        let source = bridge_extension(
-            "suplex_root",
-            &BridgeServer {
-                command: "/opt/suplex\"bin",
-                args: &["mcp".to_owned(), "root".to_owned()],
-                environment_names: &["SUPLEX_ROOT_TOKEN".to_owned()],
-            },
+    fn omp_resumes_its_session_file_and_loads_the_bridge_directory() {
+        // Flags from `omp --help` 18.12.3: omp has no `--session-id`.
+        let first = pi_arguments(
+            &OMP,
+            &turn(Role::Worker, "high", SessionArgument::New, None),
         );
+        assert_eq!(
+            first,
+            [
+                "--mode",
+                "json",
+                "--model",
+                "anthropic/claude-sonnet-5",
+                "--thinking",
+                "high",
+                "--session-dir",
+                "/runtime/session/pi-sessions",
+                "--no-title",
+            ]
+        );
+        let root = pi_arguments(
+            &OMP,
+            &turn(
+                Role::Root,
+                "max",
+                SessionArgument::Resume(Path::new("/s/omp-sessions/t_019c.jsonl")),
+                Some(Path::new("/s/suplex-bridge")),
+            ),
+        );
+        assert_eq!(
+            root[8..],
+            [
+                "--resume",
+                "/s/omp-sessions/t_019c.jsonl",
+                "--no-title",
+                "--tools",
+                "read,grep,glob",
+                "-e",
+                "/s/suplex-bridge",
+            ]
+        );
+    }
+
+    #[test]
+    fn bridge_files_name_variables_without_their_values() {
+        let bridge = BridgeServer {
+            command: "/opt/suplex\"bin",
+            args: &["mcp".to_owned(), "root".to_owned()],
+            environment_names: &["SUPLEX_ROOT_TOKEN".to_owned()],
+        };
+        let source = bridge_extension("suplex_root", &bridge);
         assert!(source.contains("pi.registerMcpServer(\"suplex_root\", {"));
         assert!(source.contains("\"command\":\"/opt/suplex\\\"bin\""));
         assert!(source.contains("\"SUPLEX_ROOT_TOKEN\":\"${SUPLEX_ROOT_TOKEN}\""));
         assert!(source.contains("\"exposure\":\"direct\""));
+        let config: serde_json::Value =
+            serde_json::from_str(&bridge_mcp_config("suplex_root", &bridge)).unwrap();
+        assert_eq!(
+            config,
+            json!({"mcpServers":{"suplex_root":{
+                "type":"stdio","command":"/opt/suplex\"bin","args":["mcp","root"],
+                "env":{"SUPLEX_ROOT_TOKEN":"${SUPLEX_ROOT_TOKEN}"},"timeout":3_600_000,
+            }}})
+        );
     }
 }

@@ -204,7 +204,12 @@ pub async fn collect(
                 let refresh_ms = if startup
                     && matches!(
                         HarnessKind::parse(harness),
-                        Some(HarnessKind::Codex | HarnessKind::Devin | HarnessKind::Pi)
+                        Some(
+                            HarnessKind::Codex
+                                | HarnessKind::Devin
+                                | HarnessKind::Pi
+                                | HarnessKind::Omp
+                        )
                     ) {
                     0
                 } else if previous.is_some_and(|value| value.error_at.is_some()) {

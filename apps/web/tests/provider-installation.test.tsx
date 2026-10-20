@@ -14,6 +14,7 @@ test("every provider has its own official installation command and guide", () =>
     opencode: { command: "curl -fsSL https://opencode.ai/install | bash", guideUrl: "https://opencode.ai/docs/", os: "macOS or Linux" },
     devin: { command: "curl -fsSL https://cli.devin.ai/install.sh | bash", guideUrl: "https://docs.devin.ai/cli/index", os: "macOS, Linux, or WSL" },
     pi: { command: "curl -fsSL https://pi.dev/install.sh | sh", guideUrl: "https://pi.dev/docs/latest/quickstart", os: "macOS, Linux, or WSL" },
+    omp: { command: "curl -fsSL https://omp.sh/install | sh", guideUrl: "https://github.com/can1357/oh-my-pi#install", os: "macOS, Linux, or WSL" },
   });
 });
 

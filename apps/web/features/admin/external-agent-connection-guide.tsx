@@ -25,21 +25,27 @@ function OpenLink({ href, children }: { href: string; children: string }): React
 
 export function ExternalAgentConnectionGuide(): ReactElement {
   const baseUrl = window.location.origin;
-  const [mcpUrl, setMcpUrl] = useState<string>();
+  const [address, setAddress] = useState<McpAddress>();
   useEffect(() => {
-    void readJsonUnchecked<{ resource?: unknown }>("/.well-known/oauth-protected-resource/mcp").then((metadata) => {
-      const resource = canonicalMcpResource(metadata);
-      if (resource) setMcpUrl(resource);
-    }).catch(() => undefined);
+    void readJsonUnchecked<{ resource?: unknown }>("/.well-known/oauth-protected-resource/mcp")
+      .then((metadata) => setAddress(mcpAddress(metadata, window.location.hostname)))
+      .catch(() => setAddress({ kind: "not_available" }));
   }, []);
+  const mcpUrl = address && address.kind !== "not_available" ? address.url : undefined;
   const claudeCommands = mcpUrl ? `claude mcp add --transport http suplex ${mcpUrl}\nclaude mcp login suplex` : "";
+  const httpsAddressHint = "Open Remote Access and save an HTTPS address.";
   const skillCommand = "npx skills add meiji-industries/suplex-skills --skill suplex --global";
   const environment =`SUPLEX_BASE_URL=${baseUrl}\nSUPLEX_AGENT_CREDENTIAL=<returned credential>`;
   const stdioConfig = `[mcp_servers.suplex]\ncommand = "suplex"\nargs = ["mcp"]\nenv_vars = ["SUPLEX_BASE_URL", "SUPLEX_AGENT_CREDENTIAL"]`;
+  const claudeDescription = !address
+    ? "Suplex is reading the canonical MCP address."
+    : address.kind === "not_available"
+      ? `OAuth is not available. ${httpsAddressHint}`
+      : <>Run these commands. You can also run <code>/mcp</code> in Claude Code and select <code>Authenticate</code>.<CodeBlock>{claudeCommands}</CodeBlock>{address.kind === "loopback" ? <p className="mt-2">Suplex advertises a loopback address that remote clients cannot reach. {httpsAddressHint}</p> : null}</>;
   return (
     <>
       <SettingsSection title="Connect an external client" description="Connect Claude Code to Suplex with OAuth. Suplex asks you to approve the company and projects.">
-        <SettingRow label="Claude Code" description={mcpUrl ? <>Run these commands. You can also run <code>/mcp</code> in Claude Code and select <code>Authenticate</code>.<CodeBlock>{claudeCommands}</CodeBlock></> : "Suplex is reading the canonical MCP address."}>
+        <SettingRow label="Claude Code" description={claudeDescription}>
           {mcpUrl ? <CopyButton text={claudeCommands} label="Copy the Claude Code commands" /> : null}
         </SettingRow>
         <SettingRow label="Suplex skill" description={<>Run this command on the client computer. The skill gives the agent the rules for Suplex tasks.<CodeBlock>{skillCommand}</CodeBlock></>}>
@@ -60,6 +66,22 @@ export function ExternalAgentConnectionGuide(): ReactElement {
       </SettingsSection>
     </>
   );
+}
+
+export type McpAddress =
+  | { kind: "ready"; url: string }
+  | { kind: "loopback"; url: string }
+  | { kind: "not_available" };
+
+const loopbackHosts = new Set(["127.0.0.1", "[::1]", "::1", "localhost"]);
+
+/** The advertised MCP address, judged from the page that shows it. A loopback
+ * address shown on a remote page means the HTTPS address is not set. */
+export function mcpAddress(metadata: { resource?: unknown } | undefined, pageHostname: string): McpAddress {
+  const url = metadata ? canonicalMcpResource(metadata) : undefined;
+  if (!url) return { kind: "not_available" };
+  if (loopbackHosts.has(new URL(url).hostname) && !loopbackHosts.has(pageHostname)) return { kind: "loopback", url };
+  return { kind: "ready", url };
 }
 
 export function canonicalMcpResource(metadata: { resource?: unknown }): string | undefined {

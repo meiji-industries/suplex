@@ -21,6 +21,8 @@ use crate::{
 pub const BRIDGE_EXTENSION: &str = "suplex-bridge.ts";
 /// The extension directory whose `.mcp.json` declares the bridge for omp.
 pub const BRIDGE_DIRECTORY: &str = "suplex-bridge";
+/// The extension file that registers the local endpoint of the model.
+pub const ENDPOINT_EXTENSION: &str = "suplex-endpoint.ts";
 
 /// Prepare the role's bridge capability and guarded shell, then make the
 /// durable prompt claim inside the native dispatch operation before spawning.
@@ -151,6 +153,25 @@ where
         }
         None => None,
     };
+    let endpoint = crate::profiles::local_endpoints::for_model(scope.database_path, scope.model)?;
+    let endpoint_extension = match &endpoint {
+        Some(endpoint) => {
+            let path = directory.join(ENDPOINT_EXTENSION);
+            crate::shared::fs::write_private(
+                &path,
+                invocation::endpoint_extension(cli, endpoint).as_bytes(),
+            )?;
+            Some(path)
+        }
+        None => None,
+    };
+    let mut additions = additions;
+    if let Some(key) = endpoint
+        .as_ref()
+        .and_then(|endpoint| endpoint.api_key.clone())
+    {
+        additions.insert(invocation::ENDPOINT_API_KEY_ENV.to_owned(), key);
+    }
     let environment = task_harness::task_bridge_environment(
         &guard.environment,
         bridge_environment.as_ref(),
@@ -185,6 +206,7 @@ where
             reasoning_effort: scope.reasoning_effort,
             role,
             bridge_extension: extension.as_deref(),
+            endpoint_extension: endpoint_extension.as_deref(),
             environment: &environment,
             excluded_environment_keys: scope.excluded_environment_keys,
         },
@@ -472,6 +494,63 @@ mod tests {
         let directory = launch.runtime_directory().unwrap();
         assert!(!directory.join(BRIDGE_EXTENSION).exists());
         wait_for_completion(&directory, "msg_worker");
+        fs::remove_dir_all(&fixture.base).unwrap();
+    }
+
+    #[test]
+    fn an_endpoint_model_loads_its_provider_extension_with_the_key_only_in_the_environment() {
+        use crate::platform::database::{OpenMode, SuplexDatabase};
+        use crate::profiles::local_endpoints;
+        let fixture = fixture(
+            "endpoint",
+            concat!(
+                "test \"$SUPLEX_ENDPOINT_API_KEY\" = secret-key || exit 21\n",
+                "eval \"extension=\\${$#}\"\n",
+                "case \"$extension\" in */suplex-endpoint.ts) ;; *) exit 22 ;; esac\n",
+                "grep -q 'pi.registerProvider(\"local-' \"$extension\" || exit 23\n",
+                "grep -q secret-key \"$extension\" && exit 24\n",
+                "case \"$*\" in *'--model local-'*'/qwen3-coder '*) ;; *) exit 25 ;; esac\n",
+            ),
+            &[],
+        );
+        let endpoint = {
+            let mut database = SuplexDatabase::open(&fixture.database, OpenMode::Migrate).unwrap();
+            local_endpoints::create(
+                &mut database,
+                &local_endpoints::LocalEndpointInput {
+                    base_url: "http://127.0.0.1:8080/v1".into(),
+                    api_key: Some("secret-key".into()),
+                    model_id: "qwen3-coder".into(),
+                    label: None,
+                },
+            )
+            .unwrap()
+        };
+        let model = endpoint.model();
+        let launch = TaskScope {
+            model: &model,
+            ..scope(
+                &fixture,
+                "session_endpoint",
+                TaskRole::Worker(WorkerPurpose::Implementation),
+                WorkflowLaunch::default(),
+                &[],
+            )
+        };
+        let observed = dispatch(&PI, &launch, "msg_endpoint", "Implement", |_| Ok(true)).unwrap();
+        assert!(observed.admission_observed);
+        let directory = launch.runtime_directory().unwrap();
+        wait_for_completion(&directory, "msg_endpoint");
+        for entry in fs::read_dir(&directory).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_file() {
+                assert!(
+                    !String::from_utf8_lossy(&fs::read(&path).unwrap()).contains("secret-key"),
+                    "{}",
+                    path.display()
+                );
+            }
+        }
         fs::remove_dir_all(&fixture.base).unwrap();
     }
 

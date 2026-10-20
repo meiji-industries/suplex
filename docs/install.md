@@ -129,6 +129,54 @@ a provider API key in the environment.
 
 `/admin/providers` shows all six rows without making a paid model request.
 **Configured** means the executable is present, not that inference was tested.
+
+### Local or custom endpoints
+
+A local or custom endpoint is an OpenAI-compatible server, such as
+llama-server, MLX, oMLX, Ollama, LM Studio, or vLLM. Add one in the **Your
+stack** step of onboarding (**Local or custom endpoint**, then **Add**) or in
+**Settings > Providers** (**Add Provider**, then **Local or custom endpoint**).
+Suplex asks for three values:
+
+- **Base URL**: the OpenAI-compatible root, usually ending in `/v1`, such as
+  `http://127.0.0.1:8080/v1`.
+- **API key (optional)**: sent as `Authorization: Bearer <key>`. Leave it empty
+  for a server without authentication.
+- **Model id**: the id the server lists at `GET <base URL>/models`, such as
+  `qwen3-coder`.
+
+**Check** calls `GET <base URL>/models` with a 5 second timeout and saves
+nothing. It reports **Model listed** when the server answers and lists the
+model, **Reachable** when it answers without listing the model, or **Error**
+with the reason, such as a refused connection, HTTP 401, or HTTP 404 for a base
+URL without `/v1`. **Add** saves the endpoint in the Suplex database. The
+label is "Local endpoint" and the host and port.
+
+Each endpoint is its own row in `/admin/providers`, below the six tools, and in
+the **Endpoints** group of **Settings > Providers**. Its status is
+**Connected** when the same models check lists the model, so it counts toward
+**Continue** in onboarding. Its model id is `<endpoint id>/<model id>`, such
+as `local-1a2b3c4d5e6f/qwen3-coder`, and the Team step and agent dialogs list
+it. The row runs the model with OpenCode when OpenCode is installed, else with
+Pi or OMP; the Pi and OMP rows also list it. **Delete** removes the endpoint
+and its key after a confirmation, unless an agent still selects its model.
+
+When a task starts an agent with an endpoint model, Suplex writes the provider
+configuration for that process only and does not change the user's own
+configuration files:
+
+- OpenCode receives, in `OPENCODE_CONFIG_CONTENT`, a `provider.<endpoint id>`
+  entry with `npm` `@ai-sdk/openai-compatible`, the endpoint label as `name`,
+  `options.baseURL`, `options.apiKey` when a key is set, and
+  `models.<model id>`. Suplex leaves the reasoning and service tier options out
+  for these models.
+- Pi and OMP load `<session runtime>/suplex-endpoint.ts` with `-e`. The
+  extension calls `pi.registerProvider("<endpoint id>", …)` with the base URL,
+  the `openai-completions` API, and the model. The file holds no key: Pi reads
+  `$SUPLEX_ENDPOINT_API_KEY` and OMP reads `process.env.SUPLEX_ENDPOINT_API_KEY`
+  from the process environment.
+
+No response, log line, task record, or sync frame holds the API key.
 Agent dialogs and project defaults use that same catalog. New installations seed
 Codex CLI GPT-5.6 Sol with medium reasoning for Coordinator and GPT-5.6 Luna with max
 reasoning and priority service for Worker. An installation with task history

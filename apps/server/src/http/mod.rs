@@ -50,6 +50,7 @@ pub mod routes {
     pub mod github_auth;
     pub mod github_triggers;
     pub mod health;
+    pub mod local_endpoints;
     pub mod mcp;
     pub mod moves;
     pub mod oauth;
@@ -246,6 +247,7 @@ pub fn router(state: AppState) -> Router {
         .merge(routes::github_auth::router())
         .merge(routes::github_triggers::router())
         .merge(routes::health::router())
+        .merge(routes::local_endpoints::router())
         .merge(routes::pages::router())
         .merge(routes::profiles::router())
         .merge(routes::projects::router())

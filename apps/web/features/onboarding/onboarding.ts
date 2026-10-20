@@ -31,8 +31,16 @@ export const ONBOARDING_STEPS: readonly OnboardingStepId[] = [...INTRO_STEPS, ..
 
 export type OnboardingState = { company: ApiCompany | undefined; checks: readonly HealthCheck[]; providers: readonly ProviderSummary[]; profiles: readonly ApiProfile[]; projects: readonly ApiProject[] };
 
+/** Configured and signed-in rows. A local endpoint counts when it lists its model. */
 export function connectedProviders(providers: readonly ProviderSummary[]): ProviderSummary[] {
   return providers.filter(provider => provider.status === "configured" && provider.connection.status === "connected");
+}
+
+/** An agent can run on a connected tool, or on the model of a connected local endpoint. */
+export function runsOnConnected(providers: readonly ProviderSummary[], profile: Pick<ApiProfile, "provider" | "model">): boolean {
+  return connectedProviders(providers).some(provider => provider.kind === "local-endpoint"
+    ? provider.models.some(model => model.id === profile.model)
+    : provider.id === profile.provider);
 }
 
 export function toolsReady(checks: readonly HealthCheck[]): boolean {
@@ -43,10 +51,8 @@ export function stepComplete(state: OnboardingState, id: SetupStepId): boolean {
   switch (id) {
     case "you": return typeof state.company?.issueCode === "string";
     case "stack": return toolsReady(state.checks) && connectedProviders(state.providers).length > 0;
-    case "team": {
-      const connected = new Set(connectedProviders(state.providers).map(provider => provider.id));
-      return ["root", "worker"].every(role => state.profiles.some(profile => profile.role === role && profile.archivedAt === null && connected.has(profile.provider)));
-    }
+    case "team":
+      return ["root", "worker"].every(role => state.profiles.some(profile => profile.role === role && profile.archivedAt === null && runsOnConnected(state.providers, profile)));
     case "project": return state.projects.length >= 1;
   }
 }

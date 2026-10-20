@@ -157,10 +157,12 @@ async fn choose_defaults(State(state): State<AppState>, headers: HeaderMap) -> R
         Err(error) => return *error,
     };
     // Signed-in providers win; before any sign-in, installed ones do. An
-    // OpenCode model must come from a vendor that OpenCode lists.
+    // OpenCode model must come from a vendor that OpenCode lists. A local
+    // endpoint has no preferred default, so its probe is skipped here.
     let directory = std::env::current_dir().unwrap_or_default();
     let observed =
-        crate::profiles::provider_catalog::read_providers(&directory.to_string_lossy(), true).await;
+        crate::profiles::provider_catalog::read_providers(&directory.to_string_lossy(), true, &[])
+            .await;
     let rows = observed["providers"]
         .as_array()
         .cloned()

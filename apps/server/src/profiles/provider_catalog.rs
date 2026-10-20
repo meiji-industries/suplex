@@ -7,6 +7,7 @@ use chrono::Utc;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
+use crate::profiles::local_endpoints::{self, LocalEndpoint};
 use crate::runtimes::pi::cli::{self as pi_cli, PiCli};
 use crate::runtimes::task_harness::{ExecutableSpec, resolve_executable};
 
@@ -159,7 +160,8 @@ async fn read_pi_models(cli: &PiCli, environment: &HashMap<String, String>) -> V
 
 /// `readProviders`. OpenCode's own vendors fold into its row as vendor-qualified
 /// model ids; neither observation sends a model request. `probe` checks each sign-in.
-pub async fn read_providers(directory: &str, probe: bool) -> Value {
+/// Each local endpoint follows the tool rows as its own row; `probe` asks it for its models.
+pub async fn read_providers(directory: &str, probe: bool, endpoints: &[LocalEndpoint]) -> Value {
     let native = crate::runtimes::opencode::providers::read_providers(Path::new(directory), None)
         .await
         .unwrap_or_else(|_| {
@@ -201,22 +203,74 @@ pub async fn read_providers(directory: &str, probe: bool) -> Value {
             read_pi_models(&pi_cli::OMP, &environment).await,
         ),
     ];
+    let installed = rows
+        .iter()
+        .filter(|(spec, ..)| resolve_executable(spec, None, &environment, home.as_deref()).is_ok())
+        .map(|(_, id, _)| *id)
+        .collect::<Vec<_>>();
+    let endpoint_harness = ENDPOINT_HARNESSES
+        .into_iter()
+        .find(|harness| installed.contains(harness));
     let mut providers = Vec::new();
-    for (spec, id, models) in rows {
-        let installed = resolve_executable(spec, None, &environment, home.as_deref()).is_ok();
+    for (spec, id, mut models) in rows {
+        let installed = installed.contains(&id);
+        // Pi and OMP also run each endpoint model when they are installed.
+        if installed && Some(id) != endpoint_harness && ENDPOINT_HARNESSES.contains(&id) {
+            models.extend(endpoints.iter().map(endpoint_model));
+        }
         let connection = if probe {
             crate::profiles::provider_connection::provider_connection(id).await
         } else {
             json!({"status": "unknown", "summary": "Suplex did not check the sign-in."})
         };
         providers.push(json!({
-            "id": id, "label": spec.label, "modelCount": models.len(), "models": models,
+            "id": id, "kind": "cli", "harness": id, "label": spec.label, "modelCount": models.len(), "models": models,
             "status": if installed { "configured" } else { "missing" },
             "connection": connection,
         }));
     }
     providers.sort_by(|left, right| left["label"].as_str().cmp(&right["label"].as_str()));
+    for endpoint in endpoints {
+        let connection = match endpoint_harness {
+            None => {
+                json!({"status": "not-connected", "summary": "OpenCode, Pi, or OMP is necessary to run the model of this endpoint."})
+            }
+            Some(_) if !probe => {
+                json!({"status": "unknown", "summary": "Suplex did not check the endpoint."})
+            }
+            Some(_) => local_endpoints::connection(
+                &local_endpoints::test(
+                    &endpoint.base_url,
+                    endpoint.api_key.as_deref(),
+                    &endpoint.model_id,
+                )
+                .await,
+            ),
+        };
+        providers.push(endpoint_row(
+            endpoint,
+            endpoint_harness.unwrap_or(ENDPOINT_HARNESSES[0]),
+            connection,
+        ));
+    }
     json!({"directory": native["directory"], "observedAt": native["observedAt"], "providers": providers})
+}
+
+/// The runtimes that can run an endpoint model, in the order that its row prefers them.
+const ENDPOINT_HARNESSES: [&str; 3] = ["opencode", "pi", "omp"];
+
+fn endpoint_model(endpoint: &LocalEndpoint) -> Value {
+    json!({"id": endpoint.model(), "label": format!("{} ({})", endpoint.model_id, endpoint.label)})
+}
+
+/// One endpoint as a provider row. Its models run on `harness`.
+fn endpoint_row(endpoint: &LocalEndpoint, harness: &str, connection: Value) -> Value {
+    json!({
+        "id": endpoint.id, "kind": "local-endpoint", "harness": harness, "label": endpoint.label,
+        "modelCount": 1, "models": [endpoint_model(endpoint)], "status": "configured",
+        "connection": connection,
+        "endpoint": {"baseUrl": endpoint.base_url, "modelId": endpoint.model_id, "hasApiKey": endpoint.api_key.is_some()},
+    })
 }
 
 /// `ProjectService.listModels`: every provider model as a selectable option.
@@ -227,7 +281,7 @@ pub fn list_models(providers: &Value) -> Value {
         .flatten()
         .flat_map(|provider| {
             provider["models"].as_array().into_iter().flatten().map(move |model| {
-                json!({"id": model["id"], "provider": provider["id"], "providerLabel": provider["label"], "providerStatus": provider["status"], "displayName": model["label"]})
+                json!({"id": model["id"], "provider": provider["harness"], "providerLabel": provider["label"], "providerStatus": provider["status"], "displayName": model["label"]})
             })
         })
         .collect::<Vec<_>>();
@@ -354,7 +408,7 @@ mod tests {
 
     #[tokio::test]
     async fn providers_list_one_sorted_row_per_tool_and_models_flatten_them() {
-        let providers = read_providers("/work", false).await;
+        let providers = read_providers("/work", false, &[]).await;
         let labels = providers["providers"]
             .as_array()
             .unwrap()

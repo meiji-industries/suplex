@@ -58,6 +58,9 @@ pub struct PiCli {
     pub install_command: &'static str,
     /// The command that signs in to a model provider.
     pub login_command: &'static str,
+    /// The JavaScript expression that gives a local endpoint extension its
+    /// API key from `SUPLEX_ENDPOINT_API_KEY`.
+    pub endpoint_api_key: &'static str,
 }
 
 /// `npm install -g` puts `pi` beside `node` on PATH; the pi.dev installer
@@ -85,6 +88,8 @@ pub const PI: PiCli = PiCli {
     install_command: "curl -fsSL https://pi.dev/install.sh | sh",
     // `/login` inside Pi stores a credential in its agent directory.
     login_command: "pi",
+    // Pi reads `$NAME` in a provider `apiKey` from its environment.
+    endpoint_api_key: "\"$SUPLEX_ENDPOINT_API_KEY\"",
 };
 
 /// The omp.sh installer writes `~/.local/bin/omp`; `bun install -g` uses
@@ -114,6 +119,8 @@ pub const OMP: PiCli = PiCli {
     waiting_label: "Waiting for OMP output...\n",
     install_command: "curl -fsSL https://omp.sh/install | sh",
     login_command: "omp login",
+    // omp sends a provider `apiKey` as written, so the extension reads it.
+    endpoint_api_key: "process.env.SUPLEX_ENDPOINT_API_KEY",
 };
 
 pub const ALL: [&PiCli; 2] = [&PI, &OMP];

@@ -201,6 +201,7 @@ pub async fn ensure_session(scope: &TaskScope<'_>) -> Result<String, BoxError> {
         && (scope.workflow.reads_evidence(scope.role) || scope.project_context_path.is_some()))
     .then(|| scope.evidence_root().to_string_lossy().into_owned());
     let worktree = scope.worktree.to_string_lossy().into_owned();
+    let endpoint = crate::profiles::local_endpoints::for_model(scope.database_path, scope.model)?;
     let config = server::role_config(RoleConfigInput {
         role,
         profile: &profile,
@@ -208,6 +209,7 @@ pub async fn ensure_session(scope: &TaskScope<'_>) -> Result<String, BoxError> {
         evidence_directory: evidence.as_deref(),
         context_directory: context.as_deref(),
         directory: evidence.as_ref().map(|_| worktree.as_str()),
+        endpoint: endpoint.as_ref(),
     })?;
     let reference = server::ensure_server(EnsureInput {
         runtime_directory: &runtime,
@@ -1118,6 +1120,123 @@ process.on("SIGTERM", () => server.close(() => process.exit(0)));
             Some("ses_kept")
         );
         server::stop_server(&restarted).unwrap();
+        fs::remove_dir_all(base).unwrap();
+    }
+
+    #[tokio::test]
+    async fn an_endpoint_profile_starts_opencode_with_the_endpoint_provider() {
+        use crate::platform::database::{OpenMode, SuplexDatabase};
+        use crate::profiles::{agent_profiles, local_endpoints};
+        use std::os::unix::fs::PermissionsExt;
+        let base = temporary("opencode-endpoint");
+        let worktree = base.join("worktree");
+        fs::create_dir_all(&worktree).unwrap();
+        let config_log = base.join("config.json");
+        let executable = base.join("opencode");
+        fs::write(
+            &executable,
+            format!(
+                r#"#!{}
+const fs = require("node:fs");
+const http = require("node:http");
+fs.writeFileSync({}, process.env.OPENCODE_CONFIG_CONTENT);
+const port = Number(process.argv[process.argv.indexOf("--port") + 1]);
+const session = {{ id: "ses_endpoint", projectID: "project", directory: process.cwd(), title: "Endpoint", version: "1", time: {{ created: 1, updated: 1 }} }};
+const server = http.createServer((request, response) => {{
+  response.setHeader("content-type", "application/json");
+  if (request.url.startsWith("/global/health")) response.end(JSON.stringify({{ healthy: true, version: "test" }}));
+  else if (request.url.startsWith("/session/status")) response.end("{{}}");
+  else if (request.url.startsWith("/session")) response.end(JSON.stringify(session));
+  else {{ response.statusCode = 404; response.end("{{}}"); }}
+}});
+server.listen(port, "127.0.0.1");
+process.on("SIGTERM", () => server.close(() => process.exit(0)));
+"#,
+                crate::runtimes::opencode::server::tests::node(),
+                json!(config_log.to_string_lossy()),
+            ),
+        )
+        .unwrap();
+        fs::set_permissions(&executable, fs::Permissions::from_mode(0o700)).unwrap();
+        let database_path = base.join("suplex.sqlite");
+        let (endpoint, profile) = {
+            let mut database = SuplexDatabase::open(&database_path, OpenMode::Migrate).unwrap();
+            let now = chrono::Utc::now();
+            database.connection().execute("INSERT INTO suplex_users (id, display_name, username, role, status, created_at, updated_at, identity_version) VALUES ('admin', 'A', 'admin', 'admin', 'active', ?1, ?1, 1)", [now.to_rfc3339()]).unwrap();
+            let endpoint = local_endpoints::create(
+                &mut database,
+                &local_endpoints::LocalEndpointInput {
+                    base_url: "http://127.0.0.1:8080/v1".into(),
+                    api_key: Some("secret-key".into()),
+                    model_id: "qwen3-coder".into(),
+                    label: Some("Studio".into()),
+                },
+            )
+            .unwrap();
+            let profile = agent_profiles::create(
+                &mut database,
+                "admin",
+                &agent_profiles::ProfileInput {
+                    name: "Local worker".into(),
+                    role: "worker".into(),
+                    avatar_seed: "0".repeat(32),
+                    provider: "opencode".into(),
+                    model: endpoint.model(),
+                    reasoning_level: "medium".into(),
+                    service_tier: "default".into(),
+                    provider_instance_id: None,
+                },
+                now,
+            )
+            .unwrap();
+            (endpoint, profile)
+        };
+        let inherited: std::collections::HashMap<String, String> = std::env::vars().collect();
+        let empty = std::collections::HashMap::new();
+        let scope = TaskScope {
+            workflow: WorkflowLaunch::default(),
+            database_path: &database_path,
+            artifact_root: &base,
+            task_id: "task-endpoint",
+            session_id: "session-endpoint",
+            native_session_id: "opencode-endpoint",
+            role: TaskRole::Worker(WorkerPurpose::Implementation),
+            worktree: &worktree,
+            model: &profile.model,
+            reasoning_effort: &profile.reasoning_level,
+            instance_home_directory: None,
+            project_mcp: None,
+            project_context_path: None,
+            project_environment: &empty,
+            excluded_environment_keys: &[],
+            executable: Some(&executable),
+            inherited_environment: &inherited,
+        };
+        OpenCodeTaskRuntime.ensure_session(&scope).await.unwrap();
+        let config: Value = serde_json::from_slice(&fs::read(&config_log).unwrap()).unwrap();
+        assert_eq!(config["model"], format!("{}/qwen3-coder", endpoint.id));
+        assert_eq!(
+            config["provider"][&endpoint.id],
+            json!({
+                "npm":"@ai-sdk/openai-compatible","name":"Studio",
+                "options":{"baseURL":"http://127.0.0.1:8080/v1","apiKey":"secret-key"},
+                "models":{"qwen3-coder":{"name":"qwen3-coder"}},
+            })
+        );
+        // Suplex records no copy of the key next to the session.
+        let runtime = scope.runtime_directory().unwrap();
+        let reference = server::read_server(&runtime).unwrap().unwrap();
+        for entry in fs::read_dir(&runtime).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_file() {
+                assert!(
+                    !String::from_utf8_lossy(&fs::read(&path).unwrap()).contains("secret-key"),
+                    "{}",
+                    path.display()
+                );
+            }
+        }
+        server::stop_server(&reference).unwrap();
         fs::remove_dir_all(base).unwrap();
     }
 

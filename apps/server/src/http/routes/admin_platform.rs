@@ -63,9 +63,18 @@ async fn providers(State(state): State<AppState>, headers: HeaderMap) -> Respons
         Ok(value) => value,
         Err(response) => return *response,
     };
+    let endpoints =
+        match state.with_database(|database| crate::profiles::local_endpoints::list(database)) {
+            Ok(endpoints) => endpoints,
+            Err(error) => return finish(ApiError::response(error), cookies),
+        };
     let directory = std::env::current_dir().unwrap_or_default();
-    let observed =
-        crate::profiles::provider_catalog::read_providers(&directory.to_string_lossy(), true).await;
+    let observed = crate::profiles::provider_catalog::read_providers(
+        &directory.to_string_lossy(),
+        true,
+        &endpoints,
+    )
+    .await;
     finish(private(Json(observed).into_response()), cookies)
 }
 
@@ -75,10 +84,18 @@ async fn models(State(state): State<AppState>, headers: HeaderMap) -> Response {
         Ok(value) => value,
         Err(response) => return *response,
     };
+    let endpoints =
+        match state.with_database(|database| crate::profiles::local_endpoints::list(database)) {
+            Ok(endpoints) => endpoints,
+            Err(error) => return finish(ApiError::response(error), cookies),
+        };
     let directory = std::env::current_dir().unwrap_or_default();
-    let providers =
-        crate::profiles::provider_catalog::read_providers(&directory.to_string_lossy(), false)
-            .await;
+    let providers = crate::profiles::provider_catalog::read_providers(
+        &directory.to_string_lossy(),
+        false,
+        &endpoints,
+    )
+    .await;
     let response = Json(crate::profiles::provider_catalog::list_models(&providers)).into_response();
     finish(response, cookies)
 }

@@ -2,7 +2,7 @@ import { z } from "zod";
 
 import { HarnessKindSchema } from "./harness-kind.js";
 
-import { ProviderSummarySchema, ProviderInstanceSchema } from "./providers.js";
+import { NativeProviderSummarySchema, ProviderInstanceSchema } from "./providers.js";
 
 import { AgentProfileSchema } from "./profiles.js";
 
@@ -56,7 +56,7 @@ export const ProjectProviderInstanceSchema = ProviderInstanceSchema.pick({ id: t
 
 export const ProfileResponseSchema = AgentProfileSchema.strip();
 
-export const ModelResponseSchema = z.object({ id: z.string(), provider: HarnessKindSchema, providerLabel: z.string(), providerStatus: ProviderSummarySchema.shape.status, displayName: z.string() });
+export const ModelResponseSchema = z.object({ id: z.string(), provider: HarnessKindSchema, providerLabel: z.string(), providerStatus: NativeProviderSummarySchema.shape.status, displayName: z.string() });
 
 export type ProfileResponse = z.infer<typeof ProfileResponseSchema>;
 

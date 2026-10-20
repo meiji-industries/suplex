@@ -18,6 +18,12 @@ const SLOTS: readonly Slot[] = [
   { id: "profile_native_independent", role: "root", label: "Optional", badge: "Second opinion", description: "Gives a second plan, reviews changes and rates pull requests.", color: "#0ea5b7", optional: true },
 ];
 
+/** A local endpoint model id starts with the endpoint id, so show the model id the endpoint uses. */
+function modelName(provider: ProviderSummary, model: ProviderSummary["models"][number]): string {
+  if (provider.kind === "local-endpoint") return provider.endpoint.modelId;
+  return model.id.startsWith("local-") ? model.label : model.id;
+}
+
 /** The built-in agent for a slot, else the first live agent that fits it and no earlier slot took. The optional slot takes any role. */
 function slotAgents(profiles: readonly ApiProfile[]): (ApiProfile | undefined)[] {
   const live = profiles.filter(profile => profile.archivedAt === null);
@@ -30,8 +36,9 @@ function slotAgents(profiles: readonly ApiProfile[]): (ApiProfile | undefined)[]
 }
 
 function AgentCard({ slot, agent, providers, left, onChange, busy }: { slot: Slot; agent: ApiProfile; providers: readonly ProviderSummary[]; left: number; onChange: (agent: ApiProfile, body: AgentProfileChanges) => void; busy: boolean }): ReactElement {
-  const provider = providers.find(candidate => candidate.id === agent.provider);
-  const available = providers.some(candidate => candidate.id === agent.provider && candidate.models.some(model => model.id === agent.model));
+  const listed = (candidate: ProviderSummary): boolean => candidate.harness === agent.provider && candidate.models.some(model => model.id === agent.model);
+  const provider = providers.find(listed) ?? providers.find(candidate => candidate.id === agent.provider);
+  const available = providers.some(listed);
   const selectId = `onb-model-${agent.id}`;
   return <div className="ag" style={{ left, ...(slot.optional ? { borderStyle: "dashed", borderColor: "#333" } : {}) }}>
     <div className="row">
@@ -47,7 +54,7 @@ function AgentCard({ slot, agent, providers, left, onChange, busy }: { slot: Slo
       <span className="sel" style={available ? undefined : { borderColor: "#80612a" }}>
         <select id={selectId} className="mdl" disabled={busy} value={available ? `${agent.provider}\n${agent.model}` : ""} onChange={event => { const [nextProvider, model] = event.target.value.split("\n"); if (nextProvider && model) onChange(agent, { provider: nextProvider as ApiProfile["provider"], model }); }}>
           {available ? null : <option value="" disabled>Pick a model</option>}
-          {providers.map(candidate => <optgroup key={candidate.id} label={candidate.label}>{candidate.models.map(model => <option key={model.id} value={`${candidate.id}\n${model.id}`}>{model.id}</option>)}</optgroup>)}
+          {providers.map(candidate => <optgroup key={candidate.id} label={candidate.label}>{candidate.models.map(model => <option key={model.id} value={`${candidate.harness}\n${model.id}`}>{modelName(candidate, model)}</option>)}</optgroup>)}
         </select>
         {CHEVRON}
       </span>

@@ -16,6 +16,7 @@ use super::{
 pub use crate::profiles::agent_profiles::{
     ProfileInput as ProfileBody, ProfilePatch as ProfilePatchBody,
 };
+pub use crate::profiles::local_endpoints::LocalEndpointInput as LocalEndpointCreateBody;
 
 pub(crate) const HARNESSES: &[&str] = &["opencode", "claude-code", "devin", "codex", "pi", "omp"];
 
@@ -765,6 +766,38 @@ impl Contract for ProviderInstanceCreateBody {
             .req("provider", one_of(HARNESSES))
             .req("label", trimmed(1, 128))
             .finish()
+    }
+}
+
+/// `POST /api/admin/local-endpoints/test`: the fields to check before Add.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LocalEndpointTestBody {
+    pub base_url: String,
+    pub api_key: Option<String>,
+    pub model_id: String,
+}
+
+fn local_endpoint_fields(input: Option<&Value>) -> ContractResult<Fields<'_>> {
+    Ok(Fields::new(input)?
+        .req("baseUrl", |input| {
+            super::string(input, true, (1, 2048), Some(url))
+        })
+        .opt("apiKey", text(0, 4096))
+        .req("modelId", trimmed(1, 200)))
+}
+
+impl Contract for LocalEndpointCreateBody {
+    fn schema(input: Option<&Value>) -> ContractResult<Value> {
+        local_endpoint_fields(input)?
+            .opt("label", trimmed(0, 128))
+            .strict()
+    }
+}
+
+impl Contract for LocalEndpointTestBody {
+    fn schema(input: Option<&Value>) -> ContractResult<Value> {
+        local_endpoint_fields(input)?.strict()
     }
 }
 

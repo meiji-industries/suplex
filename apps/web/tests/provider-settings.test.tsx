@@ -157,3 +157,69 @@ test("a provider deletion conflict closes the dialog and shows the server error"
   expect(document.body.textContent).not.toContain("Delete Work laptop?");
   expect(container.querySelector('[role="alert"]')?.textContent).toBe("Provider instance is used by a project provider restriction.");
 });
+
+const endpointRow = {
+  id: "local-0a1b2c3d4e5f", kind: "local-endpoint", harness: "opencode", label: "Local endpoint 127.0.0.1:8080", modelCount: 1,
+  models: [{ id: "local-0a1b2c3d4e5f/qwen3-coder", label: "qwen3-coder (Local endpoint 127.0.0.1:8080)" }], status: "configured",
+  connection: { status: "connected", summary: "The endpoint is reachable and lists qwen3-coder." },
+  endpoint: { baseUrl: "http://127.0.0.1:8080/v1", modelId: "qwen3-coder", hasApiKey: true },
+};
+
+function typeInto(selector: string, value: string): void {
+  const input = document.body.querySelector<HTMLInputElement>(selector);
+  expect(input).not.toBeNull();
+  Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set?.call(input!, value);
+  input!.dispatchEvent(new Event("input", { bubbles: true }));
+}
+
+test("a local endpoint lists with its connection and deletes after confirmation", async () => {
+  mockReads({ providers: { ...providersResponse, providers: [...providersResponse.providers, endpointRow] } as typeof providersResponse, instances: [] });
+  const container = document.createElement("div");
+  document.body.append(container);
+  await act(async () => { createRoot(container).render(<ProviderSettingsView />); });
+
+  const text = container.textContent ?? "";
+  expect(text).toContain("Endpoints");
+  expect(text).toContain("Local endpoint 127.0.0.1:8080");
+  expect(text).toContain("qwen3-coder · http://127.0.0.1:8080/v1");
+  expect(container.querySelector('[aria-label="Login to Local endpoint 127.0.0.1:8080"]')).toBeNull();
+
+  await act(async () => { container.querySelector<HTMLButtonElement>('[aria-label="Delete Local endpoint 127.0.0.1:8080"]')!.click(); });
+  expect(document.body.textContent).toContain("Suplex deletes the endpoint and its API key.");
+  expect(api.readJsonUnchecked.mock.calls.some(([, init]) => init?.method === "DELETE")).toBe(false);
+  const confirm = Array.from(document.body.querySelectorAll("button")).find(button => button.textContent === "Delete the endpoint");
+  await act(async () => { confirm!.click(); });
+  expect(api.readJsonUnchecked).toHaveBeenCalledWith("/api/admin/local-endpoints/local-0a1b2c3d4e5f", { method: "DELETE" });
+});
+
+test("Add Provider checks and adds a local endpoint", async () => {
+  mockReads({ instances: [] });
+  const base = api.readJsonUnchecked.getMockImplementation()!;
+  api.readJsonUnchecked.mockImplementation(async (url: string, init?: RequestInit) => {
+    if (url === "/api/admin/local-endpoints/test") return { status: "reachable", summary: "The endpoint is reachable, but it does not list qwen3.", models: ["gemma"] };
+    if (url === "/api/admin/local-endpoints") return { id: "local-0a1b2c3d4e5f" };
+    return base(url, init);
+  });
+  const container = document.createElement("div");
+  document.body.append(container);
+  await act(async () => { createRoot(container).render(<ProviderSettingsView />); });
+
+  await act(async () => { Array.from(container.querySelectorAll("button")).find(button => button.textContent === "Add Provider")!.click(); });
+  await act(async () => { document.body.querySelector<HTMLButtonElement>("#provider-kind-endpoint")!.click(); });
+  expect(document.body.textContent).toContain("Suplex runs the model of an OpenAI-compatible server with OpenCode, Pi, or OMP.");
+  await act(async () => {
+    typeInto("#provider-endpoint-url", "http://127.0.0.1:8080/v1");
+    typeInto("#provider-endpoint-key", "secret-key");
+    typeInto("#provider-endpoint-model", "qwen3");
+  });
+  const check = Array.from(document.body.querySelectorAll("button")).find(button => button.textContent === "Check");
+  await act(async () => { check!.click(); });
+  const body = JSON.stringify({ baseUrl: "http://127.0.0.1:8080/v1", apiKey: "secret-key", modelId: "qwen3" });
+  expect(api.readJsonUnchecked).toHaveBeenCalledWith("/api/admin/local-endpoints/test", { method: "POST", body });
+  expect(document.body.querySelector('[role="status"]')?.textContent).toBe("ReachableThe endpoint is reachable, but it does not list qwen3.");
+
+  const submit = document.body.querySelector<HTMLInputElement>("#provider-endpoint-url")!.form!.querySelector<HTMLButtonElement>('button[type="submit"]');
+  await act(async () => { submit!.click(); });
+  expect(api.readJsonUnchecked).toHaveBeenCalledWith("/api/admin/local-endpoints", { method: "POST", body });
+  expect(document.body.querySelector("#provider-endpoint-url")).toBeNull();
+});

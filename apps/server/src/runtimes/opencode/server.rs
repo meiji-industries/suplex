@@ -21,7 +21,10 @@ use super::{
 };
 use crate::{
     coordination::bridge_auth::prepare_runtime_directory,
-    profiles::agent_profiles::{executable as is_executable, home_directory},
+    profiles::{
+        agent_profiles::{executable as is_executable, home_directory},
+        local_endpoints::LocalEndpoint,
+    },
     runtimes::{
         headless::{self, HeadlessTurnRecord, RecordedProcessIdentity},
         process::{IdentityMatch, compare_identity, inspect_process, owner_marker},
@@ -120,6 +123,23 @@ pub struct RoleConfigInput<'a> {
     pub context_directory: Option<&'a str>,
     /// The task worktree; listed so an alias of the working directory (macOS /var vs /private/var) is not treated as external.
     pub directory: Option<&'a str>,
+    /// The local endpoint that the profile model selects.
+    pub endpoint: Option<&'a LocalEndpoint>,
+}
+
+/// An OpenAI-compatible endpoint as an OpenCode custom provider. Reasoning
+/// and service tier options stay out: a local server may reject them.
+fn endpoint_provider(endpoint: &LocalEndpoint) -> Value {
+    let mut options = Map::from_iter([("baseURL".to_owned(), json!(endpoint.base_url))]);
+    if let Some(key) = &endpoint.api_key {
+        options.insert("apiKey".to_owned(), json!(key));
+    }
+    json!({
+        "npm": "@ai-sdk/openai-compatible",
+        "name": endpoint.label,
+        "options": options,
+        "models": {endpoint.model_id.clone(): {"name": endpoint.model_id}},
+    })
 }
 
 pub fn role_config(input: RoleConfigInput<'_>) -> Result<Value, String> {
@@ -160,12 +180,23 @@ pub fn role_config(input: RoleConfigInput<'_>) -> Result<Value, String> {
         ),
     };
     let agent = format!("suplex-{}", input.role.name());
-    let mut config = json!({
-        "model": model,
-        "default_agent": agent,
-        "agent": {agent.clone(): {"mode":"primary","model":model,"variant":effort,"permission":permission,"tools":tools,"reasoningEffort":effort,"serviceTier":tier}},
-        "provider": {native.provider_id.clone(): {"models": {native.model_id.clone(): {"options": {"reasoningEffort":effort,"serviceTier":tier}}}}},
-    });
+    let endpoint = input
+        .endpoint
+        .filter(|endpoint| endpoint.model() == input.profile.model_id);
+    let mut config = match endpoint {
+        Some(endpoint) => json!({
+            "model": model,
+            "default_agent": agent,
+            "agent": {agent.clone(): {"mode":"primary","model":model,"permission":permission,"tools":tools}},
+            "provider": {native.provider_id.clone(): endpoint_provider(endpoint)},
+        }),
+        None => json!({
+            "model": model,
+            "default_agent": agent,
+            "agent": {agent.clone(): {"mode":"primary","model":model,"variant":effort,"permission":permission,"tools":tools,"reasoningEffort":effort,"serviceTier":tier}},
+            "provider": {native.provider_id.clone(): {"models": {native.model_id.clone(): {"options": {"reasoningEffort":effort,"serviceTier":tier}}}}},
+        }),
+    };
     if let Some(bridge) = input.bridge.filter(|_| input.role != RoleKind::Worker) {
         let name = if input.role == RoleKind::Root {
             "suplex_root"
@@ -490,6 +521,7 @@ pub(crate) mod tests {
             evidence_directory: None,
             context_directory: None,
             directory: None,
+            endpoint: None,
         }
     }
 
@@ -578,6 +610,64 @@ pub(crate) mod tests {
                 .collect::<Vec<_>>(),
             ["suplex_advisor"]
         );
+    }
+
+    #[test]
+    fn an_endpoint_model_gets_an_openai_compatible_provider_block() {
+        let endpoint = LocalEndpoint {
+            id: "local-0a1b2c3d4e5f".into(),
+            label: "Local endpoint 127.0.0.1:8080".into(),
+            base_url: "http://127.0.0.1:8080/v1".into(),
+            api_key: Some("secret-key".into()),
+            model_id: "mlx-community/qwen3".into(),
+            created_at: String::new(),
+            updated_at: String::new(),
+        };
+        let profile = Profile {
+            model_id: endpoint.model(),
+            ..profile()
+        };
+        let config = role_config(RoleConfigInput {
+            endpoint: Some(&endpoint),
+            ..input(RoleKind::Worker, &profile)
+        })
+        .unwrap();
+        assert_eq!(config["model"], "local-0a1b2c3d4e5f/mlx-community/qwen3");
+        assert_eq!(
+            config["provider"],
+            json!({"local-0a1b2c3d4e5f":{
+                "npm":"@ai-sdk/openai-compatible",
+                "name":"Local endpoint 127.0.0.1:8080",
+                "options":{"baseURL":"http://127.0.0.1:8080/v1","apiKey":"secret-key"},
+                "models":{"mlx-community/qwen3":{"name":"mlx-community/qwen3"}},
+            }})
+        );
+        let agent = &config["agent"]["suplex-worker"];
+        assert!(agent.get("serviceTier").is_none() && agent.get("variant").is_none());
+        // The hash that server.json records does not reveal the key.
+        assert!(!config_hash(&config).contains("secret-key"));
+
+        let keyless = LocalEndpoint {
+            api_key: None,
+            ..endpoint.clone()
+        };
+        let config = role_config(RoleConfigInput {
+            endpoint: Some(&keyless),
+            ..input(RoleKind::Root, &profile)
+        })
+        .unwrap();
+        assert_eq!(
+            config["provider"]["local-0a1b2c3d4e5f"]["options"],
+            json!({"baseURL":"http://127.0.0.1:8080/v1"})
+        );
+        // An endpoint for another model does not change a vendor model.
+        let vendor = tests::profile();
+        let config = role_config(RoleConfigInput {
+            endpoint: Some(&endpoint),
+            ..input(RoleKind::Worker, &vendor)
+        })
+        .unwrap();
+        assert!(config["provider"].get("local-0a1b2c3d4e5f").is_none());
     }
 
     pub(crate) fn node() -> String {

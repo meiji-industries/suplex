@@ -112,6 +112,7 @@ pub struct PiDispatch<'a> {
     pub reasoning_effort: &'a str,
     pub role: Role,
     pub bridge_extension: Option<&'a Path>,
+    pub endpoint_extension: Option<&'a Path>,
     pub environment: &'a HashMap<String, String>,
     pub excluded_environment_keys: &'a [String],
 }
@@ -160,6 +161,7 @@ where
             session_directory: &session_reader::session_directory(input.cli, input.directory),
             session,
             bridge: input.bridge_extension,
+            endpoint: input.endpoint_extension,
         },
     );
     let record = headless::dispatch_with_exclusions(

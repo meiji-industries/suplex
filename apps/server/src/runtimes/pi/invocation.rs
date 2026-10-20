@@ -3,6 +3,7 @@ use std::path::Path;
 use serde_json::json;
 
 use super::cli::{BridgeRegistration, PiCli};
+use crate::profiles::local_endpoints::LocalEndpoint;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Role {
@@ -84,6 +85,36 @@ pub fn bridge_mcp_config(name: &str, bridge: &BridgeServer<'_>) -> String {
     .to_string()
 }
 
+/// The variable that holds a local endpoint API key for one Pi or omp process.
+pub const ENDPOINT_API_KEY_ENV: &str = "SUPLEX_ENDPOINT_API_KEY";
+
+/// An extension file that registers a local endpoint as an OpenAI-compatible
+/// provider for one Pi or omp process. The provider id is the endpoint id, so
+/// `--model <endpoint id>/<model id>` selects it. The file holds no secret: a
+/// key comes from `SUPLEX_ENDPOINT_API_KEY` in the process environment.
+pub fn endpoint_extension(cli: &PiCli, endpoint: &LocalEndpoint) -> String {
+    let api_key = if endpoint.api_key.is_some() {
+        cli.endpoint_api_key.to_owned()
+    } else {
+        // A local server without a key still needs a value for the model to be available.
+        json!("none").to_string()
+    };
+    let model = json!({
+        "id": endpoint.model_id,
+        "name": endpoint.model_id,
+        "reasoning": false,
+        "input": ["text"],
+        "cost": {"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0},
+        "contextWindow": 128_000,
+        "maxTokens": 16_384,
+    });
+    format!(
+        "// Suplex writes this file for each turn. Do not edit it.\nexport default function (pi: any) {{\n  pi.registerProvider({}, {{ baseUrl: {}, api: \"openai-completions\", apiKey: {api_key}, models: [{model}] }});\n}}\n",
+        json!(endpoint.id),
+        json!(endpoint.base_url),
+    )
+}
+
 /// How one turn reaches its native session.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SessionArgument<'a> {
@@ -103,6 +134,8 @@ pub struct TurnArguments<'a> {
     pub session: SessionArgument<'a>,
     /// The role's bridge extension file or directory.
     pub bridge: Option<&'a Path>,
+    /// The extension file that registers the local endpoint of the model.
+    pub endpoint: Option<&'a Path>,
 }
 
 /// The prompt comes from standard input, so it never reaches argv.
@@ -138,6 +171,9 @@ pub fn pi_arguments(cli: &PiCli, turn: &TurnArguments<'_>) -> Vec<String> {
             args.extend(["-e".to_owned(), bridge.to_string_lossy().into_owned()]);
         }
     }
+    if let Some(endpoint) = turn.endpoint {
+        args.extend(["-e".to_owned(), endpoint.to_string_lossy().into_owned()]);
+    }
     args
 }
 
@@ -159,6 +195,7 @@ mod tests {
             session_directory: Path::new("/runtime/session/pi-sessions"),
             session,
             bridge,
+            endpoint: None,
         }
     }
 
@@ -257,6 +294,49 @@ mod tests {
                 "/s/suplex-bridge",
             ]
         );
+    }
+
+    #[test]
+    fn endpoint_extensions_register_the_endpoint_without_its_key() {
+        let endpoint = LocalEndpoint {
+            id: "local-0a1b2c3d4e5f".into(),
+            label: "Studio".into(),
+            base_url: "http://127.0.0.1:8080/v1".into(),
+            api_key: Some("secret-key".into()),
+            model_id: "qwen3-coder".into(),
+            created_at: String::new(),
+            updated_at: String::new(),
+        };
+        let pi = endpoint_extension(&PI, &endpoint);
+        assert!(pi.contains("pi.registerProvider(\"local-0a1b2c3d4e5f\", { baseUrl: \"http://127.0.0.1:8080/v1\", api: \"openai-completions\", apiKey: \"$SUPLEX_ENDPOINT_API_KEY\", models: [{"));
+        assert!(pi.contains("\"id\":\"qwen3-coder\""));
+        assert!(!pi.contains("secret-key"));
+        let omp = endpoint_extension(&OMP, &endpoint);
+        assert!(omp.contains("apiKey: process.env.SUPLEX_ENDPOINT_API_KEY,"));
+        assert!(!omp.contains("secret-key"));
+        let keyless = LocalEndpoint {
+            api_key: None,
+            ..endpoint
+        };
+        assert!(endpoint_extension(&OMP, &keyless).contains("apiKey: \"none\","));
+        let args = pi_arguments(
+            &PI,
+            &TurnArguments {
+                endpoint: Some(Path::new("/s/suplex-endpoint.ts")),
+                model: "local-0a1b2c3d4e5f/qwen3-coder",
+                ..turn(
+                    Role::Root,
+                    "high",
+                    SessionArgument::Id("pi-4"),
+                    Some(Path::new("/s/suplex-bridge.ts")),
+                )
+            },
+        );
+        assert_eq!(
+            args[args.len() - 4..],
+            ["-e", "/s/suplex-bridge.ts", "-e", "/s/suplex-endpoint.ts"]
+        );
+        assert_eq!(args[3], "local-0a1b2c3d4e5f/qwen3-coder");
     }
 
     #[test]

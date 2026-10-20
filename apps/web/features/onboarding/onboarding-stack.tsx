@@ -6,10 +6,12 @@ import { PROVIDER_INSTALLATIONS } from "../../components/app/provider-installati
 import { HerdrInstallButton, useSystemHealth } from "../../components/app/system-health.js";
 import { ToolIcon, type ToolIconId } from "../../components/app/tool-icons.js";
 import type { HealthCheck } from "../../contracts/health.js";
-import type { ProviderSummary } from "../../contracts/providers.js";
+import { Server } from "lucide-react";
+import type { CliProviderSummary, EndpointProviderSummary } from "../../contracts/providers.js";
 import { copyToClipboard } from "../../lib/clipboard.js";
 import { useCompanyContext } from "../../shell/company-context.js";
 import { thisComputer } from "../../shell/desktop-platform.js";
+import { CHECK_STATUS_LABELS, LOCAL_ENDPOINT_TITLE, useLocalEndpointForm } from "../settings/local-endpoint-form.js";
 import { OnboardingFrame, PrimaryButton } from "./onboarding-frame.js";
 import { connectedProviders, ONBOARDING_TOOL_CHECKS, toolsReady, type OnboardingData } from "./onboarding.js";
 import type { StepProps } from "./onboarding-wizard.js";
@@ -75,7 +77,41 @@ function ToolRow({ id, check, revealed, canManage, onConnected }: { id: (typeof 
   </Row>;
 }
 
-function ProviderRow({ provider, revealed, busy, onSignIn }: { provider: ProviderSummary; revealed: boolean; busy: boolean; onSignIn: () => void }): ReactElement {
+const ENDPOINT_ICON = <Server size={16} aria-hidden="true" />;
+const SMALL_BUTTON = { height: 30, fontSize: 12, padding: "0 12px" } as const;
+
+function EndpointRow({ provider, revealed }: { provider: EndpointProviderSummary; revealed: boolean }): ReactElement {
+  const detail = `${provider.endpoint.modelId} · ${provider.endpoint.baseUrl}`;
+  if (!revealed) return <Row icon={ENDPOINT_ICON} name={provider.label} detail="Suplex checks this endpoint" status={<Checking />} />;
+  if (provider.connection.status === "connected") return <Row icon={ENDPOINT_ICON} name={provider.label} detail={`${detail} · model listed`} status={<Done label="Connected" />} />;
+  return <Row icon={ENDPOINT_ICON} name={provider.label} detail={`${detail} · ${provider.connection.summary}`} status={<span className="pill p-ans">Not connected</span>} />;
+}
+
+/** Adds an OpenAI-compatible server, such as llama-server or MLX, inline in the step. */
+function AddEndpointRow({ onAdded }: { onAdded: () => Promise<void> }): ReactElement {
+  const [open, setOpen] = useState(false);
+  const form = useLocalEndpointForm(onAdded);
+  const { fields, check, busy } = form;
+  const disabled = busy !== null;
+  return <Row icon={ENDPOINT_ICON} name={LOCAL_ENDPOINT_TITLE} detail="llama-server, MLX, Ollama, or another OpenAI-compatible server" status={<button className="pill p-mute" type="button" aria-expanded={open} style={{ cursor: "pointer" }} onClick={() => setOpen(value => !value)}>Add {open ? "↑" : "↓"}</button>}>
+    {open ? <form className="grp" aria-label={LOCAL_ENDPOINT_TITLE} style={{ flexBasis: "100%", marginLeft: 44 }} onSubmit={event => { event.preventDefault(); void form.add().then(added => { if (added) setOpen(false); }); }}>
+      <div className="fr"><label htmlFor="onb-endpoint-url">Base URL</label><input id="onb-endpoint-url" className="input" required autoComplete="off" placeholder="http://127.0.0.1:8080/v1" disabled={disabled} value={fields.baseUrl} onChange={event => form.change({ baseUrl: event.target.value })} /></div>
+      <div className="fr"><label htmlFor="onb-endpoint-key">API key (optional)</label><input id="onb-endpoint-key" className="input" type="password" autoComplete="off" disabled={disabled} value={fields.apiKey} onChange={event => form.change({ apiKey: event.target.value })} /></div>
+      <div className="fr"><label htmlFor="onb-endpoint-model">Model id</label><input id="onb-endpoint-model" className="input" required autoComplete="off" placeholder="qwen3-coder" disabled={disabled} value={fields.modelId} onChange={event => form.change({ modelId: event.target.value })} /></div>
+      <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", justifyContent: "flex-end", gap: 10, paddingTop: 10 }}>
+        {check ? <span role="status" style={{ display: "flex", alignItems: "center", gap: 8, flex: 1, minWidth: 0 }}>
+          <span className={`pill ${check.status === "model-listed" ? "p-ok" : check.status === "reachable" ? "p-ans" : "p-mute"}`}>{CHECK_STATUS_LABELS[check.status]}</span>
+          <span className="d" style={{ marginTop: 0 }}>{check.summary}</span>
+        </span> : null}
+        <button className="btn2" type="button" style={SMALL_BUTTON} disabled={!form.valid || disabled} onClick={() => void form.runCheck()}>Check</button>
+        <button className="btn2" type="submit" style={SMALL_BUTTON} disabled={!form.valid || disabled}>Add</button>
+      </div>
+      {form.error ? <p className="error" role="alert">{form.error}</p> : null}
+    </form> : null}
+  </Row>;
+}
+
+function ProviderRow({ provider, revealed, busy, onSignIn }: { provider: CliProviderSummary; revealed: boolean; busy: boolean; onSignIn: () => void }): ReactElement {
   const [open, setOpen] = useState(false);
   const [later, setLater] = useState(false);
   const icon = <ProviderIcon provider={provider.id} />;
@@ -103,7 +139,7 @@ export function StackStep({ onBack, onNext, data, startLogin, loginPending }: St
   // Tools first, then the agents, one row at a time.
   const shown = useReveal(ONBOARDING_TOOL_CHECKS.length + Math.max(state.providers.length, 1));
   const computer = thisComputer().replace("This ", "");
-  const signIn = (provider: ProviderSummary): void => {
+  const signIn = (provider: CliProviderSummary): void => {
     setError("");
     void startLogin(`provider:${provider.id}`, provider.label, `/api/admin/providers/${provider.id}/login`).catch(reason => setError(reason instanceof Error ? reason.message : "Suplex could not open a sign-in pane."));
   };
@@ -130,7 +166,10 @@ export function StackStep({ onBack, onNext, data, startLogin, loginPending }: St
       </div>
       <div className="lst" aria-label="Agent subscriptions" aria-busy={loading && state.providers.length === 0}>
         {state.providers.length === 0 ? <Row icon={<span />} name="Agent subscriptions" detail="Checking the subscriptions on this computer" status={<Checking />} />
-          : state.providers.map((provider, index) => <ProviderRow key={provider.id} provider={provider} revealed={shown > ONBOARDING_TOOL_CHECKS.length + index} busy={loginPending !== null} onSignIn={() => signIn(provider)} />)}
+          : state.providers.map((provider, index) => provider.kind === "local-endpoint"
+            ? <EndpointRow key={provider.id} provider={provider} revealed={shown > ONBOARDING_TOOL_CHECKS.length + index} />
+            : <ProviderRow key={provider.id} provider={provider} revealed={shown > ONBOARDING_TOOL_CHECKS.length + index} busy={loginPending !== null} onSignIn={() => signIn(provider)} />)}
+        {state.providers.length > 0 && user?.role === "admin" ? <AddEndpointRow onAdded={reload} /> : null}
       </div>
       {connected.length && shown > ONBOARDING_TOOL_CHECKS.length ? <div className="row onb-fade-in" role="status" style={{ fontSize: 13.5, color: "#cfcfcf" }}>
         <span className="dot" style={{ background: "#22c55e" }} />Ready to go. {connected.map(provider => provider.label).join(", ")} {connected.length === 1 ? "is" : "are"} connected. Add more agents any time in Settings.

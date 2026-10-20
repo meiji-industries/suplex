@@ -84,9 +84,13 @@ overwrites a different object. `SUPLEX_PUBLISH_PHASE=files` or `manifest` runs
 one phase; the combined release runs all files for Mac, Linux, and Windows
 before any manifest.
 
-`mise run release:major`, `release:minor`, and `release:patch` run the release pipeline: verify a clean checkout, fetch the service account, bump the frontend, desktop, desktop shell crate, and native versions, sign and notarize the Mac builds, build Linux archives for both architectures,
-build the Linux and Windows desktop apps for both architectures (see below),
-commit, tag, push, then publish. A rerun after a failure keeps Linux and Windows
+`mise run release:major`, `release:minor`, and `release:patch` run the release pipeline: verify a clean checkout, fetch the service account, bump the frontend, desktop, desktop shell crate, and native versions, build every target, commit, tag, push, then publish every target, files before manifests.
+A target is `mac`, `linux-cli`, `linux-desktop`, or `windows`, each optionally
+`-arm64` or `-x64`. Arguments pick the targets, so `mise run release:patch
+linux-cli-x64` ships one Linux CLI archive and leaves every other feed on the
+previous version; a later full release catches them up. Without arguments the
+release runs every target. `scripts/release-target.sh` runs one target through
+one phase; `SUPLEX_RELEASE_DRY_RUN=1` prints the targets and stops. A rerun after a failure keeps Linux and Windows
 desktop builds already signed from the same commit. The Tauri app version comes from
 `apps/desktop/package.json`. The bump starts from the highest stable version
 in the checkout, local tags, and live `origin` tags. Remote lookup failures stop

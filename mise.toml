@@ -416,21 +416,37 @@ op run --env-file apps/desktop/release.env -- bash scripts/publish-bootstrap-rel
 # --- release: public tasks, then the hidden steps they run ---
 
 [tasks."release:major"]
-description = "Bump, sign, notarize, commit, tag, push, and publish the next major release: the Mac, Linux, and Windows desktop apps and the Linux CLI"
-run = "RELEASE_BUMP=major mise run _release:run"
+description = "Bump, sign, commit, tag, push, and publish the next major release for the given targets, or every target: Mac, Linux CLI, Linux desktop, Windows"
+usage = 'arg "[targets]" var=#true help="mac, linux-cli, linux-desktop, windows, each optionally -arm64 or -x64. Default: every target"'
+run = 'SUPLEX_RELEASE_TARGETS="${usage_targets:-}" RELEASE_BUMP=major mise run _release:run'
 
 [tasks."release:minor"]
-description = "Bump, sign, notarize, commit, tag, push, and publish the next minor release: the Mac, Linux, and Windows desktop apps and the Linux CLI"
-run = "RELEASE_BUMP=minor mise run _release:run"
+description = "Bump, sign, commit, tag, push, and publish the next minor release for the given targets, or every target: Mac, Linux CLI, Linux desktop, Windows"
+usage = 'arg "[targets]" var=#true help="mac, linux-cli, linux-desktop, windows, each optionally -arm64 or -x64. Default: every target"'
+run = 'SUPLEX_RELEASE_TARGETS="${usage_targets:-}" RELEASE_BUMP=minor mise run _release:run'
 
 [tasks."release:patch"]
-description = "Bump, sign, notarize, commit, tag, push, and publish the next patch release: the Mac, Linux, and Windows desktop apps and the Linux CLI"
-run = "RELEASE_BUMP=patch mise run _release:run"
+description = "Bump, sign, commit, tag, push, and publish the next patch release for the given targets, or every target: Mac, Linux CLI, Linux desktop, Windows"
+usage = 'arg "[targets]" var=#true help="mac, linux-cli, linux-desktop, windows, each optionally -arm64 or -x64. Default: every target"'
+run = 'SUPLEX_RELEASE_TARGETS="${usage_targets:-}" RELEASE_BUMP=patch mise run _release:run'
 
 [tasks."_release:run"]
 hide = true
-description = "Run the desktop and Linux release pipeline"
-run = "mise run _release:check && mise run _1password:setup && mise run _release:bump && mise run desktop:dist:signed && SUPLEX_DESKTOP_REUSE=1 mise run server:dist:linux && mise run _release:desktop:platforms && mise run _release:commit && mise run _release:publish"
+description = "Run the release pipeline for SUPLEX_RELEASE_TARGETS, or every target; SUPLEX_RELEASE_DRY_RUN=1 only prints the targets"
+run = '''
+#!/usr/bin/env bash
+set -euo pipefail
+targets="$(bash scripts/release-target.sh expand $SUPLEX_RELEASE_TARGETS)"
+echo "Release targets: $targets"
+[[ -z "${SUPLEX_RELEASE_DRY_RUN:-}" ]] || exit 0
+mise run _release:check && mise run _1password:setup && mise run _release:bump
+for target in $targets; do bash scripts/release-target.sh build "$target"; done
+mise run _release:commit
+# Every file is uploaded before any feed changes, so a failed upload leaves the previous release live on all platforms.
+for phase in files manifest; do
+  for target in $targets; do bash scripts/release-target.sh "$phase" "$target"; done
+done
+'''
 
 [tasks."_release:check"]
 hide = true
@@ -475,20 +491,6 @@ else
 fi
 '''
 
-[tasks."_release:desktop:platforms"]
-hide = true
-description = "Build the Linux and Windows desktop apps with the production update feed and updater key, reusing a release already built from this commit"
-run = '''
-source scripts/onepassword.sh
-onepassword_setup_service_account
-# Optional Authenticode signing for Windows; without the item the installers show an unknown publisher.
-for name in AZURE_TENANT_ID AZURE_CLIENT_ID AZURE_CLIENT_SECRET AZURE_SIGNING_ENDPOINT AZURE_SIGNING_ACCOUNT AZURE_CERTIFICATE_PROFILE; do
-  value="$(op read "op://Suplex/Azure Trusted Signing/$name" 2>/dev/null)" && export "$name=$value"
-done
-SUPLEX_DESKTOP_REUSE=1 op run --env-file apps/desktop/signing.env -- sh scripts/build-desktop-linux.sh
-SUPLEX_DESKTOP_REUSE=1 op run --env-file apps/desktop/signing.env -- bash scripts/build-desktop-windows.sh
-'''
-
 [tasks."_release:commit"]
 hide = true
 description = "Commit, tag, and push the released desktop version"
@@ -502,22 +504,4 @@ if [[ "$(git rev-parse -q --verify "refs/tags/v$version^{commit}")" != "$(git re
   git tag "v$version"
 fi
 git push --atomic origin HEAD "refs/tags/v$version"
-'''
-
-[tasks."_release:publish"]
-hide = true
-description = "Upload the Mac, Linux, and Windows files for both architectures, then point every download and update feed at the new version"
-run = '''
-source scripts/onepassword.sh
-onepassword_setup_service_account
-# Every file is uploaded before any feed changes, so a failed upload leaves the previous release live on all platforms.
-for phase in files manifest; do
-  for arch in arm64 x64; do
-    SUPLEX_PUBLISH_PHASE=$phase SUPLEX_DESKTOP_ARCH=$arch op run --env-file apps/desktop/release.env -- pnpm run desktop:publish
-    SUPLEX_PUBLISH_PHASE=$phase SUPLEX_LINUX_ARCH=$arch op run --env-file apps/desktop/release.env -- bash scripts/publish-linux-release.sh
-    for platform in linux windows; do
-      SUPLEX_PUBLISH_PHASE=$phase SUPLEX_DESKTOP_PLATFORM=$platform SUPLEX_DESKTOP_ARCH=$arch op run --env-file apps/desktop/release.env -- bash scripts/publish-desktop-platform-release.sh
-    done
-  done
-done
 '''

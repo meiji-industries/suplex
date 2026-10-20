@@ -2,6 +2,12 @@ import { useEffect, type RefObject } from "react";
 
 const editable = "input, textarea, select, [contenteditable=true]";
 
+/** True when a key typed at the target belongs to a field or a dialog, not to a global shortcut. */
+export function inFieldOrDialog(target: EventTarget | null): boolean {
+  if (!(target instanceof Element)) return false;
+  return target.matches(editable) || target instanceof HTMLElement && target.isContentEditable || Boolean(target.closest("[role=dialog], [role=alertdialog]"));
+}
+
 /** ⌘K on macOS, Ctrl+K elsewhere. */
 export function isCommandK(event: KeyboardEvent): boolean {
   return (event.metaKey || event.ctrlKey) && !event.altKey && event.key.toLowerCase() === "k";
@@ -11,6 +17,18 @@ export function isCommandK(event: KeyboardEvent): boolean {
 export function opensCommandMenu(event: KeyboardEvent): boolean {
   if (event.defaultPrevented) return false;
   return isCommandK(event) || !event.metaKey && !event.ctrlKey && event.key === "/";
+}
+
+/** True when a keydown opens Settings: ⌘, on macOS, Ctrl+, elsewhere. */
+export function opensSettings(event: KeyboardEvent): boolean {
+  if (event.defaultPrevented) return false;
+  return (event.metaKey || event.ctrlKey) && !event.altKey && event.key === ",";
+}
+
+/** The Settings shortcut as the user's platform writes it. Without a desktop platform, the browser's platform decides. */
+export function settingsShortcutLabel(): string {
+  const platform = window.suplexApp?.platform ?? (/Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent) ? "macos" : "other");
+  return platform === "macos" ? "⌘," : "Ctrl+,";
 }
 
 /**
@@ -23,8 +41,7 @@ export function useCommandKFocus(ref: RefObject<HTMLInputElement | null>): void 
     const focus = (event: KeyboardEvent): void => {
       const input = ref.current;
       if (!input || event.defaultPrevented || !isCommandK(event)) return;
-      const target = event.target instanceof Element ? event.target : null;
-      if (target && target !== input && (target.matches(editable) || target.closest("[role=dialog], [role=alertdialog]"))) return;
+      if (event.target !== input && inFieldOrDialog(event.target)) return;
       event.preventDefault();
       input.focus();
       input.select();

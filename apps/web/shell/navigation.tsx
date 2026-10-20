@@ -19,11 +19,18 @@ import { EntityAvatar } from "../components/app/entity-avatar.js";
 import { RecentTasks } from "../features/tasks/recent-tasks.js";
 import { SystemHealthIndicator } from "../components/app/system-health.js";
 import { requestNewTask, useHasProjects } from "./global-new-task-dialog.js";
-import { opensCommandMenu } from "./shortcuts.js";
+import { inFieldOrDialog, opensCommandMenu, opensSettings, settingsShortcutLabel } from "./shortcuts.js";
 import { useSignOut } from "./server-state.js";
 import wordmark from "../assets/suplex-wordmark.svg?inline";
 
-type NavItem = { href: string; label: string; icon: LucideIcon };
+type NavItem = { href: string; label: string; icon: LucideIcon; shortcut?: string };
+
+/** Company settings for admins, the profile otherwise. The sidebar icon, the command menu, and ⌘, all open it. */
+function useSettingsHref(): string {
+  const context = useOptionalCompanyContext();
+  const companyId = context?.currentCompany?.id;
+  return context?.user?.role === "admin" && companyId ? companySettingsPath(companyId) : withCompany("/profile", companyId);
+}
 
 function isActive(href: string): boolean {
   const current = window.location.pathname;
@@ -67,11 +74,14 @@ function NavigationSearch({ close }: { close?: () => void }): ReactElement {
   const companyId = context?.currentCompany?.id;
   const hasProjects = useHasProjects(companyId);
   const todayPage = useExperiments()?.todayPage ?? false;
+  const settingsHref = useSettingsHref();
+  const settingsShortcut = settingsShortcutLabel();
   const items: NavItem[] = [
     ...(todayPage ? [{ href: "/today", label: "Today", icon: CalendarDays }] : []),
     { href: withCompany("/timeline", companyId), label: "Timeline", icon: ChartNoAxesGantt },
     { href: withCompany("/analytics", companyId), label: "Analytics", icon: BarChart3 },
     { href: withCompany("/tasks", companyId), label: "Tasks", icon: ClipboardList }, { href: withCompany("/board", companyId), label: "Board", icon: Columns3 }, { href: withCompany("/moves", companyId), label: "Moves", icon: Zap }, { href: withCompany("/health", companyId), label: "Host health", icon: Shield },
+    ...(context?.user ? [{ href: settingsHref, label: "Settings", icon: Settings, shortcut: settingsShortcut }] : []),
   ];
   const visible = items.filter((item) => item.label.toLowerCase().includes(query.trim().toLowerCase()));
   useEffect(() => {
@@ -79,7 +89,7 @@ function NavigationSearch({ close }: { close?: () => void }): ReactElement {
     window.addEventListener("suplex:command-menu", openMenu);
     return () => window.removeEventListener("suplex:command-menu", openMenu);
   }, []);
-  return <><Dialog open={open} onOpenChange={setOpen}><DialogContent><DialogHeader><DialogTitle>Command menu</DialogTitle></DialogHeader><Input autoFocus aria-label="Search Suplex" placeholder="Search the views" value={query} onChange={(event) => setQuery(event.target.value)} /><div className="space-y-1 -ml-[11px] -mr-[11px]"><button type="button" className={cn(buttonVariants({ variant: "ghost", className: "w-full justify-start focus-visible:border-foreground/25 focus-visible:ring-0 text-sm gap-x-[12px]" }))} onClick={() => { setOpen(false); close?.(); requestNewTask(); }}><Plus />{hasProjects === false ? "Add project" : "New task"} <kbd className="ml-auto text-xs text-muted-foreground">C</kbd></button>{visible.map(({ href, label, icon: Icon }) => <a className={cn(buttonVariants({ variant: "ghost", className: "w-full justify-start focus-visible:border-foreground/25 focus-visible:ring-0 text-sm gap-x-[12px]" }))} href={href} onClick={() => { setOpen(false); close?.(); }} key={href}><Icon />{label}</a>)}</div><p className="text-xs text-muted-foreground">⌘K or / search. G then H, T, B, or M navigates. C starts a new task.</p></DialogContent></Dialog></>;
+  return <><Dialog open={open} onOpenChange={setOpen}><DialogContent><DialogHeader><DialogTitle>Command menu</DialogTitle></DialogHeader><Input autoFocus aria-label="Search Suplex" placeholder="Search the views" value={query} onChange={(event) => setQuery(event.target.value)} /><div className="space-y-1 -ml-[11px] -mr-[11px]"><button type="button" className={cn(buttonVariants({ variant: "ghost", className: "w-full justify-start focus-visible:border-foreground/25 focus-visible:ring-0 text-sm gap-x-[12px]" }))} onClick={() => { setOpen(false); close?.(); requestNewTask(); }}><Plus />{hasProjects === false ? "Add project" : "New task"} <kbd className="ml-auto text-xs text-muted-foreground">C</kbd></button>{visible.map(({ href, label, icon: Icon, shortcut }) => <a className={cn(buttonVariants({ variant: "ghost", className: "w-full justify-start focus-visible:border-foreground/25 focus-visible:ring-0 text-sm gap-x-[12px]" }))} href={href} onClick={() => { setOpen(false); close?.(); }} key={href}><Icon />{label}{shortcut ? <kbd className="ml-auto text-xs text-muted-foreground">{shortcut}</kbd> : null}</a>)}</div><p className="text-xs text-muted-foreground">⌘K or / search. G then H, T, B, or M navigates. C starts a new task.{context?.user ? ` ${settingsShortcut} opens Settings.` : ""}</p></DialogContent></Dialog></>;
 }
 
 function SecondaryNavigation(): ReactElement {
@@ -106,8 +116,7 @@ function UserMenu(): ReactElement | null {
 
 export function AppSidebar(): ReactElement {
   const context = useOptionalCompanyContext();
-  const companyId = context?.currentCompany?.id;
-  const settingsHref = context?.user?.role === "admin" && companyId ? companySettingsPath(companyId) : withCompany("/profile", companyId);
+  const settingsHref = useSettingsHref();
   const { setOpenMobile } = useSidebar();
   const close = (): void => setOpenMobile(false);
   const todayPage = useExperiments()?.todayPage ?? false;
@@ -115,6 +124,10 @@ export function AppSidebar(): ReactElement {
     let goPending = false;
     let goTimer: number | undefined;
     const handleShortcut = (event: KeyboardEvent): void => {
+      if (opensSettings(event)) {
+        if (!inFieldOrDialog(event.target)) { event.preventDefault(); navigate(settingsHref); }
+        return;
+      }
       const target = event.target instanceof HTMLElement ? event.target : null;
       if (target?.matches("input, textarea, select, button, [contenteditable=true]")) return;
       const key = event.key.toLowerCase();
@@ -135,7 +148,7 @@ export function AppSidebar(): ReactElement {
     };
     window.addEventListener("keydown", handleShortcut);
     return () => { window.removeEventListener("keydown", handleShortcut); window.clearTimeout(goTimer); };
-  }, [context?.currentCompany?.id, context?.currentCompany?.status, todayPage]);
+  }, [context?.currentCompany?.id, context?.currentCompany?.status, settingsHref, todayPage]);
   return (
     <Sidebar variant="inset" collapsible="offcanvas">
       <SidebarHeader data-tauri-drag-region="deep" className="titlebar-top"><div className="flex h-8 items-center gap-1 pl-2 -mr-2"><img src={wordmark} alt="Suplex" className="w-auto invert dark:invert-0 h-5" />{context?.user ? <span className="ml-auto flex"><Button variant="ghost" size="icon-sm" nativeButton={false} render={<a href={settingsHref} onClick={close} aria-label="Settings" title="Settings" />}><Settings /></Button></span> : null}<span className="md:hidden"><SidebarTrigger aria-label="Close navigation" title="Close navigation" /></span></div><CompanySwitcher /></SidebarHeader>

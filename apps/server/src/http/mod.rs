@@ -16,7 +16,11 @@ use tower_http::compression::CompressionLayer;
 
 use crate::identity::{oauth::OAuth, remote_access_repository};
 use crate::integrations::{github_device::DeviceAuth, herdr::Herdr};
-use crate::platform::{config::Installation, database::SuplexDatabase, embedded};
+use crate::platform::{
+    config::Installation,
+    database::{DatabaseResult, SuplexDatabase},
+    embedded,
+};
 use crate::profiles::provider_login::ProviderLogins;
 use crate::projects::git::Github;
 use crate::sync::CompanyFeed;
@@ -187,20 +191,18 @@ impl AppState {
     /// The OAuth issuer and MCP resource that external clients use. The admin
     /// HTTPS address wins over the derived reachable address, so a reverse proxy
     /// in front of a loopback bind advertises its public origin.
-    pub fn oauth(&self) -> OAuth {
+    pub fn oauth(&self) -> DatabaseResult<OAuth> {
         let external = self
-            .with_database(|database| remote_access_repository::external_https_origin(database))
-            .ok()
-            .flatten();
+            .with_database(|database| remote_access_repository::external_https_origin(database))?;
         let origin = remote_access_repository::effective_https_origin(
             external.as_deref(),
             &self.session_config.reachable_address,
         );
-        OAuth::new(
+        Ok(OAuth::new(
             origin
                 .as_deref()
                 .unwrap_or(&self.session_config.reachable_address),
-        )
+        ))
     }
 
     pub fn with_database<T>(&self, operation: impl FnOnce(&mut SuplexDatabase) -> T) -> T {

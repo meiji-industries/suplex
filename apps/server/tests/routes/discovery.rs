@@ -109,4 +109,28 @@ mod tests {
         );
         assert_eq!(mcp("attacker.test").await.unwrap().status(), 403);
     }
+
+    /// A missing remote access policy is an error, not a silent fall back to the
+    /// loopback issuer.
+    #[tokio::test]
+    async fn a_missing_remote_access_policy_fails_oauth_discovery() {
+        let server = server(None).await;
+        server.state.with_database(|database| {
+            database
+                .connection()
+                .execute("DELETE FROM suplex_remote_access_policy", [])
+                .unwrap()
+        });
+        for path in [
+            "/.well-known/oauth-protected-resource/mcp",
+            "/.well-known/oauth-authorization-server",
+        ] {
+            let response = server.request(reqwest::Method::GET, path, &[], None).await;
+            assert_eq!(response.status(), 500, "{path}");
+        }
+        let mcp = server
+            .request(reqwest::Method::POST, "/mcp", &[], Some(json!({})))
+            .await;
+        assert_eq!(mcp.status(), 500);
+    }
 }

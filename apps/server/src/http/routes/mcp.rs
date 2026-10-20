@@ -16,7 +16,10 @@ use rmcp::transport::streamable_http_server::{
 };
 use serde_json::json;
 
-use crate::{http::AppState, integrations::suplex::runtime::SuplexMcpRuntime};
+use crate::{
+    http::{AppState, error::ApiError},
+    integrations::suplex::runtime::SuplexMcpRuntime,
+};
 
 use super::{agent_api, oauth::challenge};
 
@@ -58,7 +61,10 @@ fn authority_allowed(reachable: &str, host: Option<&str>, origin: Option<&str>) 
 }
 
 async fn mcp(State(state): State<AppState>, request: Request) -> Response {
-    let oauth = state.oauth();
+    let oauth = match state.oauth() {
+        Ok(oauth) => oauth,
+        Err(error) => return ApiError::response(error),
+    };
     let headers = request.headers();
     let text = |name: header::HeaderName| headers.get(name).and_then(|value| value.to_str().ok());
     if !authority_allowed(&oauth.issuer, text(header::HOST), text(header::ORIGIN)) {

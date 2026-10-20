@@ -15,7 +15,7 @@ use serde_json::{Value, json};
 
 use crate::{
     http::{AppState, error::ApiError},
-    shared::js_json,
+    shared::{PublicFailure, js_json},
 };
 
 const LLMS: &str = include_str!("discovery/llms.txt");
@@ -91,11 +91,20 @@ fn metadata(value: Value) -> Response {
         .into_response()
 }
 
+/// OAuth needs an HTTPS origin or a loopback bind. Without one the server
+/// would advertise an issuer that its own registration route refuses.
+fn oauth_not_available() -> Response {
+    PublicFailure::new(404, "OAuth is not available without an HTTPS address").into_response()
+}
+
 async fn protected_resource(State(state): State<AppState>) -> Response {
     let oauth = match state.oauth() {
         Ok(oauth) => oauth,
         Err(error) => return ApiError::response(error),
     };
+    if !oauth.available {
+        return oauth_not_available();
+    }
     metadata(
         json!({"resource": oauth.resource, "authorization_servers": [oauth.issuer], "scopes_supported": ["suplex:mcp"], "bearer_methods_supported": ["header"]}),
     )
@@ -106,6 +115,9 @@ async fn authorization_server(State(state): State<AppState>) -> Response {
         Ok(oauth) => oauth,
         Err(error) => return ApiError::response(error),
     };
+    if !oauth.available {
+        return oauth_not_available();
+    }
     let issuer = oauth.issuer;
     metadata(json!({
         "issuer": issuer,

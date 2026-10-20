@@ -135,4 +135,26 @@ mod tests {
             .await;
         assert_eq!(mcp.status(), 500);
     }
+
+    /// A direct Tailscale or LAN bind is plain HTTP, which OAuth refuses, so the
+    /// discovery documents are absent instead of naming an issuer that fails.
+    #[tokio::test]
+    async fn oauth_discovery_is_absent_without_an_https_origin() {
+        let (mut state, path) = crate::http::routes::auth::tests::state();
+        state.session_config.reachable_address = "http://100.64.0.1:4111".to_owned();
+        state.session_config.tailscale_exposure = "direct".to_owned();
+        let server = server(Some((state, path))).await;
+        let get = |path: &str| server.client.get(format!("{}{path}", server.base)).send();
+        for path in [
+            "/.well-known/oauth-protected-resource/mcp",
+            "/.well-known/oauth-protected-resource",
+            "/.well-known/oauth-authorization-server",
+        ] {
+            assert_eq!(get(path).await.unwrap().status(), 404, "{path}");
+        }
+        assert_eq!(
+            get("/.well-known/suplex/api-catalog.json").await.unwrap().status(),
+            200
+        );
+    }
 }

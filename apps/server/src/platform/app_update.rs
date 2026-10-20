@@ -153,7 +153,7 @@ fn parse_feed(text: &str) -> Result<Release, Box<dyn std::error::Error + Send + 
     })
 }
 
-fn newer(candidate: &str, current: &str) -> bool {
+pub(crate) fn newer(candidate: &str, current: &str) -> bool {
     let parse = |version: &str| -> Option<Vec<u64>> {
         version.split('.').map(|part| part.parse().ok()).collect()
     };
@@ -246,7 +246,7 @@ fn quit_app(app: &Path) -> Result<bool, Box<dyn std::error::Error + Send + Sync>
     Err("Suplex.app did not stop. Quit it, then run 'suplex update' again.".into())
 }
 
-fn confirm(version: &str, assume_yes: bool) -> io::Result<bool> {
+pub(crate) fn confirm(version: &str, assume_yes: bool) -> io::Result<bool> {
     if assume_yes {
         return Ok(true);
     }

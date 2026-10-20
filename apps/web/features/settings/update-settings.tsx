@@ -19,11 +19,15 @@ export function UpdateSettings(): ReactElement {
               : status.message;
   const description = status?.kind === "failed"
     ? status.error
-    : update?.availableRevision
-      ? `Revision ${update.availableRevision.slice(0, 12)}`
-      : update?.currentRevision
-        ? `Revision ${update.currentRevision.slice(0, 12)}`
-        : undefined;
+    : update?.availableVersion
+      ? `Version ${update.availableVersion}`
+      : update?.availableRevision
+        ? `Revision ${update.availableRevision.slice(0, 12)}`
+        : update?.currentVersion
+          ? `Version ${update.currentVersion}`
+          : update?.currentRevision
+            ? `Revision ${update.currentRevision.slice(0, 12)}`
+            : undefined;
 
   return (
     <SettingsSection title="Suplex host update">

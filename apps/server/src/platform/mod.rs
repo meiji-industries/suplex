@@ -1,4 +1,5 @@
 pub mod app_update;
+pub mod archive_update;
 pub mod artifacts;
 pub mod backup;
 pub mod config;

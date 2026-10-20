@@ -13,6 +13,8 @@ export const UpdateResponseSchema = z.object({
   status: UpdateStatusSchema,
   currentRevision: z.string().regex(/^[0-9a-f]{40}$/).optional(),
   availableRevision: z.string().regex(/^[0-9a-f]{40}$/).optional(),
+  currentVersion: z.string().min(1).optional(),
+  availableVersion: z.string().min(1).optional(),
   instanceId: z.string().min(1).optional(),
   canRestart: z.boolean(),
 }).strict();

@@ -1,4 +1,4 @@
-use super::{config::Installation, supervisor};
+use super::{archive_update, config::Installation, supervisor};
 use serde_json::{Value, json};
 use std::sync::{LazyLock, Mutex};
 use std::{
@@ -12,6 +12,7 @@ use std::{
 
 const REPOSITORY: &str = "meiji-industries/suplex";
 static AVAILABLE: LazyLock<Mutex<Option<String>>> = LazyLock::new(|| Mutex::new(None));
+static AVAILABLE_VERSION: LazyLock<Mutex<Option<String>>> = LazyLock::new(|| Mutex::new(None));
 static ACTIVE_CHILD: LazyLock<Mutex<Option<Child>>> = LazyLock::new(|| Mutex::new(None));
 static REQUEST_LOCK: Mutex<()> = Mutex::new(());
 fn state_path(installation: &Installation) -> PathBuf {
@@ -177,7 +178,7 @@ fn canonical_remote(raw: &str) -> bool {
         .trim_end_matches(".git")
         .eq_ignore_ascii_case(REPOSITORY)
 }
-fn remote(root: &Path) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+pub(crate) fn remote(root: &Path) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
     let branch = git(root, &["symbolic-ref", "--short", "HEAD"])?;
     if branch != "main" {
         return Err(format!(
@@ -313,6 +314,9 @@ pub fn snapshot(installation: &Installation, check: bool, admin: bool) -> Value 
         status = failure("apply", "The update process stopped before completion.");
         let _ = write_state(installation, status.clone());
     }
+    if archive_update::managed() {
+        return archive_snapshot(installation, status, check, admin);
+    }
     let mut available = AVAILABLE.lock().ok().and_then(|value| value.clone());
     if available.is_none()
         && (status["kind"] == "available"
@@ -352,6 +356,111 @@ pub fn snapshot(installation: &Installation, check: bool, admin: bool) -> Value 
         response["availableRevision"] = json!(available);
     }
     response
+}
+
+/// The feed-based status of an archive-installed Linux host.
+fn archive_snapshot(
+    installation: &Installation,
+    mut status: Value,
+    check: bool,
+    admin: bool,
+) -> Value {
+    let mut available = AVAILABLE_VERSION
+        .lock()
+        .ok()
+        .and_then(|value| value.clone());
+    if check {
+        let prior_apply_failure =
+            (status["kind"] == "failed" && status["action"] == "apply").then_some(status.clone());
+        let latest = archive_update::service_url(installation)
+            .and_then(|service| archive_update::block_on(archive_update::latest(&service)));
+        status = match latest {
+            Ok(release) => {
+                available = release.map(|release| release.version);
+                if let Ok(mut remembered) = AVAILABLE_VERSION.lock() {
+                    *remembered = available.clone();
+                }
+                prior_apply_failure.unwrap_or_else(
+                    || json!({"kind":if available.is_some(){"available"}else{"current"}}),
+                )
+            }
+            Err(error) => prior_apply_failure.unwrap_or_else(|| failure("check", error)),
+        };
+        let _ = write_state(installation, status.clone());
+    }
+    let mut response = json!({"status":status,"canRestart":admin && supervisor::current_is_supervised(installation),"currentVersion":env!("CARGO_PKG_VERSION")});
+    if let Some(available) = available {
+        response["availableVersion"] = json!(available);
+    }
+    response
+}
+
+/// Downloads the published archive, swaps this binary, and restarts the host.
+fn apply_archive(
+    installation: &Installation,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let root = std::env::current_dir()?;
+    let rollback = installation.runtime.join("update-rollback-suplex");
+    let target = std::env::current_exe()?.canonicalize()?;
+    let mut host_stopped = false;
+    let mut recovery_attempted = false;
+    let result = (|| -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        applying(installation, "fetch", "Suplex checks the update.")?;
+        let service = archive_update::service_url(installation)?;
+        let Some(release) = archive_update::block_on(archive_update::latest(&service))? else {
+            write_state(installation, json!({"kind":"current"}))?;
+            return Ok(());
+        };
+        applying(
+            installation,
+            "install",
+            &format!("Suplex downloads version {}.", release.version),
+        )?;
+        let archive = archive_update::block_on(archive_update::download(&release))?;
+        archive_update::install(&archive, &target, &rollback)?;
+        if !supervisor::inherited_supervisor_alive() {
+            return Err("The Suplex host stopped during the update".into());
+        }
+        applying(installation, "stop", "Suplex stops the host.")?;
+        supervisor::stop(installation)?;
+        host_stopped = true;
+        applying(installation, "start", "Suplex starts the host.")?;
+        recovery_attempted = true;
+        start_with_recovery(
+            &target,
+            &rollback,
+            |candidate| {
+                if candidate != target {
+                    archive_update::restore(&rollback, &target)
+                        .map_err(|error| error.to_string())?;
+                }
+                start_binary(&target, &root, installation).map_err(|error| error.to_string())
+            },
+            || {
+                supervisor::stop(installation)
+                    .map(|_| ())
+                    .map_err(|error| error.to_string())
+            },
+        )?;
+        write_state(installation, json!({"kind":"current"}))?;
+        Ok(())
+    })();
+    if let Err(error) = result {
+        let mut message = error.to_string();
+        if host_stopped && !recovery_attempted {
+            let recovery = archive_update::restore(&rollback, &target)
+                .and_then(|_| supervisor::stop(installation).map(|_| ()))
+                .and_then(|_| start_binary(&target, &root, installation));
+            if let Err(recovery_error) = recovery {
+                message.push_str(&format!(
+                    "\nSuplex could not restart the previous binary: {recovery_error}"
+                ));
+            }
+        }
+        let _ = write_state(installation, failure("apply", &message));
+        return Err(message.into());
+    }
+    Ok(())
 }
 
 pub fn request_apply(
@@ -415,6 +524,9 @@ pub fn apply() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         if unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
             return Ok(());
         }
+    }
+    if archive_update::managed() {
+        return apply_archive(&installation);
     }
     let root = std::env::current_dir()?;
     let rollback = installation.runtime.join("update-rollback-suplex");

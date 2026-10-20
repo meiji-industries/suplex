@@ -191,11 +191,17 @@ configured release credentials. These are host binaries for servers and
 terminals; the Linux desktop app below bundles the same host.
 
 The combined release publisher uploads immutable Mac and Linux artifacts before
-updating their download manifests. Linux's manifest describes the available
-archive; it does not implement automatic replacement of a running binary.
-The host's Git-based checkout updater is a separate mechanism and must not be
-presented as an archive updater. Preserve installation data when replacing a
-binary, and verify the destination host separately from artifact publication.
+updating their download manifests. A Linux host installed from the archive, which
+is neither the desktop app nor a source checkout, updates from that manifest.
+The update check asks `suplex.sh/download` for its platform without following
+the redirect, reads `latest-linux.yml` from the directory the redirect names, and
+compares the version with the running binary. `suplex update` and the host's
+"Restart Suplex" action download the archive, verify its sha256, write the new
+binary beside the running one, keep the previous binary as a rollback under the
+runtime directory, rename it into place, then stop and start the host. A host
+whose binary directory the service user cannot write, such as `/usr/local/bin`
+on a bootstrap VM, reports "Install the update as an administrator" and leaves
+the binary alone. A source checkout keeps the Git-based updater.
 
 ## Linux and Windows desktop apps
 

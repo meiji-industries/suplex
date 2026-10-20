@@ -156,6 +156,10 @@ fn recover(arguments: &[String]) -> CliResult {
 
 /// Updates the Suplex.app bundle that holds this executable.
 async fn update(arguments: &[String]) -> CliResult {
+    let assume_yes = arguments.iter().any(|arg| arg == "--yes" || arg == "-y");
+    if crate::platform::archive_update::managed() {
+        return crate::platform::archive_update::run(assume_yes).await;
+    }
     let executable = std::env::current_exe()?.canonicalize()?;
     let Some(app) = executable
         .ancestors()
@@ -163,7 +167,6 @@ async fn update(arguments: &[String]) -> CliResult {
     else {
         return Err("This Suplex runs from a source checkout. Update it with 'git pull', then run 'suplex restart'.".into());
     };
-    let assume_yes = arguments.iter().any(|arg| arg == "--yes" || arg == "-y");
     app_update::run(app, assume_yes).await
 }
 

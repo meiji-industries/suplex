@@ -113,3 +113,27 @@ test("the conversation shows a paired agent's note under the agent's name", asyn
   const article = Array.from(view.container.querySelectorAll("article")).find(element => element.textContent?.includes("Skip the tests"));
   expect(article?.querySelector("header")?.textContent).toBe("HermesSent to Coordinator");
 });
+
+test("each turn label shows the full local date and time on hover", async () => {
+  const working = { ...note, status: "prompted", result: JSON.stringify({ text: "Partial reply" }) } satisfies TaskActivity["turns"][number];
+  const queued = { ...note, id: "turn-3", status: "pending_prompt", promptedAt: null } satisfies TaskActivity["turns"][number];
+  const view = mount();
+  await view.render({ sessions: [session], turns: [done, working, queued], setup: { state: "none", exitStatus: null }, shellPaneId: null });
+  const expectTimes = (scope: Element, labels: string[]) => {
+    const times = Array.from(scope.querySelectorAll("time"));
+    expect(times.map(time => [time.dateTime, time.title, time.textContent])).toEqual([
+      [done.completedAt, new Date(done.completedAt).toLocaleString(), labels[0]],
+      [working.promptedAt, new Date(working.promptedAt).toLocaleString(), labels[1]],
+    ]);
+  };
+
+  const conversation = view.container.querySelector('[aria-label="Conversation"]')!;
+  expectTimes(conversation, ["Turn took 5s", "In progress"]);
+  expect(Array.from(conversation.querySelectorAll("article header")).map(header => header.textContent)).toContain("CoordinatorTurn took 5s");
+
+  const activityTab = Array.from(view.container.querySelectorAll<HTMLButtonElement>('[data-slot="tabs-trigger"]')).find(button => button.textContent?.startsWith("Activity"));
+  await act(async () => activityTab?.click());
+  const rows = view.container.querySelector('[aria-label="Task activity"]')!;
+  expectTimes(rows, ["Turn took 5s", "In progress"]);
+  expect(Array.from(rows.children).slice(0, 3).map(row => row.textContent)).toEqual(["CoordinatorTurn took 5s", "CoordinatorIn progress", "CoordinatorQueued"]);
+});

@@ -93,7 +93,9 @@ fn resolved_gh_command() -> Option<String> {
 }
 
 fn suplex_executable() -> io::Result<String> {
-    Ok(std::env::current_exe()?.to_string_lossy().into_owned())
+    Ok(crate::shared::fs::executable()?
+        .to_string_lossy()
+        .into_owned())
 }
 
 pub fn read_session_id(runtime_directory: &Path) -> io::Result<Option<String>> {

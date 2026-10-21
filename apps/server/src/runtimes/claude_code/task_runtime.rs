@@ -179,7 +179,7 @@ fn prepare_session(
     }
     let mut servers = project_mcp_servers(scope.project_mcp, role, environment)?;
     if let (TaskRole::Worker(_), Some(advisor)) = (scope.role, scope.workflow.advisor) {
-        let suplex = std::env::current_exe()?;
+        let suplex = crate::shared::fs::executable()?;
         let suplex = suplex
             .to_str()
             .ok_or_else(|| io::Error::other("Suplex executable path is invalid"))?;
@@ -193,7 +193,7 @@ fn prepare_session(
         );
     }
     if let TaskRole::Root(identity) = scope.role {
-        let suplex = std::env::current_exe()?;
+        let suplex = crate::shared::fs::executable()?;
         let suplex = suplex
             .to_str()
             .ok_or_else(|| io::Error::other("Suplex executable path is invalid"))?;

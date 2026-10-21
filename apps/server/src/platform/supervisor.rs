@@ -398,7 +398,7 @@ pub async fn run_foreground() -> Result<(), Box<dyn std::error::Error + Send + S
 async fn supervise(
     installation: &Installation,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let executable = std::env::current_exe()?;
+    let executable = crate::shared::fs::executable()?;
     #[cfg(unix)]
     let mut interrupt = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())?;
     #[cfg(unix)]
@@ -478,7 +478,7 @@ pub fn start(installation: &Installation) -> Result<u32, Box<dyn std::error::Err
         .create(true)
         .append(true)
         .open(installation.runtime.join("server.log"))?;
-    let executable = std::env::current_exe()?;
+    let executable = crate::shared::fs::executable()?;
     let mut command = Command::new(executable);
     command
         .args(["start", "--foreground"])

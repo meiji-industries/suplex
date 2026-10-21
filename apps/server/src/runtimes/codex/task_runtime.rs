@@ -84,7 +84,7 @@ where
     )?;
     require_absent(&directory, input.native_session_id, input.turn_id)?;
     let codex = executable::resolve_codex_executable(input.codex_executable)?;
-    let suplex = std::env::current_exe()?;
+    let suplex = crate::shared::fs::executable()?;
     let suplex = suplex
         .to_str()
         .ok_or_else(|| io::Error::other("Suplex executable path is invalid"))?;
@@ -188,7 +188,7 @@ where
         gh.as_deref(),
         input.inherited_environment,
     )?;
-    let suplex = std::env::current_exe()?;
+    let suplex = crate::shared::fs::executable()?;
     let suplex = suplex
         .to_str()
         .ok_or_else(|| io::Error::other("Suplex executable path is invalid"))?;

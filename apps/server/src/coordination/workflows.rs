@@ -268,7 +268,10 @@ fn short(sha: &str) -> &str {
 }
 
 fn verified(verification: &Value) -> bool {
-    matches!(verification.as_str(), Some("passed" | "not_applicable" | "pending"))
+    matches!(
+        verification.as_str(),
+        Some("passed" | "not_applicable" | "pending")
+    )
 }
 
 #[derive(Debug, Default, PartialEq)]

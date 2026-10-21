@@ -100,7 +100,7 @@ pub async fn save_device_grant(grant: &super::github_device::Granted) -> AccessR
     // Keychain interaction policy is process-wide. Explicit sign-in may prompt,
     // while automatic reads and refreshes in the server must remain noninteractive.
     use tokio::io::AsyncWriteExt;
-    let mut child = tokio::process::Command::new(std::env::current_exe()?)
+    let mut child = tokio::process::Command::new(crate::shared::fs::executable()?)
         .arg("github-store-credential")
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::null())

@@ -128,7 +128,9 @@ pub async fn ensure_session(scope: &TaskScope<'_>) -> Result<String, BoxError> {
     let (role, agent, label, _) = role_parts(scope.role, scope.workflow);
     let bridge = match scope.role {
         TaskRole::Root(identity) => {
-            let suplex = std::env::current_exe()?.to_string_lossy().into_owned();
+            let suplex = crate::shared::fs::executable()?
+                .to_string_lossy()
+                .into_owned();
             let binding = root_bridge::write_binding(
                 &runtime,
                 identity,
@@ -151,7 +153,9 @@ pub async fn ensure_session(scope: &TaskScope<'_>) -> Result<String, BoxError> {
         }
         TaskRole::Worker(_) => match scope.workflow.advisor {
             Some(advisor) => {
-                let suplex = std::env::current_exe()?.to_string_lossy().into_owned();
+                let suplex = crate::shared::fs::executable()?
+                    .to_string_lossy()
+                    .into_owned();
                 let binding = advisor_bridge::write_binding(&runtime, advisor, &suplex)?;
                 Some(BridgeServer {
                     command: suplex,

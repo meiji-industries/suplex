@@ -401,7 +401,7 @@ fn apply_archive(
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let root = std::env::current_dir()?;
     let rollback = installation.runtime.join("update-rollback-suplex");
-    let target = std::env::current_exe()?.canonicalize()?;
+    let target = crate::shared::fs::executable()?.canonicalize()?;
     let mut host_stopped = false;
     let mut recovery_attempted = false;
     let result = (|| -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
@@ -484,7 +484,7 @@ pub fn request_apply(
         .create(true)
         .append(true)
         .open(installation.runtime.join("update.log"))?;
-    let mut command = Command::new(std::env::current_exe()?);
+    let mut command = Command::new(crate::shared::fs::executable()?);
     command
         .arg("update-apply")
         .stdin(Stdio::null())

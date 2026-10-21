@@ -201,7 +201,7 @@ pub async fn run(assume_yes: bool) -> Result<i32> {
     }
     println!("Downloading Suplex {}...", release.version);
     let archive = download(&release).await?;
-    let target = std::env::current_exe()?.canonicalize()?;
+    let target = crate::shared::fs::executable()?.canonicalize()?;
     fs::create_dir_all(&installation.runtime)?;
     install(
         &archive,

@@ -350,7 +350,10 @@ pub fn validate_report(
         }
         match fields.get("verification").and_then(Value::as_str) {
             None => issues.push("verification: expected value".to_owned()),
-            Some(value) if !["passed", "not_applicable", "pending", "missing", "failed"].contains(&value) => {
+            Some(value)
+                if !["passed", "not_applicable", "pending", "missing", "failed"]
+                    .contains(&value) =>
+            {
                 issues.push("verification: invalid value".to_owned());
             }
             Some(value) => verified = ["passed", "not_applicable", "pending"].contains(&value),

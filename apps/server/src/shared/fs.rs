@@ -1,4 +1,26 @@
-use std::{fs, io, io::Write, os::unix::fs::OpenOptionsExt, path::Path};
+use std::{
+    fs, io,
+    io::Write,
+    os::unix::fs::OpenOptionsExt,
+    path::{Path, PathBuf},
+};
+
+/// The Suplex program to launch for bridges, displays, and child commands.
+/// Linux names a running program whose file was replaced `<path> (deleted)`;
+/// the path itself holds the installed program, so launch that.
+pub fn executable() -> io::Result<PathBuf> {
+    Ok(installed_path(std::env::current_exe()?))
+}
+
+fn installed_path(path: PathBuf) -> PathBuf {
+    match path
+        .to_str()
+        .and_then(|text| text.strip_suffix(" (deleted)"))
+    {
+        Some(installed) => PathBuf::from(installed),
+        None => path,
+    }
+}
 
 /// The file text, or `None` when the file does not exist.
 pub fn read_optional(path: &Path) -> io::Result<Option<String>> {
@@ -50,5 +72,15 @@ mod tests {
         );
         assert_eq!(std::fs::read_dir(&directory).unwrap().count(), 1);
         std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn a_replaced_program_launches_from_its_installed_path() {
+        let installed = std::path::PathBuf::from("/usr/local/bin/suplex");
+        assert_eq!(
+            super::installed_path("/usr/local/bin/suplex (deleted)".into()),
+            installed
+        );
+        assert_eq!(super::installed_path(installed.clone()), installed);
     }
 }

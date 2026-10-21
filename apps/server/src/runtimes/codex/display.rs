@@ -49,7 +49,9 @@ pub(crate) fn command_for(
     subcommand: &str,
     runtime_directory: &Path,
 ) -> io::Result<DisplayCommand> {
-    let executable = std::env::current_exe()?.to_string_lossy().into_owned();
+    let executable = crate::shared::fs::executable()?
+        .to_string_lossy()
+        .into_owned();
     let args = vec![
         subcommand.to_owned(),
         runtime_directory.to_string_lossy().into_owned(),

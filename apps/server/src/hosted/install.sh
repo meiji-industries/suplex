@@ -145,12 +145,16 @@ install_linux() {
     if [ ! -w "$(dirname "$LINK")" ] && ! sudo -n true 2>/dev/null; then
         LINK="$HOME/.local/bin/suplex"
     fi
-    OLD_VERSION=$("$LINK" --version 2>/dev/null || true)
-    status "Installing the 'suplex' command to $LINK (your password may be necessary)..."
-    as_admin mkdir -p "$(dirname "$LINK")"
-    as_admin install -m 0755 "$TEMP_DIR/suplex" "$LINK"
     TARGET="$LINK"
-    [ "$OLD_VERSION" != "$("$TARGET" --version 2>/dev/null)" ] && UPGRADED=1
+    # Replacing the file leaves a running host on the deleted program, so swap only changed bytes and restart after any swap.
+    if [ -x "$LINK" ] && cmp -s "$TEMP_DIR/suplex" "$LINK"; then
+        status "The 'suplex' command at $LINK is already this version."
+    else
+        status "Installing the 'suplex' command to $LINK (your password may be necessary)..."
+        as_admin mkdir -p "$(dirname "$LINK")"
+        as_admin install -m 0755 "$TEMP_DIR/suplex" "$LINK"
+        UPGRADED=1
+    fi
 
     status "Install complete. Run 'suplex help' for the command line."
     [ -n "${SUPLEX_NO_START:-}" ] && exit 0

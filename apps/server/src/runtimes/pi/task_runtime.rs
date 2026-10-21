@@ -59,7 +59,7 @@ where
         gh.as_deref(),
         scope.inherited_environment,
     )?;
-    let suplex = std::env::current_exe()?;
+    let suplex = crate::shared::fs::executable()?;
     let suplex = suplex
         .to_str()
         .ok_or_else(|| io::Error::other("Suplex executable path is invalid"))?;

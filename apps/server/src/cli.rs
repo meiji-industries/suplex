@@ -160,7 +160,7 @@ async fn update(arguments: &[String]) -> CliResult {
     if crate::platform::archive_update::managed() {
         return crate::platform::archive_update::run(assume_yes).await;
     }
-    let executable = std::env::current_exe()?.canonicalize()?;
+    let executable = crate::shared::fs::executable()?.canonicalize()?;
     let Some(app) = executable
         .ancestors()
         .find(|path| path.extension().is_some_and(|extension| extension == "app"))

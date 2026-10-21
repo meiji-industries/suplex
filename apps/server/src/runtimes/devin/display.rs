@@ -31,7 +31,9 @@ fn shell_quote(value: &str) -> String {
 }
 
 pub fn display_command(runtime_directory: &Path) -> io::Result<DisplayCommand> {
-    let executable = std::env::current_exe()?.to_string_lossy().into_owned();
+    let executable = crate::shared::fs::executable()?
+        .to_string_lossy()
+        .into_owned();
     let args = vec![
         "display".to_owned(),
         "devin".to_owned(),

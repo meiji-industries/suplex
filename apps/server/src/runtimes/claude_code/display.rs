@@ -38,7 +38,9 @@ fn shell_quote(value: &str) -> String {
 
 /// The Suplex binary follows the runtime directory without bridge credentials.
 pub fn claude_display_command(runtime_directory: &Path) -> io::Result<ClaudeDisplayCommand> {
-    let executable = std::env::current_exe()?.to_string_lossy().into_owned();
+    let executable = crate::shared::fs::executable()?
+        .to_string_lossy()
+        .into_owned();
     let args = vec![
         "display".to_owned(),
         "claude-code".to_owned(),

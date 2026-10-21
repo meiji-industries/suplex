@@ -134,6 +134,15 @@ pub enum NetworkMode {
     All,
 }
 
+/// A page zoom change: the View menu or `window.suplexApp.zoom` in `apps/web/vite-env.d.ts`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ZoomStep {
+    In,
+    Out,
+    Reset,
+}
+
 /// `DesktopNetworkAccess` in `apps/web/vite-env.d.ts`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(untagged)]

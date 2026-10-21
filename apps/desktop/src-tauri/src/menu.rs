@@ -11,7 +11,7 @@ use tauri::{
 };
 
 use crate::{
-    contracts::NetworkMode,
+    contracts::{NetworkMode, ZoomStep},
     network_access::ActiveNetworkAccess,
     platform::{LOCAL_SUPPORTED, MACHINE},
     shell::{Shell, View},
@@ -361,9 +361,9 @@ pub fn handle<R: Runtime>(shell: &Arc<Shell<R>>, event: &MenuEvent) {
             "open" => shell.open().await,
             "quit" => shell.quit().await,
             "reload" => shell.reload().await,
-            "zoom-reset" => shell.zoom_by(None),
-            "zoom-in" => shell.zoom_by(Some(0.1)),
-            "zoom-out" => shell.zoom_by(Some(-0.1)),
+            "zoom-reset" => shell.zoom(ZoomStep::Reset),
+            "zoom-in" => shell.zoom(ZoomStep::In),
+            "zoom-out" => shell.zoom(ZoomStep::Out),
             "manage-hosts" => shell.open_manager().await,
             "host-local" => shell.select_local().await,
             "start" => shell.select_local().await,

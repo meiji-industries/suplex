@@ -58,6 +58,7 @@ pub fn configure<R: Runtime>(builder: tauri::Builder<R>) -> tauri::Builder<R> {
         app_restart_network_access,
         app_update_status,
         app_check_for_updates,
+        app_zoom,
     ])
 }
 

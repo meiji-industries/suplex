@@ -22,7 +22,7 @@ use crate::{
     },
     contracts::{
         AppNetworkAccess, BootFailure, DesktopSnapshot, FailureSource, FinishedStage, InstallEvent,
-        InstallStage, ManagedNetworkAccess, NetworkMode,
+        InstallStage, ManagedNetworkAccess, NetworkMode, ZoomStep,
     },
     effects::Effects,
     installer::{InstallCancel, InstallOutcome, Installer},
@@ -316,11 +316,43 @@ pub fn is_admin(body: &serde_json::Value) -> bool {
         == Some("admin")
 }
 
-/// The next page zoom: `None` resets to 1.0; a step moves by that amount within 0.5 to 2.0.
-pub fn next_zoom(current: f64, step: Option<f64>) -> f64 {
+/// Chrome's page zoom levels from 50 to 200 percent.
+pub const ZOOM_LEVELS: [f64; 11] = [
+    0.5,
+    2.0 / 3.0,
+    0.75,
+    0.8,
+    0.9,
+    1.0,
+    1.1,
+    1.25,
+    1.5,
+    1.75,
+    2.0,
+];
+
+/// The zoom level nearest to `zoom`; a value that is not a positive number is 100 percent.
+pub fn snap_zoom(zoom: f64) -> f64 {
+    if !zoom.is_finite() || zoom <= 0.0 {
+        return 1.0;
+    }
+    ZOOM_LEVELS
+        .into_iter()
+        .min_by(|a, b| (a - zoom).abs().total_cmp(&(b - zoom).abs()))
+        .unwrap()
+}
+
+/// The next page zoom: one level in or out, clamped at both ends, or back to 100 percent.
+pub fn next_zoom(current: f64, step: ZoomStep) -> f64 {
+    let current = snap_zoom(current);
+    let index = ZOOM_LEVELS
+        .iter()
+        .position(|level| *level == current)
+        .unwrap();
     match step {
-        None => 1.0,
-        Some(step) => ((current + step) * 10.0).round().clamp(5.0, 20.0) / 10.0,
+        ZoomStep::In => ZOOM_LEVELS[(index + 1).min(ZOOM_LEVELS.len() - 1)],
+        ZoomStep::Out => ZOOM_LEVELS[index.saturating_sub(1)],
+        ZoomStep::Reset => 1.0,
     }
 }
 
@@ -332,6 +364,9 @@ impl<R: Runtime> Shell<R> {
         resources: &Path,
     ) -> Arc<Self> {
         let paths = Paths::from_environment(&environment);
+        let zoom = window::read_state(&paths.window_state())
+            .and_then(|state| state.zoom)
+            .map_or(1.0, snap_zoom);
         let runtime = RuntimePaths::resolve(&environment, resources);
         let default_port = environment
             .get("SUPLEX_DESKTOP_PORT")
@@ -386,7 +421,7 @@ impl<R: Runtime> Shell<R> {
                 shut_down: AtomicBool::new(false),
                 launched: AtomicBool::new(false),
                 bounds_generation: AtomicU64::new(0),
-                zoom: Mutex::new(1.0),
+                zoom: Mutex::new(zoom),
                 fullscreen: AtomicBool::new(false),
                 weak: weak.clone(),
             }
@@ -530,6 +565,7 @@ impl<R: Runtime> Shell<R> {
                 .permission("allow-app-restart-network-access")
                 .permission("allow-app-update-status")
                 .permission("allow-app-check-for-updates")
+                .permission("allow-app-zoom")
                 .permission("core:window:allow-start-dragging")
                 .permission("core:window:allow-internal-toggle-maximize");
             if let Err(error) = self.app.add_capability(capability) {
@@ -545,7 +581,7 @@ impl<R: Runtime> Shell<R> {
             .as_ref()
             .and_then(current_bounds)
             .or_else(|| self.state.lock().unwrap().bounds)
-            .or_else(|| window::read_bounds(&self.paths.window_state()))
+            .or_else(|| window::read_state(&self.paths.window_state()).map(|state| state.bounds))
             .unwrap_or_default();
         let bridge = Self::bridge(
             kind,
@@ -667,16 +703,37 @@ impl<R: Runtime> Shell<R> {
         }
     }
 
-    // Zoom lasts for this run only; persist it in window-state.json if users ask.
-    pub fn zoom_by(&self, step: Option<f64>) {
+    /// Zooms every view through the webview's native page zoom and saves the level for this device.
+    pub fn zoom(&self, step: ZoomStep) {
         let zoom = {
             let mut zoom = self.zoom.lock().unwrap();
             *zoom = next_zoom(*zoom, step);
             *zoom
         };
-        if let Some(window) = self.window() {
+        let current = self.window();
+        if let Some(window) = &current {
             let _ = window.set_zoom(zoom);
         }
+        let bounds = current
+            .as_ref()
+            .and_then(current_bounds)
+            .or_else(|| self.state.lock().unwrap().bounds)
+            .or_else(|| window::read_state(&self.paths.window_state()).map(|state| state.bounds));
+        if let Some(bounds) = bounds {
+            self.save_window_state(bounds);
+        }
+    }
+
+    /// Writes `window-state.json` with these bounds and the current zoom.
+    fn save_window_state(&self, bounds: window::Bounds) {
+        let zoom = *self.zoom.lock().unwrap();
+        window::write_state(
+            &self.paths.window_state(),
+            window::WindowState {
+                bounds,
+                zoom: (zoom != 1.0).then_some(zoom),
+            },
+        );
     }
 
     fn show_unavailable(&self, target: &SuplexTarget) {
@@ -1197,7 +1254,7 @@ impl<R: Runtime> Shell<R> {
                         Box::pin(async move {
                             tokio::time::sleep(Duration::from_millis(300)).await;
                             if shell.bounds_generation.load(Ordering::SeqCst) == generation {
-                                window::write_bounds(&shell.paths.window_state(), bounds);
+                                shell.save_window_state(bounds);
                             }
                         })
                     });
@@ -1205,7 +1262,7 @@ impl<R: Runtime> Shell<R> {
             }
             WindowEvent::CloseRequested { .. } => {
                 if let Some(bounds) = self.window().as_ref().and_then(current_bounds) {
-                    window::write_bounds(&self.paths.window_state(), bounds);
+                    self.save_window_state(bounds);
                 }
             }
             WindowEvent::Destroyed => {
@@ -1547,11 +1604,51 @@ mod tests {
     }
 
     #[test]
-    fn zoom_steps_stay_between_half_and_double() {
-        assert_eq!(next_zoom(1.0, Some(0.1)), 1.1);
-        assert_eq!(next_zoom(2.0, Some(0.1)), 2.0);
-        assert_eq!(next_zoom(0.5, Some(-0.1)), 0.5);
-        assert_eq!(next_zoom(1.7, None), 1.0);
+    fn zoom_moves_through_chrome_levels_and_clamps_at_both_ends() {
+        let mut zoom = 1.0;
+        let mut levels = Vec::new();
+        for _ in 0..7 {
+            zoom = next_zoom(zoom, ZoomStep::In);
+            levels.push(zoom);
+        }
+        assert_eq!(levels, [1.1, 1.25, 1.5, 1.75, 2.0, 2.0, 2.0]);
+        let mut levels = Vec::new();
+        for _ in 0..12 {
+            zoom = next_zoom(zoom, ZoomStep::Out);
+            levels.push(zoom);
+        }
+        assert_eq!(
+            levels,
+            [
+                1.75,
+                1.5,
+                1.25,
+                1.1,
+                1.0,
+                0.9,
+                0.8,
+                0.75,
+                2.0 / 3.0,
+                0.5,
+                0.5,
+                0.5
+            ]
+        );
+        assert_eq!(next_zoom(1.75, ZoomStep::Reset), 1.0);
+        assert_eq!(next_zoom(0.5, ZoomStep::Reset), 1.0);
+    }
+
+    #[test]
+    fn a_saved_zoom_off_the_levels_snaps_to_the_nearest_level() {
+        assert_eq!(snap_zoom(1.3), 1.25);
+        assert_eq!(snap_zoom(0.67), 2.0 / 3.0);
+        assert_eq!(snap_zoom(1.7), 1.75);
+        assert_eq!(snap_zoom(9.0), 2.0);
+        assert_eq!(snap_zoom(0.1), 0.5);
+        assert_eq!(snap_zoom(f64::NAN), 1.0);
+        assert_eq!(snap_zoom(-1.0), 1.0);
+        assert_eq!(next_zoom(1.3, ZoomStep::In), 1.5);
+        assert_eq!(next_zoom(1.3, ZoomStep::Out), 1.1);
     }
 
     #[test]

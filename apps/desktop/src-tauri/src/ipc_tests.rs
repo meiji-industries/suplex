@@ -21,7 +21,10 @@ struct Harness {
 }
 
 fn harness(extra: &[(&str, &str)]) -> Harness {
-    let data = tempfile::tempdir().unwrap();
+    harness_in(tempfile::tempdir().unwrap(), extra)
+}
+
+fn harness_in(data: tempfile::TempDir, extra: &[(&str, &str)]) -> Harness {
     let app = crate::configure(mock_builder())
         .build(crate::context())
         .unwrap();
@@ -119,8 +122,11 @@ const NETWORK_COMMANDS: [(&str, &str); 3] = [
     ("app_save_network_access_preference", r#"{"mode":"all"}"#),
     ("app_restart_network_access", "{}"),
 ];
-const UPDATE_COMMANDS: [(&str, &str); 2] =
-    [("app_update_status", "{}"), ("app_check_for_updates", "{}")];
+const APP_COMMANDS: [(&str, &str); 3] = [
+    ("app_update_status", "{}"),
+    ("app_check_for_updates", "{}"),
+    ("app_zoom", r#"{"step":"in"}"#),
+];
 // Windows and Linux also register the notification and clipboard plugins; no page gets their commands either.
 const PLUGIN_COMMANDS: [&str; 8] = [
     "plugin:notification|notify",
@@ -155,7 +161,7 @@ fn the_setup_page_reaches_setup_commands_and_nothing_else() {
     assert_eq!(snapshot["state"], "resolve");
     for (command, body) in NETWORK_COMMANDS
         .iter()
-        .chain(UPDATE_COMMANDS.iter())
+        .chain(APP_COMMANDS.iter())
         .chain(&[("app_account_cleared", "{}"), ("unavailable_retry", "{}")])
     {
         assert!(
@@ -228,6 +234,40 @@ fn a_remote_host_reaches_only_its_narrow_bridge_on_its_exact_origin() {
 }
 
 #[test]
+fn host_zoom_starts_from_the_saved_level_and_saves_each_change() {
+    let data = tempfile::tempdir().unwrap();
+    let state = data.path().join("window-state.json");
+    std::fs::write(&state, r#"{"width":1000,"height":700,"zoom":1.3}"#).unwrap();
+    let harness = harness_in(data, &[]);
+    let label = harness
+        .shell
+        .show_host_for_test(&parse_target("https://suplex.example").unwrap())
+        .unwrap();
+    let host = harness.window(&label);
+    let zoom = |step: &str| {
+        invoke(
+            &host,
+            "https://suplex.example",
+            "app_zoom",
+            json!({ "step": step }),
+        )
+    };
+    let saved = || {
+        crate::window::read_state(&state)
+            .expect("window-state.json")
+            .zoom
+    };
+    assert_eq!(zoom("in"), Ok(Value::Null));
+    assert_eq!(saved(), Some(1.5), "1.3 snaps to 1.25, then one level in");
+    assert_eq!(zoom("out"), Ok(Value::Null));
+    assert_eq!(zoom("out"), Ok(Value::Null));
+    assert_eq!(saved(), Some(1.1));
+    assert_eq!(zoom("reset"), Ok(Value::Null));
+    assert_eq!(saved(), None, "100 percent saves no zoom");
+    assert!(zoom("sideways").is_err());
+}
+
+#[test]
 fn cross_origin_frames_other_ports_and_local_files_cannot_invoke_host_commands() {
     let harness = harness(&[]);
     let label = harness
@@ -245,7 +285,7 @@ fn cross_origin_frames_other_ports_and_local_files_cannot_invoke_host_commands()
     ] {
         for (command, body) in NETWORK_COMMANDS
             .iter()
-            .chain(UPDATE_COMMANDS.iter())
+            .chain(APP_COMMANDS.iter())
             .chain(&[
                 ("app_open_host_picker", "{}"),
                 ("app_account_cleared", "{}"),
@@ -275,14 +315,10 @@ fn a_retired_host_view_keeps_no_authority_after_another_host_is_selected() {
         .show_host_for_test(&parse_target("https://other.example").unwrap())
         .unwrap();
     assert_ne!(first, second, "every selection gets a fresh label");
-    for (command, body) in NETWORK_COMMANDS
-        .iter()
-        .chain(UPDATE_COMMANDS.iter())
-        .chain(&[
-            ("app_open_host_picker", "{}"),
-            ("app_account_cleared", "{}"),
-        ])
-    {
+    for (command, body) in NETWORK_COMMANDS.iter().chain(APP_COMMANDS.iter()).chain(&[
+        ("app_open_host_picker", "{}"),
+        ("app_account_cleared", "{}"),
+    ]) {
         assert_eq!(
             invoke(&retired, "https://suplex.example", command, args(body)),
             Err(json!(DENIED)),

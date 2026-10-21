@@ -4,12 +4,14 @@ import { Toaster } from "./components/ui/sonner.js";
 import { ArchiveReviewDialog } from "./features/tasks/archive-task-dialog.js";
 import { createRoot } from "react-dom/client";
 import { installClientLifecycle } from "./shell/client-lifecycle.js";
+import { installDesktopZoom } from "./shell/desktop-zoom.js";
 import { refreshWebPushSubscription } from "./features/profiles/lib/web-push-api.js";
 
 import "./styles.css";
 
 installClientLifecycle();
 if (window.suplexApp) document.documentElement.classList.add("suplex-desktop");
+installDesktopZoom();
 // The phone app shows the host bar too, without the desktop title bar inset.
 if (window.suplexMobile) document.documentElement.classList.add("suplex-mobile");
 if (!window.suplexApp && "serviceWorker" in navigator) void navigator.serviceWorker.register("/sw.js").then(() => refreshWebPushSubscription()).catch(() => undefined);

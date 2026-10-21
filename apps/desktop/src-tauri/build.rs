@@ -25,6 +25,7 @@ fn main() {
         "app_restart_network_access",
         "app_update_status",
         "app_check_for_updates",
+        "app_zoom",
     ]);
     // `generate_context!` compiles the merged configuration (`tauri build --config`) and the version into the
     // shell. The shell includes this file, so Cargo recompiles it when the file changes and a build with

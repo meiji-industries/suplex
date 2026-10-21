@@ -8,7 +8,9 @@ use tauri::{Runtime, State, Webview};
 
 use crate::{
     boot::{BootEvent, Mode},
-    contracts::{AppNetworkAccess, ConnectionTest, DesktopSnapshot, NetworkMode, TailscaleStatus},
+    contracts::{
+        AppNetworkAccess, ConnectionTest, DesktopSnapshot, NetworkMode, TailscaleStatus, ZoomStep,
+    },
     local_runtime::healthy,
     shell::Shell,
     tailscale,
@@ -267,6 +269,18 @@ pub async fn app_check_for_updates<R: Runtime>(
 ) -> Result<(), String> {
     require(&shell, &webview, ViewKind::Host)?;
     crate::check_for_updates(&shell, true).await;
+    Ok(())
+}
+
+/// The page's zoom shortcuts, which Windows and Linux have no menu bar for; the same as View > Zoom on macOS.
+#[tauri::command]
+pub fn app_zoom<R: Runtime>(
+    webview: Webview<R>,
+    shell: Shared<'_, R>,
+    step: ZoomStep,
+) -> Result<(), String> {
+    require(&shell, &webview, ViewKind::Host)?;
+    shell.zoom(step);
     Ok(())
 }
 

@@ -60,6 +60,7 @@
       updateStatus: () => invoke("app_update_status"),
       checkForUpdates: () => done(invoke("app_check_for_updates")),
       onUpdateChange: (listener) => subscribe((payload) => { if (payload.update) listener(payload.update); }),
+      zoom: (step) => done(invoke("app_zoom", { step })),
     });
   }
 }

@@ -38,6 +38,8 @@ declare global {
       updateStatus?(): Promise<DesktopUpdateStatus>;
       checkForUpdates?(): Promise<void>;
       onUpdateChange?(listener: (status: DesktopUpdateStatus) => void): () => void;
+      /** Zooms the whole app one level in or out, or back to 100 percent. Absent in an older shell. */
+      zoom?(step: "in" | "out" | "reset"): Promise<void>;
     };
     /** Present only inside the Suplex iOS and Android apps. */
     suplexMobile?: { openHostPicker(): Promise<void> };

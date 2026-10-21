@@ -35,6 +35,16 @@ pub struct Bounds {
     pub y: Option<f64>,
 }
 
+/// The whole `window-state.json`: the bounds, plus the page zoom when it is not 100 percent.
+/// Files without a zoom, such as the Electron shell's, load at 100 percent.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct WindowState {
+    #[serde(flatten)]
+    pub bounds: Bounds,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub zoom: Option<f64>,
+}
+
 /// A display's usable area in logical points.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Area {
@@ -85,12 +95,12 @@ pub fn fit(saved: Option<Bounds>, displays: &[Area], primary: Area) -> Bounds {
     }
 }
 
-pub fn read_bounds(file: &Path) -> Option<Bounds> {
+pub fn read_state(file: &Path) -> Option<WindowState> {
     serde_json::from_str(&std::fs::read_to_string(file).ok()?).ok()
 }
 
-pub fn write_bounds(file: &Path, bounds: Bounds) {
-    if let Ok(text) = serde_json::to_string(&bounds) {
+pub fn write_state(file: &Path, state: WindowState) {
+    if let Ok(text) = serde_json::to_string(&state) {
         let _ = write_atomic(file, text.as_bytes());
     }
 }
@@ -525,15 +535,18 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let file = directory.path().join("window-state.json");
         std::fs::write(&file, "{broken").unwrap();
-        assert_eq!(read_bounds(&file), None);
+        assert_eq!(read_state(&file), None);
         std::fs::write(&file, r#"{"width":1500,"height":900,"x":40,"y":60}"#).unwrap();
         assert_eq!(
-            read_bounds(&file),
-            Some(Bounds {
-                width: 1500.0,
-                height: 900.0,
-                x: Some(40.0),
-                y: Some(60.0)
+            read_state(&file),
+            Some(WindowState {
+                bounds: Bounds {
+                    width: 1500.0,
+                    height: 900.0,
+                    x: Some(40.0),
+                    y: Some(60.0)
+                },
+                zoom: None
             })
         );
     }
@@ -617,20 +630,36 @@ mod tests {
     fn bounds_round_trip_in_the_existing_file_format() {
         let directory = tempfile::tempdir().unwrap();
         let file = directory.path().join("window-state.json");
-        write_bounds(
-            &file,
-            Bounds {
-                width: 1200.0,
-                height: 800.0,
-                x: Some(0.0),
-                y: Some(25.0),
-            },
-        );
+        let bounds = Bounds {
+            width: 1200.0,
+            height: 800.0,
+            x: Some(0.0),
+            y: Some(25.0),
+        };
+        write_state(&file, WindowState { bounds, zoom: None });
         assert_eq!(
             std::fs::read_to_string(&file).unwrap(),
             r#"{"width":1200.0,"height":800.0,"x":0.0,"y":25.0}"#
         );
-        assert_eq!(read_bounds(&file).unwrap().width, 1200.0);
+        assert_eq!(read_state(&file).unwrap().bounds.width, 1200.0);
+        write_state(
+            &file,
+            WindowState {
+                bounds,
+                zoom: Some(1.25),
+            },
+        );
+        assert_eq!(
+            std::fs::read_to_string(&file).unwrap(),
+            r#"{"width":1200.0,"height":800.0,"x":0.0,"y":25.0,"zoom":1.25}"#
+        );
+        assert_eq!(
+            read_state(&file),
+            Some(WindowState {
+                bounds,
+                zoom: Some(1.25)
+            })
+        );
     }
 
     #[test]

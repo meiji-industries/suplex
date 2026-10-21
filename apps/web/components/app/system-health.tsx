@@ -1,5 +1,5 @@
 import { copyToClipboard } from "../../lib/clipboard.js";
-import { Activity, Bot, Check, CheckCircle2, ChevronRight, CircleAlert, Copy, Database, GitBranch, HardDrive, LayoutGrid, Network, Package, Pi, RefreshCw, ShieldCheck, SquarePi, SquareTerminal, Terminal, XCircle, type LucideIcon } from "lucide-react";
+import { Activity, Binary, Bot, Check, CheckCircle2, ChevronRight, CircleAlert, Copy, Database, GitBranch, HardDrive, LayoutGrid, Network, Package, Pi, RefreshCw, ShieldCheck, SquarePi, SquareTerminal, Terminal, XCircle, type LucideIcon } from "lucide-react";
 import { createContext, useContext, useEffect, useId, useState, type ReactElement, type ReactNode } from "react";
 
 import type { HealthCheck, HealthSnapshot } from "../../contracts/health.js";
@@ -49,6 +49,7 @@ const icons: Record<HealthCheckId, LucideIcon> = {
   pnpm: Package,
   tailscale: Network,
   backup: ShieldCheck,
+  executable: Binary,
   "provider:opencode": Terminal,
   "provider:claude-code": Bot,
   "provider:codex": SquareTerminal,
@@ -73,6 +74,7 @@ export function healthCheckPurpose(id: HealthCheckId): string {
     case "pnpm": return "Update Suplex";
     case "tailscale": return "Reach this host";
     case "backup": return "Recover your data";
+    case "executable": return "Let agents start Suplex tools";
     case "provider:opencode": return "Run tasks with OpenCode";
     case "provider:claude-code": return "Run tasks with Claude Code";
     case "provider:codex": return "Run tasks with Codex CLI";
@@ -186,7 +188,7 @@ export function healthyCheckLabel(check: HealthCheck): string {
     case "database": return typeof check.details.appliedMigrations === "number" ? `${check.details.appliedMigrations} migrations` : "Healthy";
     case "artifact-root": return bytes("freeBytes") ?? "Healthy";
     case "disk-space": return bytes("freeBytes") ?? "Healthy";
-    case "git": case "pnpm": return text("version") ?? "Healthy";
+    case "git": case "pnpm": case "executable": return text("version") ?? "Healthy";
     case "herdr-readiness": return text("serverVersion") ?? "Healthy";
     case "gh-auth": return text("logins") ?? "Healthy";
     case "gh-cli": return "Signed in";

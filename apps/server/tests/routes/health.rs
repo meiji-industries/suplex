@@ -130,6 +130,8 @@ mod tests {
         assert_eq!(low["checks"][6]["id"], "gh-cli");
         assert_eq!(low["checks"][7]["id"], "backup");
         assert_eq!(low["checks"][7]["summary"], "No backup has been made yet");
+        assert_eq!(low["checks"][8]["id"], "executable");
+        assert_eq!(low["checks"][8]["status"], "healthy");
         assert_eq!(
             tailscale_hostname(br#"{"Self":{"DNSName":"host.tailnet.ts.net."}}"#).as_deref(),
             Some("host.tailnet.ts.net")

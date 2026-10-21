@@ -45,3 +45,8 @@ test("low disk space degrades health while owned readiness stays true", () => {
   expect(lowDisk.ready).toBe(true);
   expect(getSystemHealthLevel(lowDisk, "current")).toBe("amber");
 });
+
+test("a replaced Suplex program degrades health instead of turning it red", () => {
+  const replaced: HealthSnapshot = { ...snapshot, checks: [...snapshot.checks, { id: "executable", label: "Suplex program", status: "warning", summary: "The Suplex program on disk changed", details: {} }] };
+  expect(getSystemHealthLevel(replaced, "current")).toBe("amber");
+});

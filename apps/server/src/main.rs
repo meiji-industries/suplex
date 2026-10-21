@@ -110,6 +110,7 @@ fn server_event(state: &str, extra: serde_json::Value) {
 }
 
 async fn serve() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    std::sync::LazyLock::force(&suplex::platform::health::STARTED_EXECUTABLE);
     let installation = Installation::load()?;
     suplex::integrations::github::use_installation(&installation.database);
     system_events::install(installation.logs.clone());

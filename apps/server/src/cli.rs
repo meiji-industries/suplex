@@ -322,6 +322,7 @@ const SECTIONS: [&str; 6] = [
 
 fn section_for(id: &str) -> &'static str {
     match id {
+        "executable" => "Installation",
         "database" => "Database",
         "artifact-root" | "disk-space" | "backup" => "Storage",
         id if id.starts_with("provider:") => "Agents",

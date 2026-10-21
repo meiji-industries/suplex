@@ -15,6 +15,7 @@ export const HEALTH_CHECK_IDS = [
   "pnpm",
   "tailscale",
   "backup",
+  "executable",
   "provider:opencode",
   "provider:claude-code",
   "provider:codex",
@@ -24,7 +25,7 @@ export const HEALTH_CHECK_IDS = [
 
 export type HealthCheckId = (typeof HEALTH_CHECK_IDS)[number];
 
-export const OWNED_HEALTH_CHECK_IDS = ["database", "artifact-root"] as const satisfies readonly HealthCheckId[];
+export const OWNED_HEALTH_CHECK_IDS = ["database", "artifact-root", "executable"] as const satisfies readonly HealthCheckId[];
 
 export const REQUIRED_HEALTH_CHECK_IDS = ["git", "herdr-readiness"] as const satisfies readonly HealthCheckId[];
 

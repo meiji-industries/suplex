@@ -21,10 +21,57 @@ use serde_json::{Value, json};
 use std::{
     ffi::{CString, OsStr},
     fs::OpenOptions,
-    os::unix::ffi::OsStrExt,
-    path::Path,
+    os::unix::{ffi::OsStrExt, fs::MetadataExt},
+    path::{Path, PathBuf},
+    sync::LazyLock,
 };
 const MINIMUM_ARTIFACT_FREE_BYTES: u64 = 100 * 1024 * 1024;
+
+/// The path and (device, inode) of the program this process started from.
+/// `serve` forces it at start, before an update can replace the file.
+pub static STARTED_EXECUTABLE: LazyLock<Option<(PathBuf, (u64, u64))>> = LazyLock::new(|| {
+    let path = std::env::current_exe().ok()?;
+    let identity = file_identity(&path)?;
+    Some((path, identity))
+});
+
+fn file_identity(path: &Path) -> Option<(u64, u64)> {
+    let metadata = std::fs::metadata(path).ok()?;
+    Some((metadata.dev(), metadata.ino()))
+}
+
+/// Linux names an unlinked running program `<path> (deleted)`. Other systems
+/// show a replaced or removed program only as a changed or missing inode.
+fn executable_replaced(
+    link: &str,
+    started: Option<(u64, u64)>,
+    current: Option<(u64, u64)>,
+) -> bool {
+    link.ends_with(" (deleted)") || started.is_some_and(|started| current != Some(started))
+}
+
+fn executable_check() -> Value {
+    let link = std::env::current_exe()
+        .map(|path| path.display().to_string())
+        .unwrap_or_default();
+    let started = STARTED_EXECUTABLE.as_ref();
+    let current = started.and_then(|(path, _)| file_identity(path));
+    let replaced = executable_replaced(&link, started.map(|(_, identity)| *identity), current);
+    let version = env!("CARGO_PKG_VERSION");
+    check(
+        "executable",
+        "Suplex program",
+        if replaced { "warning" } else { "healthy" },
+        &if replaced {
+            format!(
+                "The Suplex program on disk changed, but the host still runs the previous program, version {version}. Agents cannot start Suplex tools. Restart Suplex."
+            )
+        } else {
+            "The host runs the Suplex program that is on disk".to_owned()
+        },
+        json!({"version":version,"path":link}),
+    )
+}
 
 pub(crate) fn check(id: &str, label: &str, status: &str, summary: &str, details: Value) -> Value {
     json!({"id":id,"label":label,"status":status,"summary":summary,"details":details})
@@ -462,6 +509,7 @@ pub async fn snapshot(
     if let Some(data_root) = data_root {
         checks.push(backup::health_check(&data_root, Utc::now()));
     }
+    checks.push(executable_check());
     for provider in providers {
         checks.push(crate::profiles::provider_readiness::check(&provider, None, false).await);
     }
@@ -591,5 +639,19 @@ mod tests {
             read_only: false,
         };
         assert_eq!(database_check(unavailable)["status"], "unhealthy");
+    }
+
+    #[test]
+    fn a_replaced_or_removed_program_is_detected() {
+        let path = "/usr/local/bin/suplex";
+        let started = Some((1, 100));
+        assert!(!executable_replaced(path, started, started));
+        assert!(executable_replaced(
+            "/usr/local/bin/suplex (deleted)",
+            started,
+            started
+        ));
+        assert!(executable_replaced(path, started, Some((1, 101))));
+        assert!(executable_replaced(path, started, None));
     }
 }

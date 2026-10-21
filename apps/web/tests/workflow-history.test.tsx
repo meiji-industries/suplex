@@ -26,7 +26,7 @@ const session = { id: "planner-a", kind: "worker", advisorRole: "planner_a", lab
 const turn = { id: "plan-a", sessionId: session.id, prompt: "Create the plan.", status: "prompted", promptedAt: recordedAt, completedAt: null, result: null, assignment: null } satisfies TaskActivity["turns"][number];
 const roots: Root[] = [];
 
-async function mount(reviews: ReviewRecord[], activity: TaskActivity = { sessions: [], turns: [], setup: { state: "none", exitStatus: null }, shellPaneId: null }, workflow: Task["workflow"] = "independent_review") {
+async function mount(reviews: ReviewRecord[], activity: TaskActivity = { sessions: [], turns: [], setup: { state: "none", exitStatus: null }, actions: [], shellPaneId: null }, workflow: Task["workflow"] = "independent_review") {
   const container = document.createElement("div");
   document.body.append(container);
   const root = createRoot(container);
@@ -52,7 +52,7 @@ afterEach(async () => {
 
 test("a reviewer row keeps compact facts visible while findings, verification, and Markdown expand", async () => {
   const report = "## Repair plan\n\nKeep the **answer** in the task action.";
-  const container = await mount([review], { sessions: [], turns: [{ ...turn, id: review.turnId, sessionId: review.sessionId, status: "completed", completedAt: recordedAt, result: JSON.stringify({ text: report }) }], setup: { state: "none", exitStatus: null }, shellPaneId: null });
+  const container = await mount([review], { sessions: [], turns: [{ ...turn, id: review.turnId, sessionId: review.sessionId, status: "completed", completedAt: recordedAt, result: JSON.stringify({ text: report }) }], setup: { state: "none", exitStatus: null }, actions: [], shellPaneId: null });
   const history = element<HTMLElement>(container, "[data-workflow-history]");
   expect(history.matches('ol[aria-label="Review rounds"]')).toBe(true);
   expect(history.textContent).not.toContain("Review history");
@@ -113,7 +113,7 @@ test("an invalid reviewer keeps its round number and expands the destructive inv
 });
 
 test("a planner without a report has a compact row and no expand control", async () => {
-  const container = await mount([], { sessions: [session], turns: [turn], setup: { state: "none", exitStatus: null }, shellPaneId: null }, "competing_plans");
+  const container = await mount([], { sessions: [session], turns: [turn], setup: { state: "none", exitStatus: null }, actions: [], shellPaneId: null }, "competing_plans");
   const card = element<HTMLElement>(container, '[data-plan-report="planner_a"]');
   expect(card.textContent).toContain("Plan A");
   expect(element<HTMLElement>(card, '[data-slot="badge"]').textContent).toBe("No report yet");
@@ -130,7 +130,7 @@ test("planner reports and the selected Worker assignment expand their complete M
       { ...turn, status: "completed", completedAt: recordedAt, result: JSON.stringify({ text: report }) },
       { ...turn, id: "build", sessionId: worker.id, prompt: "Worker instructions", assignment: { mode: "planned", purpose: "implementation", plan: coordinatorPlan, acceptanceCriteria: [], instruction: "Implement the plan." } },
       { ...turn, id: "other-build", sessionId: worker.id, prompt: "Continue the task." },
-    ], setup: { state: "none", exitStatus: null }, shellPaneId: null,
+    ], setup: { state: "none", exitStatus: null }, actions: [], shellPaneId: null,
   }, "competing_plans");
   const plan = element<HTMLElement>(container, '[data-plan-report="planner_a"]');
   expect(element<HTMLElement>(plan, '[data-slot="badge"]').textContent).toBe("Report");
@@ -165,7 +165,7 @@ test("a Rater report renders Markdown in each structured result field", async ()
       verificationSummary: "### Focused checks\n\nRan `pnpm test`.\n\n1. Unit tests passed",
     },
   } satisfies ReviewRecord;
-  const container = await mount([rater], { sessions: [], turns: [], setup: { state: "none", exitStatus: null }, shellPaneId: null }, "refine_pull_request");
+  const container = await mount([rater], { sessions: [], turns: [], setup: { state: "none", exitStatus: null }, actions: [], shellPaneId: null }, "refine_pull_request");
   const row = element<HTMLElement>(container, '[data-review-round="rater"]');
   expect(row.textContent).toContain("Rater round 1");
   expect(Array.from(row.querySelectorAll('[data-slot="badge"]'), badge => badge.textContent)).toEqual(["1 blocking finding", "7/10"]);

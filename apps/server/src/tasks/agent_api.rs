@@ -33,6 +33,7 @@ use crate::{
     coordination::root_session_store,
     http::{
         AppState,
+        contracts::task_reads::TaskActivityActionKind,
         contracts::typed::{
             ContractFailure,
             agent_api::{
@@ -2357,11 +2358,13 @@ fn source_rejection(
 
 // Dependencies.
 
+/// `queue` is what held a task that the agent started anyway.
 fn audit(
     database: &SuplexDatabase,
     principal: &Principal,
     action: &str,
     task_id: &str,
+    queue: Option<&response::TaskQueue>,
     now: DateTime<Utc>,
 ) -> DatabaseResult<()> {
     let state = database
@@ -2377,10 +2380,14 @@ fn audit(
         .as_object()
         .cloned()
         .unwrap_or_default();
-    if action == "task_answered"
+    if action == TaskActivityActionKind::Answered.as_str()
         && let Some(grant) = &principal.answer_grant
     {
         metadata.insert("answeredForUserId".into(), json!(grant.user_id));
+    }
+    if let Some(queue) = queue {
+        // Audit metadata values are strings, like `resultingState`.
+        metadata.insert("queue".into(), serde_json::to_string(queue)?.into());
     }
     external_agents::audit(
         database,
@@ -2410,6 +2417,7 @@ fn set_dependency_ids(
         principal,
         "task_dependencies_updated",
         task_id,
+        None,
         now,
     )?;
     typed_projection(database, principal, task_id)
@@ -2496,6 +2504,7 @@ pub fn set_dependencies(
         principal,
         "task_dependencies_updated",
         task_id,
+        None,
         now,
     )?;
     projection(database, principal, task_id)
@@ -2768,6 +2777,7 @@ fn answer_text(task: &response::TaskResponse, input: &TaskCommandBody) -> Databa
         })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn finish(
     database: &mut SuplexDatabase,
     principal: &Principal,
@@ -2776,6 +2786,7 @@ fn finish(
     idempotency_key: &str,
     hash: &str,
     action: &str,
+    queue: Option<&response::TaskQueue>,
 ) -> DatabaseResult<Value> {
     let now = Utc::now();
     let result = projection(database, principal, result_task_id)?;
@@ -2786,16 +2797,17 @@ fn finish(
         )?;
         Ok(())
     })?;
-    audit(database, principal, action, task_id, now)?;
+    audit(database, principal, action, task_id, queue, now)?;
     Ok(result)
 }
 
+/// Returns what held the task when the command is `force_start`.
 fn apply(
     database: &mut SuplexDatabase,
     principal: &Principal,
     task_id: &str,
     input: &TaskCommandBody,
-) -> DatabaseResult<()> {
+) -> DatabaseResult<Option<response::TaskQueue>> {
     let now = Utc::now();
     match input.command.as_str() {
         "start_task" => {
@@ -2828,13 +2840,14 @@ fn apply(
                     "illegal_command",
                 ));
             }
-            if repository::force_start(database, task_id, now)?.is_none() {
+            let Some((_, queue)) = repository::force_start(database, task_id, now)? else {
                 return Err(fail(
                     "Only a queued task can start anyway",
                     409,
                     "illegal_command",
                 ));
-            }
+            };
+            return Ok(Some(queue));
         }
         "cancel_task" => {
             root_session_store::cancel_task(database, task_id, now)?;
@@ -2892,7 +2905,7 @@ fn apply(
         // TaskHost owns delivery observation; the route wakes it after this returns.
         _ => {}
     }
-    Ok(())
+    Ok(None)
 }
 
 fn duplicate_title(title: &str) -> String {
@@ -3019,6 +3032,7 @@ pub async fn command(
         Claim::Claimed { guard, hash, .. } => (guard, hash),
     };
     let mut result_task_id = task_id.to_owned();
+    let mut queue = None;
     match input.command.as_str() {
         "archive_task" => {
             let path = state
@@ -3067,7 +3081,7 @@ pub async fn command(
                 Creation::DryRun(_) => return Err("duplicate cannot be a dry run".into()),
             }
         }
-        _ => state.with_database(|database| apply(database, principal, task_id, input))?,
+        _ => queue = state.with_database(|database| apply(database, principal, task_id, input))?,
     }
     let result = state.with_database(|database| {
         finish(
@@ -3078,6 +3092,7 @@ pub async fn command(
             &input.idempotency_key,
             &hash,
             command_audit(&input.command),
+            queue.as_ref(),
         )
     });
     drop(guard);
@@ -3183,6 +3198,7 @@ pub fn update(
                 &input.idempotency_key,
                 &hash,
                 "task_details_updated",
+                None,
             )
         });
         drop(guard);
@@ -3213,6 +3229,7 @@ pub fn update(
             &input.idempotency_key,
             &hash,
             "task_details_updated",
+            None,
         )
     });
     drop(guard);

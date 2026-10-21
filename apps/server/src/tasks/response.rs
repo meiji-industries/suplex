@@ -149,9 +149,10 @@ pub(super) struct PublicWorkflowState {
     plan_approval: Option<PlanApproval>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, TS)]
+/// Also the audit record of what held a queued task that someone started anyway.
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct TaskQueue {
+pub struct TaskQueue {
     project_concurrency_limited: bool,
     /// Free's running-task limit holds the task back.
     plan_concurrency_limited: bool,
@@ -656,7 +657,7 @@ pub struct TaskBlockedBy {
 }
 
 /// One prerequisite a backlog or queued task waits on.
-#[derive(Debug, Clone, PartialEq, Serialize, TS)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct TaskQueueWait {
     pub kind: DependencyKind,

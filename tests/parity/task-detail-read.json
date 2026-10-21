@@ -30,6 +30,7 @@
           "assignment": null
         }
       ],
+      "actions": [],
       "shellPaneId": null,
       "setup": {
         "state": "none",

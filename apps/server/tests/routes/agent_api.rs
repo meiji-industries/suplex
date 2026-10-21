@@ -1065,8 +1065,9 @@ pub(crate) mod tests {
         assert_eq!((status, started["status"].as_str()), (200, Some("active")), "{started}");
         let (status, refused) = agent.call(reqwest::Method::POST, &path, Some(json!({"command":"force_start","revision":started["revision"],"idempotencyKey":"force-start-004"}))).await;
         assert_eq!((status, refused["code"].as_str()), (409, Some("illegal_command")), "{refused}");
-        let audits: i64 = agent.server.state.with_database(|database| database.connection().query_row("SELECT COUNT(*) FROM suplex_audit_events WHERE actor_agent_id = ?1 AND action = 'task_force_started'", [&agent.agent_id], |row| row.get(0)).unwrap());
-        assert_eq!(audits, 1);
+        let queues: Vec<String> = agent.server.state.with_database(|database| database.connection().prepare("SELECT json_extract(metadata_json, '$.queue') FROM suplex_audit_events WHERE actor_agent_id = ?1 AND action = 'task_force_started'").unwrap().query_map([&agent.agent_id], |row| row.get(0)).unwrap().collect::<rusqlite::Result<_>>().unwrap());
+        assert_eq!(queues.len(), 1);
+        assert_eq!(serde_json::from_str::<Value>(&queues[0]).unwrap()["projectConcurrencyLimited"], true);
     }
 
     #[tokio::test]

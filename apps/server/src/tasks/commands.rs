@@ -7,6 +7,7 @@ use crate::shared::hash::sha256_hex;
 use crate::shared::time::rfc3339_millis;
 use crate::tasks::TaskError;
 use crate::tasks::control::{DeliveryIntent, DeliveryTarget, TaskProfile, TaskStatus};
+use crate::tasks::response::TaskQueue;
 use std::{collections::BTreeMap, path::Path};
 
 use chrono::{DateTime, Utc};
@@ -378,11 +379,23 @@ pub fn prepare_local_user_task(
     })
 }
 
-fn audit(
+pub(super) fn audit(
     database: &SuplexDatabase,
     actor_user_id: &str,
     action: &str,
     task: &TaskRecord,
+    now: DateTime<Utc>,
+) -> DatabaseResult<()> {
+    audit_with_queue(database, actor_user_id, action, task, None, now)
+}
+
+/// `queue` is what held a task that the user started anyway.
+fn audit_with_queue(
+    database: &SuplexDatabase,
+    actor_user_id: &str,
+    action: &str,
+    task: &TaskRecord,
+    queue: Option<&TaskQueue>,
     now: DateTime<Utc>,
 ) -> DatabaseResult<()> {
     let archived: bool = database.connection().query_row(
@@ -391,6 +404,11 @@ fn audit(
         |row| row.get(0),
     )?;
     let resulting_state = json!({"status": task.status, "archived": archived}).to_string();
+    let mut metadata = json!({"taskId": task.id, "resultingState": resulting_state});
+    if let Some(queue) = queue {
+        // Audit metadata values are strings, like `resultingState`.
+        metadata["queue"] = serde_json::to_string(queue)?.into();
+    }
     crate::identity::audit::record(
         database,
         &crate::identity::audit::AuditEvent {
@@ -400,8 +418,7 @@ fn audit(
             action,
             target_user_id: None,
             company_id: Some(&task.company_id),
-            metadata_json: &json!({"taskId": task.id, "resultingState": resulting_state})
-                .to_string(),
+            metadata_json: &metadata.to_string(),
             created_at: &rfc3339_millis(now),
         },
     )?;
@@ -587,18 +604,25 @@ pub fn force_start_user_task(
     now: DateTime<Utc>,
     wake: impl FnOnce(String) + Send + 'static,
 ) -> DatabaseResult<TaskRecord> {
-    let task = database.transaction(true, |database| {
+    let (task, queue) = database.transaction(true, |database| {
         require_user_task(database, actor_user_id, task_id)?;
         if archive::in_progress(task_id) {
             return Err(TaskError::new("Archive cleanup is in progress", 409).into());
         }
-        let task = repository::force_start(database, task_id, now)?
+        let started = repository::force_start(database, task_id, now)?
             .ok_or_else(|| TaskError::new("Only a queued task can be started anyway", 409))?;
-        let id = task.id.clone();
+        let id = started.0.id.clone();
         database.after_commit(move || wake(id));
-        Ok(task)
+        Ok(started)
     })?;
-    audit(database, actor_user_id, "task_force_started", &task, now)?;
+    audit_with_queue(
+        database,
+        actor_user_id,
+        "task_force_started",
+        &task,
+        Some(&queue),
+        now,
+    )?;
     Ok(task)
 }
 
@@ -2303,6 +2327,83 @@ mod tests {
         .unwrap()
         .task;
         assert!(crate::tasks::dependencies::dispatch_blocked(&database, &waiting.id).unwrap());
+        drop(database);
+        let _ = std::fs::remove_file(&filename);
+    }
+
+    #[test]
+    fn force_start_records_the_full_project_slot_and_the_activity_names_who_did_it() {
+        use crate::http::contracts::task_reads::TaskActivityActionKind;
+        let (filename, mut database, user, prepared) = command_fixture();
+        let now = Utc::now();
+        database
+            .connection()
+            .execute(
+                "UPDATE suplex_projects SET task_concurrency = 1 WHERE id = 'command_project'",
+                [],
+            )
+            .unwrap();
+        let running = repository::create(&mut database, &prepared, now)
+            .unwrap()
+            .task;
+        start_user_task(&mut database, &user, &running.id, now, |_| {}).unwrap();
+        let queued = repository::create(
+            &mut database,
+            &PreparedTask {
+                start_queued: true,
+                ..another(&prepared, "command-slot")
+            },
+            now,
+        )
+        .unwrap()
+        .task;
+        assert_eq!(queued.status, TaskStatus::Queued);
+        force_start_user_task(&mut database, &user, &queued.id, now, |_| {}).unwrap();
+
+        let metadata: String = database
+            .connection()
+            .query_row(
+                "SELECT metadata_json FROM suplex_audit_events WHERE action = 'task_force_started'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let metadata: Value = serde_json::from_str(&metadata).unwrap();
+        assert_eq!(metadata["taskId"], queued.id.as_str());
+        assert!(metadata["resultingState"].is_string());
+        let queue: Value = serde_json::from_str(metadata["queue"].as_str().unwrap()).unwrap();
+        assert_eq!(
+            queue,
+            json!({"projectConcurrencyLimited": true, "planConcurrencyLimited": false, "waitingOn": []})
+        );
+
+        // An older record has no queue, and other audit actions stay out of the activity.
+        database.connection().execute(
+            "INSERT INTO suplex_audit_events (id, actor_user_id, actor_agent_id, action, target_user_id, company_id, metadata_json, created_at) VALUES ('audit_old', ?1, NULL, 'task_force_started', NULL, 'command_company', json_object('taskId', ?2), ?3), ('audit_pane', ?1, NULL, 'pane_terminal_attached', NULL, 'command_company', json_object('taskId', ?2), ?3)",
+            params![user, queued.id, rfc3339_millis(now + chrono::Duration::seconds(1))],
+        ).unwrap();
+        let rows = root_session_store::root_observation_rows(&database, &queued.id).unwrap();
+        let activity =
+            crate::http::routes::task_reads::activity_document(&database, &rows, &queued.id, None)
+                .unwrap();
+        let operator: String = database
+            .connection()
+            .query_row(
+                "SELECT display_name FROM suplex_users WHERE id = ?1",
+                [&user],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let [current, old] = activity.actions.as_slice() else {
+            panic!("expected two actions: {:?}", activity.actions);
+        };
+        assert_eq!(current.action, TaskActivityActionKind::ForceStarted);
+        assert_eq!(current.actor_name, operator);
+        assert_eq!(serde_json::to_value(&current.queue).unwrap(), queue);
+        assert_eq!(
+            (old.id.as_str(), old.action, old.queue.as_ref()),
+            ("audit_old", TaskActivityActionKind::ForceStarted, None)
+        );
         drop(database);
         let _ = std::fs::remove_file(&filename);
     }

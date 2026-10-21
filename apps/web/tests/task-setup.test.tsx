@@ -22,7 +22,7 @@ async function mount(setup: TaskSetup, shellPaneId: string | null = null) {
   document.body.append(container);
   const root = createRoot(container);
   const render = async (next: TaskSetup) => {
-    const activity: TaskActivityResponse = { setup: next, sessions: [], turns: [], shellPaneId };
+    const activity: TaskActivityResponse = { setup: next, sessions: [], turns: [], actions: [], shellPaneId };
     await act(async () => { root.render(<><LivePaneDock taskId="task" activity={activity} /><RecentTaskAgents agents={[]} setup={next} /></>); });
   };
   cleanup = async () => { await act(async () => { root.unmount(); }); container.remove(); };

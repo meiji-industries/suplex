@@ -12,7 +12,7 @@ use crate::{
     runtimes::opencode::session_reader::PlanItem,
     tasks::{
         control::{HarnessKind, SessionKind, SessionReplacement, TurnStatus},
-        response::{TaskListItem, TaskResponse},
+        response::{TaskListItem, TaskQueue, TaskResponse},
         timeline::TimelineResponse,
     },
 };
@@ -187,6 +187,8 @@ pub struct TaskActivityResponse {
     pub setup: crate::tasks::preparation::TaskSetup,
     pub sessions: Vec<TaskActivitySession>,
     pub turns: Vec<TaskActivityTurn>,
+    /// The commands that people and paired agents sent for this task, oldest first.
+    pub actions: Vec<TaskActivityAction>,
     pub shell_pane_id: Option<String>,
     /// Why the host has not dispatched the next turn. A display observation only.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -226,6 +228,38 @@ pub struct TaskActivityTurn {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub note_agent_name: Option<String>,
+}
+
+crate::shared::wire_enum! {
+    /// The audited task commands that the task activity shows. Each value is its audit action.
+    pub enum TaskActivityActionKind {
+        Started = "task_started",
+        ForceStarted = "task_force_started",
+        MovedToFront = "task_moved_to_front",
+        Disarmed = "task_disarmed",
+        Cancelled = "task_cancelled",
+        Answered = "task_answered",
+        DetailsUpdated = "task_details_updated",
+        DependenciesUpdated = "task_dependencies_updated",
+        Archived = "task_archived",
+        Unarchived = "task_unarchived",
+    }
+}
+
+/// One audited command for the task and who sent it.
+#[derive(Debug, PartialEq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct TaskActivityAction {
+    pub id: String,
+    pub action: TaskActivityActionKind,
+    /// The display name of the person, or the name of the paired agent.
+    pub actor_name: String,
+    pub created_at: String,
+    /// What held the queued task when it was started anyway. Absent on other
+    /// actions and on records from before Suplex saved it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub queue: Option<TaskQueue>,
 }
 
 crate::shared::wire_enum! {

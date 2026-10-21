@@ -19,7 +19,7 @@ const session = (id: string, kind: "root" | "worker", advisorRole: TaskActivity[
   ({ id, kind, advisorRole, label: id, profileId: "profile", generation: 1, nativeSessionId: null, paneId: null, current: true, replacement: null, harness: "claude-code" }) as const;
 const sessions = [session("root", "root"), session("worker", "worker"), session("rater", "worker", "rater"), session("reviewer", "worker", "reviewer"), session("plan-a", "worker", "planner_a"), session("plan-b", "worker", "planner_b")];
 const turn = (sessionId: string, open = false) => ({ id: `${sessionId}-${Math.random()}`, sessionId, prompt: "", status: open ? "prompted" as const : "completed" as const, promptedAt: null, completedAt: null, result: open ? null : "{}", assignment: null });
-const activity = (...turns: ReturnType<typeof turn>[]): TaskActivity => ({ sessions, turns, setup: { state: "none", exitStatus: null }, shellPaneId: null });
+const activity = (...turns: ReturnType<typeof turn>[]): TaskActivity => ({ sessions, turns, setup: { state: "none", exitStatus: null }, actions: [], shellPaneId: null });
 const agent = (role: "root" | "worker", status: "working" | "idle" | "waiting_human", advisorRole: "rater" | "planner_a" | "planner_b" | null = null) =>
   ({ id: `${role}-${advisorRole}`, role, advisorRole, paneId: null, status, statusChangedAt: null });
 

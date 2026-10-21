@@ -20,6 +20,8 @@ pub struct AuditEvent {
     pub id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub actor_user_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub actor_agent_id: Option<String>,
     pub action: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub target_user_id: Option<String>,
@@ -113,18 +115,19 @@ pub fn list_audit_events(
     actor_user_id: &str,
 ) -> DatabaseResult<Vec<AuditEvent>> {
     companies::require_admin(database, actor_user_id)?;
-    let mut statement = database.connection().prepare("SELECT id, actor_user_id, action, target_user_id, company_id, metadata_json, created_at FROM suplex_audit_events ORDER BY created_at ASC, id ASC")?;
+    let mut statement = database.connection().prepare("SELECT id, actor_user_id, actor_agent_id, action, target_user_id, company_id, metadata_json, created_at FROM suplex_audit_events ORDER BY created_at ASC, id ASC")?;
     Ok(statement
         .query_map([], |row| {
-            let raw: String = row.get(5)?;
+            let raw: String = row.get(6)?;
             Ok(AuditEvent {
                 id: row.get(0)?,
                 actor_user_id: row.get(1)?,
-                action: row.get(2)?,
-                target_user_id: row.get(3)?,
-                company_id: row.get(4)?,
+                actor_agent_id: row.get(2)?,
+                action: row.get(3)?,
+                target_user_id: row.get(4)?,
+                company_id: row.get(5)?,
                 metadata: Value::Object(auth::safe_metadata(&raw)),
-                created_at: row.get(6)?,
+                created_at: row.get(7)?,
             })
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?)
@@ -148,11 +151,17 @@ mod tests {
             r#"INSERT INTO suplex_audit_events (id, actor_user_id, actor_agent_id, action, target_user_id, company_id, metadata_json, created_at) VALUES ('audit_fixed', 'user_development', NULL, 'fixture', NULL, NULL, '{"first":"one","second":"two","skip":1}', '2026-09-24T12:00:00.000Z')"#,
             [],
         ).unwrap();
+        database.connection().execute_batch(
+            r#"INSERT INTO suplex_agents (id, kind, name, avatar_seed, created_at, updated_at) VALUES ('agent_fixed', 'external', 'Agent', 'seed', 'now', 'now');
+            INSERT INTO suplex_audit_events (id, actor_user_id, actor_agent_id, action, target_user_id, company_id, metadata_json, created_at) VALUES ('audit_agent', NULL, 'agent_fixed', 'task_force_started', NULL, NULL, '{}', '2026-09-24T12:00:01.000Z')"#,
+        ).unwrap();
         let events = list_audit_events(&database, &admin.user.id).unwrap();
         assert_eq!(
             events[0].metadata,
             serde_json::json!({"first":"one","second":"two"})
         );
+        assert_eq!(events[1].actor_agent_id.as_deref(), Some("agent_fixed"));
+        assert_eq!(events[1].actor_user_id, None);
         drop(database);
         let _ = std::fs::remove_file(&path);
         let _ = std::fs::remove_file(path.with_extension("sqlite-wal"));

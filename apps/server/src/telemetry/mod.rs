@@ -26,6 +26,7 @@ use serde_json::{Map, Value, json};
 
 use crate::shared::hash::sha256_hex;
 use crate::{
+    http::contracts::task_reads::TaskActivityActionKind,
     platform::{
         database::{DatabaseResult, OpenMode, SuplexDatabase},
         environment_settings,
@@ -363,7 +364,7 @@ fn audit_properties(
                 properties["source"] = json!(if by_agent { "agent" } else { "user" });
                 properties["has_image"] = json!(has_image);
             }
-            if action == "task_cancelled" {
+            if action == TaskActivityActionKind::Cancelled.as_str() {
                 properties["duration_s"] = json!(duration_s);
             }
             properties

@@ -24,6 +24,7 @@ use crate::{
     },
     tasks::{
         archive::displays,
+        commands,
         repository::{self, TaskRecord},
         worktree::{self, TaskWorktreeIntent, WorktreeCleanup},
     },
@@ -223,7 +224,15 @@ pub fn unarchive_local_task(
     actor_user_id: &str,
     task_id: &str,
 ) -> DatabaseResult<TaskRecord> {
-    unarchive_task(database, &user_authority(actor_user_id), task_id)
+    let task = unarchive_task(database, &user_authority(actor_user_id), task_id)?;
+    commands::audit(
+        database,
+        actor_user_id,
+        "task_unarchived",
+        &task,
+        chrono::Utc::now(),
+    )?;
+    Ok(task)
 }
 
 pub fn unarchive_task(
@@ -262,13 +271,24 @@ pub async fn archive_local_task(
     task_id: &str,
     confirm_discard_dirty: bool,
 ) -> DatabaseResult<ArchiveOutcome> {
-    archive_task(
+    let outcome = archive_task(
         database_path,
         &user_authority(actor_user_id),
         task_id,
         confirm_discard_dirty,
     )
-    .await
+    .await?;
+    if let ArchiveOutcome::Archived(task) = &outcome {
+        let database = SuplexDatabase::open(database_path, OpenMode::ReadWrite)?;
+        commands::audit(
+            &database,
+            actor_user_id,
+            "task_archived",
+            task,
+            chrono::Utc::now(),
+        )?;
+    }
+    Ok(outcome)
 }
 
 pub async fn archive_task(

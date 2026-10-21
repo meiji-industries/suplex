@@ -593,10 +593,14 @@ pub fn force_start(
     database: &mut SuplexDatabase,
     task_id: &str,
     now: DateTime<Utc>,
-) -> DatabaseResult<Option<TaskRecord>> {
+) -> DatabaseResult<Option<(TaskRecord, super::response::TaskQueue)>> {
     database.transaction(true, |database| {
         assert_task_pull_requests_available(database, task_id)?;
         crate::billing::require(database, crate::billing::Limit::RunningTasks, now)?;
+        // What held the task, read before admission clears it.
+        let Some(queue) = task_response(database, task_id)?.map(|task| task.queue) else {
+            return Ok(None);
+        };
         let admitted = database.connection().execute(
             "UPDATE suplex_task_controls SET status = 'active', wake_at = ?1, updated_at = ?1 WHERE task_id = ?2 AND status = 'queued' AND EXISTS(SELECT 1 FROM suplex_tasks WHERE id = ?2 AND archived_at IS NULL)",
             params![rfc3339_millis(now), task_id],
@@ -609,7 +613,7 @@ pub fn force_start(
         root_session_store::write_workflow_state(database, task_id, &state, now)?;
         root_session_store::observe_lifecycle(database, task_id)?;
         root_session_store::observe_admission(database, task_id, "force start", None);
-        task_by_id(database, task_id)
+        Ok(task_by_id(database, task_id)?.map(|task| (task, queue)))
     })
 }
 

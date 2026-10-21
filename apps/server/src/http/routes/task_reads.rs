@@ -26,10 +26,11 @@ use crate::{
         AppState,
         contracts::{
             task_reads::{
-                TaskActivityResponse, TaskActivitySession, TaskActivityTurn, TaskDiffResponse,
-                TaskDiffSummaryResponse, TaskExecutionReasoning, TaskExecutionResponse,
-                TaskExecutionSession, TaskExecutionTool, TaskToolStatus, TaskWorkerAssignment,
-                WorkerAssignmentMode, WorkerAssignmentPurpose,
+                TaskActivityAction, TaskActivityActionKind, TaskActivityResponse,
+                TaskActivitySession, TaskActivityTurn, TaskDiffResponse, TaskDiffSummaryResponse,
+                TaskExecutionReasoning, TaskExecutionResponse, TaskExecutionSession,
+                TaskExecutionTool, TaskToolStatus, TaskWorkerAssignment, WorkerAssignmentMode,
+                WorkerAssignmentPurpose,
             },
             typed::tasks::TaskIdParams,
         },
@@ -212,6 +213,44 @@ fn note_agent_name(database: &SuplexDatabase, prompt: &str) -> Option<String> {
         .ok()
 }
 
+/// The task's audited commands, each with the name of who sent it. The caller
+/// already checked that the reader can read the task.
+fn task_actions(
+    database: &SuplexDatabase,
+    task_id: &str,
+) -> Result<Vec<TaskActivityAction>, Box<dyn Error + Send + Sync>> {
+    let mut statement = database.connection().prepare(
+        "SELECT e.id, e.action, COALESCE(u.display_name, a.name), e.created_at, json_extract(e.metadata_json, '$.queue') FROM suplex_audit_events e LEFT JOIN suplex_users u ON u.id = e.actor_user_id LEFT JOIN suplex_agents a ON a.id = e.actor_agent_id WHERE json_extract(e.metadata_json, '$.taskId') = ?1 AND e.company_id = (SELECT company_id FROM suplex_tasks WHERE id = ?1) ORDER BY e.created_at, e.rowid",
+    )?;
+    let rows = statement.query_map([task_id], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, Option<String>>(2)?,
+            row.get::<_, String>(3)?,
+            row.get::<_, Option<String>>(4)?,
+        ))
+    })?;
+    let mut actions = Vec::new();
+    for row in rows {
+        let (id, action, actor_name, created_at, queue) = row?;
+        // Other audit actions, such as terminal attaches, stay out of the activity.
+        let (Some(action), Some(actor_name)) = (TaskActivityActionKind::parse(&action), actor_name)
+        else {
+            continue;
+        };
+        actions.push(TaskActivityAction {
+            id,
+            action,
+            actor_name,
+            created_at,
+            // Older records have no queue; one in an older shape shows no reason either.
+            queue: queue.and_then(|raw| serde_json::from_str(&raw).ok()),
+        });
+    }
+    Ok(actions)
+}
+
 /// `host` derives terminal ids for host terminals instead of stored Herdr panes.
 pub(crate) fn activity_document(
     database: &SuplexDatabase,
@@ -275,6 +314,7 @@ pub(crate) fn activity_document(
         )?,
         sessions,
         turns,
+        actions: task_actions(database, task_id)?,
         shell_pane_id: terminals::shell_pane(
             host,
             task_id,

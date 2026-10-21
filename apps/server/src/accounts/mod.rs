@@ -70,17 +70,27 @@ pub fn linked(database: &SuplexDatabase) -> DatabaseResult<Option<LinkedAccount>
         .optional()?)
 }
 
-/// Replaces any earlier link: one account per installation.
+/// Replaces any earlier link: one account per installation. The account
+/// signs in as `user_development` (`members::accept`), so that user's
+/// `suplex_account_users` row names it. When another user already has this
+/// account or email, the owner gets no row: Suplex does not guess. The old
+/// row goes first, so a failed step leaves no row rather than a wrong one.
 pub fn link(database: &SuplexDatabase, account: &HostedAccount, token: &str) -> DatabaseResult<()> {
+    forget_owner_account(database)?;
     database.connection().execute(
         "INSERT OR REPLACE INTO suplex_account (id, account_id, email, display_name, token, linked_at, identify_sent_at) VALUES ('host', ?1, ?2, ?3, ?4, ?5, NULL)",
         params![account.id, account.email, account.name, token, now_millis_rfc3339()],
+    )?;
+    database.connection().execute(
+        "INSERT OR IGNORE INTO suplex_account_users (user_id, account_id, email) SELECT 'user_development', ?1, ?2 WHERE EXISTS (SELECT 1 FROM suplex_users WHERE id = 'user_development')",
+        params![account.id, account.email],
     )?;
     Ok(())
 }
 
 /// Removes the link and returns its token for the hosted logout.
 pub fn unlink(database: &SuplexDatabase) -> DatabaseResult<Option<String>> {
+    forget_owner_account(database)?;
     Ok(database
         .connection()
         .query_row(
@@ -89,6 +99,27 @@ pub fn unlink(database: &SuplexDatabase) -> DatabaseResult<Option<String>> {
             |row| row.get(0),
         )
         .optional()?)
+}
+
+fn forget_owner_account(database: &SuplexDatabase) -> DatabaseResult<()> {
+    database.connection().execute(
+        "DELETE FROM suplex_account_users WHERE user_id = 'user_development'",
+        [],
+    )?;
+    Ok(())
+}
+
+/// The hosted account that `user_id` signs in with, if any.
+pub fn user_account_id(database: &SuplexDatabase, user_id: &str) -> DatabaseResult<Option<String>> {
+    Ok(database
+        .connection()
+        .query_row(
+            "SELECT account_id FROM suplex_account_users WHERE user_id = ?1",
+            [user_id],
+            |row| row.get(0),
+        )
+        .optional()?
+        .flatten())
 }
 
 struct PendingAttempt {

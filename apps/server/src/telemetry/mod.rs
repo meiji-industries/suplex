@@ -55,8 +55,13 @@ pub struct Config {
     pub key: String,
     pub host: String,
     pub installation_id: String,
-    /// The PostHog person: the linked Suplex account, else the installation.
-    pub distinct_id: String,
+}
+
+/// The PostHog person for events that no user caused. Hosts that linked an
+/// account earlier merged the installation ID into that account's person, so
+/// host events use an ID that never joins a user.
+fn host_person(config: &Config) -> String {
+    format!("{}:host", config.installation_id)
 }
 
 /// `DO_NOT_TRACK=1` or `SUPLEX_TELEMETRY=0|false|off` turn telemetry off.
@@ -81,7 +86,6 @@ pub fn config(installation_id: &str) -> Option<Config> {
         key,
         host: variable("SUPLEX_POSTHOG_HOST").unwrap_or_else(|| DEFAULT_HOST.to_owned()),
         installation_id: installation_id.to_owned(),
-        distinct_id: installation_id.to_owned(),
     })
 }
 
@@ -233,7 +237,7 @@ fn event_with_seed(
     let uuid = deterministic_uuid(&format!("{}\0{seed}", config.installation_id));
     json!({
         "event": name,
-        "distinct_id": config.distinct_id,
+        "distinct_id": host_person(config),
         "timestamp": timestamp,
         "uuid": uuid,
         "properties": properties,
@@ -376,7 +380,7 @@ fn collect_audit(
 ) -> DatabaseResult<()> {
     collected.audit_cursor = cursor;
     let mut statement = database.connection().prepare(
-        "SELECT rowid, action, company_id, actor_agent_id IS NOT NULL, metadata_json, created_at FROM suplex_audit_events WHERE rowid > ?1 ORDER BY rowid LIMIT ?2",
+        "SELECT e.rowid, e.action, e.company_id, e.actor_agent_id IS NOT NULL, e.metadata_json, e.created_at, e.actor_user_id, a.account_id FROM suplex_audit_events e LEFT JOIN suplex_account_users a ON a.user_id = e.actor_user_id WHERE e.rowid > ?1 ORDER BY e.rowid LIMIT ?2",
     )?;
     let rows = statement
         .query_map(params![cursor, BATCH], |row| {
@@ -387,21 +391,32 @@ fn collect_audit(
                 row.get::<_, bool>(3)?,
                 row.get::<_, String>(4)?,
                 row.get::<_, String>(5)?,
+                row.get::<_, Option<String>>(6)?,
+                row.get::<_, Option<String>>(7)?,
             ))
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
-    for (rowid, action, company_id, by_agent, metadata, created_at) in rows {
+    for (rowid, action, company_id, by_agent, metadata, created_at, actor, account_id) in rows {
         collected.audit_cursor = rowid;
         if AUDIT_ACTIONS.contains(&action.as_str()) {
             let properties = audit_properties(database, &action, by_agent, &metadata, &created_at)?;
-            collected.events.push(durable_event(
+            let mut event = durable_event(
                 config,
                 &action,
                 company_id.as_deref(),
                 &created_at,
                 properties,
                 &format!("audit:{rowid}"),
-            ));
+            );
+            // A user's person is their hosted account, else this user on this
+            // host. The browser uses the same IDs.
+            if let Some(actor) = actor {
+                event["distinct_id"] = json!(
+                    account_id
+                        .unwrap_or_else(|| format!("{}:user:{actor}", config.installation_id))
+                );
+            }
+            collected.events.push(event);
         }
     }
     Ok(())
@@ -558,7 +573,7 @@ fn collect_daily(
         let plan = crate::billing::plan(database)?;
         collected.events.push(json!({
             "event": "$groupidentify",
-            "distinct_id": config.distinct_id,
+            "distinct_id": host_person(config),
             "timestamp": now,
             "uuid": deterministic_uuid(&format!("groupidentify\0{}\0{}\0{}", config.installation_id, company_id, now)),
             "properties": {
@@ -588,17 +603,16 @@ fn collect(
         version_observed: true,
         ..Collected::default()
     };
-    // One merge of the installation person into the account person, before
-    // any event keyed by the account.
+    // The account person gets its email once. It does not merge the
+    // installation person: that one holds other users' and host events.
     if let Some(account) = account.filter(|account| account.identify_sent_at.is_none()) {
         collected.identified = Some(account.account_id.clone());
         collected.events.push(json!({
-            "event": "$identify",
+            "event": "$set",
             "distinct_id": account.account_id,
             "timestamp": stamp,
             "uuid": deterministic_uuid(&format!("identify\0{}\0{}", config.installation_id, account.account_id)),
             "properties": {
-                "$anon_distinct_id": config.installation_id,
                 "$set": {"email": account.email},
             },
         }));
@@ -701,16 +715,9 @@ fn prepare(
     }
     let current = state(database)?.ok_or("Telemetry state disappeared")?;
     let account = crate::accounts::linked(database)?;
-    let config = Config {
-        distinct_id: account.as_ref().map_or_else(
-            || config.installation_id.clone(),
-            |account| account.account_id.clone(),
-        ),
-        ..config.clone()
-    };
     Ok(Some(collect(
         database,
-        &config,
+        config,
         &current,
         account.as_ref(),
         now,
@@ -780,7 +787,6 @@ mod tests {
             key: "phc_test".to_owned(),
             host: DEFAULT_HOST.to_owned(),
             installation_id: "install-1".to_owned(),
-            distinct_id: "install-1".to_owned(),
         }
     }
 
@@ -865,7 +871,9 @@ mod tests {
             collected.events[2]["properties"]["$group_set"],
             json!({"seats": 0, "projects": 0, "plan": "free"})
         );
-        assert_eq!(collected.events[0]["distinct_id"], "install-1");
+        for event in &collected.events {
+            assert_eq!(event["distinct_id"], "install-1:host");
+        }
         commit(&mut database, &collected, &rfc3339_millis(now)).unwrap();
 
         // Rows written while the setting is off are never sent later.
@@ -893,7 +901,7 @@ mod tests {
         assert_eq!(properties["source"], "user");
         assert_eq!(properties["has_image"], false);
         assert_eq!(properties["$groups"]["company"], "company_1");
-        assert_eq!(collected.events[0]["distinct_id"], "install-1");
+        assert_eq!(collected.events[0]["distinct_id"], "install-1:host");
         commit(&mut database, &collected, &rfc3339_millis(now)).unwrap();
         let collected = prepare(&mut database, &test_config(), now, false)
             .unwrap()
@@ -965,7 +973,7 @@ mod tests {
     }
 
     #[test]
-    fn a_linked_account_becomes_the_person_after_one_identify() {
+    fn a_linked_account_gets_its_email_once_and_no_host_events() {
         let mut database = database();
         let now = Utc::now();
         acknowledge(&mut database, now).unwrap();
@@ -980,14 +988,16 @@ mod tests {
             .unwrap();
         assert_eq!(
             names(&collected),
-            ["$identify", "host_started", "host_daily", "$groupidentify"]
+            ["$set", "host_started", "host_daily", "$groupidentify"]
         );
-        let identify = &collected.events[0];
-        assert_eq!(identify["distinct_id"], account.id);
-        assert_eq!(identify["properties"]["$anon_distinct_id"], "install-1");
-        assert_eq!(identify["properties"]["$set"]["email"], "ada@example.com");
+        let set = &collected.events[0];
+        assert_eq!(set["distinct_id"], account.id);
+        assert_eq!(
+            set["properties"],
+            json!({"$set": {"email": "ada@example.com"}})
+        );
         for event in &collected.events[1..] {
-            assert_eq!(event["distinct_id"], account.id);
+            assert_eq!(event["distinct_id"], "install-1:host");
         }
         assert_eq!(
             collected.events[1]["properties"]["$groups"]["host"],
@@ -999,16 +1009,88 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(names(&collected), ["task_created"]);
-        assert_eq!(collected.events[0]["distinct_id"], account.id);
+        assert_eq!(collected.events[0]["distinct_id"], "install-1:host");
+    }
 
-        crate::accounts::unlink(&database).unwrap();
-        audit(&database, "task_created", r#"{"taskId":"task_after"}"#);
-        commit(&mut database, &collected, &rfc3339_millis(now)).unwrap();
-        let collected = prepare(&mut database, &test_config(), now, false)
+    #[test]
+    fn an_audit_event_belongs_to_the_user_who_acted() {
+        let mut database = database();
+        let now = Utc::now();
+        acknowledge(&mut database, now).unwrap();
+        let baseline = prepare(&mut database, &test_config(), now, false)
             .unwrap()
             .unwrap();
-        assert_eq!(names(&collected), ["task_created"]);
-        assert_eq!(collected.events[0]["distinct_id"], "install-1");
+        commit(&mut database, &baseline, &rfc3339_millis(now)).unwrap();
+        database.connection().execute("INSERT INTO suplex_users (id, display_name, username, role, status, created_at, updated_at, identity_version) VALUES ('user_chris', 'Chris', 'chris', 'member', 'active', '2026-10-02T00:00:00.000Z', '2026-10-02T00:00:00.000Z', 1)", []).unwrap();
+        let actions = |database: &mut SuplexDatabase| {
+            for actor in [Some("user_development"), Some("user_chris"), None] {
+                database.connection().execute(
+                    "INSERT INTO suplex_audit_events (id, actor_user_id, action, company_id, metadata_json, created_at) VALUES (?1, ?2, 'task_started', 'company_1', '{}', '2026-10-02T00:00:00.000Z')",
+                    params![format!("audit_{}", uuid::Uuid::new_v4().simple()), actor],
+                ).unwrap();
+            }
+            let collected = prepare(database, &test_config(), now, false)
+                .unwrap()
+                .unwrap();
+            commit(database, &collected, &rfc3339_millis(now)).unwrap();
+            collected
+                .events
+                .iter()
+                .filter(|event| event["event"] == "task_started")
+                .map(|event| {
+                    assert_eq!(event["properties"]["$groups"]["host"], "install-1");
+                    assert_eq!(event["properties"]["$groups"]["company"], "company_1");
+                    event["distinct_id"].as_str().unwrap().to_owned()
+                })
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            actions(&mut database),
+            [
+                "install-1:user:user_development",
+                "install-1:user:user_chris",
+                "install-1:host"
+            ]
+        );
+
+        // An invited member who accepted has their own hosted account.
+        database.connection().execute("INSERT INTO suplex_account_users (user_id, account_id, email) VALUES ('user_chris', 'user_chris_account', 'chris@example.com')", []).unwrap();
+        let owner = crate::accounts::wire::HostedAccount {
+            id: "user_owner_account".to_owned(),
+            email: "Owner@example.com".to_owned(),
+            name: None,
+        };
+        crate::accounts::link(&database, &owner, &"t".repeat(43)).unwrap();
+        assert_eq!(
+            actions(&mut database),
+            ["user_owner_account", "user_chris_account", "install-1:host"]
+        );
+
+        crate::accounts::unlink(&database).unwrap();
+        assert_eq!(
+            actions(&mut database),
+            [
+                "install-1:user:user_development",
+                "user_chris_account",
+                "install-1:host"
+            ]
+        );
+
+        // A link to an account another user already holds maps nobody new.
+        let taken = crate::accounts::wire::HostedAccount {
+            id: "user_other_account".to_owned(),
+            email: "CHRIS@example.com".to_owned(),
+            name: None,
+        };
+        crate::accounts::link(&database, &taken, &"t".repeat(43)).unwrap();
+        assert_eq!(
+            actions(&mut database),
+            [
+                "install-1:user:user_development",
+                "user_chris_account",
+                "install-1:host"
+            ]
+        );
     }
 
     #[test]

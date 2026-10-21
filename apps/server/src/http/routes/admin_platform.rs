@@ -223,7 +223,7 @@ async fn read_telemetry(
                 |row| row.get::<_, bool>(0),
             )
             .unwrap_or(false);
-        let account_id = crate::accounts::linked(database)?.map(|account| account.account_id);
+        let account_id = crate::accounts::user_account_id(database, &user.id)?;
         Ok::<_, Box<dyn std::error::Error + Send + Sync>>((
             settings.telemetry_enabled,
             acknowledged,

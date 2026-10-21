@@ -93,14 +93,21 @@ test("loads PostHog only for active consent and stops immediately after opt out"
   expect(captured.stack).not.toContain("secret");
 });
 
-test("a linked account is the person and unlinking resets it", async () => {
-  await applyTelemetry(active({ accountId: "user_67e55044-10b1-426f-9247-bb680e5fe0c8" }));
-  expect(sdk.posthog.identify).toHaveBeenLastCalledWith("user_67e55044-10b1-426f-9247-bb680e5fe0c8", expect.objectContaining({ user_role: "member" }));
-  expect(sdk.posthog.group).toHaveBeenCalledWith("host", "install-1");
-  sdk.posthog.reset.mockClear();
-  await applyTelemetry(active());
-  expect(sdk.posthog.reset).toHaveBeenCalledOnce();
-  expect(sdk.posthog.identify).toHaveBeenLastCalledWith("install-1:user:user-1", expect.anything());
+test("each user on a host is their own person in the host group", async () => {
+  const users = [
+    { userId: "user_development", accountId: "user_67e55044-10b1-426f-9247-bb680e5fe0c8", person: "user_67e55044-10b1-426f-9247-bb680e5fe0c8" },
+    { userId: "user-chris", accountId: "user_chris_account", person: "user_chris_account" },
+    { userId: "user-1", accountId: undefined, person: "install-1:user:user-1" },
+  ];
+  await applyTelemetry(inactive());
+  for (const [index, { userId, accountId, person }] of users.entries()) {
+    sdk.posthog.reset.mockClear();
+    sdk.posthog.group.mockClear();
+    await applyTelemetry(active({ userId, ...(accountId ? { accountId } : {}) }));
+    expect(sdk.posthog.reset).toHaveBeenCalledTimes(index === 0 ? 0 : 1);
+    expect(sdk.posthog.identify).toHaveBeenLastCalledWith(person, expect.objectContaining({ user_role: "member" }));
+    expect(sdk.posthog.group).toHaveBeenCalledWith("host", "install-1");
+  }
 });
 
 test("browser DNT prevents SDK initialization", async () => {

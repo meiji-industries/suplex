@@ -3,6 +3,6 @@ import type { TelemetryUserRole } from "./TelemetryUserRole.js";
 
 export type TelemetryResponse = { noticeRequired: boolean, enabled: boolean, projectKey?: string, host?: string, installationId?: string, appVersion?: string, appRevision?: string, userId?: string, userRole?: TelemetryUserRole, 
 /**
- * The linked Suplex account, the browser's PostHog person.
+ * This user's Suplex account, their PostHog person across hosts.
  */
 accountId?: string, };

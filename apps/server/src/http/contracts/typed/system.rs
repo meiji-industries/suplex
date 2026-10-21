@@ -144,7 +144,7 @@ pub struct TelemetryResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub user_role: Option<TelemetryUserRole>,
-    /// The linked Suplex account, the browser's PostHog person.
+    /// This user's Suplex account, their PostHog person across hosts.
     #[serde(skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub account_id: Option<String>,

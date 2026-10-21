@@ -27,21 +27,25 @@ user action.
 
 ## Identity
 
-- `distinct_id` is the linked [Suplex account](accounts.md) ID (`user_<uuid>`).
-  Before an account is linked, and on hosts without the account service, it is
-  the installation ID in `<root>/installation-id`.
+- An event that a user caused uses that user's person. It is the user's
+  [Suplex account](accounts.md) ID (`user_<uuid>`) from
+  `suplex_account_users`, else `<installation ID>:user:<user ID>`. The host
+  owner's account is the linked account; an invited member's account is the
+  one they accepted the invitation with. The browser and the host use the same
+  IDs.
+- Events that no user caused (host lifecycle, daily counts, task lifecycle,
+  pull requests, and agent actions) use `<installation ID>:host`. That person is
+  never a user and never merges into one.
 - Every event carries the PostHog groups `host` (the installation ID) and,
   when the event belongs to a company, `company` (the company ID).
-- After a link, the host sends one `$identify` with `distinct_id` set to the
-  account ID, `$anon_distinct_id` set to the installation ID, and
-  `$set.email`. PostHog merges the installation person into the account person.
-  The hosted service sends a second `$identify` when the login browser carried
+- After a link, the host sends one `$set` with `distinct_id` set to the account
+  ID and `$set.email`. It does not merge the installation person, which holds
+  events from before this rule that every user and the host caused.
+  The hosted service sends an `$identify` when the login browser carried
   a `suplex_visitor` cookie from `suplex.sh/download`. That merges the website
-  visitor into the same person.
-- Browser identities use the account ID when an account is linked. Otherwise
-  they use the installation ID and authenticated user ID. Browser and host
-  events also join through the `host` and `company` groups. Browser properties
-  include the user role and company plan, without names.
+  visitor into the account person.
+- Browser and host events also join through the `host` and `company` groups.
+  Browser properties include the user role and company plan, without names.
 - Hosts that sent an email through the retired telemetry notice keep that
   email on the installation person. They join an account person only through
   the `host` group, unless the host later links an account.
@@ -56,7 +60,7 @@ Native usage events have these properties: `app_version` (the semantic version),
 | Event | Source | Extra properties |
 | --- | --- | --- |
 | `host_started` | first send after the host starts | none |
-| `$identify` | first send after an account is linked | `$anon_distinct_id` (the installation ID), `$set.email` |
+| `$set` | first send after an account is linked | `$set.email` on the account person |
 | `host_upgraded` | first observation of a different semantic version | `previous_app_version`, `previous_app_revision` |
 | `company_created` | audit event | none |
 | `project_created` | audit event | `git_host` (`github`, `bitbucket`, or `none`), `tracker` (`github`, `jira`, or `none`) |

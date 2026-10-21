@@ -78,7 +78,7 @@ function baseProperties(): Record<string, unknown> {
   };
 }
 
-/** The linked Suplex account, else this signed-in user on this host. */
+/** This user's Suplex account, else this signed-in user on this host. */
 function personId(telemetry: TelemetryResponse): string {
   return telemetry.accountId ?? `${telemetry.installationId}:user:${telemetry.userId}`;
 }

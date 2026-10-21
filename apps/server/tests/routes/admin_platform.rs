@@ -417,4 +417,77 @@ mod tests {
         assert_eq!(status, StatusCode::FOUND);
         assert_eq!(headers[header::LOCATION], "/onboarding");
     }
+
+    #[tokio::test]
+    async fn each_user_receives_only_their_own_hosted_account() {
+        // SAFETY: only read_telemetry reads these, and only with an installation.
+        unsafe {
+            std::env::set_var("SUPLEX_POSTHOG_KEY", "phc_test");
+            std::env::remove_var("DO_NOT_TRACK");
+            std::env::remove_var("SUPLEX_TELEMETRY");
+        }
+        let fixture = fixture().await;
+        let root = fixture.root.clone();
+        let state = fixture.state.clone().with_installation(crate::platform::config::Installation {
+            root: root.clone(),
+            data: root.join("data"),
+            database: root.join("data/suplex.sqlite"),
+            artifacts: root.join("data/artifacts"),
+            logs: root.join("logs"),
+            runtime: root.join("runtime"),
+            repositories: root.join("repositories"),
+            worktrees: root.join("worktrees"),
+            configuration: root.join("suplex.env"),
+            port: 4113,
+            bind_address: "127.0.0.1".into(),
+            reachable_address: "http://127.0.0.1:4113".into(),
+            access_mode: "local".into(),
+            tailscale_exposure: "off".into(),
+            installation_id: "install-1".into(),
+            development_auto_login: false,
+            billing_service_url: None,
+            account_service_url: None,
+        });
+        state.with_database(|database| {
+            crate::telemetry::acknowledge(database, Utc::now()).unwrap();
+            let account = crate::accounts::wire::HostedAccount {
+                id: "user_67e55044-10b1-426f-9247-bb680e5fe0c8".into(),
+                email: "owner@example.com".into(),
+                name: None,
+            };
+            crate::accounts::link(database, &account, &"t".repeat(43)).unwrap();
+            database.connection().execute("INSERT INTO suplex_users (id, display_name, username, role, status, created_at, updated_at, identity_version) VALUES ('user_chris', 'Chris', 'chris', 'member', 'active', '2026-10-02T00:00:00.000Z', '2026-10-02T00:00:00.000Z', 1)", []).unwrap();
+            database.connection().execute("INSERT INTO suplex_account_users (user_id, account_id, email) VALUES ('user_chris', 'user_chris_account', 'chris@example.com')", []).unwrap();
+        });
+        let telemetry = |id: &str, role: UserRole| {
+            let user = AuthUser {
+                id: id.into(),
+                display_name: "User".into(),
+                title: String::new(),
+                username: id.into(),
+                avatar_seed: id.into(),
+                role,
+                status: crate::identity::auth::UserStatus::Active,
+                company_ids: Vec::new(),
+                read_company_ids: Vec::new(),
+            };
+            let state = state.clone();
+            async move {
+                let response =
+                    read_telemetry(State(state), crate::http::access::SessionUser(user)).await;
+                json_body(&axum::body::to_bytes(response.into_body(), 4096).await.unwrap())
+            }
+        };
+        for (id, role, account) in [
+            ("user_development", UserRole::Admin, Some("user_67e55044-10b1-426f-9247-bb680e5fe0c8")),
+            ("user_chris", UserRole::Member, Some("user_chris_account")),
+            ("user_admin", UserRole::Admin, None),
+        ] {
+            let body = telemetry(id, role).await;
+            assert_eq!(body["enabled"], true);
+            assert_eq!(body["installationId"], "install-1");
+            assert_eq!(body["userId"], id);
+            assert_eq!(body.get("accountId").and_then(Value::as_str), account, "{body}");
+        }
+    }
 }

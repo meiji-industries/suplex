@@ -89,7 +89,8 @@ A target is `mac`, `linux-cli`, `linux-desktop`, or `windows`, each optionally
 `-arm64` or `-x64`. Arguments pick the targets, so `mise run release:patch
 linux-cli-x64` ships one Linux CLI archive and leaves every other feed on the
 previous version; a later full release catches them up. Without arguments the
-release runs every target. `scripts/release-target.sh` runs one target through
+release runs every target. Each target also has its own patch task, such as
+`mise run release:patch:linux-cli-x64`; `mise tasks` lists them. `scripts/release-target.sh` runs one target through
 one phase; `SUPLEX_RELEASE_DRY_RUN=1` prints the targets and stops. A rerun after a failure keeps Linux and Windows
 desktop builds already signed from the same commit. The Tauri app version comes from
 `apps/desktop/package.json`. The bump starts from the highest stable version

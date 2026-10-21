@@ -430,6 +430,54 @@ description = "Bump, sign, commit, tag, push, and publish the next patch release
 usage = 'arg "[targets]" var=#true help="mac, linux-cli, linux-desktop, windows, each optionally -arm64 or -x64. Default: every target"'
 run = 'SUPLEX_RELEASE_TARGETS="${usage_targets:-}" RELEASE_BUMP=patch mise run _release:run'
 
+[tasks."release:patch:mac"]
+description = "Release the next patch for Mac arm64 and x64 only"
+run = "mise run release:patch mac"
+
+[tasks."release:patch:mac-arm64"]
+description = "Release the next patch for Mac arm64 only"
+run = "mise run release:patch mac-arm64"
+
+[tasks."release:patch:mac-x64"]
+description = "Release the next patch for Mac x64 only"
+run = "mise run release:patch mac-x64"
+
+[tasks."release:patch:linux-cli"]
+description = "Release the next patch for Linux CLI arm64 and x64 only"
+run = "mise run release:patch linux-cli"
+
+[tasks."release:patch:linux-cli-arm64"]
+description = "Release the next patch for Linux CLI arm64 only"
+run = "mise run release:patch linux-cli-arm64"
+
+[tasks."release:patch:linux-cli-x64"]
+description = "Release the next patch for Linux CLI x64 only"
+run = "mise run release:patch linux-cli-x64"
+
+[tasks."release:patch:linux-desktop"]
+description = "Release the next patch for Linux desktop arm64 and x64 only"
+run = "mise run release:patch linux-desktop"
+
+[tasks."release:patch:linux-desktop-arm64"]
+description = "Release the next patch for Linux desktop arm64 only"
+run = "mise run release:patch linux-desktop-arm64"
+
+[tasks."release:patch:linux-desktop-x64"]
+description = "Release the next patch for Linux desktop x64 only"
+run = "mise run release:patch linux-desktop-x64"
+
+[tasks."release:patch:windows"]
+description = "Release the next patch for Windows arm64 and x64 only"
+run = "mise run release:patch windows"
+
+[tasks."release:patch:windows-arm64"]
+description = "Release the next patch for Windows arm64 only"
+run = "mise run release:patch windows-arm64"
+
+[tasks."release:patch:windows-x64"]
+description = "Release the next patch for Windows x64 only"
+run = "mise run release:patch windows-x64"
+
 [tasks."_release:run"]
 hide = true
 description = "Run the release pipeline for SUPLEX_RELEASE_TARGETS, or every target; SUPLEX_RELEASE_DRY_RUN=1 only prints the targets"

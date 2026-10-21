@@ -100,6 +100,12 @@ fn ps_field(pid: u32, field: &str) -> Option<String> {
 }
 
 pub fn inspect_process(pid: u32) -> Option<ProcessIdentity> {
+    // posix_spawn returns before the kernel sets the child's argv, and a zombie has none.
+    // Either way `ps` would report a placeholder command that never matches again.
+    #[cfg(target_os = "linux")]
+    if std::fs::read(format!("/proc/{pid}/cmdline")).is_ok_and(|cmdline| cmdline.is_empty()) {
+        return None;
+    }
     let command = ps_field(pid, "command=")?;
     let executable = ps_field(pid, "comm=")?;
     let process_group = ps_field(pid, "pgid=")?.parse().ok()?;
@@ -202,5 +208,17 @@ mod tests {
         assert_eq!(observed.pid, std::process::id());
         assert!(observed.process_group > 0);
         assert!(!observed.start_time.is_empty());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_process_without_argv_has_no_identity() {
+        let mut child = Command::new("true").spawn().unwrap();
+        let cmdline = format!("/proc/{}/cmdline", child.id());
+        while !std::fs::read(&cmdline).unwrap().is_empty() {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert_eq!(inspect_process(child.id()), None);
+        child.wait().unwrap();
     }
 }

@@ -408,7 +408,15 @@ pub async fn ensure_server(input: EnsureInput<'_>) -> Result<ServerReference, Bo
     std::thread::spawn(move || {
         let _ = child.wait();
     });
-    let inspection = inspect_process(pid)
+    let mut inspection = None;
+    for _ in 0..20 {
+        inspection = inspect_process(pid);
+        if inspection.is_some() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    let inspection = inspection
         .filter(|found| found.owner_uid.is_some() && found.process_group == pid)
         .ok_or("OpenCode process identity could not be established")?;
     let reference = ServerReference {

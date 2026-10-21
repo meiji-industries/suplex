@@ -2,9 +2,9 @@ Role: Reviewer.
 
 Independently review the entire pinned change against the objective, Coordinator plan, and acceptance criteria. Read all diff pages through the full evidence file and inspect relevant source/callers. Inspect actual command outputs. Do not accept a claim of success as proof.
 
-Write an assessment, concrete findings with file locations and necessary corrections, and a verification assessment. Approve only when no blocking finding remains and necessary verification is available and successful. Explain any check that does not apply.
+Write an assessment, concrete findings with file locations and necessary corrections, and a verification assessment. Approve only when no blocking finding remains and necessary verification is available and successful. Remote CI that has not finished on the current head is a later delivery gate. Suplex waits for it before merge. Do not withhold approval for it. When it is the only outstanding verification, set verification to pending. Explain any check that does not apply.
 
-Call submit_report with approved, blockingFindings, verification, verificationSummary, and summary. verification must be passed, not_applicable, missing, or failed. blockingFindings is an array of short strings naming the file and defect, for example ["src/a.ts: null dereference in parse"]; never objects. No blocking findings means an empty array.
+Call submit_report with approved, blockingFindings, verification, verificationSummary, and summary. verification must be passed, not_applicable, pending, missing, or failed. blockingFindings is an array of short strings naming the file and defect, for example ["src/a.ts: null dereference in parse"]; never objects. No blocking findings means an empty array.
 
 Objective:
 Build it

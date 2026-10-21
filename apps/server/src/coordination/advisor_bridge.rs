@@ -115,7 +115,7 @@ impl AdvisorBridge {
                 );
                 properties.insert(
                     "verification".into(),
-                    json!({"type":"string","enum":["passed","not_applicable","missing","failed"]}),
+                    json!({"type":"string","enum":["passed","not_applicable","pending","missing","failed"]}),
                 );
                 properties.insert(
                     "verificationSummary".into(),
@@ -141,7 +141,7 @@ impl AdvisorBridge {
                 );
                 properties.insert(
                     "verification".into(),
-                    json!({"type":"string","enum":["passed","not_applicable","missing","failed"]}),
+                    json!({"type":"string","enum":["passed","not_applicable","pending","missing","failed"]}),
                 );
                 properties.insert(
                     "verificationSummary".into(),
@@ -350,10 +350,10 @@ pub fn validate_report(
         }
         match fields.get("verification").and_then(Value::as_str) {
             None => issues.push("verification: expected value".to_owned()),
-            Some(value) if !["passed", "not_applicable", "missing", "failed"].contains(&value) => {
+            Some(value) if !["passed", "not_applicable", "pending", "missing", "failed"].contains(&value) => {
                 issues.push("verification: invalid value".to_owned());
             }
-            Some(value) => verified = ["passed", "not_applicable"].contains(&value),
+            Some(value) => verified = ["passed", "not_applicable", "pending"].contains(&value),
         }
         match text_field(&fields, "verificationSummary").map(str::to_owned) {
             Ok(text) => {
@@ -568,6 +568,9 @@ mod tests {
         assert!(integral.to_string().contains("\"rating\":9"));
         assert!(!integral.to_string().contains("\"rating\":9.0"));
         assert!(validate_submission(AdvisorRole::Rater, json!({"rating":9,"blockingFindings":[],"verification":"failed","verificationSummary":"Failed","summary":"Repair"})).is_err());
+        assert!(validate_submission(AdvisorRole::Rater, json!({"rating":9,"blockingFindings":[],"verification":"missing","verificationSummary":"No checks","summary":"Repair"})).is_err());
+        assert!(validate_submission(AdvisorRole::Rater, json!({"rating":9,"blockingFindings":[],"verification":"pending","verificationSummary":"Remote CI running","summary":"Good"})).is_ok());
+        assert!(validate_submission(AdvisorRole::Reviewer, json!({"approved":true,"blockingFindings":[],"verification":"pending","verificationSummary":"Remote CI running","summary":"Good"})).is_ok());
     }
 
     #[test]

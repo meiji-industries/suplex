@@ -83,7 +83,7 @@ function HistoryRow({ title, icon: Icon, badge, timestamp, findings, children }:
   </Collapsible.Root>;
 }
 
-const verificationLabels = { passed: "Passed", not_applicable: "Not applicable", missing: "Missing", failed: "Failed" };
+const verificationLabels = { passed: "Passed", not_applicable: "Not applicable", pending: "Pending", missing: "Missing", failed: "Failed" };
 
 /** How long the turn took, or when it was recorded if the turn's times are not known. */
 function HistoryTime({ value, turn }: { value: string | null; turn: TaskActivity["turns"][number] | undefined }) {

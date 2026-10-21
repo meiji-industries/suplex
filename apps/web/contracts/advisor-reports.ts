@@ -8,9 +8,9 @@ export type AdvisorRole = z.infer<typeof AdvisorRoleSchema>;
 
 export const REPAIR_RATING_TARGET = 9;
 
-const VerificationSchema = z.enum(["passed", "not_applicable", "missing", "failed"]);
+const VerificationSchema = z.enum(["passed", "not_applicable", "pending", "missing", "failed"]);
 
-const verified = (verification: z.infer<typeof VerificationSchema>) => verification === "passed" || verification === "not_applicable";
+const verified = (verification: z.infer<typeof VerificationSchema>) => verification === "passed" || verification === "not_applicable" || verification === "pending";
 
 const ReviewerSubmissionSchema = z.object({ approved: z.boolean(), blockingFindings: z.array(text), verification: VerificationSchema, verificationSummary: text, summary: text }).strict();
 

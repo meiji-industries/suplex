@@ -37,7 +37,9 @@ platform="${target%-*}"
 arch="${target##*-}"
 source scripts/onepassword.sh
 onepassword_setup_service_account
-export SUPLEX_DESKTOP_REUSE=1 SUPLEX_PUBLISH_PHASE="$phase"
+export SUPLEX_DESKTOP_REUSE=1
+# The build phase runs the publisher as a dry run, which checks every publish phase.
+[[ "$phase" == build ]] || export SUPLEX_PUBLISH_PHASE="$phase"
 signed() { op run --env-file apps/desktop/signing.env -- "$@"; }
 published() { op run --env-file apps/desktop/release.env -- "$@"; }
 case "$phase:$platform" in

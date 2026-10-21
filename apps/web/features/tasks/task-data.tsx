@@ -13,6 +13,7 @@ import { useCompanyContext } from "../../shell/company-context.js";
 import { SyncLiveContext, SyncWatchContext, syncedPolling, useSyncLive, useSyncWatch } from "../../shell/sync.js";
 import { movesKey } from "../moves/lib/move-runs.js";
 import { projectsKey } from "../projects/lib/projects.js";
+import { playInputSound, tasksEnteringInput } from "./lib/input-sound.js";
 import { taskObservationKey } from "./lib/task-queries.js";
 import { readTaskList, showRecentTasks } from "./lib/task-list.js";
 import { openTaskSync } from "./lib/task-sync-api.js";
@@ -110,6 +111,8 @@ export function TaskDataProvider({ children }: { children: ReactNode }) {
       const ids = new Set(before?.map(task => task.id));
       const after = client.getQueryData<TaskListTask[]>(queryKey);
       if (before && after && (after.length !== ids.size || after.some(task => !ids.has(task.id)))) void client.invalidateQueries({ queryKey: taskListKey(userId, companyId, true), exact: true });
+      // The sound follows each applied frame, not a render. It changes no command and no display.
+      if (tasksEnteringInput(message.type, before, after).length) playInputSound();
       push(movesKey(userId, companyId), message.moves);
       push(taskCostsKey(userId, companyId), message.costs && { tasks: message.costs });
       push(projectsKey(userId, companyId), message.projects);

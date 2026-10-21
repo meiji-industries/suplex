@@ -19,6 +19,8 @@ const scope = vi.hoisted(() => ({ companyId: "company-a" }));
 vi.mock("../shell/company-context.js", () => { const context = () => ({ user: { id: "user-a", role: "admin" }, currentCompany: { id: scope.companyId }, avatars: {} }); return { useCompanyContext: context, useOptionalCompanyContext: context }; });
 vi.mock("../features/tasks/task-chat/live-pane-terminal.js", () => ({ PaneTerminal: () => <p>Terminal</p> }));
 vi.mock("../features/moves/run-transcript.js", () => ({ RunTranscript: () => <p>Transcript</p> }));
+const sound = vi.hoisted(() => ({ play: vi.fn() }));
+vi.mock("../features/tasks/lib/input-sound.js", async original => ({ ...await original<object>(), playInputSound: sound.play }));
 
 class FakeWebSocket {
   static OPEN = 1;
@@ -87,6 +89,7 @@ beforeEach(() => {
   focusManager.setFocused(true);
   scope.companyId = "company-a";
   FakeWebSocket.instances = [];
+  sound.play.mockClear();
   rows = undefined; runs = []; projects = undefined; projectRows = undefined;
   listed = [row("a"), row("b")];
   projectNames = ["Repository"];
@@ -130,6 +133,25 @@ test("a snapshot stops the 3 second poll, and changes replace, order, and remove
   await act(async () => vi.advanceTimersByTimeAsync(60_000));
   expect(lists()).toBe(2);
   expect(titles()).toEqual(["a", "b"]);
+});
+
+test("a changes frame that moves a task into waiting_human plays the input sound once", async () => {
+  const waiting = (id: string, updatedAt = "2026-09-09T00:00:00.000Z") => ({ ...row(id, id, updatedAt), status: "waiting_human" as const });
+  await render();
+  // The first snapshot and the snapshot after a reconnect show tasks that already waited.
+  await emit(sockets()[0], { type: "snapshot", tasks: [row("a"), waiting("b")], moves: [] });
+  await act(async () => sockets()[0]?.close());
+  await act(async () => vi.advanceTimersByTimeAsync(3000));
+  await emit(sockets()[1], { type: "snapshot", tasks: [waiting("a"), waiting("b")], moves: [] });
+  expect(sound.play).not.toHaveBeenCalled();
+
+  await emit(sockets()[1], { type: "changes", tasks: [row("a", "a", "2026-09-10T00:00:00.000Z")], removedTaskIds: [] });
+  await emit(sockets()[1], { type: "changes", tasks: [waiting("a", "2026-09-11T00:00:00.000Z")], removedTaskIds: [] });
+  expect(sound.play).toHaveBeenCalledTimes(1);
+  // The same state again and a render do not play the sound again.
+  await emit(sockets()[1], { type: "changes", tasks: [waiting("a", "2026-09-12T00:00:00.000Z")], removedTaskIds: [] });
+  await render();
+  expect(sound.play).toHaveBeenCalledTimes(1);
 });
 
 test("moves and projects arrive whole in the frames", async () => {

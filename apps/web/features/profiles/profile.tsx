@@ -12,6 +12,7 @@ import { useEffect, useState, type ReactElement } from "react";
 import { LoadingState } from "../../components/app/loading-state.js";
 import type { AccountResponse } from "../../contracts/generated/AccountResponse.js";
 import { getAccount, logoutAccount } from "../account/lib/account-api.js";
+import { InputSoundSetting } from "./input-sound-setting.js";
 import { WebPushSetting } from "./web-push-setting.js";
 
 export function ProfileView(): ReactElement {
@@ -61,6 +62,7 @@ export function ProfileView(): ReactElement {
         </Select>
       </SettingRow>
       <WebPushSetting />
+      <InputSoundSetting />
       {account?.configured && account.account ? <SettingRow label="Suplex account">
         <Button type="button" variant="destructive" size="sm" onClick={() => void logout()}>Log out</Button>
       </SettingRow> : null}

@@ -75,8 +75,8 @@ mod tests {
         assert_eq!(
             json_body(&body),
             json!({"tasks":[
-                {"id":"active_task","cost":3,"unpriced":false,"subsidized":false,"partial":false},
-                {"id":"archived_task","cost":null,"unpriced":false,"subsidized":false,"partial":false},
+                {"id":"active_task","cost":3,"unpriced":false,"subsidized":false,"partial":false,"totalTokens":15},
+                {"id":"archived_task","cost":null,"unpriced":false,"subsidized":false,"partial":false,"totalTokens":0},
             ]})
         );
 

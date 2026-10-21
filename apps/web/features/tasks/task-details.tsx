@@ -23,6 +23,7 @@ import { TaskDeliveryProperty } from "./task-delivery-property.js";
 import { LivePaneDock } from "./task-chat/live-pane-dock.js";
 import { useTaskCosts } from "../analytics/lib/analytics.js";
 import { CostValue } from "../../components/app/cost-value.js";
+import { useUsageDisplay } from "../analytics/lib/usage-display.js";
 import { Progress, ProgressLabel, ProgressValue } from "../../components/ui/progress.js";
 import { WorkflowHistory, WorkflowStatus } from "./workflow-history.js";
 import { TaskPullRequestCard } from "./pull-request-card.js";
@@ -89,7 +90,8 @@ export function TaskBlockedByProperty({ task, onChange }: { task: Pick<Task, "id
 /** `health` shows why an active task does not advance. It is a display observation only. */
 export function TaskDetailsPage({ task, project, onChange, backHref, titleActions, health }: { task: Task; project: ApiProject | undefined; onChange: (task: Task) => void; backHref?: string; titleActions?: ReactElement; health?: TaskHealth | undefined }): ReactElement {
   const cost = useTaskCosts(task.companyId).get(task.id);
-  const costTitle = cost ? undefined : "OpenCode estimates are not bills. Zero does not verify free usage.";
+  const display = useUsageDisplay();
+  const costTitle = cost || display === "tokens" ? undefined : "OpenCode estimates are not bills. Zero does not verify free usage.";
   const activityQuery = useTaskActivity(task.id);
   const activity = activityQuery.data ?? emptyActivity;
   const [error, setError] = useState("");
@@ -127,9 +129,9 @@ export function TaskDetailsPage({ task, project, onChange, backHref, titleAction
         <dl className="grid grid-cols-1 gap-5 text-xs">
           <div className="space-y-1.5"><dt className="text-muted-foreground text-sm dark:text-[#d1d1d1]">Status</dt><dd className="flex items-center gap-2"><TaskStatus status={task.status} pullRequestState={task.pullRequest?.state} />{task.archivedAt ? <Badge variant="outline">Archived</Badge> : null}</dd></div>
           <div aria-hidden="true" className="-mx-4 border-t" /><div className="space-y-3">
-            <Progress className="gap-y-1.5" title={costTitle} aria-label="Estimated cost" value={task.limits.budgetUsd ? Math.min(100, ((cost?.cost ?? 0) / task.limits.budgetUsd) * 100) : null}>
-              <ProgressLabel className="font-normal text-muted-foreground text-sm dark:text-[#d1d1d1]">Cost</ProgressLabel>
-              <ProgressValue className="text-xs">{() => <>{cost ? <CostValue value={cost.cost} subsidized={cost.subsidized} partial={cost.partial} /> : "Not available"}{task.limits.budgetUsd ? ` of $${task.limits.budgetUsd.toFixed(2)}` : ""}</>}</ProgressValue>
+            <Progress className="gap-y-1.5" title={costTitle} aria-label={display === "tokens" ? "Total tokens" : "Estimated cost"} value={display === "tokens" ? null : task.limits.budgetUsd ? Math.min(100, ((cost?.cost ?? 0) / task.limits.budgetUsd) * 100) : null}>
+              <ProgressLabel className="font-normal text-muted-foreground text-sm dark:text-[#d1d1d1]">{display === "tokens" ? "Tokens" : "Cost"}</ProgressLabel>
+              <ProgressValue className="text-xs">{() => <>{cost ? <CostValue value={cost.cost} tokens={cost.totalTokens} subsidized={cost.subsidized} partial={cost.partial} /> : "Not available"}{display === "spend" && task.limits.budgetUsd ? ` of $${task.limits.budgetUsd.toFixed(2)}` : ""}</>}</ProgressValue>
             </Progress>
             <Progress className="gap-y-1.5" aria-label="Turns" value={task.limits.maxTurns ? Math.min(100, (task.limits.admittedTurns / task.limits.maxTurns) * 100) : null}>
               <ProgressLabel className="font-normal text-muted-foreground text-sm dark:text-[#d1d1d1]">Turns</ProgressLabel>

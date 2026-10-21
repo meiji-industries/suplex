@@ -208,7 +208,7 @@ function Costs() {
 }
 
 test("staggered cost consumers share one timer, stable map, and visibility refresh", async () => {
-  const fetch = vi.fn(async (url: string) => new Response(JSON.stringify({ tasks: url.endsWith("/task-costs") ? [{ id: "a", cost: 2, partial: false, subsidized: false, unpriced: false }] : [] })));
+  const fetch = vi.fn(async (url: string) => new Response(JSON.stringify({ tasks: url.endsWith("/task-costs") ? [{ id: "a", cost: 2, partial: false, subsidized: false, unpriced: false, totalTokens: 0 }] : [] })));
   vi.stubGlobal("fetch", fetch);
   let map: ReturnType<typeof useTaskCosts> | undefined;
   function Capture() { map = useTaskCosts(scope.companyId); return <Costs />; }
@@ -251,7 +251,7 @@ test("costs cancel across company changes and unmount, and late responses remain
   scope.companyId = "company-b";
   await act(async () => render());
   expect(pending[0]?.signal?.aborted).toBe(true);
-  const response = (id: string) => new Response(JSON.stringify({ tasks: [{ id, cost: 3, partial: false, subsidized: false, unpriced: false }] }));
+  const response = (id: string) => new Response(JSON.stringify({ tasks: [{ id, cost: 3, partial: false, subsidized: false, unpriced: false, totalTokens: 0 }] }));
   await act(async () => pending[1]?.resolve(response("B")));
   await act(async () => pending[0]?.resolve(response("A")));
   expect(container.textContent).toBe("B:3");
@@ -264,7 +264,7 @@ test("costs cancel across company changes and unmount, and late responses remain
 test("costs disappear after an error and return on recovery", async () => {
   let failed = false;
   vi.stubGlobal("fetch", vi.fn(async (url: string) => url.endsWith("/task-costs")
-    ? failed ? new Response('{"error":"No costs"}', { status: 500 }) : new Response(JSON.stringify({ tasks: [{ id: "a", cost: 1, partial: false, subsidized: false, unpriced: false }] }))
+    ? failed ? new Response('{"error":"No costs"}', { status: 500 }) : new Response(JSON.stringify({ tasks: [{ id: "a", cost: 1, partial: false, subsidized: false, unpriced: false, totalTokens: 0 }] }))
     : new Response('{"tasks":[]}')));
   await act(async () => root.render(<QueryClientProvider client={client}><TaskDataProvider><Costs /></TaskDataProvider></QueryClientProvider>));
   expect(container.textContent).toBe("a:1");

@@ -7,6 +7,7 @@ import { compact, money } from "./lib/analytics.js";
 import { activityMetrics, buildActivity, type ActivityMetric } from "./lib/activity.js";
 import { TaskControlStatusSchema } from "../../contracts/task-control.js";
 import { usageIsUnpriced } from "./lib/usage-metrics.js";
+import { useUsageDisplay } from "./lib/usage-display.js";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../components/ui/select.js";
 
 const colors = { delivered: "#10b981", active: "#3b82f6", waiting_human: "#f59e0b", cancelled: "#ef4444", queued: "#0ea5e9", backlog: "#94a3b8" };
@@ -26,20 +27,22 @@ export const OutcomeChart = memo(function OutcomeChart({ tasks }: { tasks: TaskA
 });
 
 export const SpendChart = memo(function SpendChart({ tasks }: { tasks: TaskAnalytics[] }) {
+  const tokens = useUsageDisplay() === "tokens";
   const days = new Map<string, { date: string; root: number; worker: number }>();
   for (const task of tasks) for (const usage of task.usage) {
-    if (usageIsUnpriced(usage)) continue;
+    if (!tokens && usageIsUnpriced(usage)) continue;
     const date = new Date(usage.startedAt).toISOString().slice(0, 10);
     const row = days.get(date) ?? { date, root: 0, worker: 0 };
-    row[usage.role] += usage.cost; days.set(date, row);
+    row[usage.role] += tokens ? usage.tokens.input + usage.tokens.output + usage.tokens.reasoning + usage.tokens.cache.read + usage.tokens.cache.write : usage.cost; days.set(date, row);
   }
   const data = [...days.values()].sort((a, b) => a.date.localeCompare(b.date));
-  return <section className="min-w-0 p-4" aria-label="Estimated spend over time"><div className="flex items-center justify-between gap-2"><h2 className="text-sm font-medium">Estimated spend over time</h2><span className="text-xs text-muted-foreground">USD · UTC days</span></div>
+  const title = tokens ? "Token usage over time" : "Estimated spend over time";
+  return <section className="min-w-0 p-4" aria-label={title}><div className="flex items-center justify-between gap-2"><h2 className="text-sm font-medium">{title}</h2><span className="text-xs text-muted-foreground">{tokens ? "Tokens · UTC days" : "USD · UTC days"}</span></div>
     <ChartContainer config={config} className="h-48 w-full"><AreaChart data={data} accessibilityLayer margin={{ top: 16, right: 8, left: 0, bottom: 0 }}>
-      <CartesianGrid vertical={false} /><XAxis dataKey="date" tickLine={false} axisLine={false} minTickGap={30} tickFormatter={value => String(value).slice(5)} /><YAxis width={45} tickLine={false} axisLine={false} tickFormatter={value => `$${compact(Number(value))}`} />
-      <ChartTooltip content={<ChartTooltipContent formatter={(value, name) => <span>{name === "root" ? "Coordinator" : "Delegated"}: {money(Number(value))}</span>} />} />
+      <CartesianGrid vertical={false} /><XAxis dataKey="date" tickLine={false} axisLine={false} minTickGap={30} tickFormatter={value => String(value).slice(5)} /><YAxis width={45} tickLine={false} axisLine={false} tickFormatter={value => tokens ? compact(Number(value)) : `$${compact(Number(value))}`} />
+      <ChartTooltip content={<ChartTooltipContent formatter={(value, name) => <span>{name === "root" ? "Coordinator" : "Delegated"}: {tokens ? compact(Number(value)) : money(Number(value))}</span>} />} />
       <Area type="monotone" dataKey="root" stackId="cost" stroke="var(--color-root)" fill="var(--color-root)" fillOpacity={0.15} isAnimationActive={false} /><Area type="monotone" dataKey="worker" stackId="cost" stroke="var(--color-worker)" fill="var(--color-worker)" fillOpacity={0.15} isAnimationActive={false} />
-    </AreaChart></ChartContainer><div className="flex gap-4 text-xs text-muted-foreground"><span><span className="text-blue-500">●</span> Coordinator</span><span><span className="text-violet-500">●</span> Delegated</span>{!data.length ? <span>No measured spend</span> : null}</div>
+    </AreaChart></ChartContainer><div className="flex gap-4 text-xs text-muted-foreground"><span><span className="text-blue-500">●</span> Coordinator</span><span><span className="text-violet-500">●</span> Delegated</span>{!data.length ? <span>{tokens ? "No measured token usage" : "No measured spend"}</span> : null}</div>
   </section>;
 });
 

@@ -35,6 +35,7 @@ vi.mock("../components/ui/select.js", () => {
 import { AnalyticsView } from "../features/analytics/analytics.js";
 import { dateInputValue } from "../components/app/date-range.js";
 import { usageIsUnpriced, usageMetrics } from "../features/analytics/lib/usage-metrics.js";
+import { saveUsageDisplay } from "../features/analytics/lib/usage-display.js";
 
 function usage(overrides: Partial<TaskUsage> = {}): TaskUsage {
   return {
@@ -104,6 +105,60 @@ test("keeps cohort, partial, and missing-usage values while ledger search and so
     expect(vi.mocked(usageIsUnpriced).mock.calls).toHaveLength(chartCalls);
     expect(metric("Estimated spend")?.textContent).toBe("$9.00");
   } finally {
+    await act(async () => root.unmount());
+    container.remove();
+  }
+});
+
+test("shows token counts and token labels in place of spend when the usage display is Tokens", async () => {
+  Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+  const tokens = (input: number) => ({ input, output: 0, reasoning: 0, cache: { read: 0, write: 0 } });
+  const tasks = [
+    task("Delivered", { usage: [usage({ tokens: tokens(80_000) }), usage({ messageId: "second", cost: 3, tokens: tokens(200) })] }),
+    task("Pending", { status: "active", usage: [usage({ messageId: "third", cost: 0, subsidized: false, tokens: tokens(919_800) })] }),
+    task("No usage", { observedSessions: 0 }),
+  ];
+  api.readJsonUnchecked.mockImplementation(async (path: string) => path.endsWith("/projects") ? { projects: [{ id: "project-1", name: "Project" }] } : { tasks, generatedAt: new Date().toISOString() });
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  const metric = (label: string) => Array.from(container.querySelectorAll("dt")).find(item => item.textContent === label)?.nextElementSibling;
+  const headers = (section: string) => Array.from(container.querySelectorAll(`section[aria-label="${section}"] th`)).map(item => item.textContent);
+  const createObjectURL = vi.fn((_blob: Blob) => "blob:analytics");
+  Object.assign(URL, { createObjectURL, revokeObjectURL: vi.fn() });
+  const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
+  try {
+    saveUsageDisplay("tokens");
+    await act(async () => root.render(<AnalyticsView />));
+    await act(async () => { await import("../features/analytics/analytics-charts.js"); });
+    expect(metric("Estimated spend")).toBeUndefined();
+    expect(metric("Token usage")?.textContent).toBe("1M");
+    expect(metric("Token usage")?.querySelector("span")?.title).toContain("Total tokens");
+    expect(metric("Token usage")?.nextElementSibling?.textContent).toBe("2 of 3 tasks with usage · tokens");
+    expect(metric("Tokens per delivered task")?.textContent).toBe("80.2K");
+    expect(metric("Token usage on tasks not delivered")?.textContent).toBe("920K");
+    expect(container.querySelector('section[aria-label="Token usage over time"] h2')?.textContent).toBe("Token usage over time");
+    expect(container.querySelector('section[aria-label="Token usage over time"]')?.textContent).toContain("Tokens · UTC days");
+    expect(headers("Task analytics")).toEqual(["Task", "Status", "Coordinator / Delegated turns", "Agent time", "Output tokens/s", "Median first response", "Tokens", "Coverage"]);
+    expect(headers("Project analytics")).toEqual(["Project", "Delivered / Total", "Turns", "Agent time", "Tokens"]);
+    expect(container.querySelector('section[aria-label="Project analytics"] tbody tr')?.lastElementChild?.textContent).toBe("1M");
+    expect(container.querySelector('[data-value="cost"]')?.textContent).toBe("Most tokens");
+    expect(Array.from(container.querySelectorAll('section[aria-label="Task analytics"] tbody tr td:first-child a')).map(item => item.textContent)).toEqual(["Pending", "Delivered", "No usage"]);
+
+    await act(async () => Array.from(container.querySelectorAll("button")).find(button => button.textContent === "Export CSV")!.click());
+    const csv = await createObjectURL.mock.calls[0]![0].text();
+    const [header, first] = csv.split("\r\n");
+    expect(header).toBe("Task,Status,Tokens,Coordinator turns,Delegated turns,Agent seconds,Output tokens per second,Median first response ms");
+    expect(first?.startsWith('"Pending","active","919800","1","0","1",')).toBe(true);
+
+    await act(async () => { saveUsageDisplay("spend"); });
+    expect(metric("Token usage")).toBeUndefined();
+    expect(metric("Estimated spend")?.textContent).toBe("$5.00");
+    expect(headers("Task analytics")).toEqual(["Task", "Status", "Coordinator / Delegated turns", "Tokens", "Agent time", "Output tokens/s", "Median first response", "Est. USD", "Coverage"]);
+    expect(container.querySelector('[data-value="cost"]')?.textContent).toBe("Highest cost");
+  } finally {
+    saveUsageDisplay("spend");
+    click.mockRestore();
     await act(async () => root.unmount());
     container.remove();
   }

@@ -39,6 +39,7 @@ export const TodayResponseSchema = z.object({
     unpricedMessages: z.number().int().nonnegative(),
     partial: z.boolean(),
     subsidized: z.boolean(),
+    totalTokens: z.number().int().nonnegative(),
   }).strict()),
 }).strict() satisfies z.ZodType<TodayResponse>;
 

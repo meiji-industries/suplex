@@ -40,6 +40,7 @@ pub(crate) struct TodaySpend {
     pub unpriced_messages: usize,
     pub partial: bool,
     pub subsidized: bool,
+    pub total_tokens: u64,
 }
 
 #[derive(Debug, Serialize, TS)]

@@ -2,7 +2,7 @@ export { useTaskCosts } from "../../tasks/task-data.js";
 
 // Formatters are module constants: constructing one per call is slow, and list rows call these on every poll.
 const usdFormat = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 2 });
-const compactFormat = new Intl.NumberFormat("en-US", { notation: "compact", maximumFractionDigits: 1 });
+const compactFormat = new Intl.NumberFormat("en-US", { notation: "compact", maximumSignificantDigits: 3 });
 
 export function money(value: number | null): string {
   if (value === null) return "Not available";
@@ -12,6 +12,9 @@ export function money(value: number | null): string {
 export function costExplanation(subsidized: boolean, partial: boolean): string {
   if (subsidized) return `OpenCode reported zero cost. Suplex estimates this value with the public models.dev list price. Suplex estimates are not bills.${partial ? " Usage is partial." : ""}`;
   return `Estimated cost (USD)${partial ? ", partial usage" : ""}. OpenCode estimates are not bills.`;
+}
+export function tokenExplanation(partial: boolean): string {
+  return `Total tokens. Suplex counts input, output, reasoning, and cache tokens.${partial ? " Usage is partial." : ""}`;
 }
 export function duration(value: number | null): string {
   if (value === null) return "Not available";

@@ -288,7 +288,7 @@ function detail(title: string, updatedAt = "2026-09-08T00:00:00.000Z", changes: 
   };
 }
 function agent(status: string) { return { id: "agent-1", role: "root", advisorRole: null, label: "Coordinator", paneId: null, status, statusChangedAt: null }; }
-const cost = (value: number) => ({ id: "a", cost: value, partial: false, subsidized: false, unpriced: false });
+const cost = (value: number) => ({ id: "a", cost: value, partial: false, subsidized: false, unpriced: false, totalTokens: 0 });
 const activity = (shellPaneId: string) => ({ sessions: [], turns: [], setup: { state: "none" as const, exitStatus: null }, shellPaneId });
 const pullRequest = (headSha: string) => ({ repository: "owner/repo", number: 1, url: "https://github.com/owner/repo/pull/1", headSha, state: "open", mergedAt: null }) satisfies Task["pullRequest"];
 

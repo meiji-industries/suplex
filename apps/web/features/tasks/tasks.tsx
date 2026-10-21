@@ -30,6 +30,7 @@ import { ProjectLabel } from "../../components/app/project-label.js";
 import { ProjectSelect } from "../../components/app/project-select.js";
 import { DataList, DataListRow, FilterInput, ListToolbar, ViewTabs } from "../../components/app/data-list.js";
 import { CostValue } from "../../components/app/cost-value.js";
+import { hasUsageValue, useUsageDisplay } from "../analytics/lib/usage-display.js";
 import { useTaskCosts } from "../analytics/lib/analytics.js";
 import { relativeTime, type ApiProject } from "../../shell/view-shared.js";
 import { taskListKey, useTaskCache, useTaskData, useTaskHealth } from "./task-data.js";
@@ -190,15 +191,16 @@ function BoardRunCard({ move, run, project }: { move: MoveResponse; run: MoveRun
 
 export const TaskRow = memo(function TaskRow({ task, project, cost }: { task: TaskListTask; project: ApiProject | undefined; cost: ReturnType<typeof useTaskCosts> extends Map<string, infer Value> ? Value | undefined : never }): ReactElement {
   const settled = task.status === "delivered" || task.status === "cancelled";
+  const display = useUsageDisplay();
   return <DataListRow data-task-row>
     <a data-shortcut-item className="col-span-full row-start-1 grid min-w-0 grid-cols-subgrid items-center focus-visible:outline-2 focus-visible:outline-ring" href={withCompany(`/tasks/${task.id}`, task.companyId)}>
       <span data-task-title className="flex min-w-0 items-center gap-2.5"><TaskStatusIcon status={task.status} pullRequestState={task.pullRequest?.state} /><span className="flex min-w-0 flex-col"><span className="flex min-w-0 items-baseline gap-2">{task.issueKey ? <span className="shrink-0 text-muted-foreground">{task.issueKey}</span> : null}<span className={`truncate ${settled ? "text-muted-foreground" : "text-foreground"} not-dark:font-medium`}>{task.title}</span></span></span></span>
       <span data-task-project className="hidden min-w-0 items-center gap-2 text-muted-foreground lg:flex"><ProjectLabel project={project} fallback="Not available" /></span>
       <span data-task-status className="hidden lg:block"><TaskStatus status={task.status} pullRequestState={task.pullRequest?.state} /></span>
       <span className="hidden lg:block">{task.pullRequest ? null : <span className="text-muted-foreground">—</span>}</span>
-      <span data-task-cost className="hidden text-right tabular-nums text-muted-foreground lg:block">{cost?.cost != null ? <CostValue value={cost.cost} subsidized={cost.subsidized} partial={cost.partial} suffix={cost.partial ? "+" : ""} /> : null}</span>
+      <span data-task-cost className="hidden text-right tabular-nums text-muted-foreground lg:block">{cost && hasUsageValue(cost, display) ? <CostValue value={cost.cost} tokens={cost.totalTokens} subsidized={cost.subsidized} partial={cost.partial} suffix={cost.partial ? "+" : ""} /> : null}</span>
       <time data-task-time dateTime={task.updatedAt} className="col-start-2 row-start-1 shrink-0 text-right font-mono text-xs tabular-nums text-muted-foreground lg:col-auto lg:row-auto">{new Date(task.updatedAt).toDateString() === new Date().toDateString() ? relativeTime(task.updatedAt) : shortDate.format(new Date(task.updatedAt))}</time>
-      <span data-task-compact-details className="col-span-2 flex min-w-0 items-center gap-2 pl-6 text-xs text-muted-foreground lg:hidden"><span data-task-compact-project className="flex min-w-0 items-center gap-1.5"><ProjectLabel project={project} fallback="Not available" /></span><span data-task-compact-cost className="ml-auto shrink-0 text-right tabular-nums">{cost?.cost != null ? <CostValue value={cost.cost} subsidized={cost.subsidized} partial={cost.partial} suffix={cost.partial ? "+" : ""} /> : null}</span></span>
+      <span data-task-compact-details className="col-span-2 flex min-w-0 items-center gap-2 pl-6 text-xs text-muted-foreground lg:hidden"><span data-task-compact-project className="flex min-w-0 items-center gap-1.5"><ProjectLabel project={project} fallback="Not available" /></span><span data-task-compact-cost className="ml-auto shrink-0 text-right tabular-nums">{cost && hasUsageValue(cost, display) ? <CostValue value={cost.cost} tokens={cost.totalTokens} subsidized={cost.subsidized} partial={cost.partial} suffix={cost.partial ? "+" : ""} /> : null}</span></span>
     </a>
     {task.pullRequest ? <span data-task-pr className="pointer-events-none relative z-10 col-start-4 row-start-1 hidden lg:block"><a href={task.pullRequest.url} target="_blank" rel="noreferrer" className="pointer-events-auto underline-offset-2 hover:underline focus-visible:outline-2 focus-visible:outline-ring">#{task.pullRequest.number}</a></span> : null}
   </DataListRow>;

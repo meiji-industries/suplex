@@ -14,6 +14,7 @@ import { RecentTaskAgents } from "./recent-task-agents.js";
 import { RecentPullRequest } from "./recent-pull-request.js";
 import { useTaskCosts } from "../analytics/lib/analytics.js";
 import { CostValue } from "../../components/app/cost-value.js";
+import { hasUsageValue, useUsageDisplay } from "../analytics/lib/usage-display.js";
 
 export function recentTasks<T extends Pick<TaskListTask, "status" | "statusChangedAt">>(tasks: T[]): T[] {
   return tasks.filter(task => task.status !== "cancelled").sort((left, right) => right.statusChangedAt.localeCompare(left.statusChangedAt)).slice(0, 10);
@@ -36,6 +37,7 @@ function RecentTasksContent({ close, costs }: { close?: () => void; costs: Retur
   const list = useTaskData();
   const [archived, setArchived] = useState<ReadonlySet<string>>(new Set());
   const runActions = useRunActions();
+  const display = useUsageDisplay();
   const activity = recentActivity(list.data ?? [], useShellRuns(companyId).map(({ run }) => run).filter(run => !archived.has(run.id)));
   const tasks = activity.flatMap(item => item.task ? [item.task] : []);
   const agents = useTaskAgents(tasks.map(task => task.id));
@@ -63,7 +65,7 @@ function RecentTasksContent({ close, costs }: { close?: () => void; costs: Retur
         <span className="flex min-w-0 flex-1 items-center gap-2">
           <span data-recent-task-status={task.status} className={`inline-flex shrink-0${task.status === "active" ? " animate-spin" : ""}`}><TaskStatusIcon status={task.status} pullRequestState={task.pullRequest?.state} /></span>
           <span className="min-w-0 flex-1 truncate text-sm">{task.title}{task.blockedBy.length ? <span data-recent-task-blocked-by className="text-muted-foreground"> · {blockedByLabel(task.blockedBy)}</span> : null}</span>
-          {cost?.cost != null ? <CostValue value={cost.cost} subsidized={cost.subsidized} partial={cost.partial} className="shrink-0 text-xs tabular-nums text-muted-foreground" suffix={cost.partial ? "+" : ""} /> : null}
+          {cost && hasUsageValue(cost, display) ? <CostValue value={cost.cost} tokens={cost.totalTokens} subsidized={cost.subsidized} partial={cost.partial} className="shrink-0 text-xs tabular-nums text-muted-foreground" suffix={cost.partial ? "+" : ""} /> : null}
         </span>
       </a>} isActive={window.location.pathname === `/tasks/${task.id}`} tooltip={`${task.title}${task.blockedBy.length ? ` · ${blockedByLabel(task.blockedBy)}` : ""}`} />
       {task.pullRequest ? <RecentPullRequest taskId={task.id} title={task.title} issueKey={task.issueKey} number={task.pullRequest.number} state={task.pullRequest.state} headSha={task.pullRequest.headSha} status={task.status} archivedAt={task.archivedAt} onArchived={cacheTask} /> : null}

@@ -237,6 +237,7 @@ pub(crate) fn read(
                 || metrics.incomplete_messages > 0
                 || company_usage.is_some_and(|value| value.incomplete_coverage),
             subsidized: metrics.subsidized,
+            total_tokens: metrics.total_tokens as u64,
         });
     }
 

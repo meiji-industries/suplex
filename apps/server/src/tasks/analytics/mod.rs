@@ -575,6 +575,7 @@ pub fn task_costs(analytics: &Value) -> DatabaseResult<TaskCostsResponse> {
                     || task.stale_sessions > 0
                     || task.observed_sessions < task.sessions
                     || task.usage.iter().any(|entry| entry.completed_at.is_none()),
+                total_tokens: metrics.total_tokens as u64,
             })
         })
         .collect::<DatabaseResult<Vec<_>>>()?;
@@ -625,12 +626,12 @@ pub(crate) mod tests {
         assert_eq!(
             serde_json::to_value(task_costs(&input).unwrap()).unwrap(),
             json!({"tasks": [
-                {"id":"empty","cost":null,"unpriced":false,"subsidized":false,"partial":true},
-                {"id":"priced","cost":3.0,"unpriced":false,"subsidized":false,"partial":false},
-                {"id":"unpriced","cost":null,"unpriced":true,"subsidized":false,"partial":true},
-                {"id":"stale","cost":2.0,"unpriced":false,"subsidized":false,"partial":true},
-                {"id":"running","cost":1.0,"unpriced":false,"subsidized":false,"partial":true},
-                {"id":"subsidized","cost":2.0,"unpriced":false,"subsidized":true,"partial":false},
+                {"id":"empty","cost":null,"unpriced":false,"subsidized":false,"partial":true,"totalTokens":0},
+                {"id":"priced","cost":3.0,"unpriced":false,"subsidized":false,"partial":false,"totalTokens":15},
+                {"id":"unpriced","cost":null,"unpriced":true,"subsidized":false,"partial":true,"totalTokens":15},
+                {"id":"stale","cost":2.0,"unpriced":false,"subsidized":false,"partial":true,"totalTokens":15},
+                {"id":"running","cost":1.0,"unpriced":false,"subsidized":false,"partial":true,"totalTokens":15},
+                {"id":"subsidized","cost":2.0,"unpriced":false,"subsidized":true,"partial":false,"totalTokens":15},
             ]})
         );
     }

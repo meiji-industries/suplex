@@ -391,4 +391,6 @@ pub struct TaskCost {
     pub unpriced: bool,
     pub subsidized: bool,
     pub partial: bool,
+    #[serde(rename = "totalTokens")]
+    pub total_tokens: u64,
 }

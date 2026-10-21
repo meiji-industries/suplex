@@ -96,6 +96,7 @@ mod tests {
         assert_eq!((company("today_c1")["knownCostUsd"].clone(), company("today_c1")["partial"].clone()), (json!(2.0), json!(false)));
         assert_eq!((company("today_c2")["knownCostUsd"].clone(), company("today_c2")["partial"].clone()), (Value::Null, json!(true)));
         assert_eq!((company("today_c3")["knownCostUsd"].clone(), company("today_c3")["partial"].clone()), (Value::Null, json!(true)));
+        assert_eq!(["today_c1", "today_c2", "today_c3"].map(|id| company(id)["totalTokens"].clone()), [json!(10), json!(10), json!(0)]);
         let member_cookie = format!("sid_v1={member}");
         let member_body = json_body(&call(&app, "GET", path, Some(&member_cookie), None).await.2);
         assert_eq!(member_body["companies"].as_array().unwrap().len(), 2);

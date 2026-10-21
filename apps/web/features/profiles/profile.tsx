@@ -5,6 +5,7 @@ import { Button } from "../../components/ui/button.js";
 import { useCompanyContext } from "../../shell/company-context.js";
 import { SettingsContent, SettingsLayout, SettingsSection, SettingRow } from "../settings/settings-layout.js";
 import { readTaskAgentExpiry, saveTaskAgentExpiry, taskAgentExpiryOptions } from "../tasks/task-agent-expiry.js";
+import { saveUsageDisplay, usageDisplayOptions, useUsageDisplay } from "../analytics/lib/usage-display.js";
 import { withCompany } from "../../lib/api.js";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../components/ui/select.js";
 import { Save } from "lucide-react";
@@ -21,6 +22,7 @@ export function ProfileView(): ReactElement {
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState("");
   const [taskAgentExpiry, setTaskAgentExpiry] = useState(readTaskAgentExpiry);
+  const usageDisplay = useUsageDisplay();
   const [account, setAccount] = useState<AccountResponse>();
 
   useEffect(() => { void getAccount().then(setAccount).catch(() => undefined); }, []);
@@ -59,6 +61,12 @@ export function ProfileView(): ReactElement {
         <Select value={String(taskAgentExpiry)} onValueChange={value => { if (value !== null) setTaskAgentExpiry(saveTaskAgentExpiry(Number(value))); }}>
           <SelectTrigger size="sm" aria-label="Inactive task agents"><SelectValue /></SelectTrigger>
           <SelectContent>{taskAgentExpiryOptions.map(option => <SelectItem key={option.value} value={String(option.value)}>{option.label}</SelectItem>)}</SelectContent>
+        </Select>
+      </SettingRow>
+      <SettingRow label="Usage display">
+        <Select value={usageDisplay} onValueChange={value => { if (value !== null) saveUsageDisplay(value); }}>
+          <SelectTrigger size="sm" aria-label="Usage display"><SelectValue /></SelectTrigger>
+          <SelectContent>{usageDisplayOptions.map(option => <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>)}</SelectContent>
         </Select>
       </SettingRow>
       <WebPushSetting />

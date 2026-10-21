@@ -660,6 +660,10 @@ impl NativeSessionReader for OpenCodeTaskRuntime {
                         } else {
                             "message"
                         },
+                        generation_ms: entry["generationMs"].as_f64().map(|value| value as i64),
+                        first_response_ms: entry["firstResponseMs"]
+                            .as_f64()
+                            .map(|value| value as i64),
                     })
                     .collect(),
                 live_message_id: timeline.live_message_id,

@@ -11,6 +11,7 @@ export const TaskUsageSchema = z.object({
   provider: z.string(), model: z.string(), startedAt: z.number(), completedAt: z.number().nullable(),
   failed: z.boolean(), summary: z.boolean(), steps: count, cost: count, subsidized: z.boolean().default(false),
   tokens: UsageTokensSchema, source: z.enum(["steps", "message"]),
+  generationMs: count.nullable().default(null), firstResponseMs: count.nullable().default(null),
 });
 
 export type TaskUsage = z.infer<typeof TaskUsageSchema>;

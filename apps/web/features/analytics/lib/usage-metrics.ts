@@ -34,6 +34,10 @@ export function usageMetrics(usage: TaskUsage[]) {
       turns.set(entry.sessionId, session);
     }
   }
+  const timed = usage.filter(entry => entry.generationMs !== null);
+  const generationMs = timed.reduce((sum, entry) => sum + (entry.generationMs ?? 0), 0);
+  const outputTokensPerSecond = generationMs > 0 ? timed.reduce((sum, entry) => sum + entry.tokens.output, 0) / (generationMs / 1000) : null;
+  const medianFirstResponseMs = percentile(usage.flatMap(entry => entry.firstResponseMs === null ? [] : [entry.firstResponseMs]), 0.5);
   let durationMs = 0;
   let measuredDuration = false;
   for (const session of turns.values()) {
@@ -48,7 +52,8 @@ export function usageMetrics(usage: TaskUsage[]) {
   return { cost: usage.length && (cost > 0 || unpricedMessages === 0) ? cost : null, measuredMessages: usage.length, unpricedMessages, subsidized: subsidizedMessages > 0 && usage.every(entry => entry.subsidized || entry.cost <= 0), subsidizedMessages, tokens, totalTokens: tokens.input + tokens.output + tokens.reasoning + tokens.cache.read + tokens.cache.write,
     turns: root.size + worker.size, rootTurns: root.size, workerTurns: worker.size, steps, failedTurns: failed.size,
     incompleteMessages: usage.filter(entry => entry.completedAt === null).length,
-    summaries: usage.filter(entry => entry.summary).length, durationMs: measuredDuration ? durationMs : null };
+    summaries: usage.filter(entry => entry.summary).length, durationMs: measuredDuration ? durationMs : null,
+    outputTokensPerSecond, medianFirstResponseMs };
 }
 
 export function percentile(values: number[], percent: number): number | null {

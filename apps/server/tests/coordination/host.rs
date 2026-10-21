@@ -1459,6 +1459,8 @@ mod host_tests {
             summary: false,
             steps: 1.0,
             source: "message",
+            generation_ms: None,
+            first_response_ms: None,
         };
         let settle = |usage: Vec<UsageEntry>, pricing, require| {
             settle_usage(
@@ -2391,6 +2393,8 @@ mod host_tests {
                         summary: false,
                         steps: 1.0,
                         source: "message",
+                        generation_ms: None,
+                        first_response_ms: None,
                     }],
                     live_message_id: Some("msg-usage".into()),
                 },
@@ -2431,6 +2435,8 @@ mod host_tests {
                         summary: false,
                         steps: 1.0,
                         source: "message",
+                        generation_ms: None,
+                        first_response_ms: None,
                     }],
                     live_message_id: None,
                 };

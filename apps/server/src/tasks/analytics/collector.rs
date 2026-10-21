@@ -96,6 +96,12 @@ pub async fn read_native_usage(
                 },
             },
             source: entry.source.into(),
+            // A running step's generation time is not final.
+            generation_ms: entry
+                .generation_ms
+                .filter(|_| entry.completed_at_ms.is_some())
+                .map(|value| value as f64),
+            first_response_ms: entry.first_response_ms.map(|value| value as f64),
         })
         .collect())
 }

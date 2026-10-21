@@ -458,18 +458,30 @@ pub struct UsageRecord {
     pub failed: bool,
     pub tokens: UsageTokens,
     pub cost_usd: f64,
+    /// From the entry that sent the request (the prompt, a tool result, or the
+    /// previous response) to the last transcript entry of this response.
+    pub generation_ms: Option<i64>,
+    /// From that request entry to the first transcript entry of this response.
+    pub first_response_ms: Option<i64>,
 }
 
 /// TypeScript `claudeUsage`: one record per API response. Claude Code reports
 /// no native cost per message, so listed prices estimate it.
+///
+/// Claude Code writes one transcript entry per content block of a response,
+/// each with its write time. The entry before a response's first block is its
+/// request, so those timestamps time the response without tool execution.
 pub fn usage_records(
     entries: &[ClaudeMessageEntry],
     pricing: Option<&ModelPricingCatalog>,
 ) -> Vec<UsageRecord> {
-    let mut records = Vec::new();
-    let mut seen = HashSet::new();
+    let mut records: Vec<UsageRecord> = Vec::new();
+    // Response key -> (record index, request time).
+    let mut seen = HashMap::<String, (usize, Option<i64>)>::new();
     let mut turn_id = String::new();
+    let mut previous_at = None;
     for entry in entries {
+        let request_at = std::mem::replace(&mut previous_at, created_at(entry));
         if entry.kind == "user"
             && blocks(entry)
                 .iter()
@@ -481,14 +493,25 @@ pub fn usage_records(
         if entry.kind != "assistant" || turn_id.is_empty() {
             continue;
         }
-        if !seen.insert(
-            entry
-                .message_id
-                .clone()
-                .unwrap_or_else(|| entry.uuid.clone()),
-        ) {
+        let key = entry
+            .message_id
+            .clone()
+            .unwrap_or_else(|| entry.uuid.clone());
+        if let Some(&(index, request_at)) = seen.get(&key) {
+            let record = &mut records[index];
+            if record.generation_ms.is_some()
+                && let (Some(request_at), Some(last_at)) = (request_at, created_at(entry))
+            {
+                record.generation_ms = Some((last_at - request_at).max(0));
+            }
             continue;
         }
+        let first_at = created_at(entry);
+        seen.insert(key, (records.len(), request_at));
+        let elapsed = request_at
+            .zip(first_at)
+            .filter(|_| !entry.is_api_error_message)
+            .map(|(request_at, first_at)| (first_at - request_at).max(0));
         let tokens = entry
             .usage
             .as_ref()
@@ -511,6 +534,8 @@ pub fn usage_records(
             failed: entry.is_api_error_message,
             tokens,
             cost_usd,
+            generation_ms: elapsed,
+            first_response_ms: elapsed,
         });
     }
     records
@@ -681,6 +706,20 @@ mod tests {
             }
         );
         assert_eq!(usage[0].started_at_ms, ms("2026-09-07T15:37:24.252Z"));
+        // The prompt requests msg_1; its two blocks are written at .252 and .300.
+        assert_eq!(
+            usage
+                .iter()
+                .map(|record| (record.first_response_ms, record.generation_ms))
+                .collect::<Vec<_>>(),
+            [
+                (Some(22_090), Some(22_138)),
+                // The tool result at 24.400 requests msg_2.
+                (Some(852), Some(852)),
+                // An API error is not a response.
+                (None, None),
+            ]
+        );
         let expected = (9.0 + (82.0 + 74.0) * 5.0 + 5.0 * 0.1 + 6053.0 * 1.25) / 1_000_000.0;
         assert!((usage[0].cost_usd - expected).abs() < 1e-12);
         assert_eq!(usage_records(&entries, None)[0].cost_usd, 0.0);

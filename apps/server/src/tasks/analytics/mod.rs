@@ -20,13 +20,13 @@ use crate::{
     tasks::response as task_response,
 };
 
-#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, ts_rs::TS)]
 pub struct CacheTokens {
     pub read: f64,
     pub write: f64,
 }
 
-#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, ts_rs::TS)]
 pub struct Tokens {
     pub input: f64,
     pub output: f64,
@@ -41,8 +41,9 @@ impl Tokens {
 }
 
 /// `TaskUsageSchema`: field order is the persisted and public order.
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, ts_rs::TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export)]
 pub struct TaskUsage {
     pub session_id: String,
     pub message_id: String,
@@ -60,6 +61,13 @@ pub struct TaskUsage {
     pub subsidized: bool,
     pub tokens: Tokens,
     pub source: String,
+    /// Model generation time of the record's steps; the divisor of output
+    /// tokens per second. See `UsageEntry::generation_ms`.
+    #[serde(default)]
+    pub generation_ms: Option<f64>,
+    /// Time from the model request to its first output.
+    #[serde(default)]
+    pub first_response_ms: Option<f64>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -243,6 +251,34 @@ pub struct UsageMetrics {
     pub incomplete_messages: usize,
     pub summaries: usize,
     pub duration_ms: f64,
+    pub output_tokens_per_second: Option<f64>,
+    pub median_first_response_ms: Option<f64>,
+}
+
+/// Output tokens over the generation time of the records that have one.
+fn output_tokens_per_second(usage: &[TaskUsage]) -> Option<f64> {
+    let (output, generation_ms) = usage
+        .iter()
+        .filter_map(|entry| Some((entry.tokens.output, entry.generation_ms?)))
+        .fold((0.0, 0.0), |(output, total), (tokens, ms)| {
+            (output + tokens, total + ms)
+        });
+    (generation_ms > 0.0).then(|| output / (generation_ms / 1000.0))
+}
+
+/// The median first response across the records that have one.
+fn median_first_response_ms(usage: &[TaskUsage]) -> Option<f64> {
+    let mut values = usage
+        .iter()
+        .filter_map(|entry| entry.first_response_ms)
+        .collect::<Vec<_>>();
+    values.sort_by(f64::total_cmp);
+    let middle = values.len() / 2;
+    match values.len() {
+        0 => None,
+        length if length % 2 == 1 => Some(values[middle]),
+        _ => Some((values[middle - 1] + values[middle]) / 2.0),
+    }
 }
 
 pub fn usage_is_unpriced(entry: &TaskUsage) -> bool {
@@ -315,6 +351,8 @@ pub fn usage_metrics(usage: &[TaskUsage]) -> UsageMetrics {
             .count(),
         summaries: usage.iter().filter(|entry| entry.summary).count(),
         duration_ms,
+        output_tokens_per_second: output_tokens_per_second(usage),
+        median_first_response_ms: median_first_response_ms(usage),
     }
 }
 
@@ -568,6 +606,8 @@ pub(crate) mod tests {
                 ..Tokens::default()
             },
             source: "steps".into(),
+            generation_ms: None,
+            first_response_ms: None,
         }
     }
 
@@ -628,6 +668,41 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn timing_metrics_use_only_records_with_native_timing() {
+        let untimed = usage_metrics(&[entry("msg_untimed", 1.0)]);
+        assert_eq!(
+            (
+                untimed.output_tokens_per_second,
+                untimed.median_first_response_ms
+            ),
+            (None, None)
+        );
+        let timed = |id: &str, output: f64, generation: f64, first: f64| TaskUsage {
+            generation_ms: Some(generation),
+            first_response_ms: Some(first),
+            tokens: Tokens {
+                output,
+                ..Tokens::default()
+            },
+            ..entry(id, 1.0)
+        };
+        let usage = [
+            timed("msg_a", 100.0, 2_000.0, 400.0),
+            timed("msg_b", 50.0, 1_000.0, 900.0),
+            timed("msg_c", 30.0, 1_000.0, 100.0),
+            // Untimed output does not count toward the rate.
+            entry("msg_untimed", 1.0),
+        ];
+        let result = usage_metrics(&usage);
+        assert_eq!(result.output_tokens_per_second, Some(45.0));
+        assert_eq!(result.median_first_response_ms, Some(400.0));
+        assert_eq!(
+            usage_metrics(&usage[..2]).median_first_response_ms,
+            Some(650.0)
+        );
+    }
+
+    #[test]
     fn mixed_billed_and_subsidized_entries_are_not_wholly_subsidized() {
         let subsidized = TaskUsage {
             subsidized: true,
@@ -642,8 +717,14 @@ pub(crate) mod tests {
     fn old_usage_snapshots_default_to_non_subsidized_and_keep_integer_json() {
         let mut value = serde_json::to_value(entry("msg", 3.0)).unwrap();
         value.as_object_mut().unwrap().remove("subsidized");
+        value.as_object_mut().unwrap().remove("generationMs");
+        value.as_object_mut().unwrap().remove("firstResponseMs");
         let parsed: TaskUsage = serde_json::from_value(value).unwrap();
         assert!(!parsed.subsidized);
+        assert_eq!(
+            (parsed.generation_ms, parsed.first_response_ms),
+            (None, None)
+        );
         assert!(js(&parsed).contains(r#""startedAt":100,"completedAt":200"#));
     }
 

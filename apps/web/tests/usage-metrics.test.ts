@@ -20,6 +20,8 @@ function usage(overrides: Partial<TaskUsage>): TaskUsage {
     subsidized: false,
     tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
     source: "message",
+    generationMs: null,
+    firstResponseMs: null,
     ...overrides,
   };
 }
@@ -53,5 +55,29 @@ describe("usageMetrics agent time", () => {
     ]);
 
     expect(metrics.durationMs).toBeNull();
+  });
+});
+
+describe("usageMetrics model timing", () => {
+  const tokens = (output: number) => ({ input: 0, output, reasoning: 0, cache: { read: 0, write: 0 } });
+
+  it("divides timed output tokens by their generation time and takes the median first response", () => {
+    const metrics = usageMetrics([
+      usage({ messageId: "a", tokens: tokens(100), generationMs: 2_000, firstResponseMs: 400 }),
+      usage({ messageId: "b", tokens: tokens(50), generationMs: 1_000, firstResponseMs: 900 }),
+      usage({ messageId: "c", tokens: tokens(30), generationMs: 1_000, firstResponseMs: 100 }),
+      usage({ messageId: "untimed", tokens: tokens(1_000) }),
+    ]);
+
+    expect(metrics.outputTokensPerSecond).toBe(45);
+    expect(metrics.medianFirstResponseMs).toBe(400);
+  });
+
+  it("reports no timing when no native record has it", () => {
+    const metrics = usageMetrics([usage({ tokens: tokens(10) })]);
+
+    expect(metrics.outputTokensPerSecond).toBeNull();
+    expect(metrics.medianFirstResponseMs).toBeNull();
+    expect(usageMetrics([]).outputTokensPerSecond).toBeNull();
   });
 });

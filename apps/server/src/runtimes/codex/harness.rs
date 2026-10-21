@@ -194,6 +194,11 @@ impl NativeSessionReader for CodexTaskRuntime {
                         summary: false,
                         steps: 1.0,
                         source: "message",
+                        // A Codex turn is timed only by its prompt file and log
+                        // writes, which include tool execution and carry no
+                        // first-output timestamp.
+                        generation_ms: None,
+                        first_response_ms: None,
                     })
                     .collect(),
                 live_message_id: live,

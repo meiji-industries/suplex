@@ -148,6 +148,13 @@ pub struct UsageEntry {
     pub summary: bool,
     pub steps: f64,
     pub source: &'static str,
+    /// Milliseconds from the model request to its last output, excluding tool
+    /// execution the native record shows. `None` when the native files cannot
+    /// separate generation from tool time or the step is still running.
+    pub generation_ms: Option<i64>,
+    /// Milliseconds from the model request to its first recorded output.
+    /// `None` when the native files carry no per-response timestamp.
+    pub first_response_ms: Option<i64>,
 }
 
 /// TypeScript `NativeSessionReader.timeline`.

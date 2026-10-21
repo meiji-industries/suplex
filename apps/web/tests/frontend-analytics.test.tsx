@@ -10,7 +10,7 @@ import type * as usageMetricsModule from "../features/analytics/lib/usage-metric
 const api = vi.hoisted(() => ({ readJsonUnchecked: vi.fn(), withCompany: (path: string) => path }));
 vi.mock("../lib/api.js", () => api);
 vi.mock("../shell/company-context.js", () => ({ useCompanyContext: () => ({ currentCompany: { id: "company-1" } }), useOptionalCompanyContext: () => null }));
-vi.mock("../shell/application-frame.js", () => ({ ApplicationFrame: ({ children }: { children: ReactNode }) => children }));
+vi.mock("../shell/application-frame.js", () => ({ ApplicationFrame: ({ children, headerRight }: { children: ReactNode; headerRight?: ReactNode }) => <>{headerRight}{children}</> }));
 vi.mock("../features/tasks/task-status.js", () => ({ TaskStatus: ({ status }: { status: string }) => status, taskStatusLabels: { delivered: "Delivered", active: "Active" } }));
 vi.mock("../features/analytics/lib/usage-metrics.js", async importOriginal => {
   const actual = await importOriginal<typeof usageMetricsModule>();
@@ -40,7 +40,7 @@ function usage(overrides: Partial<TaskUsage> = {}): TaskUsage {
   return {
     sessionId: "shared-session", messageId: "message", turnId: "turn", role: "root", provider: "opencode", model: "model",
     startedAt: 0, completedAt: 1_000, failed: false, summary: false, steps: 1, cost: 2, subsidized: true,
-    tokens: { input: 10, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }, source: "message", ...overrides,
+    tokens: { input: 10, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }, source: "message", generationMs: null, firstResponseMs: null, ...overrides,
   };
 }
 
@@ -132,8 +132,8 @@ test("narrows every analytics cohort to tasks created in the date range and proj
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
   const daysAgo = (days: number) => { const date = new Date(); date.setDate(date.getDate() - days); return date.toISOString(); };
   const tasks = [
-    task("Recent", { createdAt: daysAgo(0), usage: [usage()] }),
-    task("Last week", { createdAt: daysAgo(5), projectId: "project-2", usage: [usage({ messageId: "second", cost: 3 })] }),
+    task("Recent", { createdAt: daysAgo(0), usage: [usage({ tokens: { input: 10, output: 20, reasoning: 0, cache: { read: 0, write: 0 } }, generationMs: 1_000, firstResponseMs: 200 })] }),
+    task("Last week", { createdAt: daysAgo(5), projectId: "project-2", usage: [usage({ messageId: "second", cost: 3, tokens: { input: 10, output: 40, reasoning: 0, cache: { read: 0, write: 0 } }, generationMs: 1_000, firstResponseMs: 600 })] }),
     task("Old", { createdAt: daysAgo(40), usage: [usage({ messageId: "third", cost: 5 })] }),
   ];
   api.readJsonUnchecked.mockImplementation(async (path: string) => path.endsWith("/projects") ? { projects: [{ id: "project-1", name: "Project" }, { id: "project-2", name: "Other" }] } : { tasks, generatedAt: new Date().toISOString() });
@@ -150,6 +150,12 @@ test("narrows every analytics cohort to tasks created in the date range and proj
     });
   };
   const dateValue = (days: number) => dateInputValue(new Date(daysAgo(days)));
+  const modelRow = () => {
+    const table = Array.from(container.querySelectorAll("section")).find(section => section.querySelector("h2")?.textContent === "Models")!.querySelector("table")!;
+    const headers = Array.from(table.querySelectorAll("thead th")).map(cell => cell.textContent);
+    const cells = Array.from(table.querySelectorAll("tbody tr:first-child td")).map(cell => cell.textContent);
+    return { rate: cells[headers.indexOf("Output tokens/s")], firstResponse: cells[headers.indexOf("Median first response")] };
+  };
   try {
     await act(async () => root.render(<AnalyticsView />));
     expect(container.querySelector('[aria-label="Creation period"]')).toBeNull();
@@ -157,20 +163,69 @@ test("narrows every analytics cohort to tasks created in the date range and proj
     expect(container.querySelector<HTMLInputElement>('input[aria-label="Creation end date"]')?.value).toBe(dateValue(0));
     expect(ledgerTitles()).toEqual(["Last week", "Recent"]);
     expect(metric("Estimated spend")?.textContent).toBe("$5.00");
+    expect(modelRow()).toEqual({ rate: "30.0", firstResponse: "400 ms" });
 
     await setDate("Creation start date", dateValue(45));
     expect(ledgerTitles()).toEqual(["Old", "Last week", "Recent"]);
     expect(metric("Estimated spend")?.textContent).toBe("$10.00");
+    // The untimed old task leaves the timed values unchanged.
+    expect(modelRow()).toEqual({ rate: "30.0", firstResponse: "400 ms" });
 
     await setDate("Creation end date", dateValue(1));
     expect(ledgerTitles()).toEqual(["Old", "Last week"]);
     expect(metric("Estimated spend")?.textContent).toBe("$8.00");
+    expect(modelRow()).toEqual({ rate: "40.0", firstResponse: "600 ms" });
+
+    await setDate("Creation start date", dateValue(45));
+    await setDate("Creation end date", dateValue(30));
+    expect(ledgerTitles()).toEqual(["Old"]);
+    expect(modelRow()).toEqual({ rate: "Not available", firstResponse: "Not available" });
+    await setDate("Creation end date", dateValue(1));
 
     await act(async () => container.querySelector<HTMLButtonElement>('[data-value="project-2"]')!.click());
     expect(ledgerTitles()).toEqual(["Last week"]);
     await act(async () => container.querySelectorAll<HTMLButtonElement>('[data-value="all"]')[0]!.click());
     expect(ledgerTitles()).toEqual(["Old", "Last week"]);
   } finally {
+    await act(async () => root.unmount());
+    container.remove();
+  }
+});
+
+test("shows model timing in the ledger and the CSV export", async () => {
+  Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+  const output = (value: number) => ({ input: 10, output: value, reasoning: 0, cache: { read: 0, write: 0 } });
+  const tasks = [
+    task("Timed", { usage: [usage({ tokens: output(30), generationMs: 2_000, firstResponseMs: 1_500 }), usage({ messageId: "second", tokens: output(50), generationMs: 2_000, firstResponseMs: 500 })] }),
+    task("Untimed", { usage: [usage({ messageId: "third", cost: 1 })] }),
+  ];
+  api.readJsonUnchecked.mockImplementation(async (path: string) => path.endsWith("/projects") ? { projects: [] } : { tasks, generatedAt: new Date().toISOString() });
+  const blobs: Blob[] = [];
+  const createObjectURL = vi.fn((blob: Blob) => { blobs.push(blob); return "blob:analytics"; });
+  Object.assign(URL, { createObjectURL, revokeObjectURL: vi.fn() });
+  const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  try {
+    await act(async () => root.render(<AnalyticsView />));
+    const ledger = container.querySelector('section[aria-label="Task analytics"] table')!;
+    const headers = Array.from(ledger.querySelectorAll("thead th")).map(cell => cell.textContent);
+    const row = (title: string) => {
+      const cells = Array.from(Array.from(ledger.querySelectorAll("tbody tr")).find(item => item.querySelector("a")?.textContent === title)!.querySelectorAll("td")).map(cell => cell.textContent);
+      return [cells[headers.indexOf("Output tokens/s")], cells[headers.indexOf("Median first response")]];
+    };
+    expect(row("Timed")).toEqual(["20.0", "1.0s"]);
+    expect(row("Untimed")).toEqual(["Not available", "Not available"]);
+
+    await act(async () => Array.from(container.querySelectorAll("button")).find(button => button.textContent === "Export CSV")!.click());
+    expect(click).toHaveBeenCalled();
+    const [header, ...lines] = (await blobs[0]!.text()).split("\r\n");
+    expect(header).toBe("Task,Status,Estimated USD,Coordinator turns,Delegated turns,Tokens,Agent seconds,Output tokens per second,Median first response ms");
+    const columns = (line: string) => line.split(",").slice(-2);
+    expect(lines.map(columns)).toEqual([['"20"', '"1000"'], ['""', '""']]);
+  } finally {
+    click.mockRestore();
     await act(async () => root.unmount());
     container.remove();
   }

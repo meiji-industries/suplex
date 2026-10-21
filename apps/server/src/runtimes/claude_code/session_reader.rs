@@ -181,6 +181,8 @@ impl NativeSessionReader for ClaudeCodeTaskRuntime {
                     summary: false,
                     steps: 1.0,
                     source: "message",
+                    generation_ms: record.generation_ms,
+                    first_response_ms: record.first_response_ms,
                 })
                 .collect::<Vec<_>>();
             let mut live_message_id = None;
@@ -188,6 +190,7 @@ impl NativeSessionReader for ClaudeCodeTaskRuntime {
                 && let Some(live) = usage.last_mut()
             {
                 live.completed_at_ms = None;
+                live.generation_ms = None;
                 live_message_id = Some(live.message_id.clone());
             }
             Ok(NativeTimeline {

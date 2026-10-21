@@ -232,6 +232,49 @@ impl Counts {
     }
 }
 
+/// `(generationMs, firstResponseMs)` of one assistant message. OpenCode
+/// stamps the message when it sends the request and when the step finishes,
+/// and stamps each text and reasoning part when its output starts. Tool parts
+/// stamp their execution, which runs inside the step and is excluded from
+/// generation time. A failed message has no timing.
+fn message_timing(message: &Envelope, failed: bool) -> (Option<f64>, Option<f64>) {
+    let time = &message.raw["info"]["time"];
+    let Some(created) = time["created"].as_f64().filter(|_| !failed) else {
+        return (None, None);
+    };
+    let parts = message.raw["parts"]
+        .as_array()
+        .map_or(&[][..], Vec::as_slice);
+    let first_response = parts
+        .iter()
+        .filter(|part| matches!(part["type"].as_str(), Some("text" | "reasoning")))
+        .filter_map(|part| part["time"]["start"].as_f64())
+        .reduce(f64::min)
+        .map(|start| (start - created).max(0.0));
+    let generation = time["completed"].as_f64().and_then(|completed| {
+        let mut tools = Vec::new();
+        for part in parts.iter().filter(|part| part["type"] == "tool") {
+            let tool = &part["state"]["time"];
+            match (tool["start"].as_f64(), tool["end"].as_f64()) {
+                (Some(start), Some(end)) => {
+                    tools.push((start.max(created), end.min(completed)));
+                }
+                // A tool without an end leaves the step's tool time unknown.
+                (Some(_), None) => return None,
+                _ => {}
+            }
+        }
+        tools.sort_by(|left, right| left.0.total_cmp(&right.0));
+        let (mut tool_ms, mut end) = (0.0, f64::NEG_INFINITY);
+        for (start, finish) in tools {
+            tool_ms += (finish - start.max(end)).max(0.0);
+            end = end.max(finish);
+        }
+        Some((completed - created - tool_ms).max(0.0))
+    });
+    (generation, first_response)
+}
+
 /// One usage row per native assistant message; step totals win over the message total.
 pub fn task_usage(
     messages: &[Envelope],
@@ -292,6 +335,7 @@ pub fn task_usage(
         } else {
             steps.len()
         };
+        let (generation_ms, first_response_ms) = message_timing(message, info.error.is_some());
         usage.push(json!({
             "sessionId": info.session_id, "messageId": info.id, "turnId": info.parent_id, "role": role,
             "provider": info.provider_id, "model": info.model_id,
@@ -300,6 +344,7 @@ pub fn task_usage(
             "failed": info.error.is_some(), "summary": info.summary.unwrap_or(false),
             "steps": step_count, "cost": js_number(cost), "subsidized": estimate > 0.0,
             "tokens": tokens.json(), "source": if steps.is_empty() { "message" } else { "steps" },
+            "generationMs": generation_ms.map(js_number), "firstResponseMs": first_response_ms.map(js_number),
         }));
     }
     Ok(usage)
@@ -638,6 +683,54 @@ mod tests {
         assert_eq!(usage[0]["tokens"]["input"], json!(2_000_000));
         assert_eq!(usage[0]["cost"], json!(4));
         assert_eq!(usage[0]["subsidized"], true);
+    }
+
+    #[test]
+    fn usage_times_generation_without_tool_execution_and_the_first_output_part() {
+        let mut finished = retired_message();
+        finished["parts"] = json!([
+            {"type":"step-start"},
+            {"type":"reasoning","text":"Plan","time":{"start":130,"end":150}},
+            {"type":"tool","callID":"call-1","tool":"bash","state":{"status":"completed","input":{},"output":"ok","title":"ls","metadata":{},"time":{"start":150,"end":160}}},
+            {"type":"tool","callID":"call-2","tool":"bash","state":{"status":"completed","input":{},"output":"ok","title":"ls","metadata":{},"time":{"start":155,"end":165}}},
+            {"type":"text","text":"Done","time":{"start":170,"end":190}},
+            {"type":"step-finish","id":"s1","cost":0,"tokens":{"input":1,"output":40,"reasoning":0,"cache":{"read":0,"write":0}}},
+        ]);
+        let mut failed = retired_message();
+        failed["info"]["id"] = json!("msg_failed");
+        failed["info"]["error"] = json!({"name":"APIError","data":{"message":"overloaded"}});
+        failed["parts"] = json!([{"type":"text","text":"","time":{"start":120}}]);
+        let mut running = retired_message();
+        running["info"]["id"] = json!("msg_running");
+        running["info"]["time"] = json!({"created":300});
+        running["parts"] = json!([{"type":"text","text":"Work","time":{"start":340}}]);
+        let mut untimed = retired_message();
+        untimed["info"]["id"] = json!("msg_untimed");
+        untimed["parts"] = json!([{"type":"text","text":"Done"}]);
+        let messages = [finished, failed, running, untimed]
+            .into_iter()
+            .map(|message| Envelope::parse(message).unwrap())
+            .collect::<Vec<_>>();
+        let usage = task_usage(&messages, "worker", None).unwrap();
+        let timing = usage
+            .iter()
+            .map(|entry| {
+                (
+                    entry["generationMs"].clone(),
+                    entry["firstResponseMs"].clone(),
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            timing,
+            [
+                // 100 ms from request to finish less 15 ms of overlapping tool time.
+                (json!(85), json!(30)),
+                (Value::Null, Value::Null),
+                (Value::Null, json!(40)),
+                (json!(100), Value::Null),
+            ]
+        );
     }
 
     #[tokio::test]

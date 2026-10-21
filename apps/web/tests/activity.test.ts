@@ -5,7 +5,7 @@ import type { TaskUsage } from "../contracts/usage.js";
 import { buildActivity } from "../features/analytics/lib/activity.js";
 
 function usage(overrides: Partial<TaskUsage> = {}): TaskUsage {
-  return { sessionId: "session", messageId: "message", turnId: "turn", role: "root", provider: "opencode", model: "model", startedAt: 0, completedAt: 1, failed: false, summary: false, steps: 1, cost: 1, subsidized: false, tokens: { input: 1, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }, source: "message", ...overrides };
+  return { sessionId: "session", messageId: "message", turnId: "turn", role: "root", provider: "opencode", model: "model", startedAt: 0, completedAt: 1, failed: false, summary: false, steps: 1, cost: 1, subsidized: false, tokens: { input: 1, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }, source: "message", generationMs: null, firstResponseMs: null, ...overrides };
 }
 
 function task(entries: TaskUsage[]): TaskAnalytics {

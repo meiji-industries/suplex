@@ -49,6 +49,10 @@ pub fn usage(turns: &[DevinTurn]) -> Vec<UsageEntry> {
             summary: false,
             steps: 1.0,
             source: "message",
+            // `devin --print` writes final text only: no token counts, and the
+            // turn times include tool execution.
+            generation_ms: None,
+            first_response_ms: None,
         })
         .collect()
 }

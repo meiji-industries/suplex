@@ -610,6 +610,8 @@ pub(crate) fn replace_observed_usage(
                     "tokens":{"input":entry.tokens.input,"output":entry.tokens.output,
                         "reasoning":entry.tokens.reasoning,"cache":{"read":entry.tokens.cache_read,
                             "write":entry.tokens.cache_write}},"source":entry.source,
+                    "generationMs":entry.completed_at_ms.and(entry.generation_ms),
+                    "firstResponseMs":entry.first_response_ms,
                 }),
             ));
         }

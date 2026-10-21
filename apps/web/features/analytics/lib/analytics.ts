@@ -20,3 +20,10 @@ export function duration(value: number | null): string {
   return `${(value / 3_600_000).toFixed(1)}h`;
 }
 export function compact(value: number): string { return compactFormat.format(value); }
+export function tokenRate(value: number | null): string { return value === null ? "Not available" : value.toFixed(1); }
+export function latency(value: number | null): string {
+  if (value === null) return "Not available";
+  if (value < 1000) return `${Math.round(value)} ms`;
+  if (value < 60_000) return `${(value / 1000).toFixed(1)}s`;
+  return duration(value);
+}

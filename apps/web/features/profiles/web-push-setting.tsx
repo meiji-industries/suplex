@@ -38,9 +38,11 @@ export function WebPushSetting(): ReactElement | null {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(false);
   const refresh = useCallback(() => readState().then(setState, () => setState("off")), []);
-  useEffect(() => { if (!window.suplexApp) void refresh(); }, [refresh]);
+  // The desktop and mobile shells run in a web view, which has no Web Push.
+  const shell = Boolean(window.suplexApp ?? window.suplexMobile);
+  useEffect(() => { if (!shell) void refresh(); }, [refresh, shell]);
 
-  if (window.suplexApp || !state) return null;
+  if (shell || !state) return null;
   if (state === "unsupported") return <SettingRow label={LABEL} description="This browser cannot show notifications. On iPhone or iPad, add Suplex to the Home Screen, then open it from there." />;
 
   const change = async (checked: boolean): Promise<void> => {

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type FormEvent, type RefObject, type ReactElement } from "react";
+import { Plus } from "lucide-react";
 
 import suplexWordmark from "../../assets/suplex-wordmark.svg?inline";
-import accountBackground from "../../assets/account-background.png?inline";
 import { Alert, AlertDescription } from "../../components/ui/alert.js";
 import { Button } from "../../components/ui/button.js";
 import { Input } from "../../components/ui/input.js";
@@ -118,39 +118,46 @@ export function AccountLoginView({ preview = false, previewState }: { preview?: 
   const cancel = (): void => { closeLoginWindow(loginWindow); setWaiting(undefined); setEmailForm(false); setError(""); };
 
   return (
-    <main className="dark flex min-h-dvh flex-col items-center justify-center gap-8 bg-[#080808] pt-8 pb-[calc(var(--desktop-status-height,0px)+2rem)] text-foreground md:grid md:grid-cols-[minmax(0,1fr)_minmax(0,2fr)] md:gap-0 md:pt-0 md:pb-[var(--desktop-status-height,0px)]">
-      <div className="relative order-2 aspect-[941/1257] w-full max-w-sm justify-self-center overflow-hidden md:aspect-[1257/941] md:max-w-none">
-        <img src={accountBackground} alt="" className="absolute top-1/2 left-1/2 h-auto w-[133.582%] max-w-none -translate-x-1/2 -translate-y-1/2 -rotate-90 md:w-full md:-rotate-180" />
-      </div>
-      <div className="order-1 flex flex-col items-center gap-10 px-6 py-8 md:px-12">
-        <img src={suplexWordmark} alt="Suplex" className="h-auto w-full max-w-sm" />
-        <div className="flex w-full max-w-xs flex-col gap-4">
-          {canManage === false ? <p className="text-xs text-muted-foreground">Ask an administrator to log in to Suplex.</p> : waiting ? (
+    <main className="dark flex min-h-dvh flex-col bg-[#070707] pb-[var(--desktop-status-height,0px)] text-foreground md:flex-row">
+      <section aria-label="Suplex" className="flex flex-col justify-between gap-16 bg-primary px-6 py-10 text-primary-foreground md:flex-1 md:gap-24 md:px-12 md:py-16 xl:px-18">
+        <div className="flex items-center justify-between font-mono text-xs tracking-wider text-primary-foreground/75 md:text-sm">
+          <span>AI TOOLS FOR BUILDERS.</span>
+          <Plus aria-hidden="true" strokeWidth={0.6} className="size-12 md:size-24" />
+        </div>
+        <div className="flex flex-col gap-6 md:gap-10">
+          <h1 className="text-6xl leading-[0.92] font-medium tracking-[-0.05em] md:text-8xl">Heavy tasks.<br />Light work.</h1>
+          <p className="font-mono text-xs tracking-wider text-primary-foreground/75 md:text-sm">YOUR BACKLOG NEVER SAW IT COMING.</p>
+        </div>
+      </section>
+      <div className="flex flex-1 flex-col items-center justify-center px-6 py-10 md:w-[37.5%] md:min-w-[30rem] md:flex-none md:px-12 md:py-16">
+        <img src={suplexWordmark} alt="Suplex" className="h-auto w-full max-w-[375px]" />
+        <div className="mt-10 flex w-full max-w-[375px] flex-col gap-4 md:mt-12">
+          {canManage === false ? <p className="text-center text-sm text-muted-foreground">Ask an administrator to log in to Suplex.</p> : waiting ? (
             <div className="flex flex-col gap-5 text-center">
               <div className="flex flex-col gap-2">
-                <h1 className="text-2xl font-normal tracking-tight">{waiting.email ? "Check your email" : "Continue in the browser"}</h1>
+                <h2 className="text-2xl font-normal tracking-tight">{waiting.email ? "Check your email" : "Continue in the browser"}</h2>
                 {waiting.email ? <p className="text-sm leading-relaxed text-muted-foreground">Suplex sent a login link to <span className="break-words text-foreground">{waiting.email}</span>. Open it to continue.</p> : <p className="text-sm leading-relaxed text-muted-foreground">Suplex will continue after you log in.</p>}
               </div>
               <div className="flex min-h-9 items-center justify-center gap-2 text-muted-foreground"><Spinner />{waiting.url ? <Button variant="link" nativeButton={false} render={<a href={waiting.url} target={LOGIN_WINDOW} onClick={(event) => { event.preventDefault(); if (waiting.url) openLogin(waiting.url); }} />}>Open the browser</Button> : null}</div>
-              <Button variant="outline" onClick={cancel}>Cancel</Button>
+              <Button variant="outline" size="lg" onClick={cancel}>Cancel</Button>
             </div>
           ) : emailForm ? (
-            <form className="flex flex-col gap-2" onSubmit={submitEmail}>
+            <form className="flex flex-col gap-3" onSubmit={submitEmail}>
               <Input type="email" required autoFocus autoComplete="email" aria-label="Email address" placeholder="Email address" value={email} onChange={(event) => setEmail(event.target.value)} />
-              <Button type="submit" disabled={busy || email.trim().length < 3}>Continue</Button>
-              <Button type="button" variant="ghost" onClick={cancel}>Cancel</Button>
+              <Button type="submit" size="lg" disabled={busy || email.trim().length < 3}>Continue</Button>
+              <Button type="button" variant="ghost" size="lg" onClick={cancel}>Cancel</Button>
             </form>
           ) : (
-            <div className="flex flex-col gap-2">
-              {recovery ? <p className="pb-2 text-sm text-muted-foreground">Log in to recover this host. Your account becomes its owner.</p> : null}
-              <Button disabled={busy || canManage === undefined} onClick={() => void start("google")}>Continue with Google</Button>
-              <Button variant="outline" disabled={busy || canManage === undefined} onClick={() => void start("github")}>Continue with GitHub</Button>
-              <Button variant="outline" disabled={busy || canManage === undefined} onClick={() => { setEmailForm(true); setError(""); }}>Continue with email</Button>
+            <div className="flex flex-col gap-3">
+              {recovery ? <p className="pb-2 text-center text-sm text-muted-foreground">Log in to recover this host. Your account becomes its owner.</p> : null}
+              <Button size="lg" disabled={busy || canManage === undefined} onClick={() => void start("google")}>Continue with Google</Button>
+              <Button variant="outline" size="lg" disabled={busy || canManage === undefined} onClick={() => void start("github")}>Continue with GitHub</Button>
+              <Button variant="outline" size="lg" disabled={busy || canManage === undefined} onClick={() => { setEmailForm(true); setError(""); }}>Continue with email</Button>
             </div>
           )}
           {error ? <Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert> : null}
           {canManage === false || waiting ? null : (
-            <p className="pt-4 text-center text-xs text-muted-foreground">When you continue, you agree to the <a href="https://suplex.sh/terms" target="_blank" rel="noreferrer" className="underline underline-offset-4">Terms of Service</a> and <a href="https://suplex.sh/privacy" target="_blank" rel="noreferrer" className="underline underline-offset-4">Privacy Policy</a>.</p>
+            <p className="mt-7 text-center text-sm leading-snug text-balance text-muted-foreground">When you continue, you agree to the <a href="https://suplex.sh/terms" target="_blank" rel="noreferrer" className="underline underline-offset-4 hover:text-foreground">Terms of Service</a> and <a href="https://suplex.sh/privacy" target="_blank" rel="noreferrer" className="underline underline-offset-4 hover:text-foreground">Privacy Policy</a>.</p>
           )}
         </div>
       </div>

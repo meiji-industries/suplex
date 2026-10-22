@@ -95,3 +95,17 @@ test("Open the browser keeps the new login tab and Cancel closes it", async () =
   expect(tab.close).toHaveBeenCalledTimes(1);
   expect(document.body.textContent).toContain("Continue with Google");
 });
+
+test("the mobile shells offer only the email login", async () => {
+  const buttons = (): string[] => Array.from(document.querySelectorAll("button")).map(button => button.textContent ?? "");
+  expect(buttons()).toEqual(expect.arrayContaining(["Continue with Google", "Continue with GitHub", "Continue with email"]));
+  window.suplexMobile = { openHostPicker: async () => {} };
+  try {
+    await act(async () => root.render(<AccountLoginView key="mobile" />));
+    expect(buttons()).not.toContain("Continue with Google");
+    expect(buttons()).not.toContain("Continue with GitHub");
+    expect(buttons()).toContain("Continue with email");
+  } finally {
+    delete window.suplexMobile;
+  }
+});

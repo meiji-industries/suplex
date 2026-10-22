@@ -150,9 +150,12 @@ export function AccountLoginView({ preview = false, previewState }: { preview?: 
           ) : (
             <div className="flex flex-col gap-3">
               {recovery ? <p className="pb-2 text-center text-sm text-muted-foreground">Log in to recover this host. Your account becomes its owner.</p> : null}
-              <Button size="lg" disabled={busy || canManage === undefined} onClick={() => void start("google")}>Continue with Google</Button>
-              <Button variant="outline" size="lg" disabled={busy || canManage === undefined} onClick={() => void start("github")}>Continue with GitHub</Button>
-              <Button variant="outline" size="lg" disabled={busy || canManage === undefined} onClick={() => { setEmailForm(true); setError(""); }}>Continue with email</Button>
+              {/* App Store guideline 4.8 asks for Sign in with Apple next to a third-party login, so the mobile shells offer only Suplex's own email login. Every method reaches the same account. */}
+              {window.suplexMobile ? null : <>
+                <Button size="lg" disabled={busy || canManage === undefined} onClick={() => void start("google")}>Continue with Google</Button>
+                <Button variant="outline" size="lg" disabled={busy || canManage === undefined} onClick={() => void start("github")}>Continue with GitHub</Button>
+              </>}
+              <Button variant={window.suplexMobile ? "default" : "outline"} size="lg" disabled={busy || canManage === undefined} onClick={() => { setEmailForm(true); setError(""); }}>Continue with email</Button>
             </div>
           )}
           {error ? <Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert> : null}

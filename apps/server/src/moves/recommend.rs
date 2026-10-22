@@ -7,11 +7,14 @@ use std::{collections::HashSet, error::Error, time::Duration};
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
-use super::{MoveRunner, shell};
+use super::{
+    MoveRunner,
+    agent::{self, Endpoint},
+};
 use crate::{
     http::AppState,
-    profiles::provider_login::{scoped_command, shell_binary, shell_quoted},
     projects::service as projects,
+    runtimes::pi::cli::{OMP, PI},
     tasks::{
         TaskError,
         control::{HarnessKind, TaskProfile},
@@ -85,52 +88,86 @@ Reply with only this JSON object, with no other text:
 
 /// The agent's one-shot command line, with tools that can change files or run
 /// commands turned off.
-fn command(profile: &TaskProfile) -> Result<String, Box<dyn Error + Send + Sync>> {
-    shell::check_provider(profile)?;
+fn command(profile: &TaskProfile, endpoint: Option<&Endpoint>) -> String {
     let effort = profile.reasoning_level.as_str();
-    let provider = profile.provider.as_str();
-    let args = match profile.provider {
-        HarnessKind::ClaudeCode => vec![
-            "-p".to_owned(),
-            PROMPT.to_owned(),
-            "--output-format".to_owned(),
-            "json".to_owned(),
-            "--model".to_owned(),
-            profile.model.clone(),
-            "--effort".to_owned(),
-            effort.to_owned(),
-            // Only file reading: no shell, edits, web, subagents, or MCP servers.
-            "--tools".to_owned(),
-            "Read,Glob,Grep".to_owned(),
-            "--strict-mcp-config".to_owned(),
-        ],
-        HarnessKind::Opencode
-        | HarnessKind::Devin
-        | HarnessKind::Codex
-        | HarnessKind::Pi
-        | HarnessKind::Omp => vec![
-            "exec".to_owned(),
-            "--skip-git-repo-check".to_owned(),
-            "-m".to_owned(),
-            profile.model.clone(),
-            "-c".to_owned(),
-            format!("model_reasoning_effort=\"{effort}\""),
-            "-c".to_owned(),
-            "approval_policy=\"never\"".to_owned(),
-            "-c".to_owned(),
-            "sandbox_mode=\"read-only\"".to_owned(),
-            PROMPT.to_owned(),
-        ],
+    let codex_effort = format!("model_reasoning_effort=\"{effort}\"");
+    let (environment, args) = match profile.provider {
+        HarnessKind::ClaudeCode => (
+            None,
+            vec![
+                "-p",
+                PROMPT,
+                "--output-format",
+                "json",
+                "--model",
+                &profile.model,
+                "--effort",
+                effort,
+                // Only file reading: no shell, edits, web, subagents, or MCP servers.
+                "--tools",
+                "Read,Glob,Grep",
+                "--strict-mcp-config",
+            ],
+        ),
+        HarnessKind::Codex => (
+            None,
+            vec![
+                "exec",
+                "--skip-git-repo-check",
+                "-m",
+                &profile.model,
+                "-c",
+                &codex_effort,
+                "-c",
+                "approval_policy=\"never\"",
+                "-c",
+                "sandbox_mode=\"read-only\"",
+                PROMPT,
+            ],
+        ),
+        // OpenCode does not offer a denied tool to the model.
+        HarnessKind::Opencode => (
+            Some((
+                "OPENCODE_PERMISSION",
+                r#"{"*":"deny","read":"allow","glob":"allow","grep":"allow","list":"allow"}"#,
+            )),
+            vec![
+                "run",
+                "--model",
+                &profile.model,
+                "--variant",
+                effort,
+                PROMPT,
+            ],
+        ),
+        // In print mode, `auto` runs only read-only tools and rejects the rest.
+        HarnessKind::Devin => (
+            None,
+            vec![
+                "--model",
+                &profile.model,
+                "--permission-mode",
+                "auto",
+                "--respect-workspace-trust",
+                "false",
+                "--print",
+                PROMPT,
+            ],
+        ),
+        HarnessKind::Pi | HarnessKind::Omp => {
+            let cli = if profile.provider == HarnessKind::Pi {
+                &PI
+            } else {
+                &OMP
+            };
+            let mut args = vec!["-p", "--model", &profile.model, "--thinking", effort];
+            args.extend(["--tools", cli.read_only_tools]);
+            args.extend(cli.turn_args);
+            args.push(PROMPT);
+            (None, args)
+        }
     };
-    let line = std::iter::once(shell_binary(provider))
-        .chain(args.iter().map(|arg| shell_quoted(arg)))
-        .collect::<Vec<_>>()
-        .join(" ");
-    Ok(scoped_command(
-        provider,
-        profile.instance_home_directory(),
-        line,
-    ))
+    agent::line(profile, endpoint, environment.as_slice(), &args)
 }
 
 /// The first JSON object with a `moves` list in the text.
@@ -147,7 +184,7 @@ fn moves_in(text: &str) -> Option<Vec<Draft>> {
 }
 
 /// Claude Code prints a result event, alone or last in an array of events,
-/// with the reply in `result`; Codex prints the reply as is.
+/// with the reply in `result`; the other agents print the reply as is.
 fn extract(stdout: &str) -> Option<Vec<Draft>> {
     let events = match serde_json::from_str::<serde_json::Value>(stdout.trim()) {
         Ok(serde_json::Value::Array(events)) => events,
@@ -206,7 +243,7 @@ pub async fn recommend(
     user_id: &str,
     project_id: &str,
 ) -> Result<MoveRecommendationsResponse, Box<dyn Error + Send + Sync>> {
-    let (project, profile, existing) = state.with_database(|database| {
+    let (project, profile, existing, database_path) = state.with_database(|database| {
         let project = projects::get(database, user_id, project_id)?;
         crate::identity::companies::require_company_edit(database, user_id, &project.company_id)?;
         let profile = crate::tasks::commands::selected_profile(
@@ -222,15 +259,31 @@ pub async fn recommend(
         let existing = statement
             .query_map([&project.id], |row| row.get::<_, String>(0))?
             .collect::<rusqlite::Result<Vec<_>>>()?;
-        Ok::<_, Box<dyn Error + Send + Sync>>((project, profile, existing))
+        let path = database.connection().path().map(std::path::PathBuf::from);
+        Ok::<_, Box<dyn Error + Send + Sync>>((
+            project,
+            profile,
+            existing,
+            path.unwrap_or_default(),
+        ))
     })?;
-    let line = command(&profile)?;
+    // Dropped when the agent ends or the request is cancelled.
+    let endpoint = Endpoint::register(
+        &database_path,
+        &profile,
+        &format!("recommendation-{}", uuid::Uuid::new_v4().simple()),
+    )?;
     let child = tokio::process::Command::new("/bin/sh")
         .arg("-c")
-        .arg(line)
+        .arg(command(&profile, endpoint.as_ref()))
         .current_dir(&project.repository_path)
         .env_clear()
         .envs(crate::terminals::host::user_environment())
+        .envs(
+            endpoint
+                .iter()
+                .flat_map(|endpoint| endpoint.environment.clone()),
+        )
         .stdin(std::process::Stdio::null())
         .kill_on_drop(true)
         .output();

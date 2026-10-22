@@ -1,6 +1,7 @@
 //! Moves: saved, parameterized prompts that start Suplex tasks. A run records
 //! what it started. The tasks own their own status.
 
+mod agent;
 pub mod prompt;
 pub mod recommend;
 pub mod shell;
@@ -643,16 +644,13 @@ fn checked_body(
         body.visual_evidence = VisualEvidence::Off;
     }
     if let Some(profile_id) = body.profile_id.as_deref() {
-        let profile = crate::tasks::commands::selected_profile(
+        crate::tasks::commands::selected_profile(
             database,
             project,
             Some(profile_id),
             &project.worker_profile_id,
             "worker",
         )?;
-        if body.runner == MoveRunner::Prompt {
-            shell::check_provider(&profile)?;
-        }
     }
     Ok(body)
 }
@@ -1002,19 +1000,24 @@ pub async fn start(
     let outcomes = async {
         Ok::<_, Box<dyn Error + Send + Sync>>(match stored.runner {
         MoveRunner::Prompt | MoveRunner::Script => {
-            let command = if stored.runner == MoveRunner::Script {
-                shell::script(&rendered)
+            let (command, endpoint) = if stored.runner == MoveRunner::Script {
+                (shell::script(&rendered), None)
             } else {
-                let profile = state.with_database(|database| {
-                    crate::tasks::commands::selected_profile(
+                let (profile, database_path) = state.with_database(|database| {
+                    let profile = crate::tasks::commands::selected_profile(
                         database,
                         &project,
                         stored.profile_id.as_deref(),
                         &project.worker_profile_id,
                         "worker",
-                    )
+                    )?;
+                    let path = database.connection().path().map(std::path::PathBuf::from);
+                    Ok::<_, Box<dyn Error + Send + Sync>>((profile, path.unwrap_or_default()))
                 })?;
-                shell::command(&profile, &project.base_branch, &rendered)?
+                let endpoint = agent::Endpoint::register(&database_path, &profile, &run_id)?;
+                let command =
+                    shell::command(&profile, endpoint.as_ref(), &project.base_branch, &rendered);
+                (command, endpoint)
             };
             let worktree =
                 std::path::Path::new(&project.worktree_root).join(format!("move-{run_id}"));
@@ -1031,15 +1034,21 @@ pub async fn start(
             let (saving, saved_run) = (state.clone(), run_id.clone());
             // The run row is written just after the terminal opens, so a
             // command that ends within that moment keeps no transcript.
-            let spec = crate::terminals::host::Spec::move_run(&command, worktree).with_transcript(
-                move |transcript| {
+            let environment = endpoint
+                .as_ref()
+                .map(|endpoint| endpoint.environment.clone())
+                .unwrap_or_default();
+            let spec = crate::terminals::host::Spec::move_run(&command, worktree)
+                .with_environment(environment)
+                .with_transcript(move |transcript| {
                     if let Err(error) = saving
                         .with_database(|database| save_transcript(database, &saved_run, transcript))
                     {
                         eprintln!("Suplex could not save the move run transcript: {error}");
                     }
-                },
-            );
+                    // The endpoint files last as long as the agent's terminal.
+                    drop(endpoint);
+                });
             state
                 .host_terminals
                 .open(&shell::terminal_id(&run_id), spec, 120, 32)?;

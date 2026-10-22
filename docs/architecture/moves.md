@@ -57,19 +57,20 @@ resolves it against the project's provider policy.
 - **Default.** With no `profile_id`, the run uses the project's
   `worker_profile_id`. When that profile is not allowed, `selected_profile`
   falls back to the first allowed Worker profile.
-- **`prompt`.** The agent must have an interactive command line. Only Claude
-  Code and Codex do (`shell::check_provider`). Suplex checks this when the
-  move is saved and again when a run starts, because the profile or the
-  project policy can change in between.
+- **`prompt`.** Any Worker profile that the project allows. The run opens
+  the agent's interactive command line (`shell::command`) with the profile's
+  model and, where the command line takes one, its reasoning level. The
+  OpenCode interface and Devin take no reasoning level. A local endpoint
+  model works as described below. After the agent exits, the login shell
+  starts without the endpoint variables.
 - **`pull_request_tasks`.** The profile becomes `workerProfileId` on each
   created task. Any Worker profile that the project allows is valid.
 - **`script`.** No agent. Save clears `profile_id`.
 - **`task`.** The task uses the project's Coordinator and Worker, and the
   workflow's default Advisors. Save clears `profile_id`.
 
-The editor lists Worker profiles that the project allows. For a prompt it
-lists only Claude Code and Codex profiles. "The default agent" shows the
-avatar of the project's default Worker.
+The editor lists Worker profiles that the project allows. "The default
+agent" shows the avatar of the project's default Worker.
 
 ## Recommendations
 
@@ -85,7 +86,23 @@ route.
   `--output-format json`, `--tools Read,Glob,Grep`, and `--strict-mcp-config`,
   so it cannot run commands, change files, use the web, start subagents, or
   load MCP servers. Codex runs `exec` with `sandbox_mode="read-only"` and
-  `approval_policy="never"`. The default Worker must be Claude Code or Codex.
+  `approval_policy="never"`. OpenCode runs `run` with an
+  `OPENCODE_PERMISSION` that denies every tool except read, glob, grep, and
+  list. Devin runs `--print` with `--permission-mode auto`, which rejects
+  every tool that is not read-only. Pi and OMP run `-p` with `--tools` set to
+  their read-only tools. OMP still offers `write`, but it reaches only its
+  `xd://` devices.
+- **Local endpoints.** A prompt move or a recommendation registers the
+  [local endpoint](../../apps/server/src/profiles/local_endpoints.rs) of an
+  OpenCode, Pi, or OMP model as a task run does
+  ([`agent.rs`](../../apps/server/src/moves/agent.rs)). OpenCode receives the
+  provider in `OPENCODE_CONFIG_CONTENT`. Pi and OMP load the endpoint
+  extension with `-e` from a private directory under
+  `runtime/move-endpoints`, and receive the API key in
+  `SUPLEX_ENDPOINT_API_KEY`. The key is only in the agent's environment,
+  never in an argument or a file. The directory is removed when the move
+  terminal ends or the recommendation finishes. A deleted or changed endpoint
+  stops the start with a 422.
 - **Prompt.** It lists dozens of places where projects define commands
   (package manifests, task runners, build files, CI, deploy configs, scripts,
   and docs). It explains the runners and the placeholder syntax, and asks for

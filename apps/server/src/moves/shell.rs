@@ -4,12 +4,10 @@
 
 use std::{error::Error, path::Path, process::Command};
 
-use crate::{
-    profiles::provider_login::{scoped_command, shell_binary, shell_quoted},
-    tasks::{
-        TaskError,
-        control::{HarnessKind, TaskProfile},
-    },
+use super::agent::{self, Endpoint};
+use crate::tasks::{
+    TaskError,
+    control::{HarnessKind, TaskProfile},
 };
 
 pub fn terminal_id(run_id: &str) -> String {
@@ -22,57 +20,41 @@ fn preamble(base_branch: &str) -> String {
     )
 }
 
-fn unsupported() -> TaskError {
-    TaskError::new("Moves run Claude Code and Codex agents", 422)
-}
-
-/// Only these agents have an interactive command line for a move.
-pub fn check_provider(profile: &TaskProfile) -> Result<(), TaskError> {
-    match profile.provider {
-        HarnessKind::ClaudeCode | HarnessKind::Codex => Ok(()),
-        HarnessKind::Opencode | HarnessKind::Devin | HarnessKind::Pi | HarnessKind::Omp => {
-            Err(unsupported())
-        }
-    }
-}
-
-/// The agent's interactive command line, then a login shell after it exits.
+/// The agent's interactive command line, then a login shell, without the
+/// endpoint variables, after it exits.
 pub fn command(
     profile: &TaskProfile,
+    endpoint: Option<&Endpoint>,
     base_branch: &str,
     prompt: &str,
-) -> Result<String, Box<dyn Error + Send + Sync>> {
+) -> String {
     let effort = profile.reasoning_level.as_str();
+    let model = profile.model.as_str();
+    let prompt = format!("{}{prompt}", preamble(base_branch));
+    let codex_effort = format!("model_reasoning_effort=\"{effort}\"");
     let args = match profile.provider {
-        HarnessKind::ClaudeCode => vec![
-            "--model".to_owned(),
-            profile.model.clone(),
-            "--effort".to_owned(),
-            effort.to_owned(),
-        ],
-        HarnessKind::Codex => vec![
-            "-m".to_owned(),
-            profile.model.clone(),
-            "-c".to_owned(),
-            format!("model_reasoning_effort=\"{effort}\""),
-        ],
-        HarnessKind::Opencode | HarnessKind::Devin | HarnessKind::Pi | HarnessKind::Omp => {
-            return Err(unsupported().into());
-        }
+        HarnessKind::ClaudeCode => vec!["--model", model, "--effort", effort, &prompt],
+        HarnessKind::Codex => vec!["-m", model, "-c", &codex_effort, &prompt],
+        // The OpenCode interface takes no reasoning effort, by flag or by configuration.
+        HarnessKind::Opencode => vec!["--model", model, "--prompt", &prompt],
+        // Devin takes no reasoning effort flag.
+        HarnessKind::Devin => vec!["--model", model, "--", &prompt],
+        HarnessKind::Pi | HarnessKind::Omp => vec!["--model", model, "--thinking", effort, &prompt],
     };
-    let provider = profile.provider.as_str();
-    let line = std::iter::once(shell_binary(provider))
-        .chain(args.iter().map(|arg| shell_quoted(arg)))
-        .chain(std::iter::once(shell_quoted(&format!(
-            "{}{prompt}",
-            preamble(base_branch)
-        ))))
-        .collect::<Vec<_>>()
-        .join(" ");
-    Ok(format!(
-        "{}; exec \"$SHELL\" -l",
-        scoped_command(provider, profile.instance_home_directory(), line)
-    ))
+    let removed = endpoint
+        .into_iter()
+        .flat_map(|endpoint| &endpoint.environment)
+        .map(|(name, _)| format!("-u {name} "))
+        .collect::<String>();
+    let shell = if removed.is_empty() {
+        String::new()
+    } else {
+        format!("env {removed}")
+    };
+    format!(
+        "{}; exec {shell}\"$SHELL\" -l",
+        agent::line(profile, endpoint, &[], &args)
+    )
 }
 
 /// The script as written, then a login shell after it exits.
@@ -136,19 +118,28 @@ mod tests {
 
     #[test]
     fn the_prompt_is_one_quoted_argument_and_a_shell_follows_the_agent() {
-        let line = command(&profile("claude-code"), "main", "Run it'; rm -rf / #").unwrap();
+        let line = command(&profile("claude-code"), None, "main", "Run it'; rm -rf / #");
         assert!(line.contains("'--model' 'opus' '--effort' 'high' 'You run a Suplex move"));
         assert!(line.contains("Run it'\\''; rm -rf / #'"));
         assert!(line.ends_with("; exec \"$SHELL\" -l"));
         assert!(
-            command(&profile("codex"), "main", "x")
-                .unwrap()
+            command(&profile("codex"), None, "main", "x")
                 .contains("'model_reasoning_effort=\"high\"'")
         );
     }
 
     #[test]
-    fn other_providers_cannot_run_a_move() {
-        assert!(command(&profile("opencode"), "main", "x").is_err());
+    fn every_provider_opens_its_interactive_command_line() {
+        for (provider, arguments) in [
+            ("opencode", "'--model' 'opus' '--prompt' 'You run"),
+            ("devin", "'--model' 'opus' '--' 'You run"),
+            ("pi", "'--model' 'opus' '--thinking' 'high' 'You run"),
+            ("omp", "'--model' 'opus' '--thinking' 'high' 'You run"),
+        ] {
+            assert!(
+                command(&profile(provider), None, "main", "x").contains(arguments),
+                "{provider}"
+            );
+        }
     }
 }

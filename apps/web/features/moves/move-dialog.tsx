@@ -36,8 +36,6 @@ const runnerOptions = [
 ];
 /** Review and repair needs a pull request, so "for each pull request" covers it. */
 const workflowOptions = WORKFLOWS.filter(definition => definition.id !== "refine_pull_request").map(definition => ({ value: definition.id, label: definition.name, icon: workflowIcons[definition.id] }));
-/** Agents with an interactive command line for a move. */
-const terminalProviders = new Set(["claude-code", "codex"]);
 
 const startOptions = [
   { value: "confirm", label: "ask before start", icon: <ShieldQuestion aria-hidden="true" className="size-[11px]" /> },
@@ -83,8 +81,7 @@ export function MoveDialog({ companyId, projects, move, open, onOpenChange, onSa
   useEffect(() => {
     if (draft.runner === "task" && draft.deliveryTarget && !supportsDeliveryTarget(connection, draft.deliveryTarget)) setDraft(current => ({ ...current, deliveryTarget: "pull_request_draft" }));
   }, [draft.runner, draft.deliveryTarget, connection]);
-  // A prompt opens the agent in a terminal; pull request tasks take any allowed Worker.
-  const agents = profiles.filter(profile => profile.role === "worker" && !profile.archivedAt && (draft.runner !== "prompt" || terminalProviders.has(profile.provider)) && isProfileAllowed(project?.providerPolicy, profile));
+  const agents = profiles.filter(profile => profile.role === "worker" && !profile.archivedAt && isProfileAllowed(project?.providerPolicy, profile));
   const fallback = profiles.find(profile => profile.id === project?.workerProfileId);
   const agentOptions = [{ value: "default", label: "the default agent", icon: fallback ? <EntityAvatar kind="agent" id={fallback.id} name={fallback.name} seed={fallback.avatarSeed} size="xs" /> : <Bot aria-hidden="true" className="size-[11px]" /> }, ...agents.map(profile => ({ value: profile.id, label: profile.name, icon: <EntityAvatar kind="agent" id={profile.id} name={profile.name} seed={profile.avatarSeed} size="xs" /> }))];
   const save = async (): Promise<void> => {
@@ -120,7 +117,7 @@ export function MoveDialog({ companyId, projects, move, open, onOpenChange, onSa
             <div className="flex flex-wrap items-center gap-2 p-6">
               <div className="-m-1 max-w-full overflow-x-auto p-1">
                 <ButtonGroup aria-label="Move options">
-                  <TaskOptionFilter prefix="Run" label="Run" value={draft.runner} disabled={busy} options={admin ? runnerOptions : memberRunnerOptions} onValueChange={value => setDraft(current => withRunner(current, MoveRunnerSchema.parse(value), profiles))} />
+                  <TaskOptionFilter prefix="Run" label="Run" value={draft.runner} disabled={busy} options={admin ? runnerOptions : memberRunnerOptions} onValueChange={value => setDraft(current => withRunner(current, MoveRunnerSchema.parse(value)))} />
                   {draft.runner === "task" ? <>
                     <TaskOptionFilter prefix="using" label="Workflow" value={draft.workflow ?? "standard"} disabled={busy} options={workflowOptions} onValueChange={value => set("workflow", WorkflowIdSchema.parse(value))} />
                     <TaskChecksOption runProjectTests={draft.runProjectTests ?? true} visualEvidence={draft.visualEvidence ?? "off"} verificationCommand={project?.verificationCommand} disabled={busy} onChange={checks => setDraft(current => ({ ...current, ...checks }))} />
@@ -144,14 +141,12 @@ export function MoveDialog({ companyId, projects, move, open, onOpenChange, onSa
 }
 
 /**
- * A script keeps no agent, and a prompt keeps only an agent that runs in a terminal.
+ * A script keeps no agent.
  * A task uses the project's agents, starts without a confirmation, and keeps task settings that other runners clear.
  */
-function withRunner(draft: MoveBody, runner: MoveBody["runner"], profiles: ApiProfile[]): MoveBody {
+function withRunner(draft: MoveBody, runner: MoveBody["runner"]): MoveBody {
   if (runner === "task") return { ...draft, runner, profileId: null, confirm: false };
-  const provider = profiles.find(profile => profile.id === draft.profileId)?.provider;
-  const keep = runner !== "script" && (runner !== "prompt" || !provider || terminalProviders.has(provider));
-  return { ...draft, ...taskDefaults, runner, profileId: keep ? draft.profileId ?? null : null };
+  return { ...draft, ...taskDefaults, runner, profileId: runner === "script" ? null : draft.profileId ?? null };
 }
 
 const taskDefaults = { workflow: "standard", deliveryTarget: "pull_request_ready", runProjectTests: true, visualEvidence: "off" } as const;

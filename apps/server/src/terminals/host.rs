@@ -78,6 +78,8 @@ pub struct Spec {
     linger: bool,
     persistent: bool,
     on_exit: Option<SaveTranscript>,
+    /// Variables beyond the user environment, never in an argument.
+    environment: Vec<(String, String)>,
 }
 
 /// `$SHELL`, else `/bin/zsh`, else `/bin/sh`.
@@ -104,6 +106,7 @@ impl Spec {
             linger: false,
             persistent: false,
             on_exit: None,
+            environment: Vec::new(),
         }
     }
 
@@ -117,6 +120,7 @@ impl Spec {
             linger: true,
             persistent: false,
             on_exit: None,
+            environment: Vec::new(),
         }
     }
 
@@ -131,6 +135,7 @@ impl Spec {
             linger: false,
             persistent: false,
             on_exit: None,
+            environment: Vec::new(),
         }
     }
 
@@ -146,6 +151,7 @@ impl Spec {
             linger: false,
             persistent: true,
             on_exit: None,
+            environment: Vec::new(),
         }
     }
 
@@ -165,8 +171,20 @@ impl Spec {
         self
     }
 
+    /// Adds variables to the user environment of the process.
+    pub fn with_environment(mut self, environment: Vec<(String, String)>) -> Self {
+        self.environment.extend(environment);
+        self
+    }
+
     fn environment(&self) -> Vec<(OsString, OsString)> {
-        user_environment()
+        let mut environment = user_environment();
+        environment.extend(
+            self.environment
+                .iter()
+                .map(|(key, value)| (key.into(), value.into())),
+        );
+        environment
     }
 }
 

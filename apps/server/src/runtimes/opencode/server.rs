@@ -129,7 +129,7 @@ pub struct RoleConfigInput<'a> {
 
 /// An OpenAI-compatible endpoint as an OpenCode custom provider. Reasoning
 /// and service tier options stay out: a local server may reject them.
-fn endpoint_provider(endpoint: &LocalEndpoint) -> Value {
+pub fn endpoint_provider(endpoint: &LocalEndpoint) -> Value {
     let mut options = Map::from_iter([("baseURL".to_owned(), json!(endpoint.base_url))]);
     if let Some(key) = &endpoint.api_key {
         options.insert("apiKey".to_owned(), json!(key));

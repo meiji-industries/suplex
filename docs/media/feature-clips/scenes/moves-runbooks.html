@@ -1,0 +1,246 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<link rel="stylesheet" href="shared/suplex.css">
+<script src="shared/chrome.js"></script>
+<style>
+/* Moves */
+#suplexWin { background: #111; }
+.hbtn { position: absolute; display: flex; align-items: center; gap: 7px; font-size: 14px; color: #e6e6e6; }
+.lime { background: oklch(0.938 0.172 121.709); color: #151515; border-radius: 999px; justify-content: center; font-weight: 500; }
+#panel { position: absolute; left: 306px; top: 96px; width: 1196px; height: 874px; border: 1px solid #1d1d1d; border-radius: 10px; }
+.th { position: absolute; top: 162px; font-size: 13.5px; color: #9a9a9a; }
+.row { position: absolute; left: 314px; width: 1180px; height: 53px; border-radius: 8px; font-size: 14px; }
+.row::after { content: ""; position: absolute; left: 8px; right: 8px; bottom: -1px; border-bottom: 1px solid #1c1c1c; }
+.row > * { position: absolute; top: 0; height: 53px; display: flex; align-items: center; white-space: nowrap; }
+#overlay { position: absolute; left: 0; top: 36px; right: 0; bottom: 0; background: rgba(0,0,0,.6); backdrop-filter: blur(3px); opacity: 0; }
+.dlg { position: absolute; background: #1a1a1a; border: 1px solid #2c2c2c; border-radius: 16px; box-shadow: 0 30px 80px rgba(0,0,0,.6); opacity: 0; }
+.dlg .x { position: absolute; right: 22px; top: 22px; color: #bdbdbd; }
+.dlg h3 { position: absolute; left: 28px; top: 24px; font-size: 18px; font-weight: 600; color: #f2f2f2; }
+.dlg .ds { position: absolute; left: 28px; top: 54px; font-size: 14px; color: #9a9a9a; }
+.card2 { position: absolute; width: 350px; height: 104px; border: 1px solid #2a2a2a; border-radius: 10px; background: #1d1d1d; }
+.card2 .cb { position: absolute; left: 13px; top: 15px; width: 16px; height: 16px; border-radius: 4px; background: oklch(0.938 0.172 121.709); display: flex; align-items: center; justify-content: center; }
+.card2 .nm { position: absolute; left: 41px; top: 11px; font-size: 14px; font-weight: 500; color: #f0f0f0; display: flex; align-items: center; gap: 8px; white-space: nowrap; }
+.badge { display: inline-flex; align-items: center; gap: 4px; border: 1px solid #333; border-radius: 6px; padding: 1px 6px; font-size: 11.5px; font-weight: 400; color: #bdbdbd; }
+.badge svg { width: 11px; height: 11px; }
+.card2 .cmd { position: absolute; left: 41px; top: 38px; width: 295px; font: 12px/17px "Geist Mono", monospace; color: #9c9c9c; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 34px; overflow: hidden; }
+.card2 .why { position: absolute; left: 41px; top: 78px; font-size: 11px; color: #858585; white-space: nowrap; }
+.btn { position: absolute; height: 32px; border-radius: 999px; display: flex; align-items: center; justify-content: center; font-size: 14px; font-weight: 500; padding: 0 16px; }
+.radio { position: absolute; left: 28px; display: flex; align-items: center; gap: 12px; font-size: 15px; color: #ececec; }
+.radio i { width: 20px; height: 20px; border-radius: 50%; border: 1.5px solid #555; display: flex; align-items: center; justify-content: center; }
+.radio i b { width: 9px; height: 9px; border-radius: 50%; background: oklch(0.938 0.172 121.709); opacity: 0; }
+#runview { position: absolute; left: 300px; top: 36px; right: 0; bottom: 0; background: #111; opacity: 0; }
+#term { position: absolute; left: 24px; top: 130px; font: 14.5px/23.5px "Geist Mono", monospace; color: #e6e6e6; white-space: pre; }
+.tg { color: #4ade80; } .tb2 { color: #7cb4f5; } .tdim { color: #8c8c8c; }
+.livebadge { position: absolute; right: 22px; top: 10px; font-size: 11px; font-weight: 600; color: #151515; background: oklch(0.938 0.172 121.709); border-radius: 6px; padding: 1px 6px; }
+.shimmer { background: linear-gradient(90deg, #777 0%, #eee 50%, #777 100%); background-size: 200% 100%; -webkit-background-clip: text; color: transparent; }
+</style>
+</head>
+<body>
+<div id="stage">
+  <div id="cam">
+    <div id="bg"></div>
+    <div class="win" id="suplexWin">
+      <div class="titlebar"><div class="dot" style="left:16px;background:#ff5f57"></div><div class="dot" style="left:36px;background:#febc2e"></div><div class="dot" style="left:56px;background:#28c840"></div><div class="title">Suplex</div></div>
+      <div data-slot="side" data-nav="Moves"></div>
+      <div id="movesview">
+        <div class="abs" style="left:333px;top:60px;color:#bdbdbd"><svg class="i" viewBox="0 0 24 24"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M9 3v18"/></svg></div>
+        <div class="abs" style="left:361px;top:56px;width:1px;height:24px;background:#262626"></div>
+        <div class="abs" style="left:379px;top:53px;font-size:20px;font-weight:600;color:#f4f4f4">Moves</div>
+        <div class="abs" style="left:1098px;top:60px;color:#bdbdbd"><span data-icon="sun"></span></div>
+        <div class="abs" style="left:1136px;top:60px;color:#bdbdbd"><svg class="i" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg></div>
+        <div class="hbtn" id="recBtn" style="left:1166px;top:52px;height:32px;padding:0 10px;border-radius:8px"><svg class="i" viewBox="0 0 24 24" style="width:15px;height:15px"><path d="M9.937 15.5A2 2 0 0 0 8.5 14.063l-6.135-1.582a.5.5 0 0 1 0-.962L8.5 9.936A2 2 0 0 0 9.937 8.5l1.582-6.135a.5.5 0 0 1 .963 0L14.063 8.5A2 2 0 0 0 15.5 9.937l6.135 1.581a.5.5 0 0 1 0 .964L15.5 14.063a2 2 0 0 0-1.437 1.437l-1.582 6.135a.5.5 0 0 1-.963 0z"/><path d="M20 3v4"/><path d="M22 5h-4"/></svg>Recommend moves</div>
+        <div class="hbtn lime" style="left:1334px;top:52px;width:112px;height:32px"><svg class="i" viewBox="0 0 24 24" style="width:15px;height:15px"><path d="M5 12h14"/><path d="M12 5v14"/></svg>New move</div>
+        <div id="panel"></div>
+        <div class="tb" id="tabs" style="left:315px;top:108px;height:34px;width:148px"><span class="sel">All</span><span>Live</span><span>Ended</span></div>
+        <div class="tb" style="left:1147px;top:108px;height:34px;width:183px;color:#8a8a8a"><svg class="i" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>Filter moves<span style="margin-left:auto;font-size:11px;background:#1e1e1e;border-radius:4px;padding:2px 6px;color:#8a8a8a">⌘K</span></div>
+        <div class="tb" style="left:1338px;top:108px;height:34px;width:108px">All projects<svg class="i" viewBox="0 0 24 24" style="margin-left:auto"><path d="m6 9 6 6 6-6"/></svg></div>
+        <div class="th" style="left:329px">Move</div><div class="th" style="left:1013px">Project</div><div class="th" style="left:1135px">Runs</div><div class="th" style="left:1220px">Status</div><div class="th" style="left:1276px">Last run</div>
+        <div id="rows"></div>
+      </div>
+      <div id="runview">
+        <div class="abs" style="left:33px;top:24px;color:#bdbdbd"><svg class="i" viewBox="0 0 24 24"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M9 3v18"/></svg></div>
+        <div class="abs" style="left:61px;top:20px;width:1px;height:24px;background:#262626"></div>
+        <div class="abs" style="left:79px;top:17px;font-size:20px;font-weight:600;color:#f4f4f4">Scale workers</div>
+        <div class="abs" style="left:961px;top:24px;color:#bdbdbd"><span data-icon="sun"></span></div>
+        <div class="abs" style="left:1001px;top:24px;color:#bdbdbd"><svg class="i" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg></div>
+        <div class="hbtn" style="left:1038px;top:17px;height:30px"><svg class="i" viewBox="0 0 24 24" style="width:15px;height:15px"><path d="M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z"/></svg>Edit</div>
+        <div class="hbtn lime" style="left:1107px;top:17px;width:80px;height:30px"><svg class="i" viewBox="0 0 24 24" style="width:14px;height:14px"><path d="M6 3 20 12 6 21z"/></svg>Start</div>
+        <div class="abs" style="left:33px;top:80px"><span data-icon="proj"></span></div>
+        <div class="abs" style="left:56px;top:78px;font-size:14px;color:#d4d4d4">checkout-api</div>
+        <div class="abs" style="left:146px;top:74px;height:27px;padding:0 11px;border:1px solid #333;border-radius:999px;font-size:13.5px;font-weight:500;color:#f0f0f0;display:flex;align-items:center" id="chip">count 6</div>
+        <div class="abs" style="left:248px;top:84px;width:7px;height:7px;border-radius:50%;background:#4ade80" id="livedot"></div>
+        <div class="abs" style="left:262px;top:78px;font-size:14px;color:#e6e6e6"><span id="livetxt">Live</span> <span style="color:#8a8a8a">· just now</span></div>
+        <div class="abs" style="left:372px;top:79px;width:18px;height:18px;border-radius:50%;background:#f4efd6;color:#1b1b1b;font-size:10px;font-weight:600;display:flex;align-items:center;justify-content:center">D</div>
+        <div class="abs" style="left:397px;top:78px;font-size:14px;color:#e6e6e6">Dana Reyes</div>
+        <div class="abs" style="left:972px;top:78px;font-size:14px;color:#e6e6e6;display:flex;gap:6px;align-items:center"><svg class="i" viewBox="0 0 24 24" style="width:14px;height:14px"><rect width="16" height="16" x="4" y="4" rx="2"/></svg>Stop</div>
+        <div class="abs" style="left:1036px;top:78px;font-size:14px;color:#e6e6e6;display:flex;gap:6px;align-items:center"><svg class="i" viewBox="0 0 24 24" style="width:14px;height:14px"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>Start again</div>
+        <div class="abs" style="left:0;right:0;top:112px;height:1px;background:#1e1e1e"></div>
+        <div id="term"></div>
+      </div>
+      <div id="overlay"></div>
+      <div class="dlg" id="recDlg" style="left:371px;top:150px;width:768px;height:530px">
+        <h3>Recommend moves</h3>
+        <div class="ds">Your default agent reads the project and proposes moves for the commands it defines.</div>
+        <div class="x"><svg class="i" viewBox="0 0 24 24"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></div>
+        <div id="thinking" class="abs" style="left:0;right:0;top:120px;display:flex;justify-content:center;align-items:center;gap:10px;font-size:14px"><svg class="i" viewBox="0 0 24 24" id="spin" style="color:#9a9a9a"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg><span id="thinkTxt" class="shimmer">Reading package.json…</span></div>
+        <div id="recBody" style="opacity:0">
+          <div class="abs" style="left:28px;top:96px;font-size:14px;font-weight:500;color:#ececec">Recommended moves</div>
+          <div class="abs" style="left:182px;top:94px;font-size:12.5px;color:#bdbdbd;display:flex;gap:5px;align-items:center"><svg class="i" viewBox="0 0 24 24" style="width:12px;height:12px"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>Read again</div>
+          <div id="cards"></div>
+          <div class="btn" style="left:520px;top:474px;color:#e6e6e6">Select none</div>
+          <div class="btn lime" id="importBtn" style="left:628px;top:474px;width:116px;padding:0">Import 6 moves</div>
+        </div>
+      </div>
+      <div class="dlg" id="startDlg" style="left:465px;top:280px;width:580px;height:330px">
+        <h3>Scale workers</h3>
+        <div class="x"><svg class="i" viewBox="0 0 24 24"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></div>
+        <div class="abs" style="left:28px;top:76px;font-size:15px;font-weight:500;color:#ececec">count</div>
+        <div id="radios"></div>
+        <div class="btn" style="left:362px;top:272px;border:1px solid #3a3a3a;color:#ececec">Cancel</div>
+        <div class="btn lime" id="startBtn" style="left:462px;top:272px;width:90px;padding:0">Start</div>
+      </div>
+      <svg id="cursor" viewBox="0 0 22 30"><path d="M2 2 L2 24 L7.5 18.5 L11.5 27.5 L15 26 L11 17 L19 17 Z" fill="#000" stroke="#fff" stroke-width="1.6" stroke-linejoin="round"/></svg>
+    </div>
+  </div>
+</div>
+<script>
+Suplex.mount();
+const DUR = 20.5;
+const ZAP = '<svg class="i" viewBox="0 0 24 24" style="width:15px;height:15px;color:#9a9a9a"><path d="M4 14a1 1 0 0 1-.78-1.63l9.9-10.2a.5.5 0 0 1 .86.46l-1.92 6.02A1 1 0 0 0 13 10h7a1 1 0 0 1 .78 1.63l-9.9 10.2a.5.5 0 0 1-.86-.46l1.92-6.02A1 1 0 0 0 11 14z"/></svg>';
+const PLAY = '<svg class="i" viewBox="0 0 24 24" style="width:15px;height:15px"><path d="M6 3 20 12 6 21z"/></svg>';
+const DOTS = '<svg class="i" viewBox="0 0 24 24" style="width:15px;height:15px"><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/><circle cx="5" cy="12" r="1"/></svg>';
+const TERM = '<svg class="i" viewBox="0 0 24 24"><path d="m7 11 2-2-2-2"/><path d="M11 13h4"/><rect width="18" height="18" x="3" y="3" rx="2"/></svg>';
+const MSG = '<svg class="i" viewBox="0 0 24 24"><path d="M22 17a2 2 0 0 1-2 2H6.828a2 2 0 0 0-1.414.586l-2.202 2.202A.71.71 0 0 1 2 21.286V5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2z"/><path d="M7 11h10"/><path d="M7 15h6"/><path d="M7 7h8"/></svg>';
+const CHECK = '<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="#151515" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>';
+const PROJ = Suplex.icons.proj;
+
+const OLD = [["Run one test suite", "Shell script"], ["Tag a release", "Shell script"], ["Write the changelog", "Prompt"]];
+const RECS = [
+  ["Restart the API servers", "script", "fly apps restart checkout-api", "fly.toml · Restarts every API machine"],
+  ["Scale workers", "script", "fly scale count worker={{count: 2 | 4 | 6 | 8}} --yes -a checkout-api", "fly.toml · Sets the worker machine count"],
+  ["Purge the CDN cache", "script", "make purge-cdn", "Makefile · Clears cached assets after a deploy"],
+  ["Force an app update", "script", "npm run app:force-update -- --min-version {{version}}", "package.json · Makes old app versions update"],
+  ["Replay failed webhooks", "prompt", "Run `npm run webhooks:failed -- --since {{hours: 24 | 72}}h`. Replay each failed delivery and report any that fail again.", "package.json · Needs judgment on repeat failures"],
+  ["Run database migrations", "script", "fly ssh console -a checkout-api -C \"npm run migrate\"", "fly.toml · Applies pending migrations"],
+];
+const T = { recHover: 1.0, recClick: 1.75, think: [2.0, 2.8, 3.6], cards: 4.4, importClick: 7.7, rows: 8.0, startClick: 9.9, pick: 11.1, go: 11.9, run: 12.3, out: 12.7, end: 16.6 };
+
+// rows
+const rowsEl = $("rows");
+const rows = [...OLD.map(([n, r]) => [n, r]), ...RECS.map(r => [r[0], r[1] === "script" ? "Shell script" : "Prompt"])].map(([name, runner], i) => {
+  const el = document.createElement("div"); el.className = "row";
+  el.innerHTML = `<span style="left:22px">${ZAP}</span><span style="left:39px;color:#f0f0f0">${esc(name)}</span><span style="left:707px">${PROJ}</span><span style="left:731px;color:#cfcfcf">checkout-api</span><span style="left:821px;color:#9a9a9a">${runner}</span><span style="left:912px;color:#9a9a9a" class="st">—</span><span style="left:1038px;display:flex;gap:6px;align-items:center;color:#ececec" class="sb">${PLAY}<span style="line-height:normal">Start</span></span><span style="left:1111px;color:#9a9a9a">${DOTS}</span>`;
+  el.style.top = (192 + i * 55) + "px";
+  rowsEl.appendChild(el); return el;
+});
+// recommendation cards
+const cardsEl = $("cards");
+const cards = RECS.map(([name, runner, cmd, why], i) => {
+  const el = document.createElement("div"); el.className = "card2";
+  el.style.left = (28 + (i % 2) * 362) + "px"; el.style.top = (128 + Math.floor(i / 2) * 114) + "px";
+  el.innerHTML = `<div class="cb">${CHECK}</div><div class="nm">${esc(name)}<span class="badge">${runner === "script" ? TERM : MSG}${runner === "script" ? "Shell script" : "Prompt"}</span></div><div class="cmd">${esc(runner === "script" ? "$ " + cmd : cmd)}</div><div class="why">${esc(why)}</div>`;
+  cardsEl.appendChild(el); return el;
+});
+// radios
+const radios = ["2", "4", "6", "8"].map((v, i) => {
+  const el = document.createElement("div"); el.className = "radio"; el.style.top = (108 + i * 38) + "px";
+  el.innerHTML = `<i><b></b></i>${v}`; $("radios").appendChild(el); return el;
+});
+// activity
+const acts = $("acts");
+function mkAct(title, icon, live) {
+  const el = document.createElement("div"); el.className = "act";
+  el.innerHTML = `<span class="ic">${icon}</span><span class="tt">${esc(title)}</span>${live ? '<span class="livebadge">Live</span>' : ""}`;
+  acts.appendChild(el); return el;
+}
+const CHK = '<svg class="i green" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="m9 12 2 2 4-4"/></svg>';
+const DASH = '<svg class="i mute" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" stroke-dasharray="3 3"/></svg>';
+const liveAct = mkAct("Scale workers", ZAP.replace('style="width:15px;height:15px;color:#9a9a9a"', 'style="color:#bdbdbd"'), true);
+const others = [mkAct("Retry failed Stripe webhooks with backoff", CHK), mkAct("Move currency rounding into money.js", CHK), mkAct("Rate limit the receipts endpoint", DASH), mkAct("Upgrade to Node 24", DASH)];
+
+const OUT = [
+  ["", "App 'checkout-api' is going to be scaled according to this plan:"],
+  ["", "  +4 machines for group 'worker' on region 'iad' of size 'shared-cpu-2x'"],
+  ["tb2", "Executing scale plan"],
+  ["", "  Created <span class='tdim'>e286de4f711e86</span> group:worker region:iad size:shared-cpu-2x"],
+  ["", "  Created <span class='tdim'>7811373c095928</span> group:worker region:iad size:shared-cpu-2x"],
+  ["", "  Created <span class='tdim'>3d8d9e5f126e89</span> group:worker region:iad size:shared-cpu-2x"],
+  ["", "  Created <span class='tdim'>9185e2d9c64383</span> group:worker region:iad size:shared-cpu-2x"],
+  ["tg", "✔ worker: 6 machines started"],
+  ["tg", "dana@acme-build <span class='tb2'>checkout-api</span> <span style='color:#e6e6e6'>%</span> "],
+];
+const OUT_T = [12.7, 13.0, 13.5, 13.9, 14.2, 14.5, 14.8, 15.3, 15.6];
+
+// camera and cursor
+const CAM = [
+  [0.0, 960, 540, 1], [0.6, 960, 540, 1], [1.5, 1150, 330, 1.35],
+  [1.9, 1150, 330, 1.35], [2.6, 960, 500, 1.42], [7.6, 960, 505, 1.45],
+  [8.3, 1000, 460, 1.3], [9.6, 1120, 470, 1.3], [10.3, 960, 500, 1.6], [11.9, 960, 500, 1.6],
+  [12.6, 820, 330, 1.38], [15.8, 820, 360, 1.38], [16.4, 720, 180, 1.9], [18.2, 720, 180, 1.9], [19.2, 960, 540, 1],
+];
+// cursor positions in window coordinates
+const CUR = [
+  [0, 1080, 700], [0.9, 1080, 700], [1.6, 1250, 120], [1.8, 1250, 120], [6.8, 1200, 600], [7.6, 1180, 548],
+  [8.2, 1180, 548], [9.7, 1360, 476], [10.1, 1360, 476], [10.9, 520, 497], [11.3, 520, 497], [11.85, 1000, 572],
+  [12.3, 1000, 572], [13.5, 1150, 760], [21, 1150, 760],
+];
+const CLICKS = [T.recClick, T.importClick, T.startClick, T.pick, T.go];
+
+function render(t) {
+  const [fx, fy, s] = keyed(CAM, t);
+  $("cam").style.transform = `translate(${960 - fx * s}px, ${540 - fy * s}px) scale(${s})`;
+  const [cx, cy] = keyed(CUR, t);
+  const press = CLICKS.some(c => t >= c && t < c + 0.12);
+  const cur = $("cursor"); cur.style.left = cx + "px"; cur.style.top = cy + "px"; cur.style.transform = press ? "scale(.85)" : "none"; cur.style.transformOrigin = "2px 2px";
+
+  // header button hover
+  $("recBtn").style.background = t > 1.5 && t < 1.9 ? "#232323" : "transparent";
+
+  // rec dialog
+  const rd = prog(t, T.recClick + 0.05, T.recClick + 0.3) * (1 - prog(t, T.importClick + 0.1, T.importClick + 0.35));
+  const sd = prog(t, T.startClick + 0.05, T.startClick + 0.3) * (1 - prog(t, T.go + 0.1, T.go + 0.3));
+  $("recDlg").style.height = lerp(170, 530, prog(t, T.cards - 0.25, T.cards + 0.05)) + "px"; $("recDlg").style.opacity = rd; $("recDlg").style.transform = `scale(${0.97 + 0.03 * rd})`;
+  $("startDlg").style.opacity = sd; $("startDlg").style.transform = `scale(${0.97 + 0.03 * sd})`;
+  $("overlay").style.opacity = Math.max(rd, sd);
+  const thinking = t < T.cards;
+  $("thinking").style.opacity = thinking ? 1 : 0;
+  $("spin").style.transform = `rotate(${t * 400}deg)`;
+  $("thinkTxt").textContent = ["Reading package.json…", "Looking for Makefile targets…", "Drafting moves…"][t < T.think[1] ? 0 : t < T.think[2] ? 1 : 2];
+  $("thinkTxt").style.backgroundPosition = `${200 - ((t * 120) % 200)}% 0`;
+  $("recBody").style.opacity = thinking ? 0 : 1;
+  cards.forEach((el, i) => { const k = easeOut((t - T.cards - i * 0.1) / 0.3); el.style.opacity = k; el.style.transform = `translateY(${(1 - k) * 8}px)`; });
+  $("importBtn").style.filter = t >= T.importClick && t < T.importClick + 0.15 ? "brightness(.85)" : "none";
+
+  // rows
+  rows.forEach((el, i) => {
+    if (i < OLD.length) return;
+    const k = easeOut((t - T.rows - (i - OLD.length) * 0.08) / 0.35);
+    el.style.opacity = k; el.style.transform = `translateY(${(1 - k) * -6}px)`;
+    el.style.background = i === OLD.length + 1 && t > 9.4 && t < 12 ? "#191919" : (k < 1 && k > 0 ? `rgba(163,230,53,${0.06 * (1 - k)})` : "transparent");
+  });
+  // radios
+  radios.forEach((el, i) => {
+    const sel = t >= T.pick ? i === 2 : i === 0;
+    el.querySelector("b").style.opacity = sel ? 1 : 0;
+    el.querySelector("i").style.borderColor = sel ? "oklch(0.938 0.172 121.709)" : "#555";
+  });
+  $("startBtn").style.filter = t >= T.go && t < T.go + 0.15 ? "brightness(.85)" : "none";
+
+  // run view
+  const rv = prog(t, T.run - 0.1, T.run + 0.15);
+  $("runview").style.opacity = rv; $("movesview").style.opacity = 1 - rv;
+  $("term").innerHTML = OUT.filter((_, i) => t >= OUT_T[i]).map(([c, h], i) => `<div class="${c}">${h}${i === OUT.length - 1 ? (Math.floor(t * 1.8) % 2 ? "" : "<span style='color:#e6e6e6'>|</span>") : ""}</div>`).join("");
+
+  // activity: live run appears at top
+  const la = easeOut((t - T.run) / 0.35);
+  liveAct.style.top = "413px"; liveAct.style.height = 38 * la + "px"; liveAct.style.opacity = la;
+  others.forEach((el, i) => { el.style.top = 413 + 38 * la + i * 38 + "px"; });
+  // nav selection
+}
+window.render = render; window.DUR = DUR;
+render(Number(new URLSearchParams(location.search).get("t") || 0));
+</script>
+</body>
+</html>

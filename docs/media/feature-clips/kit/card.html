@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Suplex reel layer</title>
+<!--
+  Renders one layer of the reel frame to a 1080×1350 PNG. render.mjs passes the data in the URL hash as JSON.
+  Layers (bottom to top):  bg → clip (968×628 at 56,200, rounded) → overlay → lime progress fill.
+    {"type":"bg"}       ground (charcoal, or lime with "theme":"lime"), grain, the clip's drop shadow (opaque)
+    {"type":"overlay"}  progress tracks, label, plus, clip edge, headline, wordmark, URL (transparent elsewhere)
+    {"type":"end"}      end card (opaque); "theme":"lime" or dark
+    {"type":"mask"}     white rounded rectangle the clip is cut to
+  Preview in a browser: card.html#{"type":"overlay","index":1,"count":5,"label":"02 — PR review","headline":"Tag a PR.","preview":true}
+-->
+<style>
+  @font-face { font-family: "Inter"; src: url(fonts/Inter-Variable.woff2) format("woff2"); font-weight: 100 900; font-display: block; }
+  @font-face { font-family: "Geist Mono"; src: url(fonts/GeistMono-400.woff2) format("woff2"); font-weight: 400; font-display: block; }
+  @font-face { font-family: "Geist Mono"; src: url(fonts/GeistMono-500.woff2) format("woff2"); font-weight: 500; font-display: block; }
+
+  /* Suplex brand tokens */
+  :root {
+    --ground: #111111;
+    --off-white: #f2f1ec;
+    --muted: #b4b4ae;
+    --lime: #d5ff40;
+    --track: rgba(242, 241, 236, .18);
+    --sans: "Inter", system-ui, sans-serif;
+    --mono: "Geist Mono", ui-monospace, monospace;
+  }
+  html, body { margin: 0; background: transparent; }
+  .f { position: relative; width: 1080px; height: 1350px; overflow: hidden; font-family: var(--sans); color: var(--off-white); }
+  .grain { position: absolute; left: 0; top: 0; }
+  .mono { font-family: var(--mono); font-size: 28px; letter-spacing: .04em; text-transform: uppercase; line-height: 1; }
+
+  .bars { position: absolute; left: 56px; right: 56px; top: 44px; height: 4px; display: flex; gap: 8px; }
+  .bars i { flex: 1; height: 4px; display: block; }
+  .bars i.done { background: var(--lime); }
+  .bars i.todo, .bars i.now { background: var(--track); }
+
+  .label { position: absolute; left: 56px; top: 92px; color: var(--muted); }
+  .plus { position: absolute; right: 44px; top: 70px; width: 84px; height: 84px; }
+
+  .slot { position: absolute; left: 56px; top: 200px; width: 968px; height: 628px; border-radius: 14px; box-sizing: border-box; }
+  .shadow { background: #0a0a0a; box-shadow: 0 30px 80px rgba(0,0,0,.65), 0 8px 24px rgba(0,0,0,.5); }
+  .edge { border: 1px solid rgba(242,241,236,.14); }
+
+  h1 { position: absolute; left: 56px; top: 896px; width: 968px; margin: 0; font-weight: 500; font-size: 84px; line-height: .95; letter-spacing: -.045em; text-wrap: balance; }
+
+  .foot { position: absolute; left: 56px; right: 56px; bottom: 56px; display: flex; justify-content: space-between; align-items: flex-end; }
+  .foot svg { width: 300px; height: auto; display: block; }
+  .foot .mono { color: var(--muted); }
+
+  /* lime theme */
+  .lime { color: #0a0a0a; }
+  .lime .label, .lime .foot .mono { color: #2e2e2a; }
+  .lime .bars i.done { background: #0a0a0a; }
+  .lime .bars i.todo, .lime .bars i.now { background: rgba(10,10,10,.18); }
+  .lime .edge { border-color: rgba(10,10,10,.22); }
+  .lime .shadow { box-shadow: 0 30px 80px rgba(0,0,0,.35), 0 8px 24px rgba(0,0,0,.25); }
+  /* end card */
+  .end h1 { top: auto; bottom: 250px; width: 732px; font-size: 104px; line-height: .95; letter-spacing: -.05em; }
+  /* 16:9 layout: clip on the right, headline in the left column */
+  .wide { width: 1920px; height: 1080px; }
+  .wide .slot { left: 712px; top: 180px; width: 1152px; height: 747px; }
+  .wide h1 { top: 180px; width: 600px; }
+  .wide.end h1 { top: auto; bottom: 220px; width: 1640px; font-size: 120px; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script>
+const WORDMARK = '<svg viewBox="0 0 491.52 102.24" aria-label="Suplex"><g fill="currentColor"><path d="M77.87,85.02c-.55,3.35-3.15,5.9-6.63,5.9l-38.81.06c-2.49,0-4.79-.65-6.38-2.58-1.48-1.78-1.98-4.26-1.78-6.5l-5.27-.09c-3.5-.58-6.27-3.28-6.26-6.94l.03-13.51c6.2-1,11.85,3.71,11.87,10.16l.03,9.75,53.25-.02.03-23.9-46.71.06c-3.56.08-6.45-1.93-7.17-5.43-.26-1.25-.22-2.66-.26-4.11-2.09,0-4.11.12-6.32-.19s-4.7-2.5-4.76-4.94c-.1-4.48-.26-8.8.07-13.22.3-4.14,4.64-6.36,8.31-6.17l3.08.16c.05-1.4-.15-3.02.1-4.27.76-3.82,4.25-5.58,7.88-5.58l39.82.06c2.52,0,4.91,2.19,5.5,4.45.47,1.79.27,3.52.3,5.35,1.91-.07,3.75-.23,5.7.05,2.99.44,5.8,2.99,5.79,6.14l-.04,15.17c-2.72.32-5.24-.49-7.42-2.2-2.68-1.88-3.99-5.06-3.96-8.39l.08-10.33h-20.12s-33.58.01-33.58.01l-.03,23.32h47.51c3.05.02,5.45,1.92,6.19,4.88.37,1.45.25,3.11.26,4.69l6.21.11c2.02.03,4.63,1.6,4.73,3.83.21,4.52.05,8.84.03,13.35-.01,2.47-1.11,4.92-3.17,6.26-2.35,1.51-5.14,1.65-7.86,1.24l-.24,3.35Z"/><path d="M196.01,57.2l-5.93-.06-.11,33.71-9.71-.19-.04-33.62,9.7-.02.09-9.56-10.18-.08-.02-17.37c0-2.61,1.48-4.63,3.84-5.77,1.95-.94,4.22-.94,6.45-.67-.09-1.37-.33-2.59-.06-3.98.54-2.82,3.13-5.8,6.3-5.81l40.5-.06c3.46,0,6.29,2.28,6.64,5.79l.15,3.96,5.71.1c2.46.04,5.07,2.28,5.1,4.87l.13,12.64c.03,2.89-1.76,5.47-4.63,6.33-1.97.59-4.06.48-6.24.06l-.17,4.08c-.14,3.31-3.09,5.62-6.45,5.62l-41.08.02ZM189.97,23.77l-.1,23.5,53.64.22.1-23.5-53.64-.22Z"/><path d="M161.95,13.74l8.63-.04.08,59.22c0,4.92-3.04,8.9-8.24,8.93l-4.69.03-.11,3.03c-.44,3.74-3.46,6.12-7.16,6.12h-31.63c-3.47,0-6.71-1.62-7.8-5.02-.42-1.33-.25-2.92-.2-4.4-2.45.14-4.98.24-7.27-.51-3.23-1.07-4.95-3.55-4.95-6.98l.08-60.43,8.68-.02-.06,53.23c.33.99.84,1.65,1.57,2.33l2,2.35.11,9.73,46.65.05-.02-9.15c.55-.93,1.54-1.88,2.38-2.65,1.15-.88,1.87-2.01,1.87-3.51V26.43s.08-12.69.08-12.69Z"/><path d="M353.68,91.03c-5.08-.14-7.96-4.2-7.5-9l-4.79-.31c-3.93-.59-6.43-3.92-6.42-7.8l.05-13.7c0-1.84,2.18-3.12,3.82-3.11l7.49.06.07-4.11c.06-3.36,3.11-5.33,6.44-5.53l52.48-.06-.05,10.08-58.75.09v23.7s27.87,0,27.87,0l30.83.02-.1,9.67h-51.45Z"/><polygon points="330.58 81.25 330.58 91.01 312.45 91.07 263.47 91.05 263.43 13.68 272.22 13.71 272.2 81.19 330.58 81.25"/><path d="M339.72,45.63l-4.66.49-.05-16.36c-.01-3.52,4.18-6.26,6.26-6.25l5.45.02.09-4.08c.65-3.08,3.23-5.29,6.3-5.71l52.15-.09-.12,10.42-14.2.06-28.76-.12-15.25-.03-.09,12.98c-.76,3.95-3.42,6.97-7.12,8.67Z"/><path d="M447.15,45.24c-.19,1.81-1.46,3.14-2.58,3.74-1.66.89-3.3.96-4.88.22-2.31-1.07-3.9-3.16-3.92-5.77l-.03-3.53c-2.09.2-4.27.29-6.27-.08-3.71-.68-5.76-3.54-5.76-7.13l.03-18.95c7.39-.83,12.8,4.77,12.78,12.41l-.05,13.07,5.63.08c2.98.04,5.39,2.73,5.05,5.93Z"/><path d="M423.92,91.12l.04-18.56c0-2.87,2.74-5.38,5.52-5.44l6.26-.13c-.07-1.34-.22-2.83,0-4.24.43-2.61,2.38-4.71,4.89-5.37,1.75-.46,3.43.17,4.65,1.23,1.31,1.12,2.06,2.9,1.75,4.65-.34,1.63-1.1,3.03-2.65,3.64-2.54.99-5.28,1.06-7.93.63l-.08,23.63-12.47-.02Z"/><path d="M464.69,49.57c-1.88.54-3.72-.25-4.86-1.44-1.24-1.3-1.94-3.23-1.29-5.04,1.33-3.73,5.91-4.22,10.1-3.69l-.03-14.41c-.12-1.9.47-3.47,1.28-5.1,2.19-4.41,6.61-6.89,11.6-6.2l-.08,19.39c-.01,3.3-2.53,6.15-5.7,6.52l-6.66.26.05,4.21c-.28,2.48-1.86,4.76-4.4,5.5Z"/><path d="M481.24,91.59l-2.93-.22c-4.86-1.03-9.24-5.12-9.69-10.25l-.09-13.27-4.96-.07c-2.55-.03-4.79-1.99-5.23-4.61-.47-2.82,1.72-5.74,4.68-5.94s5.88,2.36,5.95,5.34l.1,4.46,6.32.17c3.61.4,6.01,3.23,5.99,6.78l-.13,17.59Z"/></g></svg>';
+const PLUS = c => `<svg class="plus" viewBox="0 0 24 24" fill="none" stroke="${c}" stroke-width="0.6"><path d="M4 12h16"/><path d="M12 4v16"/></svg>`;
+const GRAIN = (op, blend) => `<svg class="grain" width="${FW}" height="${FH}" style="opacity:${op};mix-blend-mode:${blend}"><filter id="g"><feTurbulence type="fractalNoise" baseFrequency="0.85" numOctaves="3" stitchTiles="stitch" seed="7"/><feColorMatrix type="saturate" values="0"/></filter><rect width="${FW}" height="${FH}" filter="url(#g)"/></svg>`;
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])).replace(/\n/g, '<br>');
+
+const D = JSON.parse(decodeURIComponent(location.hash.slice(1) || '{}'));
+const WIDE = D.format === '16x9', FW = WIDE ? 1920 : 1080, FH = WIDE ? 1080 : 1350, W_ = WIDE ? ' wide' : '';
+const n = D.count || 1, i = D.index || 0;
+const foot = c => `<div class="foot"><span style="color:${c}">${WORDMARK}</span><span class="mono">${esc(D.url || 'GETSUPLEX.AI')}</span></div>`;
+
+const LIME = D.theme === 'lime';
+const ground = () => LIME ? `<div style="position:absolute;inset:0;background:var(--lime)"></div>${GRAIN(.12, 'multiply')}`
+                          : `<div style="position:absolute;inset:0;background:var(--ground)"></div>${GRAIN(.09, 'screen')}`;
+const ink = LIME ? '#0a0a0a' : '#ffffff', plusC = LIME ? '#0a0a0a' : '#b4b4ae';
+let html = '';
+if (D.type === 'bg') {
+  html = `<div class="f${W_} ${LIME ? 'lime' : ''}">${ground()}<div class="slot shadow"></div></div>`;
+} else if (D.type === 'mask') {
+  html = `<div class="f${W_}" style="background:#000"><div class="slot" style="background:#fff"></div></div>`;
+} else if (D.type === 'end') {
+  html = `<div class="f${W_} end ${LIME ? 'lime' : ''}">${ground()}<span class="mono label">${esc(D.label || 'AI orchestration for builders.')}</span>${PLUS(plusC)}<h1>${esc(D.headline)}</h1>${foot(ink)}</div>`;
+} else {
+  // overlay; with "preview": true it also paints the ground and an empty slot so it can be judged in a browser
+  const pv = D.preview ? `${ground()}<div class="slot shadow"></div>` : '';
+  const bars = Array.from({ length: n }, (_, k) => `<i class="${k < i ? 'done' : k === i ? 'now' : 'todo'}"></i>`).join('');
+  html = `<div class="f${W_} ${LIME ? 'lime' : ''}">${pv}<div class="bars">${bars}</div><span class="mono label">${esc(D.label)}</span>${PLUS(plusC)}
+    <div class="slot edge"></div><h1 id="h">${esc(D.headline)}</h1>${foot(ink)}</div>`;
+}
+document.getElementById('root').innerHTML = html;
+
+// shrink a long headline until it clears the footer
+document.fonts.ready.then(() => {
+  const h = document.getElementById('h');
+  if (h) { let s = 84; while (h.offsetTop + h.offsetHeight > (WIDE ? 900 : 1190) && s > 48) { s -= 2; h.style.fontSize = s + 'px'; } }
+  document.body.dataset.ready = '1';
+});
+</script>
+</body>
+</html>

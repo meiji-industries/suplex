@@ -1,0 +1,5 @@
+Moves are your ops runbooks, one click each.
+
+Restart the API servers. Scale workers to 6. Purge the CDN cache. Force an app update.
+
+Suplex reads your repo and suggests Moves from the commands you already have. Every run logs who, which inputs, and the full transcript.

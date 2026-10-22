@@ -1,0 +1,353 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<link rel="stylesheet" href="shared/suplex.css">
+<script src="shared/chrome.js"></script>
+</head>
+<body>
+<div id="stage">
+  <div id="cam">
+    <div id="bg"></div>
+
+    <div class="win" id="suplexWin">
+      <div class="titlebar"><div class="dot" style="left:16px;background:#ff5f57"></div><div class="dot" style="left:36px;background:#febc2e"></div><div class="dot" style="left:56px;background:#28c840"></div><div class="title">Suplex</div></div>
+      <div data-slot="side" data-nav="Board"></div>
+      <div id="mainhdr">
+        <div class="abs" style="left:33px;top:24px;color:#bdbdbd"><svg class="i" viewBox="0 0 24 24"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M9 3v18"/></svg></div>
+        <div class="abs" style="left:61px;top:20px;width:1px;height:24px;background:#262626"></div>
+        <div class="abs" style="left:79px;top:17px;font-size:20px;font-weight:600;color:#f4f4f4">Board</div>
+        <div class="abs" style="left:1085px;top:24px;color:#bdbdbd"><svg class="i" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2"/><path d="M12 20v2"/><path d="m4.93 4.93 1.41 1.41"/><path d="m17.66 17.66 1.41 1.41"/><path d="M2 12h2"/><path d="M20 12h2"/><path d="m6.34 17.66-1.41 1.41"/><path d="m19.07 4.93-1.41 1.41"/></svg></div>
+        <div class="abs" style="left:1127px;top:24px;color:#bdbdbd"><svg class="i" viewBox="0 0 24 24"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/></svg></div>
+        <div class="abs" style="left:1169px;top:24px;color:#bdbdbd"><svg class="i" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg></div>
+      </div>
+      <div class="tb" id="tabs" style="left:319px;width:354px"><span>Active</span><span>Backlog</span><span>Queued</span><span class="sel">All tasks</span><span>Archived</span></div>
+      <div class="tb" style="left:683px;width:100px">Compact<svg class="i" viewBox="0 0 24 24" style="margin-left:auto"><path d="m6 9 6 6 6-6"/></svg></div>
+      <div class="tb" style="left:793px;width:167px"><svg class="i" viewBox="0 0 24 24"><path d="M3 6h18"/><path d="M7 12h10"/><path d="M10 18h4"/></svg>Tasks and moves<svg class="i" viewBox="0 0 24 24" style="margin-left:auto"><path d="m6 9 6 6 6-6"/></svg></div>
+      <div class="tb" style="left:971px;width:134px"><svg class="i" viewBox="0 0 24 24"><path d="M3 6h18"/><path d="M7 12h10"/><path d="M10 18h4"/></svg>All statuses<svg class="i" viewBox="0 0 24 24" style="margin-left:auto"><path d="m6 9 6 6 6-6"/></svg></div>
+      <div class="tb" style="left:1178px;width:187px;color:#8a8a8a"><svg class="i" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>Filter tasks<span style="margin-left:auto;font-size:11px;background:#1e1e1e;border-radius:4px;padding:2px 6px;color:#8a8a8a">⌘K</span></div>
+      <div class="tb" style="left:1376px;width:110px">All projects<svg class="i" viewBox="0 0 24 24" style="margin-left:auto"><path d="m6 9 6 6 6-6"/></svg></div>
+      <div id="board"></div>
+      <svg id="cursor" viewBox="0 0 22 30" style="left:1040px;top:700px"><path d="M2 2 L2 24 L7.5 18.5 L11.5 27.5 L15 26 L11 17 L19 17 Z" fill="#000" stroke="#fff" stroke-width="1.6" stroke-linejoin="round"/></svg>
+    </div>
+
+    <div class="win" id="termWin">
+      <div class="titlebar"><div class="dot" style="left:16px;background:#ff5f57"></div><div class="dot" style="left:36px;background:#febc2e"></div><div class="dot" style="left:56px;background:#28c840"></div><div class="title" id="ttitle">✳ Claude Code</div></div>
+      <div id="tview"><div id="tin"></div></div>
+    </div>
+  </div>
+
+  <div id="hud">
+    <div class="hl" id="hudhl" style="left:162px"></div>
+    <img src="shared/local/ghostty-icon.png" style="left:30px">
+    <img src="../../../../apps/desktop/src-tauri/icons/128x128@2x.png" style="left:170px;width:108px;height:108px">
+    <div class="nm" id="hudnm" style="left:162px">Suplex</div>
+  </div>
+  <div id="keys"></div>
+</div>
+
+<script>
+Suplex.mount();
+const DUR = 25.5;
+
+// ---------- Icons ----------
+const I = {
+  dashed: '<svg class="i mute" viewBox="0 0 24 24"><path d="M10.1 2.182a10 10 0 0 1 3.8 0"/><path d="M13.9 21.818a10 10 0 0 1-3.8 0"/><path d="M17.609 3.721a10 10 0 0 1 2.69 2.7"/><path d="M2.182 13.9a10 10 0 0 1 0-3.8"/><path d="M20.279 17.609a10 10 0 0 1-2.7 2.69"/><path d="M21.818 10.1a10 10 0 0 1 0 3.8"/><path d="M3.721 6.391a10 10 0 0 1 2.7-2.69"/><path d="M6.391 20.279a10 10 0 0 1-2.69-2.7"/></svg>',
+  clock: '<svg class="i sky" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>',
+  active: '<svg class="i teal" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="3.2" fill="currentColor"/></svg>',
+  check: '<svg class="i green" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="m9 12 2 2 4-4"/></svg>',
+  plus: '<svg class="i" viewBox="0 0 24 24"><path d="M5 12h14"/><path d="M12 5v14"/></svg>',
+  minus: '<svg class="i" viewBox="0 0 24 24"><path d="M5 12h14"/></svg>',
+  more: '<svg class="i" viewBox="0 0 24 24"><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/><circle cx="5" cy="12" r="1"/></svg>',
+  proj: '<svg width="16" height="16" viewBox="0 0 16 16"><defs><linearGradient id="pg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#7fd3f7"/><stop offset="1" stop-color="#1769b3"/></linearGradient></defs><rect width="16" height="16" rx="3" fill="url(#pg)"/><path d="M3 13 L13 3 M6 13 L13 6" stroke="#fff" stroke-width="1.6" opacity=".9"/></svg>',
+};
+
+// ---------- Story data ----------
+const TASKS = [
+  "Send a refund.settled webhook and email",
+  "Show a clear error when a card is declined",
+  "Add Apple Pay to checkout",
+  "Export payouts as CSV",
+  "Search orders by customer email",
+  "Show webhook delivery attempts and retries",
+];
+const ROWS = [
+  ["1", "Refund status is invisible to customers", "“Three emails a day asking where their refund is.”", TASKS[0]],
+  ["2", "Declined cards fail silently", "“The button just spins, then nothing.”", TASKS[1]],
+  ["3", "No Apple Pay", "“Half my buyers bail at the card form on phones.”", TASKS[2]],
+  ["4", "Payout reconciliation is manual", "“My accountant copies payouts by hand.”", TASKS[3]],
+  ["5", "Orders can’t be found by email", "“I only have their email, not the order number.”", TASKS[4]],
+  ["6", "Webhook failures are invisible", "“Inventory sync broke for two days. Nobody knew.”", TASKS[5]],
+];
+const HEAD = ["#", "Takeaway", "Maya said", "Task"];
+const Q1 = "What are the takeaways from this user interview: ";
+const PASTE = "[Pasted text #1 +412 lines]";
+const Q2 = "Build them in Suplex";
+
+// Timeline (seconds)
+const T = {
+  type1: 0.7, paste: 3.25, enter1: 3.95,
+  think1: 4.3, answer1: 6.1, table: 6.4, tableRow: 0.22, scope: 8.5, done1: 8.6,
+  type2: 11.2, enter2: 12.7,
+  think2: 12.95, skill: 13.7, skillOk: 14.0, who: 14.3, whoOk: 14.65,
+  create: [15.0, 15.65], createOk: [15.4, 99],
+  swap: 16.15, swapEnd: 16.9,
+  card: [15.4, 17.4, 18.0, 18.6, 19.2, 19.8],
+  activate: 20.7,
+};
+const IDS = ["ACM-142", "ACM-143", "ACM-144", "ACM-145", "ACM-146", "ACM-147"];
+
+// Deterministic typing
+function rnd(i) { const x = Math.sin(i * 12.9898 + 78.233) * 43758.5453; return x - Math.floor(x); }
+function typeTimes(text, t0, cps, seed) {
+  const out = []; let t = t0;
+  for (let i = 0; i < text.length; i++) { t += (1 / cps) * (0.55 + rnd(seed + i) * 0.9) + (text[i - 1] === " " ? 0.03 : 0); out.push(t); }
+  return out;
+}
+const TT1 = typeTimes(Q1, T.type1, 21, 1), TT2 = typeTimes(Q2, T.type2, 15, 99);
+const typed = (text, times, t) => text.slice(0, times.filter(x => x <= t).length);
+
+// Streamed text: reveal chars at a rate
+const stream = (text, t0, cps, t) => text.slice(0, Math.max(0, Math.floor((t - t0) * cps)));
+
+// ---------- Claude mascot ----------
+function clawd() {
+  const q = { " ": "0000", "▐": "0101", "▛": "1110", "█": "1111", "▜": "1101", "▌": "1010", "▝": "0100", "▘": "1000" };
+  const rows = [" ▐▛███▜▌ ", "▝▜█████▛▘", "  ▘▘ ▝▝  "];
+  const cw = 8.4, lh = 22; let r = "";
+  rows.forEach((row, y) => [...row].forEach((ch, x) => {
+    const m = q[ch];
+    [[0, 0], [1, 0], [0, 1], [1, 1]].forEach(([dx, dy], k) => {
+      if (m[k] === "1") r += `<rect x="${(x * cw + dx * cw / 2).toFixed(2)}" y="${y * lh + dy * lh / 2}" width="${(cw / 2 + .3).toFixed(2)}" height="${lh / 2 + .3}"/>`;
+    });
+  }));
+  return `<svg width="${9 * cw}" height="${3 * lh}" fill="#d77757" shape-rendering="crispEdges">${r}</svg>`;
+}
+const CLAWD = clawd();
+
+// ---------- Table ----------
+const W = HEAD.map((h, c) => Math.max(h.length, ...ROWS.map(r => r[c].length)));
+const pad = (s, n) => s + " ".repeat(n - s.length);
+const bline = (l, m, r) => `<span class="bd">${l}${W.map(w => "─".repeat(w + 2)).join(m)}${r}</span>`;
+const brow = (cells, bold) => `<span class="bd">│</span>` + cells.map((c, i) => ` ${bold ? `<span class="b">${esc(pad(c, W[i]))}</span>` : esc(pad(c, W[i]))} <span class="bd">│</span>`).join("");
+
+// ---------- Terminal render ----------
+const ln = (html, cls = "") => `<div class="ln ${cls}">${html}</div>`;
+const SPIN = ["·", "✢", "✳", "✶", "✻", "✽", "✻", "✶", "✳", "✢"];
+function toolDot(t, t0, ok) {
+  if (t >= ok) return `<span class="gr">⏺</span>`;
+  return Math.floor((t - t0) * 2.2) % 2 ? `<span class="dim">⏺</span>` : `<span style="color:#e9e9e9">⏺</span>`;
+}
+function renderTerm(t) {
+  const L = [];
+  L.push(`<div class="hdr">${CLAWD}<div class="tx">${ln(`<span class="b">Claude Code</span> <span class="dim">v2.1.307</span>`)}${ln(`<span class="dim">Opus 5.5 · Claude Max</span>`)}${ln(`<span class="dim">~/checkout-api</span>`)}</div></div>`);
+  L.push(ln(""));
+  let busy = null;
+  if (t >= T.enter1) {
+    L.push(ln(`<span class="dim">&gt;</span> ${esc(Q1)}${esc(PASTE)}`, "um"));
+    L.push(ln(""));
+    busy = { verb: "Synthesizing…", t0: T.enter1 };
+  }
+  if (t >= T.think1) {
+    L.push(ln(`<span class="dim">∴ Thinking…</span>`));
+    const r1 = "Maya runs a home-goods store on Acme Checkout. She raised seven problems across refunds,";
+    const r2 = "declines, wallets, payouts, search, and webhooks. Six are buildable. Multi-currency needs a pricing call.";
+    const a = stream(r1, T.think1 + 0.15, 95, t), b = stream(r2, T.think1 + 0.15 + r1.length / 95, 95, t);
+    L.push(ln(`  <span class="dim it">${esc(a)}</span>`));
+    if (b) L.push(ln(`  <span class="dim it">${esc(b)}</span>`));
+    L.push(ln(""));
+  }
+  if (t >= T.answer1) {
+    L.push(ln(`<span style="color:#e9e9e9">⏺</span> ${esc(stream("Six takeaways from the interview with Maya Chen (home-goods store on Acme Checkout):", T.answer1, 160, t))}`));
+    L.push(ln(""));
+  }
+  if (t >= T.table) {
+    const lines = [bline("┌", "┬", "┐"), brow(HEAD, true), bline("├", "┼", "┤"), ...ROWS.map(r => brow(r)), bline("└", "┴", "┘")];
+    const n = Math.min(lines.length, 1 + Math.floor((t - T.table) / T.tableRow));
+    lines.slice(0, n).forEach(h => L.push(ln("  " + h, "tbl")));
+    L.push(ln(""));
+  }
+  if (t >= T.scope) {
+    L.push(ln(`  ${esc(stream("Out of scope: multi-currency pricing. It needs a pricing decision first.", T.scope, 200, t))}`));
+    L.push(ln(""));
+  }
+  if (t >= T.done1 && t < T.enter2) busy = null;
+  if (t >= T.enter2) {
+    L.push(ln(`<span class="dim">&gt;</span> ${esc(Q2)}`, "um"));
+    L.push(ln(""));
+    busy = { verb: "Orchestrating…", t0: T.enter2 };
+  }
+  if (t >= T.think2) {
+    L.push(ln(`<span class="dim">∴ Thinking…</span>`));
+    L.push(ln(`  <span class="dim it">${esc(stream("Load the Suplex skill, confirm the workspace, then create one checkout-api task per takeaway.", T.think2 + 0.1, 130, t))}</span>`));
+    L.push(ln(""));
+  }
+  if (t >= T.skill) {
+    L.push(ln(`${toolDot(t, T.skill, T.skillOk)} <span class="b">Skill</span>(suplex)`));
+    if (t >= T.skillOk) L.push(ln(`  <span class="dim">⎿  Successfully loaded skill</span>`));
+    L.push(ln(""));
+  }
+  if (t >= T.who) {
+    L.push(ln(`${toolDot(t, T.who, T.whoOk)} <span class="b">suplex - suplex_whoami (MCP)</span>`));
+    if (t >= T.whoOk) L.push(ln(`  <span class="dim">⎿  Dana Reyes · Acme · projects: checkout-api</span>`));
+    L.push(ln(""));
+  }
+  T.create.forEach((c, i) => {
+    if (t < c) return;
+    L.push(ln(`${toolDot(t, c, T.createOk[i])} <span class="b">suplex - suplex_create_task (MCP)</span>(project: "checkout-api", title: "${esc(TASKS[i])}", start: true)`));
+    if (t >= T.createOk[i]) L.push(ln(`  <span class="dim">⎿  Created ${IDS[i]} · Queued</span>`));
+    else L.push(ln(`  <span class="dim">⎿  Running…</span>`));
+    L.push(ln(""));
+  });
+  if (busy) {
+    const s = Math.max(1, Math.floor(t - busy.t0 + 1));
+    const tok = (0.4 + (t - busy.t0) * 0.38).toFixed(1);
+    L.push(ln(`<span class="or">${SPIN[Math.floor(t * 9) % SPIN.length]} ${busy.verb}</span> <span class="dim">(${s}s · ↓ ${tok}k tokens · esc to interrupt)</span>`));
+    L.push(ln(""));
+  }
+  // input box
+  let input = "", typing = false;
+  if (t >= T.type1 && t < T.enter1) { input = esc(typed(Q1, TT1, t)) + (t >= T.paste ? esc(PASTE) : ""); typing = t < TT1[TT1.length - 1] + 0.2; }
+  if (t >= T.type2 && t < T.enter2) { input = esc(typed(Q2, TT2, t)); typing = true; }
+  const blink = typing || Math.floor(t * 1.8) % 2 === 0;
+  L.push(`<div class="rule"></div>`);
+  L.push(ln(`<span class="dim">&gt;</span> ${input}${blink ? '<span class="cur"> </span>' : " "}`));
+  L.push(`<div class="rule"></div>`);
+  L.push(ln(`  <span class="dim">? for shortcuts</span>`));
+  const tin = $("tin");
+  tin.innerHTML = L.join("");
+  const over = Math.max(0, tin.offsetHeight - (978 - 36 - 40));
+  tin.style.transform = `translateY(${-over}px)`;
+  $("ttitle").textContent = t >= T.enter1 + 0.6 ? "✳ Interview Takeaways" : "✳ Claude Code";
+}
+
+// ---------- Board ----------
+const BACKLOG = ["Rate limit the receipts endpoint", "Upgrade to Node 24"];
+const DELIVERED = ["Return 404 for unknown refund IDs", "Add idempotency keys to POST /charges", "Retry failed Stripe webhooks with backoff", "Move currency rounding into money.js"];
+const board = $("board");
+function mkCol(label, icon) {
+  const el = document.createElement("div"); el.className = "col";
+  el.innerHTML = `<div class="hd"><span class="ic">${icon}</span><span class="lb">${label}<span class="ct">0</span></span><span class="pl">${I.plus}</span></div>`;
+  board.appendChild(el); return el;
+}
+function mkCard(title, icon, menu) {
+  const el = document.createElement("div"); el.className = "card";
+  el.innerHTML = `<span class="ic">${icon}</span><span class="tt">${esc(title)}</span><span class="mn">${menu}</span><span class="pj">${I.proj}checkout-api</span>`;
+  board.appendChild(el); return el;
+}
+const cols = { backlog: mkCol("Backlog", I.dashed), queued: mkCol("Queued", I.clock), active: mkCol("Active", I.active), delivered: mkCol("Delivered", I.check) };
+const bCards = BACKLOG.map(s => mkCard(s, I.dashed, I.minus));
+const dCards = DELIVERED.map(s => mkCard(s, I.check, ""));
+const nCards = TASKS.map(s => mkCard(s, I.clock, I.minus));
+const COLW = 296, X0 = 19, CT = 13;
+const slot = (x, i) => [x + 12, CT + 49 + i * 74];
+function place(el, x, y, op = 1, extra = "") { el.style.left = x + "px"; el.style.top = y + "px"; el.style.opacity = op; el.style.transform = extra; }
+function setCount(col, n) { col.querySelector(".ct").textContent = n; }
+
+// Activity sidebar
+const acts = $("acts");
+function mkAct(title, icon) {
+  const el = document.createElement("div"); el.className = "act";
+  el.innerHTML = `<span class="ic">${icon}</span><span class="tt">${esc(title)}</span><span class="sub" style="opacity:0"><i></i>Coordinator · Working</span>`;
+  acts.appendChild(el); return el;
+}
+const nActs = TASKS.map(s => mkAct(s, I.clock));
+const oActs = [mkAct(DELIVERED[0], I.check), mkAct(DELIVERED[1], I.check), mkAct(DELIVERED[2], I.check), mkAct(BACKLOG[0], I.dashed)];
+
+function renderBoard(t) {
+  const created = T.card.map(c => clamp((t - c) / 0.35));
+  const qF = created[0] > 0 ? 1 : 0;
+  const aF = prog(t, T.activate, T.activate + 0.45);
+  const move = prog(t, T.activate + 0.2, T.activate + 0.85);
+  const shift = prog(t, T.activate + 0.45, T.activate + 0.95);
+  const isActive = t >= T.activate + 0.55;
+  const xB = X0, xQ = X0 + COLW, xA = xQ + COLW * qF, xD = xA + COLW * aF;
+  place(cols.backlog, xB, CT); place(cols.queued, xQ, CT, qF); place(cols.active, xA, CT, aF); place(cols.delivered, xD, CT);
+  setCount(cols.backlog, 2); setCount(cols.delivered, 4);
+  const nCreated = created.filter(x => x > 0).length;
+  setCount(cols.queued, nCreated - (isActive ? 1 : 0)); setCount(cols.active, isActive ? 1 : 0);
+  bCards.forEach((el, i) => place(el, ...slot(xB, i)));
+  dCards.forEach((el, i) => place(el, ...slot(xD, i)));
+  nCards.forEach((el, i) => {
+    const k = easeOut(created[i]);
+    if (i === 0) {
+      const [qx, qy] = slot(xQ, 0), [ax, ay] = slot(xA, 0);
+      const lift = Math.sin(Math.PI * move);
+      place(el, lerp(qx, ax, move), lerp(qy, ay, move) - lift * 6, k, `scale(${1 + lift * 0.03})`);
+      el.style.boxShadow = lift > 0.01 ? `0 ${12 * lift}px ${30 * lift}px rgba(0,0,0,${.5 * lift})` : "none";
+      el.style.zIndex = 5;
+      el.querySelector(".ic").innerHTML = isActive ? I.active : I.clock;
+      el.querySelector(".mn").innerHTML = isActive ? I.more : I.minus;
+    } else {
+      const idx = i - (t >= T.activate ? shift : 0);
+      const [x, y] = slot(xQ, idx);
+      place(el, x, y + (1 - k) * -14, k, `scale(${0.97 + 0.03 * k})`);
+    }
+    const glow = clamp(1 - (t - T.card[i] - 0.2) / 1.1);
+    const aGlow = i === 0 ? clamp(1 - (t - T.activate - 0.7) / 1.2) * (t > T.activate + 0.55 ? 1 : 0) : 0;
+    el.style.borderColor = aGlow > 0 ? `rgba(20,184,166,${0.25 + 0.6 * aGlow})` : glow > 0 && created[i] > 0 ? `rgba(56,189,248,${0.25 + 0.6 * glow})` : "#272727";
+  });
+  // activity rows
+  let y = 0;
+  const rowTop = 413;
+  nActs.forEach((el, i) => {
+    const k = easeOut(created[i]);
+    el.style.top = rowTop + y + "px"; el.style.height = 38 * k + "px"; el.style.opacity = k; y += 38 * k;
+    const act = i === 0 && isActive;
+    el.querySelector(".ic").innerHTML = act ? I.active : I.clock;
+    const sk = i === 0 ? prog(t, T.activate + 0.55, T.activate + 0.9) : 0;
+    el.querySelector(".tt").style.top = -9 * sk + "px";
+    el.querySelector(".sub").style.opacity = sk;
+  });
+  oActs.forEach(el => { el.style.top = rowTop + y + "px"; el.style.opacity = rowTop + y + 38 < 800 ? 1 : 0; y += 38; });
+}
+
+// ---------- Camera ----------
+const CAM = [
+  [0.0, 960, 540, 1], [0.35, 960, 540, 1], [1.3, 760, 290, 1.45],
+  [3.9, 760, 300, 1.45], [5.9, 870, 470, 1.3], [10.6, 870, 490, 1.38],
+  [11.4, 820, 640, 1.42], [12.8, 820, 660, 1.42], [13.8, 900, 760, 1.36], [15.5, 900, 790, 1.36],
+  [16.05, 960, 540, 1], [17.1, 960, 540, 1], [17.9, 960, 440, 1.22], [22.6, 975, 445, 1.26], [23.5, 960, 540, 1],
+];
+function camAt(t) {
+  for (let i = 0; i < CAM.length - 1; i++) {
+    const [t0, ...a] = CAM[i], [t1, ...b] = CAM[i + 1];
+    if (t <= t1) { const k = ease((t - t0) / (t1 - t0)); return a.map((v, j) => lerp(v, b[j], k)); }
+  }
+  return CAM[CAM.length - 1].slice(1);
+}
+
+// ---------- Overlays ----------
+function keys(html, t, t0, t1) {
+  const k = $("keys");
+  const on = t >= t0 && t < t1;
+  if (on) { if (k.dataset.h !== html) { k.innerHTML = html; k.dataset.h = html; } }
+  const a = on ? Math.min(clamp((t - t0) / 0.12), clamp((t1 - t) / 0.15)) : 0;
+  return a;
+}
+
+function render(t) {
+  renderTerm(t);
+  renderBoard(t);
+  const [fx, fy, s] = camAt(t);
+  $("cam").style.transform = `translate(${960 - fx * s}px, ${540 - fy * s}px) scale(${s})`;
+  // window swap
+  const sw = t >= T.swapEnd ? 1 : 0;
+  $("termWin").style.opacity = 1 - sw;
+  $("suplexWin").style.opacity = sw;
+  $("termWin").style.visibility = sw >= 1 ? "hidden" : "visible";
+  // HUD
+  const hud = $("hud");
+  const ha = t >= T.swap && t < T.swapEnd + 0.15 ? Math.min(clamp((t - T.swap) / 0.12), clamp((T.swapEnd + 0.15 - t) / 0.15)) : 0;
+  hud.style.opacity = ha; hud.style.transform = `scale(${0.96 + 0.04 * ha})`;
+  // key chips
+  let ka = 0;
+  if (t < 5) ka = keys(`<div class="key">⌘</div><span class="plus">+</span><div class="key">V</div>`, t, T.paste - 0.15, T.paste + 0.75);
+  else ka = keys(`<div class="key">⌘</div><span class="plus">+</span><div class="key">Tab</div>`, t, T.swap - 0.1, T.swapEnd + 0.1);
+  $("keys").style.opacity = ka;
+}
+window.render = render; window.DUR = DUR;
+render(Number(new URLSearchParams(location.search).get("t") || 0));
+</script>
+</body>
+</html>

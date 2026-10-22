@@ -55,6 +55,8 @@ conditions separately. Review every new rejection, disabled action, and retry
 requirement against this rule. Fix violations at the source; do not add a
 special-case bypass for each symptom.
 
+For product demo videos, brand-kit renders, and launch posts, read
+`docs/media/feature-clips/README.md`.
 For visible sub-agent pane delegation and its verification rules, read
 `docs/agents/subagents-in-herdr-panes.md`.
 For the local Herdr workflow and helper scripts, read `docs/herdr.md`.

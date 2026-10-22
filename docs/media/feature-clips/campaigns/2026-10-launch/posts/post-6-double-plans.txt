@@ -1,0 +1,5 @@
+Hot take: the best contributor at one of my clients is the CEO.
+
+He labels a PR and moves on. Suplex resolves conflicts, reorders DB migrations, polishes it to 9/10 with green CI, and merges.
+
+1,000+ PRs in. I'm no longer the bottleneck. I went OOO for a week; he kept shipping.

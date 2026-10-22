@@ -1,0 +1,80 @@
+{
+  "mode": "reel",
+  "outDir": "out/thread-reel-16x9",
+  "fps": 30,
+  "transition": 0.4,
+  "url": "GETSUPLEX.AI",
+  "segments": [
+    {
+      "label": "01 — New task",
+      "headline": "Describe the task. Your agents get it merged.",
+      "clip": "../../clips/new-task.mp4",
+      "start": 0.4,
+      "duration": 6.5,
+      "speed": 1.8,
+      "crop": [
+        204,
+        50,
+        1512,
+        980
+      ]
+    },
+    {
+      "label": "02 — PR review",
+      "headline": "Tag a PR. Suplex reviews, improves, and ships it.",
+      "clip": "../../clips/delivery.mp4",
+      "start": 0,
+      "duration": 6,
+      "speed": 1.8,
+      "crop": [
+        204,
+        50,
+        1512,
+        980
+      ]
+    },
+    {
+      "label": "03 — Double plans",
+      "headline": "Plan with 2 models. You get the best of both.",
+      "clip": "../../clips/double-plans.mp4",
+      "start": 0,
+      "duration": 6,
+      "speed": 1.8,
+      "crop": [
+        204,
+        50,
+        1512,
+        980
+      ]
+    },
+    {
+      "label": "04 — Meeting notes",
+      "headline": "Turn meeting notes into shipped fixes & features.",
+      "clip": "../../clips/meeting-queue.mp4",
+      "start": 0,
+      "duration": 9,
+      "speed": 2.2
+    },
+    {
+      "label": "05 — Moves",
+      "headline": "1-click DevOps runbooks for the whole team.",
+      "clip": "../../clips/moves.mp4",
+      "start": 1.2,
+      "duration": 7.5,
+      "speed": 2.2,
+      "crop": [
+        204,
+        50,
+        1512,
+        980
+      ]
+    }
+  ],
+  "end": {
+    "label": "AI orchestration for builders.",
+    "headline": "Your agents\ndo the work. Suplex runs\nthe workflow.",
+    "duration": 3
+  },
+  "output": "suplex-reel.mp4",
+  "format": "16x9"
+}

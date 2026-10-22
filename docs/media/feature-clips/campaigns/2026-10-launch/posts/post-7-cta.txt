@@ -1,0 +1,7 @@
+I run my clients, startups, and apps on Suplex.
+
+Bring the agents you already pay for: Claude Code, Codex, OpenCode, Pi. Native Rust app, about 20 MB. Mac or Linux, plus your phone.
+
+Free to start: https://getsuplex.ai
+
+What would you hand your squad first?

@@ -1,0 +1,11 @@
+This year I shipped more production code than ever. I wrote zero lines of it.
+
+My actual job: copy-paste. Plans between agents. CI logs back. Doomscrolling while tests ran.
+
+Velocity was up. My brain was fried.
+
+Every backlog moved at the speed of my clipboard. I wasn't the engineer anymore. I was the bottleneck.
+
+So I built the eng squad I ran for 15 years as a CTO, out of agents.
+
+Meet Suplex.

@@ -1,0 +1,7 @@
+My favorite trick:
+
+Paste a customer interview into Claude Code.
+"What are the takeaways?"
+"Build them in Suplex."
+
+Claude queues a task per takeaway over MCP. The squad starts on the first one before you're off the next call.

@@ -1,0 +1,5 @@
+A model reviewing its own code isn't review.
+
+Review and repair: a Rater scores an open PR, a Worker fixes the findings, and it repeats until the PR scores 9/10 with no blockers. Then it merges.
+
+Double plans: two agents plan independently, and the Coordinator combines them.

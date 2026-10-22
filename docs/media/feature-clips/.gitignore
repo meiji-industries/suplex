@@ -1,0 +1,6 @@
+# Videos stay out of git. Source clips live in Google Drive (see README.md).
+*.mp4
+out/
+.reel-tmp/
+scenes/shared/local/
+still-*.png

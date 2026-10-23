@@ -312,7 +312,9 @@ mod tests {
                     fs::read_to_string(headless::turn_file(directory, turn_id, "stderr.log"))
                         .unwrap_or_default();
                 assert_eq!(status.trim(), "0", "fake pi failed: {stderr}");
-                assert_eq!(
+                // The wrapper writes the exit file just before it exits, so the
+                // turn can still be observed running for a moment.
+                let observe = || {
                     runtime::observe(
                         directory,
                         "pi-native-1",
@@ -321,9 +323,15 @@ mod tests {
                         None,
                     )
                     .unwrap()
-                    .state,
-                    PromptState::Completed
-                );
+                    .state
+                };
+                for _ in 0..100 {
+                    if observe() != PromptState::Running {
+                        break;
+                    }
+                    thread::sleep(Duration::from_millis(50));
+                }
+                assert_eq!(observe(), PromptState::Completed);
                 return;
             }
             thread::sleep(Duration::from_millis(50));

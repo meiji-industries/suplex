@@ -96,15 +96,19 @@ test("Open the browser keeps the new login tab and Cancel closes it", async () =
   expect(document.body.textContent).toContain("Continue with Google");
 });
 
-test("the mobile shells offer only the email login", async () => {
+test("the iOS shell offers only the email login, and the Android shell keeps Google and GitHub", async () => {
   const buttons = (): string[] => Array.from(document.querySelectorAll("button")).map(button => button.textContent ?? "");
   expect(buttons()).toEqual(expect.arrayContaining(["Continue with Google", "Continue with GitHub", "Continue with email"]));
   window.suplexMobile = { openHostPicker: async () => {} };
   try {
-    await act(async () => root.render(<AccountLoginView key="mobile" />));
+    vi.spyOn(navigator, "userAgent", "get").mockReturnValue("Mozilla/5.0 (iPhone; CPU iPhone OS 27_0 like Mac OS X) AppleWebKit/605.1.15");
+    await act(async () => root.render(<AccountLoginView key="ios" />));
     expect(buttons()).not.toContain("Continue with Google");
     expect(buttons()).not.toContain("Continue with GitHub");
     expect(buttons()).toContain("Continue with email");
+    vi.spyOn(navigator, "userAgent", "get").mockReturnValue("Mozilla/5.0 (Linux; Android 15; Pixel 9) AppleWebKit/537.36 Chrome/140.0 Mobile Safari/537.36");
+    await act(async () => root.render(<AccountLoginView key="android" />));
+    expect(buttons()).toEqual(expect.arrayContaining(["Continue with Google", "Continue with GitHub", "Continue with email"]));
   } finally {
     delete window.suplexMobile;
   }

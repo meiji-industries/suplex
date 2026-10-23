@@ -95,8 +95,12 @@ pub async fn run(command: &str, arguments: &[String]) -> CliResult {
         }
         "restart" => {
             let installation = Installation::load()?;
-            println!("{}", supervisor::stop(&installation)?);
-            let pid = supervisor::start(&installation)?;
+            let pid = if supervisor::supervisor_running(&installation) {
+                supervisor::restart(&installation)?
+            } else {
+                println!("{}", supervisor::stop(&installation)?);
+                supervisor::start(&installation)?
+            };
             println!(
                 "Suplex restarted at {}; owned processes: 1 (server#{pid})",
                 installation.reachable_address

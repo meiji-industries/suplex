@@ -24,7 +24,7 @@ start a server. The server starts only through an explicit command:
 | --- | --- |
 | `up` (`start`) | Starts a supervised server in the background. `--foreground` runs the supervisor in the current process. |
 | `down` (`stop`) | Stops the supervised server for this installation. |
-| `restart` | Stops, then starts. |
+| `restart` | Signals the supervisor to run the program on disk again in place, keeping its pid. Stops, then starts, when no supervisor runs. |
 | `serve` | Runs the server in the current process without a supervisor. |
 | `update` (`upgrade`) | Installs the newest `Suplex.app` and restarts what was running. See [Updates](#updates). |
 | `doctor` | Read-only installation report. See [Doctor](#doctor). |
@@ -101,8 +101,15 @@ sends SIGTERM, and SIGKILL if the app still runs. A killed app leaves its host
 running; the command stops that host and lets the reopened app start it. See
 [replacing a running Suplex.app](../updates.md#replacing-a-running-suplexapp).
 
-Outside an app bundle, the command exits with instructions to update the
-checkout with Git and restart. The checkout's Git-based updater runs only
+On a Linux host installed from the release archive, the command reads the
+published feed, asks when a host is running, and then runs the same update as
+the web application's Update button: download, checksum, swap the binary,
+check that the new binary reports its version, and restart the supervisor in
+place. A binary that cannot run or an API that stops before it is ready
+restores the previous binary. On a stopped host it installs the binary only.
+
+Outside an app bundle or an archive install, the command exits with
+instructions to update the checkout with Git and restart. The checkout's Git-based updater runs only
 under the server's supervisor, through the web application. See
 [updates and release publication](../updates.md).
 

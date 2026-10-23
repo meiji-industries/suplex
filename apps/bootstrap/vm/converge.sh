@@ -75,8 +75,14 @@ systemctl enable docker >/dev/null 2>&1; systemctl restart docker
 docker --version
 echo "container egress ip: $(docker run --rm alpine wget -qO- -T 20 https://ifconfig.me/ip 2>/dev/null || echo NONE)"
 
-step "suplex binary (root-owned, /usr/local/bin)"
-[ -x /usr/local/bin/suplex ] || bash $T/install-suplex.sh
+step "suplex binary (owned by suplex in ~/.local/bin, so the in-app update can replace it; /usr/local/bin/suplex links to it)"
+# Earlier layouts kept a root-owned binary in /usr/local/bin; move it to the service user.
+as_suplex 'mkdir -p ~/.local/bin'
+if [ -f /usr/local/bin/suplex ] && [ ! -L /usr/local/bin/suplex ]; then
+  mv /usr/local/bin/suplex $H/.local/bin/suplex; chown suplex:suplex $H/.local/bin/suplex; chmod 0755 $H/.local/bin/suplex
+fi
+[ -x $H/.local/bin/suplex ] || bash $T/install-suplex.sh
+ln -sfn $H/.local/bin/suplex /usr/local/bin/suplex
 suplex version
 
 step "tools as suplex: mise (node, pnpm, uv), herdr, agent tools (${AGENT_TOOLS:-none})"
@@ -156,6 +162,9 @@ else rm -f /etc/systemd/system/suplex.service.d/port.conf; fi
 command -v tailscale >/dev/null && tailscale serve reset >/dev/null 2>&1 || true
 systemctl daemon-reload
 systemctl enable herdr.service suplex.service >/dev/null 2>&1
+# A host that an earlier `suplex update` started outside the unit keeps the port, and the unit then
+# restarts forever with "Suplex is already running".
+systemctl stop suplex.service; as_suplex 'suplex down' >/dev/null 2>&1 || true
 systemctl restart herdr.service; systemctl restart suplex.service
 sleep 6
 rm -rf $T

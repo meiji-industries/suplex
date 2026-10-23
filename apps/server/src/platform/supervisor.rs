@@ -18,6 +18,10 @@ struct OwnedProcess {
     start_time: String,
     executable: String,
 }
+/// Supervisors that write version 2 restart in place on SIGUSR2; earlier ones stop on it.
+const REGISTRY_VERSION: u8 = 2;
+/// Set on a supervisor that SIGUSR2 relaunched, never on its `serve` child.
+const RELAUNCH_VARIABLE: &str = "SUPLEX_SUPERVISOR_RELAUNCH";
 #[derive(Clone, Serialize, Deserialize)]
 struct Registry {
     version: u8,
@@ -83,29 +87,39 @@ fn matches(owned: &OwnedProcess) -> bool {
             && actual.executable == owned.executable
     })
 }
-pub fn current_is_supervised(installation: &Installation) -> bool {
-    let Ok(pid) = std::env::var("SUPLEX_SUPERVISOR_PID")
-        .unwrap_or_default()
+/// The executable of a supervisor command line: `suplex start --foreground` from the CLI,
+/// `suplex up --foreground` from the systemd unit.
+fn foreground_executable(command: &str) -> Option<&str> {
+    command
+        .strip_suffix(" start --foreground")
+        .or_else(|| command.strip_suffix(" up --foreground"))
+}
+fn inherited_supervisor() -> Option<OwnedProcess> {
+    let pid = std::env::var("SUPLEX_SUPERVISOR_PID")
+        .ok()?
         .parse::<u32>()
-    else {
-        return false;
-    };
+        .ok()?;
     let start = std::env::var("SUPLEX_SUPERVISOR_START").unwrap_or_default();
-    inspect(pid).is_some_and(|process| {
-        process.start_time == start && process.command.contains("start --foreground")
-    }) && database_open_by(std::process::id(), installation)
+    inspect(pid).filter(|process| {
+        process.start_time == start && foreground_executable(&process.command).is_some()
+    })
+}
+pub fn current_is_supervised(installation: &Installation) -> bool {
+    inherited_supervisor().is_some() && database_open_by(std::process::id(), installation)
 }
 pub fn inherited_supervisor_alive() -> bool {
-    let Ok(pid) = std::env::var("SUPLEX_SUPERVISOR_PID") else {
-        return true;
-    };
-    let Ok(pid) = pid.parse::<u32>() else {
-        return false;
-    };
-    let start = std::env::var("SUPLEX_SUPERVISOR_START").unwrap_or_default();
-    inspect(pid).is_some_and(|process| {
-        process.start_time == start && process.command.contains("start --foreground")
-    })
+    std::env::var_os("SUPLEX_SUPERVISOR_PID").is_none() || inherited_supervisor().is_some()
+}
+/// The supervisor that owns this installation's host, whether or not its API answers yet.
+fn running_supervisor(installation: &Installation) -> Option<Registry> {
+    read(&registry_path(installation))
+        .ok()
+        .flatten()
+        .filter(|record| matches(&record.process))
+        .or_else(|| discover(installation))
+}
+pub fn supervisor_running(installation: &Installation) -> bool {
+    running_supervisor(installation).is_some()
 }
 pub fn host_running(installation: &Installation) -> bool {
     let recorded = read(&registry_path(installation)).ok().flatten();
@@ -207,7 +221,7 @@ fn discover(installation: &Installation) -> Option<Registry> {
             .and_then(|value| value.trim().parse::<u32>().ok())
             .and_then(inspect);
         if let Some(parent) = parent
-            && parent.command.strip_suffix(" start --foreground") == Some(executable)
+            && foreground_executable(&parent.command) == Some(executable)
             && parent.executable == child.executable
         {
             return Some(Registry {
@@ -318,7 +332,7 @@ pub fn register_foreground(installation: &Installation) -> io::Result<()> {
     write(
         &path,
         &Registry {
-            version: 1,
+            version: REGISTRY_VERSION,
             process: owned,
             child: None,
             ready: false,
@@ -351,12 +365,18 @@ fn register_child(installation: &Installation, child_pid: u32) -> io::Result<()>
         .flatten()
         .filter(|record| record.process.pid == own.pid && matches(&record.process))
         .unwrap_or(Registry {
-            version: 1,
+            version: REGISTRY_VERSION,
             process: own,
             child: None,
             ready: false,
         });
-    record.child = inspect(child_pid);
+    // A child that exited before `ps` saw it stays on record, so `restart` learns it stopped.
+    record.child = Some(inspect(child_pid).unwrap_or(OwnedProcess {
+        pid: child_pid,
+        command: String::new(),
+        start_time: String::new(),
+        executable: String::new(),
+    }));
     record.ready = false;
     write(&path, &record)
 }
@@ -387,77 +407,146 @@ async fn stop_child(child: &mut tokio::process::Child) {
         let _ = child.kill().await;
     }
 }
+/// Replaces this process with the program on disk, keeping pid, start time, and command
+/// line. The registry record and the systemd unit therefore keep describing this process.
+/// Returns only when the exec failed; the caller then keeps supervising with this program.
+#[cfg(unix)]
+fn exec_installed() {
+    use std::os::unix::process::CommandExt;
+    let mut arguments = std::env::args_os();
+    let arg0 = arguments.next().unwrap_or_default();
+    eprintln!("Suplex supervisor restarts from the installed program");
+    let error = match crate::shared::fs::executable() {
+        Ok(executable) => Command::new(executable)
+            .arg0(arg0)
+            .args(arguments)
+            .env(RELAUNCH_VARIABLE, "1")
+            .exec(),
+        Err(error) => error,
+    };
+    eprintln!("Suplex supervisor could not restart from the installed program: {error}");
+}
+#[cfg(unix)]
+struct Signals {
+    interrupt: tokio::signal::unix::Signal,
+    terminate: tokio::signal::unix::Signal,
+    relaunch: tokio::signal::unix::Signal,
+}
+#[cfg(unix)]
+impl Signals {
+    fn install() -> io::Result<Self> {
+        use tokio::signal::unix::{SignalKind, signal};
+        Ok(Self {
+            interrupt: signal(SignalKind::interrupt())?,
+            terminate: signal(SignalKind::terminate())?,
+            relaunch: signal(SignalKind::user_defined2())?,
+        })
+    }
+}
+#[cfg(not(unix))]
+struct Signals;
+#[cfg(not(unix))]
+impl Signals {
+    fn install() -> io::Result<Self> {
+        Ok(Self)
+    }
+}
 pub async fn run_foreground() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     require_non_root_host()?;
     let installation = Installation::load()?;
+    // Installed before the registry says this supervisor handles SIGUSR2.
+    let mut signals = Signals::install()?;
     register_foreground(&installation)?;
-    let result = supervise(&installation).await;
+    let result = supervise(&installation, &mut signals).await;
     unregister_foreground(&installation);
     result
 }
 async fn supervise(
     installation: &Installation,
+    signals: &mut Signals,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let executable = crate::shared::fs::executable()?;
-    #[cfg(unix)]
-    let mut interrupt = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())?;
-    #[cfg(unix)]
-    let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
     let started = inspect(std::process::id())
         .ok_or("Could not inspect supervisor")?
         .start_time;
-    loop {
-        let mut child = tokio::process::Command::new(&executable);
-        child
+    // A relaunched supervisor is the service's main process. It retries the program on disk
+    // instead of exiting, so the updater can restore its rollback and signal again.
+    let mut relaunched = std::env::var_os(RELAUNCH_VARIABLE).is_some();
+    'supervise: loop {
+        let mut command = tokio::process::Command::new(&executable);
+        command
             .arg("serve")
             .env("SUPLEX_SUPERVISOR_PID", std::process::id().to_string())
             .env("SUPLEX_SUPERVISOR_START", &started)
+            .env_remove(RELAUNCH_VARIABLE)
             .stdin(Stdio::inherit())
             .stdout(Stdio::inherit())
             .stderr(Stdio::inherit());
-        let mut child = child.spawn()?;
-        register_child(
-            installation,
-            child.id().ok_or("Could not start Suplex API")?,
-        )?;
-        let ready_deadline = Instant::now() + Duration::from_secs(30);
-        loop {
+        let failure: Box<dyn std::error::Error + Send + Sync> = 'attempt: {
+            let mut child = match command.spawn() {
+                Ok(child) => child,
+                Err(error) => break 'attempt error.into(),
+            };
+            register_child(
+                installation,
+                child.id().ok_or("Could not start Suplex API")?,
+            )?;
+            let ready_deadline = Instant::now() + Duration::from_secs(30);
+            loop {
+                #[cfg(unix)]
+                tokio::select! {
+                    _ = signals.interrupt.recv() => { stop_child(&mut child).await; return Ok(()); },
+                    _ = signals.terminate.recv() => { stop_child(&mut child).await; return Ok(()); },
+                    _ = signals.relaunch.recv() => { stop_child(&mut child).await; exec_installed(); relaunched = true; continue 'supervise; },
+                    result = child.wait() => break 'attempt format!("Suplex API stopped before readiness ({})", result?).into(),
+                    _ = tokio::time::sleep(Duration::from_millis(100)) => {},
+                }
+                #[cfg(not(unix))]
+                tokio::time::sleep(Duration::from_millis(100)).await;
+                if http_ready(&installation.bind_address, installation.port) {
+                    break;
+                }
+                if Instant::now() >= ready_deadline {
+                    let _ = child.kill().await;
+                    break 'attempt "Suplex API did not report readiness".into();
+                }
+            }
+            mark_ready(installation)?;
+            relaunched = false;
             #[cfg(unix)]
-            tokio::select! {
-                _ = interrupt.recv() => { stop_child(&mut child).await; return Ok(()); },
-                _ = terminate.recv() => { stop_child(&mut child).await; return Ok(()); },
-                result = child.wait() => return Err(format!("Suplex API stopped before readiness ({})", result?).into()),
-                _ = tokio::time::sleep(Duration::from_millis(100)) => {},
-            }
+            let reason = {
+                tokio::select! {
+                    _ = signals.interrupt.recv() => Some("SIGINT"),
+                    _ = signals.terminate.recv() => Some("SIGTERM"),
+                    _ = signals.relaunch.recv() => { stop_child(&mut child).await; exec_installed(); relaunched = true; continue 'supervise; },
+                    result = child.wait() => { eprintln!("Suplex API stopped ({}) and will restart", result?); None },
+                }
+            };
             #[cfg(not(unix))]
-            tokio::time::sleep(Duration::from_millis(100)).await;
-            if http_ready(&installation.bind_address, installation.port) {
-                break;
+            let reason = {
+                tokio::select! { _ = tokio::signal::ctrl_c() => Some("SIGINT"), result = child.wait() => { eprintln!("Suplex API stopped ({}) and will restart", result?); None } }
+            };
+            if let Some(reason) = reason {
+                eprintln!("Suplex supervisor received {reason}; stopping API");
+                stop_child(&mut child).await;
+                return Ok(());
             }
-            if Instant::now() >= ready_deadline {
-                let _ = child.kill().await;
-                return Err("Suplex API did not report readiness".into());
-            }
+            tokio::time::sleep(Duration::from_secs(1)).await;
+            continue 'supervise;
+        };
+        if !relaunched {
+            return Err(failure);
         }
-        mark_ready(installation)?;
+        eprintln!("{failure}; Suplex supervisor retries the installed program in 5 seconds");
         #[cfg(unix)]
-        let reason = {
-            tokio::select! {
-                _ = interrupt.recv() => Some("SIGINT"),
-                _ = terminate.recv() => Some("SIGTERM"),
-                result = child.wait() => { eprintln!("Suplex API stopped ({}) and will restart", result?); None },
-            }
-        };
-        #[cfg(not(unix))]
-        let reason = {
-            tokio::select! { _ = tokio::signal::ctrl_c() => Some("SIGINT"), result = child.wait() => { eprintln!("Suplex API stopped ({}) and will restart", result?); None } }
-        };
-        if let Some(reason) = reason {
-            eprintln!("Suplex supervisor received {reason}; stopping API");
-            stop_child(&mut child).await;
-            return Ok(());
+        tokio::select! {
+            _ = signals.interrupt.recv() => return Ok(()),
+            _ = signals.terminate.recv() => return Ok(()),
+            _ = signals.relaunch.recv() => exec_installed(),
+            _ = tokio::time::sleep(Duration::from_secs(5)) => {},
         }
-        tokio::time::sleep(Duration::from_secs(1)).await;
+        #[cfg(not(unix))]
+        tokio::time::sleep(Duration::from_secs(5)).await;
     }
 }
 
@@ -518,6 +607,79 @@ pub fn start(installation: &Installation) -> Result<u32, Box<dyn std::error::Err
     }
     stop(installation)?;
     Err("Suplex API did not become reachable within 30 seconds".into())
+}
+
+/// Restarts the host in place: the supervisor stops its API, replaces itself with the
+/// program on disk, and keeps its pid, so a systemd unit sees no exit. Returns that pid once
+/// the new API answers.
+pub fn restart(
+    installation: &Installation,
+) -> Result<u32, Box<dyn std::error::Error + Send + Sync>> {
+    let registry = running_supervisor(installation).ok_or("Suplex is not running")?;
+    let pid = registry.process.pid;
+    if registry.version < REGISTRY_VERSION {
+        let service = runs_as_service(pid);
+        stop(installation)?;
+        if !service {
+            return start(installation);
+        }
+        // The service manager starts the unit again; a host from `start` would fight it.
+        let deadline = Instant::now() + Duration::from_secs(60);
+        while Instant::now() < deadline {
+            if let Some(current) = running_supervisor(installation)
+                && current.process.pid != pid
+                && current.ready
+                && http_ready(&installation.bind_address, installation.port)
+            {
+                return Ok(current.process.pid);
+            }
+            thread::sleep(Duration::from_millis(100));
+        }
+        return Err("Suplex API did not become reachable within 60 seconds of the restart".into());
+    }
+    let previous_child = registry.child.as_ref().map(|child| child.pid);
+    #[cfg(unix)]
+    {
+        use nix::sys::signal::{Signal, kill};
+        use nix::unistd::Pid;
+        kill(Pid::from_raw(pid as i32), Signal::SIGUSR2)?;
+    }
+    #[cfg(not(unix))]
+    return Err("Suplex cannot restart in place on this platform".into());
+    let deadline = Instant::now() + Duration::from_secs(60);
+    while Instant::now() < deadline {
+        if inspect(pid).is_none_or(|process| process.start_time != registry.process.start_time) {
+            return Err(format!("Suplex supervisor {pid} stopped during the restart").into());
+        }
+        let current = read(&registry_path(installation))
+            .ok()
+            .flatten()
+            .filter(|current| current.process.pid == pid && matches(&current.process));
+        if let Some(current) = &current
+            && let Some(child) = &current.child
+            && Some(child.pid) != previous_child
+        {
+            if current.ready && http_ready(&installation.bind_address, installation.port) {
+                return Ok(pid);
+            }
+            if !current.ready && inspect(child.pid).is_none() {
+                return Err("The new Suplex API stopped before it was ready".into());
+            }
+        }
+        thread::sleep(Duration::from_millis(100));
+    }
+    Err("Suplex API did not become reachable within 60 seconds of the restart".into())
+}
+/// A supervisor whose cgroup is a service unit, which its service manager starts again.
+fn runs_as_service(pid: u32) -> bool {
+    fs::read_to_string(format!("/proc/{pid}/cgroup")).is_ok_and(|cgroup| service_cgroup(&cgroup))
+}
+fn service_cgroup(cgroup: &str) -> bool {
+    cgroup.lines().any(|line| {
+        line.rsplit(':')
+            .next()
+            .is_some_and(|path| path.ends_with(".service"))
+    })
 }
 
 pub fn stop(
@@ -696,6 +858,17 @@ mod tests {
         assert_eq!(stop(&installation).unwrap()["stopped"], 0);
         assert!(!calls.exists(), "stop touched Tailscale Serve");
         let _ = fs::remove_dir_all(directory);
+    }
+    #[test]
+    fn a_service_unit_cgroup_names_a_service_managed_supervisor() {
+        assert!(service_cgroup("0::/system.slice/suplex.service\n"));
+        assert!(service_cgroup(
+            "12:pids:/system.slice/suplex.service\n1:name=systemd:/system.slice/suplex.service\n"
+        ));
+        assert!(!service_cgroup(
+            "0::/user.slice/user-1000.slice/session-3.scope\n"
+        ));
+        assert!(!service_cgroup(""));
     }
     #[test]
     fn stale_identity_cannot_signal_reused_pid() {

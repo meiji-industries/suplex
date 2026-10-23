@@ -1,6 +1,6 @@
 //! `suplex update` for a Linux host installed from the release archive: compare the
 //! running version with the published feed, download the archive, verify its
-//! checksum, replace this binary in place, and restart the host. The desktop app
+//! checksum, replace this binary in place, and restart the host in place. The desktop app
 //! and a source checkout update through their own paths.
 use std::{
     fs,
@@ -187,30 +187,24 @@ pub fn service_url(installation: &Installation) -> Result<url::Url> {
         .ok_or_else(|| "The Suplex account service address is not configured.".into())
 }
 
-/// `suplex update` on an archive-installed host.
+/// `suplex update` on an archive-installed host: the feed check and the question, then the
+/// same download, check, and in-place restart as the Update button.
 pub async fn run(assume_yes: bool) -> Result<i32> {
     let installation = Installation::load()?;
     let Some(release) = latest(&service_url(&installation)?).await? else {
         println!("Suplex {} is current.", env!("CARGO_PKG_VERSION"));
         return Ok(0);
     };
-    let running = supervisor::host_running(&installation);
+    let running = supervisor::supervisor_running(&installation);
     if running && !app_update::confirm(&release.version, assume_yes)? {
         println!("Update cancelled.");
         return Ok(1);
     }
     println!("Downloading Suplex {}...", release.version);
-    let archive = download(&release).await?;
-    let target = crate::shared::fs::executable()?.canonicalize()?;
-    fs::create_dir_all(&installation.runtime)?;
-    install(
-        &archive,
-        &target,
-        &installation.runtime.join("update-rollback-suplex"),
-    )?;
+    if !tokio::task::spawn_blocking(update::apply).await?? {
+        return Err("Another Suplex update is in progress.".into());
+    }
     if running {
-        supervisor::stop(&installation)?;
-        supervisor::start(&installation)?;
         println!("Suplex {} is running.", release.version);
     } else {
         println!(

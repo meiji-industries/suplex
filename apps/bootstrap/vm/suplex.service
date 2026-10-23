@@ -9,7 +9,7 @@ Group=suplex
 WorkingDirectory=/home/suplex
 Environment=HOME=/home/suplex
 Environment=PATH=/home/suplex/.local/bin:/home/suplex/.local/share/mise/shims:/usr/local/bin:/usr/bin:/bin
-ExecStart=/usr/local/bin/suplex up --foreground
+ExecStart=/home/suplex/.local/bin/suplex up --foreground
 Restart=always
 RestartSec=5
 NoNewPrivileges=yes

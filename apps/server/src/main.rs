@@ -13,15 +13,22 @@ use tokio::net::TcpListener;
 fn main() {
     // PATH changes before the runtime starts its worker threads.
     suplex::platform::user_path::extend();
-    let runtime = tokio::runtime::Runtime::new().expect("Failed building the Runtime");
-    if let Err(error) = runtime.block_on(run()) {
+    let command = std::env::args().skip(1).collect::<Vec<_>>();
+    // The updater builds a runtime per network step; inside another runtime that panics.
+    let result = if command == ["update-apply"] {
+        suplex::platform::update::apply().map(|_| ())
+    } else {
+        tokio::runtime::Runtime::new()
+            .expect("Failed building the Runtime")
+            .block_on(run(command))
+    };
+    if let Err(error) = result {
         eprintln!("{error}");
         std::process::exit(1);
     }
 }
 
-async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let command = std::env::args().skip(1).collect::<Vec<_>>();
+async fn run(command: Vec<String>) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     if command == ["github-store-credential"] {
         suplex::integrations::github::use_installation(&Installation::load()?.database);
         if let Err(error) = suplex::integrations::github::store_device_credential_from_stdin() {
@@ -32,9 +39,6 @@ async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     }
     if command == ["mcp", "advisor"] {
         return suplex::coordination::advisor_bridge::serve_from_environment().await;
-    }
-    if command == ["update-apply"] {
-        return suplex::platform::update::apply();
     }
     if let [subcommand, directory] = command.as_slice()
         && subcommand == suplex::runtimes::codex::display::SUBCOMMAND

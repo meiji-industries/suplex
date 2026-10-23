@@ -41,8 +41,8 @@ The wizard (Rust, [cliclack](https://github.com/fadeevab/cliclack) prompts) asks
 - **Login link**: prints a one-time owner link from `suplex recover` at the end.
 
 Everything on the VM is then converged, idempotently: service user, firewall, Docker, the Suplex
-binary (the release tarball `suplex.sh/install.sh` would fetch, checksum-verified; the installer itself refuses
-root and the service user cannot write `/usr/local/bin`), mise/node/pnpm/uv, Claude Code, Herdr, systemd units
+binary (the release tarball `suplex.sh/install.sh` would fetch, checksum-verified, owned by the service user so
+the in-app update can replace it; the installer itself refuses root), mise/node/pnpm/uv, Claude Code, Herdr, systemd units
 that start on boot. Sign-ins only a human can do (Claude Code, `gh`) are offered interactively at the end.
 Rerun the wizard any time; every answer defaults to the last one.
 
@@ -92,16 +92,18 @@ Verified: direct `eth0` blocked, exit node off = nothing leaves, survives reboot
    IP (replies reroute); reconnect over the tailnet.
 2. `/etc/suplex-egress.nft` + `suplex-egress.service`: OUTPUT policy drop; allow `lo`, `tailscale0`,
    tailscaled's own packets (fwmark `0x80000`), DHCP, Hetzner metadata, IPv6 ND, and replies to inbound.
-3. The binary goes to `/usr/local/bin/suplex` as root from `https://suplex.sh/download?platform=linux-x64&format=tar.gz`
-   plus its `.sha256`, the same steps as `install.sh`. The installer refuses root since suplex#402, and as the
-   service user it would need sudo for `/usr/local/bin`; see `vm/install-suplex.sh`.
+3. The binary goes to `/home/suplex/.local/bin/suplex`, owned by `suplex`, from
+   `https://suplex.sh/download?platform=linux-x64&format=tar.gz` plus its `.sha256`, the same steps as `install.sh`;
+   `/usr/local/bin/suplex` is a symlink to it for the admin shell. The installer refuses root since suplex#402, so root
+   runs `vm/install-suplex.sh` instead. The service user owns the file so the in-app update and `suplex update` can
+   replace it; the unit's `ProtectSystem=full` keeps `/usr` read-only for the service.
 4. `/home/suplex/.local/share/Suplex/suplex.env`: `SUPLEX_ACCESS_MODE=tailscale`,
    `SUPLEX_TAILSCALE_EXPOSURE=serve`, `SUPLEX_TAILSCALE_ADDRESS=<node>.<tailnet>.ts.net`, repo and worktree roots.
    The supervisor runs `tailscale serve` itself; the tailnet needs HTTPS certificates enabled.
 5. `suplex.service`: `User=suplex`, `suplex up --foreground`, `WorkingDirectory=/home/suplex`, `PATH` with
    `~/.local/bin` (claude, herdr, op) and the mise shims (node, pnpm, uv), `Restart=always`, `NoNewPrivileges`,
    `ProtectSystem=full`, `Requires=suplex-egress.service`, `Wants=herdr.service` (`herdr server` as `suplex`, its own unit). `tailscale set --operator=suplex` lets it run `tailscale serve`.
-   The `suplex` binary stays root-owned in `/usr/local/bin`; `mise run bootstrap:install` updates it as root.
+   `ExecStart` runs `/home/suplex/.local/bin/suplex` directly; `mise run bootstrap:install` updates it as root.
 6. Agents, installed as `suplex`: mise (node 24, pnpm, uv), `claude`, `herdr`. Sign in on the VM as `suplex`
    (`ssh suplex@suplex`, run `claude` once, accept the trust dialog for each repo root), not by copying the Mac's
    Keychain credentials. Tasks failed setup earlier because `pnpm` was missing from the service PATH.

@@ -2,7 +2,7 @@
 
 use std::{
     fs,
-    io::{Read, Write},
+    io::{self, Read, Write},
     net::{TcpListener, TcpStream},
     path::{Path, PathBuf},
     process::{Command, Output},
@@ -205,18 +205,25 @@ impl Fixture {
     }
 
     fn update(&self, check: bool) -> serde_json::Value {
-        let mut stream = TcpStream::connect(("127.0.0.1", self.port)).unwrap();
+        self.try_update(check).unwrap()
+    }
+
+    /// `Err` while the API restarts, or when it answers anything but 200.
+    fn try_update(&self, check: bool) -> io::Result<serde_json::Value> {
+        let mut stream = TcpStream::connect(("127.0.0.1", self.port))?;
         let suffix = if check { "?check=1" } else { "" };
         write!(
             stream,
             "GET /api/update{suffix} HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nConnection: close\r\n\r\n",
             self.port
-        )
-        .unwrap();
+        )?;
         let mut response = String::new();
-        stream.read_to_string(&mut response).unwrap();
-        assert!(response.starts_with("HTTP/1.1 200"), "{response}");
-        serde_json::from_str(response.split("\r\n\r\n").nth(1).unwrap()).unwrap()
+        stream.read_to_string(&mut response)?;
+        if !response.starts_with("HTTP/1.1 200") {
+            return Err(io::Error::other(response));
+        }
+        serde_json::from_str(response.split("\r\n\r\n").nth(1).unwrap_or_default())
+            .map_err(io::Error::other)
     }
 }
 
@@ -416,6 +423,233 @@ fn concurrent_update_helpers_install_once() {
             .count(),
         1
     );
+}
+
+/// The release feed as suplex.sh serves it: `/download` redirects to the archive, and the
+/// manifest beside it names the version and checksum.
+#[cfg(target_os = "linux")]
+async fn feed(version: &'static str, archive: Vec<u8>) -> String {
+    use axum::{Router, http::StatusCode, response::IntoResponse, routing::get};
+    use sha2::{Digest, Sha256};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let file = format!("suplex-{version}-linux-x64.tar.gz");
+    let location = format!("{base}/stable/linux/x64/{file}");
+    let manifest = format!(
+        "version: {version}\nfiles:\n  - url: {file}\n    sha256: {:x}\n",
+        Sha256::digest(&archive)
+    );
+    let app =
+        Router::new()
+            .route(
+                "/download",
+                get(move || async move {
+                    (StatusCode::FOUND, [("location", location)]).into_response()
+                }),
+            )
+            .route(
+                "/stable/linux/x64/latest-linux.yml",
+                get(move || async move { manifest }),
+            )
+            .route(
+                &format!("/stable/linux/x64/{file}"),
+                get(move || async move { archive }),
+            );
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    base
+}
+
+/// An archive-installed host runs `update-apply` outside a source checkout; the updater
+/// must reach the feed from that process without a runtime of its own.
+#[cfg(target_os = "linux")]
+#[test]
+fn archive_update_apply_reports_current_against_an_older_feed() {
+    let fixture = Fixture::new();
+    let plain = fixture.root.join("plain");
+    fs::create_dir_all(&plain).unwrap();
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let feed = runtime.block_on(feed("0.0.1", Vec::new()));
+    let applied = fixture
+        .command_builder(&["update-apply"])
+        .current_dir(&plain)
+        .env("SUPLEX_ACCOUNT_SERVICE_URL", &feed)
+        .output()
+        .unwrap();
+    assert!(
+        applied.status.success(),
+        "exit {:?}: {}",
+        applied.status.code(),
+        String::from_utf8_lossy(&applied.stderr)
+    );
+    assert_eq!(fixture.status()["kind"], "current");
+}
+
+/// A release archive whose `suplex` is a script: it records each launch, answers `version`
+/// with `reported`, and otherwise runs this build under the installed path.
+#[cfg(target_os = "linux")]
+fn release(fixture: &Fixture, reported: Option<&str>) -> Vec<u8> {
+    let directory = fixture.root.join("release");
+    fs::create_dir_all(&directory).unwrap();
+    let version = match reported {
+        Some(version) => format!("echo 'suplex {version}'; exit 0"),
+        None => "exit 1".into(),
+    };
+    script(
+        &directory.join("suplex"),
+        &format!(
+            "#!/bin/bash\necho \"$*\" >> {}\n[ \"$1\" = version ] && {{ {version}; }}\nexec -a \"$0\" {} \"$@\"\n",
+            fixture.root.join("launches").display(),
+            env!("CARGO_BIN_EXE_suplex")
+        ),
+    );
+    let archive = fixture.root.join("release.tar.gz");
+    let tar = Command::new("tar")
+        .arg("-czf")
+        .arg(&archive)
+        .arg("-C")
+        .arg(&directory)
+        .arg("suplex")
+        .status()
+        .unwrap();
+    assert!(tar.success());
+    fs::read(archive).unwrap()
+}
+
+/// Runs the in-app update the way the Update button does, against a host that a service
+/// manager started as `suplex up --foreground`. Returns the final update status and whether
+/// the service manager's process is still running.
+#[cfg(target_os = "linux")]
+fn update_from_the_web(fixture: &Fixture, archive: Vec<u8>) -> (serde_json::Value, bool) {
+    let plain = fixture.root.join("plain");
+    let installed = fixture.root.join("installed/suplex");
+    fs::create_dir_all(&plain).unwrap();
+    fs::create_dir_all(installed.parent().unwrap()).unwrap();
+    fs::copy(env!("CARGO_BIN_EXE_suplex"), &installed).unwrap();
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let feed = runtime.block_on(feed("99.0.0", archive));
+    let mut supervisor = fixture
+        .command_builder_for(&installed, &["up", "--foreground"])
+        .current_dir(&plain)
+        .env("SUPLEX_ACCOUNT_SERVICE_URL", &feed)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .unwrap();
+    fixture.ready();
+    let checked = fixture.update(true);
+    assert_eq!(checked["canRestart"], true, "{checked}");
+    assert_eq!(checked["availableVersion"], "99.0.0", "{checked}");
+
+    let mut stream = TcpStream::connect(("127.0.0.1", fixture.port)).unwrap();
+    write!(
+        stream,
+        "POST /api/update/restart HTTP/1.1\r\nHost: 127.0.0.1:{0}\r\nOrigin: http://127.0.0.1:{0}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+        fixture.port
+    )
+    .unwrap();
+    let mut accepted = String::new();
+    stream.read_to_string(&mut accepted).unwrap();
+    assert!(accepted.starts_with("HTTP/1.1 202"), "{accepted}");
+
+    let deadline = Instant::now() + Duration::from_secs(90);
+    let status = loop {
+        if let Ok(response) = fixture.try_update(false) {
+            let status = response["status"].clone();
+            if status["kind"] == "current" || status["kind"] == "failed" {
+                break status;
+            }
+        }
+        assert!(Instant::now() < deadline, "the update did not finish");
+        thread::sleep(Duration::from_millis(200));
+    };
+    let running = supervisor.try_wait().unwrap().is_none();
+    let _ = fixture.command(&["stop"]);
+    let _ = supervisor.wait();
+    (status, running)
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn web_update_restarts_the_service_process_in_place() {
+    let fixture = Fixture::new();
+    let (status, running) = update_from_the_web(&fixture, release(&fixture, Some("99.0.0")));
+    assert_eq!(status["kind"], "current", "{status}");
+    assert!(running, "the service manager's process exited");
+    let launches = fs::read_to_string(fixture.root.join("launches")).unwrap();
+    assert_eq!(launches, "version\nup --foreground\n");
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn web_update_with_a_release_that_cannot_run_keeps_the_host() {
+    let fixture = Fixture::new();
+    let (status, running) = update_from_the_web(&fixture, release(&fixture, None));
+    assert_eq!(status["kind"], "failed", "{status}");
+    assert!(running, "the service manager's process exited");
+    assert_eq!(
+        fs::read(fixture.root.join("installed/suplex")).unwrap(),
+        fs::read(env!("CARGO_BIN_EXE_suplex")).unwrap(),
+        "the previous binary was not restored"
+    );
+    let launches = fs::read_to_string(fixture.root.join("launches")).unwrap();
+    assert_eq!(launches, "version\n");
+}
+
+/// Stands in for a release whose API stops before it is ready: takes the port the moment
+/// the old API releases it, and gives it back once the previous binary is at `installed`.
+/// The supervisor spawns `serve` from its own executable, so the release script cannot
+/// fail that command itself.
+#[cfg(target_os = "linux")]
+fn take_port_until_restored(port: u16, installed: PathBuf) -> thread::JoinHandle<()> {
+    let restored_len = fs::metadata(env!("CARGO_BIN_EXE_suplex")).unwrap().len();
+    thread::spawn(move || {
+        let deadline = Instant::now() + Duration::from_secs(90);
+        while TcpStream::connect(("127.0.0.1", port)).is_err() {
+            assert!(Instant::now() < deadline, "the host did not start");
+            thread::sleep(Duration::from_millis(20));
+        }
+        let listener = loop {
+            if let Ok(listener) = TcpListener::bind(("127.0.0.1", port)) {
+                break listener;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "the API did not release its port"
+            );
+            thread::sleep(Duration::from_millis(2));
+        };
+        listener.set_nonblocking(true).unwrap();
+        while fs::metadata(&installed).map(|file| file.len()).ok() != Some(restored_len) {
+            while listener.accept().is_ok() {}
+            assert!(
+                Instant::now() < deadline,
+                "the previous binary was not restored"
+            );
+            thread::sleep(Duration::from_millis(10));
+        }
+    })
+}
+
+/// Under systemd the supervisor is the unit's main process. A release that reports its
+/// version but whose API stops before it is ready must leave that process running, so the
+/// updater can restore the previous binary and the host answers again. The final status
+/// comes from the recovered host, which proves it answers.
+#[cfg(target_os = "linux")]
+#[test]
+fn web_update_whose_api_stops_keeps_the_service_process_and_restores_the_previous_binary() {
+    let fixture = Fixture::new();
+    let blocker = take_port_until_restored(fixture.port, fixture.root.join("installed/suplex"));
+    let (status, running) = update_from_the_web(&fixture, release(&fixture, Some("99.0.0")));
+    blocker.join().unwrap();
+    assert_eq!(status["kind"], "failed", "{status}");
+    assert!(running, "the service manager's process exited");
+    assert_eq!(
+        fs::read(fixture.root.join("installed/suplex")).unwrap(),
+        fs::read(env!("CARGO_BIN_EXE_suplex")).unwrap(),
+        "the previous binary was not restored"
+    );
+    let launches = fs::read_to_string(fixture.root.join("launches")).unwrap();
+    assert_eq!(launches, "version\nup --foreground\n");
 }
 
 #[cfg(unix)]

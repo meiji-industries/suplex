@@ -6090,7 +6090,7 @@ dependencies = [
 
 [[package]]
 name = "suplex"
-version = "1.11.1"
+version = "1.11.2"
 dependencies = [
  "axum",
  "base64 0.22.1",
@@ -6144,7 +6144,7 @@ dependencies = [
 
 [[package]]
 name = "suplex-desktop"
-version = "1.11.1"
+version = "1.11.2"
 dependencies = [
  "base64 0.22.1",
  "block2",

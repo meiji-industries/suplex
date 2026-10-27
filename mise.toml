@@ -186,11 +186,11 @@ onepassword_setup_service_account
 # The sandbox has no head office address, which Stripe Tax needs.
 export STRIPE_AUTOMATIC_TAX=false BILLING_ENVIRONMENT=sandbox BILLING_PORT=4212 BILLING_PUBLIC_ORIGIN=https://billing-sandbox.example.com BILLING_DATABASE_PATH="$PWD/.suplex/billing.sqlite"
 mkdir -p .suplex
-env_file=scripts/billing-dev.env
+env_file="${SUPLEX_HOSTED_DEV_ENV_FILE:-scripts/billing-dev.env}"
 # The six account provider fields are optional: without them the service runs with sign-in off.
 if ! op read "$(sed -n 's/^ACCOUNT_EMAIL_FROM=//p' "$env_file")" >/dev/null 2>&1; then
   echo "[hosted:dev] The sandbox item has no account provider fields; sign-in is off." >&2
-  grep -vE '^(ACCOUNT_[A-Z_]+|RESEND_API_KEY)=' scripts/billing-dev.env >.suplex/billing-dev.env
+  grep -vE '^(ACCOUNT_[A-Z_]+|RESEND_API_KEY)=' "$env_file" >.suplex/billing-dev.env
   env_file=.suplex/billing-dev.env
 fi
 op run --env-file "$env_file" -- cargo run --manifest-path apps/server/Cargo.toml -- hosted serve

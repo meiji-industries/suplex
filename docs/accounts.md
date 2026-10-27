@@ -231,6 +231,11 @@ Locally, `mise run hosted:tunnel` and `mise run hosted:dev` run the service
 on `127.0.0.1:4212` behind `https://billing-sandbox.example.com`, with the
 sandbox values from `scripts/billing-dev.env`.
 
+For a local provider configuration, set `SUPLEX_HOSTED_DEV_ENV_FILE` to an
+ignored file under `.suplex/` containing 1Password references. The file must
+include the billing and account fields from `scripts/billing-dev.env`.
+Secrets are resolved by `op run` when the service starts.
+
 ### Ingress limits
 
 Keep these limits in front of the service, next to the

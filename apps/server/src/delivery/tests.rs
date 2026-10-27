@@ -1380,3 +1380,366 @@ async fn paired_agent_delivery_keeps_authority_dependencies_receipts_and_provena
     drop(database);
     std::fs::remove_dir_all(fixture.base).unwrap();
 }
+
+const QUESTION: &str = "The Migrations check was cancelled. How do you want a valid result?";
+
+struct QuestionCase {
+    fixture: Fixture,
+    api: String,
+    operations: DeliveryOperations,
+    fake: Shared,
+}
+
+fn delivery_operations(fixture: &Fixture, api: &str) -> DeliveryOperations {
+    let mut github = Github::new(Access::for_api(api, None).unwrap());
+    github.retry_pauses = vec![];
+    DeliveryOperations::with_github(
+        &fixture.database_path,
+        &fixture.base.join("artifacts"),
+        github,
+    )
+}
+
+/// A merge-target task whose open pull request has a failing check, and a
+/// delivery question the host asked about it.
+async fn delivery_question() -> QuestionCase {
+    let fixture = fixture("merged");
+    let (api, fake) = fake_github(fixture.origin.clone()).await;
+    let operations = delivery_operations(&fixture, &api);
+    let head = control(&fixture).worktree.unwrap().head_sha;
+    fake.lock().unwrap().pulls.push(json!({"number":1,"state":"open","draft":false,"mergedAt":null,"head":"task-merged","headSha":head,"base":"main","baseSha":"b".repeat(40),"title":"Add line","body":BODY,"checkConclusion":"FAILURE"}));
+    operations
+        .set_pull_request(
+            &fixture.task_id,
+            Some(&crate::tasks::control::PullRequestReference {
+                repository: "owner/repo".into(),
+                number: 1,
+                url: "https://github.com/owner/repo/pull/1".into(),
+                head_sha: head,
+                state: crate::tasks::control::PullRequestState::Open,
+                merged_at: None,
+            }),
+            true,
+        )
+        .unwrap();
+    let mut database = SuplexDatabase::open(&fixture.database_path, OpenMode::ReadWrite).unwrap();
+    assert!(
+        root_session_store::ask_human(
+            &mut database,
+            &fixture.task_id,
+            QUESTION,
+            &json!([]),
+            Utc::now()
+        )
+        .unwrap()
+    );
+    QuestionCase {
+        fixture,
+        api,
+        operations,
+        fake,
+    }
+}
+
+impl QuestionCase {
+    async fn sweep(&self) {
+        self.operations
+            .observe_host_task(&self.fixture.task_id)
+            .await
+            .unwrap();
+    }
+
+    fn execute(&self, sql: &str) {
+        SuplexDatabase::open(&self.fixture.database_path, OpenMode::ReadWrite)
+            .unwrap()
+            .connection()
+            .execute(sql, [&self.fixture.task_id])
+            .unwrap();
+    }
+
+    fn wait(&self) -> Option<crate::coordination::workflows::DeliveryWait> {
+        control(&self.fixture).workflow_state.delivery_wait
+    }
+
+    /// Coordinator prompts inserted after the fixture's completed first turn.
+    fn root_prompts(&self) -> Vec<String> {
+        let database =
+            SuplexDatabase::open(&self.fixture.database_path, OpenMode::ReadOnly).unwrap();
+        let mut statement = database.connection().prepare("SELECT t.prompt_text FROM suplex_task_turns t JOIN suplex_task_sessions s ON s.id = t.session_id WHERE t.task_id = ?1 AND s.kind = 'root' AND t.status = 'pending_prompt' ORDER BY t.created_at, t.id").unwrap();
+        statement
+            .query_map([&self.fixture.task_id], |row| row.get(0))
+            .unwrap()
+            .collect::<rusqlite::Result<Vec<String>>>()
+            .unwrap()
+    }
+
+    fn answer(&self, question_id: &str) -> Result<(), String> {
+        let mut database =
+            SuplexDatabase::open(&self.fixture.database_path, OpenMode::ReadWrite).unwrap();
+        root_session_store::answer_human(
+            &mut database,
+            &self.fixture.task_id,
+            question_id,
+            "Rerun it",
+            false,
+            None,
+            Utc::now(),
+        )
+        .map_err(|error| error.to_string())
+    }
+
+    fn assert_still_asking(&self) {
+        let control = control(&self.fixture);
+        assert_eq!(
+            control.status,
+            crate::tasks::control::TaskStatus::WaitingHuman
+        );
+        assert_eq!(control.human_question.as_deref(), Some(QUESTION));
+        assert!(
+            self.root_prompts().is_empty(),
+            "no Coordinator turn while the question stands"
+        );
+    }
+
+    fn assert_withdrawn(&self) -> String {
+        let control = control(&self.fixture);
+        assert_eq!(control.status, crate::tasks::control::TaskStatus::Active);
+        assert_eq!(control.human_question, None);
+        assert_eq!(control.human_question_id, None);
+        assert_eq!(control.human_question_options, json!([]));
+        assert_eq!(control.workflow_state.delivery_wait, None);
+        let prompts = self.root_prompts();
+        assert_eq!(prompts.len(), 1, "exactly one Coordinator wake");
+        let prompt = prompts[0].clone();
+        assert!(
+            prompt.starts_with("Suplex withdrew your question because the pull request changed")
+        );
+        assert!(prompt.contains(&format!("Question: {QUESTION}.")));
+        assert!(prompt.contains("Current observation: {"));
+        prompt
+    }
+
+    fn cleanup(self) {
+        std::fs::remove_dir_all(&self.fixture.base).unwrap();
+    }
+}
+
+#[tokio::test]
+async fn an_open_delivery_question_records_its_pull_request_baseline() {
+    let case = delivery_question().await;
+    case.sweep().await;
+    let wait = case
+        .wait()
+        .expect("the sweep records the question's baseline");
+    let observed = case
+        .operations
+        .checks_observation(&case.fixture.task_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        wait.reason,
+        crate::coordination::workflows::DeliveryWaitReason::Question
+    );
+    assert_eq!(
+        wait.fingerprint,
+        super::operations::delivery_wait_fingerprint(&observed)
+    );
+    assert_eq!(Some(wait.head_sha.clone()), observed.head_sha);
+    case.assert_still_asking();
+    for _ in 0..3 {
+        case.sweep().await;
+    }
+    assert_eq!(
+        case.wait(),
+        Some(wait),
+        "an unchanged pull request keeps the baseline"
+    );
+    case.assert_still_asking();
+    case.cleanup();
+}
+
+#[tokio::test]
+async fn a_question_a_person_must_decide_records_no_baseline() {
+    for decision in [
+        "UPDATE suplex_task_controls SET workflow_state_json = json_set(workflow_state_json, '$.planApproval', json_object('proposed', 'Plan', 'questionId', human_question_id, 'approved', NULL)) WHERE task_id = ?1",
+        "UPDATE suplex_task_controls SET limit_pause_json = '{\"kind\":\"budget\"}' WHERE task_id = ?1",
+        "UPDATE suplex_task_controls SET recovery_turn_id = (SELECT id FROM suplex_task_turns WHERE task_id = ?1 LIMIT 1) WHERE task_id = ?1",
+    ] {
+        let case = delivery_question().await;
+        case.execute(decision);
+        case.sweep().await;
+        case.fake.lock().unwrap().pulls[0]["checkConclusion"] = json!("SUCCESS");
+        case.sweep().await;
+        assert_eq!(case.wait(), None, "{decision}");
+        case.assert_still_asking();
+        case.cleanup();
+    }
+}
+
+#[tokio::test]
+async fn green_checks_withdraw_the_question_and_resume_coordinator() {
+    let case = delivery_question().await;
+    case.sweep().await;
+    assert!(case.wait().is_some());
+    case.fake.lock().unwrap().pulls[0]["checkConclusion"] = json!("SUCCESS");
+    case.sweep().await;
+    let prompt = case.assert_withdrawn();
+    assert!(prompt.contains("\"failing\":0"), "{prompt}");
+    assert!(prompt.contains("\"successful\":1"), "{prompt}");
+    case.sweep().await;
+    assert_eq!(
+        case.root_prompts().len(),
+        1,
+        "the withdrawal is consumed once"
+    );
+    case.cleanup();
+}
+
+#[tokio::test]
+async fn a_new_head_withdraws_the_question() {
+    let case = delivery_question().await;
+    case.sweep().await;
+    let pushed = "d".repeat(40);
+    case.fake.lock().unwrap().pulls[0]["headSha"] = json!(pushed);
+    case.sweep().await;
+    let prompt = case.assert_withdrawn();
+    assert!(prompt.contains(&pushed), "{prompt}");
+    case.cleanup();
+}
+
+#[tokio::test]
+async fn a_merge_during_the_question_delivers_the_task() {
+    let case = delivery_question().await;
+    case.sweep().await;
+    assert!(case.wait().is_some());
+    {
+        let mut fake = case.fake.lock().unwrap();
+        fake.pulls[0]["state"] = json!("closed");
+        fake.pulls[0]["mergedAt"] = json!("2026-09-25T02:00:00Z");
+    }
+    case.sweep().await;
+    let control = control(&case.fixture);
+    assert_eq!(control.status, crate::tasks::control::TaskStatus::Delivered);
+    assert_eq!(control.human_question, None);
+    assert_eq!(control.human_question_id, None);
+    assert_eq!(control.workflow_state.delivery_wait, None);
+    assert_eq!(
+        control.pull_request.unwrap().state,
+        crate::tasks::control::PullRequestState::Merged
+    );
+    case.cleanup();
+}
+
+#[tokio::test]
+async fn a_human_answer_first_makes_the_withdrawal_a_no_op() {
+    let case = delivery_question().await;
+    case.sweep().await;
+    let wait = case.wait().unwrap();
+    let question_id = control(&case.fixture).human_question_id.unwrap();
+    case.answer(&question_id).unwrap();
+    case.fake.lock().unwrap().pulls[0]["checkConclusion"] = json!("SUCCESS");
+    let mut database =
+        SuplexDatabase::open(&case.fixture.database_path, OpenMode::ReadWrite).unwrap();
+    assert!(
+        !root_session_store::withdraw_question_for_delivery_change(
+            &mut database,
+            &case.fixture.task_id,
+            &wait,
+            str::to_owned,
+            Utc::now(),
+        )
+        .unwrap()
+    );
+    case.sweep().await;
+    let control = control(&case.fixture);
+    assert_eq!(control.status, crate::tasks::control::TaskStatus::Active);
+    assert_eq!(control.human_question, None);
+    assert_eq!(control.workflow_state.delivery_wait, None);
+    let prompts = case.root_prompts();
+    assert_eq!(prompts.len(), 1, "only the answer reaches Coordinator");
+    assert!(
+        prompts[0].contains("\"answer\":\"Rerun it\""),
+        "{}",
+        prompts[0]
+    );
+    case.cleanup();
+}
+
+#[tokio::test]
+async fn a_stale_answer_after_the_withdrawal_is_refused() {
+    let case = delivery_question().await;
+    case.sweep().await;
+    let question_id = control(&case.fixture).human_question_id.unwrap();
+    case.fake.lock().unwrap().pulls[0]["checkConclusion"] = json!("SUCCESS");
+    case.sweep().await;
+    case.assert_withdrawn();
+    assert_eq!(
+        case.answer(&question_id).unwrap_err(),
+        "question_identity_mismatch"
+    );
+    case.assert_withdrawn();
+    case.cleanup();
+}
+
+#[tokio::test]
+async fn recreated_display_metadata_does_not_change_the_withdrawal() {
+    let case = delivery_question().await;
+    case.sweep().await;
+    case.execute("UPDATE suplex_task_sessions SET pane_id = 'w9:p9' WHERE task_id = ?1");
+    case.execute("UPDATE suplex_task_controls SET shell_pane_id = 'w9:p8' WHERE task_id = ?1");
+    case.fake.lock().unwrap().pulls[0]["checkConclusion"] = json!("SUCCESS");
+    // A restarted host observes through a new operations instance.
+    let restarted = delivery_operations(&case.fixture, &case.api);
+    restarted
+        .observe_host_task(&case.fixture.task_id)
+        .await
+        .unwrap();
+    case.assert_withdrawn();
+    case.cleanup();
+}
+
+#[tokio::test]
+async fn an_active_task_never_resumes_from_a_leftover_question_wait() {
+    let case = delivery_question().await;
+    case.sweep().await;
+    assert!(case.wait().is_some());
+    case.execute("UPDATE suplex_task_controls SET status = 'active', human_question = NULL, human_question_id = NULL WHERE task_id = ?1");
+    case.fake.lock().unwrap().pulls[0]["checkConclusion"] = json!("SUCCESS");
+    assert_eq!(
+        case.operations
+            .observe_delivery_wait(&case.fixture.task_id)
+            .await
+            .unwrap(),
+        "none"
+    );
+    case.sweep().await;
+    assert_eq!(case.wait(), None, "the orphaned wait is dropped");
+    assert_eq!(
+        control(&case.fixture).status,
+        crate::tasks::control::TaskStatus::Active
+    );
+    assert!(case.root_prompts().is_empty());
+    case.cleanup();
+}
+
+#[tokio::test]
+async fn a_merge_coordinator_has_not_read_withdraws_the_question() {
+    let case = delivery_question().await;
+    case.execute("UPDATE suplex_task_controls SET workflow_state_json = json_set(workflow_state_json, '$.followUp', json('true')) WHERE task_id = ?1");
+    case.sweep().await;
+    assert!(case.wait().is_some());
+    {
+        let mut fake = case.fake.lock().unwrap();
+        fake.pulls[0]["state"] = json!("closed");
+        fake.pulls[0]["mergedAt"] = json!("2026-09-25T02:00:00Z");
+    }
+    case.sweep().await;
+    let prompt = case.assert_withdrawn();
+    assert!(prompt.contains("\"state\":\"merged\""), "{prompt}");
+    assert_eq!(
+        control(&case.fixture).pull_request.unwrap().state,
+        crate::tasks::control::PullRequestState::Merged
+    );
+    case.cleanup();
+}

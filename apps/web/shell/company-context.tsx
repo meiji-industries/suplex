@@ -1,15 +1,21 @@
 import { saveProfile } from "../features/profiles/lib/profile-api.js";
-import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactElement, type ReactNode } from "react";
+import { getBillingSummary } from "../features/settings/lib/billing-api.js";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactElement, type ReactNode } from "react";
 import { flushSync } from "react-dom";
 
 import { companySettingsPath, readJsonUnchecked, withCompany, type ApiCompany, type ApiUser, type CompanyStatus } from "../lib/api.js";
 import type { AvatarRecord, AvatarUpdateBody } from "../contracts/avatars.js";
-import type { Plan } from "../contracts/billing.js";
+import type { BillingSummary } from "../contracts/billing.js";
 import { navigate } from "./navigation-state.js";
+import { useVisibleRefresh } from "./use-visible-refresh.js";
 
 const activeCompanyStorageKey = "suplex.activeCompanyId";
 const companiesStorageKey = "suplex.companies";
 const userStorageKey = "suplex.user";
+/** The shell reads the installation plan this often while the tab is visible. */
+const planReadIntervalMs = 5 * 60_000;
+/** A return to the tab reads the plan at most this often. */
+const planReadGapMs = 15_000;
 
 export type CompanyContextValue = {
   user?: ApiUser;
@@ -22,8 +28,11 @@ export type CompanyContextValue = {
   renameCompany: (companyId: string, name: string) => Promise<ApiCompany>;
   setCompanyIssueCode: (companyId: string, issueCode: string | null) => Promise<ApiCompany>;
   setCompanyStatus: (companyId: string, status: CompanyStatus) => Promise<ApiCompany>;
-  /** Updates the plan label after a live billing read, without reloading companies. The plan belongs to the installation. */
-  setPlan: (plan: Plan) => void;
+  /**
+   * Shows the plan from a live billing read on every company. The plan belongs to the installation.
+   * A summary that suplex.sh did not check changes nothing. A display observation: never gate a command on it.
+   */
+  applyBillingSummary: (summary: BillingSummary) => void;
   updateProfile: (profile: { displayName: string; username: string; avatarSeed: string; title: string }) => Promise<ApiUser>;
   avatars: Record<string, AvatarRecord>;
   saveAvatar: (ownerId: string, patch: AvatarUpdateBody) => Promise<AvatarRecord>;
@@ -168,11 +177,43 @@ export function CompanyProvider({ children }: { children: ReactNode }): ReactEle
     return updated;
   }, [reloadCompanies]);
 
-  const setPlan = useCallback((plan: Plan): void => {
-    const label = (company: ApiCompany): ApiCompany => ({ ...company, plan });
+  const companiesRef = useRef(companies);
+  useEffect(() => { companiesRef.current = companies; }, [companies]);
+
+  // Access follows the plan, such as read-only work after Team ends. Read it
+  // again without the loading state; a failed read keeps what is shown.
+  const refreshAccess = useCallback(async (): Promise<void> => {
+    try {
+      const result = await readJsonUnchecked<{ companies: ApiCompany[] }>("/api/companies");
+      setCompanies(sortCompanies(result.companies));
+      resolveSelection(result.companies);
+    } catch {
+      // The next plan read tries again.
+    }
+  }, [resolveSelection]);
+
+  const applyBillingSummary = useCallback((summary: BillingSummary): void => {
+    if (!summary.checked) return;
+    const changed = companiesRef.current.some((company) => company.plan !== summary.plan || (company.teamLapsed ?? false) !== summary.teamLapsed);
+    if (!changed) return;
+    const label = (company: ApiCompany): ApiCompany => ({ ...company, plan: summary.plan, teamLapsed: summary.teamLapsed });
+    companiesRef.current = companiesRef.current.map(label);
     setCompanies((current) => current.map(label));
     setCurrentCompany((current) => current && label(current));
-  }, []);
+    void refreshAccess();
+  }, [refreshAccess]);
+
+  // GET /api/billing reads suplex.sh, so the shell shows the live plan
+  // without a visit to Settings > Billing.
+  const planReading = useRef(false);
+  const readPlan = useCallback((): void => {
+    if (planReading.current) return;
+    planReading.current = true;
+    void getBillingSummary().then(applyBillingSummary, () => undefined).finally(() => { planReading.current = false; });
+  }, [applyBillingSummary]);
+  const userId = user?.id;
+  useEffect(() => { if (userId) readPlan(); }, [readPlan, userId]);
+  useVisibleRefresh(readPlan, planReadIntervalMs, { enabled: userId !== undefined, minGapMs: planReadGapMs });
 
   const updateProfile = useCallback(async (profile: { displayName: string; username: string; avatarSeed: string; title: string }): Promise<ApiUser> => {
     const updated = await saveProfile(profile);
@@ -201,12 +242,12 @@ export function CompanyProvider({ children }: { children: ReactNode }): ReactEle
     renameCompany,
     setCompanyIssueCode,
     setCompanyStatus,
-    setPlan,
+    applyBillingSummary,
     updateProfile,
     avatars,
     saveAvatar,
     reloadCompanies,
-  }), [avatars, companies, createCompany, currentCompany, error, loading, reloadCompanies, renameCompany, saveAvatar, selectCompany, setCompanyIssueCode, setPlan, setCompanyStatus, updateProfile, user]);
+  }), [avatars, companies, createCompany, currentCompany, error, loading, reloadCompanies, renameCompany, saveAvatar, selectCompany, setCompanyIssueCode, applyBillingSummary, setCompanyStatus, updateProfile, user]);
   return <CompanyContext.Provider value={value}>{children}</CompanyContext.Provider>;
 }
 

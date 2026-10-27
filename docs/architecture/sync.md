@@ -85,6 +85,8 @@ remaining id sends nothing.
 | [A move run that is not the last run](../../apps/web/features/moves/move-run.tsx) | 3 s | The feed carries only each move's last run. |
 | [Archived task list](../../apps/web/features/tasks/tasks.tsx) | 3 s, or 60 s while live. Read again when a task enters or leaves the active list. | The feed publishes active tasks only. |
 | [Today](../../apps/web/features/today/today.tsx), [Analytics](../../apps/web/features/analytics/analytics.tsx), and [Timeline](../../apps/web/features/timeline/timeline.tsx) pages | 30 s, 30 s, and 60 s, with or without the socket | The feed publishes no value for these pages. |
+| [Billing summary](../../apps/web/features/settings/billing-section.tsx) on Settings > Billing | 15 s while the page shows and the tab is visible. Read again at once on window focus or when the tab becomes visible. | The route reads the plan from suplex.sh at request time. Stripe changes the plan outside Suplex. |
+| [Installation plan](../../apps/web/shell/company-context.tsx) in the shell | After the first load, then 5 min while the tab is visible. Read again on window focus or when the tab becomes visible, at most one time in 15 s. | Uses the billing summary route. A checked plan or `teamLapsed` change also reads `/api/companies` again for access. |
 
 ## Frames
 

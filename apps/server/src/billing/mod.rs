@@ -8,11 +8,18 @@
 //! a purchase made anywhere applies at once. A hosted outage keeps confirmed
 //! Pro until its paid access ends; it never grants Pro.
 
-use std::{error::Error, time::Duration};
+use std::{
+    error::Error,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
+    time::{Duration, Instant},
+};
 
 use chrono::{DateTime, Datelike, Utc};
 use reqwest::Method;
-use rusqlite::params;
+use rusqlite::{OptionalExtension, params};
 use serde::{Serialize, de::DeserializeOwned};
 use ts_rs::TS;
 use url::Url;
@@ -230,6 +237,10 @@ pub async fn observe(state: &AppState, limit: Limit) {
         )
     });
     if refused.unwrap_or(false) {
+        // A purchase made a moment ago applies: do not use a recent read.
+        if let Some(client) = &state.billing {
+            client.forget_plan_reads();
+        }
         let _ = refresh(state).await;
     }
 }
@@ -253,6 +264,27 @@ fn account_required() -> PublicFailure {
 pub struct BillingClient {
     base: Url,
     http: reqwest::Client,
+    reads: Arc<PlanReads>,
+    /// How long a plan read also answers later readers.
+    plan_read_reuse: Duration,
+}
+
+/// One plan read at a time, and the last answer. Each open Settings > Billing
+/// page and each tab reads the plan, so readers that wait on a running read,
+/// or arrive soon after it, share its request to suplex.sh. A money command
+/// starts a new generation, so a read that began before it is not used after
+/// it.
+#[derive(Default)]
+struct PlanReads {
+    generation: AtomicU64,
+    last: tokio::sync::Mutex<Option<PlanRead>>,
+}
+
+struct PlanRead {
+    at: Instant,
+    generation: u64,
+    token: String,
+    result: Result<HostedPlan, PublicFailure>,
 }
 
 /// Hosted 4xx codes that keep their meaning for the caller. Any other
@@ -291,7 +323,40 @@ impl BillingClient {
                 .redirect(reqwest::redirect::Policy::none())
                 .build()
                 .expect("billing HTTP client builds"),
+            reads: Arc::default(),
+            plan_read_reuse: Duration::from_secs(5),
         }
+    }
+
+    /// GET /v1/plan for `token`. Readers that arrive while a read runs, or
+    /// soon after it, get its answer.
+    async fn read_plan(&self, token: &str) -> Result<HostedPlan, PublicFailure> {
+        let arrived = Instant::now();
+        let mut last = self.reads.last.lock().await;
+        let generation = self.reads.generation.load(Ordering::SeqCst);
+        if let Some(read) = last.as_ref().filter(|read| {
+            read.generation == generation
+                && read.token == token
+                && (read.at >= arrived || read.at.elapsed() < self.plan_read_reuse)
+        }) {
+            return read.result.clone();
+        }
+        let result = self
+            .call(Method::GET, "/v1/plan?tier=1", token, None, None)
+            .await
+            .and_then(valid);
+        *last = Some(PlanRead {
+            at: Instant::now(),
+            generation,
+            token: token.to_owned(),
+            result: result.clone(),
+        });
+        result
+    }
+
+    /// The hosted plan changed or can have changed: the next read asks suplex.sh.
+    fn forget_plan_reads(&self) {
+        self.reads.generation.fetch_add(1, Ordering::SeqCst);
     }
 
     async fn call<T: DeserializeOwned>(
@@ -402,11 +467,7 @@ pub async fn refresh(state: &AppState) -> Result<Option<HostedPlan>, Box<dyn Err
     let Some(account) = state.with_database(|database| accounts::linked(database))? else {
         return Ok(None);
     };
-    let plan = valid(
-        client
-            .call(Method::GET, "/v1/plan?tier=1", &account.token, None, None)
-            .await?,
-    )?;
+    let plan = client.read_plan(&account.token).await?;
     remember(state, &account.account_id, &plan)?;
     Ok(Some(plan))
 }
@@ -555,11 +616,12 @@ pub async fn start_trial(
     user_id: &str,
 ) -> Result<BillingSummary, Box<dyn Error + Send + Sync>> {
     let (client, account) = administered(state, user_id)?;
-    let plan = valid(
-        client
-            .call(Method::POST, "/v1/plan/trial", &account.token, None, None)
-            .await?,
-    )?;
+    let plan = client
+        .call(Method::POST, "/v1/plan/trial", &account.token, None, None)
+        .await
+        .and_then(valid);
+    client.forget_plan_reads();
+    let plan = plan?;
     remember(state, &account.account_id, &plan)?;
     summary(state, user_id).await
 }
@@ -572,7 +634,7 @@ pub async fn checkout(
 ) -> Result<BillingCheckoutResponse, Box<dyn Error + Send + Sync>> {
     let (client, account) = administered(state, user_id)?;
     let body = serde_json::to_value(body)?;
-    let result: HostedCheckoutResult = client
+    let result: Result<HostedCheckoutResult, _> = client
         .call(
             Method::POST,
             "/v1/plan/checkout",
@@ -580,7 +642,9 @@ pub async fn checkout(
             Some(idempotency_key),
             Some(&body),
         )
-        .await?;
+        .await;
+    client.forget_plan_reads();
+    let result = result?;
     if !result.valid() {
         return Err(unavailable().into());
     }
@@ -635,17 +699,72 @@ pub async fn portal(
     })
 }
 
-/// Reads the plan every 15 minutes, so a renewal, cancellation, or trial end
-/// applies to queued tasks without a visit to Settings > Billing.
+/// When the background read asks suplex.sh again. Every 15 minutes at most,
+/// so a renewal, cancellation, or trial end applies to queued tasks without a
+/// visit to Settings > Billing. Confirmed access ends at the end of the paid
+/// period, so the next read comes just after it: a renewal then keeps the
+/// plan instead of showing Free until the next read. Stripe can settle the
+/// renewal later, so for an hour after access ends it reads each minute. A
+/// failed read retries sooner, backing off to 15 minutes.
+fn next_refresh(
+    now: DateTime<Utc>,
+    access_until: Option<DateTime<Utc>>,
+    failures: u32,
+) -> Duration {
+    let mut delay = Duration::from_secs(15 * 60);
+    if failures > 0 {
+        delay = delay.min(Duration::from_secs(30) * 2u32.pow(failures.min(6) - 1));
+    }
+    if let Some(until) = access_until {
+        delay = match (until - now).to_std() {
+            Ok(left) => delay.min(left + Duration::from_secs(5)),
+            Err(_) if now - until < chrono::Duration::hours(1) => {
+                delay.min(Duration::from_secs(60))
+            }
+            Err(_) => delay,
+        };
+    }
+    delay
+}
+
+/// The end of the paid access that `suplex_plan` holds for the linked account.
+fn confirmed_access_until(database: &SuplexDatabase) -> DatabaseResult<Option<DateTime<Utc>>> {
+    let until: Option<String> = database
+        .connection()
+        .query_row(
+            "SELECT p.access_until FROM suplex_plan p JOIN suplex_account a ON a.account_id = p.account_id WHERE p.id = 'host'",
+            [],
+            |row| row.get(0),
+        )
+        .optional()?
+        .flatten();
+    Ok(until
+        .and_then(|until| DateTime::parse_from_rfc3339(&until).ok())
+        .map(|until| until.with_timezone(&Utc)))
+}
+
+/// Reads the plan from suplex.sh at start and then on the `next_refresh`
+/// schedule.
 pub fn spawn_refresh(state: AppState) {
     if state.billing.is_none() {
         return;
     }
     tokio::spawn(async move {
-        let mut interval = tokio::time::interval(Duration::from_secs(15 * 60));
+        let mut failures = 0u32;
+        // The last end of paid access this loop saw. A lapse clears it in
+        // `suplex_plan`, but the reads after it still follow the renewal.
+        let mut access_until = None;
         loop {
-            interval.tick().await;
-            let _ = refresh(&state).await;
+            failures = match refresh(&state).await {
+                Ok(_) => 0,
+                Err(_) => failures.saturating_add(1),
+            };
+            if let Ok(Some(until)) =
+                state.with_database(|database| confirmed_access_until(database))
+            {
+                access_until = Some(until);
+            }
+            tokio::time::sleep(next_refresh(Utc::now(), access_until, failures)).await;
         }
     });
 }

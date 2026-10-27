@@ -151,7 +151,11 @@ pub(crate) mod tests {
     pub(crate) async fn fixture() -> Fixture {
         let fake = fake_hosted().await;
         let (state, _filename) = crate::http::routes::auth::tests::state();
-        let state = state.with_billing(BillingClient::new(fake.url.clone()));
+        // These tests change the hosted answer between reads, so a read
+        // answers only the readers that waited on it.
+        let mut client = BillingClient::new(fake.url.clone());
+        client.plan_read_reuse = Duration::ZERO;
+        let state = state.with_billing(client);
         let now = Utc::now();
         let (admin, company_id) = state.with_database(|database| {
             let admin = crate::http::routes::auth::tests::verified_sign_in(database, now).unwrap();
@@ -518,5 +522,78 @@ pub(crate) mod tests {
             code(start_trial(&f.state, &f.admin_id).await.unwrap_err()),
             Some("account_required")
         );
+    }
+
+    #[tokio::test]
+    async fn concurrent_and_recent_plan_reads_share_one_hosted_request() {
+        let f = fixture().await;
+        f.fake.with(|hosted| hosted.respond("/v1/plan", 200, pro_plan()));
+        let state = f.state.clone().with_billing(BillingClient::new(f.fake.url.clone()));
+        let together = |count: usize| {
+            let mut reads = tokio::task::JoinSet::new();
+            for _ in 0..count {
+                let state = state.clone();
+                reads.spawn(async move { refresh(&state).await.map(|plan| plan.is_some()).map_err(|error| error.to_string()) });
+            }
+            reads.join_all()
+        };
+        assert!(together(8).await.into_iter().all(|read| read == Ok(true)));
+        assert_eq!(f.reads(), 1);
+        // A read soon after answers from the last one.
+        refresh(&state).await.unwrap();
+        assert_eq!(f.reads(), 1);
+
+        // A money command changes the plan: the next read asks suplex.sh.
+        start_trial(&state, &f.admin_id).await.unwrap();
+        assert_eq!(f.reads(), 2);
+        checkout(&state, &f.admin_id, "checkout-key-1", CheckoutBody::default())
+            .await
+            .unwrap();
+        refresh(&state).await.unwrap();
+        assert_eq!(f.reads(), 3);
+
+        // A failed read is shared too, and an outage still never grants a plan.
+        f.sql("DELETE FROM suplex_plan", &[]);
+        f.fake.with(|hosted| hosted.respond("/v1/plan", 503, json!({"error": "down"})));
+        state.billing.as_ref().unwrap().forget_plan_reads();
+        assert!(together(4).await.iter().all(Result::is_err));
+        assert_eq!(f.reads(), 4);
+        assert_eq!(f.plan(), Plan::Free);
+    }
+
+    #[test]
+    fn the_background_read_follows_the_end_of_paid_access() {
+        let now = Utc::now();
+        let minutes = |n: i64| now + chrono::Duration::minutes(n);
+        let quarter = Duration::from_secs(15 * 60);
+        assert_eq!(next_refresh(now, None, 0), quarter);
+        assert_eq!(next_refresh(now, Some(minutes(60 * 24)), 0), quarter);
+        // Access ends in 2 minutes: read again just after it ends.
+        assert_eq!(
+            next_refresh(now, Some(minutes(2)), 0),
+            Duration::from_secs(2 * 60 + 5)
+        );
+        // Until an hour after it ends, read each minute for the renewal.
+        assert_eq!(next_refresh(now, Some(minutes(-10)), 0), Duration::from_secs(60));
+        assert_eq!(next_refresh(now, Some(minutes(-61)), 0), quarter);
+        // A failure retries sooner and backs off to 15 minutes.
+        assert_eq!(next_refresh(now, None, 1), Duration::from_secs(30));
+        assert_eq!(next_refresh(now, None, 3), Duration::from_secs(120));
+        assert_eq!(next_refresh(now, None, 40), quarter);
+    }
+
+    #[tokio::test]
+    async fn the_background_read_sees_confirmed_access_for_the_linked_account() {
+        let f = fixture().await;
+        let until = |f: &Fixture| f.state.with_database(|database| confirmed_access_until(database).unwrap());
+        assert_eq!(until(&f), None);
+        f.fake.with(|hosted| hosted.respond("/v1/plan", 200, pro_plan()));
+        refresh(&f.state).await.unwrap();
+        assert_eq!(
+            until(&f).map(rfc3339_millis),
+            Some("2099-01-01T00:00:00.000Z".to_owned())
+        );
+        f.sql("UPDATE suplex_account SET account_id = 'user_other'", &[]);
+        assert_eq!(until(&f), None);
     }
 }

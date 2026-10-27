@@ -7,10 +7,14 @@ import type { BillingSummary } from "../../contracts/billing.js";
 import { changePlan, getBillingSummary, openBillingPortal, startCheckout, startTrial } from "./lib/billing-api.js";
 import { PlanTable, type PlanTarget } from "./plan-table.js";
 import { useOptionalCompanyContext } from "../../shell/company-context.js";
+import { useVisibleRefresh } from "../../shell/use-visible-refresh.js";
 import { SettingsSection, SettingRow } from "./settings-layout.js";
 import { useCallback, useEffect, useRef, useState, type ReactElement } from "react";
 
 export { formatUsd } from "./plan-table.js";
+
+/** The page reads the plan this often while it is shown, so a change made in Stripe or another tab appears. */
+const refreshIntervalMs = 15_000;
 
 function formatDate(timestamp: string): string {
   return new Date(timestamp).toLocaleDateString();
@@ -74,23 +78,27 @@ export function BillingSection(): ReactElement {
   const [errorText, setErrorText] = useState("");
   const [actionError, setActionError] = useState("");
   const [busy, setBusy] = useState("");
-  const [externalOpen, setExternalOpen] = useState(false);
   const checkoutKey = useRef<string | undefined>(undefined);
   const checkoutChoice = useRef("");
   const mounted = useRef(true);
+  const busyRef = useRef(false);
+  const reading = useRef(false);
+  // Each applied summary starts a new version, so a background read that
+  // began before an action does not replace the action's newer answer.
+  const version = useRef(0);
 
-  const setPlan = useOptionalCompanyContext()?.setPlan;
+  const applyBillingSummary = useOptionalCompanyContext()?.applyBillingSummary;
   const applySummary = useCallback((next: BillingSummary): void => {
+    version.current += 1;
     setSummary(next);
-    // A live read refreshes the switcher label.
-    if (next.checked) setPlan?.(next.plan);
+    // A live read refreshes the plan in the shell.
+    applyBillingSummary?.(next);
     setState("ready");
     setErrorText("");
-    if (next.plan !== "free" && !next.paymentActionRequired) setExternalOpen(false);
-  }, [setPlan]);
+  }, [applyBillingSummary]);
 
-  const load = useCallback(async (silent = false): Promise<void> => {
-    if (!silent) setState("loading");
+  const load = useCallback(async (): Promise<void> => {
+    setState("loading");
     try {
       const next = await getBillingSummary();
       if (mounted.current) applySummary(next);
@@ -101,21 +109,28 @@ export function BillingSection(): ReactElement {
     }
   }, [applySummary]);
 
+  // A background read never shows the loading state, and a failed one keeps
+  // the last summary. It waits while an action runs.
+  const reload = useCallback((): void => {
+    if (reading.current || busyRef.current) return;
+    reading.current = true;
+    const started = version.current;
+    void getBillingSummary().then((next) => {
+      if (mounted.current && !busyRef.current && version.current === started) applySummary(next);
+    }, () => undefined).finally(() => { reading.current = false; });
+  }, [applySummary]);
+
   useEffect(() => {
     mounted.current = true;
     void load();
     return () => { mounted.current = false; };
   }, [load]);
 
-  useEffect(() => {
-    if (!externalOpen) return;
-    const onFocus = (): void => { void load(true); };
-    window.addEventListener("focus", onFocus);
-    return () => window.removeEventListener("focus", onFocus);
-  }, [externalOpen, load]);
+  useVisibleRefresh(reload, refreshIntervalMs);
 
   const run = async (name: string, action: () => Promise<void>): Promise<void> => {
-    if (busy !== "") return;
+    if (busyRef.current) return;
+    busyRef.current = true;
     setBusy(name);
     setActionError("");
     try {
@@ -123,6 +138,7 @@ export function BillingSection(): ReactElement {
     } catch (reason) {
       setActionError(actionMessage(reason));
     } finally {
+      busyRef.current = false;
       setBusy("");
     }
   };
@@ -141,13 +157,11 @@ export function BillingSection(): ReactElement {
       const result = await startCheckout(checkoutKey.current, interval, plan, quantity);
       if (result.status === "redirect") {
         tab.go(result.url);
-        setExternalOpen(true);
         return;
       }
       tab.close();
       applySummary(result.summary);
       checkoutKey.current = undefined;
-      if (result.status === "payment_required") setExternalOpen(true);
     } catch (reason) {
       tab.close();
       // The hosted service ended this checkout command. A new key starts a fresh one.
@@ -160,7 +174,6 @@ export function BillingSection(): ReactElement {
     const tab = pendingTab();
     try {
       tab.go((await changePlan(plan, interval, quantity)).url);
-      setExternalOpen(true);
     } catch (reason) {
       tab.close();
       throw reason;
@@ -171,7 +184,6 @@ export function BillingSection(): ReactElement {
     const tab = pendingTab();
     try {
       tab.go((await openBillingPortal()).url);
-      setExternalOpen(true);
     } catch (reason) {
       tab.close();
       throw reason;

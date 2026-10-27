@@ -6,7 +6,7 @@ import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
 const api = vi.hoisted(() => ({ readJson: vi.fn() }));
 vi.mock("../lib/api.js", async importOriginal => ({ ...(await importOriginal()), readJsonUnchecked: api.readJson }));
-const company = vi.hoisted(() => ({ setPlan: vi.fn() }));
+const company = vi.hoisted(() => ({ applyBillingSummary: vi.fn() }));
 vi.mock("../shell/company-context.js", () => ({ useOptionalCompanyContext: () => company }));
 vi.mock("../features/settings/settings-layout.js", () => ({
   SettingsSection: ({ title, children }: { title?: string; children: ReactNode }) => <section><h2>{title}</h2><div>{children}</div></section>,
@@ -29,6 +29,8 @@ const pro: BillingSummary = { ...trial, subscriptionStatus: "active", renewalAt:
 const team: BillingSummary = { ...pro, plan: "team", limits: { companies: null, projects: null, runningTasks: null, monthlyTasks: null }, purchasedSeats: 4 };
 
 let roots: Root[] = [];
+let visibility: DocumentVisibilityState = "visible";
+Object.defineProperty(document, "visibilityState", { configurable: true, get: () => visibility });
 let tab: { opener: unknown; location: { href: string }; close: ReturnType<typeof vi.fn> };
 
 async function mount(): Promise<HTMLElement> {
@@ -48,11 +50,13 @@ const posts = (path: string) => api.readJson.mock.calls.filter(([url, init]) => 
 
 beforeEach(() => {
   api.readJson.mockReset();
-  company.setPlan.mockReset();
+  company.applyBillingSummary.mockReset();
   tab = { opener: window, location: { href: "" }, close: vi.fn() };
   vi.spyOn(window, "open").mockReturnValue(tab as unknown as Window);
 });
 afterEach(async () => {
+  vi.useRealTimers();
+  visibility = "visible";
   vi.restoreAllMocks();
   for (const root of roots) await act(async () => { root.unmount(); });
   roots = [];
@@ -77,7 +81,7 @@ test("Free shows usage against each limit and starts the trial without a tab", a
   expect(window.open).not.toHaveBeenCalled();
   expect(container.textContent).toContain("Pro trial");
   expect(container.textContent).toContain("2 / Unlimited");
-  expect(company.setPlan).toHaveBeenLastCalledWith("pro");
+  expect(company.applyBillingSummary).toHaveBeenLastCalledWith(trial);
 });
 
 test("Select Pro opens Checkout in a tab and keeps its key after a failure", async () => {
@@ -158,3 +162,68 @@ test("a member or a host without a Suplex account sees the plan without actions"
   expect(container.textContent).toContain("Log in to your Suplex account to start a trial or select Pro.");
   expect(button(container, "Select Pro")).toBeUndefined();
 });
+
+const reads = () => api.readJson.mock.calls.filter(([url, init]) => url === "/api/billing" && init === undefined).length;
+const tick = (ms: number) => act(async () => { await vi.advanceTimersByTimeAsync(ms); });
+
+test("the page reads the plan every 15 s while it is visible and shows a change without the loading state", async () => {
+  vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+  api.readJson.mockResolvedValue(free);
+  const container = await mount();
+  expect(reads()).toBe(1);
+  api.readJson.mockResolvedValue(team);
+  await tick(15_000);
+  expect(reads()).toBe(2);
+  expect(container.querySelector("[aria-busy]")).toBeNull();
+  expect(container.textContent).toContain("Team plan");
+  expect(company.applyBillingSummary).toHaveBeenLastCalledWith(team);
+
+  // A hidden page does not read. Showing it again reads at once.
+  visibility = "hidden";
+  await tick(45_000);
+  expect(reads()).toBe(2);
+  visibility = "visible";
+  await act(async () => { document.dispatchEvent(new Event("visibilitychange")); });
+  expect(reads()).toBe(3);
+
+  // Unmounting stops the reads.
+  await act(async () => { roots.pop()!.unmount(); });
+  await tick(60_000);
+  expect(reads()).toBe(3);
+});
+
+test("focus reads the plan at once, also when Suplex did not open Stripe", async () => {
+  api.readJson.mockResolvedValue(free);
+  const container = await mount();
+  api.readJson.mockResolvedValue(pro);
+  await act(async () => { window.dispatchEvent(new Event("focus")); });
+  expect(reads()).toBe(2);
+  expect(container.textContent).toContain("Pro plan");
+});
+
+test("a failed background read keeps the last summary; only the first read shows the error", async () => {
+  vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+  api.readJson.mockResolvedValue(pro);
+  const container = await mount();
+  api.readJson.mockRejectedValue(new Error("Down"));
+  await tick(15_000);
+  expect(reads()).toBe(2);
+  expect(container.textContent).toContain("Pro plan");
+  expect(container.textContent).not.toContain("Reload the page to retry.");
+
+  api.readJson.mockRejectedValue(new Error("Down"));
+  const failed = await mount();
+  expect(failed.textContent).toContain("Down. Reload the page to retry.");
+});
+
+test("a background read waits while an action runs and does not replace its answer", async () => {
+  let answerTrial: (value: BillingSummary) => void = () => undefined;
+  api.readJson.mockImplementation((url: string) => url === "/api/billing/trial" ? new Promise(resolve => { answerTrial = resolve; }) : Promise.resolve(free));
+  const container = await mount();
+  await act(async () => { button(container, "Start 14-day trial")!.click(); });
+  await act(async () => { window.dispatchEvent(new Event("focus")); });
+  expect(reads()).toBe(1);
+  await act(async () => { answerTrial(trial); });
+  expect(container.textContent).toContain("Pro trial");
+});
+

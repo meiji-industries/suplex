@@ -189,6 +189,52 @@ impl Observation {
     }
 }
 
+#[derive(Deserialize)]
+pub(crate) struct ActionsRun {
+    pub id: u64,
+    pub head_sha: String,
+    pub head_branch: Option<String>,
+    pub status: String,
+    pub conclusion: Option<String>,
+    repository: RunRepository,
+    head_repository: Option<RunRepository>,
+    pull_requests: Vec<RunPullRequest>,
+}
+
+#[derive(Deserialize)]
+struct RunRepository {
+    full_name: String,
+}
+
+#[derive(Deserialize)]
+struct RunPullRequest {
+    number: u64,
+    head: RunHead,
+}
+
+#[derive(Deserialize)]
+struct RunHead {
+    sha: String,
+}
+
+impl ActionsRun {
+    pub(crate) fn matches_pull(&self, pull: &PullRequest) -> bool {
+        self.repository
+            .full_name
+            .eq_ignore_ascii_case(&pull.repository)
+            && self
+                .head_repository
+                .as_ref()
+                .is_some_and(|repo| repo.full_name.eq_ignore_ascii_case(&pull.repository))
+            && self.head_branch.as_deref() == Some(pull.head_branch.as_str())
+            && (self.head_sha == pull.head_sha
+                || self
+                    .pull_requests
+                    .iter()
+                    .any(|linked| linked.number == pull.number && linked.head.sha == pull.head_sha))
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum MergeResult {
     Merged,
@@ -1389,6 +1435,45 @@ impl Github {
                 }),
             Api::Accepted { .. } => unreachable!("no accepted statuses"),
         }
+    }
+
+    pub(crate) async fn workflow_run(
+        &self,
+        repository: &str,
+        run_id: u64,
+    ) -> GithubResult<ActionsRun> {
+        let path = repo_route(repository, &["actions", "runs", &run_id.to_string()]);
+        decode_response(
+            &self
+                .response_body("GET", &path, None, "workflow run observation")
+                .await?,
+            "GitHub workflow run response is malformed",
+        )
+    }
+
+    pub(crate) async fn rerun_failed_jobs(
+        &self,
+        repository: &str,
+        run_id: u64,
+    ) -> GithubResult<()> {
+        let path = repo_route(
+            repository,
+            &["actions", "runs", &run_id.to_string(), "rerun-failed-jobs"],
+        );
+        self.response_body(
+            "POST",
+            &path,
+            None,
+            "rerun failed CI jobs",
+        )
+        .await
+        .map_err(|mut error| {
+            if error.code == "authentication-required" {
+                error.summary.push_str(". CI reruns need Actions write permission, or repo scope for a classic/OAuth token.");
+            }
+            error
+        })?;
+        Ok(())
     }
 
     pub async fn get_pull_request(

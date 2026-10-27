@@ -37,6 +37,10 @@ struct Fake {
     origin: PathBuf,
     pulls: Vec<Value>,
     merge_refusal: bool,
+    workflow_run: Value,
+    rerun_calls: usize,
+    rerun_denied: bool,
+    cancel_on_run: Option<(PathBuf, String)>,
     observation_gate: Option<Arc<tokio::sync::Barrier>>,
 }
 
@@ -201,6 +205,38 @@ async fn graphql(State(fake): State<Shared>, Json(body): Json<Value>) -> Respons
     Json(json!({"data": data})).into_response()
 }
 
+async fn workflow_run(State(fake): State<Shared>) -> Json<Value> {
+    let (run, cancel) = {
+        let fake = fake.lock().unwrap();
+        (fake.workflow_run.clone(), fake.cancel_on_run.clone())
+    };
+    if let Some((path, task_id)) = cancel {
+        let db = SuplexDatabase::open(&path, OpenMode::ReadWrite).unwrap();
+        db.connection()
+            .execute(
+                "UPDATE suplex_task_controls SET status='cancelled' WHERE task_id=?1",
+                [task_id],
+            )
+            .unwrap();
+    }
+    Json(run)
+}
+
+async fn rerun_failed_jobs(State(fake): State<Shared>) -> Response {
+    let mut fake = fake.lock().unwrap();
+    fake.rerun_calls += 1;
+    if fake.rerun_denied {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(json!({"message":"Resource not accessible by integration"})),
+        )
+            .into_response();
+    }
+    fake.workflow_run["status"] = json!("queued");
+    fake.workflow_run["conclusion"] = Value::Null;
+    StatusCode::CREATED.into_response()
+}
+
 async fn fake_github(origin: PathBuf) -> (String, Shared) {
     let fake: Shared = Arc::new(Mutex::new(Fake {
         origin,
@@ -213,6 +249,8 @@ async fn fake_github(origin: PathBuf) -> (String, Shared) {
         .route("/repos/owner/repo/pulls", post(create_pull))
         .route("/repos/owner/repo/pulls/{number}", get(get_pull).patch(patch_pull))
         .route("/repos/owner/repo/pulls/{number}/merge", put(merge_pull))
+        .route("/repos/owner/repo/actions/runs/42", get(workflow_run))
+        .route("/repos/owner/repo/actions/runs/42/rerun-failed-jobs", post(rerun_failed_jobs))
         .route("/graphql", post(graphql))
         .with_state(fake.clone());
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -1743,4 +1781,121 @@ async fn a_merge_coordinator_has_not_read_withdraws_the_question() {
         crate::tasks::control::PullRequestState::Merged
     );
     case.cleanup();
+}
+
+#[tokio::test]
+async fn ci_rerun_uses_live_pull_and_run_not_local_receipts() {
+    let fixture = fixture("pull_request_ready");
+    let (operations, fake) = operations(&fixture).await;
+    let task = control(&fixture);
+    let head = task.worktree.as_ref().unwrap().head_sha.clone();
+    let branch = task.delivery_intent.head_branch.as_str();
+    let pull = json!({"number":1,"state":"open","draft":false,"mergedAt":null,
+        "head":branch,"headSha":head,"base":"main","baseSha":"b".repeat(40),"title":"CI repair","body":""});
+    let run = json!({"id":42,"head_sha":head,"head_branch":branch,"status":"completed","conclusion":"failure",
+        "repository":{"full_name":"Owner/Repo"},"head_repository":{"full_name":"Owner/Repo"},"pull_requests":[]});
+    fake.lock().unwrap().pulls = vec![pull.clone()];
+    let mut db = SuplexDatabase::open(&fixture.database_path, OpenMode::ReadWrite).unwrap();
+    let token = root_session_store::claim_tool_owner(&mut db, &fixture.task_id, Utc::now())
+        .unwrap()
+        .unwrap();
+    // Missing and stale display observations must not prevent retrying the same live run.
+    for cached in [
+        Value::Null,
+        json!({"repository":"other/repo","number":99,"url":"https://github.com/other/repo/pull/99","headSha":"stale","state":"closed","mergedAt":null}),
+    ] {
+        db.connection()
+            .execute(
+                "UPDATE suplex_task_controls SET pull_request_json=?1 WHERE task_id=?2",
+                rusqlite::params![
+                    if cached.is_null() {
+                        None
+                    } else {
+                        Some(cached.to_string())
+                    },
+                    fixture.task_id
+                ],
+            )
+            .unwrap();
+        fake.lock().unwrap().workflow_run = run.clone();
+        let before = fake.lock().unwrap().rerun_calls;
+        let result = operations
+            .rerun_failed_checks(&fixture.root, &token, 42)
+            .await
+            .unwrap();
+        assert_eq!(result["kind"], "ci_rerun_requested");
+        assert_eq!(fake.lock().unwrap().rerun_calls, before + 1);
+        let pending = operations
+            .rerun_failed_checks(&fixture.root, &token, 42)
+            .await
+            .unwrap();
+        assert_eq!(pending["kind"], "ci_run_pending");
+        assert_eq!(fake.lock().unwrap().rerun_calls, before + 1);
+    }
+    // A PR merge-ref run carries the current head through its GitHub PR association.
+    let mut merge_run = run.clone();
+    merge_run["head_sha"] = json!("c".repeat(40));
+    merge_run["pull_requests"] = json!([{"number":1,"head":{"sha":head}}]);
+    fake.lock().unwrap().workflow_run = merge_run;
+    operations
+        .rerun_failed_checks(&fixture.root, &token, 42)
+        .await
+        .unwrap();
+    for (field, value, code) in [
+        ("head_sha", json!("stale"), "ci_run_mismatch"),
+        ("head_branch", json!("other-branch"), "ci_run_mismatch"),
+        (
+            "repository",
+            json!({"full_name":"other/repo"}),
+            "ci_run_mismatch",
+        ),
+        (
+            "head_repository",
+            json!({"full_name":"fork/repo"}),
+            "ci_run_mismatch",
+        ),
+        ("id", json!(43), "ci_run_mismatch"),
+        ("conclusion", json!("success"), "ci_run_not_failed"),
+    ] {
+        let mut invalid = run.clone();
+        invalid[field] = value;
+        fake.lock().unwrap().workflow_run = invalid;
+        let before = fake.lock().unwrap().rerun_calls;
+        let error = operations
+            .rerun_failed_checks(&fixture.root, &token, 42)
+            .await
+            .unwrap_err();
+        assert_eq!(DeliveryError::code_of(error.as_ref()), Some(code));
+        assert_eq!(fake.lock().unwrap().rerun_calls, before);
+    }
+    fake.lock().unwrap().workflow_run = run.clone();
+    fake.lock().unwrap().pulls[0]["state"] = json!("closed");
+    let before = fake.lock().unwrap().rerun_calls;
+    assert!(
+        operations
+            .rerun_failed_checks(&fixture.root, &token, 42)
+            .await
+            .is_err()
+    );
+    assert_eq!(fake.lock().unwrap().rerun_calls, before);
+    fake.lock().unwrap().pulls = vec![pull];
+    fake.lock().unwrap().rerun_denied = true;
+    let error = operations
+        .rerun_failed_checks(&fixture.root, &token, 42)
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("GitHub denied access"));
+    assert_eq!(fake.lock().unwrap().rerun_calls, before + 1);
+    assert!(error.to_string().contains("Actions write permission"));
+    fake.lock().unwrap().cancel_on_run =
+        Some((fixture.database_path.clone(), fixture.task_id.clone()));
+    assert!(
+        operations
+            .rerun_failed_checks(&fixture.root, &token, 42)
+            .await
+            .is_err()
+    );
+    assert_eq!(fake.lock().unwrap().rerun_calls, before + 1);
+    drop(db);
+    std::fs::remove_dir_all(&fixture.base).unwrap();
 }

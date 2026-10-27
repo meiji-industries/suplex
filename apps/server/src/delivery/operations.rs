@@ -1463,6 +1463,84 @@ impl DeliveryOperations {
         Ok(())
     }
 
+    /// Retry failed CI against GitHub's current task pull request, without local review gates.
+    pub async fn rerun_failed_checks(
+        &self,
+        root: &RootIdentity,
+        owner_token: &str,
+        run_id: u64,
+    ) -> DatabaseResult<Value> {
+        let recheck = Recheck {
+            root,
+            owner_token: Some(owner_token),
+        };
+        self.recheck(&recheck)?;
+        let control = self.get(&root.task_id)?;
+        if control.status != TaskStatus::Active || run_id == 0 {
+            return Err(delivery_failure(
+                "ci_rerun_not_available",
+                "CI reruns need an active task and a workflow run ID",
+            ));
+        }
+        let ReleasePort::Github(github) = self.for_task(&root.task_id).await? else {
+            return Err(delivery_failure(
+                "ci_rerun_not_available",
+                "CI reruns are available for GitHub Actions",
+            ));
+        };
+        let repository = control.delivery_intent.repository.as_str();
+        let run = github.workflow_run(repository, run_id).await?;
+        let pull = match control.delivery_intent.pull_request_number {
+            Some(number) => Some(github.get_pull_request(repository, number).await?),
+            None => select_discovered_pull(
+                &control,
+                github
+                    .list_pull_requests(repository, control.delivery_intent.head_branch.as_str())
+                    .await?,
+            )?,
+        }
+        .ok_or_else(|| {
+            delivery_failure(
+                "pull_request_missing",
+                "No task pull request exists on GitHub",
+            )
+        })?;
+        if !matches_delivery_intent(&control, &pull)
+            || pull.state != "open"
+            || run.id != run_id
+            || !run.matches_pull(&pull)
+        {
+            return Err(delivery_failure(
+                "ci_run_mismatch",
+                "The workflow run does not test the current task pull request. Inspect its latest CI runs.",
+            ));
+        }
+        if run.status != "completed" {
+            return Ok(json!({"kind":"ci_run_pending","runId":run_id,"status":run.status}));
+        }
+        if !matches!(
+            run.conclusion.as_deref(),
+            Some("failure" | "timed_out" | "cancelled" | "startup_failure")
+        ) {
+            return Err(delivery_failure(
+                "ci_run_not_failed",
+                "The workflow run has no failed jobs to retry",
+            ));
+        }
+        self.recheck(&recheck)?;
+        let current = self.get(&root.task_id)?;
+        if current.status != TaskStatus::Active || !matches_delivery_intent(&current, &pull) {
+            return Err(delivery_failure(
+                "ci_run_mismatch",
+                "The task changed while Suplex checked the workflow run. Observe the task again.",
+            ));
+        }
+        github.rerun_failed_jobs(repository, run_id).await?;
+        Ok(
+            json!({"kind":"ci_rerun_requested","runId":run_id,"headSha":run.head_sha,"pullRequestNumber":pull.number}),
+        )
+    }
+
     /// The whole TypeScript `execute` for the Standard workflow.
     pub async fn execute(
         &self,

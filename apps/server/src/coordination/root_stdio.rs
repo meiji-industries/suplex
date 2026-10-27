@@ -40,6 +40,7 @@ pub struct RootBridgeServer {
 
 enum RootCall {
     Observe,
+    RerunFailedChecks(u64),
     ReadImage(String),
     ReadWorkerEvidence(WorkerEvidenceRequest),
     DelegateWorker(WorkerAssignment),
@@ -67,6 +68,10 @@ enum RootCall {
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 enum WireCall {
     Observe(Empty),
+    RerunFailedChecks {
+        #[serde(rename = "runId")]
+        run_id: u64,
+    },
     ReadImage {
         #[serde(rename = "artifactId")]
         artifact_id: String,
@@ -247,6 +252,12 @@ fn parse_call(mut input: Map<String, Value>) -> Result<RootCall, String> {
         serde_json::from_value(Value::Object(input)).map_err(|error| error.to_string())?;
     match call {
         WireCall::Observe(_) => Ok(RootCall::Observe),
+        WireCall::RerunFailedChecks { run_id } => {
+            if run_id == 0 || run_id > 9_007_199_254_740_991 {
+                return Err("runId: expected a positive safe integer".into());
+            }
+            Ok(RootCall::RerunFailedChecks(run_id))
+        }
         WireCall::ReplaceWorker {
             session_id,
             reason,
@@ -455,10 +466,11 @@ fn tool() -> Tool {
         serde_json::from_value::<Map<String, Value>>(json!({
             "type":"object",
             "properties":{
-                "kind":{"type":"string","enum":["observe","read_image","read_worker_evidence","delegate_worker","delegate_advisor","delegate_planners","replace_worker","request_delivery","ask_human","request_plan_approval"],"description":"Fields per kind. observe: no other fields. read_image: required artifactId. read_worker_evidence: required turnId; optional toolId, field (input/output/error), position (head/tail), cursor, maxCharacters (1000..20000). delegate_worker: required acceptanceCriteria, instruction; plan is required when mode is planned or omitted; optional mode (planned or direct; direct only for Direct build), purpose (implementation or verification), advisorTurnId (Pull request repair: the latest valid Rater report turn), candidateTurnIds (Combined planning: the Plan A and Plan B report turns), advisorSessionId and candidateSessionIds (legacy session forms). delegate_advisor: required role (reviewer, planner_a, planner_b, rater); optional brief (Reviewer only: your plan and acceptance criteria). delegate_planners: no other fields; Combined planning reserves Plan A and Plan B together. replace_worker: required sessionId and reason; optional handoff. request_delivery: required operation; expectedHead and review are required for push_branch, create_or_adopt_pull_request, request_review, and merge_pull_request; pullRequestTitle and pullRequestBody create a pull request. ask_human: required question, options. request_plan_approval: required plan; Approve then build only. Suplex shows the complete plan to the user and waits for approval or change requests."},
+                "kind":{"type":"string","enum":["observe","rerun_failed_checks","read_image","read_worker_evidence","delegate_worker","delegate_advisor","delegate_planners","replace_worker","request_delivery","ask_human","request_plan_approval"],"description":"Fields per kind. observe: no other fields. rerun_failed_checks: required runId (GitHub Actions workflow run ID). After diagnosing a retryable CI failure, retry failed jobs for the current task pull request. Read GitHub state after an uncertain result before retrying. read_image: required artifactId. read_worker_evidence: required turnId; optional toolId, field (input/output/error), position (head/tail), cursor, maxCharacters (1000..20000). delegate_worker: required acceptanceCriteria, instruction; plan is required when mode is planned or omitted; optional mode (planned or direct; direct only for Direct build), purpose (implementation or verification), advisorTurnId (Pull request repair: the latest valid Rater report turn), candidateTurnIds (Combined planning: the Plan A and Plan B report turns), advisorSessionId and candidateSessionIds (legacy session forms). delegate_advisor: required role (reviewer, planner_a, planner_b, rater); optional brief (Reviewer only: your plan and acceptance criteria). delegate_planners: no other fields; Combined planning reserves Plan A and Plan B together. replace_worker: required sessionId and reason; optional handoff. request_delivery: required operation; expectedHead and review are required for push_branch, create_or_adopt_pull_request, request_review, and merge_pull_request; pullRequestTitle and pullRequestBody create a pull request. ask_human: required question, options. request_plan_approval: required plan; Approve then build only. Suplex shows the complete plan to the user and waits for approval or change requests."},
                 "sessionId":{"type":"string","minLength":1},
                 "reason":{"type":"string","minLength":1},
                 "handoff":{"type":"string"},
+                "runId":{"type":"integer","minimum":1,"maximum":9007199254740991_u64},
                 "artifactId":{"type":"string","minLength":1,"maxLength":256,"pattern":"^[A-Za-z0-9][A-Za-z0-9._:-]*$"},
                 "operation":{"type":"string","enum":["inspect_delivery_diff","complete_local_work","push_branch","create_or_adopt_pull_request","observe_pull_request","observe_checks","request_review","merge_pull_request"],"description":"Inspect the published-base-to-head patch, complete reviewed local work, or publish and observe the reviewed head."},
                 "expectedHead":{"type":"string","minLength":1},
@@ -517,6 +529,10 @@ impl RootBridgeServer {
             let result = async {
                 match call {
                     RootCall::Observe => root_controller::observe(db, path, &root).await,
+                    RootCall::RerunFailedChecks(run_id) => {
+                        delivery::operations::DeliveryOperations::new(path, artifacts)
+                            .rerun_failed_checks(&root, &token, run_id).await
+                    }
                     RootCall::ReadImage(artifact_id) => {
                         root_controller::read_image(db, artifacts, &root, &artifact_id)
                     }
@@ -774,12 +790,37 @@ mod tests {
     }
 
     #[test]
+    fn ci_rerun_requires_only_a_positive_run_id() {
+        let parse = |value: Value| parse_call(value.as_object().unwrap().clone());
+        assert!(matches!(
+            parse(json!({"kind":"rerun_failed_checks","runId":42})),
+            Ok(RootCall::RerunFailedChecks(42))
+        ));
+        for id in [
+            json!(0),
+            json!(-1),
+            json!(1.5),
+            json!("42"),
+            Value::Null,
+            json!(9007199254740992_u64),
+        ] {
+            assert!(parse(json!({"kind":"rerun_failed_checks","runId":id})).is_err());
+        }
+        assert!(parse(json!({"kind":"rerun_failed_checks"})).is_err());
+        assert!(
+            parse(json!({"kind":"rerun_failed_checks","runId":42,"repository":"other/repo"}))
+                .is_err()
+        );
+    }
+
+    #[test]
     fn advertised_kinds_match_the_root_tool_contract() {
         let schema = tool().input_schema;
         assert_eq!(
             schema["properties"]["kind"]["enum"],
             json!([
                 "observe",
+                "rerun_failed_checks",
                 "read_image",
                 "read_worker_evidence",
                 "delegate_worker",

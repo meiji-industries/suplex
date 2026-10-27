@@ -50,6 +50,25 @@ capability checks. It does not provide a universal target-based fence around
 all repository actions. Do not infer such a fence from a target's name or add
 one as a documentation-derived requirement.
 
+## CI retries
+
+Coordinator can call `suplex_root` with
+`{"kind":"rerun_failed_checks","runId":123}` after diagnosing a retryable
+GitHub Actions failure. Worker can inspect logs with `gh run view` and report
+the run ID and tested revision; its GitHub mutation guard stays in place.
+Suplex requests failed jobs and their dependent jobs through GitHub's
+`rerun-failed-jobs` API, using the host's repository credential. That credential
+needs Actions write permission (or `repo` scope for a classic/OAuth token).
+
+The action reads the run and the task's current open pull request from GitHub.
+It checks repository, branch, and tested revision, including PR merge-ref runs.
+Missing or stale local PR observations and review receipts do not block it.
+A pending run is observed without another rerun request. Closed PRs, unrelated
+runs, old revisions, and successful runs are not retried. Authentication and
+provider failures return to Coordinator; an uncertain write must be observed
+before retrying. After requesting a rerun, Coordinator uses `observe_checks`
+and the existing delivery wait.
+
 ## Observation failures
 
 A failed GitHub read does not erase local task intent or prove that a remote

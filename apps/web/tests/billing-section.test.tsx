@@ -6,7 +6,7 @@ import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
 const api = vi.hoisted(() => ({ readJson: vi.fn() }));
 vi.mock("../lib/api.js", async importOriginal => ({ ...(await importOriginal()), readJsonUnchecked: api.readJson }));
-const company = vi.hoisted(() => ({ applyBillingSummary: vi.fn() }));
+const company = vi.hoisted(() => ({ applyBillingSummary: vi.fn(), user: { role: "admin" } as { role: string }, currentCompany: { id: "company-1" } }));
 vi.mock("../shell/company-context.js", () => ({ useOptionalCompanyContext: () => company }));
 vi.mock("../features/settings/settings-layout.js", () => ({
   SettingsSection: ({ title, children }: { title?: string; children: ReactNode }) => <section><h2>{title}</h2><div>{children}</div></section>,
@@ -51,6 +51,7 @@ const posts = (path: string) => api.readJson.mock.calls.filter(([url, init]) => 
 beforeEach(() => {
   api.readJson.mockReset();
   company.applyBillingSummary.mockReset();
+  company.user = { role: "admin" };
   tab = { opener: window, location: { href: "" }, close: vi.fn() };
   vi.spyOn(window, "open").mockReturnValue(tab as unknown as Window);
 });
@@ -161,6 +162,43 @@ test("a member or a host without a Suplex account sees the plan without actions"
   container = await mount();
   expect(container.textContent).toContain("Log in to your Suplex account to start a trial or select Pro.");
   expect(button(container, "Select Pro")).toBeUndefined();
+});
+
+function link(scope: ParentNode, label: string): HTMLAnchorElement | undefined {
+  return Array.from(scope.querySelectorAll("a")).find(candidate => candidate.textContent === label);
+}
+
+test("Team with free seats links an administrator to invite and manage users", async () => {
+  api.readJson.mockResolvedValue({ ...team, seatsUsed: 1 });
+  const container = await mount();
+  const row = container.querySelector('[data-setting-row="Seats"]')!;
+  expect(link(row, "Invite")?.getAttribute("href")).toBe("/admin?invite=1&company=company-1");
+  expect(link(row, "Manage")?.getAttribute("href")).toBe("/admin?company=company-1");
+  expect(row.textContent).toMatch(/InviteManage1 of 4$/);
+});
+
+test("Team with all seats used offers Manage without Invite", async () => {
+  api.readJson.mockResolvedValue(team);
+  const container = await mount();
+  const row = container.querySelector('[data-setting-row="Seats"]')!;
+  expect(link(row, "Invite")).toBeUndefined();
+  expect(link(row, "Manage")?.getAttribute("href")).toBe("/admin?company=company-1");
+});
+
+test("a member sees the seat count without Invite or Manage", async () => {
+  company.user = { role: "member" };
+  api.readJson.mockResolvedValue({ ...team, seatsUsed: 1 });
+  const container = await mount();
+  const row = container.querySelector('[data-setting-row="Seats"]')!;
+  expect(row.textContent).toContain("1 of 4");
+  expect(link(row, "Invite")).toBeUndefined();
+  expect(link(row, "Manage")).toBeUndefined();
+});
+
+test("plans other than Team show no Seats row", async () => {
+  api.readJson.mockResolvedValue(pro);
+  const container = await mount();
+  expect(container.querySelector('[data-setting-row="Seats"]')).toBeNull();
 });
 
 const reads = () => api.readJson.mock.calls.filter(([url, init]) => url === "/api/billing" && init === undefined).length;

@@ -2,7 +2,7 @@ import { Alert, AlertDescription } from "../../components/ui/alert.js";
 import { Button } from "../../components/ui/button.js";
 import { Skeleton } from "../../components/ui/skeleton.js";
 import { Spinner } from "../../components/ui/spinner.js";
-import { isApiError } from "../../lib/api.js";
+import { isApiError, withCompany } from "../../lib/api.js";
 import type { BillingSummary } from "../../contracts/billing.js";
 import { changePlan, getBillingSummary, openBillingPortal, startCheckout, startTrial } from "./lib/billing-api.js";
 import { PlanTable, type PlanTarget } from "./plan-table.js";
@@ -87,7 +87,10 @@ export function BillingSection(): ReactElement {
   // began before an action does not replace the action's newer answer.
   const version = useRef(0);
 
-  const applyBillingSummary = useOptionalCompanyContext()?.applyBillingSummary;
+  const companyContext = useOptionalCompanyContext();
+  const applyBillingSummary = companyContext?.applyBillingSummary;
+  const companyId = companyContext?.currentCompany?.id;
+  const isAdmin = companyContext?.user?.role === "admin";
   const applySummary = useCallback((next: BillingSummary): void => {
     version.current += 1;
     setSummary(next);
@@ -226,7 +229,13 @@ export function BillingSection(): ReactElement {
         <PlanTable summary={summary} canChange={ready && !summary.paymentActionRequired} busy={busy} onTrial={() => void trial()} onCheckout={target => void checkout(target)} onChange={target => void change(target)} />
       </SettingsSection>
       <SettingsSection title="Usage">
-        {summary.plan === "team" ? <SettingRow label="Seats" description="Each user who is not revoked uses a seat."><span className="text-xs text-muted-foreground">{summary.seatsUsed} of {summary.purchasedSeats}</span></SettingRow> : null}
+        {summary.plan === "team" ? <SettingRow label="Seats" description="Each user who is not revoked uses a seat.">
+          <span className="flex items-center gap-2">
+            {isAdmin && summary.seatsUsed < summary.purchasedSeats ? <Button size="sm" nativeButton={false} render={<a href={withCompany("/admin?invite=1", companyId)} />}>Invite</Button> : null}
+            {isAdmin ? <Button size="sm" variant="outline" nativeButton={false} render={<a href={withCompany("/admin", companyId)} />}>Manage</Button> : null}
+            <span className="text-xs text-muted-foreground">{summary.seatsUsed} of {summary.purchasedSeats}</span>
+          </span>
+        </SettingRow> : null}
         <SettingRow label="Companies" description="Archived companies do not count."><span className="text-xs text-muted-foreground">{limitText(usage.companies, limits.companies)}</span></SettingRow>
         <SettingRow label="Projects" description="Projects in all companies count."><span className="text-xs text-muted-foreground">{limitText(usage.projects, limits.projects)}</span></SettingRow>
         <SettingRow label="Tasks at a time" description="Other tasks wait in the queue."><span className="text-xs text-muted-foreground">{limitText(usage.runningTasks, limits.runningTasks)}</span></SettingRow>

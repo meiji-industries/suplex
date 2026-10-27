@@ -63,6 +63,19 @@ export function AdminView(): ReactElement {
   const isAgents = window.location.pathname.endsWith("/agents");
   const isCompanies = window.location.pathname.endsWith("/companies");
 
+  // Billing links here with ?invite=1 so the Add User dialog is open on arrival.
+  // Clear it so a reload or Back does not open the dialog again.
+  const companyId = currentCompany?.id;
+  const canInvite = !loading && user?.role === "admin" && companyId !== undefined && !isAgents && !isCompanies;
+  useEffect(() => {
+    if (!canInvite) return;
+    const url = new URL(window.location.href);
+    if (!url.searchParams.has("invite")) return;
+    url.searchParams.delete("invite");
+    window.history.replaceState(window.history.state, "", `${url.pathname}${url.search}${url.hash}`);
+    setInviteOpen(true);
+  }, [canInvite]);
+
   const reload = useCallback(
     async (signal?: AbortSignal): Promise<void> => {
       const options = signal ? { signal } : {};

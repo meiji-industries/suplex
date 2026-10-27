@@ -189,7 +189,7 @@ mod tests {
         for (path, title, policy) in [
             ("/terms", "Suplex terms of service", "14-day first-purchase guarantee"),
             ("/privacy", "Suplex privacy policy", "separately and explicitly opt in"),
-            ("/support", "Suplex support", "info@meiji.industries"),
+            ("/support", "Suplex support", "support@getsuplex.ai"),
         ] {
             let page = f.get(path, &[]).await;
             assert_eq!(page.status(), 200);

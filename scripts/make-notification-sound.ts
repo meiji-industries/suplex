@@ -5,36 +5,34 @@ import { writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 
 const sampleRate = 22_050;
-const duration = 0.5;
-const peak = 0.35;
-// Three rising tones (A5, C#6, E6). Each starts before the previous one ends.
-const notes = [
-  { frequency: 880, start: 0, length: 0.26 },
-  { frequency: 1108.73, start: 0.12, length: 0.26 },
-  { frequency: 1318.51, start: 0.24, length: 0.26 },
-];
-const attack = 0.008;
-const release = 0.03;
+const duration = 0.2;
+const peak = 0.6;
+// One low, damped knock, like a wood block or a heavy key press.
+// The pitch drops a little at the start, and a quiet inharmonic partial gives the woody color.
+const frequency = 240;
+const attack = 0.002;
 
-function envelope(time: number, length: number): number {
-  if (time < 0 || time >= length) return 0;
-  // A raised-cosine attack and release keep the edges free of clicks. The decay between them keeps the tone soft.
-  const rise = time < attack ? (1 - Math.cos(Math.PI * time / attack)) / 2 : 1;
-  const fall = time > length - release ? (1 + Math.cos(Math.PI * (time - (length - release)) / release)) / 2 : 1;
-  return rise * fall * Math.exp(-time * 9);
+// A seeded generator keeps the click noise, and so the output, deterministic.
+let seed = 1;
+function noise(): number {
+  seed = (seed * 1_103_515_245 + 12_345) % 2_147_483_648;
+  return seed / 1_073_741_824 - 1;
 }
 
 const count = Math.round(sampleRate * duration);
 const data = Buffer.alloc(count * 2);
+let phase = 0;
+let click = 0;
 for (let index = 0; index < count; index++) {
   const time = index / sampleRate;
-  let value = 0;
-  for (const note of notes) {
-    const local = time - note.start;
-    const level = envelope(local, note.length);
-    // A quiet second harmonic makes the tone less thin than a pure sine.
-    if (level) value += level * (Math.sin(2 * Math.PI * note.frequency * local) + 0.12 * Math.sin(4 * Math.PI * note.frequency * local));
-  }
+  // A raised-cosine attack keeps the start free of a hard edge. The fast decay keeps the knock short.
+  const rise = time < attack ? (1 - Math.cos(Math.PI * time / attack)) / 2 : 1;
+  const fade = time > duration - 0.02 ? (duration - time) / 0.02 : 1;
+  phase += 2 * Math.PI * frequency * (1 + 0.5 * Math.exp(-time * 120)) / sampleRate;
+  const body = Math.sin(phase) * Math.exp(-time * 28) + 0.08 * Math.sin(2.76 * phase) * Math.exp(-time * 45);
+  // A short low-passed noise burst is the contact click.
+  click += 0.1 * (noise() - click);
+  const value = rise * fade * (body + 1.5 * click * Math.exp(-time * 400));
   data.writeInt16LE(Math.round(Math.max(-1, Math.min(1, value * peak)) * 32_767), index * 2);
 }
 

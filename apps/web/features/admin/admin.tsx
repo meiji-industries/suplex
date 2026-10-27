@@ -1,5 +1,5 @@
 import { CompanyInvitations } from "./company-invitations.js";
-import { listCompanyInvitations } from "./company-users-api.js";
+import { listCompanyInvitations, setUserRole } from "./company-users-api.js";
 import type { CompanyInvitation } from "../../contracts/generated/CompanyInvitation.js";
 import { Button } from "../../components/ui/button.js";
 import { Alert, AlertDescription } from "../../components/ui/alert.js";
@@ -7,6 +7,7 @@ import { useCompanyContext } from "../../shell/company-context.js";
 import { SettingRow, SettingsContent, SettingsLayout, SettingsSection } from "../settings/settings-layout.js";
 import { readJsonUnchecked, withCompany, type ApiUser } from "../../lib/api.js";
 import { useCallback, useEffect, useState, type ReactElement } from "react";
+import { toast } from "sonner";
 import type {
   ApiProfile,
   ApiExternalAgent,
@@ -24,7 +25,7 @@ import { createExternalAgentActions } from "./external-agent-actions.js";
 import { LoadingState } from "../../components/app/loading-state.js";
 
 export function AdminView(): ReactElement {
-  const { user, companies, currentCompany, loading } = useCompanyContext();
+  const { user, companies, currentCompany, loading, reloadCompanies } = useCompanyContext();
   const [users, setUsers] = useState<ApiUser[]>([]);
   const [invitations, setInvitations] = useState<CompanyInvitation[]>([]);
   const [agents, setAgents] = useState<ApiProfile[]>([]);
@@ -235,6 +236,19 @@ export function AdminView(): ReactElement {
       setError(cause instanceof Error ? cause.message : "Unable to change access");
     }
   };
+  const changeRole = async (candidate: ApiUser, role: ApiUser["role"]): Promise<void> => {
+    setError("");
+    try {
+      await setUserRole(candidate.id, role, currentCompany?.id);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Unable to change role");
+      return;
+    }
+    toast.success(`Suplex made ${candidate.displayName} ${role === "admin" ? "an admin" : "a member"}.`);
+    // A user who loses admin access leaves this page, so refresh the signed-in user instead of the list.
+    if (candidate.id === user?.id) await reloadCompanies();
+    else await reload();
+  };
   const revokeUser = async (candidate: ApiUser): Promise<void> => {
     if (!currentCompany) return;
     const action = `user:${candidate.id}`;
@@ -311,6 +325,7 @@ export function AdminView(): ReactElement {
             companyId={currentCompany?.id ?? ""}
             canScope={canScope}
             onSetAccess={(candidate, access) => void setAccess(candidate, access)}
+            onSetRole={(candidate, role) => void changeRole(candidate, role)}
             onRevokeUser={(candidate) => void revokeUser(candidate)}
             onClearPendingAction={() => setPendingAction("")}
           />

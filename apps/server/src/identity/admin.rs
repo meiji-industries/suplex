@@ -1,5 +1,5 @@
 use crate::identity::IdentityError;
-use crate::identity::auth::UserStatus;
+use crate::identity::auth::{UserRole, UserStatus};
 use crate::shared::ids::random_hex_id;
 use crate::shared::time::rfc3339_millis;
 use chrono::{DateTime, Utc};
@@ -105,6 +105,82 @@ pub fn revoke_user(
             "user_revoked",
             Some(target_user_id),
             "{}",
+            now,
+        )
+    })
+}
+
+/// Makes a user an admin or a member. Suplex always keeps one active admin.
+/// A demoted admin joins `company_id` (and every company when the plan does
+/// not scope members), so the user keeps the access they were working in.
+pub fn set_user_role(
+    database: &mut SuplexDatabase,
+    actor_user_id: &str,
+    target_user_id: &str,
+    role: UserRole,
+    company_id: Option<&str>,
+    now: DateTime<Utc>,
+) -> DatabaseResult<()> {
+    database.transaction(false, |database| {
+        companies::require_admin(database, actor_user_id)?;
+        let target: Option<(UserRole, UserStatus)> = database
+            .connection()
+            .query_row(
+                "SELECT role, status FROM suplex_users WHERE id = ?1",
+                [target_user_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?;
+        let Some((current, status)) = target else {
+            return Err(IdentityError::not_found().into());
+        };
+        if status == UserStatus::Revoked {
+            return Err(IdentityError::not_found().into());
+        }
+        if current == role {
+            return Ok(());
+        }
+        let now_iso = rfc3339_millis(now);
+        if role == UserRole::Member {
+            if status == UserStatus::Active {
+                let other_admins: i64 = database.connection().query_row(
+                    "SELECT COUNT(*) FROM suplex_users WHERE role = 'admin' AND status = 'active' AND id != ?1",
+                    [target_user_id],
+                    |row| row.get(0),
+                )?;
+                if other_admins == 0 {
+                    return Err(IdentityError::auth(
+                        "Suplex must keep at least one admin.",
+                        409,
+                        "last_admin",
+                    )
+                    .into());
+                }
+            }
+            if let Some(company_id) = company_id {
+                companies::require_company_access(database, actor_user_id, company_id)?;
+                database.connection().execute(
+                    "INSERT OR IGNORE INTO suplex_memberships (user_id, company_id, created_at) VALUES (?1, ?2, ?3)",
+                    params![target_user_id, company_id, now_iso],
+                )?;
+            }
+            if companies::grants_every_company(database)? {
+                database.connection().execute(
+                    "INSERT OR IGNORE INTO suplex_memberships (user_id, company_id, created_at) SELECT ?1, id, ?2 FROM suplex_companies WHERE status != 'archived'",
+                    params![target_user_id, now_iso],
+                )?;
+            }
+        }
+        database.connection().execute(
+            "UPDATE suplex_users SET role = ?2, updated_at = ?3 WHERE id = ?1",
+            params![target_user_id, role, now_iso],
+        )?;
+        audit(
+            database,
+            Some(actor_user_id),
+            "user_role_changed",
+            Some(target_user_id),
+            &serde_json::json!({"role": role.as_str(), "previousRole": current.as_str()}).to_string(),
             now,
         )
     })
@@ -231,5 +307,266 @@ mod tests {
                 .status(),
             404
         );
+    }
+
+    fn role_database() -> (SuplexDatabase, std::path::PathBuf, DateTime<Utc>) {
+        let path =
+            std::env::temp_dir().join(format!("{}.sqlite", random_hex_id("suplex_admin").unwrap()));
+        let database = SuplexDatabase::open(&path, OpenMode::Migrate).unwrap();
+        let now = DateTime::parse_from_rfc3339("2026-09-24T12:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        (database, path, now)
+    }
+
+    fn insert_user(
+        database: &SuplexDatabase,
+        id: &str,
+        role: &str,
+        status: &str,
+        now: DateTime<Utc>,
+    ) {
+        database
+            .connection()
+            .execute(
+                "INSERT INTO suplex_users (id, display_name, username, avatar_seed, role, status, created_at, updated_at, identity_version) VALUES (?1, ?1, ?1, ?1, ?2, ?3, ?4, ?4, 1)",
+                params![id, role, status, rfc3339_millis(now)],
+            )
+            .unwrap();
+    }
+
+    fn role_of(database: &SuplexDatabase, id: &str) -> UserRole {
+        database
+            .connection()
+            .query_row("SELECT role FROM suplex_users WHERE id = ?1", [id], |row| {
+                row.get(0)
+            })
+            .unwrap()
+    }
+
+    fn status_of(error: Box<dyn std::error::Error + Send + Sync>) -> u16 {
+        error.downcast_ref::<IdentityError>().unwrap().status()
+    }
+
+    fn role_audit_count(database: &SuplexDatabase) -> i64 {
+        database
+            .connection()
+            .query_row(
+                "SELECT COUNT(*) FROM suplex_audit_events WHERE action = 'user_role_changed'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap()
+    }
+
+    #[test]
+    fn role_changes_promote_demote_and_audit() {
+        let (mut database, path, now) = role_database();
+        let admin = auth::development_sign_in(&mut database, now)
+            .unwrap()
+            .user
+            .id;
+        insert_user(&database, "user_member", "member", "pending", now);
+        set_user_role(
+            &mut database,
+            &admin,
+            "user_member",
+            UserRole::Admin,
+            None,
+            now,
+        )
+        .unwrap();
+        assert_eq!(role_of(&database, "user_member"), UserRole::Admin);
+        let (actor, target, metadata): (String, String, String) = database
+            .connection()
+            .query_row(
+                "SELECT actor_user_id, target_user_id, metadata_json FROM suplex_audit_events WHERE action = 'user_role_changed'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            (actor.as_str(), target.as_str()),
+            (admin.as_str(), "user_member")
+        );
+        assert_eq!(
+            serde_json::from_str::<Value>(&metadata).unwrap(),
+            serde_json::json!({"role": "admin", "previousRole": "member"})
+        );
+        // A no-op succeeds and records nothing.
+        set_user_role(
+            &mut database,
+            &admin,
+            "user_member",
+            UserRole::Admin,
+            None,
+            now,
+        )
+        .unwrap();
+        assert_eq!(role_audit_count(&database), 1);
+        set_user_role(
+            &mut database,
+            &admin,
+            "user_member",
+            UserRole::Member,
+            None,
+            now,
+        )
+        .unwrap();
+        assert_eq!(role_of(&database, "user_member"), UserRole::Member);
+        assert_eq!(role_audit_count(&database), 2);
+        drop(database);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn last_active_admin_cannot_be_demoted() {
+        let (mut database, path, now) = role_database();
+        let admin = auth::development_sign_in(&mut database, now)
+            .unwrap()
+            .user
+            .id;
+        insert_user(&database, "user_pending_admin", "admin", "pending", now);
+        // A pending admin does not count as an active admin.
+        let error =
+            set_user_role(&mut database, &admin, &admin, UserRole::Member, None, now).unwrap_err();
+        assert_eq!(status_of(error), 409);
+        assert_eq!(role_of(&database, &admin), UserRole::Admin);
+        assert_eq!(role_audit_count(&database), 0);
+        // With a second active admin, self-demotion works.
+        insert_user(&database, "user_second", "admin", "active", now);
+        set_user_role(&mut database, &admin, &admin, UserRole::Member, None, now).unwrap();
+        assert_eq!(role_of(&database, &admin), UserRole::Member);
+        // The former admin is not an admin any more, so the last one stays.
+        let error = set_user_role(
+            &mut database,
+            &admin,
+            "user_second",
+            UserRole::Member,
+            None,
+            now,
+        )
+        .unwrap_err();
+        assert_eq!(status_of(error), 404);
+        let error = set_user_role(
+            &mut database,
+            "user_second",
+            "user_second",
+            UserRole::Member,
+            None,
+            now,
+        )
+        .unwrap_err();
+        assert_eq!(status_of(error), 409);
+        assert_eq!(role_of(&database, "user_second"), UserRole::Admin);
+        // Another admin can demote a pending admin.
+        set_user_role(
+            &mut database,
+            "user_second",
+            "user_pending_admin",
+            UserRole::Member,
+            None,
+            now,
+        )
+        .unwrap();
+        drop(database);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn role_change_rejects_missing_revoked_and_non_admin() {
+        let (mut database, path, now) = role_database();
+        let admin = auth::development_sign_in(&mut database, now)
+            .unwrap()
+            .user
+            .id;
+        insert_user(&database, "user_revoked", "member", "revoked", now);
+        insert_user(&database, "user_member", "member", "active", now);
+        for target in ["user_missing", "user_revoked"] {
+            let error = set_user_role(&mut database, &admin, target, UserRole::Admin, None, now)
+                .unwrap_err();
+            assert_eq!(status_of(error), 404);
+        }
+        let error = set_user_role(
+            &mut database,
+            "user_member",
+            &admin,
+            UserRole::Member,
+            None,
+            now,
+        )
+        .unwrap_err();
+        assert_eq!(status_of(error), 404);
+        let error = set_user_role(
+            &mut database,
+            "user_member",
+            "user_member",
+            UserRole::Admin,
+            None,
+            now,
+        )
+        .unwrap_err();
+        assert_eq!(status_of(error), 404);
+        assert_eq!(role_of(&database, "user_revoked"), UserRole::Member);
+        assert_eq!(role_of(&database, &admin), UserRole::Admin);
+        assert_eq!(role_of(&database, "user_member"), UserRole::Member);
+        assert_eq!(role_audit_count(&database), 0);
+        drop(database);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn demoted_admin_keeps_the_company() {
+        let (mut database, path, now) = role_database();
+        let admin = auth::development_sign_in(&mut database, now)
+            .unwrap()
+            .user
+            .id;
+        insert_user(&database, "user_second", "admin", "active", now);
+        let company =
+            companies::create_company(&mut database, &admin, "Demotion Company", now).unwrap();
+        assert!(
+            auth::public_user(&database, "user_second")
+                .unwrap()
+                .unwrap()
+                .company_ids
+                .is_empty()
+        );
+        set_user_role(
+            &mut database,
+            &admin,
+            "user_second",
+            UserRole::Member,
+            Some(&company.id),
+            now,
+        )
+        .unwrap();
+        let demoted = auth::public_user(&database, "user_second")
+            .unwrap()
+            .unwrap();
+        assert_eq!(demoted.role, UserRole::Member);
+        assert!(demoted.company_ids.contains(&company.id));
+        let error = set_user_role(
+            &mut database,
+            &admin,
+            "user_second",
+            UserRole::Admin,
+            Some("company_missing"),
+            now,
+        )
+        .and_then(|()| {
+            set_user_role(
+                &mut database,
+                &admin,
+                "user_second",
+                UserRole::Member,
+                Some("company_missing"),
+                now,
+            )
+        });
+        assert_eq!(status_of(error.unwrap_err()), 404);
+        assert_eq!(role_of(&database, "user_second"), UserRole::Admin);
+        drop(database);
+        let _ = std::fs::remove_file(&path);
     }
 }

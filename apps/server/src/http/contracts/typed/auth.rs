@@ -130,6 +130,22 @@ impl Contract for MembershipAccessBody {
             .strict()
     }
 }
+/// The role to give a user. `companyId` is the company a demoted admin keeps.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UserRoleBody {
+    pub role: crate::identity::auth::UserRole,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub company_id: Option<String>,
+}
+impl Contract for UserRoleBody {
+    fn schema(input: Option<&Value>) -> ContractResult<Value> {
+        Fields::new(input)?
+            .req("role", choice::<crate::identity::auth::UserRole>)
+            .opt("companyId", text(1, 256))
+            .strict()
+    }
+}
 impl Contract for MembershipParams {
     fn schema(input: Option<&Value>) -> ContractResult<Value> {
         params(input, &["companyId", "userId"], (1, 256))

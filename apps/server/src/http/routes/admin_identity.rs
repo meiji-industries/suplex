@@ -7,13 +7,16 @@ use axum::{
     extract::State,
     http::{HeaderMap, StatusCode, header},
     response::{IntoResponse, Response},
-    routing::{get, post},
+    routing::{get, patch, post},
 };
 use chrono::Utc;
 use serde::Serialize;
 
 use crate::{
-    http::{contracts::typed::auth::UserIdParams, validation::ValidPath},
+    http::{
+        contracts::typed::auth::{UserIdParams, UserRoleBody},
+        validation::{Valid, ValidPath},
+    },
     identity::admin,
 };
 
@@ -33,6 +36,7 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/api/admin/users", get(list_users))
         .route("/api/admin/users/{user_id}/revoke", post(revoke_user))
+        .route("/api/admin/users/{user_id}/role", patch(set_user_role))
         .route("/api/admin/audit", get(list_audit))
 }
 
@@ -60,6 +64,32 @@ async fn revoke_user(
     let response = match state
         .with_database(|database| admin::revoke_user(database, &actor, &user_id, Utc::now()))
     {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(error) => ApiError::response(error),
+    };
+    with_cookies(response, cookies)
+}
+
+async fn set_user_role(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    ValidPath(UserIdParams { user_id }): ValidPath<UserIdParams>,
+    Valid(body): Valid<UserRoleBody>,
+) -> Response {
+    let (actor, cookies) = match authenticated(&state, &headers, "PATCH") {
+        Ok(value) => value,
+        Err(error) => return *error,
+    };
+    let response = match state.with_database(|database| {
+        admin::set_user_role(
+            database,
+            &actor,
+            &user_id,
+            body.role,
+            body.company_id.as_deref(),
+            Utc::now(),
+        )
+    }) {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
         Err(error) => ApiError::response(error),
     };

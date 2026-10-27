@@ -93,7 +93,11 @@ export function CompanyProvider({ children }: { children: ReactNode }): ReactEle
     setLoading(true);
     setError(undefined);
     try {
-      const result = await readJsonUnchecked<{ companies: ApiCompany[] }>("/api/companies");
+      const [me, result] = await Promise.all([
+        readJsonUnchecked<{ user: ApiUser }>("/api/auth/me"),
+        readJsonUnchecked<{ companies: ApiCompany[] }>("/api/companies"),
+      ]);
+      setUser(me.user);
       const sorted = sortCompanies(result.companies);
       setCompanies(sorted);
       resolveSelection(result.companies);

@@ -1,4 +1,4 @@
-import { CalendarDays, ChartNoAxesGantt, Columns3, ClipboardList, EllipsisVertical, Keyboard, LogOut, Plus, Settings, Shield, UserRound, Zap, type LucideIcon } from "lucide-react";
+import { CalendarDays, ChartNoAxesGantt, Columns3, ClipboardList, EllipsisVertical, Keyboard, LifeBuoy, LogOut, Plus, Settings, Shield, UserRound, Zap, type LucideIcon } from "lucide-react";
 import { useEffect, useMemo, useState, type ReactElement } from "react";
 import { BarChart3 } from "lucide-react"; import { cn } from "../lib/utils.js"; import { PhosphorTerminalIcon, toggleQuickShell } from "./quick-shell.js";
 
@@ -112,7 +112,7 @@ function UserMenu(): ReactElement | null {
   const { isMobile } = useSidebar();
   const user = context?.user;
   if (!user) return null;
-  return <SidebarMenu><SidebarMenuItem><DropdownMenu><DropdownMenuTrigger render={<SidebarMenuButton size="lg"><EntityAvatar kind="user" id={user.id} name={user.displayName} seed={user.avatarSeed} /><span className="grid min-w-0 flex-1 text-left leading-tight"><span className="truncate font-medium">{user.displayName}</span><span className="truncate text-xs text-muted-foreground">{user.username}</span></span><EllipsisVertical className="ml-auto" /></SidebarMenuButton>} /><DropdownMenuContent className="min-w-56" side={isMobile ? "bottom" : "right"} align="end" sideOffset={4}><DropdownMenuItem render={<a href={withCompany("/profile", context.currentCompany?.id)} />}><UserRound />Profile</DropdownMenuItem><DropdownMenuItem onClick={() => void logout()}><LogOut />{accountLogout ? "Log out" : "Sign out"}</DropdownMenuItem></DropdownMenuContent></DropdownMenu>{logoutError ? <Alert variant="destructive"><AlertDescription>{logoutError}</AlertDescription></Alert> : null}</SidebarMenuItem></SidebarMenu>;
+  return <SidebarMenu><SidebarMenuItem><DropdownMenu><DropdownMenuTrigger render={<SidebarMenuButton size="lg"><EntityAvatar kind="user" id={user.id} name={user.displayName} seed={user.avatarSeed} /><span className="grid min-w-0 flex-1 text-left leading-tight"><span className="truncate font-medium">{user.displayName}</span><span className="truncate text-xs text-muted-foreground">{user.username}</span></span><EllipsisVertical className="ml-auto" /></SidebarMenuButton>} /><DropdownMenuContent className="min-w-56" side={isMobile ? "bottom" : "right"} align="end" sideOffset={4}><DropdownMenuItem render={<a href="mailto:support@getsuplex.ai" />}><LifeBuoy />Support</DropdownMenuItem><DropdownMenuItem render={<a href={withCompany("/profile", context.currentCompany?.id)} />}><UserRound />Profile</DropdownMenuItem><DropdownMenuItem onClick={() => void logout()}><LogOut />{accountLogout ? "Log out" : "Sign out"}</DropdownMenuItem></DropdownMenuContent></DropdownMenu>{logoutError ? <Alert variant="destructive"><AlertDescription>{logoutError}</AlertDescription></Alert> : null}</SidebarMenuItem></SidebarMenu>;
 }
 
 export function AppSidebar(): ReactElement {

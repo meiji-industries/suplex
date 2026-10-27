@@ -15,7 +15,7 @@ vi.mock("../components/ui/sidebar.js", async () => {
   const box = ({ children }: { children?: ReactNode }) => React.createElement("div", null, children);
   return {
     Sidebar: box, SidebarContent: box, SidebarFooter: box, SidebarGroup: box, SidebarGroupContent: box, SidebarHeader: box, SidebarMenu: box, SidebarMenuItem: box,
-    SidebarMenuButton: ({ render, children }: { render?: ReactNode; children?: ReactNode }) => React.createElement("div", null, render ?? children),
+    SidebarMenuButton: ({ render, children, size: _size, isActive: _isActive, tooltip: _tooltip, ...props }: { render?: ReactNode; children?: ReactNode; size?: string; isActive?: boolean; tooltip?: string }) => React.createElement("div", props, render ?? children),
     SidebarTrigger: () => null,
     useSidebar: () => ({ isMobile: false, setOpenMobile: () => undefined }),
   };
@@ -362,4 +362,14 @@ test("the command menu lists Settings with its shortcut", async () => {
   expect(entry?.querySelector("kbd")?.textContent).toBe("Ctrl+,");
   expect(document.querySelector("[role=dialog]")?.textContent).toContain("Ctrl+, opens Settings.");
   platform.mockRestore();
+});
+
+test("the user menu lists Support first and links it to the support email", async () => {
+  await mount(<AppSidebar />);
+  const trigger = document.querySelector<HTMLElement>('[aria-haspopup="menu"]');
+  await act(async () => { trigger?.click(); });
+  const items = Array.from(document.querySelectorAll<HTMLElement>("[role=menuitem]"));
+  expect(items.map(item => item.textContent)).toEqual(["Support", "Profile", "Sign out"]);
+  expect(items[0]?.getAttribute("href")).toBe("mailto:support@getsuplex.ai");
+  expect(items[1]?.getAttribute("href")).toBe("/profile?company=company-a");
 });

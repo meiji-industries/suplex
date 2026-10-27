@@ -22,8 +22,9 @@ use crate::{
         AppState,
         access::with_cookies,
         contracts::typed::account::{
-            AccountLoginBody, AccountLoginResponse, AccountLoginStatusResponse, AccountResponse,
-            AccountSummary, AttemptIdParams,
+            AccountEmailUpdatesBody, AccountEmailUpdatesResponse, AccountLoginBody,
+            AccountLoginResponse, AccountLoginStatusResponse, AccountResponse, AccountSummary,
+            AttemptIdParams,
         },
         error::ApiError,
         validation::{Valid, ValidPath},
@@ -41,6 +42,10 @@ pub fn router() -> Router<AppState> {
         .route("/api/account/login", post(login))
         .route("/api/account/login/{attempt_id}", get(login_status))
         .route("/api/account/logout", post(logout))
+        .route(
+            "/api/account/email-updates",
+            get(read_email_updates).put(write_email_updates),
+        )
 }
 
 fn private(mut response: Response) -> Response {
@@ -304,6 +309,90 @@ async fn logout(State(state): State<AppState>, headers: HeaderMap) -> Response {
         client.logout(&token).await;
     }
     with_cookies(private(StatusCode::NO_CONTENT.into_response()), cookies)
+}
+
+/// The linked account's token when the signed-in administrator uses that
+/// account. Another administrator, or a host with no link, gets `None`.
+fn owner_token(
+    state: &AppState,
+    headers: &HeaderMap,
+    method: &Method,
+) -> Result<(Option<String>, Vec<String>), Box<Response>> {
+    let (user, cookies) = administrator(state, headers, method, ADMIN_REQUIRED)?;
+    let local = session::is_local_recovery(headers);
+    let token = state
+        .with_database(|database| {
+            let Some(linked) = accounts::linked(database)? else {
+                return Ok(None);
+            };
+            let mine = local
+                || accounts::user_account_id(database, &user.id)?.as_deref()
+                    == Some(linked.account_id.as_str());
+            Ok(mine.then_some(linked.token))
+        })
+        .map_err(|error| Box::new(with_cookies(ApiError::response(error), cookies.clone())))?;
+    Ok((token, cookies))
+}
+
+async fn read_email_updates(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    let (token, cookies) = match owner_token(&state, &headers, &Method::GET) {
+        Ok(value) => value,
+        Err(response) => return *response,
+    };
+    let (Some(client), Some(token)) = (state.accounts.clone(), token) else {
+        let response = AccountEmailUpdatesResponse {
+            available: false,
+            subscribed: false,
+        };
+        return with_cookies(private(Json(response).into_response()), cookies);
+    };
+    let response = match client.email_updates(&token).await {
+        Ok(choice) => private(
+            Json(AccountEmailUpdatesResponse {
+                available: true,
+                subscribed: choice.subscribed,
+            })
+            .into_response(),
+        ),
+        Err(error) => failure(error),
+    };
+    with_cookies(response, cookies)
+}
+
+async fn write_email_updates(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Valid(body): Valid<AccountEmailUpdatesBody>,
+) -> Response {
+    let (token, cookies) = match owner_token(&state, &headers, &Method::PUT) {
+        Ok(value) => value,
+        Err(response) => return *response,
+    };
+    let (Some(client), Some(token)) = (state.accounts.clone(), token) else {
+        return with_cookies(
+            failure(PublicFailure::new(
+                409,
+                "Log in to a Suplex account to choose email updates",
+            )),
+            cookies,
+        );
+    };
+    let choice = accounts::wire::EmailUpdatesBody {
+        subscribed: body.subscribed,
+        source: body.source,
+        wording: body.wording,
+    };
+    let response = match client.set_email_updates(&token, &choice).await {
+        Ok(saved) => private(
+            Json(AccountEmailUpdatesResponse {
+                available: true,
+                subscribed: saved.subscribed,
+            })
+            .into_response(),
+        ),
+        Err(error) => failure(error),
+    };
+    with_cookies(response, cookies)
 }
 
 #[cfg(test)]

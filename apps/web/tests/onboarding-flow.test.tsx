@@ -11,7 +11,7 @@ const fixture = vi.hoisted(() => ({
 vi.mock("../shell/company-context.js", () => ({ useCompanyContext: () => ({ currentCompany: fixture.company, user: { id: "user-1", role: "admin", displayName: "Ada", username: "ada", avatarSeed: "ada", title: "" }, updateProfile: vi.fn(), renameCompany: vi.fn(), setCompanyIssueCode: vi.fn(), reloadCompanies: vi.fn() }), useOptionalCompanyContext: () => undefined }));
 vi.mock("../features/onboarding/onboarding.js", async importOriginal => ({ ...(await importOriginal()), useOnboardingData: () => ({ state: { company: fixture.company, checks: fixture.checks, providers: [], profiles: [], projects: fixture.projects }, loading: false, error: "", reload: vi.fn(async () => undefined) }) }));
 vi.mock("../features/settings/lib/billing-api.js", () => ({ getBillingSummary: vi.fn(), startTrial: vi.fn(async () => ({})) }));
-vi.mock("../features/account/lib/account-api.js", () => ({ getAccount: vi.fn(async () => ({ account: { email: "ada@example.com" } })) }));
+vi.mock("../features/account/lib/account-api.js", async importOriginal => ({ ...(await importOriginal()), getAccount: vi.fn(async () => ({ account: { email: "ada@example.com" } })), getEmailUpdates: vi.fn(async () => ({ available: true, subscribed: false })), setEmailUpdates: vi.fn(async (subscribed: boolean) => ({ available: true, subscribed })) }));
 vi.mock("../features/settings/provider-login.js", () => ({ ProviderLoginTerminal: () => null, useProviderLogin: () => ({ login: null, loginPending: null, startLogin: vi.fn(), closeLogin: vi.fn() }) }));
 vi.mock("../components/app/system-health.js", () => ({ useSystemHealth: () => ({ snapshot: { checks: fixture.checks }, refresh: vi.fn(), refreshing: false }), HerdrInstallButton: () => null }));
 vi.mock("../features/projects/lib/project-api.js", () => ({ createProject: vi.fn(), listRecentRepositories: vi.fn(async () => ({ repositories: [], nextPage: null })) }));
@@ -22,6 +22,7 @@ vi.mock("../components/app/entity-avatar.js", () => ({ AvatarEditor: () => null 
 
 import { OnboardingView } from "../features/onboarding/onboarding-wizard.js";
 import { getBillingSummary, startTrial } from "../features/settings/lib/billing-api.js";
+import { setEmailUpdates } from "../features/account/lib/account-api.js";
 import { createTask } from "../features/tasks/lib/task-api.js";
 import { createProject, listRecentRepositories } from "../features/projects/lib/project-api.js";
 import { ApiError } from "../lib/api.js";
@@ -77,6 +78,18 @@ test.each([[true, 1], [false, 0]])("You Continue saves and starts a trial only w
   await act(async () => button("Continue").click());
   expect(window.location.search).toContain("step=stack");
   expect(startTrial).toHaveBeenCalledTimes(calls);
+});
+
+test.each([[true, 1], [false, 0]])("You Continue saves the email updates choice only when the box is checked (%s)", async (check, calls) => {
+  await render("/onboarding?step=you");
+  setValue(container.querySelector<HTMLInputElement>("#onb-name")!, "Ada Lovelace");
+  const box = container.querySelector<HTMLInputElement>('input[type="checkbox"]')!;
+  expect(box.checked).toBe(false);
+  if (check) await act(async () => box.click());
+  await act(async () => button("Continue").click());
+  expect(window.location.search).toContain("step=stack");
+  expect(setEmailUpdates).toHaveBeenCalledTimes(calls);
+  if (check) expect(setEmailUpdates).toHaveBeenCalledWith(true, "onboarding");
 });
 
 test("You Continue still moves on when the trial cannot start", async () => {

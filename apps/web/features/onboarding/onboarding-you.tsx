@@ -4,7 +4,7 @@ import { useEffect, useState, type ReactElement } from "react";
 import { AvatarEditor } from "../../components/app/entity-avatar.js";
 import type { BillingSummary } from "../../contracts/billing.js";
 import { useCompanyContext } from "../../shell/company-context.js";
-import { getAccount } from "../account/lib/account-api.js";
+import { EMAIL_UPDATES_LABEL, EMAIL_UPDATES_NOTE, getAccount, getEmailUpdates, setEmailUpdates } from "../account/lib/account-api.js";
 import { useProfileDraft } from "../profiles/lib/profile-draft.js";
 import { getBillingSummary } from "../settings/lib/billing-api.js";
 import { OnboardingFrame, PrimaryButton } from "./onboarding-frame.js";
@@ -37,6 +37,9 @@ export function YouStep({ onBack, onNext }: StepProps & { data: OnboardingData }
   const [name, setName] = useState(fresh ? "" : currentCompany?.name ?? "");
   const [code, setCode] = useState(currentCompany?.issueCode ?? "");
   const [codeEdited, setCodeEdited] = useState(Boolean(currentCompany?.issueCode));
+  // Unchecked until the person checks it. `undefined` hides the choice: this host has no linked Suplex account.
+  const [emailUpdates, setEmailUpdatesChoice] = useState<{ saved: boolean; checked: boolean }>();
+  useEffect(() => { void getEmailUpdates().then(result => { if (result.available) setEmailUpdatesChoice({ saved: result.subscribed, checked: result.subscribed }); }).catch(() => undefined); }, []);
   const [billing, setBilling] = useState<BillingSummary>();
   useEffect(() => { void getBillingSummary().then(setBilling).catch(() => undefined); }, []);
   const [saving, setSaving] = useState(false);
@@ -58,6 +61,10 @@ export function YouStep({ onBack, onNext }: StepProps & { data: OnboardingData }
       if (name.trim() !== currentCompany.name) await renameCompany(currentCompany.id, name.trim());
       if (companyCode !== currentCompany.issueCode) await setCompanyIssueCode(currentCompany.id, companyCode);
       await reloadCompanies();
+      if (emailUpdates && emailUpdates.checked !== emailUpdates.saved) {
+        const result = await setEmailUpdates(emailUpdates.checked, "onboarding").catch(() => { throw new Error("Suplex could not save your email choice. Retry."); });
+        setEmailUpdatesChoice({ saved: result.subscribed, checked: result.subscribed });
+      }
       // The preview promised the trial: start it now, before any Free limit can stop a later step.
       await startTrialIfAvailable().catch(() => false);
       onNext();
@@ -79,6 +86,7 @@ export function YouStep({ onBack, onNext }: StepProps & { data: OnboardingData }
         <div className="fr"><span className="lbl">Picture</span><div className="row" style={{ justifyContent: "flex-end" }}><button className="icon-btn" type="button" aria-label="Regenerate avatar" title="Regenerate avatar" disabled={saving} onClick={() => changeProfile({ avatarSeed: crypto.randomUUID() })}><RefreshCw aria-hidden="true" /></button>{user ? <AvatarEditor compact kind="user" id={user.id} name={profile.displayName || user.displayName} seed={profile.avatarSeed || profile.username} /> : null}</div></div>
         <div className="fr"><label htmlFor="onb-name">Full name</label><input id="onb-name" className="input" required autoComplete="name" maxLength={120} disabled={saving} value={profile.displayName} onChange={event => changeProfile({ displayName: event.target.value })} /></div>
         <div className="fr"><label htmlFor="onb-email">Email</label><input id="onb-email" className="input" type="email" disabled value={email ?? ""} placeholder="Not available" /></div>
+        {emailUpdates ? <div className="fr"><span className="lbl">Updates</span><label className="check"><input type="checkbox" checked={emailUpdates.checked} disabled={saving} onChange={event => setEmailUpdatesChoice({ ...emailUpdates, checked: event.target.checked })} /><span>{EMAIL_UPDATES_LABEL}<span className="dimmer"> {EMAIL_UPDATES_NOTE}</span></span></label></div> : null}
         <div className="fr"><label htmlFor="onb-title">Title</label><input id="onb-title" className="input" autoComplete="organization-title" maxLength={120} placeholder="Founder, lead developer…" disabled={saving} value={profile.title} onChange={event => changeProfile({ title: event.target.value })} /></div>
       </div>
       <div className="mono dimmer" style={{ fontSize: 10 }}>Your first company</div>

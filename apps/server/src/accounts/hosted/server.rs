@@ -193,6 +193,7 @@ pub(super) async fn private(mut response: Response) -> Response {
 pub fn router(accounts: Accounts) -> Router {
     Router::new()
         .merge(super::invitations::router())
+        .merge(super::email_updates::router())
         .route("/v1/auth/attempts", post(create_attempt))
         .route("/v1/auth/attempts/{id}/poll", post(poll))
         .route("/v1/auth/email", post(send_email))

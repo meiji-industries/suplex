@@ -59,6 +59,8 @@ The wire types are in `apps/server/src/accounts/wire.rs`.
 | `POST /v1/auth/attempts/{id}/poll` | Body `{verifier}`. `{status: "pending"}`, or `complete` once. A wrong verifier, an unknown or expired attempt, or a second completion poll is 404 `attempt_not_found` and consumes nothing. |
 | `POST /v1/auth/email` | Body `{attemptId, email}`. Sends a magic link through Resend; 204. Five sends per address per hour (429 `rate_limited`). A Resend failure is 503 `email_unavailable`. |
 | `POST /v1/auth/logout` | `Authorization: Bearer <token>`. Deletes the token hash. Always 204. |
+| `GET /v1/account/email-updates` | `Authorization: Bearer <token>`. Returns `{subscribed}`, the account's latest product update email choice. An account with no choice is not subscribed. |
+| `PUT /v1/account/email-updates` | `Authorization: Bearer <token>`. Body `{subscribed, source, wording}`. `source` is `onboarding` or `settings`; `wording` is the text the person saw. Adds one row and returns `{subscribed}`. |
 | `GET /auth/start?attempt=&provider=` | 303 to Google or GitHub with a new single-use `state`. |
 | `GET /auth/callback/{google,github}` | Exchanges the code, completes the attempt, 303 to `/auth/done`. |
 | `GET /auth/email/verify?token=` | A one-button form. It does not consume the link, because mail scanners fetch links. |
@@ -89,6 +91,31 @@ account token is minted at poll time, so no plaintext token rests in SQLite.
 | `account_magic_links` | Token hash, attempt, email, `used_at`. Deleted with their attempt. |
 | `account_tokens` | Token hash, account, installation. |
 | `company_invitations` | Invitation hash, owner account, company, recipient, host address, expiry, and delivery time. |
+| `account_email_updates` | Each product update email choice: account, subscribed or not, source, the wording shown, and time. Rows are never edited; the latest row per account is its current choice. Deleted with the account. |
+
+### Product update emails
+
+Promotional email needs a separate, explicit opt-in (see the privacy policy). The
+"Let's set you up" onboarding step shows an unchecked checkbox, and Settings >
+Profile shows a Product update emails switch. Both appear only for the person
+whose Suplex account is linked to the host. Each change goes to
+`PUT /v1/account/email-updates` with the exact wording of the control the
+person used: the checkbox text from onboarding, or the switch label and
+description from Settings. suplex.sh keeps this as proof of when and how each
+person opted in or out.
+
+There is no email service integration yet. To export the current subscribers for
+an email tool such as Resend, run this on the hosted machine:
+
+```sh
+suplex hosted email-updates > subscribers.csv
+```
+
+`BILLING_DATABASE_PATH` must name the existing service database; the command
+fails instead of creating an empty one. It prints
+`email,name,subscribed_at,source,wording` for each account whose
+latest choice is subscribed. Before each send, export the list again and honor
+every unsubscribe from the email tool here as well.
 
 ### Configuration
 

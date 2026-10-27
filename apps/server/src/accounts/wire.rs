@@ -243,3 +243,33 @@ impl CompanyInvitationBody {
             })
     }
 }
+
+crate::shared::wire_enum! {
+    /// Where a person made their email updates choice.
+    pub enum EmailUpdatesSource { Onboarding = "onboarding", Settings = "settings" }
+}
+
+const MAX_WORDING: usize = 500;
+
+/// PUT /v1/account/email-updates: one choice about product update emails.
+/// `wording` is the exact text the person saw, kept as proof of consent.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct EmailUpdatesBody {
+    pub subscribed: bool,
+    pub source: EmailUpdatesSource,
+    pub wording: String,
+}
+
+impl EmailUpdatesBody {
+    pub fn valid(&self) -> bool {
+        !self.wording.trim().is_empty() && self.wording.chars().count() <= MAX_WORDING
+    }
+}
+
+/// GET and PUT /v1/account/email-updates. An account with no choice is not subscribed.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct EmailUpdatesState {
+    pub subscribed: bool,
+}

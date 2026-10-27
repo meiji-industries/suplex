@@ -115,6 +115,8 @@
 .onb .fr label, .onb .fr .lbl { font-size: 14px; color: #cfcfcf; }
 .onb .grp { background: #111; border: 1px solid #232323; border-radius: 14px; padding: 4px 18px; }
 .onb .grp .fr:first-child { border-top: 0; }
+.onb .check { display: flex; align-items: flex-start; gap: 10px; padding: 14px 0; font-size: 14px; line-height: 1.45; color: #cfcfcf; cursor: pointer; }
+.onb .check input { flex: none; width: 16px; height: 16px; margin: 2px 0 0; accent-color: #d8f65c; cursor: pointer; }
 .onb .icon-btn { display: grid; place-items: center; width: 32px; height: 32px; border-radius: 8px; border: 0; background: none; color: var(--fg2); cursor: pointer; }
 .onb .icon-btn:hover:not(:disabled) { background: #1c1c1c; color: var(--fg); }
 .onb .icon-btn:disabled { cursor: default; opacity: .5; }

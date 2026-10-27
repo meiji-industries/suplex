@@ -38,6 +38,7 @@ mod tests {
         logouts: Vec<String>,
         poll: Option<Poll>,
         logout_fails: bool,
+        email_updates: Vec<(String, Value)>,
     }
 
     #[derive(Clone, Default)]
@@ -55,7 +56,29 @@ mod tests {
         let polls = fake.clone();
         let emails = fake.clone();
         let logouts = fake.clone();
+        let reads = fake.clone();
+        let writes = fake.clone();
         let app = axum::Router::new()
+            .route(
+                "/v1/account/email-updates",
+                axum::routing::get(move || async move {
+                    let subscribed = reads.with(|hosted| {
+                        hosted.email_updates.last().is_some_and(|(_, body)| body["subscribed"] == true)
+                    });
+                    Json(json!({"subscribed": subscribed}))
+                })
+                .put(move |headers: HeaderMap, Json(body): Json<wire::EmailUpdatesBody>| async move {
+                    assert!(body.valid());
+                    let subscribed = body.subscribed;
+                    writes.with(|hosted| {
+                        hosted.email_updates.push((
+                            headers["authorization"].to_str().unwrap().to_owned(),
+                            serde_json::to_value(&body).unwrap(),
+                        ));
+                    });
+                    Json(json!({"subscribed": subscribed}))
+                }),
+            )
             .route(
                 "/v1/auth/attempts",
                 post(move |Json(body): Json<wire::AuthAttemptBody>| async move {
@@ -350,6 +373,51 @@ mod tests {
         let (status, _, _) = call(&app, "POST", "/api/account/logout", Some(&f.admin), None).await;
         assert_eq!(status, StatusCode::NO_CONTENT);
         assert_eq!(f.fake.with(|hosted| hosted.logouts.len()), 1);
+    }
+
+    #[tokio::test]
+    async fn email_updates_need_the_linked_account_and_reach_the_hosted_service() {
+        let f = fixture().await;
+        let app = crate::http::router(f.state.clone());
+        let choice = json!({
+            "subscribed": true,
+            "source": "onboarding",
+            "wording": "Send me Suplex product updates and tips by email.",
+        });
+        // No linked account: the app hides the choice and a write changes nothing.
+        let (status, _, bytes) = call(&app, "GET", "/api/account/email-updates", Some(&f.admin), None).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body(&bytes), json!({"available": false, "subscribed": false}));
+        let (status, _, _) = call(&app, "PUT", "/api/account/email-updates", Some(&f.admin), Some(choice.clone())).await;
+        assert_eq!(status, StatusCode::CONFLICT);
+        assert!(f.fake.with(|hosted| hosted.email_updates.is_empty()));
+
+        f.state.with_database(|database| {
+            crate::accounts::link(
+                database,
+                &wire::HostedAccount {
+                    id: ACCOUNT_ID.to_owned(),
+                    email: "ada@example.com".to_owned(),
+                    name: None,
+                },
+                &"k".repeat(43),
+            )
+            .unwrap();
+        });
+        let (status, _, bytes) = call(&app, "GET", "/api/account/email-updates", Some(&f.admin), None).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body(&bytes), json!({"available": true, "subscribed": false}));
+        let (status, _, bytes) = call(&app, "PUT", "/api/account/email-updates", Some(&f.admin), Some(choice.clone())).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body(&bytes), json!({"available": true, "subscribed": true}));
+        assert_eq!(
+            f.fake.with(|hosted| hosted.email_updates.clone()),
+            [(format!("Bearer {}", "k".repeat(43)), choice)]
+        );
+        let (_, _, bytes) = call(&app, "GET", "/api/account/email-updates", Some(&f.admin), None).await;
+        assert_eq!(body(&bytes), json!({"available": true, "subscribed": true}));
+        let (status, _, _) = call(&app, "PUT", "/api/account/email-updates", Some(&f.admin), Some(json!({"subscribed": true, "source": "elsewhere", "wording": "x"}))).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
     }
 
     #[tokio::test]

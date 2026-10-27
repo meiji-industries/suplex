@@ -338,6 +338,45 @@ impl AccountClient {
         }
     }
 
+    /// The linked account's choice about product update emails.
+    pub async fn email_updates(
+        &self,
+        token: &str,
+    ) -> Result<wire::EmailUpdatesState, PublicFailure> {
+        let response = self
+            .send(
+                Method::GET,
+                "/v1/account/email-updates",
+                Some(token),
+                None::<&()>,
+            )
+            .await?;
+        if !response.status().is_success() {
+            return Err(unavailable());
+        }
+        response.json().await.map_err(|_| unavailable())
+    }
+
+    /// Records one choice about product update emails with the wording the person saw.
+    pub async fn set_email_updates(
+        &self,
+        token: &str,
+        body: &wire::EmailUpdatesBody,
+    ) -> Result<wire::EmailUpdatesState, PublicFailure> {
+        let response = self
+            .send(
+                Method::PUT,
+                "/v1/account/email-updates",
+                Some(token),
+                Some(body),
+            )
+            .await?;
+        if !response.status().is_success() {
+            return Err(unavailable());
+        }
+        response.json().await.map_err(|_| unavailable())
+    }
+
     /// Best effort: the local link is already gone.
     pub async fn logout(&self, token: &str) {
         let _ = self

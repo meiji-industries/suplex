@@ -3,7 +3,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use super::{Contract, ContractResult, Fields, formatted, one_of, rule, text};
+use super::{Contract, ContractResult, Fields, flag, formatted, one_of, rule, text};
 use crate::accounts::{AccountLoginState, wire};
 
 fn email(value: &str, _: &()) -> garde::Result {
@@ -80,6 +80,35 @@ pub struct AccountLoginResponse {
 #[ts(export)]
 pub struct AccountLoginStatusResponse {
     pub status: AccountLoginState,
+}
+
+/// `PUT /api/account/email-updates`. `wording` is the exact checkbox text the person saw.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountEmailUpdatesBody {
+    pub subscribed: bool,
+    pub source: wire::EmailUpdatesSource,
+    pub wording: String,
+}
+
+impl Contract for AccountEmailUpdatesBody {
+    fn schema(input: Option<&Value>) -> ContractResult<Value> {
+        Fields::new(input)?
+            .req("subscribed", flag)
+            .req("source", one_of(&["onboarding", "settings"]))
+            .req("wording", text(1, 500))
+            .strict()
+    }
+}
+
+/// `GET` and `PUT /api/account/email-updates`. `available` is false when this
+/// person has no linked Suplex account on this host; the app then hides the choice.
+#[derive(Clone, Debug, Serialize, ts_rs::TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct AccountEmailUpdatesResponse {
+    pub available: bool,
+    pub subscribed: bool,
 }
 
 #[cfg(test)]

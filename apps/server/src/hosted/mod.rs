@@ -110,11 +110,27 @@ pub async fn serve() -> Result<(), String> {
     served.map_err(|error| error.to_string())
 }
 
-/// `suplex hosted serve`. Returns the process exit code.
+/// Prints the accounts subscribed to product update emails as CSV, for an
+/// email tool import. Reads `BILLING_DATABASE_PATH` only, and fails when that
+/// file does not exist instead of creating an empty database.
+fn email_updates() -> Result<(), String> {
+    let path = std::env::var("BILLING_DATABASE_PATH")
+        .map_err(|_| "BILLING_DATABASE_PATH is necessary".to_owned())?;
+    let connection = billing::store::open_existing(Path::new(&path))
+        .map_err(|error| format!("Suplex could not open the database at {path}: {error}"))?;
+    accounts::store::apply_schema(&connection).map_err(|error| error.to_string())?;
+    let csv =
+        accounts::email_updates::export_csv(&connection).map_err(|error| error.to_string())?;
+    print!("{csv}");
+    Ok(())
+}
+
+/// `suplex hosted serve` or `suplex hosted email-updates`. Returns the process exit code.
 pub async fn main(args: &[String]) -> i32 {
     let outcome = match args {
         [command] if command == "serve" => serve().await,
-        _ => Err("Usage: suplex hosted serve".to_owned()),
+        [command] if command == "email-updates" => email_updates(),
+        _ => Err("Usage: suplex hosted serve | suplex hosted email-updates".to_owned()),
     };
     match outcome {
         Ok(()) => 0,

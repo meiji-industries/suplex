@@ -21,6 +21,7 @@ use crate::{
 use providers::{Endpoints, Profile};
 
 pub mod delete;
+pub mod email_updates;
 pub mod invitations;
 pub mod providers;
 pub mod server;

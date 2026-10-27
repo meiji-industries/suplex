@@ -53,3 +53,16 @@ CREATE TABLE IF NOT EXISTS company_invitations (
   sent_at TEXT,
   accepted_account_id TEXT REFERENCES accounts(id)
 );
+
+-- Each choice about product update emails, oldest first. The latest row for
+-- an account is its current choice; every row keeps the wording the person saw.
+CREATE TABLE IF NOT EXISTS account_email_updates (
+  id INTEGER PRIMARY KEY,
+  account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  subscribed INTEGER NOT NULL CHECK (subscribed IN (0, 1)),
+  source TEXT NOT NULL CHECK (source IN ('onboarding', 'settings')),
+  wording TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS account_email_updates_account ON account_email_updates (account_id, id);

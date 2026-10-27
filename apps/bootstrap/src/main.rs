@@ -862,7 +862,18 @@ fn converge(cfg: &mut Config) -> Result<()> {
         .initial_value(true)
         .interact()?
     {
-        github_login(&host)?;
+        github_login(&host, GH_LOGIN, "signed in")?;
+    } else if host.ok(&as_suplex("gh auth status"))
+        && host
+            .capture(&as_suplex("gh auth status 2>&1"))
+            .is_ok_and(|status| lacks_workflow_scope(&status))
+        && confirm(
+            "GitHub CLI is signed in without the workflow scope, so Suplex cannot push workflow files. Add the scope now?",
+        )
+        .initial_value(true)
+        .interact()?
+    {
+        github_login(&host, GH_REFRESH, "workflow scope added")?;
     }
 
     // --- Done -----------------------------------------------------------------------------------
@@ -977,43 +988,56 @@ fn secret(cfg: &mut Config, key: &str, prompt: &str) -> Result<()> {
     Ok(())
 }
 
+/// `gh auth login` and `gh auth refresh` print the same one-time code. GitHub rejects a push that
+/// changes `.github/workflows/*` unless the token has the `workflow` scope, so both ask for it.
+const GH_LOGIN: &str = "gh auth login -h github.com -p https -w -s workflow";
+const GH_REFRESH: &str = "gh auth refresh -h github.com -s workflow";
+
+/// True when `gh auth status` lists token scopes and `workflow` is not among them. Output without
+/// a scope list (for example a token from `GH_TOKEN`) says nothing, so it does not count.
+fn lacks_workflow_scope(status: &str) -> bool {
+    status
+        .lines()
+        .find_map(|line| line.split("Token scopes:").nth(1))
+        .is_some_and(|scopes| {
+            !scopes
+                .split(|c: char| c == ',' || c.is_whitespace() || c == '\'' || c == '"')
+                .any(|scope| scope == "workflow")
+        })
+}
+
 /// GitHub's device flow, driven from here: the VM has no browser, so the code it prints is shown
 /// in a note and the device page opens on this machine. gh keeps polling until you approve.
-fn github_login(host: &Host) -> Result<()> {
+fn github_login(host: &Host, command: &str, done: &str) -> Result<()> {
     let sp = spinner();
     sp.start("Asking GitHub for a device code…");
     let mut shown = false;
-    host.stream(
-        &as_suplex("BROWSER=false gh auth login -h github.com -p https -w"),
-        |line| {
-            if let Some(code) = line.split("one-time code:").nth(1).map(str::trim) {
-                sp.stop("Device code ready");
-                let _ = note(
-                    style("Approve on GitHub").magenta().bold(),
-                    format!(
-                        "Enter this code at {}\n\n{}\n\n{}",
-                        style("https://github.com/login/device").cyan().underlined(),
-                        style(code).yellow().bold(),
-                        style(
-                            "Opening that page in your browser now. This waits until you approve."
-                        )
+    host.stream(&as_suplex(&format!("BROWSER=false {command}")), |line| {
+        if let Some(code) = line.split("one-time code:").nth(1).map(str::trim) {
+            sp.stop("Device code ready");
+            let _ = note(
+                style("Approve on GitHub").magenta().bold(),
+                format!(
+                    "Enter this code at {}\n\n{}\n\n{}",
+                    style("https://github.com/login/device").cyan().underlined(),
+                    style(code).yellow().bold(),
+                    style("Opening that page in your browser now. This waits until you approve.")
                         .dim()
-                    ),
-                );
-                let _ = Command::new("open")
-                    .arg("https://github.com/login/device")
-                    .status();
-                shown = true;
-            } else if shown && !line.contains("Open this URL") {
-                let _ = log::remark(line);
-            }
-        },
-    )?;
+                ),
+            );
+            let _ = Command::new("open")
+                .arg("https://github.com/login/device")
+                .status();
+            shown = true;
+        } else if shown && !line.contains("Open this URL") {
+            let _ = log::remark(line);
+        }
+    })?;
     if !shown {
         sp.error("gh printed no device code");
     }
     host.run(&as_suplex("gh auth setup-git"))?;
-    log::success("GitHub: signed in; git uses gh for credentials")?;
+    log::success(format!("GitHub: {done}; git uses gh for credentials"))?;
     Ok(())
 }
 
@@ -1136,6 +1160,22 @@ fn recover(host: &Host, cfg: &Config) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn workflow_scope_is_read_from_gh_auth_status() {
+        let status = |scopes: &str| {
+            format!(
+                "github.com\n  ✓ Logged in to github.com account a (keyring)\n  - Token scopes: {scopes}\n"
+            )
+        };
+        assert!(lacks_workflow_scope(&status("'gist', 'read:org', 'repo'")));
+        assert!(lacks_workflow_scope(&status("gist, read:org, repo")));
+        assert!(!lacks_workflow_scope(&status(
+            "'gist', 'read:org', 'repo', 'workflow'"
+        )));
+        assert!(!lacks_workflow_scope(&status("gist, repo, workflow")));
+        assert!(!lacks_workflow_scope("Logged in to github.com\n"));
+    }
 
     #[test]
     fn config_round_trips_quotes_and_dollars() {

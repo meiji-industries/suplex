@@ -100,7 +100,7 @@ export function GithubDeviceSignIn({ onConnected, label, primary = false }: { on
     try {
       const status = await getGitHubAuthStatus();
       if (status.status !== "connected") {
-        setMessage("GitHub is not signed in. Run gh auth login and select Check again.");
+        setMessage("GitHub is not signed in. Run gh auth login -s workflow and select Check again.");
         return;
       }
       setOpen(false);
@@ -142,7 +142,7 @@ export function GithubDeviceSignIn({ onConnected, label, primary = false }: { on
           </div>
           {!nextPollAt ? <Button type="button" size="xs" variant="outline" onClick={() => setNextPollAt(new Date().toISOString())}>Retry</Button> : null}
         </> : busy ? <p role="status">Suplex starts sign-in</p> : deviceUnavailable ? <>
-          <p>Sign in on the machine that runs Suplex with <code>gh auth login</code>.</p>
+          <p>Sign in on the machine that runs Suplex with <code>gh auth login -s workflow</code>.</p>
           <Button type="button" size="xs" variant="outline" onClick={() => void checkCliSignIn()}>Check again</Button>
           <Button type="button" size="xs" variant="outline" onClick={() => void start()}>Retry device sign-in</Button>
         </> : <Button type="button" size="xs" variant="outline" onClick={() => void start()}>Retry</Button>}

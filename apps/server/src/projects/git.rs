@@ -94,6 +94,23 @@ pub(crate) fn libgit2_transport() -> bool {
     LIBGIT2_TRANSPORT.load(Ordering::Relaxed)
 }
 
+/// The stderr line that explains a failed Git command. GitHub names a missing token scope on a
+/// "remote rejected" line, not the last line, so that line wins to keep the push failure actionable.
+fn failure_line(stderr: &str) -> &str {
+    stderr
+        .lines()
+        .map(str::trim)
+        .find(|line| line.contains("`workflow` scope"))
+        .or_else(|| {
+            stderr
+                .lines()
+                .rev()
+                .map(str::trim)
+                .find(|line| !line.is_empty())
+        })
+        .unwrap_or("Git command failed")
+}
+
 /// Run `git` with the machine's credentials. Prompts are off so a missing
 /// credential fails at once. Failure becomes a `git2::Error`. The Root MCP
 /// server runs delivery inside the agent environment, where `git` on PATH is
@@ -129,12 +146,7 @@ fn run_git(args: &[&str]) -> Result<(), git2::Error> {
     ]
     .iter()
     .any(|pattern| lower.contains(pattern));
-    let line = stderr
-        .lines()
-        .rev()
-        .map(str::trim)
-        .find(|line| !line.is_empty())
-        .unwrap_or("Git command failed");
+    let line = failure_line(&stderr);
     Err(git2::Error::new(
         if auth {
             git2::ErrorCode::Auth
@@ -1015,6 +1027,20 @@ mod tests {
     use serde_json::{Value, json};
 
     use super::{fixtures::*, *};
+
+    #[test]
+    fn a_workflow_scope_rejection_outranks_the_last_stderr_line() {
+        let stderr = "To https://github.com/acme/repo.git\n \
+            ! [remote rejected] HEAD -> topic (refusing to allow an OAuth App to create or update workflow \
+            `.github/workflows/ci.yml` without `workflow` scope)\n\
+            error: failed to push some refs to 'https://github.com/acme/repo.git'\n";
+        assert!(super::failure_line(stderr).contains("without `workflow` scope"));
+        assert_eq!(
+            super::failure_line("hint\nerror: failed\n\n"),
+            "error: failed"
+        );
+        assert_eq!(super::failure_line(""), "Git command failed");
+    }
 
     #[test]
     fn system_transport_fetches_pushes_and_clones_local_remotes() {

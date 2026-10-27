@@ -15,7 +15,7 @@ use super::github::Access;
 pub type DeviceResult<T> = Result<T, Box<dyn Error + Send + Sync>>;
 
 pub const CLIENT_ID: &str = "Ov23liXzUOo24uKB09MA";
-const SCOPE: &str = "repo read:user offline_access";
+const SCOPE: &str = "repo workflow read:user offline_access";
 
 #[derive(Clone)]
 pub struct DeviceAuth {
@@ -314,6 +314,7 @@ mod tests {
                     let form = String::from_utf8_lossy(&body);
                     assert!(form.contains("client_id=Ov23liXzUOo24uKB09MA"));
                     assert!(form.contains("offline_access"));
+                    assert!(form.contains("scope=repo+workflow+read%3Auser+offline_access"));
                     Json(json!({
                         "device_code":"private-device-code", "user_code":"ABCD-EFGH",
                         "verification_uri":"https://github.com/login/device",

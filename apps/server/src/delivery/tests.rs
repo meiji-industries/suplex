@@ -26,7 +26,7 @@ use crate::{
     identity::auth,
     integrations::{
         github::Access,
-        github_delivery::{Github, MergeResult},
+        github_delivery::{Github, MergeDisposition, MergeResult},
     },
     platform::database::{OpenMode, SuplexDatabase},
     tasks::repository::{self, PreparedTask, TaskCreator},
@@ -835,14 +835,14 @@ async fn refused_merge_reports_github_evidence_and_merge_input_is_checked() {
         .await
         .unwrap();
     assert!(
-        matches!(refused, MergeResult::Disposition { disposition: "blocked", ref message } if message.contains("no pending required checks"))
+        matches!(refused, MergeResult::Disposition { disposition: MergeDisposition::Blocked, ref message } if message.contains("no pending required checks"))
     );
     let changed = github
         .merge_conditionally("owner/repo", 1, &"d".repeat(40), false)
         .await
         .unwrap();
     assert!(
-        matches!(changed, MergeResult::Disposition { disposition: "blocked", ref message } if message.contains("head changed"))
+        matches!(changed, MergeResult::Disposition { disposition: MergeDisposition::Blocked, ref message } if message.contains("head changed"))
     );
     assert_eq!(
         github

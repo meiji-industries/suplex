@@ -375,7 +375,7 @@ async fn github_cli_check() -> Value {
     };
     if result["status"] != "healthy" {
         result["remedy"] = json!(if installed {
-            "gh auth login"
+            "gh auth login -s workflow"
         } else {
             "https://cli.github.com"
         });

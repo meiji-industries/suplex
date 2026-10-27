@@ -108,8 +108,9 @@ Verified: direct `eth0` blocked, exit node off = nothing leaves, survives reboot
    (`ssh suplex@suplex`, run `claude` once, accept the trust dialog for each repo root), not by copying the Mac's
    Keychain credentials. Tasks failed setup earlier because `pnpm` was missing from the service PATH.
 9. "Repository provisioning failed" on Add Project: Suplex clones with the system `git` and the machine's own
-   credentials, and a fresh Linux box has none for HTTPS GitHub. `gh auth login` then `gh auth setup-git`
-   fixes it. Bootstrap runs `setup-git` when gh is signed in.
+   credentials, and a fresh Linux box has none for HTTPS GitHub. `gh auth login -s workflow` then `gh auth setup-git`
+   fixes it. Bootstrap runs `setup-git` when gh is signed in. The `workflow` scope lets Suplex push changes to
+   `.github/workflows/*`. When gh is signed in without it, bootstrap offers `gh auth refresh -h github.com -s workflow`.
 10. Docker (official repo). `suplex` is NOT in the `docker` group: that is root-equivalent. Grant it only if tasks
     need Docker, or prefer rootless Docker or per-task containers. Container traffic takes the FORWARD path, so the firewall has a forward chain that only
     lets containers out via `tailscale0`. Containers cannot use MagicDNS, so `/etc/docker/daemon.json` sets public
@@ -135,7 +136,7 @@ Verified: direct `eth0` blocked, exit node off = nothing leaves, survives reboot
 7. Network: the exit node is IPv4-only, so apt is forced to IPv4 and `gai.conf` prefers IPv4. Hetzner's apt
    mirror only answers from inside Hetzner, so sources point at `archive.ubuntu.com`. `gh` installed via apt.
 8. GitHub: the Mac's `~/.ssh/id_rsa` copied to `/home/suplex/.ssh/` (0700/0600), `github.com` in `known_hosts`,
-   git identity and `gh auth setup-git` as `suplex`. `gh auth login` is interactive, once, as `suplex`.
+   git identity and `gh auth setup-git` as `suplex`. `gh auth login -s workflow` is interactive, once, as `suplex`.
 
 ## Migration record (7 Oct 2026)
 

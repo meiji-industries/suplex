@@ -61,6 +61,6 @@ export function ProjectRepositoryConnection({ projectId }: { projectId: string }
     </AlertDialog>
     {state.kind === "failed" ? <p role="alert">Repository check is not available.</p> : null}
     {result && (result.status === "needs_repair" || result.status === "unavailable") ? <p>{result.message}</p> : null}
-    {result?.method === "cli" && !connected ? <p>Sign in to GitHub on the Suplex host with <code>gh auth login</code>, then select Connect.</p> : null}
+    {result?.method === "cli" && !connected ? <p>Sign in to GitHub on the Suplex host with <code>gh auth login -s workflow</code>, then select Connect.</p> : null}
   </div>;
 }

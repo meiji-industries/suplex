@@ -189,12 +189,24 @@ impl Observation {
     }
 }
 
+crate::shared::wire_enum! {
+    /// The state of a GitHub Actions workflow run.
+    pub enum ActionsRunStatus {
+        Queued = "queued",
+        InProgress = "in_progress",
+        Completed = "completed",
+        Waiting = "waiting",
+        Requested = "requested",
+        Pending = "pending",
+    }
+}
+
 #[derive(Deserialize)]
 pub(crate) struct ActionsRun {
     pub id: u64,
     pub head_sha: String,
     pub head_branch: Option<String>,
-    pub status: String,
+    pub status: ActionsRunStatus,
     pub conclusion: Option<String>,
     repository: RunRepository,
     head_repository: Option<RunRepository>,
@@ -235,12 +247,21 @@ impl ActionsRun {
     }
 }
 
+crate::shared::wire_enum! {
+    /// What GitHub did with a merge request that did not merge at once.
+    pub enum MergeDisposition {
+        Blocked = "blocked",
+        Waiting = "waiting",
+        Queued = "queued",
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum MergeResult {
     Merged,
     NotMerged,
     Disposition {
-        disposition: &'static str,
+        disposition: MergeDisposition,
         message: String,
     },
 }
@@ -1302,7 +1323,7 @@ impl Github {
                 "authentication-required",
                 format!(
                     "GitHub CLI authentication is unavailable: {}",
-                    or("sign in with gh auth login".into())
+                    or("sign in with gh auth login -s workflow".into())
                 ),
             ));
         }
@@ -1814,7 +1835,7 @@ impl Github {
             Api::NotFound => unreachable!("not found is a failure"),
         };
         let blocked = |message: String| MergeResult::Disposition {
-            disposition: "blocked",
+            disposition: MergeDisposition::Blocked,
             message,
         };
         let context = self
@@ -1853,7 +1874,7 @@ impl Github {
         let pending = describe(&["pending"]);
         if !pending.is_empty() {
             return Ok(MergeResult::Disposition {
-                disposition: "waiting",
+                disposition: MergeDisposition::Waiting,
                 message: format!(
                     "GitHub is waiting for required checks: {}. {refused}",
                     pending.join(", ")
@@ -1871,7 +1892,7 @@ impl Github {
         }
         if mergeable == Some("UNKNOWN") {
             return Ok(MergeResult::Disposition {
-                disposition: "waiting",
+                disposition: MergeDisposition::Waiting,
                 message: format!("GitHub is still computing mergeability. {refused}"),
             });
         }
@@ -1911,7 +1932,7 @@ impl Github {
                 ));
             }
             return Ok(MergeResult::Disposition {
-                disposition: "queued",
+                disposition: MergeDisposition::Queued,
                 message: format!(
                     "GitHub added pull request {number} at {head_sha} to the merge queue."
                 ),
@@ -2212,12 +2233,7 @@ pub fn push_normal(
             "The push commit is invalid",
         ));
     }
-    let unavailable = |error: git2::Error| {
-        failure(
-            "provider-unavailable",
-            redact_summary(&format!("normal push failed: {}", error.message())),
-        )
-    };
+    let unavailable = |error: git2::Error| push_failure(error.message());
     let repository = Repository::open(cwd).map_err(unavailable)?;
     if !crate::projects::git::libgit2_transport() {
         return crate::projects::git::system_push(
@@ -2246,17 +2262,52 @@ pub fn push_normal(
         .map_err(unavailable)?;
     drop(options);
     if let Some(status) = rejected.into_inner() {
-        return Err(failure(
-            "provider-unavailable",
-            redact_summary(&format!("normal push failed: {status}")),
-        ));
+        return Err(push_failure(&status));
     }
     Ok(())
+}
+
+/// GitHub refuses a push that changes `.github/workflows/*` when the token has
+/// no `workflow` scope. Classify that rejection and say how to fix it. Every
+/// other push failure stays `provider-unavailable`.
+fn push_failure(message: &str) -> GithubFailure {
+    if message.contains("`workflow` scope") {
+        return failure(
+            "authentication-required",
+            "GitHub rejected the push because the token has no workflow scope. \
+             Sign in to GitHub again in Suplex. \
+             You can also run gh auth refresh -h github.com -s workflow.",
+        );
+    }
+    failure(
+        "provider-unavailable",
+        redact_summary(&format!("normal push failed: {message}")),
+    )
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_missing_workflow_scope_is_an_authentication_failure_with_a_fix() {
+        let rejected = "refusing to allow an OAuth App to create or update workflow \
+                        `.github/workflows/ci.yml` without `workflow` scope";
+        for message in [rejected.to_owned(), format!("remote rejected: {rejected}")] {
+            let error = push_failure(&message);
+            assert_eq!(error.code, "authentication-required");
+            assert!(
+                error
+                    .summary
+                    .contains("gh auth refresh -h github.com -s workflow")
+            );
+            assert!(error.summary.contains("Sign in to GitHub again in Suplex"));
+        }
+        assert_eq!(
+            push_failure("failed to push some refs").code,
+            "provider-unavailable"
+        );
+    }
 
     #[test]
     fn rate_limit_headers_choose_the_later_deadline_and_ignore_invalid_dates() {
@@ -2859,7 +2910,7 @@ mod tests {
                 .await
                 .unwrap(),
             MergeResult::Disposition {
-                disposition: "blocked",
+                disposition: MergeDisposition::Blocked,
                 message: "GitHub refused the merge because required checks failed: unit (FAILURE, https://github.com/owner/repo/actions/runs/1), deploy (ERROR). Required status check \"unit\" is failing.".into(),
             }
         );
@@ -2886,7 +2937,7 @@ mod tests {
             .await
             .unwrap();
         assert!(
-            matches!(direct, MergeResult::Disposition { disposition: "blocked", message } if message.contains("direct trigger merges cannot enter the queue"))
+            matches!(direct, MergeResult::Disposition { disposition: MergeDisposition::Blocked, message } if message.contains("direct trigger merges cannot enter the queue"))
         );
         assert_eq!(
             github
@@ -2894,7 +2945,7 @@ mod tests {
                 .await
                 .unwrap(),
             MergeResult::Disposition {
-                disposition: "queued",
+                disposition: MergeDisposition::Queued,
                 message: format!("GitHub added pull request 7 at {head} to the merge queue."),
             }
         );

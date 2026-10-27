@@ -27,7 +27,9 @@ use crate::{
     },
     runtimes::{
         headless::{self, HeadlessTurnRecord, RecordedProcessIdentity},
-        process::{IdentityMatch, compare_identity, inspect_process, owner_marker},
+        process::{
+            IdentityMatch, ProcessIdentity, compare_identity, inspect_process, owner_marker,
+        },
     },
     shared::js_json,
 };
@@ -237,6 +239,32 @@ pub fn process_alive(pid: u32) -> bool {
     kill(Pid::from_raw(pid), None) != Err(Errno::ESRCH)
 }
 
+/// A process can rename itself after `exec`: Node names its main thread `node-MainThread` a few
+/// milliseconds in, so the identity captured right after spawn can still hold the script name as
+/// the executable. Once the server answers health it has settled. Adopt the observed command,
+/// executable, and argv, but only for the same process: pid, process group, start time, and owner
+/// must match the recorded identity exactly. Any other observation leaves the record unchanged.
+fn settled_reference(
+    mut reference: ServerReference,
+    observed: Option<&ProcessIdentity>,
+) -> ServerReference {
+    let recorded = &reference.process_identity;
+    if let Some(found) = observed.filter(|found| {
+        found.pid == reference.pid
+            && found.process_group == recorded.process_group
+            && found.start_time == recorded.start_time
+            && found.owner_uid == Some(recorded.owner_uid)
+    }) {
+        reference.process_identity = RecordedProcessIdentity {
+            command: found.command.clone(),
+            executable: found.executable.clone(),
+            argv: found.argv.clone(),
+            ..reference.process_identity
+        };
+    }
+    reference
+}
+
 pub fn server_running(reference: &ServerReference) -> bool {
     process_alive(reference.pid)
         && compare_identity(
@@ -444,7 +472,12 @@ pub async fn ensure_server(input: EnsureInput<'_>) -> Result<ServerReference, Bo
     let deadline = Instant::now() + Duration::from_secs(30);
     loop {
         if client.health().await.is_ok() {
-            return Ok(reference);
+            let settled = settled_reference(reference, inspect_process(pid).as_ref());
+            crate::shared::fs::write_private(
+                &input.runtime_directory.join("server.json"),
+                &serde_json::to_vec(&settled)?,
+            )?;
+            return Ok(settled);
         }
         if !process_alive(pid) {
             return Err(format!(
@@ -685,6 +718,98 @@ pub(crate) mod tests {
             "node is required for the fake OpenCode server"
         );
         String::from_utf8(output.stdout).unwrap().trim().to_owned()
+    }
+
+    /// Node renames its main thread after `exec`, so an identity captured in that window records
+    /// the script name. Health settles it, and only for the same process.
+    #[tokio::test]
+    async fn a_server_identity_captured_before_the_process_renames_itself_is_settled() {
+        let directory = temporary("opencode-identity-settle");
+        let executable = directory.join("opencode");
+        fs::write(
+            &executable,
+            format!("#!{}\nsetTimeout(() => {{}}, 30000);\n", node()),
+        )
+        .unwrap();
+        fs::set_permissions(&executable, fs::Permissions::from_mode(0o700)).unwrap();
+        let mut child = Command::new(&executable)
+            .current_dir(&directory)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .process_group(0)
+            .spawn()
+            .unwrap();
+        let pid = child.id();
+        let settled = loop {
+            if let Some(found) = inspect_process(pid)
+                && found.executable != "opencode"
+            {
+                break found;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        };
+        let reference = |identity: &ProcessIdentity, executable: &str| ServerReference {
+            pid,
+            base_url: "http://127.0.0.1:1".into(),
+            password: "p".repeat(32),
+            directory: directory.display().to_string(),
+            executable: executable.into(),
+            generation: uuid::Uuid::new_v4().to_string(),
+            config_hash: "0".repeat(64),
+            process_identity: RecordedProcessIdentity {
+                command: identity.command.clone(),
+                executable: executable.into(),
+                argv: identity.argv.clone(),
+                process_group: identity.process_group,
+                start_time: identity.start_time.clone(),
+                owner_uid: identity.owner_uid.unwrap(),
+            },
+        };
+
+        // The record captured before the rename never matches the live process again.
+        let early = reference(&settled, "opencode");
+        assert!(!server_running(&early));
+        let adopted = settled_reference(early.clone(), Some(&settled));
+        assert!(server_running(&adopted));
+        assert_eq!(adopted.process_identity.executable, settled.executable);
+
+        // A different process, process group, start time, or owner is never adopted.
+        for other in [
+            ProcessIdentity {
+                pid: pid + 1,
+                ..settled.clone()
+            },
+            ProcessIdentity {
+                process_group: settled.process_group + 1,
+                ..settled.clone()
+            },
+            ProcessIdentity {
+                start_time: "later".into(),
+                ..settled.clone()
+            },
+            ProcessIdentity {
+                owner_uid: Some(settled.owner_uid.unwrap() + 1),
+                ..settled.clone()
+            },
+            ProcessIdentity {
+                owner_uid: None,
+                ..settled.clone()
+            },
+        ] {
+            let kept = settled_reference(early.clone(), Some(&other));
+            assert_eq!(kept.process_identity.executable, "opencode");
+        }
+        let kept = settled_reference(early, None);
+        assert_eq!(kept.process_identity.executable, "opencode");
+        assert!(!server_running(&kept));
+
+        // A reused PID with other fields still does not match the settled record.
+        let mut reused = adopted.clone();
+        reused.process_identity.start_time = "Thu Jan  1 00:00:00 1970".into();
+        assert!(!server_running(&reused));
+        child.kill().unwrap();
+        child.wait().unwrap();
     }
 
     #[tokio::test]

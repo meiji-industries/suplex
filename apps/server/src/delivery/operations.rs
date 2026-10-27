@@ -34,7 +34,10 @@ use crate::{
     },
     integrations::{
         bitbucket::ReleasePort,
-        github_delivery::{self, Github, GithubFailure, MergeResult, Observation, PullRequest},
+        github_delivery::{
+            self, ActionsRunStatus, Github, GithubFailure, MergeDisposition, MergeResult,
+            Observation, PullRequest,
+        },
         github_triggers_dispatches::{self, DeliveryPolicy},
         github_triggers_inspection::{self, PullRequestInspection},
     },
@@ -1515,8 +1518,10 @@ impl DeliveryOperations {
                 "The workflow run does not test the current task pull request. Inspect its latest CI runs.",
             ));
         }
-        if run.status != "completed" {
-            return Ok(json!({"kind":"ci_run_pending","runId":run_id,"status":run.status}));
+        if run.status != ActionsRunStatus::Completed {
+            return Ok(
+                json!({"kind":"ci_run_pending","runId":run_id,"status":run.status.as_str()}),
+            );
         }
         if !matches!(
             run.conclusion.as_deref(),
@@ -2457,22 +2462,22 @@ impl DeliveryOperations {
             .await?
         {
             MergeResult::Merged => return Ok(None),
-            MergeResult::NotMerged => ("", "GitHub has not completed the merge".into()),
+            MergeResult::NotMerged => (None, "GitHub has not completed the merge".into()),
             MergeResult::Disposition {
                 disposition,
                 message,
-            } => (disposition, message),
+            } => (Some(disposition), message),
         };
-        if disposition == "blocked" {
+        if disposition == Some(MergeDisposition::Blocked) {
             return Err(delivery_failure("merge_not_eligible", message));
         }
-        let reason = if disposition == "waiting" {
+        let reason = if disposition == Some(MergeDisposition::Waiting) {
             DeliveryWaitReason::Checks
         } else {
             DeliveryWaitReason::MergeQueue
         };
         let wait = self.wait_for_merge(control.task_id.as_str(), head, observed, reason)?;
-        Ok(Some(if disposition == "queued" {
+        Ok(Some(if disposition == Some(MergeDisposition::Queued) {
             json!({"kind": "merge_requested", "checkSummary": check_summary(observed), "wait": wait, "next": DELIVERY_WAIT_NEXT})
         } else {
             json!({"kind": "waiting", "problems": [message], "wait": wait, "next": DELIVERY_WAIT_NEXT})

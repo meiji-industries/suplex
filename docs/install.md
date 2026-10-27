@@ -187,6 +187,9 @@ Suplex discovers OpenCode on its process PATH or at `~/.opencode/bin/opencode`.
 `SUPLEX_CODEX_COMMAND`, `SUPLEX_PI_COMMAND`, and `SUPLEX_OMP_COMMAND` can each
 specify an absolute executable path. GitHub
 delivery uses Suplex's GitHub sign-in or the host's available GitHub credentials.
+Both need the `workflow` scope to push changes to `.github/workflows/*`. Suplex's sign-in requests it.
+Sign in the GitHub CLI with `gh auth login -s workflow`, or add the scope with
+`gh auth refresh -h github.com -s workflow`.
 Suplex does not copy provider credentials into task records.
 
 ## Desktop app

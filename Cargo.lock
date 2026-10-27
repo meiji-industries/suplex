@@ -6119,6 +6119,7 @@ dependencies = [
  "serde_json",
  "sha2 0.10.9",
  "subtle",
+ "suplex-exception",
  "thiserror 2.0.21",
  "tokio",
  "tokio-util",
@@ -6158,6 +6159,7 @@ dependencies = [
  "reqwest 0.12.28",
  "serde",
  "serde_json",
+ "suplex-exception",
  "tauri",
  "tauri-build",
  "tauri-plugin-clipboard-manager",
@@ -6171,6 +6173,16 @@ dependencies = [
  "time",
  "tokio",
  "url",
+]
+
+[[package]]
+name = "suplex-exception"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
 ]
 
 [[package]]

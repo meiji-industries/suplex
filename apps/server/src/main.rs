@@ -11,6 +11,8 @@ use suplex::{
 use tokio::net::TcpListener;
 
 fn main() {
+    // Every command reports its panics, before anything that could panic.
+    suplex::telemetry::exceptions::install();
     // PATH changes before the runtime starts its worker threads.
     suplex::platform::user_path::extend();
     let command = std::env::args().skip(1).collect::<Vec<_>>();
@@ -116,6 +118,7 @@ fn server_event(state: &str, extra: serde_json::Value) {
 async fn serve() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     std::sync::LazyLock::force(&suplex::platform::health::STARTED_EXECUTABLE);
     let installation = Installation::load()?;
+    suplex::telemetry::exceptions::configure(&installation);
     suplex::integrations::github::use_installation(&installation.database);
     system_events::install(installation.logs.clone());
     let mut database = SuplexDatabase::open(&installation.database, OpenMode::Migrate)?;
@@ -138,8 +141,11 @@ async fn serve() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     suplex::projects::git::set_libgit2_transport(
         suplex::platform::environment_settings::read(&database)?.git2_enabled,
     );
-    let telemetry =
-        suplex::telemetry::spawn(installation.database.clone(), &installation.installation_id);
+    let telemetry = suplex::telemetry::spawn(
+        installation.database.clone(),
+        suplex::telemetry::exceptions::spool_directory(&installation.root),
+        &installation.installation_id,
+    );
     let task_host = suplex::tasks::host::spawn_task_host(
         installation.database.clone(),
         installation.artifacts.clone(),

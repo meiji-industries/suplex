@@ -109,6 +109,36 @@ fn absolute_path(path: &str) -> bool {
             && matches!(bytes[2], b'\\' | b'/'))
 }
 
+/// The hosted PostHog settings: `None` unless the operator set `BILLING_TELEMETRY`.
+pub fn telemetry_config(
+    env: &dyn Fn(&str) -> Option<String>,
+) -> Result<Option<super::telemetry::Config>, String> {
+    let require = |name: &str| {
+        env(name)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| format!("{name} is required"))
+    };
+    Ok(match env("BILLING_TELEMETRY").as_deref() {
+        Some("1" | "true") => {
+            let key = require("BILLING_POSTHOG_KEY")?;
+            let host = env("BILLING_POSTHOG_HOST")
+                .filter(|host| !host.is_empty())
+                .unwrap_or_else(|| "https://us.i.posthog.com".into());
+            let url = Url::parse(&host).map_err(|_| "BILLING_POSTHOG_HOST must be a valid URL")?;
+            if url.scheme() != "https"
+                && !matches!(url.host_str(), Some("localhost" | "127.0.0.1" | "[::1]"))
+            {
+                return Err(
+                    "BILLING_POSTHOG_HOST must use HTTPS except on explicit loopback hosts".into(),
+                );
+            }
+            Some(super::telemetry::Config { key, host })
+        }
+        None | Some("" | "0" | "false" | "off") => None,
+        Some(_) => return Err("BILLING_TELEMETRY must be 1, true, 0, false, or off".into()),
+    })
+}
+
 /// Reads the service configuration. `env` returns a variable's value.
 pub fn load_config(env: &dyn Fn(&str) -> Option<String>) -> Result<ServiceConfig, String> {
     let require = |name: &str| {
@@ -127,25 +157,7 @@ pub fn load_config(env: &dyn Fn(&str) -> Option<String>) -> Result<ServiceConfig
         Some("false") => false,
         Some(_) => return Err("STRIPE_AUTOMATIC_TAX must be true or false".into()),
     };
-    let telemetry = match env("BILLING_TELEMETRY").as_deref() {
-        Some("1" | "true") => {
-            let key = require("BILLING_POSTHOG_KEY")?;
-            let host = env("BILLING_POSTHOG_HOST")
-                .filter(|host| !host.is_empty())
-                .unwrap_or_else(|| "https://us.i.posthog.com".into());
-            let url = Url::parse(&host).map_err(|_| "BILLING_POSTHOG_HOST must be a valid URL")?;
-            if url.scheme() != "https"
-                && !matches!(url.host_str(), Some("localhost" | "127.0.0.1" | "[::1]"))
-            {
-                return Err(
-                    "BILLING_POSTHOG_HOST must use HTTPS except on explicit loopback hosts".into(),
-                );
-            }
-            Some(super::telemetry::Config { key, host })
-        }
-        None | Some("" | "0" | "false" | "off") => None,
-        Some(_) => return Err("BILLING_TELEMETRY must be 1, true, 0, false, or off".into()),
-    };
+    let telemetry = telemetry_config(env)?;
     Ok(ServiceConfig {
         origin: parse_origin("BILLING_PUBLIC_ORIGIN", &require("BILLING_PUBLIC_ORIGIN")?)?,
         address: env("BILLING_BIND_ADDRESS")
@@ -523,6 +535,14 @@ pub async fn rotate_credential(
 /// `suplex billing rotate-credential --db <path> --account <id>`. Returns
 /// the process exit code.
 pub async fn main(args: &[String]) -> i32 {
+    // `suplex billing` has no outbox: a panic is sent at once, and only when hosted telemetry is on.
+    if let Ok(Some(config)) = telemetry_config(&|name| std::env::var(name).ok()) {
+        crate::telemetry::exceptions::route_to("billing", move |report| {
+            super::telemetry::send_exception_now(&config, &report, "suplex-billing");
+        });
+    } else {
+        crate::telemetry::exceptions::route_to("billing", |_| ());
+    }
     let outcome = match args.first().map(String::as_str) {
         Some("rotate-credential") => rotate_credential(
             &args[1..],

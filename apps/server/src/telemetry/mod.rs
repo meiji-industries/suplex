@@ -24,6 +24,8 @@ use rusqlite::{OptionalExtension, params};
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 
+use suplex_exception::Report;
+
 use crate::shared::hash::sha256_hex;
 use crate::{
     http::contracts::task_reads::TaskActivityActionKind,
@@ -34,6 +36,8 @@ use crate::{
     shared::time::rfc3339_millis,
     tasks::control::{DeliveryTarget, TaskProfile},
 };
+
+pub mod exceptions;
 
 const DEFAULT_HOST: &str = "https://us.i.posthog.com";
 const PERIOD: Duration = Duration::from_secs(60);
@@ -67,10 +71,7 @@ fn host_person(config: &Config) -> String {
 
 /// `DO_NOT_TRACK=1` or `SUPLEX_TELEMETRY=0|false|off` turn telemetry off.
 fn opted_out(variable: impl Fn(&str) -> Option<String>) -> bool {
-    variable("DO_NOT_TRACK").is_some_and(|value| !value.is_empty() && value != "0")
-        || variable("SUPLEX_TELEMETRY").is_some_and(|value| {
-            matches!(value.to_ascii_lowercase().as_str(), "0" | "false" | "off")
-        })
+    suplex_exception::opted_out(variable)
 }
 
 /// The send configuration, or `None` when this build or environment never
@@ -97,13 +98,15 @@ struct State {
     daily_at: Option<String>,
     last_app_version: Option<String>,
     last_app_revision: Option<String>,
+    /// Unix milliseconds when telemetry last turned on.
+    exceptions_since: Option<i64>,
 }
 
 fn state(database: &SuplexDatabase) -> DatabaseResult<Option<State>> {
     Ok(database
         .connection()
         .query_row(
-            "SELECT notice_at, audit_cursor, lifecycle_cursor, daily_at, last_app_version, last_app_revision FROM suplex_telemetry WHERE id = 'host'",
+            "SELECT notice_at, audit_cursor, lifecycle_cursor, daily_at, last_app_version, last_app_revision, exceptions_since FROM suplex_telemetry WHERE id = 'host'",
             [],
             |row| {
                 Ok(State {
@@ -113,6 +116,7 @@ fn state(database: &SuplexDatabase) -> DatabaseResult<Option<State>> {
                     daily_at: row.get(3)?,
                     last_app_version: row.get(4)?,
                     last_app_revision: row.get(5)?,
+                    exceptions_since: row.get(6)?,
                 })
             },
         )
@@ -132,19 +136,20 @@ pub fn acknowledge(database: &mut SuplexDatabase, now: DateTime<Utc>) -> Databas
 /// never sent. The next send starts from the rows that exist then.
 fn forget(database: &SuplexDatabase) -> DatabaseResult<()> {
     database.connection().execute(
-        "UPDATE suplex_telemetry SET audit_cursor = NULL, lifecycle_cursor = NULL WHERE id = 'host'",
+        "UPDATE suplex_telemetry SET audit_cursor = NULL, lifecycle_cursor = NULL, exceptions_since = NULL WHERE id = 'host'",
         [],
     )?;
     Ok(())
 }
 
 /// Starts the send position at the rows that exist now. History from before
-/// the notice, or from while telemetry was off, is never sent.
+/// the notice, or from while telemetry was off, is never sent, nor are
+/// exception reports recorded before now.
 fn baseline(database: &mut SuplexDatabase) -> DatabaseResult<()> {
     database.transaction(true, |database| {
         database.connection().execute(
-            "UPDATE suplex_telemetry SET audit_cursor = (SELECT COALESCE(MAX(rowid), 0) FROM suplex_audit_events), lifecycle_cursor = (SELECT COALESCE(MAX(id), 0) FROM suplex_task_analytics_events) WHERE id = 'host'",
-            [],
+            "UPDATE suplex_telemetry SET audit_cursor = (SELECT COALESCE(MAX(rowid), 0) FROM suplex_audit_events), lifecycle_cursor = (SELECT COALESCE(MAX(id), 0) FROM suplex_task_analytics_events), exceptions_since = ?1 WHERE id = 'host'",
+            [Utc::now().timestamp_millis()],
         )?;
         database.connection().execute(
             "INSERT INTO suplex_telemetry_pull_requests (task_id, merged) SELECT task_id, COALESCE(json_extract(pull_request_json, '$.state') = 'merged', 0) FROM suplex_task_controls WHERE pull_request_json IS NOT NULL ON CONFLICT(task_id) DO UPDATE SET merged = excluded.merged",
@@ -726,29 +731,61 @@ fn prepare(
     )?))
 }
 
+/// `prepare`, plus the pending exception reports when telemetry may send. When
+/// it may not, the spool is discarded: reports recorded now are never sent later.
+fn prepare_tick(
+    database: &mut SuplexDatabase,
+    config: &Config,
+    spool: &Path,
+    now: DateTime<Utc>,
+    first_since_start: bool,
+) -> DatabaseResult<Option<(Collected, Vec<Report>)>> {
+    let Some(collected) = prepare(database, config, now, first_since_start)? else {
+        suplex_exception::spool::purge(spool);
+        return Ok(None);
+    };
+    let since = state(database)?
+        .and_then(|state| state.exceptions_since)
+        .unwrap_or(0);
+    let exceptions = suplex_exception::spool::pending(spool, since, exceptions::PER_TICK);
+    Ok(Some((collected, exceptions)))
+}
+
 async fn tick(
     database_path: &Path,
+    spool: &Path,
     config: &Config,
     http: &reqwest::Client,
     started: &AtomicBool,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
     let now = Utc::now();
-    let collected = {
+    let prepared = {
         let mut database = SuplexDatabase::open(database_path, OpenMode::ReadWrite)
             .map_err(|error| error.to_string())?;
-        prepare(&mut database, config, now, !started.load(Ordering::Relaxed))
-            .map_err(|error| error.to_string())?
+        prepare_tick(
+            &mut database,
+            config,
+            spool,
+            now,
+            !started.load(Ordering::Relaxed),
+        )
+        .map_err(|error| error.to_string())?
     };
-    let Some(collected) = collected else {
+    let Some((collected, reports)) = prepared else {
         return Ok(());
     };
-    if !collected.events.is_empty() {
+    let mut batch = collected.events.clone();
+    batch.extend(exceptions::events(config, &reports));
+    if !batch.is_empty() {
         http.post(format!("{}/batch/", config.host.trim_end_matches('/')))
             .timeout(Duration::from_secs(15))
-            .json(&json!({"api_key": config.key, "batch": &collected.events}))
+            .json(&json!({"api_key": config.key, "batch": &batch}))
             .send()
             .await?
             .error_for_status()?;
+    }
+    for report in &reports {
+        suplex_exception::spool::acknowledge(spool, report, now.timestamp_millis());
     }
     started.store(true, Ordering::Relaxed);
     let mut database = SuplexDatabase::open(database_path, OpenMode::ReadWrite)
@@ -759,11 +796,16 @@ async fn tick(
 
 /// Starts the send loop when this build and environment send. Otherwise it
 /// forgets the send position, so a later start never sends old rows.
-pub fn spawn(database_path: PathBuf, installation_id: &str) -> Option<tokio::task::JoinHandle<()>> {
+pub fn spawn(
+    database_path: PathBuf,
+    spool: PathBuf,
+    installation_id: &str,
+) -> Option<tokio::task::JoinHandle<()>> {
     let Some(config) = config(installation_id) else {
         if let Ok(database) = SuplexDatabase::open(&database_path, OpenMode::ReadWrite) {
             let _ = forget(&database);
         }
+        suplex_exception::spool::purge(&spool);
         return None;
     };
     Some(tokio::spawn(async move {
@@ -772,7 +814,7 @@ pub fn spawn(database_path: PathBuf, installation_id: &str) -> Option<tokio::tas
         let mut interval = tokio::time::interval(PERIOD);
         loop {
             interval.tick().await;
-            if let Err(error) = tick(&database_path, &config, &http, &started).await {
+            if let Err(error) = tick(&database_path, &spool, &config, &http, &started).await {
                 eprintln!("Telemetry send will be retried: {error}");
             }
         }
@@ -1159,6 +1201,168 @@ mod tests {
                     .unwrap()
             )
             .is_empty()
+        );
+    }
+
+    fn spool_directory() -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "suplex-telemetry-spool-{}",
+            uuid::Uuid::new_v4().simple()
+        ))
+    }
+
+    fn panic_report(secret: &str) -> Report {
+        Report::panic(
+            "host",
+            false,
+            Some(("/home/ada/work/suplex/apps/server/src/tasks/mod.rs", 7, 3)),
+            Some("worker-ada"),
+            &format!(
+                "   0: suplex::tasks::run\n             at /home/ada/work/suplex/apps/server/src/tasks/mod.rs:7:3\n   1: {secret}\n"
+            ),
+        )
+    }
+
+    fn pending_for(
+        database: &mut SuplexDatabase,
+        spool: &Path,
+        now: DateTime<Utc>,
+    ) -> Option<(Collected, Vec<Report>)> {
+        prepare_tick(database, &test_config(), spool, now, false).unwrap()
+    }
+
+    #[test]
+    fn exceptions_are_sent_only_after_the_notice_while_on_and_recorded_after_it_turned_on() {
+        let mut database = database();
+        let spool = spool_directory();
+        let now = Utc::now();
+        // Before the notice: nothing is sent, and what waited is discarded.
+        suplex_exception::spool::record(&spool, &panic_report("before-notice")).unwrap();
+        assert!(pending_for(&mut database, &spool, now).is_none());
+        assert!(suplex_exception::spool::pending(&spool, 0, 10).is_empty());
+
+        acknowledge(&mut database, now).unwrap();
+        let mut early = panic_report("recorded-earlier");
+        early.recorded_at_ms = now.timestamp_millis() - 60_000;
+        suplex_exception::spool::record(&spool, &early).unwrap();
+        let (collected, reports) = pending_for(&mut database, &spool, now).unwrap();
+        assert!(
+            reports.is_empty(),
+            "history from before telemetry turned on"
+        );
+        commit(&mut database, &collected, &rfc3339_millis(now)).unwrap();
+
+        let report = panic_report("sent");
+        suplex_exception::spool::record(&spool, &report).unwrap();
+        let (_, reports) = pending_for(&mut database, &spool, now).unwrap();
+        assert_eq!(reports.len(), 1);
+        let events = exceptions::events(&test_config(), &reports);
+        assert_eq!(events[0]["event"], "$exception");
+        assert_eq!(events[0]["distinct_id"], "install-1:host");
+        assert_eq!(events[0]["properties"]["$lib"], "suplex-host");
+        assert_eq!(events[0]["properties"]["$groups"]["host"], "install-1");
+        assert_eq!(
+            events[0]["properties"]["$exception_list"][0]["mechanism"]["handled"],
+            false
+        );
+        // A resent report has the same event ID, and an acknowledged one is not resent.
+        assert_eq!(
+            events[0]["uuid"],
+            exceptions::events(&test_config(), &reports)[0]["uuid"]
+        );
+        suplex_exception::spool::acknowledge(&spool, &reports[0], now.timestamp_millis());
+        assert!(
+            pending_for(&mut database, &spool, now)
+                .unwrap()
+                .1
+                .is_empty()
+        );
+
+        // Rows written while the setting is off are never sent later.
+        set_enabled(&mut database, false);
+        suplex_exception::spool::record(&spool, &panic_report("while-off")).unwrap();
+        assert!(pending_for(&mut database, &spool, now).is_none());
+        set_enabled(&mut database, true);
+        let (_, reports) = pending_for(&mut database, &spool, now).unwrap();
+        assert!(reports.is_empty());
+    }
+
+    #[test]
+    fn a_report_recorded_while_the_setting_was_off_is_never_sent_after_it_turns_on() {
+        let mut database = database();
+        let spool = spool_directory();
+        let now = Utc::now();
+        acknowledge(&mut database, now).unwrap();
+        let (collected, _) = pending_for(&mut database, &spool, now).unwrap();
+        commit(&mut database, &collected, &rfc3339_millis(now)).unwrap();
+        // The setting turns off and on between two ticks: the report is older than the turn-on.
+        set_enabled(&mut database, false);
+        let mut off = panic_report("off");
+        off.recorded_at_ms = Utc::now().timestamp_millis();
+        suplex_exception::spool::record(&spool, &off).unwrap();
+        std::thread::sleep(Duration::from_millis(5));
+        assert!(pending_for(&mut database, &spool, now).is_none());
+        set_enabled(&mut database, true);
+        assert!(
+            pending_for(&mut database, &spool, now)
+                .unwrap()
+                .1
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn sent_exceptions_contain_no_message_path_or_user_content() {
+        let reports: Vec<Report> = [
+            panic_report("/home/ada/secret-repo/src/lib.rs"),
+            Report::new(
+                "host",
+                "InternalServerError",
+                "http_internal_error",
+                true,
+                vec![],
+            )
+            .attribute("http_route", "/Users/ada/Secret Repo/token=sk-live"),
+        ]
+        .into();
+        let sent = serde_json::to_string(&exceptions::events(&test_config(), &reports)).unwrap();
+        for leak in ["ada", "secret", "Secret", "sk-live", "/home", "/Users", "@"] {
+            assert!(!sent.contains(leak), "{leak} in {sent}");
+        }
+        assert!(sent.contains("apps/server/src/tasks/mod.rs"));
+    }
+
+    #[test]
+    fn a_crash_loop_sends_one_event_per_failure_and_ten_per_tick() {
+        let mut database = database();
+        let spool = spool_directory();
+        let now = Utc::now();
+        acknowledge(&mut database, now).unwrap();
+        let (collected, _) = pending_for(&mut database, &spool, now).unwrap();
+        commit(&mut database, &collected, &rfc3339_millis(now)).unwrap();
+        for _ in 0..500 {
+            suplex_exception::spool::record(&spool, &panic_report("loop")).unwrap();
+        }
+        let (_, reports) = pending_for(&mut database, &spool, now).unwrap();
+        assert_eq!(reports.len(), 1);
+        assert_eq!(reports[0].occurrences, 500);
+        suplex_exception::spool::acknowledge(&spool, &reports[0], now.timestamp_millis());
+        for _ in 0..500 {
+            assert_eq!(
+                suplex_exception::spool::record(&spool, &panic_report("loop")).unwrap(),
+                suplex_exception::spool::Recorded::Quiet
+            );
+        }
+        for index in 0..30 {
+            let mut report = panic_report("many");
+            report.frames[0].function = format!("suplex::failure_{index}");
+            report = Report::new("host", "Panic", "panic", false, report.frames);
+            suplex_exception::spool::record(&spool, &report).unwrap();
+        }
+        let (_, reports) = pending_for(&mut database, &spool, now).unwrap();
+        assert_eq!(reports.len(), exceptions::PER_TICK);
+        assert!(
+            std::fs::read_dir(&spool).unwrap().count() <= suplex_exception::spool::MAX_PENDING + 1
         );
     }
 }

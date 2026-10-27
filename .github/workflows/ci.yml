@@ -83,10 +83,10 @@ jobs:
       - run: pnpm exec tsx scripts/rust-route-coverage.ts
       - run: pnpm --filter suplex-web build
       # Name packages explicitly: --workspace would unify features with the Tauri crates and build them here.
-      - run: cargo fmt -p suplex -p suplex-bootstrap --check
-      - run: cargo clippy -p suplex -p suplex-bootstrap --all-targets -- -D warnings
+      - run: cargo fmt -p suplex -p suplex-exception -p suplex-bootstrap --check
+      - run: cargo clippy -p suplex -p suplex-exception -p suplex-bootstrap --all-targets -- -D warnings
       # The crates have no doctests, which nextest does not run.
-      - run: cargo nextest run -p suplex -p suplex-bootstrap --all-targets --profile ci
+      - run: cargo nextest run -p suplex -p suplex-exception -p suplex-bootstrap --all-targets --profile ci
       - name: Generated TypeScript contracts are committed
         run: git diff --exit-code -- apps/web/contracts/generated
       - name: Enforce persistent target size limit

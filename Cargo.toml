@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["apps/server", "apps/desktop/src-tauri", "apps/mobile/src-tauri", "apps/bootstrap"]
+members = ["apps/server", "apps/desktop/src-tauri", "apps/mobile/src-tauri", "apps/bootstrap", "packages/exception-report"]
 default-members = ["apps/server"]
 
 [workspace.dependencies]

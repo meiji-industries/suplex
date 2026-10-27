@@ -121,12 +121,19 @@ pub fn spawn_task_host(
                 Some(task_id) = wake_rx.recv() => vec![task_id],
                 _ = interval.tick() => match scheduled_task_ids(&database_path, &host_terminals) {
                     Ok(ids) => ids,
-                    Err(error) => { eprintln!("Task scheduling will retry: {error}"); Vec::new() },
+                    Err(error) => {
+                        eprintln!("Task scheduling will retry: {error}");
+                        crate::telemetry::exceptions::report_loop_failure("task_scheduler");
+                        Vec::new()
+                    },
                 },
                 finished = operations.join_next(), if !operations.is_empty() => {
                     if let Some(Ok((task_id, result))) = finished {
                         running.remove(&task_id);
-                        if let Err(error) = result { eprintln!("Task {task_id} recovery will retry: {error}"); }
+                        if let Err(error) = result {
+                            eprintln!("Task {task_id} recovery will retry: {error}");
+                            crate::telemetry::exceptions::report_loop_failure("task_recovery");
+                        }
                     }
                     Vec::new()
                 },

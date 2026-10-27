@@ -34,6 +34,7 @@ tokio = { workspace = true, features = ["process", "time", "fs", "io-util", "mac
 reqwest = { workspace = true }
 url = { workspace = true }
 time = { version = "0.3", features = ["formatting"] }
+suplex-exception = { path = "../../../packages/exception-report" }
 
 [target.'cfg(unix)'.dependencies]
 libc = { workspace = true }

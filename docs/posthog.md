@@ -6,9 +6,37 @@ Suplex uses one PostHog project for three explicitly separated surfaces:
 - hosted billing sends verified Stripe webhook facts with `$lib=suplex-billing`;
 - the public website sends consented browser events with `surface=website`.
 
+Crash and error reports (`$exception`) come from every Suplex surface and go to
+PostHog Error Tracking. See [Error Tracking](#error-tracking).
+
 Do not combine those filters when an insight describes one surface. The managed
 dashboard definitions in `scripts/posthog-provision.ts` apply the relevant
 filter to each insight.
+
+## Error Tracking
+
+`$exception` events carry `$exception_list` with a raw stack trace, so PostHog
+Error Tracking groups them without symbol upload. Each event has a fingerprint
+that ignores line numbers, so a release does not split a group. The surfaces
+are told apart by `$lib` and `exception_source`:
+
+| `$lib` | `exception_source` | Surface |
+| --- | --- | --- |
+| `suplex-host` | `host` | native host and `suplex` subcommands |
+| `suplex-host` | `desktop` | desktop shell panics, forwarded by the host |
+| `posthog-js` | none | signed-in browser (mechanism `onerror`, `onunhandledrejection`, `react.*`) |
+| `suplex-hosted` | `hosted` | `suplex hosted serve` |
+| `suplex-billing` | `billing` | `suplex billing` commands |
+
+The native, desktop, and browser reports follow the same consent as the other
+product events; hosted reports need `BILLING_TELEMETRY`. [Telemetry](telemetry.md#exceptions)
+lists the properties, the exclusions, the bounds on volume, and the gaps (mobile,
+bootstrap, and processes the operating system kills).
+
+Suggested Error Tracking setup: add an issue-created alert to the team channel,
+and group by `app_version` to confirm that a release fixed a crash. The
+product-health dashboard has two insights for this, "Reliability — exceptions
+by surface" and "Reliability — unhandled exceptions by app version".
 
 ## Provision dashboards and flags
 

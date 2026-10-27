@@ -6,6 +6,7 @@ use std::time::Duration;
 
 use rusqlite::params;
 use serde_json::{Map, Value, json};
+use suplex_exception::{Report, event_uuid};
 
 use super::{Hosted, iso, stripe::Event};
 use crate::{billing::wire::BillingEnvironment, shared::hash::sha256_hex};
@@ -13,6 +14,9 @@ use crate::{billing::wire::BillingEnvironment, shared::hash::sha256_hex};
 const DELIVERY_LIMIT: i64 = 100;
 const MAX_ATTEMPTS: i64 = 5;
 const RETENTION_MS: i64 = 30 * 24 * 60 * 60 * 1000;
+/// Exception reports waiting in the outbox. Further ones are dropped.
+const EXCEPTION_LIMIT: i64 = 50;
+const EXCEPTION_PERSON: &str = "suplex-hosted-service";
 
 #[derive(Clone, Debug)]
 pub struct Config {
@@ -189,6 +193,52 @@ fn insert_id(provider: &str, source_event_id: &str, event_name: &str) -> String 
     )
 }
 
+/// The PostHog event for one exception report. The hosted service has no user:
+/// it uses one fixed person that PostHog does not store a profile for.
+fn exception_properties(report: &Report, lib: &str) -> Value {
+    let mut properties = report.properties();
+    properties.insert("$lib".into(), json!(lib));
+    properties.insert("$process_person_profile".into(), json!(false));
+    properties.insert("app_version".into(), json!(env!("CARGO_PKG_VERSION")));
+    properties.insert("app_revision".into(), json!(env!("SUPLEX_REVISION")));
+    properties.insert("os".into(), json!(std::env::consts::OS));
+    properties.insert("arch".into(), json!(std::env::consts::ARCH));
+    Value::Object(properties)
+}
+
+/// Sends one report at once, for a command that has no outbox. A failure is dropped.
+pub fn send_exception_now(config: &Config, report: &Report, lib: &str) {
+    let batch = json!({
+        "api_key": config.key,
+        "batch": [{
+            "event": "$exception",
+            "distinct_id": EXCEPTION_PERSON,
+            "timestamp": iso(report.recorded_at_ms),
+            "uuid": report.uuid(),
+            "properties": exception_properties(report, lib),
+        }],
+    });
+    let url = format!("{}/batch/", config.host.trim_end_matches('/'));
+    // The caller may be a panicking runtime thread, so the request runs on its own thread and runtime.
+    let sender = std::thread::spawn(move || {
+        let Ok(runtime) = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+        else {
+            return;
+        };
+        runtime.block_on(async move {
+            let _ = reqwest::Client::new()
+                .post(url)
+                .timeout(Duration::from_secs(3))
+                .json(&batch)
+                .send()
+                .await;
+        });
+    });
+    let _ = sender.join();
+}
+
 impl Hosted {
     fn enqueue_telemetry(
         &self,
@@ -280,6 +330,67 @@ impl Hosted {
         )
     }
 
+    /// Routes this process's panics and handled failures into the outbox as
+    /// `source`, or drops them when the service operator did not turn hosted
+    /// telemetry on. Nothing here can change request handling or billing.
+    pub fn route_exceptions(&self, source: &'static str, lib: &'static str) {
+        let hosted = self.clone();
+        crate::telemetry::exceptions::route_to(source, move |report| {
+            if hosted.config.telemetry.is_none() {
+                return;
+            }
+            // The panicking thread may hold the database. Another thread waits for it,
+            // and the panic continues after a short wait.
+            let (done, finished) = std::sync::mpsc::channel();
+            let worker = hosted.clone();
+            let _ = std::thread::Builder::new()
+                .name("exception-report".into())
+                .spawn(move || {
+                    if let Err(error) = worker.enqueue_exception(&report, lib) {
+                        eprintln!("billing: exception report was not queued: {error}");
+                    }
+                    let _ = done.send(());
+                });
+            let _ = finished.recv_timeout(Duration::from_millis(500));
+        });
+    }
+
+    /// Queues one exception report. A failure repeats at most once an hour
+    /// in the outbox, and at most [`EXCEPTION_LIMIT`] wait at once.
+    pub(super) fn enqueue_exception(&self, report: &Report, lib: &str) -> rusqlite::Result<()> {
+        if self.config.telemetry.is_none() {
+            return Ok(());
+        }
+        let source_key = format!(
+            "exception:{}:{}",
+            report.fingerprint,
+            report.recorded_at_ms / 3_600_000
+        );
+        let insert_id = event_uuid(&source_key);
+        let properties = exception_properties(report, lib).to_string();
+        self.query(|db| {
+            let waiting: i64 = db.query_row(
+                "SELECT COUNT(*) FROM billing_telemetry_events WHERE source_event_id LIKE 'exception:%' AND sent_at IS NULL AND dropped_at IS NULL",
+                [],
+                |row| row.get(0),
+            )?;
+            if waiting >= EXCEPTION_LIMIT {
+                return Ok(());
+            }
+            db.execute(
+                "INSERT OR IGNORE INTO billing_telemetry_events (source_event_id, event_name, distinct_id, company_id, insert_id, timestamp, properties_json) VALUES (?1, '$exception', ?2, '', ?3, ?4, ?5)",
+                params![
+                    source_key,
+                    EXCEPTION_PERSON,
+                    insert_id,
+                    iso(report.recorded_at_ms),
+                    properties
+                ],
+            )?;
+            Ok(())
+        })
+    }
+
     /// Sends one bounded batch. Every failure is contained here: billing
     /// events keep processing, while telemetry retries at most five times.
     pub(super) async fn run_telemetry_pass(&self) {
@@ -296,6 +407,7 @@ impl Hosted {
             Ok(())
         }) {
             eprintln!("billing: telemetry retention failed: {error}");
+            crate::telemetry::exceptions::report_loop_failure("telemetry_outbox");
         }
         let rows = match self.query(|db| {
             let mut statement = db.prepare(
@@ -319,6 +431,7 @@ impl Hosted {
             Ok(_) => return,
             Err(error) => {
                 eprintln!("billing: telemetry queue read failed: {error}");
+                crate::telemetry::exceptions::report_loop_failure("telemetry_outbox");
                 return;
             }
         };
@@ -366,6 +479,7 @@ impl Hosted {
             });
             if let Err(error) = result {
                 eprintln!("billing: telemetry queue update failed: {error}");
+                crate::telemetry::exceptions::report_loop_failure("telemetry_outbox");
             }
         }
     }

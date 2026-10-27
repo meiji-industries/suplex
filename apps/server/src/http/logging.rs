@@ -1,16 +1,25 @@
 use crate::platform::system_events::{self, REQUEST_ID};
-use axum::{extract::Request, middleware::Next, response::Response};
+use axum::{
+    extract::{MatchedPath, Request},
+    middleware::Next,
+    response::Response,
+};
 use serde_json::json;
 use std::time::Instant;
 
 pub(super) async fn request(request: Request, next: Next) -> Response {
     let method = request.method().to_string();
     let path = request.uri().path().to_owned();
+    let route = request
+        .extensions()
+        .get::<MatchedPath>()
+        .map(|matched| matched.as_str().to_owned());
     let started = Instant::now();
     REQUEST_ID
         .scope(uuid::Uuid::new_v4().to_string(), async move {
             let response = next.run(request).await;
             let status = response.status().as_u16();
+            super::panics::report_if_internal_error(&method, route.as_deref(), &response);
             let level = if status >= 500 {
                 50
             } else if status >= 400 {
@@ -138,6 +147,67 @@ mod tests {
             "header-secret",
         ] {
             assert!(!relevant.contains(secret));
+        }
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn a_500_and_a_caught_panic_are_reported_once_by_route_template() {
+        let (_guard, collected) = crate::telemetry::exceptions::isolate_for_test();
+        let prefix = format!("/exceptions-{}", uuid::Uuid::new_v4().simple());
+        let router = Router::new()
+            .route(
+                &format!("{prefix}/{{id}}/fail"),
+                get(|| async { axum::http::StatusCode::INTERNAL_SERVER_ERROR }),
+            )
+            .route(
+                &format!("{prefix}/{{id}}/panic"),
+                get(|| async {
+                    if true {
+                        panic!("token=sk-live-1234 in /home/ada/secret-repo");
+                    }
+                    "unreachable"
+                }),
+            )
+            .route(&format!("{prefix}/{{id}}/ok"), get(|| async { "ok" }))
+            .layer(axum::middleware::from_fn(super::super::panics::contain))
+            .layer(axum::middleware::from_fn(request));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+        let client = reqwest::Client::new();
+        for (path, status) in [("fail", 500), ("panic", 500), ("ok", 200)] {
+            let response = client
+                .get(format!("http://{address}{prefix}/ada-private-id/{path}"))
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(response.status(), status, "{path}");
+        }
+        server.abort();
+        std::thread::sleep(std::time::Duration::from_millis(500));
+        let reports = collected.lock().unwrap().clone();
+        let route = |name: &str| format!("{prefix}/{{id}}/{name}");
+        let failures: Vec<_> = reports
+            .iter()
+            .filter(|report| report.attributes.get("http_route") == Some(&route("fail")))
+            .collect();
+        assert_eq!(failures.len(), 1);
+        assert!(failures[0].handled && failures[0].mechanism == "http_internal_error");
+        // A caught panic is one handled report, not also a 500 report.
+        assert!(
+            reports
+                .iter()
+                .all(|report| report.attributes.get("http_route") != Some(&route("panic")))
+        );
+        let panics: Vec<_> = reports
+            .iter()
+            .filter(|report| report.mechanism == "caught_panic")
+            .collect();
+        assert!(!panics.is_empty() && panics.iter().all(|report| report.handled));
+        let sent = serde_json::to_string(&reports).unwrap();
+        for leak in ["ada-private-id", "sk-live", "secret-repo", "/home/ada"] {
+            assert!(!sent.contains(leak), "{leak}");
         }
     }
 }

@@ -32,7 +32,7 @@
     "desktop:dist:signed": "pnpm --filter suplex-desktop dist:signed",
     "desktop:publish": "bash scripts/publish-desktop-release.sh",
     "dev:watch": "tsx scripts/dev.ts --watch",
-    "test:rust": "env -u RUSTUP_TOOLCHAIN RUST_TEST_THREADS=4 cargo test --manifest-path apps/server/Cargo.toml --all-targets"
+    "test:rust": "env -u RUSTUP_TOOLCHAIN RUST_TEST_THREADS=4 cargo test --manifest-path apps/server/Cargo.toml --all-targets && env -u RUSTUP_TOOLCHAIN cargo test -p suplex-exception --all-targets"
   },
   "devDependencies": {
     "@modelcontextprotocol/sdk": "1.30.0",

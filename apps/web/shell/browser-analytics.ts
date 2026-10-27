@@ -3,6 +3,7 @@ import type { PostHog } from "posthog-js";
 import type { TelemetryResponse } from "../contracts/generated/TelemetryResponse.js";
 import { getTelemetry, telemetryRefreshKey } from "./telemetry-api.js";
 import { registerApiFailureCapture } from "../lib/analytics-capture.js";
+import { parseStack } from "./exception-frames.js";
 
 export type BrowserAnalyticsContext = {
   companyId?: string;
@@ -42,7 +43,7 @@ function sanitizeProperties(properties: Record<string, unknown>): Record<string,
     if (/title|prompt|code|text|input|body|header/i.test(key)) continue;
     if (/(?:url|uri|href|referr|pathname)/i.test(key)) {
       sanitized[key] = safeCurrentUrl();
-    } else if (typeof value === "string" && /message|stack|exception|error/i.test(key)) {
+    } else if (typeof value === "string" && key !== "$exception_level" && /message|stack|exception|error/i.test(key)) {
       sanitized[key] = "[redacted]";
     } else if (typeof value === "string" && /(?:https?:\/\/|file:\/\/)/i.test(value)) {
       sanitized[key] = safeCurrentUrl();
@@ -206,16 +207,49 @@ export function updateBrowserAnalyticsContext(context: BrowserAnalyticsContext):
   captureScreenForNewScope();
 }
 
-export function captureBrowserException(reason: unknown, source?: { line?: number; column?: number }): void {
+export type ExceptionMechanism = "generic" | "onerror" | "onunhandledrejection" | "react.uncaught" | "react.caught" | "react.recoverable";
+
+const unhandledMechanisms = new Set<ExceptionMechanism>(["onerror", "onunhandledrejection", "react.uncaught"]);
+const exceptionTypes = new Set(["Error", "TypeError", "RangeError", "ReferenceError", "SyntaxError", "URIError", "EvalError"]);
+// One report per error object, so React's rethrow to `window.onerror` is not a second exception.
+const reported = new WeakSet<object>();
+
+/**
+ * Sends one sanitized exception. Messages never leave the browser: the type is
+ * one of the built-in names, the value is fixed, and frames hold only function
+ * names, `app://suplex/` bundle paths, and positions of this origin's scripts.
+ */
+export function captureBrowserException(reason: unknown, source?: { line?: number; column?: number; mechanism?: ExceptionMechanism }): void {
   if (!client || !currentTelemetry?.enabled) return;
+  if (reason !== null && typeof reason === "object") {
+    if (reported.has(reason)) return;
+    reported.add(reason);
+  }
+  const mechanism = source?.mechanism ?? "generic";
   const rawType = reason instanceof Error ? reason.name : "Error";
-  const type = new Set(["Error", "TypeError", "RangeError", "ReferenceError", "SyntaxError", "URIError", "EvalError"]).has(rawType) ? rawType : "Error";
+  const type = exceptionTypes.has(rawType) ? rawType : "Error";
   const line = Number.isSafeInteger(source?.line) ? Math.max(0, source?.line ?? 0) : 0;
   const column = Number.isSafeInteger(source?.column) ? Math.max(0, source?.column ?? 0) : 0;
+  const frames = reason instanceof Error ? parseStack(reason.stack, window.location.origin) : [];
   const safe = new Error(`Browser ${type}`);
   safe.name = type;
   safe.stack = `${type}: Browser ${type}\n    at app (suplex://app.js:${line}:${column})`;
-  client.captureException(safe, { ...baseProperties(), source_line: line, source_column: column });
+  const list = [{
+    type,
+    value: `Browser ${type}`,
+    mechanism: { type: mechanism, handled: !unhandledMechanisms.has(mechanism), synthetic: frames.length === 0 },
+    stacktrace: {
+      type: "raw",
+      // PostHog reads the outermost call first.
+      frames: frames.length ? frames.reverse() : [{ platform: "web:javascript", filename: "suplex://app.js", function: "app", lineno: line, colno: column, in_app: true, resolved: true }],
+    },
+  }];
+  client.captureException(safe, { ...baseProperties(), source_line: line, source_column: column, $exception_list: list, $exception_level: unhandledMechanisms.has(mechanism) ? "fatal" : "error" });
+}
+
+/** For `createRoot`'s `onUncaughtError`, `onCaughtError`, and `onRecoverableError`. */
+export function captureReactError(kind: "uncaught" | "caught" | "recoverable", error: unknown): void {
+  captureBrowserException(error, { mechanism: `react.${kind}` });
 }
 
 function captureApiFailure({ url, status, code }: { url: string; status: number; code?: string }): void {
@@ -242,8 +276,8 @@ export function installBrowserAnalytics(): () => void {
   const refresh = (): void => { void refreshBrowserAnalytics(); };
   const storage = (event: StorageEvent): void => { if (event.key === telemetryRefreshKey) refresh(); };
   const visible = (): void => { if (document.visibilityState === "visible") refresh(); };
-  const error = (event: ErrorEvent): void => captureBrowserException(event.error ?? event.message, { line: event.lineno, column: event.colno });
-  const rejection = (event: PromiseRejectionEvent): void => captureBrowserException(event.reason);
+  const error = (event: ErrorEvent): void => captureBrowserException(event.error ?? event.message, { line: event.lineno, column: event.colno, mechanism: "onerror" });
+  const rejection = (event: PromiseRejectionEvent): void => captureBrowserException(event.reason, { mechanism: "onunhandledrejection" });
   window.addEventListener("suplex:telemetry-change", refresh);
   window.addEventListener("suplex:navigate", routeChanged);
   window.addEventListener("popstate", routeChanged);

@@ -4,6 +4,7 @@
 mod boot;
 mod bridge;
 mod contracts;
+mod crash;
 mod effects;
 mod installer;
 mod local_runtime;
@@ -85,9 +86,15 @@ fn shell_of<R: Runtime>(app: &tauri::AppHandle<R>) -> Option<Arc<Shell<R>>> {
         .map(|shell| shell.inner().clone())
 }
 
+/// Records panics for the host to send under its consent. See `crash`.
+pub fn install_crash_reporting(environment: &HashMap<String, String>) {
+    crash::install(environment);
+}
+
 pub fn run() {
     let argv: Vec<String> = std::env::args().collect();
     let environment: HashMap<String, String> = std::env::vars().collect();
+    install_crash_reporting(&environment);
     let builder = tauri::Builder::default()
         // A second launch, `suplex desktop`, or a cold suplex:// link reaches this process instead of starting another app.
         .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {

@@ -1,4 +1,4 @@
-# Only the workspace manifests, apps/server/ (with its migrations and install scripts), and the files compiled in go into the hosted image.
+# Only the workspace manifests, apps/server/ (with its migrations and install scripts), packages/exception-report/, and the files compiled in go into the hosted image.
 *
 !Cargo.toml
 !Cargo.lock
@@ -7,6 +7,7 @@
 !apps/mobile/src-tauri/Cargo.toml
 !apps/bootstrap/Cargo.toml
 !apps/server
+!packages/exception-report
 !scripts/shared-resource-command.py
 !apps/web/assets/suplex-wordmark.svg
 !apps/web/assets/account-background.png

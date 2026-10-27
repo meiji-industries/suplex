@@ -522,4 +522,109 @@ mod tests {
         restarted.run_processor_pass().await.unwrap();
         assert!(event_row(&f, "evt_retry").0.is_some());
     }
+
+    fn panic_report(secret: &str) -> suplex_exception::Report {
+        suplex_exception::Report::panic(
+            "hosted",
+            false,
+            Some(("/app/build/suplex/apps/server/src/hosted/mod.rs", 5, 1)),
+            Some("main"),
+            &format!("   0: suplex::hosted::serve\n             at /app/build/suplex/apps/server/src/hosted/mod.rs:5:1\n   1: {secret}\n"),
+        )
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    #[allow(clippy::await_holding_lock)]
+    async fn hosted_panics_and_internal_failures_queue_only_when_hosted_telemetry_is_on() {
+        let (_guard, _) = crate::telemetry::exceptions::isolate_for_test();
+        let f = Fixture::new().await;
+        // Hosted telemetry is off: nothing is queued, and nothing changes.
+        f.hosted.route_exceptions("hosted", "suplex-hosted");
+        crate::telemetry::exceptions::report_handled(
+            "BackgroundLoopFailure",
+            "background_loop",
+            &[("loop", "off-switch")],
+        );
+        let _ = std::panic::catch_unwind(|| panic!("/home/ada/secret token=sk-live"));
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        assert_eq!(f.count("SELECT COUNT(*) FROM billing_telemetry_events"), 0);
+
+        let posthog = stub(|_| (200, json!({}))).await;
+        let hosted = Fixture::hosted_with_telemetry(
+            &f.path,
+            BillingEnvironment::Sandbox,
+            &f.stripe.url,
+            &f.revenuecat.url,
+            &f.clock,
+            &posthog.url,
+        );
+        hosted.route_exceptions("hosted", "suplex-hosted");
+        let _ = std::panic::catch_unwind(|| panic!("/home/ada/secret token=sk-live"));
+        crate::telemetry::exceptions::report_handled(
+            "BackgroundLoopFailure",
+            "background_loop",
+            &[("loop", "account_sweep")],
+        );
+        // The handled report is queued from its own thread.
+        for _ in 0..40 {
+            if f.count("SELECT COUNT(*) FROM billing_telemetry_events WHERE event_name = '$exception'") == 2 {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+        assert_eq!(f.count("SELECT COUNT(*) FROM billing_telemetry_events WHERE event_name = '$exception'"), 2);
+        hosted.run_processor_pass().await.unwrap();
+        let calls = posthog.calls();
+        assert_eq!(calls.len(), 1);
+        let batch = calls[0].json();
+        let events = batch["batch"].as_array().unwrap();
+        assert_eq!(events.len(), 2);
+        let panic = events
+            .iter()
+            .find(|event| event["properties"]["exception_source"] == "hosted" && event["properties"]["$exception_list"][0]["mechanism"]["type"] == "panic")
+            .expect("the panic is sent");
+        assert_eq!(panic["event"], "$exception");
+        assert_eq!(panic["properties"]["$lib"], "suplex-hosted");
+        assert_eq!(panic["properties"]["$exception_list"][0]["mechanism"]["handled"], false);
+        let sent = batch.to_string();
+        for leak in ["ada", "secret", "sk-live", "/home", "/app/build"] {
+            assert!(!sent.contains(leak), "{leak} in {sent}");
+        }
+        // The same failure repeats once an hour, and the queue is bounded.
+        for _ in 0..5 {
+            hosted.enqueue_exception(&panic_report("again"), "suplex-hosted").unwrap();
+        }
+        assert_eq!(f.count("SELECT COUNT(*) FROM billing_telemetry_events WHERE event_name = '$exception' AND sent_at IS NULL"), 1);
+        for index in 0..80 {
+            let mut report = panic_report("many");
+            report.frames[0].function = format!("suplex::failure_{index}");
+            let report = suplex_exception::Report::new("hosted", "Panic", "panic", false, report.frames);
+            hosted.enqueue_exception(&report, "suplex-hosted").unwrap();
+        }
+        assert_eq!(f.count("SELECT COUNT(*) FROM billing_telemetry_events WHERE event_name = '$exception' AND sent_at IS NULL"), 50);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_billing_command_panic_is_sent_at_once_and_a_send_failure_is_dropped() {
+        let posthog = stub(|_| (200, json!({}))).await;
+        let config = crate::billing::hosted::telemetry::Config {
+            key: "phc_billing_test".into(),
+            host: posthog.url.clone(),
+        };
+        crate::billing::hosted::telemetry::send_exception_now(&config, &panic_report("cli"), "suplex-billing");
+        for _ in 0..40 {
+            if !posthog.calls().is_empty() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+        let calls = posthog.calls();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].json()["batch"][0]["properties"]["$lib"], "suplex-billing");
+        let unreachable = crate::billing::hosted::telemetry::Config {
+            key: "phc_billing_test".into(),
+            host: "http://127.0.0.1:9".into(),
+        };
+        crate::billing::hosted::telemetry::send_exception_now(&unreachable, &panic_report("cli"), "suplex-billing");
+    }
 }

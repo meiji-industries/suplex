@@ -32,6 +32,7 @@ pub mod agent_api_runtime;
 pub mod contracts;
 pub mod error;
 mod logging;
+pub(crate) mod panics;
 pub mod routes {
     pub mod access;
     pub mod account;
@@ -276,6 +277,7 @@ pub fn router(state: AppState) -> Router {
         )
         .method_not_allowed_fallback(not_found)
         .fallback(not_found)
+        .layer(axum::middleware::from_fn(panics::contain))
         .layer(axum::middleware::from_fn(access::cookie_refresh))
         .layer(axum::middleware::from_fn(logging::request))
         .layer(axum::middleware::from_fn_with_state(

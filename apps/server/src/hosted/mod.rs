@@ -12,6 +12,8 @@ use crate::{
         revenuecat::{REVENUECAT_API_BASE, RevenueCatClient},
         stripe::{STRIPE_API_BASE, StripeClient},
     },
+    http::panics,
+    telemetry::exceptions,
 };
 
 pub mod site;
@@ -28,6 +30,9 @@ pub fn router(accounts: &Accounts) -> Router {
             accounts.hosted.config.origin.clone(),
             site::redirect_www,
         ))
+        // Panics become 500 responses, and every 500 is reported. Neither changes a response otherwise.
+        .layer(middleware::from_fn(panics::report_internal_errors))
+        .layer(middleware::from_fn(panics::contain))
 }
 
 fn system_clock() -> Clock {
@@ -76,6 +81,7 @@ pub async fn serve() -> Result<(), String> {
         ),
         system_clock(),
     );
+    hosted.route_exceptions("hosted", "suplex-hosted");
     let accounts = Accounts::new(hosted.clone(), account_config, Endpoints::production());
     let processor = {
         let accounts = accounts.clone();
@@ -88,9 +94,18 @@ pub async fn serve() -> Result<(), String> {
                         "billing: event processor pass failed: {}",
                         error.code.as_deref().unwrap_or("internal")
                     );
+                    exceptions::report_handled(
+                        "BackgroundLoopFailure",
+                        "background_loop",
+                        &[
+                            ("loop", "billing_processor"),
+                            ("error_code", error.code.as_deref().unwrap_or("internal")),
+                        ],
+                    );
                 }
                 if accounts.sweep().is_err() {
                     eprintln!("accounts: sweep failed");
+                    exceptions::report_loop_failure("account_sweep");
                 }
             }
         })

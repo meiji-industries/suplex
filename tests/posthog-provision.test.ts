@@ -61,7 +61,7 @@ test("provisioning reuses its tagged resources on repeated runs", async () => {
   stores.feature_flags.forEach(flag => { flag.active = true; flag.filters = { groups: [{ rollout_percentage: 25 }] }; });
   const second = await provision(config, fetchStub);
   const insightCount = DASHBOARDS.reduce((count, dashboard) => count + dashboard.insights.length, 0);
-  expect(insightCount).toBe(25);
+  expect(insightCount).toBe(27);
   expect(first.filter(line => line.startsWith("created dashboard"))).toHaveLength(DASHBOARDS.length);
   expect(first.filter(line => line.startsWith("created insight"))).toHaveLength(insightCount);
   expect(first.filter(line => line.startsWith("created feature flag"))).toHaveLength(FEATURE_FLAGS.length);
@@ -109,4 +109,16 @@ test("SQL visualizations declare exact axes and keep currencies in separate seri
   expect(insights["paid-companies"]?.chartSettings).toEqual({ xAxis: { column: "month" }, yAxis: [{ column: "paid_companies" }] });
   expect(insights["cash-collected"]?.chartSettings).toEqual({ xAxis: { column: "month" }, yAxis: [{ column: "paid_minor_units" }], seriesBreakdownColumn: "currency" });
   expect(insights["stripe-refunds"]?.chartSettings).toEqual({ xAxis: { column: "month" }, yAxis: [{ column: "refunded_minor_units" }], seriesBreakdownColumn: "currency" });
+});
+
+test("the product health dashboard tracks exceptions on every surface without message properties", () => {
+  const insights = Object.fromEntries(DASHBOARDS.flatMap(dashboard => dashboard.insights.map(insight => [insight.key, insight])));
+  const surface = JSON.stringify(insights["exceptions-surface"]?.query);
+  expect(surface).toContain('"event":"$exception"');
+  expect(surface).toContain('"property":"$lib"');
+  const crashes = JSON.stringify(insights["crashes-version"]?.query);
+  expect(crashes).toContain('"key":"$exception_level"');
+  expect(crashes).toContain('"value":["fatal"]');
+  expect(crashes).toContain('"property":"app_version"');
+  expect(JSON.stringify([surface, crashes]).toLowerCase()).not.toMatch(/\$exception_message|exception_values|\$exception_list/);
 });

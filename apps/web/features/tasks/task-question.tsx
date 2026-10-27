@@ -10,7 +10,7 @@ import { Markdown } from "../../components/app/markdown.js";
 import { roundSuggestedBudget, taskLimitQuestion } from "./lib/task-limit-presentation.js";
 import type { TaskLimitDecision } from "../../contracts/task-limits.js";
 
-export function TaskQuestion({ question, busy, onAnswer, onLimitDecision }: { question: NonNullable<Task["humanQuestion"]>; busy: boolean; onAnswer: (answer: { answer: string; confirmCommandsStopped: boolean }) => Promise<void>; onLimitDecision: (decision: TaskLimitDecision) => Promise<void> }) {
+export function TaskQuestion({ question, busy, watchingPullRequest = false, onAnswer, onLimitDecision }: { question: NonNullable<Task["humanQuestion"]>; busy: boolean; watchingPullRequest?: boolean; onAnswer: (answer: { answer: string; confirmCommandsStopped: boolean }) => Promise<void>; onLimitDecision: (decision: TaskLimitDecision) => Promise<void> }) {
   const [answered, setAnswered] = useState(false);
   const [commandsStopped, setCommandsStopped] = useState(false);
   const [budgetUsd, setBudgetUsd] = useState(question.kind === "task_limit" ? String(question.pause.reason === "turns" ? question.pause.proposedLimits.budgetUsd : roundSuggestedBudget(question.pause.proposedLimits.budgetUsd, question.pause.usage.estimatedCostUsd ?? 0)) : "0");
@@ -48,6 +48,7 @@ export function TaskQuestion({ question, busy, onAnswer, onLimitDecision }: { qu
       <QuestionnaireTitle>Answer necessary</QuestionnaireTitle>
       <QuestionnaireDescription>{prompt.split("\n").flatMap((line, index) => index ? [<br key={index} />, line] : [line])}</QuestionnaireDescription>
       {body ? <Card size="sm"><CardContent><Markdown source={body} /></CardContent></Card> : null}
+      {watchingPullRequest ? <p className="text-xs text-muted-foreground">Suplex watches the pull request. The question closes when checks or merge state change.</p> : null}
       <QuestionnaireChoices>
         {choices.map(choice => <QuestionnaireChoice key={choice.value} value={choice.value}><span>{choice.label} {choice.recommended ? <Badge variant="secondary">Recommended</Badge> : null}</span><QuestionnaireChoiceDescription>{choice.description}</QuestionnaireChoiceDescription></QuestionnaireChoice>)}
         <label className="grid gap-2"><span>Other</span><QuestionnaireInput aria-label="Answer" placeholder="Write another answer" /></label>

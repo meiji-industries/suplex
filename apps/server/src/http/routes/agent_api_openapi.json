@@ -1645,7 +1645,8 @@
                                 "checks",
                                 "mergeability",
                                 "merge_queue",
-                                "observation"
+                                "observation",
+                                "question"
                               ]
                             }
                           },
@@ -1754,7 +1755,8 @@
                                     "checks",
                                     "mergeability",
                                     "merge_queue",
-                                    "observation"
+                                    "observation",
+                                    "question"
                                   ]
                                 },
                                 "since": {
@@ -2623,7 +2625,8 @@
                             "checks",
                             "mergeability",
                             "merge_queue",
-                            "observation"
+                            "observation",
+                            "question"
                           ]
                         }
                       },
@@ -2732,7 +2735,8 @@
                                 "checks",
                                 "mergeability",
                                 "merge_queue",
-                                "observation"
+                                "observation",
+                                "question"
                               ]
                             },
                             "since": {
@@ -4631,7 +4635,8 @@
                             "checks",
                             "mergeability",
                             "merge_queue",
-                            "observation"
+                            "observation",
+                            "question"
                           ]
                         }
                       },
@@ -4740,7 +4745,8 @@
                                 "checks",
                                 "mergeability",
                                 "merge_queue",
-                                "observation"
+                                "observation",
+                                "question"
                               ]
                             },
                             "since": {
@@ -5823,7 +5829,8 @@
                             "checks",
                             "mergeability",
                             "merge_queue",
-                            "observation"
+                            "observation",
+                            "question"
                           ]
                         }
                       },
@@ -5932,7 +5939,8 @@
                                 "checks",
                                 "mergeability",
                                 "merge_queue",
-                                "observation"
+                                "observation",
+                                "question"
                               ]
                             },
                             "since": {
@@ -7403,7 +7411,8 @@
                                 "checks",
                                 "mergeability",
                                 "merge_queue",
-                                "observation"
+                                "observation",
+                                "question"
                               ]
                             }
                           },
@@ -7512,7 +7521,8 @@
                                     "checks",
                                     "mergeability",
                                     "merge_queue",
-                                    "observation"
+                                    "observation",
+                                    "question"
                                   ]
                                 },
                                 "since": {
@@ -8536,7 +8546,8 @@
                             "checks",
                             "mergeability",
                             "merge_queue",
-                            "observation"
+                            "observation",
+                            "question"
                           ]
                         }
                       },
@@ -8645,7 +8656,8 @@
                                 "checks",
                                 "mergeability",
                                 "merge_queue",
-                                "observation"
+                                "observation",
+                                "question"
                               ]
                             },
                             "since": {

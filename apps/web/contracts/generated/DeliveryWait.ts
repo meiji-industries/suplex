@@ -3,5 +3,6 @@ import type { DeliveryWaitReason } from "./DeliveryWaitReason.js";
 
 /**
  * TypeScript `DeliveryWait`: one persisted wait on GitHub delivery state.
+ * A `question` wait holds the pull request state an open human question depends on.
  */
 export type DeliveryWait = { headSha: string, fingerprint: string, since: string, reason: DeliveryWaitReason, };

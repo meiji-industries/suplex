@@ -37,7 +37,7 @@ export function workflowPosition(task: Task, activity: TaskActivityResponse, age
   const terminal = task.workflow === "refine_pull_request" ? "merge" : "delivery";
   if (task.status === "delivered" || task.workflowState.completion) return { targets: [terminal], state: "done" };
   if (task.status === "cancelled") return { targets: [], state: "idle" };
-  if (task.workflowState.deliveryWait) return { targets: [terminal], state: "waiting" };
+  if (task.workflowState.deliveryWait && task.workflowState.deliveryWait.reason !== "question") return { targets: [terminal], state: "waiting" };
   const sessions = new Map(activity.sessions.map(session => [session.id, session]));
   const turnActors = activity.turns.flatMap(turn => {
     const session = sessions.get(turn.sessionId);

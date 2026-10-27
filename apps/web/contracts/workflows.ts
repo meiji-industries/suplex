@@ -25,7 +25,7 @@ export const ReviewRecordSchema = z.discriminatedUnion("role", [
 
 export type ReviewRecord = z.infer<typeof ReviewRecordSchema>;
 
-export const DeliveryWaitSchema = z.object({ headSha: z.string().min(1), fingerprint: z.string().min(1), since: z.string(), reason: z.enum(["checks", "mergeability", "merge_queue", "observation"]) }).strict();
+export const DeliveryWaitSchema = z.object({ headSha: z.string().min(1), fingerprint: z.string().min(1), since: z.string(), reason: z.enum(["checks", "mergeability", "merge_queue", "observation", "question"]) }).strict();
 
 export const WorkflowCompletionSchema = z.object({ kind: z.enum(["workflow", "external_merge"]), reviewedHead: z.string().nullable(), pullRequestNumber: z.number().int().positive().nullable(), observedAt: z.string() }).strict();
 

@@ -102,9 +102,9 @@ mod agent_selection_tests {
             false,
             None,
         );
-        select_initial_root(&mut f.database, &f.task_id, &selected, f.now).unwrap();
+        select_initial_root(&mut f.database, &f.task_id, &selected, "user_development", f.now).unwrap();
         let first = current_root(&f.database, &f.task_id).unwrap().unwrap();
-        select_initial_root(&mut f.database, &f.task_id, &selected, f.now).unwrap();
+        select_initial_root(&mut f.database, &f.task_id, &selected, "user_development", f.now).unwrap();
         assert_eq!(
             current_root(&f.database, &f.task_id).unwrap().unwrap().id,
             first.id
@@ -119,7 +119,7 @@ mod agent_selection_tests {
             false,
             None,
         );
-        assert!(select_initial_root(&mut f.database, &f.task_id, &changed, f.now).is_err());
+        assert!(select_initial_root(&mut f.database, &f.task_id, &changed, "user_development", f.now).is_err());
     }
 
     #[test]
@@ -144,7 +144,7 @@ mod agent_selection_tests {
             false,
             None,
         );
-        select_delegate(&mut f.database, &f.task_id, &selected, f.now).unwrap();
+        select_delegate(&mut f.database, &f.task_id, &selected, "user_development", f.now).unwrap();
         let next = current_worker(&f.database, &f.task_id).unwrap().unwrap();
         assert_ne!(next.id, old.id);
         assert_eq!(next.profile.as_ref().unwrap().provider, crate::tasks::control::HarnessKind::Opencode);
@@ -154,7 +154,7 @@ mod agent_selection_tests {
                 .join("\n")
                 .contains("Keep prior checks.")
         );
-        select_delegate(&mut f.database, &f.task_id, &selected, f.now).unwrap();
+        select_delegate(&mut f.database, &f.task_id, &selected, "user_development", f.now).unwrap();
         assert_eq!(
             current_worker(&f.database, &f.task_id).unwrap().unwrap().id,
             next.id
@@ -195,7 +195,7 @@ mod agent_selection_tests {
             false,
             None,
         );
-        select_delegate(&mut f.database, &f.task_id, &selected, f.now).unwrap();
+        select_delegate(&mut f.database, &f.task_id, &selected, "user_development", f.now).unwrap();
         let (id, saved_input): (String, String) = f.database.connection().query_row("SELECT id,workflow_input_json FROM suplex_task_sessions WHERE task_id = ?1 AND kind = 'worker' AND advisor_role = 'reviewer' AND is_current = 1", [&f.task_id], |row| Ok((row.get(0)?,row.get(1)?))).unwrap();
         assert_ne!(id, old.id);
         assert_eq!(
@@ -243,7 +243,7 @@ mod agent_selection_tests {
             false,
             None,
         );
-        select_delegate(&mut f.database, &f.task_id, &selected, f.now).unwrap();
+        select_delegate(&mut f.database, &f.task_id, &selected, "user_development", f.now).unwrap();
         assert_eq!(
             current_worker(&f.database, &f.task_id).unwrap().unwrap().id,
             old.id
@@ -303,13 +303,13 @@ mod agent_selection_tests {
                 ],
             )
             .unwrap();
-        assert!(select_delegate(&mut f.database, &f.task_id, &selected, f.now).is_err());
+        assert!(select_delegate(&mut f.database, &f.task_id, &selected, "user_development", f.now).is_err());
         let turn_id = new_turn_id(f.now).unwrap();
         let time = rfc3339_millis(f.now);
         f.database.connection().execute("INSERT INTO suplex_task_sessions (id,task_id,kind,generation,is_current,lifecycle,created_at,updated_at) VALUES ('cleanup-root',?1,'root',1,1,'reserved',?2,?2)", rusqlite::params![f.task_id, time]).unwrap();
         f.database.connection().execute("INSERT INTO suplex_task_turns (id,task_id,session_id,generation,prompt_hash,prompt_text,status,created_at,updated_at) VALUES (?1,?2,'cleanup-root',1,'cleanup','Cleanup','pending_prompt',?3,?3)", rusqlite::params![turn_id, f.task_id, time]).unwrap();
         f.database.connection().execute("UPDATE suplex_task_controls SET limit_pause_json = NULL, recovery_turn_id = ?1 WHERE task_id = ?2", rusqlite::params![turn_id, f.task_id]).unwrap();
-        assert!(select_delegate(&mut f.database, &f.task_id, &selected, f.now).is_err());
+        assert!(select_delegate(&mut f.database, &f.task_id, &selected, "user_development", f.now).is_err());
         assert_eq!(
             current_root(&f.database, &f.task_id).unwrap().unwrap().id,
             "cleanup-root"
@@ -356,8 +356,8 @@ mod agent_selection_tests {
             true,
             Some("stale"),
         );
-        assert!(select_initial_root(&mut f.database, &f.task_id, &wrong, f.now).is_err());
-        select_initial_root(&mut f.database, &f.task_id, &selected, f.now).unwrap();
+        assert!(select_initial_root(&mut f.database, &f.task_id, &wrong, "user_development", f.now).is_err());
+        select_initial_root(&mut f.database, &f.task_id, &selected, "user_development", f.now).unwrap();
         let root = current_root(&f.database, &f.task_id).unwrap().unwrap();
         assert!(
             turns(&f, &root.id)

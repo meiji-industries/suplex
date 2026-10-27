@@ -427,6 +427,7 @@ pub struct AnsweredBy {
 /// Answer only the current human question. Confirmed interrupted native work
 /// is recorded before the answer prompt, all in the same durable transaction.
 /// An agent answer carries its attribution into the Coordinator prompt.
+/// Returns the answer turn.
 pub fn answer_human(
     database: &mut SuplexDatabase,
     task_id: &str,
@@ -435,13 +436,13 @@ pub fn answer_human(
     confirm_commands_stopped: bool,
     answered_by: Option<&AnsweredBy>,
     now: DateTime<Utc>,
-) -> DatabaseResult<()> {
+) -> DatabaseResult<String> {
     let answer =
         answer.trim_matches(|character: char| character.is_whitespace() || character == '\u{feff}');
     if answer.is_empty() {
         return Err(CoordinationError::refused("answer_is_empty").into());
     }
-    database.transaction(true, |database| {
+    let turn_id = database.transaction(true, |database| {
         let control: Option<(Option<String>, Option<String>, Option<String>)> = database
             .connection()
             .query_row(
@@ -486,9 +487,10 @@ pub fn answer_human(
             "UPDATE suplex_task_controls SET status = 'active', human_question = NULL, human_question_id = NULL, recovery_turn_id = NULL, workflow_state_json = json_set(workflow_state_json, '$.deliveryWait', json('null')), wake_at = ?1, updated_at = ?1 WHERE task_id = ?2",
             params![time, task_id],
         )?;
-        Ok(())
+        Ok(id)
     })?;
-    observe_lifecycle(database, task_id)
+    observe_lifecycle(database, task_id)?;
+    Ok(turn_id)
 }
 
 /// An answer to the current plan approval question: the approve option
@@ -1968,11 +1970,12 @@ fn insert_selection_turn(
     generation: i64,
     prompt: &str,
     now: DateTime<Utc>,
-) -> DatabaseResult<()> {
+) -> DatabaseResult<String> {
+    let id = new_turn_id(now)?;
     insert_pending_turn(
         database,
         &NewTurn {
-            id: &new_turn_id(now)?,
+            id: &id,
             task_id,
             session_id,
             generation,
@@ -1981,7 +1984,8 @@ fn insert_selection_turn(
             workflow_input: None,
         },
         &rfc3339_millis(now),
-    )
+    )?;
+    Ok(id)
 }
 fn finish_selection(
     database: &SuplexDatabase,
@@ -2004,6 +2008,7 @@ pub fn select_initial_root(
     database: &mut SuplexDatabase,
     task_id: &str,
     request: &AgentSelection,
+    author_user_id: &str,
     now: DateTime<Utc>,
 ) -> DatabaseResult<()> {
     let rows = root_observation_rows(database, task_id)?;
@@ -2045,7 +2050,8 @@ pub fn select_initial_root(
         insert_selection_turn(database, task_id, &id, generation, &prompt, now)?;
         if direction.is_some() || pending_question.is_some() {
             let note = format!("Human note:\n{}", [direction.clone(), pending_question.clone()].into_iter().flatten().collect::<Vec<_>>().join("\n\n"));
-            insert_selection_turn(database, task_id, &id, generation, &note, now)?;
+            let note_id = insert_selection_turn(database, task_id, &id, generation, &note, now)?;
+            set_turn_author(database, &note_id, author_user_id)?;
         }
         finish_selection(database, task_id, request, state, &time)
     })
@@ -2277,6 +2283,7 @@ pub fn select_delegate(
     database: &mut SuplexDatabase,
     task_id: &str,
     request: &AgentSelection,
+    author_user_id: &str,
     now: DateTime<Utc>,
 ) -> DatabaseResult<()> {
     let rows = root_observation_rows(database, task_id)?;
@@ -2325,7 +2332,8 @@ pub fn select_delegate(
                 None => "Use this selection for future assignments. Do not repeat completed work.".to_owned(),
             }),
         ].into_iter().flatten().collect::<Vec<_>>().join("\n\n");
-        insert_selection_turn(database, task_id, &root_id, root_generation, &format!("Human note:\n{note}"), now)?;
+        let note_id = insert_selection_turn(database, task_id, &root_id, root_generation, &format!("Human note:\n{note}"), now)?;
+        set_turn_author(database, &note_id, author_user_id)?;
         finish_selection(database, task_id, request, state, &selection.time)
     })
 }
@@ -2443,7 +2451,7 @@ pub(crate) use super::persistence::new_turn_id;
 
 pub use super::persistence::{
     NewTurn, RootObservationRows, TaskArtifact, cancel_open_turns, insert_pending_turn,
-    root_observation_rows, task_artifact, task_control,
+    root_observation_rows, set_turn_author, task_artifact, task_control,
 };
 use super::persistence::{session, turn};
 pub use super::replacement::{replace_coordinator, replace_worker, worker_replacement_ready};

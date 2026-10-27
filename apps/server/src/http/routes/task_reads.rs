@@ -29,8 +29,8 @@ use crate::{
                 TaskActivityAction, TaskActivityActionKind, TaskActivityResponse,
                 TaskActivitySession, TaskActivityTurn, TaskDiffResponse, TaskDiffSummaryResponse,
                 TaskExecutionReasoning, TaskExecutionResponse, TaskExecutionSession,
-                TaskExecutionTool, TaskToolStatus, TaskWorkerAssignment, WorkerAssignmentMode,
-                WorkerAssignmentPurpose,
+                TaskExecutionTool, TaskToolStatus, TaskTurnAuthor, TaskWorkerAssignment,
+                WorkerAssignmentMode, WorkerAssignmentPurpose,
             },
             typed::tasks::TaskIdParams,
         },
@@ -213,6 +213,28 @@ fn note_agent_name(database: &SuplexDatabase, prompt: &str) -> Option<String> {
         .ok()
 }
 
+/// The person who wrote an answer or note, by their current name and avatar.
+fn turn_author(
+    database: &SuplexDatabase,
+    turn_id: &str,
+) -> Result<Option<TaskTurnAuthor>, Box<dyn Error + Send + Sync>> {
+    let author: Option<String> = database.connection().query_row(
+        "SELECT author_user_id FROM suplex_task_turns WHERE id = ?1",
+        [turn_id],
+        |row| row.get(0),
+    )?;
+    let Some(author) = author else {
+        return Ok(None);
+    };
+    Ok(
+        crate::identity::auth::public_user(database, &author)?.map(|user| TaskTurnAuthor {
+            id: user.id,
+            name: user.display_name,
+            avatar_seed: user.avatar_seed,
+        }),
+    )
+}
+
 /// The task's audited commands, each with the name of who sent it. The caller
 /// already checked that the reader can read the task.
 fn task_actions(
@@ -281,26 +303,29 @@ pub(crate) fn activity_document(
     let turns = rows
         .turns
         .iter()
-        .map(|turn| TaskActivityTurn {
-            id: turn.id.clone(),
-            session_id: turn.session_id.clone(),
-            prompt: turn.prompt_text.clone(),
-            status: turn.status,
-            prompted_at: turn.prompted_at.clone(),
-            completed_at: turn.completed_at.clone(),
-            result: turn.terminal_observation.clone(),
-            assignment: match &turn.workflow_input {
-                None if rows
-                    .session(&turn.session_id)
-                    .is_some_and(SessionRow::is_plain_worker) =>
-                {
-                    legacy_worker_assignment(&turn.prompt_text)
-                }
-                input => worker_assignment(input.as_ref()),
-            },
-            note_agent_name: note_agent_name(database, &turn.prompt_text),
+        .map(|turn| -> Result<_, Box<dyn Error + Send + Sync>> {
+            Ok(TaskActivityTurn {
+                id: turn.id.clone(),
+                session_id: turn.session_id.clone(),
+                prompt: turn.prompt_text.clone(),
+                status: turn.status,
+                prompted_at: turn.prompted_at.clone(),
+                completed_at: turn.completed_at.clone(),
+                result: turn.terminal_observation.clone(),
+                assignment: match &turn.workflow_input {
+                    None if rows
+                        .session(&turn.session_id)
+                        .is_some_and(SessionRow::is_plain_worker) =>
+                    {
+                        legacy_worker_assignment(&turn.prompt_text)
+                    }
+                    input => worker_assignment(input.as_ref()),
+                },
+                note_agent_name: note_agent_name(database, &turn.prompt_text),
+                author: turn_author(database, &turn.id)?,
+            })
         })
-        .collect::<Vec<_>>();
+        .collect::<Result<Vec<_>, _>>()?;
     Ok(TaskActivityResponse {
         setup: crate::tasks::preparation::read_setup(
             PathBuf::from(

@@ -188,3 +188,14 @@ test("a Rater report renders Markdown in each structured result field", async ()
   expect(element<HTMLElement>(findings, "code").textContent).toBe("answerText");
   expect(element<HTMLElement>(findings, ".prose-suplex li").textContent).toBe("Add a regression check");
 });
+
+test("the approved plan names the person who approved it", async () => {
+  const approval = { ...turn, id: "approval", prompt: JSON.stringify({ question: "Approve?", answer: "Approve plan", planApproval: "approved" }), author: { id: "user_chris", name: "Chris", avatarSeed: "chris" } };
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  roots.push(root);
+  const planApproval = { proposed: "Ship it.", questionId: "q1", approved: "Ship it." };
+  await act(async () => { root.render(<WorkflowHistory task={{ ...task, workflowState: { ...task.workflowState, planApproval } }} activity={{ sessions: [], turns: [approval], setup: { state: "none", exitStatus: null }, actions: [], shellPaneId: null }} />); });
+  expect(element<HTMLElement>(container, "[data-approved-plan]").textContent).toContain("Chris");
+});

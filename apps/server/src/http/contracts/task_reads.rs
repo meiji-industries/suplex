@@ -228,6 +228,19 @@ pub struct TaskActivityTurn {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub note_agent_name: Option<String>,
+    /// The person who wrote this answer or note. Absent on other turns and on
+    /// turns from before Suplex recorded authors.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub author: Option<TaskTurnAuthor>,
+}
+
+#[derive(Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct TaskTurnAuthor {
+    pub id: String,
+    pub name: String,
+    pub avatar_seed: String,
 }
 
 crate::shared::wire_enum! {

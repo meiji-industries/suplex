@@ -10,6 +10,7 @@ import { Markdown } from "../../components/app/markdown.js";
 import { CheckCircle2, ChevronRight, FileText, Gauge, XCircle, type LucideIcon } from "lucide-react";
 import type { ReactNode } from "react";
 import { Collapsible } from "../../components/ui/collapsible.js";
+import { useOptionalCompanyContext } from "../../shell/company-context.js";
 
 const ObservationSchema = z.object({ text: z.string().optional() });
 const short = (sha: string) => sha.slice(0, 10);
@@ -94,6 +95,10 @@ function HistoryTime({ value, turn }: { value: string | null; turn: TaskActivity
 }
 
 /** Review rounds, invalid attempts, and the candidate plans behind a build, each opening its full native report. */
+function planApproval(prompt: string): unknown {
+  try { return (JSON.parse(prompt) as { planApproval?: unknown }).planApproval; } catch { return undefined; }
+}
+
 export function WorkflowHistory({ task, activity }: { task: Task; activity: TaskActivity }) {
   const reviews = task.workflowState.reviews;
   const planners = activity.turns.flatMap(turn => {
@@ -105,6 +110,8 @@ export function WorkflowHistory({ task, activity }: { task: Task; activity: Task
     return session?.kind === "worker" && !session.advisorRole ? [{ session, turn }] : [];
   });
   const approvedPlan = task.workflowState.planApproval?.approved;
+  const user = useOptionalCompanyContext()?.user;
+  const approver = [...activity.turns].reverse().find(turn => planApproval(turn.prompt) === "approved")?.author;
   if (!reviews.length && !planners.length && !approvedPlan) return null;
   return <ol data-workflow-history className="grid min-w-0 divide-y overflow-hidden rounded-md border text-xs" aria-label="Review rounds">
       {reviews.map((record, index) => {
@@ -137,7 +144,7 @@ export function WorkflowHistory({ task, activity }: { task: Task; activity: Task
         </li>;
       })}
       {approvedPlan ? <li className="min-w-0" data-approved-plan>
-        <HistoryRow title="You" icon={CheckCircle2} badge={<Badge variant="secondary">Approved plan</Badge>}>
+        <HistoryRow title={approver ? approver.id === user?.id ? "You" : approver.name : "User"} icon={CheckCircle2} badge={<Badge variant="secondary">Approved plan</Badge>}>
           <Markdown source={approvedPlan} />
         </HistoryRow>
       </li> : null}

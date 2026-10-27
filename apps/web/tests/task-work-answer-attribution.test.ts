@@ -2,9 +2,15 @@ import { expect, test } from "vitest";
 
 import { humanMessage } from "../features/tasks/task-work.js";
 
-test("a human answer and note keep their author", () => {
-  expect(humanMessage(JSON.stringify({ question: "Use main?", answer: "Yes" }))).toEqual({ author: "You", text: "Yes" });
-  expect(humanMessage("Human note:\nCheck the logs")).toEqual({ author: "You", text: "Check the logs" });
+test("a human answer and note show the person who wrote them", () => {
+  const chris = { id: "user_chris", name: "Chris", avatarSeed: "chris" };
+  const answer = JSON.stringify({ question: "Use main?", answer: "Yes" });
+  expect(humanMessage(answer, chris, "user_adam")).toEqual({ author: "Chris", text: "Yes", user: { id: "user_chris", name: "Chris", seed: "chris" } });
+  expect(humanMessage(answer, chris, "user_chris")).toEqual({ author: "You", text: "Yes", user: { id: "user_chris", name: "Chris", seed: "chris" } });
+  expect(humanMessage("Human note:\nCheck the logs", chris, "user_adam")).toMatchObject({ author: "Chris", text: "Check the logs" });
+  // An earlier message without a recorded author is never shown as the viewer's.
+  expect(humanMessage(answer, undefined, "user_adam")).toEqual({ author: "User", text: "Yes" });
+  expect(humanMessage("Human note:\nCheck the logs")).toEqual({ author: "User", text: "Check the logs" });
   expect(humanMessage("Agent note (agent_1):\nSkip the tests")).toEqual({ author: "Agent note", text: "Skip the tests", agentId: "agent_1" });
 });
 

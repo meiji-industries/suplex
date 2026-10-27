@@ -749,9 +749,9 @@ pub fn select_user_task_agent(
         question_id: request.question_id.clone().filter(|_| request.resume),
     };
     if request.role == AgentSelectionRole::Root {
-        root_session_store::select_initial_root(database, task_id, &intent, now)?;
+        root_session_store::select_initial_root(database, task_id, &intent, actor_user_id, now)?;
     } else {
-        root_session_store::select_delegate(database, task_id, &intent, now)?;
+        root_session_store::select_delegate(database, task_id, &intent, actor_user_id, now)?;
     }
     let id = task_id.to_owned();
     database.after_commit(move || wake(id));
@@ -910,7 +910,8 @@ pub fn send_user_note(
             )
             .into());
         }
-        root_session_store::send_note(database, task_id, &request.note, now)?;
+        let turn = root_session_store::send_note(database, task_id, &request.note, now)?;
+        root_session_store::set_turn_author(database, &turn.id, actor_user_id)?;
         let updated =
             repository::task_by_id(database, task_id)?.ok_or_else(TaskError::not_found)?;
         let id = task_id.to_owned();
@@ -997,7 +998,7 @@ pub fn answer_user_task(
         let task = repository::task_by_id(database, task_id)?.ok_or_else(TaskError::not_found)?;
         companies::require_company_edit(database, actor_user_id, &task.company_id)?;
         require_answerable(database, task_id, answer)?;
-        root_session_store::answer_human(
+        let turn_id = root_session_store::answer_human(
             database,
             task_id,
             &answer.question_id,
@@ -1006,6 +1007,7 @@ pub fn answer_user_task(
             None,
             now,
         )?;
+        root_session_store::set_turn_author(database, &turn_id, actor_user_id)?;
         let answered =
             repository::task_by_id(database, task_id)?.ok_or_else(TaskError::not_found)?;
         let id = task_id.to_owned();
@@ -3340,6 +3342,35 @@ mod tests {
             },
         ).unwrap().status, TaskStatus::Active);
         assert_eq!(wakes.load(Ordering::SeqCst), 4);
+        // Every viewer sees who wrote the answer and the note, not themselves.
+        let rows = root_session_store::root_observation_rows(&database, &created.task.id).unwrap();
+        let activity = crate::http::routes::task_reads::activity_document(
+            &database,
+            &rows,
+            &created.task.id,
+            None,
+        )
+        .unwrap();
+        let authored = activity
+            .turns
+            .iter()
+            .filter_map(|turn| {
+                turn.author
+                    .as_ref()
+                    .map(|author| (turn.prompt.as_str(), author.id.as_str()))
+            })
+            .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(
+            authored,
+            [
+                (
+                    r#"{"question":"Use main?","answer":"Proceed"}"#,
+                    user.id.as_str()
+                ),
+                ("Human note:\nCheck the current result.", user.id.as_str()),
+            ]
+            .into()
+        );
         let note_audits: i64 = database
             .connection()
             .query_row(

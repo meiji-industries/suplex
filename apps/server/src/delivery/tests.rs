@@ -1485,6 +1485,7 @@ impl QuestionCase {
             None,
             Utc::now(),
         )
+        .map(|_| ())
         .map_err(|error| error.to_string())
     }
 

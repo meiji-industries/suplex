@@ -350,6 +350,19 @@ pub fn insert_pending_turn(
     Ok(())
 }
 
+/// Records the person who wrote a Coordinator prompt: an answer or a note.
+pub fn set_turn_author(
+    database: &SuplexDatabase,
+    turn_id: &str,
+    user_id: &str,
+) -> DatabaseResult<()> {
+    database.connection().execute(
+        "UPDATE suplex_task_turns SET author_user_id = ?2 WHERE id = ?1",
+        params![turn_id, user_id],
+    )?;
+    Ok(())
+}
+
 pub fn cancel_open_turns(
     database: &SuplexDatabase,
     task_id: &str,

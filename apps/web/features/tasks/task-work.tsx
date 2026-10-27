@@ -5,6 +5,7 @@ import { CircleDashed, MessageSquare, Mic, Square } from "lucide-react";
 import type { Task } from "../../contracts/tasks.js";
 import type { TaskActivityResponse } from "../../contracts/generated/TaskActivityResponse.js";
 import type { TaskWorkerAssignment } from "../../contracts/generated/TaskWorkerAssignment.js";
+import type { TaskTurnAuthor } from "../../contracts/generated/TaskTurnAuthor.js";
 import { useTaskDiff, useTaskDiffSummary } from "./lib/task-queries.js";
 import { useTaskChecks } from "./lib/task-checks.js";
 import { Alert, AlertDescription } from "../../components/ui/alert.js";
@@ -68,16 +69,21 @@ const AnswerSchema = z.object({
   answeredBy: z.object({ agentId: z.string(), agentName: z.string(), userId: z.string(), userName: z.string() }).strict().optional(),
 }).strict();
 
-/** The person or granted agent who wrote a Coordinator prompt, and its text. */
-export function humanMessage(prompt: string): { author: string; text: string; user?: { id: string; name: string }; agentId?: string } | null {
-  if (prompt.startsWith("Human note:\n")) return { author: "You", text: prompt.slice("Human note:\n".length) };
+type HumanMessage = { author: string; text: string; user?: { id: string; name: string; seed?: string }; agentId?: string };
+
+/** The person or granted agent who wrote a Coordinator prompt, and its text. The viewer sees their own messages as "You". */
+export function humanMessage(prompt: string, author?: TaskTurnAuthor, viewerId?: string): HumanMessage | null {
+  const person = (text: string): HumanMessage => author
+    ? { author: author.id === viewerId ? "You" : author.name, text, user: { id: author.id, name: author.name, seed: author.avatarSeed } }
+    : { author: "User", text };
+  if (prompt.startsWith("Human note:\n")) return person(prompt.slice("Human note:\n".length));
   const agentNote = /^Agent note \(([^)\n]+)\):\n/.exec(prompt);
   if (agentNote) return { author: "Agent note", text: prompt.slice(agentNote[0].length), agentId: agentNote[1]! };
   try {
     const answer = AnswerSchema.safeParse(JSON.parse(prompt));
     if (!answer.success) return null;
     const by = answer.data.answeredBy;
-    return by ? { author: `Answered by ${by.agentName} for ${by.userName}`, text: answer.data.answer, user: { id: by.userId, name: by.userName } } : { author: "You", text: answer.data.answer };
+    return by ? { author: `Answered by ${by.agentName} for ${by.userName}`, text: answer.data.answer, user: { id: by.userId, name: by.userName } } : person(answer.data.answer);
   } catch { return null; }
 }
 
@@ -117,8 +123,8 @@ export function TaskWork({ task, activity, onChange, current }: { task: Task; ac
       {activity.turns.filter(turn => turn.assignment || resultText(turn.result) || humanMessage(turn.prompt)?.text).map(turn => {
         const session = activity.sessions.find(session => session.id === turn.sessionId);
         const role = session?.label ?? "Coordinator";
-        const message = humanMessage(turn.prompt);
-        return <div key={turn.id} className="grid min-w-0 gap-5">{turn.assignment ? <WorkerAssignment assignment={turn.assignment} worker={role} profileId={task.rootProfile.profileId} /> : null}{message?.text ? <article className="flex min-w-0 gap-3">{message.agentId ? <EntityAvatar kind="agent" id={message.agentId} name={turn.noteAgentName ?? "Agent"} size="sm" /> : <EntityAvatar kind="user" id={message.user?.id ?? user?.id ?? "you"} name={message.user?.name ?? user?.displayName ?? "You"} {...(!message.user && user?.avatarSeed ? { seed: user.avatarSeed } : {})} size="sm" />}<div className="min-w-0 flex-1 space-y-2"><header className="flex items-center gap-2 text-xs"><span className="font-medium">{message.agentId ? turn.noteAgentName ?? message.author : message.author}</span><span className="text-muted-foreground">{answerLabels[turn.status]}</span></header><Markdown source={message.text} /></div></article> : null}{resultText(turn.result) ? <article className="flex min-w-0 gap-3"><EntityAvatar kind="agent" id={session?.profileId ?? task.rootProfile.profileId} name={role} size="sm" /><div className="min-w-0 flex-1 space-y-2"><header className="flex items-center gap-2 text-xs"><span className="font-medium">{role}</span><span className="text-muted-foreground"><TurnLabel turn={turn} /></span></header><Markdown source={resultText(turn.result)} /></div></article> : null}</div>;
+        const message = humanMessage(turn.prompt, turn.author, user?.id);
+        return <div key={turn.id} className="grid min-w-0 gap-5">{turn.assignment ? <WorkerAssignment assignment={turn.assignment} worker={role} profileId={task.rootProfile.profileId} /> : null}{message?.text ? <article className="flex min-w-0 gap-3">{message.agentId ? <EntityAvatar kind="agent" id={message.agentId} name={turn.noteAgentName ?? "Agent"} size="sm" /> : <EntityAvatar kind="user" id={message.user?.id ?? "unknown-user"} name={message.user?.name ?? message.author} {...(message.user?.seed ? { seed: message.user.seed } : {})} size="sm" />}<div className="min-w-0 flex-1 space-y-2"><header className="flex items-center gap-2 text-xs"><span className="font-medium">{message.agentId ? turn.noteAgentName ?? message.author : message.author}</span><span className="text-muted-foreground">{answerLabels[turn.status]}</span></header><Markdown source={message.text} /></div></article> : null}{resultText(turn.result) ? <article className="flex min-w-0 gap-3"><EntityAvatar kind="agent" id={session?.profileId ?? task.rootProfile.profileId} name={role} size="sm" /><div className="min-w-0 flex-1 space-y-2"><header className="flex items-center gap-2 text-xs"><span className="font-medium">{role}</span><span className="text-muted-foreground"><TurnLabel turn={turn} /></span></header><Markdown source={resultText(turn.result)} /></div></article> : null}</div>;
       })}
       {showConversationPlaceholder ? <Empty><EmptyHeader><EmptyMedia variant="icon"><MessageSquare aria-hidden="true" /></EmptyMedia><EmptyTitle>No messages yet</EmptyTitle><EmptyDescription>{conversationHint}</EmptyDescription></EmptyHeader></Empty> : null}
       {pendingTurn ? <article className="flex min-w-0 gap-3" aria-busy="true" data-task-turn-pending={pendingTurn.status}><EntityAvatar kind="agent" id={pendingSession?.profileId ?? task.rootProfile.profileId} name={pendingRole} size="sm" /><div className="min-w-0 flex-1"><header className="flex items-center gap-2 text-xs"><span className="font-medium">{pendingRole}</span><Spinner /><span className="text-muted-foreground">{pendingTurn.status === "prompted" ? "Working" : turnLabels.pending_prompt}</span></header></div></article> : null}

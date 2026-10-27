@@ -219,10 +219,11 @@ mod tests {
             f.calls("/emails")[0].header("authorization"),
             Some("Bearer re_test")
         );
-        let text = sent["text"].as_str().unwrap();
-        let prefix = format!("{ORIGIN}/auth/email/verify?token=");
-        let start = text.find(&prefix).unwrap() + prefix.len();
-        let token = &text[start..start + 43];
+        assert_eq!(sent["template"]["id"], "suplex-base");
+        let link = sent["template"]["variables"]["ACTION_URL"].as_str().unwrap();
+        let token = link
+            .strip_prefix(&format!("{ORIGIN}/auth/email/verify?token="))
+            .unwrap();
         assert!(token_shape(token));
 
         // A GET (a mail scanner) does not consume the link.

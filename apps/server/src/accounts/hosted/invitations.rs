@@ -57,11 +57,33 @@ async fn send(
     if stored.6.is_some() {
         return Ok(axum::http::StatusCode::NO_CONTENT);
     }
-    let text = format!(
-        "Hi {},\n\nYou have been invited to {} on Suplex.\n\nOpen your invitation:\n{}/invite/{}\n\nDownload Suplex, then open the company and log in with {}.\nConnect over Tailscale or the same local network as the company's host. The host must be online.\n\nThis invitation expires in 7 days. If you did not expect it, you can ignore this email.\n",
-        stored.3, stored.2, accounts.hosted.config.origin, body.id, stored.4
+    let email = super::providers::template_email(
+        config,
+        &stored.4,
+        &format!("Join {} on Suplex", stored.2),
+        json!({
+            "HEADING": format!("Join {} on Suplex", stored.2),
+            "BODY": format!("Hi {}, you have been invited to {} on Suplex.", stored.3, stored.2),
+            "ACTION_LABEL": "Open invitation",
+            "ACTION_URL": format!("{}/invite/{}", accounts.hosted.config.origin, body.id),
+            "NOTE": format!("Download Suplex, then open the company and log in with {}. Connect over Tailscale or the same local network as the company's host. The host must be online. This invitation expires in 7 days. If you did not expect it, you can ignore this email.", stored.4),
+        }),
     );
-    let response = accounts.http.post(format!("{}/emails", accounts.endpoints.resend)).bearer_auth(&config.resend_api_key).header("Idempotency-Key", format!("company-invitation/{digest}")).json(&json!({ "from": config.email_from, "to": [stored.4], "subject": format!("Join {} on Suplex", stored.2), "text": text })).send().await.map_err(|_| HostedError::new(503, Some("email_unavailable"), "Suplex cannot send email now"))?;
+    let response = accounts
+        .http
+        .post(format!("{}/emails", accounts.endpoints.resend))
+        .bearer_auth(&config.resend_api_key)
+        .header("Idempotency-Key", format!("company-invitation/{digest}"))
+        .json(&email)
+        .send()
+        .await
+        .map_err(|_| {
+            HostedError::new(
+                503,
+                Some("email_unavailable"),
+                "Suplex cannot send email now",
+            )
+        })?;
     if !response.status().is_success() {
         return Err(HostedError::new(
             503,
@@ -207,6 +229,12 @@ mod tests {
         assert_eq!(
             calls[0].header("idempotency-key"),
             calls[1].header("idempotency-key")
+        );
+        let sent = calls[0].json();
+        assert_eq!(sent["template"]["id"], "suplex-base");
+        assert_eq!(
+            sent["template"]["variables"]["ACTION_URL"],
+            format!("{}/invite/{}", f.accounts.hosted.config.origin, body.id)
         );
         let page = f.get(&format!("/invite/{}", body.id), &[]).await;
         assert_eq!(page.status(), 200);

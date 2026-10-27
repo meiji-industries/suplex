@@ -142,8 +142,11 @@ startup.
   `https://suplex.sh/auth/callback/github` (production) and
   `https://billing-sandbox.example.com/auth/callback/github` (sandbox).
   The service asks for `read:user user:email`.
-- **Resend**: the domain `suplex.sh` with its DNS records verified, and an API
-  key with sending access.
+- **Resend**: the domain `suplex.sh` with its DNS records verified, an API
+  key with sending access, and the published template `suplex-base`. Every
+  email renders through it with the variables `HEADING`, `BODY`,
+  `ACTION_LABEL`, `ACTION_URL`, and `NOTE`. Edit its design and plain text
+  version in the Resend dashboard; publish to change sent email.
 
 ### Deploy
 

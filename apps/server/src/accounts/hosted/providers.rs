@@ -226,6 +226,26 @@ async fn github(
     })
 }
 
+/// Every email renders through this published Resend template. It takes
+/// `HEADING`, `BODY`, `ACTION_LABEL`, `ACTION_URL`, and `NOTE`; edit its
+/// design and plain text version in the Resend dashboard.
+const EMAIL_TEMPLATE: &str = "suplex-base";
+
+/// The Resend `/emails` body for one email through [`EMAIL_TEMPLATE`].
+pub fn template_email(
+    config: &AccountConfig,
+    to: &str,
+    subject: &str,
+    variables: serde_json::Value,
+) -> serde_json::Value {
+    json!({
+        "from": config.email_from,
+        "to": [to],
+        "subject": subject,
+        "template": { "id": EMAIL_TEMPLATE, "variables": variables },
+    })
+}
+
 /// Sends the magic link. Any failure is `email_unavailable`.
 pub async fn send_magic_link(
     http: &reqwest::Client,
@@ -234,18 +254,21 @@ pub async fn send_magic_link(
     email: &str,
     link: &str,
 ) -> Result<(), HostedError> {
-    let text = format!(
-        "Open this link to sign in to Suplex:\n\n{link}\n\nThe link expires in 15 minutes. If you did not request it, you can ignore this email.\n"
-    );
     let response = http
         .post(format!("{}/emails", endpoints.resend))
         .bearer_auth(&config.resend_api_key)
-        .json(&json!({
-            "from": config.email_from,
-            "to": [email],
-            "subject": "Sign in to Suplex",
-            "text": text,
-        }))
+        .json(&template_email(
+            config,
+            email,
+            "Sign in to Suplex",
+            json!({
+                "HEADING": "Sign in to Suplex",
+                "BODY": "Open this link to sign in to Suplex.",
+                "ACTION_LABEL": "Sign in",
+                "ACTION_URL": link,
+                "NOTE": "The link expires in 15 minutes. If you did not request it, you can ignore this email.",
+            }),
+        ))
         .send()
         .await;
     match response {

@@ -737,7 +737,7 @@ impl DeliveryOperations {
         if !observed.exists {
             return Ok(());
         }
-        // ponytail: the baseline is taken on the first sweep after the ask, so a
+        // The baseline is taken on the first sweep after the ask, so a
         // change that lands in between is missed. Capture the fingerprint at ask
         // time from a persisted observation if that window matters.
         let wait = DeliveryWait {

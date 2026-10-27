@@ -35,7 +35,7 @@ test("each setup step reports complete and incomplete states", () => {
   expect(setupComplete(state({ projects: [] }))).toBe(false);
 });
 
-test("Your stack needs both the GitHub App and the GitHub CLI signed in", () => {
+test("Your stack needs GitHub access and the GitHub CLI signed in", () => {
   for (const id of ["gh-auth", "gh-cli"] as const) {
     const checks = state().checks.filter(check => check.id !== id);
     expect(stepComplete(state({ checks }), "stack")).toBe(false);

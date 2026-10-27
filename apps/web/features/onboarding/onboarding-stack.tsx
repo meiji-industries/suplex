@@ -18,7 +18,7 @@ import type { StepProps } from "./onboarding-wizard.js";
 
 const TOOL_TEXT: Record<(typeof ONBOARDING_TOOL_CHECKS)[number], { name: string; purpose: string }> = {
   git: { name: "Git", purpose: "Source control" },
-  "gh-auth": { name: "GitHub App", purpose: "Branches, pull requests and merges" },
+  "gh-auth": { name: "GitHub", purpose: "Branches, pull requests and merges" },
   "gh-cli": { name: "GitHub CLI", purpose: "Lets agents read pull requests and checks" },
   "herdr-readiness": { name: "Herdr", purpose: "Runs your agents in the background, so you can step in anytime" },
 };

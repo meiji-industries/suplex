@@ -385,45 +385,40 @@ async fn github_cli_check() -> Value {
 }
 
 async fn github_check() -> Value {
-    match github::Access::load().await {
-        // A GitHub CLI token is its own check; this row is Suplex's GitHub App sign-in.
-        Ok(access) if access.source() == github::CredentialSource::Suplex => {
-            match access.current_user_login().await {
-                Ok(login) => check(
+    github_access_check(github::Access::load().await).await
+}
+
+async fn github_access_check(access: github::AccessResult<github::Access>) -> Value {
+    match access {
+        // Validate the same credential that repository operations use.
+        Ok(access) => match access.current_user_login().await {
+            Ok(login) => check(
+                "gh-auth",
+                "GitHub",
+                "healthy",
+                "GitHub is connected",
+                json!({"method":"device","source":access.source().as_str(),"status":"connected","logins":login}),
+            ),
+            Err(error) if matches!(error.downcast_ref::<octocrab::Error>(), Some(octocrab::Error::GitHub { source, .. }) if source.status_code.as_u16() == 401) => {
+                check(
                     "gh-auth",
-                    "GitHub App",
-                    "healthy",
-                    "GitHub is connected",
-                    json!({"method":"device","source":access.source().as_str(),"status":"connected","logins":login}),
-                ),
-                Err(error) if matches!(error.downcast_ref::<octocrab::Error>(), Some(octocrab::Error::GitHub { source, .. }) if source.status_code.as_u16() == 401) => {
-                    check(
-                        "gh-auth",
-                        "GitHub App",
-                        "warning",
-                        "Sign in to GitHub",
-                        json!({"method":"device","source":access.source().as_str(),"status":"sign_in_required"}),
-                    )
-                }
-                Err(_) => check(
-                    "gh-auth",
-                    "GitHub App",
+                    "GitHub",
                     "warning",
-                    "GitHub could not confirm the account",
-                    json!({"method":"device","source":access.source().as_str(),"status":"unavailable"}),
-                ),
+                    "Sign in to GitHub",
+                    json!({"method":"device","source":access.source().as_str(),"status":"sign_in_required"}),
+                )
             }
-        }
-        Ok(_) => check(
-            "gh-auth",
-            "GitHub App",
-            "warning",
-            "Sign in to GitHub",
-            json!({"method":"device","source":"none","status":"sign_in_required"}),
-        ),
+            Err(_) => check(
+                "gh-auth",
+                "GitHub",
+                "warning",
+                "GitHub could not confirm the account",
+                json!({"method":"device","source":access.source().as_str(),"status":"unavailable"}),
+            ),
+        },
         Err(_) => check(
             "gh-auth",
-            "GitHub App",
+            "GitHub",
             "warning",
             "GitHub authentication is not available",
             json!({"method":"device","source":"none","status":"unavailable"}),
@@ -583,6 +578,46 @@ pub fn provider_context(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn github_health_uses_live_access_without_a_suplex_credential() {
+        use axum::{Json, Router, http::StatusCode, routing::get};
+
+        for (status, expected) in [
+            (StatusCode::OK, "connected"),
+            (StatusCode::UNAUTHORIZED, "sign_in_required"),
+            (StatusCode::SERVICE_UNAVAILABLE, "unavailable"),
+        ] {
+            let app = Router::new().route(
+                "/user",
+                get(move || async move {
+                    (
+                        status,
+                        Json(json!({"login":"fixture-user", "message":"fixture response"})),
+                    )
+                }),
+            );
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let url = format!("http://{}", listener.local_addr().unwrap());
+            let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+            let access = github::Access::for_api(&url, Some("fixture-token".into())).unwrap();
+            assert!(access.source() != github::CredentialSource::Suplex);
+            let result = github_access_check(Ok(access)).await;
+            server.abort();
+            assert_eq!(result["details"]["status"], expected);
+            assert_eq!(
+                result["status"],
+                if status == StatusCode::OK {
+                    "healthy"
+                } else {
+                    "warning"
+                }
+            );
+            if status == StatusCode::OK {
+                assert_eq!(result["details"]["logins"], "fixture-user");
+            }
+        }
+    }
 
     #[tokio::test]
     async fn tailscale_health_runs_the_cli_in_cli_mode() {

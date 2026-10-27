@@ -483,7 +483,7 @@ pub fn answer_human(
         let time = rfc3339_millis(now);
         insert_pending_turn(database, &NewTurn { id: &id, task_id, session_id: &root.id, generation: root.generation, assignment_hash: None, prompt: &prompt, workflow_input: None }, &time)?;
         database.connection().execute(
-            "UPDATE suplex_task_controls SET status = 'active', human_question = NULL, human_question_id = NULL, recovery_turn_id = NULL, wake_at = ?1, updated_at = ?1 WHERE task_id = ?2",
+            "UPDATE suplex_task_controls SET status = 'active', human_question = NULL, human_question_id = NULL, recovery_turn_id = NULL, workflow_state_json = json_set(workflow_state_json, '$.deliveryWait', json('null')), wake_at = ?1, updated_at = ?1 WHERE task_id = ?2",
             params![time, task_id],
         )?;
         Ok(())
@@ -1445,6 +1445,75 @@ pub fn resume_delivery_wait(
         insert_root_wake(database, task_id, &root, prompt, now)?;
         Ok(true)
     })
+}
+
+/// Records the pull request state the open question depends on, only while
+/// that same question is open and no other wait is stored.
+pub fn capture_question_wait(
+    database: &mut SuplexDatabase,
+    task_id: &str,
+    question_id: &str,
+    wait: &DeliveryWait,
+    now: DateTime<Utc>,
+) -> DatabaseResult<bool> {
+    database.transaction(true, |database| {
+        let open: bool = database.connection().query_row(
+            "SELECT EXISTS(SELECT 1 FROM suplex_task_controls WHERE task_id = ?1 AND status = 'waiting_human' AND human_question_id = ?2 AND limit_pause_json IS NULL AND recovery_turn_id IS NULL)",
+            params![task_id, question_id],
+            |row| row.get(0),
+        )?;
+        let mut state = workflow_state(database, task_id)?;
+        if !open || state.delivery_wait.is_some() {
+            return Ok(false);
+        }
+        state.delivery_wait = Some(wait.clone());
+        write_workflow_state(database, task_id, &state, now)?;
+        Ok(true)
+    })
+}
+
+/// Withdraws the open question whose pull request state changed and resumes
+/// Coordinator with the new observation. A human answer that commits first
+/// makes this a no-op, and this makes a later stale answer a mismatch.
+pub fn withdraw_question_for_delivery_change(
+    database: &mut SuplexDatabase,
+    task_id: &str,
+    expected: &DeliveryWait,
+    prompt: impl FnOnce(&str) -> String,
+    now: DateTime<Utc>,
+) -> DatabaseResult<bool> {
+    let withdrawn = database.transaction(true, |database| {
+        let question: Option<String> = database
+            .connection()
+            .query_row(
+                "SELECT human_question FROM suplex_task_controls WHERE task_id = ?1 AND status = 'waiting_human' AND human_question IS NOT NULL AND human_question_id IS NOT NULL AND limit_pause_json IS NULL AND recovery_turn_id IS NULL",
+                [task_id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        let Some(question) = question else {
+            return Ok(false);
+        };
+        let mut state = workflow_state(database, task_id)?;
+        let Some(root) = current_root(database, task_id)?.filter(|root| {
+            root.lifecycle != SessionLifecycle::Cancelled
+                && state.delivery_wait.as_ref() == Some(expected)
+        }) else {
+            return Ok(false);
+        };
+        state.delivery_wait = None;
+        write_workflow_state(database, task_id, &state, now)?;
+        database.connection().execute(
+            "UPDATE suplex_task_controls SET status = 'active', human_question = NULL, human_question_id = NULL, human_question_options_json = '[]' WHERE task_id = ?1",
+            [task_id],
+        )?;
+        insert_root_wake(database, task_id, &root, &prompt(&question), now)?;
+        Ok(true)
+    })?;
+    if withdrawn {
+        observe_lifecycle(database, task_id)?;
+    }
+    Ok(withdrawn)
 }
 
 /// TypeScript `clearDeliveryWait`: clears exactly the expected wait.

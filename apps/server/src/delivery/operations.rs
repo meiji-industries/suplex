@@ -677,18 +677,104 @@ impl DeliveryOperations {
     /// delivered pull request batches, independently of cleanup sweeps.
     pub(super) async fn observe_host_task(&self, task_id: &str) -> DatabaseResult<()> {
         let control = self.get(task_id)?;
+        let wait = control.workflow_state.delivery_wait.as_ref();
         match control.status {
-            TaskStatus::Active if control.workflow_state.delivery_wait.is_some() => {
+            TaskStatus::Active if wait.is_some() => {
                 self.observe_delivery_wait(task_id).await.map(|_| ())
             }
-            TaskStatus::Active | TaskStatus::WaitingHuman => {
-                self.observe(task_id).await.map(|_| ())
+            TaskStatus::WaitingHuman
+                if wait.is_some_and(|wait| wait.reason == DeliveryWaitReason::Question) =>
+            {
+                self.observe_delivery_wait(task_id).await.map(|_| ())
+            }
+            TaskStatus::Active => self.observe(task_id).await.map(|_| ()),
+            TaskStatus::WaitingHuman => {
+                self.observe(task_id).await?;
+                self.capture_question_wait(task_id).await
             }
             TaskStatus::Backlog
             | TaskStatus::Queued
             | TaskStatus::Cancelled
             | TaskStatus::Delivered => Ok(()),
         }
+    }
+
+    /// Records the pull request state an open delivery question depends on, so
+    /// the sweep can withdraw the question when GitHub makes it moot. A
+    /// question a person must decide (plan approval, task limit, command
+    /// cleanup) gets no wait.
+    async fn capture_question_wait(&self, task_id: &str) -> DatabaseResult<()> {
+        let control = self.get(task_id)?;
+        let (Some(question_id), Some(number)) = (
+            control.human_question_id.as_deref(),
+            control.pull_request_number(),
+        ) else {
+            return Ok(());
+        };
+        let plan_question = control
+            .workflow_state
+            .plan_approval
+            .as_ref()
+            .is_some_and(|approval| approval.question_id == question_id);
+        if control.status != TaskStatus::WaitingHuman
+            || control.delivery_target == DeliveryTarget::LocalWorktree
+            || control.workflow_state.delivery_wait.is_some()
+            || control.limit_pause.is_some()
+            || control.recovery_turn_id.is_some()
+            || plan_question
+        {
+            return Ok(());
+        }
+        let observed = self
+            .for_task(task_id)
+            .await?
+            .observe_pull_request(
+                control.delivery_intent.repository.as_str(),
+                control.delivery_intent.head_branch.as_str(),
+                Some(number),
+            )
+            .await?;
+        if !observed.exists {
+            return Ok(());
+        }
+        // ponytail: the baseline is taken on the first sweep after the ask, so a
+        // change that lands in between is missed. Capture the fingerprint at ask
+        // time from a persisted observation if that window matters.
+        let wait = DeliveryWait {
+            head_sha: observed.head_sha.clone().unwrap_or_default(),
+            fingerprint: delivery_wait_fingerprint(&observed),
+            since: crate::shared::time::now_millis_rfc3339(),
+            reason: DeliveryWaitReason::Question,
+        };
+        root_session_store::capture_question_wait(
+            &mut self.open(OpenMode::ReadWrite)?,
+            task_id,
+            question_id,
+            &wait,
+            Utc::now(),
+        )?;
+        Ok(())
+    }
+
+    fn withdraw_question(
+        &self,
+        task_id: &str,
+        expected: &DeliveryWait,
+        observed: &Observation,
+    ) -> DatabaseResult<&'static str> {
+        let summary = Self::observation_summary(observed);
+        let withdrawn = root_session_store::withdraw_question_for_delivery_change(
+            &mut self.open(OpenMode::ReadWrite)?,
+            task_id,
+            expected,
+            |question| {
+                format!(
+                    "Suplex withdrew your question because the pull request changed while you waited for an answer. Question: {question}. Current observation: {summary}. If the change resolves the question, continue the workflow. If it does not, ask the question again."
+                )
+            },
+            Utc::now(),
+        )?;
+        Ok(if withdrawn { "changed" } else { "none" })
     }
 
     /// TypeScript `observeDeliveryWait`: one persisted wait is consumed at most once.
@@ -698,10 +784,23 @@ impl DeliveryOperations {
             .workflow_state
             .delivery_wait
             .clone()
-            .filter(|_| control.status == TaskStatus::Active)
+            .filter(|wait| match control.status {
+                TaskStatus::Active => true,
+                TaskStatus::WaitingHuman => wait.reason == DeliveryWaitReason::Question,
+                TaskStatus::Backlog
+                | TaskStatus::Queued
+                | TaskStatus::Cancelled
+                | TaskStatus::Delivered => false,
+            })
         else {
             return Ok("none");
         };
+        let question = wait.reason == DeliveryWaitReason::Question;
+        if question && control.status == TaskStatus::Active {
+            // The question it belonged to is gone; nothing waits on it.
+            self.clear_delivery_wait(task_id, &wait)?;
+            return Ok("none");
+        }
         let repository = control.delivery_intent.repository.as_str().to_owned();
         let github = self.for_task(task_id).await?;
         let number = control.pull_request_number();
@@ -731,6 +830,9 @@ impl DeliveryOperations {
             let pull = github.get_pull_request(&repository, number).await?;
             self.adopt_known_pull(&self.get(task_id)?, &pull, Adoption::default())
                 .await?;
+            if question && self.get(task_id)?.status == TaskStatus::WaitingHuman {
+                return self.withdraw_question(task_id, &wait, &observed);
+            }
             self.clear_delivery_wait(task_id, &wait)?;
             return Ok("finished");
         }
@@ -746,6 +848,9 @@ impl DeliveryOperations {
             if observed.exists && same_delivery_wait_fingerprint(&wait.fingerprint, &observed) {
                 return Ok("unchanged");
             }
+            if question {
+                return self.withdraw_question(task_id, &wait, &observed);
+            }
             Self::changed_delivery_prompt(&wait, &observed)
         };
         Ok(if self.resume_delivery_wait(task_id, &wait, &prompt)? {
@@ -757,16 +862,20 @@ impl DeliveryOperations {
 
     /// The Coordinator prompt for a delivery state that changed during a wait.
     fn changed_delivery_prompt(wait: &DeliveryWait, observed: &Observation) -> String {
-        let summary = crate::shared::js_json::stringify(&json!({
-            "exists": observed.exists, "state": observed.state, "headSha": observed.head_sha,
-            "isDraft": observed.is_draft, "mergeable": observed.mergeable,
-            "mergeStateStatus": observed.merge_state_status, "reviewDecision": observed.review_decision,
-            "checks": observed.checks,
-        }));
+        let summary = Self::observation_summary(observed);
         format!(
             "Delivery state changed while Suplex waited ({}). Current observation: {summary}. If checks failed, obtain their evidence and continue the workflow; if the pull request is eligible, request merge_pull_request with your current review; otherwise observe_checks again.",
             wait.reason
         )
+    }
+
+    fn observation_summary(observed: &Observation) -> String {
+        crate::shared::js_json::stringify(&json!({
+            "exists": observed.exists, "state": observed.state, "headSha": observed.head_sha,
+            "isDraft": observed.is_draft, "mergeable": observed.mergeable,
+            "mergeStateStatus": observed.merge_state_status, "reviewDecision": observed.review_decision,
+            "checks": observed.checks,
+        }))
     }
 
     /// TypeScript `checksObservation`: null without a pull request or when GitHub cannot answer.

@@ -201,6 +201,7 @@ crate::shared::wire_enum! {
         Mergeability = "mergeability",
         MergeQueue = "merge_queue",
         Observation = "observation",
+        Question = "question",
     }
 }
 
@@ -212,6 +213,7 @@ crate::shared::wire_enum! {
 }
 
 /// TypeScript `DeliveryWait`: one persisted wait on GitHub delivery state.
+/// A `question` wait holds the pull request state an open human question depends on.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct DeliveryWait {

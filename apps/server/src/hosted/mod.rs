@@ -25,6 +25,7 @@ pub fn router(accounts: &Accounts) -> Router {
         .merge(accounts::server::router(accounts.clone()))
         .merge(accounts::start::router(accounts.clone()))
         .merge(accounts::delete::router(accounts.clone()))
+        .merge(accounts::resend::router(accounts.clone()))
         .merge(site::router(accounts.clone()))
         .layer(middleware::from_fn_with_state(
             accounts.hosted.config.origin.clone(),
@@ -60,9 +61,9 @@ async fn shutdown_signal() {
     }
 }
 
-/// Serves until SIGINT or SIGTERM. The billing processor and the account
-/// sweep run at startup and every 30 seconds, and the processor once more
-/// after the listener closes.
+/// Serves until SIGINT or SIGTERM. The billing processor, the account sweep,
+/// and the Resend contact outbox run at startup and every 30 seconds, and
+/// the processor once more after the listener closes.
 pub async fn serve() -> Result<(), String> {
     let env = |name: &str| std::env::var(name).ok();
     let config = billing::server::load_config(&env)?;
@@ -106,6 +107,10 @@ pub async fn serve() -> Result<(), String> {
                 if accounts.sweep().is_err() {
                     eprintln!("accounts: sweep failed");
                     exceptions::report_loop_failure("account_sweep");
+                }
+                if accounts.sync_resend().await.is_err() {
+                    eprintln!("accounts: resend sync failed");
+                    exceptions::report_loop_failure("resend_sync");
                 }
             }
         })

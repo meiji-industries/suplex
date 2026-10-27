@@ -60,7 +60,8 @@ The wire types are in `apps/server/src/accounts/wire.rs`.
 | `POST /v1/auth/email` | Body `{attemptId, email}`. Sends a magic link through Resend; 204. Five sends per address per hour (429 `rate_limited`). A Resend failure is 503 `email_unavailable`. |
 | `POST /v1/auth/logout` | `Authorization: Bearer <token>`. Deletes the token hash. Always 204. |
 | `GET /v1/account/email-updates` | `Authorization: Bearer <token>`. Returns `{subscribed}`, the account's latest product update email choice. An account with no choice is not subscribed. |
-| `PUT /v1/account/email-updates` | `Authorization: Bearer <token>`. Body `{subscribed, source, wording}`. `source` is `onboarding` or `settings`; `wording` is the text the person saw. Adds one row and returns `{subscribed}`. |
+| `PUT /v1/account/email-updates` | `Authorization: Bearer <token>`. Body `{subscribed, source, wording}`. `source` is `onboarding` or `settings`; `email` is refused. `wording` is the text the person saw. Adds one row, queues the Resend contact change, and returns `{subscribed}`. A Resend failure does not change the response. |
+| `POST /webhooks/resend` | Resend webhook, signed with Svix. Records unsubscribes from the unsubscribe link in an email. 401 for a bad or stale signature, 503 without `RESEND_WEBHOOK_SECRET`. See [Product update emails](#product-update-emails). |
 | `GET /auth/start?attempt=&provider=` | 303 to Google or GitHub with a new single-use `state`. |
 | `GET /auth/callback/{google,github}` | Exchanges the code, completes the attempt, 303 to `/auth/done`. |
 | `GET /auth/email/verify?token=` | A one-button form. It does not consume the link, because mail scanners fetch links. |
@@ -91,7 +92,11 @@ account token is minted at poll time, so no plaintext token rests in SQLite.
 | `account_magic_links` | Token hash, attempt, email, `used_at`. Deleted with their attempt. |
 | `account_tokens` | Token hash, account, installation. |
 | `company_invitations` | Invitation hash, owner account, company, recipient, host address, expiry, and delivery time. |
-| `account_email_updates` | Each product update email choice: account, subscribed or not, source, the wording shown, and time. Rows are never edited; the latest row per account is its current choice. Deleted with the account. |
+| `account_email_updates` | Each product update email choice: account, subscribed or not, source (`onboarding`, `settings`, or `email`), the wording shown, and time. Rows are never edited; the latest row per account is its current choice. Deleted with the account. |
+| `account_resend_outbox` | Resend contact changes, events, and contact deletions to send, by email. Retried with backoff and never dropped. Keeps the latest sent contact change per email; a sent deletion removes every row for its email. Not deleted with the account. |
+
+At startup the service also upgrades an older `account_email_updates` table to
+accept the `email` source. It rebuilds the table and keeps every row and ID.
 
 ### Product update emails
 
@@ -104,8 +109,47 @@ person used: the checkbox text from onboarding, or the switch label and
 description from Settings. suplex.sh keeps this as proof of when and how each
 person opted in or out.
 
-There is no email service integration yet. To export the current subscribers for
-an email tool such as Resend, run this on the hosted machine:
+`account_email_updates` is the record of consent. suplex.sh keeps Resend
+contacts in step with it (`apps/server/src/accounts/hosted/resend.rs`):
+
+- Each choice queues a contact change in `account_resend_outbox`, in the same
+  transaction as the choice. A subscribe sends `PATCH /contacts/{email}` with
+  `unsubscribed: false` and the first word of the account name as
+  `first_name`; if Resend has no such contact, it sends `POST /contacts`. An
+  unsubscribe sends `unsubscribed: true`; a missing contact counts as done.
+  A person who never subscribed is not sent to Resend.
+- A change from not subscribed to subscribed also sends the event
+  `email_updates.subscribed` (`POST /events/send`) with the payload
+  `{source}`, after the contact change. A second subscribe sends no event.
+- The service sends the queue right after each choice and every 30 seconds.
+  Changes for one email go in order. A failure waits 30 seconds, 2 minutes,
+  10 minutes, then one hour between tries, and blocks the later changes for
+  that email. Nothing is dropped. A Resend failure never fails or changes the
+  `PUT` response.
+- Account deletion queues `DELETE /contacts/{email}` and drops unsent changes.
+  The queued row is keyed by email, so it is sent after the account row is
+  gone.
+- The unsubscribe link in an email (`{{{RESEND_UNSUBSCRIBE_URL}}}`) changes the
+  contact in Resend. Resend sends `contact.updated` to `POST /webhooks/resend`.
+  When `data.unsubscribed` is true, the account with that email has a
+  subscribed latest choice, and `data.updated_at` is not earlier than that
+  choice, the service adds a row with source `email` and the wording
+  "Unsubscribed with the link in a Suplex email." Settings > Profile then shows
+  the switch off. The row is not sent back to Resend, and unsent subscribe
+  changes for the email become unsubscribes. The service also ignores the
+  event when it is older than the last contact change it sent, or when the
+  last change it sent was an unsubscribe: that event is the echo of its own
+  change. A webhook never records an opt-in. Other events, unknown addresses,
+  and repeats answer 200 and change nothing.
+- The webhook verifies the Svix signature over the raw body: HMAC-SHA256,
+  keyed with the base64 part of the `whsec_` secret, of
+  `{svix-id}.{svix-timestamp}.{body}`, compared with each `v1,<signature>` in
+  `svix-signature`. A timestamp more than 5 minutes from the service clock is
+  refused.
+
+Choices made before the sync shipped are not sent automatically. To import the
+current subscribers, run this on the hosted machine and import the file into
+Resend contacts once:
 
 ```sh
 suplex hosted email-updates > subscribers.csv
@@ -114,8 +158,12 @@ suplex hosted email-updates > subscribers.csv
 `BILLING_DATABASE_PATH` must name the existing service database; the command
 fails instead of creating an empty one. It prints
 `email,name,subscribed_at,source,wording` for each account whose
-latest choice is subscribed. Before each send, export the list again and honor
-every unsubscribe from the email tool here as well.
+latest choice is subscribed. Import only these people, and do not import them
+again later: from then on the sync keeps the contacts up to date.
+
+The transactional template `suplex-base` (sign-in and invitation email) is
+separate from product update emails and is not affected by a contact's
+`unsubscribed` value.
 
 ### Configuration
 
@@ -130,6 +178,7 @@ startup.
 | `ACCOUNT_GITHUB_CLIENT_ID`, `ACCOUNT_GITHUB_CLIENT_SECRET` | GitHub OAuth app. |
 | `RESEND_API_KEY` | Resend API key for the sending domain. |
 | `ACCOUNT_EMAIL_FROM` | Sender, for example `Suplex <login@suplex.sh>`. |
+| `RESEND_WEBHOOK_SECRET` | Optional. The signing secret (`whsec_...`) of the Resend webhook. Without it `POST /webhooks/resend` answers 503 and unsubscribes made in email do not come back to suplex.sh. A value that is not a `whsec_` secret stops the service at startup. |
 | `ACCOUNT_REVIEW_EMAIL` | Optional. An email login for this address completes at once and sends no email, so App Review can log in. Use an unguessable address such as `review-<random>@suplex.sh`, keep it in 1Password, and give it only to App Review. It works on `/account/delete` too. |
 
 ### Provider setup
@@ -146,7 +195,22 @@ startup.
   key with sending access, and the published template `suplex-base`. Every
   email renders through it with the variables `HEADING`, `BODY`,
   `ACTION_LABEL`, `ACTION_URL`, and `NOTE`. Edit its design and plain text
-  version in the Resend dashboard; publish to change sent email.
+  version in the Resend dashboard; publish to change sent email. The API key
+  also needs access to contacts and events for the product update email sync.
+- **Resend product update emails**, in the Resend dashboard:
+  1. Webhooks: add `https://suplex.sh/webhooks/resend` with the event
+     `contact.updated`. Copy its signing secret to `RESEND_WEBHOOK_SECRET`.
+  2. Events: define the event `email_updates.subscribed`. Its payload has
+     `source` (`onboarding` or `settings`).
+  3. Automations: trigger on `email_updates.subscribed`. Directly after the
+     trigger, add the condition `contact.unsubscribed eq false`, so a person
+     who unsubscribed before the email goes out gets nothing.
+  4. Every Automation and broadcast template must include
+     `{{{RESEND_UNSUBSCRIBE_URL}}}`. That link is how a person unsubscribes in
+     email, and the webhook brings the choice back to suplex.sh.
+  5. Test with a throwaway address: subscribe in Settings > Profile, check the
+     contact and the Automation run in Resend, open the unsubscribe link, and
+     check that the switch in Settings > Profile is off.
 
 ### Deploy
 
@@ -159,7 +223,8 @@ and deploys this checkout to `suplex-production`, including `/terms` and
 fly secrets set --app suplex-production \
   ACCOUNT_GOOGLE_CLIENT_ID=... ACCOUNT_GOOGLE_CLIENT_SECRET=... \
   ACCOUNT_GITHUB_CLIENT_ID=... ACCOUNT_GITHUB_CLIENT_SECRET=... \
-  RESEND_API_KEY=... ACCOUNT_EMAIL_FROM='Suplex <login@suplex.sh>'
+  RESEND_API_KEY=... ACCOUNT_EMAIL_FROM='Suplex <login@suplex.sh>' \
+  RESEND_WEBHOOK_SECRET=whsec_...
 ```
 
 Locally, `mise run hosted:tunnel` and `mise run hosted:dev` run the service
@@ -279,12 +344,18 @@ GitHub, Resend, Stripe, RevenueCat, 1Password, and Framer.
 4. To keep `download_started`, set `BILLING_TELEMETRY=true` and
    `BILLING_POSTHOG_KEY` as Fly secrets, if they are not set.
 5. Create the Google OAuth client, the two GitHub OAuth apps, and the Resend
-   domain and API key as described in Provider setup.
-6. Store the six account values in the Suplex 1Password vault: production
-   values for Fly, and sandbox values as fields of the `.env.development` item
+   domain and API key as described in Provider setup. Do the Resend product
+   update email steps too: the webhook, the event, and the Automation with its
+   `contact.unsubscribed eq false` condition.
+6. Store the six account values and `RESEND_WEBHOOK_SECRET` in the Suplex
+   1Password vault: production values for Fly, and sandbox values as fields of the `.env.development` item
    that `scripts/billing-dev.env` reads. Until the sandbox fields exist,
    `mise run hosted:dev` runs with sign-in off.
 7. Run the `fly secrets set` command in Deploy. Fly restarts the machine.
 8. Paste the updated `apps/server/src/hosted/framer-attribution.js` into Framer.
    In a private browser, check that a download link gets `?visitor=` only
    after you accept analytics.
+9. Import the people who subscribed before the Resend sync shipped, once:
+   `suplex hosted email-updates > subscribers.csv`, then import the file into
+   Resend contacts. Test the sync with a throwaway address as described in
+   Provider setup.

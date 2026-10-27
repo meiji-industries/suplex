@@ -1,6 +1,7 @@
 //! Product update emails. A linked host records each choice a person makes
 //! with its wording, so suplex.sh can show who opted in and when.
 //! `suplex hosted email-updates` prints the subscribed accounts as CSV.
+//! Each choice also queues its Resend contact change (see `resend`).
 
 use axum::{
     Json, Router,
@@ -10,7 +11,7 @@ use axum::{
 };
 use rusqlite::{Connection, OptionalExtension, params};
 
-use super::Accounts;
+use super::{Accounts, resend};
 use crate::{
     accounts::wire::{EmailUpdatesBody, EmailUpdatesState, token_shape},
     billing::hosted::{HostedError, HostedResult, server::JsonBody},
@@ -73,11 +74,19 @@ async fn write(
         .ok_or_else(|| HostedError::new(400, None, "Invalid request"))?;
     let now = accounts.hosted.now_iso();
     accounts.hosted.immediate(|db| {
+        resend::enqueue_choice(db, &id, body.subscribed, body.source, &now)?;
         db.execute(
             "INSERT INTO account_email_updates (account_id, subscribed, source, wording, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
             params![id, body.subscribed, body.source.as_str(), body.wording.trim(), now],
         )
     })?;
+    // The stored choice is the answer; Resend gets it now or on a later pass.
+    let sync = accounts.clone();
+    tokio::spawn(async move {
+        if sync.sync_resend().await.is_err() {
+            eprintln!("accounts: resend sync failed");
+        }
+    });
     Ok(Json(EmailUpdatesState {
         subscribed: body.subscribed,
     }))

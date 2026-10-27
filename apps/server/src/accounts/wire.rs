@@ -245,8 +245,9 @@ impl CompanyInvitationBody {
 }
 
 crate::shared::wire_enum! {
-    /// Where a person made their email updates choice.
-    pub enum EmailUpdatesSource { Onboarding = "onboarding", Settings = "settings" }
+    /// Where a person made their email updates choice. Only suplex.sh records
+    /// `email`, from the unsubscribe link in an email; a host never sends it.
+    pub enum EmailUpdatesSource { Onboarding = "onboarding", Settings = "settings", Email = "email" }
 }
 
 const MAX_WORDING: usize = 500;
@@ -263,7 +264,9 @@ pub struct EmailUpdatesBody {
 
 impl EmailUpdatesBody {
     pub fn valid(&self) -> bool {
-        !self.wording.trim().is_empty() && self.wording.chars().count() <= MAX_WORDING
+        self.source != EmailUpdatesSource::Email
+            && !self.wording.trim().is_empty()
+            && self.wording.chars().count() <= MAX_WORDING
     }
 }
 

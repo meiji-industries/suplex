@@ -16,7 +16,7 @@ use rusqlite::params;
 use serde::Deserialize;
 
 use super::{
-    Accounts,
+    Accounts, resend,
     start::{escape, html, message},
     store,
 };
@@ -203,8 +203,11 @@ async fn delete(State(accounts): State<Accounts>, Form(form): Form<AttemptForm>)
         return confirm(State(accounts), Query(form)).await;
     }
     // Attempts and tokens cascade. Billing records stay: the law requires them.
-    // PostHog keeps its person record; delete it there on request.
+    // PostHog keeps its person record; delete it there on request. The Resend
+    // contact deletion is queued by email, so it outlives the account row.
+    let now = accounts.hosted.now_iso();
     let deleted = accounts.hosted.immediate(|db| {
+        resend::enqueue_delete(db, &account.id, &now)?;
         db.execute(
             "DELETE FROM company_invitations WHERE owner_account_id = ?1",
             params![account.id],
@@ -214,6 +217,12 @@ async fn delete(State(accounts): State<Accounts>, Form(form): Form<AttemptForm>)
             params![account.id],
         )?;
         db.execute("DELETE FROM accounts WHERE id = ?1", params![account.id])
+    });
+    let sync = accounts.clone();
+    tokio::spawn(async move {
+        if sync.sync_resend().await.is_err() {
+            eprintln!("accounts: resend sync failed");
+        }
     });
     match deleted {
         Ok(_) => html(

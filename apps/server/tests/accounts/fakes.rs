@@ -35,6 +35,8 @@ use crate::{
 
 pub const ORIGIN: &str = "https://suplex.test";
 pub const INSTALLATION: &str = "installation_1";
+/// `whsec_` and the base64 of "suplex-resend-webhook-key".
+pub const RESEND_WEBHOOK_SECRET: &str = "whsec_c3VwbGV4LXJlc2VuZC13ZWJob29rLWtleQ==";
 pub const MANIFEST: &str = "version: 1.2.3\nfiles:\n  - url: Suplex-1.2.3-arm64.dmg\n  - url: Suplex-1.2.3-arm64-mac.zip\npath: Suplex-1.2.3-arm64.dmg\n";
 
 type Answers = Arc<Mutex<HashMap<String, (u16, String)>>>;
@@ -48,6 +50,7 @@ pub fn account_config() -> AccountConfig {
         resend_api_key: "re_test".into(),
         email_from: "Suplex <login@suplex.test>".into(),
         review_email: None,
+        resend_webhook_secret: Some(RESEND_WEBHOOK_SECRET.into()),
     }
 }
 
@@ -71,6 +74,8 @@ fn default_answers() -> HashMap<String, (u16, String)> {
             ]),
         ),
         ("POST /emails", json!({"id": "email_1"})),
+        ("POST /contacts", json!({"id": "contact_1"})),
+        ("POST /events/send", json!({"object": "event"})),
     ]
     .into_iter()
     .map(|(key, value)| (key.to_owned(), (200, value.to_string())))

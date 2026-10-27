@@ -1,7 +1,8 @@
 //! The hosted account service: OAuth, magic links, and attempt polling.
 //! A private host starts an attempt with `sha256(verifier)`, the browser
 //! completes it at a provider, and the host polls with the verifier to
-//! receive an account token once. See docs/accounts.md.
+//! receive an account token once. Product update email choices sync to
+//! Resend contacts through `resend`. See docs/accounts.md.
 
 use std::{ops::Deref, sync::Arc, time::Duration};
 
@@ -24,6 +25,7 @@ pub mod delete;
 pub mod email_updates;
 pub mod invitations;
 pub mod providers;
+pub mod resend;
 pub mod server;
 pub mod start;
 pub mod store;
@@ -58,6 +60,9 @@ pub struct AccountConfig {
     /// `ACCOUNT_REVIEW_EMAIL`: an email login for this address completes at
     /// once, without an email. App Review has no inbox; keep the address secret.
     pub review_email: Option<String>,
+    /// `RESEND_WEBHOOK_SECRET`: the `whsec_` signing secret of the Resend
+    /// webhook. Without it `/webhooks/resend` answers 503.
+    pub resend_webhook_secret: Option<String>,
 }
 
 /// Reads the account configuration. `None` until every account variable is
@@ -65,6 +70,13 @@ pub struct AccountConfig {
 /// origin is `BILLING_PUBLIC_ORIGIN`.
 pub fn load_config(env: &dyn Fn(&str) -> Option<String>) -> Result<Option<AccountConfig>, String> {
     let set = |name: &str| env(name).filter(|value| !value.is_empty());
+    let resend_webhook_secret = set("RESEND_WEBHOOK_SECRET");
+    if resend_webhook_secret
+        .as_deref()
+        .is_some_and(|secret| resend::signing_key(secret).is_none())
+    {
+        return Err("RESEND_WEBHOOK_SECRET must be a whsec_ secret".to_owned());
+    }
     Ok(match ACCOUNT_VARIABLES.map(set) {
         [None, None, None, None, None, None] => None,
         [
@@ -82,6 +94,7 @@ pub fn load_config(env: &dyn Fn(&str) -> Option<String>) -> Result<Option<Accoun
             resend_api_key,
             email_from,
             review_email: set("ACCOUNT_REVIEW_EMAIL").and_then(|email| normalize_email(&email)),
+            resend_webhook_secret,
         }),
         _ => {
             return Err(format!(
@@ -136,6 +149,8 @@ pub struct Inner {
     pub config: Option<AccountConfig>,
     pub endpoints: Endpoints,
     pub http: reqwest::Client,
+    /// One Resend outbox pass at a time, so each change is sent once and in order.
+    pub resend_sync: tokio::sync::Mutex<()>,
 }
 
 impl Deref for Accounts {
@@ -159,6 +174,7 @@ impl Accounts {
             config,
             endpoints,
             http,
+            resend_sync: tokio::sync::Mutex::new(()),
         }))
     }
 

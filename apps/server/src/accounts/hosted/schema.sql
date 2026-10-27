@@ -56,13 +56,35 @@ CREATE TABLE IF NOT EXISTS company_invitations (
 
 -- Each choice about product update emails, oldest first. The latest row for
 -- an account is its current choice; every row keeps the wording the person saw.
+-- `email` rows come from the unsubscribe link in an email, through Resend.
 CREATE TABLE IF NOT EXISTS account_email_updates (
   id INTEGER PRIMARY KEY,
   account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
   subscribed INTEGER NOT NULL CHECK (subscribed IN (0, 1)),
-  source TEXT NOT NULL CHECK (source IN ('onboarding', 'settings')),
+  source TEXT NOT NULL CHECK (source IN ('onboarding', 'settings', 'email')),
   wording TEXT NOT NULL,
   created_at TEXT NOT NULL
 );
 
 CREATE INDEX IF NOT EXISTS account_email_updates_account ON account_email_updates (account_id, id);
+
+-- Resend contact changes to send, oldest first. Rows are keyed by email with
+-- no account reference, so a contact deletion outlives its account. The
+-- latest sent contact change per email stays; sent events are deleted.
+CREATE TABLE IF NOT EXISTS account_resend_outbox (
+  id INTEGER PRIMARY KEY,
+  email TEXT NOT NULL,
+  kind TEXT NOT NULL CHECK (kind IN ('contact', 'event', 'delete')),
+  unsubscribed INTEGER CHECK (unsubscribed IN (0, 1)),
+  first_name TEXT,
+  event TEXT,
+  payload_json TEXT,
+  attempt_count INTEGER NOT NULL DEFAULT 0,
+  next_attempt_at TEXT,
+  last_error TEXT,
+  created_at TEXT NOT NULL,
+  sent_at TEXT
+);
+
+CREATE INDEX IF NOT EXISTS account_resend_outbox_email ON account_resend_outbox (email, id);
+CREATE INDEX IF NOT EXISTS account_resend_outbox_pending ON account_resend_outbox (id) WHERE sent_at IS NULL;

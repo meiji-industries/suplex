@@ -8,10 +8,10 @@ use crate::accounts::wire::{AuthProvider, HostedAccount, LoginClient};
 
 const SCHEMA: &str = include_str!("schema.sql");
 
-/// Creates the account tables and adds the columns an older database lacks.
+/// Creates the account tables and upgrades the tables an older database has.
 pub fn apply_schema(db: &Connection) -> rusqlite::Result<()> {
     db.execute_batch(SCHEMA)?;
-    // One column, no migration runner. Add one when a second change arrives.
+    // Two ad hoc upgrades, no migration runner. Add one at the third.
     let has_client = db
         .prepare("SELECT 1 FROM pragma_table_info('account_attempts') WHERE name = 'client'")?
         .exists([])?;
@@ -20,7 +20,32 @@ pub fn apply_schema(db: &Connection) -> rusqlite::Result<()> {
             "ALTER TABLE account_attempts ADD COLUMN client TEXT NOT NULL DEFAULT 'desktop'",
         )?;
     }
-    Ok(())
+    allow_email_source(db)
+}
+
+/// SQLite cannot change a CHECK constraint, so a table without the `email`
+/// source is rebuilt from SCHEMA. Every row keeps its id.
+fn allow_email_source(db: &Connection) -> rusqlite::Result<()> {
+    let definition: String = db.query_row(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'account_email_updates'",
+        [],
+        |row| row.get(0),
+    )?;
+    if definition.contains("'email'") {
+        return Ok(());
+    }
+    let transaction = db.unchecked_transaction()?;
+    transaction.execute_batch(
+        "ALTER TABLE account_email_updates RENAME TO account_email_updates_old;
+         DROP INDEX account_email_updates_account;",
+    )?;
+    transaction.execute_batch(SCHEMA)?;
+    transaction.execute_batch(
+        "INSERT INTO account_email_updates (id, account_id, subscribed, source, wording, created_at)
+           SELECT id, account_id, subscribed, source, wording, created_at FROM account_email_updates_old;
+         DROP TABLE account_email_updates_old;",
+    )?;
+    transaction.commit()
 }
 
 pub struct Attempt {

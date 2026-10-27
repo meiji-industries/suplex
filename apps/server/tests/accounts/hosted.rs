@@ -377,6 +377,19 @@ mod tests {
         assert_eq!(load(&[]).unwrap().unwrap().email_from, "f");
         assert_eq!(load(&[]).unwrap().unwrap().review_email.as_deref(), Some("review-1@suplex.test"));
         assert_eq!(load(&["ACCOUNT_REVIEW_EMAIL"]).unwrap().unwrap().review_email, None);
+        assert_eq!(load(&[]).unwrap().unwrap().resend_webhook_secret, None);
+        let with_secret = |secret: &str| {
+            load_config(&|name| match name {
+                "RESEND_WEBHOOK_SECRET" => Some(secret.to_owned()),
+                _ => full.get(name).map(|value| (*value).to_owned()),
+            })
+        };
+        assert_eq!(
+            with_secret("whsec_a2V5").unwrap().unwrap().resend_webhook_secret.as_deref(),
+            Some("whsec_a2V5")
+        );
+        assert!(with_secret("a2V5").is_err());
+        assert!(with_secret("whsec_not base64").is_err());
         let without = load(&[
             "ACCOUNT_GOOGLE_CLIENT_ID",
             "ACCOUNT_GOOGLE_CLIENT_SECRET",

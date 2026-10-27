@@ -12,7 +12,6 @@ use axum::{
     routing::{get, post},
 };
 use rusqlite::{OptionalExtension, params};
-use serde_json::json;
 
 pub fn router() -> Router<Accounts> {
     Router::new()
@@ -57,17 +56,33 @@ async fn send(
     if stored.6.is_some() {
         return Ok(axum::http::StatusCode::NO_CONTENT);
     }
+    let subject = format!("Join {} on Suplex", stored.2);
     let email = super::providers::template_email(
         config,
         &stored.4,
-        &format!("Join {} on Suplex", stored.2),
-        json!({
-            "HEADING": format!("Join {} on Suplex", stored.2),
-            "BODY": format!("Hi {}, you have been invited to {} on Suplex.", stored.3, stored.2),
-            "ACTION_LABEL": "Open invitation",
-            "ACTION_URL": format!("{}/invite/{}", accounts.hosted.config.origin, body.id),
-            "NOTE": format!("Download Suplex, then open the company and log in with {}. Connect over Tailscale or the same local network as the company's host. The host must be online. This invitation expires in 7 days. If you did not expect it, you can ignore this email.", stored.4),
-        }),
+        &subject,
+        &[
+            ("HEADING", &subject),
+            (
+                "BODY",
+                &format!(
+                    "Hi {}, you have been invited to {} on Suplex.",
+                    stored.3, stored.2
+                ),
+            ),
+            ("ACTION_LABEL", "Open invitation"),
+            (
+                "ACTION_URL",
+                &format!("{}/invite/{}", accounts.hosted.config.origin, body.id),
+            ),
+            (
+                "NOTE",
+                &format!(
+                    "Download Suplex, then open the company and log in with {}. Connect over Tailscale or the same local network as the company's host. The host must be online. This invitation expires in 7 days. If you did not expect it, you can ignore this email.",
+                    stored.4
+                ),
+            ),
+        ],
     );
     let response = accounts
         .http
@@ -232,6 +247,12 @@ mod tests {
         );
         let sent = calls[0].json();
         assert_eq!(sent["template"]["id"], "suplex-base");
+        // Resend inserts variables into the HTML unescaped.
+        assert_eq!(
+            sent["template"]["variables"]["HEADING"],
+            "Join Test &lt;Company&gt; on Suplex"
+        );
+        assert_eq!(sent["subject"], "Join Test <Company> on Suplex");
         assert_eq!(
             sent["template"]["variables"]["ACTION_URL"],
             format!("{}/invite/{}", f.accounts.hosted.config.origin, body.id)

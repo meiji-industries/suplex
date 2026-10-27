@@ -232,12 +232,29 @@ async fn github(
 const EMAIL_TEMPLATE: &str = "suplex-base";
 
 /// The Resend `/emails` body for one email through [`EMAIL_TEMPLATE`].
+///
+/// Resend inserts each value into the template HTML unchanged, inside
+/// attributes too, so this escapes every value. Resend also puts the same
+/// value in the plain text version, where an escaped `&`, `<`, `>`, or `"`
+/// shows as its entity. `'` stays unescaped: the template quotes attributes
+/// with `"`, and names such as O'Brien are common.
 pub fn template_email(
     config: &AccountConfig,
     to: &str,
     subject: &str,
-    variables: serde_json::Value,
+    variables: &[(&str, &str)],
 ) -> serde_json::Value {
+    let variables: serde_json::Map<String, serde_json::Value> = variables
+        .iter()
+        .map(|(key, value)| {
+            let value = value
+                .replace('&', "&amp;")
+                .replace('<', "&lt;")
+                .replace('>', "&gt;")
+                .replace('"', "&quot;");
+            (key.to_string(), value.into())
+        })
+        .collect();
     json!({
         "from": config.email_from,
         "to": [to],
@@ -261,13 +278,13 @@ pub async fn send_magic_link(
             config,
             email,
             "Sign in to Suplex",
-            json!({
-                "HEADING": "Sign in to Suplex",
-                "BODY": "Open this link to sign in to Suplex.",
-                "ACTION_LABEL": "Sign in",
-                "ACTION_URL": link,
-                "NOTE": "The link expires in 15 minutes. If you did not request it, you can ignore this email.",
-            }),
+            &[
+                ("HEADING", "Sign in to Suplex"),
+                ("BODY", "Open this link to sign in to Suplex."),
+                ("ACTION_LABEL", "Sign in"),
+                ("ACTION_URL", link),
+                ("NOTE", "The link expires in 15 minutes. If you did not request it, you can ignore this email."),
+            ],
         ))
         .send()
         .await;

@@ -14,7 +14,7 @@ export function CompaniesSection({ companies, users, pendingAction, onChangeMemb
   const [search, setSearch] = useState("");
   const visible = companies.filter((company) => matchesSearch(search, company.name, company.issueCode, company.status));
   return (
-<section>
+<section className="mb-10">
             <SettingsToolbar searchLabel="Search companies" searchPlaceholder="Search companies" searchWidth="compact" searchValue={search} onSearchChange={setSearch} />
             <SettingsDataTable label="Companies" columns={COMPANY_COLUMNS} className="mt-5">
               <SettingsTableGroup columnCount={COMPANY_COLUMNS.length} count={visible.length} label="Companies">

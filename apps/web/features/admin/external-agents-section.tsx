@@ -63,7 +63,7 @@ export function ExternalAgentsSection({
   onClearPendingAction: () => void;
 }): ReactElement {
   return (
-    <section>
+    <section className="mb-10">
       <SettingsSectionHeader
         title="External agents"
         description="An external agent connects to Suplex with its own credential. It can open only the projects that you select."

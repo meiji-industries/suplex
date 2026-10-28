@@ -337,7 +337,7 @@ export function AdminView(): ReactElement {
         ) : null}
 
         {isAgents ? (
-          <div className="space-y-12">
+          <div>
             <InternalAgentsManager agents={agents} onSaved={reload} />
             <ExternalAgentsSection
               agents={externalAgents}

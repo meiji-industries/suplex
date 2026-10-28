@@ -138,7 +138,7 @@ export function InternalAgentsSection({
   onDeleteAgent: (agent: ApiProfile) => Promise<void>;
 }): ReactElement {
   return (
-    <section>
+    <section className="mb-10">
       <SettingsSectionHeader
         title="Internal agents"
         description="Suplex runs an internal agent as the Coordinator or Worker for a task."

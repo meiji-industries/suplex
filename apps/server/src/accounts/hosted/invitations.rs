@@ -100,6 +100,7 @@ async fn send(
     let subject = format!("Join {} on Suplex", stored.2);
     let email = super::providers::template_email(
         config,
+        super::providers::EMAIL_TEMPLATE,
         &stored.4,
         &subject,
         &[

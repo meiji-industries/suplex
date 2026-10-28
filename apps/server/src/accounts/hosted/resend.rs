@@ -255,7 +255,7 @@ impl Accounts {
                 }
             }
         }
-        Ok(())
+        self.send_welcomes(config).await
     }
 
     /// Sends one change. A missing contact is already unsubscribed or

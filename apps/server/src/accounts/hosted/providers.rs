@@ -226,12 +226,12 @@ async fn github(
     })
 }
 
-/// Every email renders through this published Resend template. It takes
-/// `HEADING`, `BODY`, `ACTION_LABEL`, `ACTION_URL`, and `NOTE`; edit its
-/// design and plain text version in the Resend dashboard.
-const EMAIL_TEMPLATE: &str = "suplex-base";
+/// Sign-in and invitation emails render through this published Resend
+/// template. It takes `HEADING`, `BODY`, `ACTION_LABEL`, `ACTION_URL`, and
+/// `NOTE`; edit its design and plain text version in the Resend dashboard.
+pub const EMAIL_TEMPLATE: &str = "suplex-base";
 
-/// The Resend `/emails` body for one email through [`EMAIL_TEMPLATE`].
+/// The Resend `/emails` body for one email through a published `template`.
 ///
 /// Resend inserts each value into the template HTML unchanged, inside
 /// attributes too, so this escapes every value. Resend also puts the same
@@ -240,6 +240,7 @@ const EMAIL_TEMPLATE: &str = "suplex-base";
 /// with `"`, and names such as O'Brien are common.
 pub fn template_email(
     config: &AccountConfig,
+    template: &str,
     to: &str,
     subject: &str,
     variables: &[(&str, &str)],
@@ -259,7 +260,7 @@ pub fn template_email(
         "from": config.email_from,
         "to": [to],
         "subject": subject,
-        "template": { "id": EMAIL_TEMPLATE, "variables": variables },
+        "template": { "id": template, "variables": variables },
     })
 }
 
@@ -276,6 +277,7 @@ pub async fn send_magic_link(
         .bearer_auth(&config.resend_api_key)
         .json(&template_email(
             config,
+            EMAIL_TEMPLATE,
             email,
             "Sign in to Suplex",
             &[

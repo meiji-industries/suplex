@@ -197,6 +197,12 @@ startup.
   `ACTION_LABEL`, `ACTION_URL`, and `NOTE`. Edit its design and plain text
   version in the Resend dashboard; publish to change sent email. The API key
   also needs access to contacts and events for the product update email sync.
+- **Resend welcome email**: the published template `suplex-welcome`, with the
+  variable `NAME` (fallback `there`). A new account with no company
+  invitation for its email gets it once, greeting its first name. Signup
+  queues it in `account_welcome_emails`; the Resend pass sends it within 30
+  seconds and retries a failure with backoff. Invited members and
+  `ACCOUNT_REVIEW_EMAIL` get none.
 - **Resend product update emails**, in the Resend dashboard:
   1. Webhooks: add `https://suplex.sh/webhooks/resend` with the event
      `contact.updated`. Copy its signing secret to `RESEND_WEBHOOK_SECRET`.

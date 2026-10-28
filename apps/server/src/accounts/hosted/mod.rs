@@ -29,6 +29,7 @@ pub mod resend;
 pub mod server;
 pub mod start;
 pub mod store;
+pub mod welcome;
 
 #[cfg(test)]
 pub(crate) mod fakes {
@@ -377,6 +378,13 @@ impl Accounts {
             };
             let (account, created) =
                 store::upsert_account(db, &candidate, &email, name.as_deref(), &now)?;
+            let review = self
+                .config
+                .as_ref()
+                .is_some_and(|config| config.review_email.as_deref() == Some(email.as_str()));
+            if created && !review && attempt.installation_id != delete::DELETE_INSTALLATION {
+                welcome::enqueue(db, &account.id, &email, &now)?;
+            }
             store::complete_attempt(db, attempt_id, &account.id, provider, &now)?;
             let event = if created {
                 "account_signed_up"

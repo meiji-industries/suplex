@@ -29,6 +29,16 @@ CREATE TABLE IF NOT EXISTS account_magic_links (
   used_at TEXT
 );
 
+-- One welcome email for each account that signed up without a company
+-- invitation. The Resend pass sends it and retries a failure with backoff.
+CREATE TABLE IF NOT EXISTS account_welcome_emails (
+  account_id TEXT PRIMARY KEY REFERENCES accounts(id) ON DELETE CASCADE,
+  attempt_count INTEGER NOT NULL DEFAULT 0,
+  next_attempt_at TEXT,
+  created_at TEXT NOT NULL,
+  sent_at TEXT
+);
+
 CREATE TABLE IF NOT EXISTS account_tokens (
   token_hash TEXT PRIMARY KEY,
   account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,

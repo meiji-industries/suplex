@@ -10,7 +10,7 @@ const context = vi.hoisted(() => ({ value: {} as Record<string, unknown> }));
 vi.mock("../shell/company-context.js", () => ({ useCompanyContext: () => context.value }));
 vi.mock("../features/admin/company-users-api.js", () => ({ listCompanyInvitations: vi.fn(async () => []) }));
 vi.mock("../features/admin/company-invitations.js", () => ({
-  CompanyInvitations: ({ open }: { open: boolean }) => (open ? <div role="dialog">Add User</div> : null),
+  CompanyInvitations: ({ open }: { open: boolean }) => (open ? <div role="dialog">Invite User</div> : null),
 }));
 vi.mock("../features/admin/users-section.js", () => ({ UsersSection: () => null }));
 vi.mock("../features/settings/settings-layout.js", () => ({
@@ -44,10 +44,10 @@ afterEach(async () => {
   document.body.replaceChildren();
 });
 
-test("arriving with the invite parameter opens Add User once and clears the parameter", async () => {
+test("arriving with the invite parameter opens Invite User once and clears the parameter", async () => {
   window.history.replaceState({}, "", "/admin?company=company-1&invite=1");
   await mount();
-  expect(document.querySelector('[role="dialog"]')?.textContent).toBe("Add User");
+  expect(document.querySelector('[role="dialog"]')?.textContent).toBe("Invite User");
   expect(window.location.search).toBe("?company=company-1");
 });
 
@@ -57,7 +57,7 @@ test("the Users page stays closed without the invite parameter", async () => {
   expect(document.querySelector('[role="dialog"]')).toBeNull();
 });
 
-test("a non-administrator does not open Add User", async () => {
+test("a non-administrator does not open Invite User", async () => {
   context.value = { ...context.value, user: { id: "u2", role: "member" } };
   window.history.replaceState({}, "", "/admin?invite=1");
   await mount();

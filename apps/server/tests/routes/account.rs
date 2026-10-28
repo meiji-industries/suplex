@@ -476,7 +476,7 @@ mod tests {
         f.state.with_database(|db| {
             crate::accounts::link(db, &owner, &"o".repeat(43)).unwrap();
             db.connection().execute("INSERT INTO suplex_companies (id, name, status, created_at) VALUES ('company_test', 'Test', 'active', '2026-10-03T00:00:00.000Z')", []).unwrap();
-            let invitation = crate::accounts::members::prepare(db, "user_development", "company_test", "Ada", "ada@example.com", "https://suplex.example.test:4111", Utc::now()).unwrap();
+            let invitation = crate::accounts::members::prepare(db, "user_development", "company_test", "Ada", "ada@example.com", crate::identity::auth::UserRole::Member, "https://suplex.example.test:4111", Utc::now()).unwrap();
             db.connection().execute("UPDATE suplex_company_invitations SET sent_at = created_at WHERE id = ?1", [&invitation.id]).unwrap();
         });
         let app = crate::http::router(f.state.clone());

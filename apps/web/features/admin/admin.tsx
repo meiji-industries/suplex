@@ -64,7 +64,7 @@ export function AdminView(): ReactElement {
   const isAgents = window.location.pathname.endsWith("/agents");
   const isCompanies = window.location.pathname.endsWith("/companies");
 
-  // Billing links here with ?invite=1 so the Add User dialog is open on arrival.
+  // Billing links here with ?invite=1 so the Invite User dialog is open on arrival.
   // Clear it so a reload or Back does not open the dialog again.
   const companyId = currentCompany?.id;
   const canInvite = !loading && user?.role === "admin" && companyId !== undefined && !isAgents && !isCompanies;
@@ -273,7 +273,7 @@ export function AdminView(): ReactElement {
     ? "Agents plan and build the work of each task. Suplex runs internal agents. External agents connect to Suplex."
     : isCompanies
       ? "Each company has its own projects and tasks. Select the accounts that can open each company."
-      : "Members must connect to this company’s host over Tailscale or the same local network.";
+      : undefined;
   const activeHref = withCompany(window.location.pathname, currentCompany?.id);
   const backHref = withCompany("/projects", currentCompany?.id);
 
@@ -316,7 +316,7 @@ export function AdminView(): ReactElement {
       activeHref={activeHref}
       contentClassName=""
     >
-      <SettingsContent width="wide" title={viewTitle} description={viewDescription} actions={!isAgents && !isCompanies ? <Button size="sm" disabled={!currentCompany} onClick={() => setInviteOpen(true)}>Add User</Button> : null}>
+      <SettingsContent width="wide" title={viewTitle} description={viewDescription} actions={!isAgents && !isCompanies ? <Button size="sm" disabled={!currentCompany} onClick={() => setInviteOpen(true)}>Invite User</Button> : null}>
         {!isAgents &&
         !isCompanies ? (
           <UsersSection

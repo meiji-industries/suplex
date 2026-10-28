@@ -22,6 +22,8 @@ pub struct CompanyInvitation {
     pub user_id: String,
     pub full_name: String,
     pub email: String,
+    /// The invited user's current role, which they keep when they join.
+    pub role: UserRole,
     pub expires_at: String,
     pub sent_at: Option<String>,
     pub accepted_at: Option<String>,
@@ -29,7 +31,7 @@ pub struct CompanyInvitation {
 }
 
 pub fn list(database: &SuplexDatabase, company_id: &str) -> DatabaseResult<Vec<CompanyInvitation>> {
-    let mut statement = database.connection().prepare("SELECT id, company_id, user_id, full_name, email, expires_at, sent_at, accepted_at, revoked_at FROM suplex_company_invitations WHERE company_id = ?1 ORDER BY created_at DESC")?;
+    let mut statement = database.connection().prepare("SELECT i.id, i.company_id, i.user_id, i.full_name, i.email, u.role, i.expires_at, i.sent_at, i.accepted_at, i.revoked_at FROM suplex_company_invitations i JOIN suplex_users u ON u.id = i.user_id WHERE i.company_id = ?1 ORDER BY i.created_at DESC")?;
     Ok(statement
         .query_map([company_id], |row| {
             Ok(CompanyInvitation {
@@ -38,10 +40,11 @@ pub fn list(database: &SuplexDatabase, company_id: &str) -> DatabaseResult<Vec<C
                 user_id: row.get(2)?,
                 full_name: row.get(3)?,
                 email: row.get(4)?,
-                expires_at: row.get(5)?,
-                sent_at: row.get(6)?,
-                accepted_at: row.get(7)?,
-                revoked_at: row.get(8)?,
+                role: row.get(5)?,
+                expires_at: row.get(6)?,
+                sent_at: row.get(7)?,
+                accepted_at: row.get(8)?,
+                revoked_at: row.get(9)?,
             })
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?)
@@ -53,6 +56,7 @@ pub fn prepare(
     company_id: &str,
     full_name: &str,
     email: &str,
+    role: UserRole,
     host_origin: &str,
     now: DateTime<Utc>,
 ) -> DatabaseResult<CompanyInvitationBody> {
@@ -86,6 +90,7 @@ pub fn prepare(
             && invite.accepted_at.is_none()
             && invite.expires_at > rfc3339_millis(now)
     }) {
+        set_invited_role(database, &existing.user_id, role)?;
         body.id = existing.id;
         body.full_name = existing.full_name;
         return Ok(body);
@@ -98,6 +103,7 @@ pub fn prepare(
             let user = auth::public_user(database, &id)?.ok_or("User missing")?;
             if user.status == UserStatus::Revoked { return Err(PublicFailure::new(409, "This user was revoked").into()); }
             if user.company_ids.iter().any(|id| id == company_id) && user.status == UserStatus::Active { return Err(PublicFailure::new(409, "This user is already a member").into()); }
+            set_invited_role(database, &id, role)?;
             id
         } else {
             let id = random_hex_id("user")?;
@@ -105,7 +111,7 @@ pub fn prepare(
             let base = if base.len() < 2 { format!("{base}_") } else { base };
             let taken = database.connection().query_row("SELECT 1 FROM suplex_users WHERE username = ?1 COLLATE NOCASE", [&base], |_| Ok(())).optional()?.is_some();
             let username = if taken { format!("{base}-{}", &id[id.len() - 8..]) } else { base };
-            database.connection().execute("INSERT INTO suplex_users (id, display_name, username, avatar_seed, role, status, created_at, updated_at, identity_version) VALUES (?1, ?2, ?3, ?3, 'member', 'pending', ?4, ?4, 1)", params![id, full_name, username, timestamp])?;
+            database.connection().execute("INSERT INTO suplex_users (id, display_name, username, avatar_seed, role, status, created_at, updated_at, identity_version) VALUES (?1, ?2, ?3, ?3, ?5, 'pending', ?4, ?4, 1)", params![id, full_name, username, timestamp, role])?;
             database.connection().execute("INSERT INTO suplex_account_users (user_id, email) VALUES (?1, ?2)", params![id, body.email])?;
             id
         };
@@ -118,6 +124,15 @@ pub fn prepare(
         Ok(())
     })?;
     Ok(body)
+}
+
+/// A pending user takes the invited role. An active user only gains admin: an invitation never demotes.
+fn set_invited_role(database: &SuplexDatabase, user_id: &str, role: UserRole) -> DatabaseResult<()> {
+    database.connection().execute(
+        "UPDATE suplex_users SET role = ?2 WHERE id = ?1 AND (status = 'pending' OR ?2 = 'admin')",
+        params![user_id, role],
+    )?;
+    Ok(())
 }
 
 pub fn accept(
@@ -250,7 +265,7 @@ mod tests {
             let invited = account("member@example.com", "user_67e55044-10b1-426f-9247-bb680e5fe0c9");
             let unknown = account("unknown@example.com", "user_67e55044-10b1-426f-9247-bb680e5fe0ca");
             assert!(accept(db, &unknown, now).is_err());
-            let invitation = prepare(db, "user_development", "company_test", "Invited Member", &invited.email, "https://host.example.com", now).unwrap();
+            let invitation = prepare(db, "user_development", "company_test", "Invited Member", &invited.email, UserRole::Member, "https://host.example.com", now).unwrap();
             assert!(accept(db, &invited, now).is_err(), "unsent invitation grants nothing");
             db.connection().execute("UPDATE suplex_company_invitations SET sent_at = ?2 WHERE id = ?1", params![invitation.id, rfc3339_millis(now)]).unwrap();
             assert!(accept(db, &invited, now + Duration::days(8)).is_err(), "expired invitation grants nothing");
@@ -272,6 +287,29 @@ mod tests {
             assert!(accept(db, &invited, now).is_err());
             let current = auth::get_user_by_session(db, &token, now).unwrap().unwrap();
             assert!(!session_verified(db, &token, &current).unwrap());
+        });
+    }
+
+    #[test]
+    fn invited_role_applies_on_join_and_never_demotes() {
+        let (state, _) = state();
+        state.with_database(|db| {
+            let now = Utc::now();
+            auth::development_sign_in(db, now).unwrap();
+            super::super::link(db, &account("owner@example.com", "user_67e55044-10b1-426f-9247-bb680e5fe0c8"), &"k".repeat(43)).unwrap();
+            db.connection().execute("INSERT INTO suplex_companies (id, name, status, created_at) VALUES ('company_test', 'Test', 'active', ?1)", [rfc3339_millis(now)]).unwrap();
+            let invited = account("admin@example.com", "user_67e55044-10b1-426f-9247-bb680e5fe0c9");
+            prepare(db, "user_development", "company_test", "Invited Admin", &invited.email, UserRole::Member, "https://host.example.com", now).unwrap();
+            // A second send before the person joins changes the role they join with.
+            let invitation = prepare(db, "user_development", "company_test", "Invited Admin", &invited.email, UserRole::Admin, "https://host.example.com", now).unwrap();
+            db.connection().execute("UPDATE suplex_company_invitations SET sent_at = ?2 WHERE id = ?1", params![invitation.id, rfc3339_millis(now)]).unwrap();
+            let token = accept(db, &invited, now).unwrap();
+            let user = auth::get_user_by_session(db, &token, now).unwrap().unwrap();
+            assert_eq!(user.role, UserRole::Admin);
+            db.connection().execute("INSERT INTO suplex_companies (id, name, status, created_at) VALUES ('company_other', 'Other', 'active', ?1)", [rfc3339_millis(now)]).unwrap();
+            db.connection().execute("DELETE FROM suplex_memberships WHERE user_id = ?1 AND company_id = 'company_other'", [&user.id]).unwrap();
+            prepare(db, "user_development", "company_other", "Invited Admin", &invited.email, UserRole::Member, "https://host.example.com", now).unwrap();
+            assert_eq!(auth::public_user(db, &user.id).unwrap().unwrap().role, UserRole::Admin);
         });
     }
 }

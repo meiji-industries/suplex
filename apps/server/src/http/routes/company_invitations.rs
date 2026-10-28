@@ -5,7 +5,7 @@ use crate::{
         access::{authorize_profile, with_cookies},
         error::ApiError,
     },
-    identity::{companies, remote_access_repository},
+    identity::{auth::UserRole, companies, remote_access_repository},
     shared::{PublicFailure, time::rfc3339_millis},
 };
 use axum::{
@@ -30,6 +30,7 @@ pub struct CompanyInvitationsResponse {
 struct InviteBody {
     full_name: String,
     email: String,
+    role: UserRole,
 }
 
 pub fn router() -> Router<AppState> {
@@ -113,6 +114,7 @@ async fn send(
             company_id,
             &body.full_name,
             &body.email,
+            body.role,
             &origin,
             Utc::now(),
         )
@@ -177,7 +179,7 @@ mod tests {
         let app = crate::http::router(state.clone());
         let path = "/api/companies/company_invite/invitations";
         let cookie = format!("sid_v1={admin}");
-        let body = json!({"fullName":"New Member", "email":"member@example.com"});
+        let body = json!({"fullName":"New Member", "email":"member@example.com", "role":"member"});
         assert_eq!(
             call(&app, "POST", path, Some(&cookie), Some(body.clone()))
                 .await

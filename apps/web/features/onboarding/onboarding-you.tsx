@@ -5,7 +5,7 @@ import { AvatarEditor } from "../../components/app/entity-avatar.js";
 import type { BillingSummary } from "../../contracts/billing.js";
 import { useCompanyContext } from "../../shell/company-context.js";
 import { EMAIL_UPDATES_LABEL, EMAIL_UPDATES_NOTE, getAccount, getEmailUpdates, setEmailUpdates } from "../account/lib/account-api.js";
-import { useProfileDraft } from "../profiles/lib/profile-draft.js";
+import { toUsername, useProfileDraft } from "../profiles/lib/profile-draft.js";
 import { getBillingSummary } from "../settings/lib/billing-api.js";
 import { OnboardingFrame, PrimaryButton } from "./onboarding-frame.js";
 import { startTrialIfAvailable, type OnboardingData } from "./onboarding.js";
@@ -56,7 +56,7 @@ export function YouStep({ onBack, onNext }: StepProps & { data: OnboardingData }
     try {
       const displayName = profile.displayName.trim();
       // The board asks for no username; keep the one on file, else derive one from the name.
-      const username = profile.username.trim() || displayName.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "me";
+      const username = profile.username.trim() || toUsername(displayName.toLowerCase()) || "me";
       await updateProfile({ ...profile, displayName, username, title: profile.title.trim() });
       if (name.trim() !== currentCompany.name) await renameCompany(currentCompany.id, name.trim());
       if (companyCode !== currentCompany.issueCode) await setCompanyIssueCode(currentCompany.id, companyCode);

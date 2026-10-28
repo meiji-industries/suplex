@@ -9,6 +9,8 @@ const operator: ApiUser = { id: "user_development", displayName: "Operator", use
 
 test("email supplies the initial username without replacing a custom profile", () => {
   expect(profileDefaults(operator, "adam@example.com")).toEqual({ displayName: "", username: "adam", avatarSeed: "adam", title: "" });
+  expect(profileDefaults(operator, "adam+oct28@example.com").username).toBe("adam-oct28");
+  expect(profileDefaults(operator, "a@example.com").username).toBe("");
   expect(profileDefaults(operator).displayName).toBe("");
   expect(profileDefaults(operator).username).toBe("");
   const custom = { ...operator, displayName: "Adam Meghji", username: "adam.m", title: "CTO", avatarSeed: "custom" };

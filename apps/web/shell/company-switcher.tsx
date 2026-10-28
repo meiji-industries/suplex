@@ -12,7 +12,7 @@ import { Input } from "../components/ui/input.js";
 import { SidebarMenu, SidebarMenuButton, SidebarMenuItem } from "../components/ui/sidebar.js";
 import { withCompany } from "../lib/api.js";
 import { navigate } from "./navigation-state.js";
-import { useOptionalCompanyContext } from "./company-context.js";
+import { activeCompanyStorageKey, useOptionalCompanyContext } from "./company-context.js";
 import { EntityAvatar } from "../components/app/entity-avatar.js";
 
 function SuplexMark(): ReactElement {
@@ -85,7 +85,10 @@ export function CompanySwitcher(): ReactElement {
         <DropdownMenuContent className="w-64" align="start">
               <DropdownMenuGroup>
                 <DropdownMenuLabel>Switch company</DropdownMenuLabel>
-                  {companies.length ? companies.map((company, index) => <span className="block" key={company.id}>{company.status === "archived" && companies[index - 1]?.status !== "archived" ? <div className="px-2 pb-1 pt-2 text-xs font-medium text-muted-foreground">Archived</div> : null}<DropdownMenuItem onClick={() => context.selectCompany(company.id)}>
+                  {companies.length ? companies.map((company, index) => <span className="block" key={company.id}>{company.status === "archived" && companies[index - 1]?.status !== "archived" ? <div className="px-2 pb-1 pt-2 text-xs font-medium text-muted-foreground">Archived</div> : null}<DropdownMenuItem onClick={() => {
+                    window.localStorage.setItem(activeCompanyStorageKey, company.id);
+                    navigate(withCompany("/", company.id));
+                  }}>
                     <EntityAvatar kind="company" id={company.id} name={company.name} seed={company.name} size="sm" />
                     <span className="min-w-0 flex-1 truncate">{company.name}</span>
                     <PlanBadge plan={company.plan} />

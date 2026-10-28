@@ -23,7 +23,7 @@ serde = { workspace = true }
 ryu-js = "1.0.3"
 toml = { version = "1", features = ["serde"] }
 serde_json = { workspace = true, features = ["preserve_order"] }
-sha2 = "0.10"
+sha2 = { workspace = true }
 hmac = "0.12"
 subtle = "2.6"
 tokio = { workspace = true, features = ["fs", "io-util", "macros", "net", "process", "rt-multi-thread", "signal", "sync", "time"] }
@@ -40,7 +40,7 @@ indexmap = { version = "2.14.2", features = ["serde"] }
 vt100 = "0.16.2"
 jwt-simple = { version = "0.12", default-features = false, features = ["pure-rust"] }
 web-push = { version = "0.11", default-features = false }
-suplex-exception = { path = "../../packages/exception-report" }
+suplex-exception = { path = "../../packages/suplex-exception" }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 security-framework-sys = "2.17"

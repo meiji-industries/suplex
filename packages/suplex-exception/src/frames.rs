@@ -174,8 +174,8 @@ mod tests {
                 Some("apps/desktop/src-tauri/src/lib.rs"),
             ),
             (
-                r"C:\Users\ada\suplex\packages\exception-report\src\lib.rs",
-                Some("packages/exception-report/src/lib.rs"),
+                r"C:\Users\ada\suplex\packages\suplex-exception\src\lib.rs",
+                Some("packages/suplex-exception/src/lib.rs"),
             ),
             ("./apps/server/src/main.rs", Some("apps/server/src/main.rs")),
             (

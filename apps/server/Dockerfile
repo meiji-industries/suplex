@@ -10,7 +10,7 @@ COPY apps/bootstrap/Cargo.toml apps/bootstrap/
 RUN mkdir -p apps/desktop/src-tauri/src apps/mobile/src-tauri/src apps/bootstrap/src \
     && touch apps/desktop/src-tauri/src/lib.rs apps/desktop/src-tauri/src/main.rs apps/mobile/src-tauri/src/lib.rs apps/mobile/src-tauri/src/main.rs apps/bootstrap/src/main.rs
 COPY apps/server apps/server
-COPY packages/exception-report packages/exception-report
+COPY packages/suplex-exception packages/suplex-exception
 COPY scripts/shared-resource-command.py scripts/
 # Hosted pages reuse the app login view's wordmark, art, and fonts.
 COPY apps/web/assets/suplex-wordmark.svg apps/web/assets/account-background.png apps/web/assets/

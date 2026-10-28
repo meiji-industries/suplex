@@ -34,7 +34,7 @@ tokio = { workspace = true, features = ["process", "time", "fs", "io-util", "mac
 reqwest = { workspace = true }
 url = { workspace = true }
 time = { version = "0.3", features = ["formatting"] }
-suplex-exception = { path = "../../../packages/exception-report" }
+suplex-exception = { path = "../../../packages/suplex-exception" }
 
 [target.'cfg(unix)'.dependencies]
 libc = { workspace = true }
@@ -54,7 +54,7 @@ objc2-user-notifications = { version = "0.3.2", default-features = false, featur
 
 [dev-dependencies]
 tauri = { version = "=2.12.1", features = ["tray-icon", "image-png", "test"] }
-tempfile = "3"
+tempfile = { workspace = true }
 # The versions tauri-plugin-updater uses: tests/updater_signature.rs verifies as the updater does.
 minisign-verify = "0.2.5"
 base64 = { workspace = true }

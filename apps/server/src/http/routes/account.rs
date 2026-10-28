@@ -208,6 +208,9 @@ async fn login_status(
         Ok(LoginPoll::Pending) => AccountLoginState::Pending,
         Ok(LoginPoll::Expired) => AccountLoginState::Expired,
         Ok(LoginPoll::Complete { token, account }) => {
+            if !local && recovery.is_none() {
+                crate::billing::observe_team(&state).await;
+            }
             let accepted = state
                 .with_database(|database| {
                     if local {

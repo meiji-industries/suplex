@@ -4,7 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
-const api = vi.hoisted(() => ({ readJsonUnchecked: vi.fn(), withCompany: (path: string) => path }));
+const api = vi.hoisted(() => ({ readJsonUnchecked: vi.fn(), withCompany: (path: string) => path, billingSettingsPath: (id: string) => `/billing?company=${id}` }));
 vi.mock("../lib/api.js", () => api);
 const context = vi.hoisted(() => ({ value: {} as Record<string, unknown> }));
 vi.mock("../shell/company-context.js", () => ({ useCompanyContext: () => context.value }));
@@ -23,7 +23,7 @@ vi.mock("../features/settings/settings-layout.js", () => ({
 import { AdminView } from "../features/admin/admin.js";
 
 const admin = { id: "u1", role: "admin" };
-const company = { id: "company-1", status: "active" };
+const company = { id: "company-1", status: "active", plan: "team" };
 let root: Root | undefined;
 
 async function mount(): Promise<void> {
@@ -62,4 +62,12 @@ test("a non-administrator does not open Invite User", async () => {
   window.history.replaceState({}, "", "/admin?invite=1");
   await mount();
   expect(document.querySelector('[role="dialog"]')).toBeNull();
+});
+
+test("on a plan without Team, Invite User points to Billing instead", async () => {
+  context.value = { ...context.value, currentCompany: { ...company, plan: "pro" } };
+  window.history.replaceState({}, "", "/admin?company=company-1&invite=1");
+  await mount();
+  expect(document.body.textContent).toContain("Team plan required");
+  expect(document.querySelector('a[href="/billing?company=company-1"]')?.textContent).toBe("Manage Plan");
 });

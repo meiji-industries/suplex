@@ -294,7 +294,10 @@ the app never asks for a login.
 - **Invitations.** Company > Users contains Invite User (full name, email, and
   role), pending invitations, and company membership removal. A pending user
   takes the invited role and keeps it on joining. An invitation can make an
-  active user an admin but never demotes one. The host checks the
+  active user an admin but never demotes one. Only Team, also a Team trial,
+  sends invitations and lets an invited user join for the first time. Other
+  plans show a dialog that links to Billing. A member who already joined keeps
+  logging in after Team lapses. The host checks the
   company and reserves membership. The hosted
   service sends the Resend email with a stable idempotency key. Failed delivery
   remains retryable. The seven-day invitation page offers download, app, and

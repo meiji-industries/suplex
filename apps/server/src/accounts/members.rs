@@ -13,6 +13,11 @@ use crate::{
     shared::{PublicFailure, hash::sha256_hex, ids::random_hex_id, time::rfc3339_millis},
 };
 
+const INVITE_NEEDS_TEAM: &str =
+    "Only the Team plan can invite users. Select Team in Settings > Billing.";
+const JOIN_NEEDS_TEAM: &str =
+    "This host's plan does not include other users. Ask an admin to select Team.";
+
 #[derive(Clone, Debug, Serialize, ts_rs::TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export)]
@@ -50,6 +55,7 @@ pub fn list(database: &SuplexDatabase, company_id: &str) -> DatabaseResult<Vec<C
         .collect::<rusqlite::Result<Vec<_>>>()?)
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn prepare(
     database: &mut SuplexDatabase,
     actor: &str,
@@ -61,6 +67,7 @@ pub fn prepare(
     now: DateTime<Utc>,
 ) -> DatabaseResult<CompanyInvitationBody> {
     companies::require_admin_company(database, actor, company_id)?;
+    crate::billing::require_team(database, INVITE_NEEDS_TEAM)?;
     let owner = super::linked(database)?
         .ok_or_else(|| PublicFailure::new(409, "Log in to Suplex before adding users"))?;
     let company = companies::require_company_access(database, actor, company_id)?;
@@ -116,10 +123,6 @@ pub fn prepare(
             id
         };
         database.connection().execute("INSERT OR IGNORE INTO suplex_memberships (user_id, company_id, created_at) VALUES (?1, ?2, ?3)", params![user_id, company_id, timestamp])?;
-        // Free and Pro have no company scoping: a new member sees every company.
-        if companies::grants_every_company(database)? {
-            database.connection().execute("INSERT OR IGNORE INTO suplex_memberships (user_id, company_id, created_at) SELECT ?1, id, ?2 FROM suplex_companies WHERE status != 'archived'", params![user_id, timestamp])?;
-        }
         database.connection().execute("INSERT INTO suplex_company_invitations (id, company_id, user_id, email, full_name, host_origin, owner_account_id, created_at, expires_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)", params![body.id, company_id, user_id, body.email, full_name, host_origin, owner.account_id, timestamp, rfc3339_millis(now + Duration::days(7))])?;
         Ok(())
     })?;
@@ -127,7 +130,11 @@ pub fn prepare(
 }
 
 /// A pending user takes the invited role. An active user only gains admin: an invitation never demotes.
-fn set_invited_role(database: &SuplexDatabase, user_id: &str, role: UserRole) -> DatabaseResult<()> {
+fn set_invited_role(
+    database: &SuplexDatabase,
+    user_id: &str,
+    role: UserRole,
+) -> DatabaseResult<()> {
     database.connection().execute(
         "UPDATE suplex_users SET role = ?2 WHERE id = ?1 AND (status = 'pending' OR ?2 = 'admin')",
         params![user_id, role],
@@ -153,6 +160,8 @@ pub fn accept(
             let (id, _) = mapped.ok_or_else(|| PublicFailure::new(403, "This account has not been invited to this host"))?;
             let user = auth::public_user(database, &id)?.ok_or("User missing")?;
             if user.status == UserStatus::Revoked || user.company_ids.is_empty() { return Err(PublicFailure::new(403, "Company access was removed").into()); }
+            // Joining for the first time needs Team. A member who already joined keeps logging in, so a lapsed Team stays readable.
+            if user.status == UserStatus::Pending { crate::billing::require_team(database, JOIN_NEEDS_TEAM)?; }
             let timestamp = rfc3339_millis(now);
             let invitations: i64 = database.connection().query_row("SELECT COUNT(*) FROM suplex_company_invitations i JOIN suplex_memberships m ON m.user_id = i.user_id AND m.company_id = i.company_id WHERE i.user_id = ?1 AND i.revoked_at IS NULL AND i.sent_at IS NOT NULL AND (i.accepted_at IS NOT NULL OR i.expires_at > ?2)", params![id, timestamp], |row| row.get(0))?;
             if invitations == 0 { return Err(PublicFailure::new(403, "The invitation expired or was removed").into()); }
@@ -261,6 +270,7 @@ mod tests {
             auth::development_sign_in(db, now).unwrap();
             let owner = account("owner@example.com", "user_67e55044-10b1-426f-9247-bb680e5fe0c8");
             super::super::link(db, &owner, &"k".repeat(43)).unwrap();
+            crate::billing::tests::grant_team(db);
             db.connection().execute("INSERT INTO suplex_companies (id, name, status, created_at) VALUES ('company_test', 'Test', 'active', ?1)", [rfc3339_millis(now)]).unwrap();
             let invited = account("member@example.com", "user_67e55044-10b1-426f-9247-bb680e5fe0c9");
             let unknown = account("unknown@example.com", "user_67e55044-10b1-426f-9247-bb680e5fe0ca");
@@ -291,12 +301,39 @@ mod tests {
     }
 
     #[test]
+    fn only_team_invites_and_a_first_join_needs_team() {
+        let (state, _) = state();
+        state.with_database(|db| {
+            let now = Utc::now();
+            auth::development_sign_in(db, now).unwrap();
+            super::super::link(db, &account("owner@example.com", "user_67e55044-10b1-426f-9247-bb680e5fe0c8"), &"k".repeat(43)).unwrap();
+            db.connection().execute("INSERT INTO suplex_companies (id, name, status, created_at) VALUES ('company_test', 'Test', 'active', ?1)", [rfc3339_millis(now)]).unwrap();
+            let invited = account("member@example.com", "user_67e55044-10b1-426f-9247-bb680e5fe0c9");
+            let invite = |db: &mut SuplexDatabase| prepare(db, "user_development", "company_test", "Invited Member", &invited.email, UserRole::Member, "https://host.example.com", now);
+            assert!(invite(db).is_err(), "Free cannot invite");
+            crate::billing::tests::grant_pro(db);
+            assert!(invite(db).is_err(), "Pro cannot invite");
+            crate::billing::tests::grant_team(db);
+            let invitation = invite(db).unwrap();
+            db.connection().execute("UPDATE suplex_company_invitations SET sent_at = ?2 WHERE id = ?1", params![invitation.id, rfc3339_millis(now)]).unwrap();
+            db.connection().execute("UPDATE suplex_plan SET plan = NULL", []).unwrap();
+            assert!(accept(db, &invited, now).is_err(), "a sent invitation cannot be redeemed on Pro");
+            crate::billing::tests::grant_team(db);
+            accept(db, &invited, now).unwrap();
+            // A member who joined keeps logging in after Team lapses to Pro.
+            db.connection().execute("UPDATE suplex_plan SET plan = NULL", []).unwrap();
+            accept(db, &invited, now).unwrap();
+        });
+    }
+
+    #[test]
     fn invited_role_applies_on_join_and_never_demotes() {
         let (state, _) = state();
         state.with_database(|db| {
             let now = Utc::now();
             auth::development_sign_in(db, now).unwrap();
             super::super::link(db, &account("owner@example.com", "user_67e55044-10b1-426f-9247-bb680e5fe0c8"), &"k".repeat(43)).unwrap();
+            crate::billing::tests::grant_team(db);
             db.connection().execute("INSERT INTO suplex_companies (id, name, status, created_at) VALUES ('company_test', 'Test', 'active', ?1)", [rfc3339_millis(now)]).unwrap();
             let invited = account("admin@example.com", "user_67e55044-10b1-426f-9247-bb680e5fe0c9");
             prepare(db, "user_development", "company_test", "Invited Admin", &invited.email, UserRole::Member, "https://host.example.com", now).unwrap();

@@ -92,6 +92,7 @@ async fn send(
         .accounts
         .as_ref()
         .ok_or_else(accounts::not_configured)?;
+    crate::billing::observe_team(state).await;
     let (owner, origin) =
         state.with_database(|db| -> crate::platform::database::DatabaseResult<_> {
             companies::require_admin_company(db, actor, company_id)?;
@@ -171,6 +172,7 @@ mod tests {
         let server = tokio::spawn(axum::serve(listener, hosted).into_future());
         let (state, _) = state();
         let admin = operator_account(&state, Utc::now());
+        state.with_database(|db| crate::billing::tests::grant_team(db));
         state.with_database(|db| db.connection().execute("INSERT INTO suplex_companies (id,name,status,created_at) VALUES ('company_invite','Invites','active','2026-10-03T00:00:00.000Z')", []).unwrap());
         let state = state.with_accounts(accounts::AccountClient::new(
             origin.parse().unwrap(),

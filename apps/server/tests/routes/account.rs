@@ -475,6 +475,7 @@ mod tests {
         let owner = wire::HostedAccount { id: "user_67e55044-10b1-426f-9247-bb680e5fe0c9".into(), email: "owner@example.com".into(), name: None };
         f.state.with_database(|db| {
             crate::accounts::link(db, &owner, &"o".repeat(43)).unwrap();
+            crate::billing::tests::grant_team(db);
             db.connection().execute("INSERT INTO suplex_companies (id, name, status, created_at) VALUES ('company_test', 'Test', 'active', '2026-10-03T00:00:00.000Z')", []).unwrap();
             let invitation = crate::accounts::members::prepare(db, "user_development", "company_test", "Ada", "ada@example.com", crate::identity::auth::UserRole::Member, "https://suplex.example.test:4111", Utc::now()).unwrap();
             db.connection().execute("UPDATE suplex_company_invitations SET sent_at = created_at WHERE id = ?1", [&invitation.id]).unwrap();

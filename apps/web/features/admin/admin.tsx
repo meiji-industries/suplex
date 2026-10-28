@@ -3,9 +3,10 @@ import { listCompanyInvitations, setUserRole } from "./company-users-api.js";
 import type { CompanyInvitation } from "../../contracts/generated/CompanyInvitation.js";
 import { Button } from "../../components/ui/button.js";
 import { Alert, AlertDescription } from "../../components/ui/alert.js";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "../../components/ui/dialog.js";
 import { useCompanyContext } from "../../shell/company-context.js";
 import { SettingRow, SettingsContent, SettingsLayout, SettingsSection } from "../settings/settings-layout.js";
-import { readJsonUnchecked, withCompany, type ApiUser } from "../../lib/api.js";
+import { billingSettingsPath, readJsonUnchecked, withCompany, type ApiUser } from "../../lib/api.js";
 import { useCallback, useEffect, useState, type ReactElement } from "react";
 import { toast } from "sonner";
 import type {
@@ -64,6 +65,10 @@ export function AdminView(): ReactElement {
   const isAgents = window.location.pathname.endsWith("/agents");
   const isCompanies = window.location.pathname.endsWith("/companies");
 
+  // Only the Team plan invites users; other plans see where to change the plan.
+  const [teamOnlyOpen, setTeamOnlyOpen] = useState(false);
+  const openInvite = (): void => { if (currentCompany?.plan === "team") setInviteOpen(true); else setTeamOnlyOpen(true); };
+
   // Billing links here with ?invite=1 so the Invite User dialog is open on arrival.
   // Clear it so a reload or Back does not open the dialog again.
   const companyId = currentCompany?.id;
@@ -74,7 +79,7 @@ export function AdminView(): ReactElement {
     if (!url.searchParams.has("invite")) return;
     url.searchParams.delete("invite");
     window.history.replaceState(window.history.state, "", `${url.pathname}${url.search}${url.hash}`);
-    setInviteOpen(true);
+    openInvite();
   }, [canInvite]);
 
   const reload = useCallback(
@@ -316,7 +321,7 @@ export function AdminView(): ReactElement {
       activeHref={activeHref}
       contentClassName=""
     >
-      <SettingsContent width="wide" title={viewTitle} description={viewDescription} actions={!isAgents && !isCompanies ? <Button size="sm" disabled={!currentCompany} onClick={() => setInviteOpen(true)}>Invite User</Button> : null}>
+      <SettingsContent width="wide" title={viewTitle} description={viewDescription} actions={!isAgents && !isCompanies ? <Button size="sm" disabled={!currentCompany} onClick={openInvite}>Invite User</Button> : null}>
         {!isAgents &&
         !isCompanies ? (
           <UsersSection
@@ -407,6 +412,7 @@ export function AdminView(): ReactElement {
         ) : null}
 
         {!isAgents && !isCompanies && currentCompany ? <CompanyInvitations companyId={currentCompany.id} invitations={invitations} open={inviteOpen} onOpenChange={setInviteOpen} onSaved={reload} /> : null}
+        {currentCompany ? <Dialog open={teamOnlyOpen} onOpenChange={setTeamOnlyOpen}><DialogContent><DialogHeader><DialogTitle>Team plan required</DialogTitle><DialogDescription>Only the Team plan can invite users. Change the plan in Billing to invite users.</DialogDescription></DialogHeader><DialogFooter><Button variant="outline" onClick={() => setTeamOnlyOpen(false)}>Cancel</Button>{window.suplexMobile ? null : <Button nativeButton={false} render={<a href={billingSettingsPath(currentCompany.id)} />}>Manage Plan</Button>}</DialogFooter></DialogContent></Dialog> : null}
 
         {error ? (
           <div className="px-4 py-3 text-xs text-destructive">

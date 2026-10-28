@@ -245,6 +245,28 @@ pub async fn observe(state: &AppState, limit: Limit) {
     }
 }
 
+/// Only Team, also a Team trial, lets other people use this host.
+pub fn require_team(database: &SuplexDatabase, message: &str) -> DatabaseResult<()> {
+    if plan(database)? == Plan::Team {
+        return Ok(());
+    }
+    Err(PublicFailure::new(402, message)
+        .with_code("team_required")
+        .into())
+}
+
+/// Reads suplex.sh again when the confirmed plan is not Team, so a Team
+/// purchase made a moment ago applies. It never fails.
+pub async fn observe_team(state: &AppState) {
+    let team = state.with_database(|database| plan(database).map(|plan| plan == Plan::Team));
+    if !team.unwrap_or(true) {
+        if let Some(client) = &state.billing {
+            client.forget_plan_reads();
+        }
+        let _ = refresh(state).await;
+    }
+}
+
 pub fn unavailable() -> PublicFailure {
     PublicFailure::new(503, "Suplex cannot check the subscription").with_code("billing_unavailable")
 }

@@ -3,6 +3,7 @@ import type { AccountSummary } from "./AccountSummary.js";
 
 /**
  * `GET /api/account`. `configured` is false when this host has no account
- * service; the app then never asks for a login.
+ * service; the app then never asks for a login. `unclaimed` is true on a
+ * fresh host, where the first login becomes the owner.
  */
-export type AccountResponse = { configured: boolean, canManage: boolean, account?: AccountSummary, };
+export type AccountResponse = { configured: boolean, canManage: boolean, unclaimed: boolean, account?: AccountSummary, };

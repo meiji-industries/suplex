@@ -38,7 +38,6 @@ The wizard (Rust, [cliclack](https://github.com/fadeevab/cliclack) prompts) asks
   the exit node the only way out, for the host and for Docker containers. Exit node offline = no internet.
 - **GitHub**: an SSH private key from this machine and a git identity, installed for the `suplex` user.
 - **Backup**: a Suplex backup archive (`suplex backup` or Settings → Backups) to restore onto the VM.
-- **Login link**: prints a one-time owner link from `suplex recover` at the end.
 
 Everything on the VM is then converged, idempotently: service user, firewall, Docker, the Suplex
 binary (the release tarball `suplex.sh/install.sh` would fetch, checksum-verified, owned by the service user so
@@ -54,7 +53,7 @@ Rerun the wizard any time; every answer defaults to the last one.
 | `suplex-bootstrap status` | provider state, services, service user, exit node, egress IP, direct-interface block, health |
 | `suplex-bootstrap doctor`, `logs`, `ssh` | `suplex doctor` as the service user, follow the service log, admin shell |
 | `suplex-bootstrap install-suplex` | install/update the Suplex binary on the server and restart the service |
-| `suplex-bootstrap recover` | a fresh one-time owner login link |
+| `suplex-bootstrap recover` | a one-time owner login link, for a host whose owner unlinked |
 
 From a checkout, `mise run bootstrap` and `mise run bootstrap:<command>` build and run the same commands, with the
 answers in `apps/bootstrap` (gitignored) instead of `~/.config/suplex-bootstrap`.
@@ -128,8 +127,8 @@ Verified: direct `eth0` blocked, exit node off = nothing leaves, survives reboot
     and a SUPERUSER role `suplex` whose random password sits in `/home/suplex/.pgpass` (0600). The repo's helper
     tries `psql -w -h localhost -d postgres` as the OS user first, so with `.pgpass` its admin path works
     without sudo. PostgreSQL listens on loopback only.
-13. First login shows "This account has not been invited to this host": `suplex recover --confirm-recovery` prints a
-   one-time owner link. Bootstrap does this at the end.
+13. Owner: the first login to a fresh host becomes its owner. After an owner unlinks, a login shows "This account has
+   not been invited to this host": `suplex recover --confirm-recovery` prints a one-time owner link. `suplex-bootstrap recover` prints one from this machine.
 14. Restoring a backup: `suplex restore <archive> <empty dir>` verifies, extracts, and migrates it; the database is
    `suplex-backup/app/suplex.sqlite` and artifacts `suplex-backup/app/artifacts/`, copied into
    `~/.local/share/Suplex/data/` with the service stopped. Projects keep their stored repository paths.

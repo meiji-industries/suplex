@@ -93,9 +93,11 @@ async fn read(State(state): State<AppState>, headers: HeaderMap) -> Response {
             display_name: Some(user.display_name.clone()),
         }))
     });
-    match account {
-        Ok(account) => private(
+    let unclaimed = state.with_database(|database| accounts::members::unclaimed(database));
+    match account.and_then(|account| Ok((account, unclaimed?))) {
+        Ok((account, unclaimed)) => private(
             Json(AccountResponse {
+                unclaimed,
                 configured: state.accounts.is_some(),
                 can_manage: if local {
                     user.as_ref()
@@ -211,6 +213,7 @@ async fn login_status(
             if !local && recovery.is_none() {
                 crate::billing::observe_team(&state).await;
             }
+            // The session to set, and whether the account now owns this host.
             let accepted = state
                 .with_database(|database| {
                     if local {
@@ -221,7 +224,7 @@ async fn login_status(
                             "account_linked",
                             json!({}),
                         )?;
-                        Ok(None)
+                        Ok((None, true))
                     } else if let Some(invitation) = recovery.as_deref() {
                         accounts::members::recover(
                             database,
@@ -230,18 +233,23 @@ async fn login_status(
                             &token,
                             Utc::now(),
                         )
-                        .map(Some)
+                        .map(|session| (Some(session), true))
+                    } else if let Some(session) =
+                        accounts::members::claim(database, &account, &token, Utc::now())?
+                    {
+                        Ok((Some(session), true))
                     } else {
-                        accounts::members::accept(database, &account, Utc::now()).map(Some)
+                        accounts::members::accept(database, &account, Utc::now())
+                            .map(|session| (Some(session), false))
                     }
                 })
                 .map_err(ApiError::response);
             // The owner link keeps its hosted token; a member login does not need one.
-            if !local && (recovery.is_none() || accepted.is_err()) {
+            if !local && !matches!(accepted, Ok((_, true))) {
                 client.logout(&token).await;
             }
             let session_token = match accepted {
-                Ok(value) => value,
+                Ok((session, _)) => session,
                 Err(response) => return response,
             };
             if let Some(token) = session_token {

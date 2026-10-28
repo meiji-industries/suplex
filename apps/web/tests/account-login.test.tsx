@@ -113,3 +113,12 @@ test("the iOS shell offers only the email login, and the Android shell keeps Goo
     delete window.suplexMobile;
   }
 });
+
+test("tells the first visitor of a fresh host that the login makes them its owner", async () => {
+  expect(container.textContent).not.toContain("This host has no owner.");
+  vi.mocked(getAccount).mockResolvedValue({ configured: true, canManage: true, unclaimed: true } as never);
+  await act(async () => root.unmount());
+  root = createRoot(container);
+  await act(async () => root.render(<AccountLoginView />));
+  expect(container.textContent).toContain("This host has no owner. Log in to become its owner.");
+});

@@ -56,6 +56,7 @@ export function emailLoginOnly(): boolean {
 
 export function AccountLoginView({ preview = false, previewState }: { preview?: boolean; previewState?: "browser" | "email" | undefined }): ReactElement {
   const [canManage, setCanManage] = useState<boolean>();
+  const [unclaimed, setUnclaimed] = useState(false);
   const [emailForm, setEmailForm] = useState(false);
   const [email, setEmail] = useState("");
   const [waiting, setWaiting] = useState<Waiting | undefined>(() => preview && previewState ? { attemptId: "preview", ...(previewState === "email" ? { email: "you@example.com" } : { url: "https://suplex.sh/auth/done" }) } : undefined);
@@ -75,7 +76,7 @@ export function AccountLoginView({ preview = false, previewState }: { preview?: 
     void getAccount().then((account) => {
       if (account.account) window.location.assign(completedLoginPath());
       else if (!account.configured) { setCanManage(false); setError("Suplex login is not configured on this host."); }
-      else setCanManage(account.canManage);
+      else { setCanManage(account.canManage); setUnclaimed(account.unclaimed); }
     }).catch(() => setCanManage(true));
   }, [preview, recovery]);
 
@@ -158,7 +159,7 @@ export function AccountLoginView({ preview = false, previewState }: { preview?: 
             </form>
           ) : (
             <div className="flex flex-col gap-3">
-              {recovery ? <p className="pb-2 text-center text-sm text-muted-foreground">Log in to recover this host. Your account becomes its owner.</p> : null}
+              {recovery ? <p className="pb-2 text-center text-sm text-muted-foreground">Log in to recover this host. Your account becomes its owner.</p> : unclaimed ? <p className="pb-2 text-center text-sm text-muted-foreground">This host has no owner. Log in to become its owner.</p> : null}
               {emailLoginOnly() ? null : <>
                 <Button size="lg" disabled={busy || canManage === undefined} onClick={() => void start("google")}>Continue with Google</Button>
                 <Button variant="outline" size="lg" disabled={busy || canManage === undefined} onClick={() => void start("github")}>Continue with GitHub</Button>

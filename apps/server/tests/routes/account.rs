@@ -203,7 +203,7 @@ mod tests {
         let app = crate::http::router(f.state.clone());
         let (status, _, read) = call(&app, "GET", "/api/account", Some(&f.member), None).await;
         assert_eq!(status, StatusCode::OK);
-        assert_eq!(body(&read), json!({"configured": true, "canManage": true}));
+        assert_eq!(body(&read), json!({"configured": true, "canManage": true, "unclaimed": true}));
 
         let (status, headers, started) = call(
             &app,
@@ -257,7 +257,7 @@ mod tests {
         let (_, _, read) = call(&app, "GET", "/api/account", Some(&f.admin), None).await;
         assert_eq!(
             body(&read),
-            json!({"configured": true, "canManage": true, "account": {"email": "ada@example.com", "displayName": "Ada"}})
+            json!({"configured": true, "canManage": true, "unclaimed": false, "account": {"email": "ada@example.com", "displayName": "Ada"}})
         );
         let audit: Vec<String> = f.state.with_database(|database| {
             database
@@ -466,7 +466,7 @@ mod tests {
         assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
         assert_eq!(body(&failure)["code"], "account_not_configured");
         let (_, _, read) = call(&unconfigured, "GET", "/api/account", Some(&cookie), None).await;
-        assert_eq!(body(&read), json!({"configured": false, "canManage": true}));
+        assert_eq!(body(&read), json!({"configured": false, "canManage": true, "unclaimed": true}));
     }
     #[tokio::test]
     async fn remote_login_is_bound_to_browser_and_invited_email() {
@@ -536,6 +536,38 @@ mod tests {
 
         let (status, _, _) = remote(&app, "POST", "/api/account/login", None, Some(json!({"provider": "google", "recovery": token}))).await;
         assert_eq!(status, StatusCode::FORBIDDEN, "a recovery link works once");
+    }
+
+    #[tokio::test]
+    async fn the_first_remote_login_to_a_fresh_host_becomes_its_owner() {
+        use crate::http::routes::avatars::tests::call as remote;
+        let f = fixture().await;
+        let app = crate::http::router(f.state.clone());
+        let (_, _, account) = remote(&app, "GET", "/api/account", None, None).await;
+        assert_eq!(body(&account)["unclaimed"], true);
+
+        let login = || async {
+            let (status, headers, _) = remote(&app, "POST", "/api/account/login", None, Some(json!({"provider": "google"}))).await;
+            assert_eq!(status, StatusCode::OK);
+            f.fake.with(|hosted| hosted.poll = Some(Poll::Complete));
+            remote(&app, "GET", &format!("/api/account/login/{ATTEMPT_ID}"), Some(&login_cookie(&headers)), None).await
+        };
+        let (status, headers, _) = login().await;
+        assert_eq!(status, StatusCode::OK);
+        let session = headers.get_all("set-cookie").iter().map(|h| h.to_str().unwrap()).find(|h| h.starts_with("sid_v1=")).unwrap().split(';').next().unwrap();
+        let (_, _, profile) = remote(&app, "GET", "/api/auth/me", Some(session), None).await;
+        assert_eq!(body(&profile)["user"]["id"], "user_development", "the first account signs in as the owner");
+        assert_eq!(f.state.with_database(|db| linked(db).unwrap().unwrap().account_id), ACCOUNT_ID);
+        assert!(f.fake.with(|hosted| hosted.logouts.is_empty()), "the owner link keeps its hosted token");
+        let (_, _, account) = remote(&app, "GET", "/api/account", None, None).await;
+        assert_eq!(body(&account)["unclaimed"], false);
+
+        // An owner who unlinked leaves a claimed host: the next stranger needs an invitation or `suplex recover`.
+        f.state.with_database(|db| crate::accounts::unlink(db).unwrap());
+        let (status, _, refused) = login().await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
+        assert_eq!(body(&refused)["error"], "This account has not been invited to this host");
+        assert!(f.state.with_database(|db| linked(db).unwrap()).is_none());
     }
 
 }

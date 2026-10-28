@@ -53,13 +53,15 @@ pub struct AccountSummary {
 }
 
 /// `GET /api/account`. `configured` is false when this host has no account
-/// service; the app then never asks for a login.
+/// service; the app then never asks for a login. `unclaimed` is true on a
+/// fresh host, where the first login becomes the owner.
 #[derive(Clone, Debug, Serialize, ts_rs::TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export)]
 pub struct AccountResponse {
     pub configured: bool,
     pub can_manage: bool,
+    pub unclaimed: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub account: Option<AccountSummary>,

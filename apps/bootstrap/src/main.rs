@@ -85,7 +85,6 @@ const PUBLIC_KEYS: &[&str] = &[
     "GIT_EMAIL",
     "COMPANY_NAME",
     "AGENT_TOOLS",
-    "RECOVER",
     "SUPLEX_PORT",
     "ACCESS",
     "EXPOSURE",
@@ -671,10 +670,6 @@ fn converge(cfg: &mut Config) -> Result<()> {
     } else {
         String::new()
     };
-    let recover_link = confirm("Print an owner login link at the end (suplex recover)?")
-        .initial_value(cfg.get("RECOVER") != "n")
-        .interact()?;
-    cfg.set("RECOVER", if recover_link { "y" } else { "n" });
     cfg.save()?;
     log::success(format!(
         "Saved your answers in {} (secrets in .env)",
@@ -892,20 +887,6 @@ fn converge(cfg: &mut Config) -> Result<()> {
         }
         _ => suplex_url(&fqdn(&host)?, &port),
     };
-    if recover_link {
-        let link = recover(&host, cfg)?;
-        note(
-            style("Sign in as the owner").magenta().bold(),
-            format!(
-                "{}\n\n{}\n\n{}",
-                style("ONE-TIME LINK  ·  open it once, it then expires")
-                    .yellow()
-                    .bold(),
-                style(link).cyan().bold().underlined(),
-                style("Run `suplex-bootstrap recover` for a fresh one.").dim()
-            ),
-        )?;
-    }
     outro(format!(
         "{}  {}\n   {}  {}\n   {}  {}",
         style("Suplex").bold(),

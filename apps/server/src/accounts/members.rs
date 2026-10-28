@@ -206,14 +206,57 @@ pub fn recover(
         if used == 0 {
             return Err(PublicFailure::new(403, "This recovery link expired or was used. Run suplex recover again.").into());
         }
-        super::link(database, account, token)?;
-        crate::identity::audit::record(database, &crate::identity::audit::AuditEvent {
-            id: &random_hex_id("audit")?, actor_user_id: Some("user_development"), actor_agent_id: None,
-            action: "account_linked", target_user_id: None, company_id: None,
-            metadata_json: r#"{"method":"recovery"}"#, created_at: &timestamp,
-        })?;
-        accept(database, account, now)
+        link_owner(database, account, token, r#"{"method":"recovery"}"#, now)
     })
+}
+
+/// True on a fresh host: no account owns it or signs in to it, and none ever owned it.
+/// An owner who unlinked leaves the audit row, so only `suplex recover` relinks that host.
+pub fn unclaimed(database: &SuplexDatabase) -> DatabaseResult<bool> {
+    Ok(database.connection().query_row(
+        "SELECT NOT EXISTS (SELECT 1 FROM suplex_account) AND NOT EXISTS (SELECT 1 FROM suplex_account_users) AND NOT EXISTS (SELECT 1 FROM suplex_audit_events WHERE action = 'account_linked')",
+        [],
+        |row| row.get(0),
+    )?)
+}
+
+/// The first login to a fresh host links `account` as its owner and signs it in as the owner. `None` once the host has an owner.
+pub fn claim(
+    database: &mut SuplexDatabase,
+    account: &HostedAccount,
+    token: &str,
+    now: DateTime<Utc>,
+) -> DatabaseResult<Option<String>> {
+    database.transaction(true, |database| {
+        if !unclaimed(database)? {
+            return Ok(None);
+        }
+        link_owner(database, account, token, r#"{"method":"first_login"}"#, now).map(Some)
+    })
+}
+
+fn link_owner(
+    database: &mut SuplexDatabase,
+    account: &HostedAccount,
+    token: &str,
+    metadata_json: &str,
+    now: DateTime<Utc>,
+) -> DatabaseResult<String> {
+    super::link(database, account, token)?;
+    crate::identity::audit::record(
+        database,
+        &crate::identity::audit::AuditEvent {
+            id: &random_hex_id("audit")?,
+            actor_user_id: Some("user_development"),
+            actor_agent_id: None,
+            action: "account_linked",
+            target_user_id: None,
+            company_id: None,
+            metadata_json,
+            created_at: &rfc3339_millis(now),
+        },
+    )?;
+    accept(database, account, now)
 }
 
 pub fn session_verified(

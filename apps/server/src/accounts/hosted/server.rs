@@ -23,7 +23,7 @@ use crate::{
 };
 
 const BODY_LIMIT: usize = 64 * 1024;
-const DONE_PAGE: &str = include_str!("done.html");
+const DONE_CONTENT: &str = include_str!("done.html");
 
 fn to_json<T: serde::Serialize>(value: &T) -> Json<Value> {
     Json(serde_json::to_value(value).unwrap_or(Value::Null))
@@ -145,7 +145,7 @@ async fn verify_form(Query(query): Query<TokenForm>) -> Response {
         // consumes the link: mail scanners fetch links before people open them.
         Some(token) if token_shape(&token) => Html(page::render(
             "Log in to Suplex",
-            &format!("<p>Select Continue to log in.</p><form class=\"actions\" method=\"post\" action=\"/auth/email/verify\"><input type=\"hidden\" name=\"token\" value=\"{token}\"><button class=\"primary\" type=\"submit\">Continue</button></form>"),
+            &format!("<p>Select Continue to log in.</p><form class=\"stack\" method=\"post\" action=\"/auth/email/verify\"><input type=\"hidden\" name=\"token\" value=\"{token}\"><button class=\"button primary\" type=\"submit\">Continue</button></form>"),
         ))
         .into_response(),
         _ => page(Err(super::expired())),
@@ -165,8 +165,8 @@ async fn verify(
     )
 }
 
-async fn done_page() -> Html<&'static str> {
-    Html(DONE_PAGE)
+async fn done_page() -> Html<String> {
+    Html(page::layout("Logged in", DONE_CONTENT))
 }
 
 async fn require_enabled(

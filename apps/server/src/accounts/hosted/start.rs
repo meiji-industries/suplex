@@ -23,8 +23,6 @@ use crate::{
 
 pub const SITE_INSTALLATION: &str = "suplex.sh";
 
-/// The app's login layout, so the website and the app look the same.
-const TEMPLATE: &str = include_str!("start.html");
 const WORDMARK: &str = include_str!("../../../../web/assets/suplex-wordmark.svg");
 const BACKGROUND: &[u8] = include_bytes!("../../../../web/assets/account-background.png");
 const FONT: &[u8] = include_bytes!("../../../../web/fonts/InterTight-Variable.woff2");
@@ -44,11 +42,7 @@ pub(super) fn escape(value: &str) -> String {
 
 /// Both arguments are HTML: escape untrusted values first.
 pub(super) fn html(status: StatusCode, title: &str, content: &str) -> Response {
-    let (head, foot) = TEMPLATE
-        .split_once("{content}")
-        .expect("start template has a content slot");
-    let page = format!("{}{content}{foot}", head.replace("{title}", title));
-    (status, Html(page)).into_response()
+    (status, Html(crate::shared::page::layout(title, content))).into_response()
 }
 
 /// A heading and a message, as the app shows a waiting state.

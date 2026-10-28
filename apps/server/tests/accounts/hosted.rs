@@ -232,6 +232,8 @@ mod tests {
         assert_eq!(form.headers()["cache-control"], "no-store");
         let html = form.text().await.unwrap();
         assert!(html.contains(&format!("value=\"{token}\"")));
+        assert!(html.contains("/start/background.png"));
+        assert!(html.contains("class=\"button primary\""));
         assert_eq!(
             f.poll(&attempt, &verifier).await,
             (200, json!({"status": "pending"}))
@@ -321,7 +323,9 @@ mod tests {
         assert_eq!(done.status(), 200);
         assert_eq!(done.headers()["cache-control"], "no-store");
         assert_eq!(done.headers()["referrer-policy"], "no-referrer");
-        assert!(done.text().await.unwrap().contains("suplex://auth/done"));
+        let html = done.text().await.unwrap();
+        assert!(html.contains("suplex://auth/done"));
+        assert!(html.contains("/start/background.png"));
         assert_eq!(f.get("/health", &[]).await.status(), 200);
     }
 

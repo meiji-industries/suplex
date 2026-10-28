@@ -1,105 +1,8 @@
-<!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <meta name="color-scheme" content="dark">
-    <title>Logged in · Suplex</title>
-    <style>
-      :root {
-        color-scheme: dark;
-        font-family: "Geist", system-ui, sans-serif;
-        background: #0f0f0f;
-        color: oklch(0.985 0 0);
-        -webkit-font-smoothing: antialiased;
-      }
-      * { box-sizing: border-box; }
-      body { margin: 0; }
-      main {
-        min-height: 100svh;
-        display: flex;
-        flex-direction: column;
-        align-items: center;
-        justify-content: center;
-        gap: 16px;
-        padding: 48px 24px;
-        text-align: center;
-        text-wrap: balance;
-      }
-      header { display: flex; flex-direction: column; align-items: center; gap: 8px; max-width: 384px; }
-      .illustration { width: 100%; max-width: 384px; margin-bottom: 8px; }
-      .accent { color: oklch(0.938 0.172 121.709); }
-      .route { stroke: #383838; stroke-dasharray: 2 4; }
-      .signal { animation: connect 1.4s ease-in-out both; }
-      .complete { animation: complete 400ms 1.2s ease-out both; }
-      .check { stroke-dasharray: 24; animation: check 350ms 1.5s ease-out both; }
-      @keyframes connect {
-        0% { transform: translateX(0); opacity: 0; }
-        15%, 85% { opacity: 1; }
-        100% { transform: translateX(132px); opacity: 0; }
-      }
-      @keyframes complete { from { opacity: 0; } to { opacity: 1; } }
-      @keyframes check { from { stroke-dashoffset: 24; } to { stroke-dashoffset: 0; } }
-      @media (prefers-reduced-motion: reduce) {
-        .signal { display: none; }
-        .complete, .check { animation: none; }
-      }
-      h1 { margin: 0; font-size: 24px; line-height: 32px; font-weight: 400; }
-      p { margin: 0; color: oklch(0.708 0 0); font-size: 14px; line-height: 26.16px; }
-      a {
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-        min-height: 36px;
-        padding: 0 10px;
-        border: 1px solid transparent;
-        border-radius: 6px;
-        background: oklch(0.938 0.172 121.709);
-        color: oklch(0.205 0 0);
-        font-size: 14px;
-        font-weight: 500;
-        text-decoration: none;
-      }
-      a:hover { background: oklch(0.938 0.172 121.709 / 0.8); }
-      a:focus-visible { outline: 2px solid oklch(0.938 0.172 121.709); outline-offset: 4px; }
-    </style>
-  </head>
-  <body>
-    <main>
-      <svg class="illustration" viewBox="0 0 360 164" fill="none" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-        <path class="route" d="M64 82H196" stroke-width="1.25" />
-        <g class="accent" stroke="currentColor" stroke-width="1.25">
-          <circle cx="44" cy="82" r="20" stroke-opacity="0.6" />
-          <circle cx="44" cy="77" r="4" />
-          <path d="M36 91v-2a8 8 0 0 1 16 0v2" />
-        </g>
-        <g class="signal accent" fill="currentColor">
-          <circle cx="64" cy="82" r="7" opacity="0.12" />
-          <circle cx="64" cy="82" r="3" />
-        </g>
-        <g stroke="#383838" stroke-width="1.25">
-          <rect x="196" y="32" width="148" height="100" rx="6" />
-          <path d="M196 50h148M226 50v82" />
-          <path d="M204 62h14m-14 10h10m-10 10h14" />
-          <circle cx="204" cy="41" r="1" /><circle cx="210" cy="41" r="1" /><circle cx="216" cy="41" r="1" />
-        </g>
-        <g fill="#282828">
-          <rect x="238" y="62" width="70" height="5" rx="2.5" />
-          <rect x="238" y="74" width="92" height="5" rx="2.5" />
-          <rect x="238" y="86" width="54" height="5" rx="2.5" />
-          <rect x="238" y="113" width="40" height="4" rx="2" />
-        </g>
-        <g class="complete accent">
-          <circle cx="316" cy="111" r="14" fill="#0f0f0f" stroke="currentColor" stroke-width="1.25" />
-          <path class="check" d="m310 111 4 4 8-8" stroke="currentColor" stroke-width="1.5" />
-        </g>
-      </svg>
-      <header>
-        <h1>You are logged in</h1>
-        <p>Return to Suplex to continue. You can close this tab.</p>
-      </header>
-      <a href="suplex://auth/done">Open Suplex</a>
-    </main>
+<div class="stack center">
+  <h1>You are logged in</h1>
+  <p>Return to Suplex to continue. You can close this tab.</p>
+</div>
+<a class="button primary" href="suplex://auth/done">Open Suplex</a>
     <script>
       // A login that started in a web browser continues in the Suplex tab that opened this one.
       if (new URLSearchParams(location.search).get("client") === "web") {
@@ -109,5 +12,3 @@
         window.close();
       } else location.replace("suplex://auth/done");
     </script>
-  </body>
-</html>

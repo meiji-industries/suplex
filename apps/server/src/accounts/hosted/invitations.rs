@@ -1,4 +1,4 @@
-use super::Accounts;
+use super::{Accounts, start::escape};
 use crate::{
     accounts::wire::{CompanyInvitationBody, token_shape},
     billing::hosted::{HostedError, HostedResult, iso},
@@ -154,15 +154,6 @@ async fn send(
         )
     })?;
     Ok(axum::http::StatusCode::NO_CONTENT)
-}
-
-fn escape(value: &str) -> String {
-    value
-        .replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
-        .replace('\'', "&#39;")
 }
 
 async fn invitation_page(State(accounts): State<Accounts>, Path(id): Path<String>) -> Response {

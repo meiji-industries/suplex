@@ -1,5 +1,6 @@
 import { useState, type ReactElement } from "react";
 
+import { Spinner } from "../../components/ui/spinner.js";
 import type { ProviderSummary } from "../../contracts/providers.js";
 import { InternalAgentsManager } from "../admin/internal-agents-manager.js";
 import { updateAgentProfile, type AgentProfileChanges } from "../admin/lib/agent-api.js";
@@ -69,7 +70,7 @@ function AgentCard({ slot, agent, providers, left, onChange, busy }: { slot: Slo
 }
 
 export function TeamStep({ onBack, onNext, data }: StepProps & { data: OnboardingData }): ReactElement {
-  const { state, reload } = data;
+  const { state, loading, reload } = data;
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const providers = connectedProviders(state.providers);
@@ -105,7 +106,7 @@ export function TeamStep({ onBack, onNext, data }: StepProps & { data: Onboardin
               const agent = agents[index];
               const left = index * 344;
               return agent ? <AgentCard key={slot.id} slot={slot} agent={agent} providers={providers} left={left} onChange={change} busy={busy} />
-                : <div key={slot.id} className="ag" style={{ left, borderStyle: "dashed", borderColor: "#333", alignItems: "center", justifyContent: "center", color: "#8a8a8a", fontSize: 13.5, textAlign: "center" }}>{slot.optional ? "Add an Alt Coordinator for a second opinion." : `Add a ${slot.label} to continue.`}</div>;
+                : <div key={slot.id} className="ag" style={{ left, borderStyle: "dashed", borderColor: "#333", alignItems: "center", justifyContent: "center", color: "#8a8a8a", fontSize: 13.5, textAlign: "center" }}>{loading ? <Spinner /> : slot.optional ? "Add an Alt Coordinator for a second opinion." : `Add a ${slot.label} to continue.`}</div>;
             })}
           </div>
         </div>

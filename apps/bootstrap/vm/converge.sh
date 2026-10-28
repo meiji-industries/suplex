@@ -31,6 +31,10 @@ if [ -n "$EXIT_NODE" ]; then
   install -m 644 $T/suplex-egress.service /etc/systemd/system/suplex-egress.service
   install -d /etc/systemd/system/suplex.service.d
   printf '[Unit]\nRequires=suplex-egress.service\nAfter=suplex-egress.service\n' > /etc/systemd/system/suplex.service.d/egress.conf
+  # networkd deletes ip rules it did not create whenever it restarts (unattended upgrades restart it), which drops
+  # suplex-egress's Docker rule and cuts containers off. Tailscale re-adds its own rules; ours would stay gone.
+  install -d /etc/systemd/networkd.conf.d
+  printf '[Network]\nManageForeignRoutingPolicyRules=no\n' > /etc/systemd/networkd.conf.d/suplex-egress.conf
   systemctl daemon-reload; systemctl enable suplex-egress.service >/dev/null 2>&1; systemctl restart suplex-egress.service
   echo "egress ip: $(curl -4 -sS --max-time 20 https://ifconfig.me || echo NONE)"
   WAN=$(ip -o -4 route show default | awk '{print $5; exit}')
@@ -41,7 +45,8 @@ if [ -n "$EXIT_NODE" ]; then
 else
   step "no exit node: the VM uses its own public IP"
   systemctl disable --now suplex-egress.service >/dev/null 2>&1 || true
-  rm -f /etc/suplex-egress.nft /etc/systemd/system/suplex-egress.service /etc/systemd/system/suplex.service.d/egress.conf /etc/apt/apt.conf.d/99force-ipv4
+  rm -f /etc/suplex-egress.nft /etc/systemd/system/suplex-egress.service /etc/systemd/system/suplex.service.d/egress.conf /etc/apt/apt.conf.d/99force-ipv4 \
+    /etc/systemd/networkd.conf.d/suplex-egress.conf
   systemctl daemon-reload
   echo "egress ip: $(curl -4 -sS --max-time 20 https://ifconfig.me || echo NONE)"
 fi

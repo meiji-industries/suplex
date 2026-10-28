@@ -11,7 +11,8 @@ const mocks = vi.hoisted(() => ({
   toast: { success: vi.fn(), error: vi.fn() },
 }));
 
-vi.mock("../lib/api.js", () => ({
+vi.mock("../lib/api.js", async importOriginal => ({
+  ...(await importOriginal<Record<string, unknown>>()),
   readJsonUnchecked: mocks.readJsonUnchecked,
   withCompany: (path: string) => path,
 }));

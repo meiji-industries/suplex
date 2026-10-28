@@ -13,10 +13,51 @@ use axum::{
 };
 use rusqlite::{OptionalExtension, params};
 
+/// The invitation page from the "Suplex Team Invite" design. The wordmark and
+/// Inter Tight come from the `/start` routes.
+const INVITE_PAGE: &str = include_str!("invite.html");
+const MONO_FONT: &[u8] = include_bytes!("../../../../web/fonts/GeistMono-Variable.woff2");
+
 pub fn router() -> Router<Accounts> {
     Router::new()
         .route("/v1/company-invitations", post(send))
         .route("/invite/{id}", get(invitation_page))
+}
+
+/// Static assets for the invitation page. They are merged outside the
+/// `private` layer so their cache header holds.
+pub fn assets() -> Router<Accounts> {
+    Router::new().route(
+        "/invite/geist-mono.woff2",
+        get(|| async {
+            (
+                [
+                    (header::CONTENT_TYPE, "font/woff2"),
+                    (header::CACHE_CONTROL, "public, max-age=86400"),
+                ],
+                MONO_FONT,
+            )
+        }),
+    )
+}
+
+/// Up to two letters or digits from the company name, for the avatar.
+fn initials(name: &str) -> String {
+    let words: Vec<&str> = name.split_whitespace().collect();
+    let letters: String = match words.as_slice() {
+        [first, second, ..] => first
+            .chars()
+            .filter(|c| c.is_alphanumeric())
+            .take(1)
+            .chain(second.chars().filter(|c| c.is_alphanumeric()).take(1))
+            .collect(),
+        _ => name
+            .chars()
+            .filter(|c| c.is_alphanumeric())
+            .take(2)
+            .collect(),
+    };
+    letters.to_uppercase()
 }
 
 async fn send(
@@ -152,21 +193,25 @@ fn invitation(accounts: &Accounts, id: &str) -> HostedResult<String> {
     target.query_pairs_mut().append_pair("company", &row.2);
     let mut deep = url::Url::parse("suplex://join").map_err(|_| HostedError::internal())?;
     deep.query_pairs_mut().append_pair("url", target.as_str());
-    let company = escape(&row.0);
-    Ok(page::render(
-        &format!("Join {company}"),
-        &format!(
-            "<p>Connect over Tailscale or the same local network as the company host. The host must be online.</p><p>Download Suplex, then open the company and log in with the email address that received this invitation.</p><div class=\"actions\"><a class=\"primary\" href=\"{}\">Open Suplex</a><a href=\"{}\">Continue in browser</a><a href=\"/download\">Download Suplex</a></div>",
-            escape(deep.as_str()),
-            escape(target.as_str())
-        ),
-    ))
+    Ok(INVITE_PAGE
+        .replace("{company}", &escape(&row.0))
+        .replace("{initials}", &escape(&initials(&row.0)))
+        .replace("{open_url}", &escape(deep.as_str()))
+        .replace("{browser_url}", &escape(target.as_str())))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::accounts::{hosted::fakes::Fixture, wire::random_token};
+
+    #[test]
+    fn initials_use_two_words_or_the_first_two_characters() {
+        assert_eq!(initials("Pedro Inc"), "PI");
+        assert_eq!(initials("Test <Company>"), "TC");
+        assert_eq!(initials("suplex"), "SU");
+        assert_eq!(initials("  "), "");
+    }
 
     #[tokio::test]
     async fn invitation_email_retries_once_and_landing_does_not_accept() {
@@ -264,6 +309,11 @@ mod tests {
         assert!(html.contains("Test &lt;Company&gt;"));
         assert!(html.contains("suplex://join?url="));
         assert!(html.contains("company=company_one"));
+        assert!(html.contains("<span class=\"avatar\" aria-hidden=\"true\">TC</span>"));
+        assert!(!html.contains("{company}") && !html.contains("{open_url}"));
+        let font = f.get("/invite/geist-mono.woff2", &[]).await;
+        assert_eq!(font.status(), 200);
+        assert_eq!(font.headers()["cache-control"], "public, max-age=86400");
         assert_eq!(
             f.count(
                 "SELECT COUNT(*) FROM company_invitations WHERE accepted_account_id IS NOT NULL"

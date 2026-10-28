@@ -208,6 +208,7 @@ pub fn router(accounts: Accounts) -> Router {
         .route("/auth/done", get(done_page))
         .layer(DefaultBodyLimit::max(BODY_LIMIT))
         .layer(middleware::map_response(private))
+        .merge(super::invitations::assets())
         .with_state(accounts)
 }
 

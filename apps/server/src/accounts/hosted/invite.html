@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="dark">
+    <meta name="referrer" content="no-referrer">
+    <title>Join {company} · Suplex</title>
+    <style>
+      /* The "Suplex Team Invite" design. invitations.rs fills {company}, {initials}, {open_url}, and {browser_url} with escaped values. */
+      @font-face { font-family: "Inter Tight"; font-style: normal; font-weight: 100 900; font-display: swap; src: url("/start/inter-tight.woff2") format("woff2"); }
+      @font-face { font-family: "Geist Mono"; font-style: normal; font-weight: 100 900; font-display: swap; src: url("/invite/geist-mono.woff2") format("woff2"); }
+      :root { color-scheme: dark; --lime: #d8f65c; --ink: #141a00; --fg: #ededed; --fg2: #a3a3a3; --line: #262626; --soft: #1c1c1c; font-family: "Inter Tight", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #0a0a0a; color: var(--fg); -webkit-font-smoothing: antialiased; }
+      * { box-sizing: border-box; }
+      body { margin: 0; }
+      a { color: var(--fg); }
+      a:hover { color: var(--lime); }
+      a:focus-visible { outline: 2px solid var(--lime); outline-offset: 3px; }
+      .page { min-height: 100dvh; display: flex; flex-direction: column; }
+      .mono { font-family: "Geist Mono", ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--fg2); }
+      header { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 32px 48px 0; }
+      header img { display: block; height: 18px; width: auto; }
+      main { flex: 1; width: 100%; max-width: 1240px; margin: 0 auto; padding: 56px 24px 72px; display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 72px; }
+      .intro { flex: 1 1 440px; max-width: 560px; min-width: 0; display: flex; flex-direction: column; gap: 32px; }
+      .stack { display: flex; flex-direction: column; gap: 14px; }
+      .stack.tight { gap: 10px; }
+      h1 { margin: 0; font-size: clamp(36px, 5vw, 56px); line-height: 1.02; letter-spacing: -.04em; font-weight: 400; overflow-wrap: anywhere; }
+      h1 em { font-style: normal; color: var(--lime); }
+      .sub { margin: 0; max-width: 480px; font-size: 18px; line-height: 1.5; color: var(--fg2); }
+      .grp { background: #111; border: 1px solid #232323; border-radius: 14px; padding: 4px 20px; }
+      .step { display: grid; grid-template-columns: 40px minmax(0, 1fr); gap: 14px; padding: 18px 0; border-top: 1px solid var(--soft); }
+      .step:first-child { border-top: 0; }
+      .step .mono { font-size: 12px; color: var(--lime); padding-top: 2px; }
+      .step h2 { margin: 0; font-size: 16px; font-weight: 500; letter-spacing: -.01em; }
+      .step p { margin: 4px 0 0; font-size: 14px; line-height: 1.5; color: var(--fg2); }
+      .actions { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
+      .btn { display: inline-flex; align-items: center; gap: 10px; height: 48px; padding: 0 13px 0 18px; border-radius: 999px; background: var(--lime); color: var(--ink); font-size: 15px; font-weight: 500; text-decoration: none; }
+      .btn:hover { color: var(--ink); filter: brightness(1.05); }
+      .key { display: inline-grid; place-items: center; width: 26px; height: 26px; border-radius: 7px; background: rgba(20, 26, 0, .14); }
+      .btn2 { display: inline-flex; align-items: center; height: 48px; padding: 0 22px; border-radius: 999px; border: 1px solid #3a3a3a; color: var(--fg); font-size: 14px; font-weight: 500; text-decoration: none; }
+      .btn2:hover { border-color: #5a5a5a; color: var(--fg); }
+      .download { margin: 0; font-size: 14px; line-height: 1.5; color: var(--fg2); }
+      .download a { text-decoration: none; border-bottom: 1px solid #3a3a3a; padding-bottom: 1px; }
+      .download .mono { margin-left: 8px; }
+      .download .mono a { color: var(--fg2); border: 0; }
+      .download .mono a:hover { color: var(--lime); }
+      aside { flex: 1 1 380px; max-width: 500px; min-width: 0; padding: 28px; display: flex; flex-direction: column; gap: 20px; background: #0e0e0e; border: 1px solid var(--soft); border-radius: 16px; }
+      .company { display: flex; align-items: center; gap: 12px; height: 56px; padding: 0 14px; border-radius: 12px; background: #1a1a1a; border: 1px solid #2a2a2a; }
+      .avatar { flex: none; width: 32px; height: 32px; border-radius: 8px; background: var(--lime); color: var(--ink); display: grid; place-items: center; font-size: 12px; font-weight: 500; }
+      .company .name { flex: 1; min-width: 0; font-size: 17px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .pill { display: inline-flex; align-items: center; height: 22px; padding: 0 9px; border-radius: 999px; font-size: 11px; font-weight: 500; white-space: nowrap; color: var(--fg2); background: var(--soft); border: 1px solid #333; }
+      .node { display: flex; align-items: center; gap: 14px; height: 72px; padding: 0 18px; border-radius: 12px; background: #161616; border: 1px solid var(--line); }
+      .node.host { border-color: #4a5a1f; }
+      .ico { flex: none; width: 36px; height: 36px; border-radius: 9px; display: grid; place-items: center; background: var(--soft); border: 1px solid #333; }
+      .host .ico { background: #1a1f0a; border-color: var(--lime); }
+      .node .what { flex: 1; min-width: 0; }
+      .node .what div:first-child { font-size: 15px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .node .mono { font-size: 10px; margin-top: 4px; }
+      .link { display: flex; align-items: center; gap: 16px; height: 76px; padding-left: 35px; }
+      .link i { display: block; width: 0; height: 100%; border-left: 1.5px dashed var(--lime); }
+      .link .mono { font-size: 10px; color: var(--lime); }
+      .spacer { flex: 1; }
+      aside > p { margin: 0; font-size: 10px; line-height: 1.6; }
+      @media (max-width: 640px) {
+        header { padding: 24px 24px 0; }
+        main { padding: 40px 24px 56px; gap: 48px; }
+        aside { padding: 20px; }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="page">
+      <header>
+        <img src="/start/wordmark.svg" alt="Suplex">
+        <span class="mono">Team invite</span>
+      </header>
+      <main>
+        <section class="intro">
+          <div class="stack">
+            <span class="mono">01 · Invitation</span>
+            <h1>Join <em>{company}</em><br>on Suplex.</h1>
+            <p class="sub">Your team’s projects, agents and workflows run on the company host.</p>
+          </div>
+          <div class="stack tight">
+            <span class="mono" style="font-size: 10px;">Before you open it</span>
+            <div class="grp">
+              <div class="step"><span class="mono">01</span><div><h2>Connect to the host network</h2><p>Connect over Tailscale, or join the same local network as the company host.</p></div></div>
+              <div class="step"><span class="mono">02</span><div><h2>Make sure the host is online</h2><p>The host is the computer that runs Suplex for {company}. It must be awake and connected.</p></div></div>
+              <div class="step"><span class="mono">03</span><div><h2>Log in with the invited email</h2><p>Open the company in Suplex and log in with the email address that received this invitation.</p></div></div>
+            </div>
+          </div>
+          <div class="stack" style="gap: 18px;">
+            <div class="actions">
+              <a class="btn" href="{open_url}">Open Suplex<span class="key" aria-hidden="true"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M7 17 17 7"></path><path d="M8 7h9v9"></path></svg></span></a>
+              <a class="btn2" href="{browser_url}">Continue in browser</a>
+            </div>
+            <p class="download">No Suplex app yet? <a href="/download?platform=macos-arm64">Download for macOS →</a><span class="mono"><a href="/download?platform=windows-x64">Windows</a> · <a href="/download?platform=linux-desktop-x64">Linux</a></span></p>
+          </div>
+        </section>
+        <aside aria-label="How you connect">
+          <span class="mono" style="font-size: 10px;">Preview · How you connect</span>
+          <div class="company"><span class="avatar" aria-hidden="true">{initials}</span><span class="name">{company}</span><span class="pill">Invitation</span></div>
+          <div>
+            <div class="node">
+              <span class="ico"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#ededed" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="5" width="16" height="11" rx="1.5"></rect><path d="M2 19h20"></path></svg></span>
+              <div class="what"><div>This device</div><div class="mono">Suplex app or browser</div></div>
+              <span class="pill">You</span>
+            </div>
+            <div class="link"><i aria-hidden="true"></i><span class="mono">Tailscale or local network</span></div>
+            <div class="node host">
+              <span class="ico"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#d8f65c" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="4" width="16" height="7" rx="1.5"></rect><rect x="4" y="13" width="16" height="7" rx="1.5"></rect><path d="M8 7.5h.01M8 16.5h.01"></path></svg></span>
+              <div class="what"><div>{company} host</div><div class="mono">Runs Suplex for the team</div></div>
+              <span class="pill">Host</span>
+            </div>
+          </div>
+          <div class="spacer"></div>
+          <p class="mono">Projects, agents and credentials stay on the host. You connect to it.</p>
+        </aside>
+      </main>
+    </div>
+  </body>
+</html>

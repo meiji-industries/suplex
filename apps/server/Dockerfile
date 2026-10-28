@@ -12,9 +12,9 @@ RUN mkdir -p apps/desktop/src-tauri/src apps/mobile/src-tauri/src apps/bootstrap
 COPY apps/server apps/server
 COPY packages/exception-report packages/exception-report
 COPY scripts/shared-resource-command.py scripts/
-# The suplex.sh/start pages reuse the app login view's wordmark, art, and font.
+# Hosted pages reuse the app login view's wordmark, art, and fonts.
 COPY apps/web/assets/suplex-wordmark.svg apps/web/assets/account-background.png apps/web/assets/
-COPY apps/web/fonts/InterTight-Variable.woff2 apps/web/fonts/
+COPY apps/web/fonts/InterTight-Variable.woff2 apps/web/fonts/GeistMono-Variable.woff2 apps/web/fonts/
 # The hosted service serves no app UI. A release build only checks that these entry files exist.
 RUN mkdir -p apps/web/dist && touch apps/web/dist/suplex-ui.js apps/web/dist/suplex-ui.css
 # Use the image's toolchain instead of letting rust-toolchain.toml install clippy and rustfmt on every build.

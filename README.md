@@ -344,3 +344,13 @@ project credential controls. Agency use keeps the owner-controlled trust
 boundary. Unfinished design ideas live in [proposals](docs/proposals.md) and
 [unresolved work](docs/architecture/unknowns.md). None of that is a commitment.
 It is where the questions are.
+
+## License
+
+Suplex is source-available under the [Elastic License 2.0](LICENSE). You can
+use, copy, change, and redistribute it. You cannot offer it to others as a
+hosted or managed service, or remove or get around its license key
+functions. Third-party material keeps its own license; see
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+This summary is not the license. The [LICENSE](LICENSE) file governs.
+To contribute, read [CONTRIBUTING.md](CONTRIBUTING.md).

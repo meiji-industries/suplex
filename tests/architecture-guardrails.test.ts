@@ -38,3 +38,13 @@ test("native task UI has Coordinator, Worker, and workflow Advisors without the 
   expect(source).not.toMatch(/builder|integrator|role="planner"|role="reviewer"/);
   expect(source).toContain("advisorRoles");
 });
+
+test("every package and crate declares the Elastic License 2.0", () => {
+  const members = /^members = \[(.*)\]$/m.exec(readFileSync("Cargo.toml", "utf8"))![1]!.match(/"[^"]+"/g)!.map(member => JSON.parse(member) as string);
+  expect(readFileSync("Cargo.toml", "utf8")).toMatch(/^\[workspace\.package\]\nlicense = "Elastic-2\.0"$/m);
+  for (const member of members) expect(readFileSync(`${member}/Cargo.toml`, "utf8"), member).toMatch(/^license\.workspace = true$/m);
+  const manifests = ["package.json", ...["apps", "packages"].flatMap(root => readdirSync(root).map(name => `${root}/${name}/package.json`))];
+  for (const manifest of manifests.filter(path => { try { readFileSync(path); return true; } catch { return false; } })) {
+    expect((JSON.parse(readFileSync(manifest, "utf8")) as { license?: string }).license, manifest).toBe("Elastic-2.0");
+  }
+});

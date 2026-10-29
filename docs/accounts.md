@@ -185,11 +185,11 @@ startup.
 
 - **Google**: a Google Cloud OAuth client of type Web application. Authorized
   redirect URIs: `https://suplex.sh/auth/callback/google` and
-  `https://billing-sandbox.example.com/auth/callback/google`. Scopes
+  `$SUPLEX_SANDBOX_ORIGIN/auth/callback/google`. Scopes
   `openid email profile`.
 - **GitHub**: two OAuth apps, because each has one callback URL:
   `https://suplex.sh/auth/callback/github` (production) and
-  `https://billing-sandbox.example.com/auth/callback/github` (sandbox).
+  `$SUPLEX_SANDBOX_ORIGIN/auth/callback/github` (sandbox).
   The service asks for `read:user user:email`.
 - **Resend**: the domain `suplex.sh` with its DNS records verified, an API
   key with sending access, and the published template `suplex-base`. Every
@@ -234,8 +234,10 @@ fly secrets set --app suplex-production \
 ```
 
 Locally, `mise run hosted:tunnel` and `mise run hosted:dev` run the service
-on `127.0.0.1:4212` behind `https://billing-sandbox.example.com`, with the
+on `127.0.0.1:4212` behind `$SUPLEX_SANDBOX_ORIGIN`, with the
 sandbox values from `scripts/billing-dev.env`.
+Set `SUPLEX_SANDBOX_ORIGIN` to the tunnel's public URL in the git-ignored
+`mise.local.toml` (an `[env]` table); `hosted:dev` stops without it.
 
 For a local provider configuration, set `SUPLEX_HOSTED_DEV_ENV_FILE` to an
 ignored file under `.suplex/` containing 1Password references. The file must

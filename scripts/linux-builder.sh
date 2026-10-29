@@ -1,13 +1,13 @@
 # Sourced by the Linux build scripts. Docker on Apple silicon runs x64 builds under slow emulation, so an x64
-# build runs on SUPLEX_BUILD_HOST (default build-host, a native x64 machine on the tailnet) when it answers,
-# and here otherwise. SUPLEX_BUILD_HOST= always builds here. The checkout and its Git directory are mirrored
+# build runs on SUPLEX_BUILD_HOST (an SSH destination for a native x64 machine, set in mise.local.toml) when it
+# answers, and here otherwise. Without SUPLEX_BUILD_HOST it always builds here. The checkout and its Git directory are mirrored
 # to the same absolute paths there, so the scripts' bind mounts work unchanged through DOCKER_HOST.
 
 # Sets builder to the build host for this architecture, or to nothing for a local build.
 linux_builder() {
   builder=""
   [ "$1" = x64 ] && [ "$(uname -m)" != x86_64 ] || return 0
-  host="${SUPLEX_BUILD_HOST-build-host}"
+  host="${SUPLEX_BUILD_HOST-}"
   [ -n "$host" ] || return 0
   if ssh -o BatchMode=yes -o ConnectTimeout=5 "$host" 'uname -m | grep -qx x86_64 && docker info' >/dev/null 2>&1; then
     builder="$host"

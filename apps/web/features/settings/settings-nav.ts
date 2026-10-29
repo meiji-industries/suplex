@@ -1,4 +1,4 @@
-import { Archive, Braces, CreditCard, Building2, FileText, FolderGit2, HardDrive, KeyRound, ListChecks, Plug, ShieldCheck, SquareTerminal, UserRound, Users, Webhook, Workflow, type LucideIcon } from "lucide-react";
+import { Archive, Braces, CreditCard, Building2, FileText, FolderGit2, HardDrive, KeyRound, ListChecks, Plug, Scale, ShieldCheck, SquareTerminal, UserRound, Users, Webhook, Workflow, type LucideIcon } from "lucide-react";
 
 import { billingSettingsPath, companySettingsPath, withCompany, type ApiUser } from "../../lib/api.js";
 
@@ -37,6 +37,7 @@ export function buildSettingsGroups(companyId: string, user?: ApiUser): Settings
         { label: "Backups", href: withCompany("/admin/backups", companyId), icon: Archive },
       ] : []),
       { label: "Host health", href: withCompany("/health", companyId), icon: ShieldCheck },
+      ...(user ? [{ label: "Licenses", href: withCompany("/licenses", companyId), icon: Scale }] : []),
     ] },
   ];
 }

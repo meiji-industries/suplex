@@ -16,9 +16,9 @@ apps/desktop/.build/
 apps/desktop/src-tauri/gen/
 apps/mobile/release/
 apps/mobile/src-tauri/gen/schemas/
-# Tauri migration logs, isolated profiles, and fixtures stay local; the Markdown records are committed.
-.context/tauri-migration/*
-!.context/tauri-migration/*.md
+.context/
+mise.local.toml
+apps/mobile/src/third-party-licenses.txt
 *.sqlite
 *.sqlite-shm
 *.sqlite-wal

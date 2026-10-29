@@ -77,17 +77,17 @@ list exit nodes; without it you type the name.
 
 ## The reference VM
 
-Hetzner CPX62 `vm` (Helsinki, Ubuntu 26.04, 16 vCPU, 32 GB), tailnet name `suplex`,
-exit node `exit-node` (home IP 203.0.113.10). `ssh build-host` is the admin shell; `ssh suplex@suplex` is the
-agent user (Tailscale SSH). Suplex: https://suplex.tail1234.ts.net:4111 (Tailscale Serve HTTPS, tailnet only).
+A Hetzner Cloud CPX62 (Ubuntu 26.04, 16 vCPU, 32 GB) on the tailnet as `<vm>`, with egress through a
+Tailscale exit node. `ssh root@<vm>` is the admin shell; `ssh suplex@<vm>` is the agent user (Tailscale SSH).
+Suplex: `https://<vm>.<tailnet>.ts.net:4111` (Tailscale Serve HTTPS, tailnet only).
 Suplex and every agent run as the non-root user `suplex` (no sudo): Claude Code refuses
 `--dangerously-skip-permissions` as root, so Workers died at launch while the service ran as root (suplex#401).
 Verified: direct `eth0` blocked, exit node off = nothing leaves, survives reboot.
 
 ## How the VM is set up (knowledge for suplex.sh docs)
 
-1. `curl -fsSL https://tailscale.com/install.sh | sh`, `tailscale up --authkey … --hostname suplex --ssh --accept-dns`,
-   then `tailscale set --exit-node=exit-node`. Setting the exit node breaks an SSH session over the public
+1. `curl -fsSL https://tailscale.com/install.sh | sh`, `tailscale up --authkey … --hostname <vm> --ssh --accept-dns`,
+   then `tailscale set --exit-node=<exit-node>`. Setting the exit node breaks an SSH session over the public
    IP (replies reroute); reconnect over the tailnet.
 2. `/etc/suplex-egress.nft` + `suplex-egress.service`: OUTPUT policy drop; allow `lo`, `tailscale0`,
    tailscaled's own packets (fwmark `0x80000`), DHCP, Hetzner metadata, IPv6 ND, and replies to inbound.

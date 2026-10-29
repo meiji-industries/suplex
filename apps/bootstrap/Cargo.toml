@@ -3,7 +3,7 @@ name = "suplex-bootstrap"
 version = "0.1.3"
 edition = "2024"
 description = "Run Suplex on a cloud VM: interactive bootstrap, power control, status"
-license = "MIT"
+license.workspace = true
 
 [dependencies]
 anyhow = "1"

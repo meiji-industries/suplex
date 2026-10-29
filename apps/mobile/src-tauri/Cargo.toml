@@ -2,6 +2,7 @@
 name = "suplex-mobile"
 version = "1.5.0"
 edition = "2021"
+license.workspace = true
 publish = false
 rust-version = "1.93"
 

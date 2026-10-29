@@ -17,14 +17,14 @@ test("admin sees Company, AI, and System groups in order", () => {
   expect(titles(groups)).toEqual(["Company", "Features", "System"]);
   expect(items(groups, "Company")).toEqual(["Profile", "Users", "Projects", "Billing", "Templates", "Workspace", "Onboarding"]);
   expect(items(groups, "Features")).toEqual(["Agents", "Providers", "Terminal", "API & MCP", "Workflows", "Triggers"]);
-  expect(items(groups, "System")).toEqual(["Companies", "Remote Access", "Environment", "Backups", "Host health"]);
+  expect(items(groups, "System")).toEqual(["Companies", "Remote Access", "Environment", "Backups", "Host health", "Licenses"]);
 });
 
-test("member sees Profile, Projects, Billing, Templates, and Host health only", () => {
+test("member sees Profile, Projects, Billing, Templates, Host health, and Licenses", () => {
   const groups = buildSettingsGroups("company-1", member);
   expect(titles(groups)).toEqual(["Company", "System"]);
   expect(items(groups, "Company")).toEqual(["Profile", "Projects", "Billing", "Templates"]);
-  expect(items(groups, "System")).toEqual(["Host health"]);
+  expect(items(groups, "System")).toEqual(["Host health", "Licenses"]);
 });
 
 test("signed-out user sees only System with Host health", () => {
@@ -53,5 +53,6 @@ test("items keep their existing hrefs", () => {
     Environment: "/admin/environment?company=company-1",
     Backups: "/admin/backups?company=company-1",
     "Host health": "/health?company=company-1",
+    Licenses: "/licenses?company=company-1",
   });
 });

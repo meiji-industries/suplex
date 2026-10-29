@@ -2,7 +2,7 @@
 # Builds the Windows desktop installer (NSIS, per-user) for each architecture in SUPLEX_WINDOWS_ARCHES
 # (default "arm64 x64") under apps/desktop/release/windows-<arch>/, then finishes each folder on this Mac with
 # apps/desktop/scripts/finish-platform-release.sh. Both architectures cross-compile from Linux in Docker with
-# cargo-xwin (apps/desktop/windows/Dockerfile); the build runs on the build-host tailnet host when it answers.
+# cargo-xwin (apps/desktop/windows/Dockerfile); the build runs on SUPLEX_BUILD_HOST when it answers.
 # Windows runs no local host, so nothing else is bundled. Never publishes. --check runs the shell's clippy for the
 # Windows targets instead; its tests need a Windows machine.
 #

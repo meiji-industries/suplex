@@ -1,10 +1,11 @@
 {
   "name": "suplex-web",
   "private": true,
+  "license": "Elastic-2.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "vite build",
+    "build": "vite build && node ../../scripts/third-party-licenses.mjs dist/third-party-licenses.txt",
     "typecheck": "tsc --noEmit",
     "test": "vitest run"
   },

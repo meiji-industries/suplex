@@ -1,5 +1,6 @@
 {
   "name": "suplex-desktop",
+  "license": "Elastic-2.0",
   "productName": "Suplex",
   "private": true,
   "version": "1.13.0",

@@ -112,6 +112,7 @@ pub fn application_page(view: &str) -> String {
         "setup" => "Set up",
         "onboarding" => "Onboarding",
         "health" => "Host health",
+        "licenses" => "Licenses",
         _ => "Company settings",
     };
     auth_page()

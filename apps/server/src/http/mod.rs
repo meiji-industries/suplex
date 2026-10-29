@@ -351,11 +351,13 @@ async fn asset(
         "font/woff2"
     } else if filename.ends_with(".css") {
         "text/css; charset=utf-8"
+    } else if filename.ends_with(".txt") {
+        "text/plain; charset=utf-8"
     } else {
         "application/octet-stream"
     };
-    // Vite hashes chunk names, so only the fixed suplex-ui.* entry files change under one name.
-    let cache_control = if filename.starts_with("suplex-ui.") {
+    // Vite hashes chunk names, so only the fixed suplex-ui.* entry files and text notices change under one name.
+    let cache_control = if filename.starts_with("suplex-ui.") || filename.ends_with(".txt") {
         "no-cache"
     } else {
         "public, max-age=31536000, immutable"

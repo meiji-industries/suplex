@@ -5,7 +5,7 @@ name: Sync skills
 on:
   push:
     branches: [main]
-    paths: ['apps/server/skills/**']
+    paths: ['apps/server/skills/**', 'LICENSE']
   workflow_dispatch:
 
 permissions:
@@ -18,6 +18,7 @@ concurrency:
 jobs:
   sync:
     name: Sync skills to suplex-skills
+    if: github.repository == 'meiji-industries/suplex'
     runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 5
     steps:
@@ -30,8 +31,9 @@ jobs:
       - name: Copy and push the skills
         run: |
           rsync --archive --delete --exclude __pycache__ apps/server/skills/ public/skills/
+          cp LICENSE public/LICENSE
           cd public
-          git add --all skills
+          git add --all skills LICENSE
           if git diff --cached --quiet; then exit 0; fi
           git -c user.name="github-actions[bot]" -c user.email="41898282+github-actions[bot]@users.noreply.github.com" commit --message "Sync skills from suplex"
           git push

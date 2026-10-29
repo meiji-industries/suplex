@@ -156,7 +156,7 @@ done
 '''
 
 [tasks."server:dist:linux"]
-description = "Build the Linux suplex binary in Docker for arm64 and x64 and pack each under dist/linux/<arch>; x64 builds on the build-host tailnet host when it answers (SUPLEX_BUILD_HOST picks another host, empty builds here); the telemetry key comes from the 1Password Suplex vault"
+description = "Build the Linux suplex binary in Docker for arm64 and x64 and pack each under dist/linux/<arch>; x64 builds on SUPLEX_BUILD_HOST when it answers (SUPLEX_BUILD_HOST picks another host, empty builds here); the telemetry key comes from the 1Password Suplex vault"
 run = '''
 source scripts/onepassword.sh
 onepassword_setup_service_account
@@ -182,9 +182,9 @@ description = "Run the hosted service (billing, accounts, suplex.sh) from source
 run = '''
 source scripts/onepassword.sh
 onepassword_setup_service_account
-# `mise run hosted:tunnel` routes https://billing-sandbox.example.com to this port.
+# `mise run hosted:tunnel` routes SUPLEX_SANDBOX_ORIGIN (set in mise.local.toml) to this port.
 # The sandbox has no head office address, which Stripe Tax needs.
-export STRIPE_AUTOMATIC_TAX=false BILLING_ENVIRONMENT=sandbox BILLING_PORT=4212 BILLING_PUBLIC_ORIGIN=https://billing-sandbox.example.com BILLING_DATABASE_PATH="$PWD/.suplex/billing.sqlite"
+export STRIPE_AUTOMATIC_TAX=false BILLING_ENVIRONMENT=sandbox BILLING_PORT=4212 BILLING_PUBLIC_ORIGIN="${SUPLEX_SANDBOX_ORIGIN:?Set SUPLEX_SANDBOX_ORIGIN in mise.local.toml}" BILLING_DATABASE_PATH="$PWD/.suplex/billing.sqlite"
 mkdir -p .suplex
 env_file="${SUPLEX_HOSTED_DEV_ENV_FILE:-scripts/billing-dev.env}"
 # The six account provider fields are optional: without them the service runs with sign-in off.
@@ -248,11 +248,11 @@ description = "Bundle the host runtime, then package Suplex.app, DMG, and ZIP un
 run = "pnpm run desktop:dist"
 
 [tasks."desktop:dist:linux"]
-description = "Build the Linux desktop app (deb and rpm with the bundled host) in Docker for arm64 and x64 under apps/desktop/release/linux-<arch>, then install and launch each in a clean Ubuntu container; x64 builds on the build-host tailnet host when it answers (SUPLEX_BUILD_HOST picks another host, empty builds here; SUPLEX_LINUX_ARCHES limits the architectures; update files only with SUPLEX_DESKTOP_UPDATE_URL and an updater key pair)"
+description = "Build the Linux desktop app (deb and rpm with the bundled host) in Docker for arm64 and x64 under apps/desktop/release/linux-<arch>, then install and launch each in a clean Ubuntu container; x64 builds on SUPLEX_BUILD_HOST when it answers (SUPLEX_BUILD_HOST picks another host, empty builds here; SUPLEX_LINUX_ARCHES limits the architectures; update files only with SUPLEX_DESKTOP_UPDATE_URL and an updater key pair)"
 run = "sh scripts/build-desktop-linux.sh"
 
 [tasks."desktop:dist:windows"]
-description = "Cross-compile the Windows desktop installer in Docker for arm64 and x64 under apps/desktop/release/windows-<arch>; the build runs on the build-host tailnet host when it answers (SUPLEX_BUILD_HOST picks another host, empty builds here; SUPLEX_WINDOWS_ARCHES limits the architectures)"
+description = "Cross-compile the Windows desktop installer in Docker for arm64 and x64 under apps/desktop/release/windows-<arch>; the build runs on SUPLEX_BUILD_HOST when it answers (SUPLEX_BUILD_HOST picks another host, empty builds here; SUPLEX_WINDOWS_ARCHES limits the architectures)"
 run = "bash scripts/build-desktop-windows.sh"
 
 [tasks."desktop:check:linux"]

@@ -21,7 +21,8 @@ build="${XDG_CACHE_HOME:-$HOME/.cache}/suplex/mobile-release"
 git worktree prune
 [[ -d "$build" ]] || git worktree add --detach "$build" "$tag"
 git -C "$build" checkout -q --force --detach "$tag"
-pnpm --dir "$build" install --frozen-lockfile --filter suplex-mobile
+pnpm --dir "$build" install --frozen-lockfile --filter suplex-mobile --filter suplex-web
+node "$build/scripts/third-party-licenses.mjs" "$build/apps/mobile/src/third-party-licenses.txt"
 out="$root/apps/mobile/release/$tag"
 mkdir -p "$out"
 secrets="$(mktemp -d)"

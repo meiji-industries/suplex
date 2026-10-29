@@ -172,7 +172,7 @@ suplex hosted serve
 ### Local sandbox
 
 The Stripe sandbox and the RevenueCat project send webhooks to
-`https://billing-sandbox.example.com`, a named Cloudflare Tunnel to
+`$SUPLEX_SANDBOX_ORIGIN`, a named Cloudflare Tunnel to
 `127.0.0.1:4212`. Run the tunnel, the service, and Suplex in three terminals:
 
 ```sh

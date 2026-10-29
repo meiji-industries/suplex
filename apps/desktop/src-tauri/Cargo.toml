@@ -2,6 +2,7 @@
 name = "suplex-desktop"
 version = "1.13.0"
 edition = "2021"
+license.workspace = true
 publish = false
 rust-version = "1.93"
 

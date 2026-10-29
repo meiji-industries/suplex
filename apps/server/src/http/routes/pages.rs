@@ -60,6 +60,7 @@ pub fn router() -> Router<AppState> {
         .route("/setup", get(setup))
         .route("/onboarding", get(onboarding))
         .route("/health", get(health))
+        .route("/licenses", get(licenses))
 }
 
 fn redirect(location: &str) -> Response {
@@ -256,6 +257,7 @@ page_handler!(moves, "moves");
 page_handler!(analytics, "analytics");
 page_handler!(setup, "setup");
 page_handler!(onboarding, "onboarding");
+page_handler!(licenses, "licenses");
 async fn health(State(state): State<AppState>, headers: HeaderMap) -> Response {
     let cookies = match page_user(&state, &headers) {
         Ok((_, cookies)) => cookies,

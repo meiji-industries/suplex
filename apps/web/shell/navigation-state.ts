@@ -2,6 +2,7 @@ const applicationPaths = [
   /^\/admin(?:\/(?:agents|companies|invitations|providers|api-mcp|prompts|environment|workflows|triggers|onboarding))?$/,
   /^\/companies\/[^/]+\/settings$/,
   /^\/profile$/,
+  /^\/licenses$/,
   /^\/templates$/,
   /^\/projects(?:\/[^/]+(?:\/templates)?)?$/,
   /^\/moves\/[^/]+\/runs\/[^/]+$/,

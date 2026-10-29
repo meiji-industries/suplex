@@ -2,7 +2,7 @@
 
 `mise run desktop:dist:windows` cross-compiles the Windows installers (NSIS, per-user) for arm64 and x64 in
 Docker, from Linux, with [cargo-xwin](https://github.com/rust-cross/cargo-xwin). x64 builds run on the
-`build-host` tailnet host when it answers, as the Linux builds do (`scripts/linux-builder.sh`). The release
+`SUPLEX_BUILD_HOST` machine when it answers, as the Linux builds do (`scripts/linux-builder.sh`). The release
 (`mise run release:*`) runs the same build with the production update feed and key.
 `mise run desktop:check:windows` runs the shell's clippy for both Windows targets.
 
@@ -24,9 +24,8 @@ files on the Mac (`apps/desktop/scripts/finish-platform-release.sh`).
 
 ## Authenticode signing
 
-The release reads the six `AZURE_*` values from the `Azure Trusted Signing` item in the Suplex 1Password
-vault and signs the app and installer with Azure Trusted Signing (publisher "Meiji Heavy Industries, Inc."),
-through `jsign`. The item holds the Entra app `release-signing`, which has only the Artifact Signing
-Certificate Profile Signer role on the `vm-provisioning` profile in the `codesigning` resource group. Its
-secret expires on 2028-10-06; create a new one with `az ad app credential reset` before then and update the
+The release reads the six `AZURE_*` values from the `Azure Trusted Signing` item in the Suplex 1Password vault
+and signs the app and installer with Azure Trusted Signing (publisher "Meiji Heavy Industries, Inc."), through
+`jsign`. The item holds an Entra app that has only the Artifact Signing Certificate Profile Signer role on the
+signing profile. Before its secret expires, create a new one with `az ad app credential reset` and update the
 item. Without the item the installers are unsigned, and Windows SmartScreen shows an unknown publisher.

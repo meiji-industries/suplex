@@ -26,6 +26,7 @@ import { TaskTemplateSettings } from "../features/settings/task-template-setting
 import { ApiMcpSettingsView } from "../features/settings/api-mcp-settings.js";
 import { ProviderSettingsView } from "../features/settings/provider-settings.js";
 import { TerminalSettingsView } from "../features/settings/terminal-settings.js";
+import { LicensesView } from "../features/settings/licenses-settings.js";
 import { BackupSettingsView } from "../features/settings/backup-settings.js";
 import { EnvironmentSettingsView } from "../features/settings/environment-settings.js";
 import { WorkflowSettingsView } from "../features/settings/workflow-settings.js";
@@ -74,6 +75,7 @@ function AppView(): ReactElement {
   if (pathname === "/admin" || pathname === "/admin/agents" || pathname === "/admin/companies" || pathname === "/admin/invitations") return <AdminView />;
   if (/^\/companies\/[^/]+\/settings$/.test(pathname)) return <CompanySettingsView />;
   if (pathname === "/profile") return <ProfileView />;
+  if (pathname === "/licenses") return <LicensesView />;
   if (pathname === "/projects") return <ProjectsView />;
   // The app stores allow no purchase outside their own billing.
   if (pathname === "/billing" && !window.suplexMobile) return <BillingSettingsView />;

@@ -2,6 +2,7 @@
 name = "suplex"
 version = "1.13.0"
 edition = "2024"
+license.workspace = true
 rust-version = "1.93.1"
 
 [dependencies]

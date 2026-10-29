@@ -276,10 +276,14 @@ This installation is for owner-controlled repositories and trusted local tools.
 
 ## Back up and restore
 
+Admins create, download, and restore backups in **Settings > Backups**. On a
+Linux host, use the installed `suplex` command. From a source checkout, prefix
+each command with `pnpm run`.
+
 ```sh
-pnpm run suplex backup /path/to/suplex-backup.tar.gz
-pnpm run suplex verify-backup /path/to/suplex-backup.tar.gz
-pnpm run suplex restore /path/to/suplex-backup.tar.gz /path/to/empty-restore-directory
+suplex backup /path/to/suplex-backup.tar.gz
+suplex verify-backup /path/to/suplex-backup.tar.gz
+suplex restore /path/to/suplex-backup.tar.gz /path/to/empty-restore-directory
 ```
 
 Backups contain Suplex's database, artifacts, and non-secret configuration.

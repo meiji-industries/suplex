@@ -16,6 +16,7 @@
 
 <p align="center">
  <a href="https://github.com/meiji-industries/suplex/actions/workflows/ci.yml"><img src="https://github.com/meiji-industries/suplex/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI" /></a>
+ <a href="LICENSE"><img src="https://img.shields.io/badge/license-Elastic%202.0-blue" alt="Elastic License 2.0" /></a>
  <img src="https://img.shields.io/badge/core-Rust-dea584" alt="Rust core" />
  <img src="https://img.shields.io/badge/agent-OpenCode-555555" alt="OpenCode" />
  <img src="https://img.shields.io/badge/agent-Claude%20Code-d97757" alt="Claude Code" />
@@ -85,6 +86,33 @@ for the agents. Keep each animation under 10 MB. -->
   </tr>
 </table>
 
+# What is Suplex?
+
+Suplex coordinates software-development tasks through the coding agents, Git,
+and repository services you already use. It reduces the work of copying plans
+between agents, brokering revisions, and shepherding branches and checks through
+delivery.
+
+A Coordinator plans and reviews. A Worker implements in a task worktree. Suplex
+is a copilot: you can edit code, change a branch, or merge a pull request
+yourself. Suplex observes what happened, keeps your work, and continues from the
+actual state.
+
+## By hand vs. Suplex
+
+|  | By hand | Suplex |
+| --- | --- | --- |
+| **Plan handoff** | ⚠️ You copy the plan from one agent to the next | ✅ Coordinator delegates to Worker |
+| **Revisions** | ⚠️ You relay review comments back and forth | ✅ Coordinator reviews and asks Worker for repairs |
+| **Independent plans** | ❌ You run two agents and merge the plans yourself | ✅ Double plans combines Plan A and Plan B |
+| **Parallel tasks** | ⚠️ You create and track worktrees yourself | ✅ One worktree and branch per task |
+| **Task order** | ❌ You remember which task waits for which | ✅ Queued tasks wait for prerequisites |
+| **CI and conflicts** | ⚠️ You watch checks and rebase | ✅ Agents can repair code and integration conflicts |
+| **Your agents and accounts** | ✅ Yes | ✅ Yes, through each tool's own sign-in |
+| **Direct edits and merges** | ✅ Yes | ✅ Yes, Suplex observes them and continues |
+| **Input alerts on a phone** | ❌ No | ✅ Web Push when a task needs input |
+| **Host isolation between clients** | ❌ No | ❌ No, use owner-controlled repositories and trusted tools |
+
 # Install
 
 Download the app from [suplex.sh](https://suplex.sh), or use a direct link:
@@ -136,27 +164,20 @@ settings and the checkout install commands.
 
 ## Back up and restore
 
+Admins create, download, and restore backups in **Settings > Backups**. On a
+Linux host, the `suplex` command does the same:
+
 ```sh
-pnpm run suplex backup /path/to/suplex-backup.tar.gz
-pnpm run suplex verify-backup /path/to/suplex-backup.tar.gz
-pnpm run suplex restore /path/to/suplex-backup.tar.gz /path/to/empty-restore-directory
+suplex backup /path/to/suplex-backup.tar.gz
+suplex verify-backup /path/to/suplex-backup.tar.gz
+suplex restore /path/to/suplex-backup.tar.gz /path/to/empty-restore-directory
 ```
 
 Backups exclude provider credentials. Restore requires an empty destination.
 Read [back up and restore](docs/install.md#back-up-and-restore) for what a
 backup holds and what it cannot restore.
 
-# What is Suplex?
-
-Suplex coordinates software-development tasks through the coding agents, Git,
-and repository services you already use. It reduces the work of copying plans
-between agents, brokering revisions, and shepherding branches and checks through
-delivery.
-
-A Coordinator plans and reviews. A Worker implements in a task worktree. Suplex
-is a copilot: you can edit code, change a branch, or merge a pull request
-yourself. Suplex observes what happened, keeps your work, and continues from the
-actual state.
+# How it works
 
 Suplex runs a native API and task host beside a SQLite database. Each system
 owns its own facts:
@@ -289,25 +310,11 @@ project grants, and verify an agent integration after an upgrade. See the
 
 The [product guide](docs/product.md#integrations) lists each implementation and boundary.
 
-# By hand vs. Suplex
-
-|  | By hand | Suplex |
-| --- | --- | --- |
-| **Plan handoff** | ⚠️ You copy the plan from one agent to the next | ✅ Coordinator delegates to Worker |
-| **Revisions** | ⚠️ You relay review comments back and forth | ✅ Coordinator reviews and asks Worker for repairs |
-| **Independent plans** | ❌ You run two agents and merge the plans yourself | ✅ Double plans combines Plan A and Plan B |
-| **Parallel tasks** | ⚠️ You create and track worktrees yourself | ✅ One worktree and branch per task |
-| **Task order** | ❌ You remember which task waits for which | ✅ Queued tasks wait for prerequisites |
-| **CI and conflicts** | ⚠️ You watch checks and rebase | ✅ Agents can repair code and integration conflicts |
-| **Your agents and accounts** | ✅ Yes | ✅ Yes, through each tool's own sign-in |
-| **Direct edits and merges** | ✅ Yes | ✅ Yes, Suplex observes them and continues |
-| **Input alerts on a phone** | ❌ No | ✅ Web Push when a task needs input |
-| **Host isolation between clients** | ❌ No | ❌ No, use owner-controlled repositories and trusted tools |
-
 # Contributing from source
 
 Read [AGENTS.md](AGENTS.md) before you change code. It holds the engineering
-rules, the UI stack, and where new code goes. The short path:
+rules, the UI stack, and where new code goes. Install [mise](https://mise.jdx.dev),
+then run:
 
 ```sh
 mise run worktree
@@ -333,19 +340,18 @@ commands, and the full verification suite.
 
 [CONTEXT.md](CONTEXT.md) defines the terms. [Current architecture](docs/architecture/README.md)
 records how the system works. [Architecture decisions](docs/adr/) explain why.
-[Billing setup and recovery](docs/billing.md) covers Suplex Free and Pro operations.
 
-# Where this is heading
+Outside contributions need a signed contributor license agreement. Read
+[CONTRIBUTING.md](CONTRIBUTING.md) before you open a pull request.
 
-The [product guide](docs/product.md#market-questions-and-positioning-to-test)
-lists the themes under test: less agent babysitting, explicit planning and
-review, parallel tasks with prerequisites, existing tools and accounts, and
-project credential controls. Agency use keeps the owner-controlled trust
-boundary. Unfinished design ideas live in [proposals](docs/proposals.md) and
-[unresolved work](docs/architecture/unknowns.md). None of that is a commitment.
-It is where the questions are.
+# Status and roadmap
 
-## License
+Suplex ships versioned releases from `main`. Planned work and open questions
+live in [issues](https://github.com/meiji-industries/suplex/issues),
+[proposals](docs/proposals.md), and [unresolved work](docs/architecture/unknowns.md).
+Proposals are ideas, not commitments.
+
+# License
 
 Suplex is source-available under the [Elastic License 2.0](LICENSE). You can
 use, copy, change, and redistribute it. You cannot offer it to others as a
@@ -353,5 +359,3 @@ hosted or managed service, or remove or get around its license key
 functions. Third-party material keeps its own license; see
 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 This summary is not the license. The [LICENSE](LICENSE) file governs.
-To contribute, read [CONTRIBUTING.md](CONTRIBUTING.md).
-

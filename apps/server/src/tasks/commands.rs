@@ -192,7 +192,7 @@ pub(crate) fn selected_profile(
     .into())
 }
 
-fn task_branch_name(title: &str, task_id: &str) -> String {
+pub(crate) fn task_branch_name(title: &str, task_id: &str) -> String {
     const FIX: &[&str] = &[
         "fix",
         "fixes",

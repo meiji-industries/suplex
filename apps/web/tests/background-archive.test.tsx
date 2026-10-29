@@ -4,13 +4,14 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { toast } from "sonner";
 import type { Task } from "../contracts/tasks.js";
-import { archiveTask } from "../features/tasks/lib/task-api.js";
+import { archiveTask, sendTaskToBacklog } from "../features/tasks/lib/task-api.js";
 import { ArchiveReviewDialog, ArchiveTaskDialog } from "../features/tasks/archive-task-dialog.js";
-import { archiveToastId, closeArchiveReview, startTaskArchive } from "../features/tasks/lib/background-archive.js";
+import { archiveToastId, closeArchiveReview, startTaskArchive, startTaskCleanup } from "../features/tasks/lib/background-archive.js";
 
 vi.mock("sonner", () => ({ toast: { loading: vi.fn(), success: vi.fn(), error: vi.fn(), warning: vi.fn() } }));
 vi.mock("../features/tasks/lib/task-api.js", () => ({
   archiveTask: vi.fn(),
+  sendTaskToBacklog: vi.fn(),
   isArchiveConfirmation: (result: object) => "dirtyFilePaths" in result,
 }));
 
@@ -30,11 +31,13 @@ let root: Root;
 
 beforeEach(() => {
   requests.clear();
-  vi.mocked(archiveTask).mockImplementation((taskId: string) => {
+  const request = (taskId: string) => {
     const request = deferred<Awaited<ReturnType<typeof archiveTask>>>();
     requests.set(taskId, [...requests.get(taskId) ?? [], request]);
     return request.promise;
-  });
+  };
+  vi.mocked(archiveTask).mockImplementation(request);
+  vi.mocked(sendTaskToBacklog).mockImplementation(request);
   container = document.createElement("div");
   document.body.append(container);
   root = createRoot(container);
@@ -128,4 +131,34 @@ test("uncommitted changes are discarded only after you review the files and conf
   requests.get("dirty")![1]!.resolve(archived("dirty"));
   await flush();
   expect(onArchived).toHaveBeenCalledExactlyOnceWith(archived("dirty"));
+});
+
+test("Send to backlog uses its own request and copy, and its review discards with the same request", async () => {
+  const onArchived = vi.fn();
+  await act(async () => root.render(<ArchiveTaskDialog kind="backlog" task={{ id: "fresh", title: "Fresh" }} open onOpenChange={vi.fn()} onArchived={onArchived} />));
+  expect(document.querySelector('[role="alertdialog"]')!.textContent).toContain("Send task to backlog?");
+  await act(async () => button("Send to backlog")!.click());
+  expect(sendTaskToBacklog).toHaveBeenCalledExactlyOnceWith("fresh", false);
+  expect(archiveTask).not.toHaveBeenCalled();
+  expect(toast.loading).toHaveBeenCalledWith('Sending "Fresh" to the backlog', expect.objectContaining({ id: archiveToastId("fresh") }));
+  await act(async () => root.render(<ArchiveReviewDialog />));
+  requests.get("fresh")![0]!.resolve({ status: "confirmation_required", dirtyFileCount: 1, dirtyFilePaths: ["draft.md"] });
+  await flush();
+  expect(onArchived).not.toHaveBeenCalled();
+  await act(async () => (vi.mocked(toast.warning).mock.lastCall![1]!.action as unknown as { onClick: () => void }).onClick());
+  expect(document.querySelector('[role="alertdialog"]')!.textContent).toContain("Discard 1 uncommitted change and send the task to the backlog?");
+  await act(async () => button("Discard changes and send to backlog")!.click());
+  expect(sendTaskToBacklog).toHaveBeenLastCalledWith("fresh", true);
+  const returned = { id: "fresh", status: "backlog", archivedAt: null } as Task;
+  requests.get("fresh")![1]!.resolve(returned);
+  await flush();
+  expect(toast.success).toHaveBeenCalledWith('Suplex sent "Fresh" to the backlog', expect.anything());
+  expect(onArchived).toHaveBeenCalledExactlyOnceWith(returned);
+});
+
+test("a board move awaits the backlog request and gets null when it needs your review", async () => {
+  const pending = startTaskCleanup("backlog", { id: "board" })!;
+  expect(startTaskCleanup("backlog", { id: "board" })).toBeNull();
+  requests.get("board")![0]!.resolve({ status: "confirmation_required", dirtyFileCount: 1, dirtyFilePaths: ["a"] });
+  expect(await pending).toBeNull();
 });

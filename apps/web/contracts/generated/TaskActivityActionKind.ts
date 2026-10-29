@@ -3,4 +3,4 @@
 /**
  * The audited task commands that the task activity shows. Each value is its audit action.
  */
-export type TaskActivityActionKind = "task_started" | "task_force_started" | "task_moved_to_front" | "task_disarmed" | "task_cancelled" | "task_answered" | "task_details_updated" | "task_dependencies_updated" | "task_archived" | "task_unarchived";
+export type TaskActivityActionKind = "task_started" | "task_force_started" | "task_moved_to_front" | "task_disarmed" | "task_cancelled" | "task_answered" | "task_details_updated" | "task_dependencies_updated" | "task_archived" | "task_unarchived" | "task_sent_to_backlog";

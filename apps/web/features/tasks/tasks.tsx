@@ -1,4 +1,5 @@
-import { listTasks, runTaskAction, type TaskAction } from "./lib/task-api.js";
+import { listTasks, runTaskAction } from "./lib/task-api.js";
+import { startTaskCleanup } from "./lib/background-archive.js";
 import { Fragment, memo, useCallback, useEffect, useMemo, useRef, useState, type ReactElement } from "react";
 import { useReducedMotion } from "motion/react";
 import { BoardDragOverlay, hideNativeDragImage, useBoardLanding, type BoardLift } from "./board-drag.js";
@@ -15,7 +16,7 @@ import { Alert, AlertDescription } from "../../components/ui/alert.js";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../components/ui/select.js";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../components/ui/card.js";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "../../components/ui/dropdown-menu.js";
-import { boardMove, boardMovesFrom } from "./lib/task-board-transitions.js";
+import { boardMove, boardMovesFrom, type BoardAction } from "./lib/task-board-transitions.js";
 import { ApiConnectionError, billingSettingsPath, withCompany } from "../../lib/api.js";
 import type { TaskListTask } from "../../contracts/task-responses.js";
 import type { MoveResponse } from "../../contracts/generated/MoveResponse.js";
@@ -89,11 +90,16 @@ export function TasksView({ mode = "list" }: { mode?: "list" | "board" }): React
   const pendingIds = useRef(new Set<string>());
   const [pending, setPending] = useState<ReadonlySet<string>>(pendingIds.current);
   // A move sends one command. The card changes column only when the server returns the task.
-  const moveTask = useCallback(async (id: string, action: TaskAction) => {
+  // Send to backlog runs in the background with its own toasts, and can stop for your review of uncommitted changes.
+  const taskTitles = useRef(new Map<string, Pick<TaskListTask, "title" | "issueKey">>());
+  useEffect(() => { taskTitles.current = new Map(tasks.map(task => [task.id, task])); }, [tasks]);
+  const moveTask = useCallback(async (id: string, action: BoardAction) => {
     if (pendingIds.current.has(id)) return;
     pendingIds.current.add(id); setPending(new Set(pendingIds.current)); setError("");
     try {
-      const moved = await runTaskAction(id, action);
+      const named = taskTitles.current.get(id);
+      const moved = action === "backlog" ? await startTaskCleanup("backlog", { id, ...(named ? { title: named.title, issueKey: named.issueKey } : {}) }) : await runTaskAction(id, action);
+      if (!moved) { setLift(current => current?.id === id ? null : current); return; }
       cacheTask(moved);
       // The lifted card lands when the board shows the new status. A move that keeps the status lands it at once.
       setLift(current => current?.id === id && moved.status === current.from ? null : current);
@@ -172,7 +178,7 @@ function BoardTaskCardContent({ task, project, pending, health }: { task: TaskLi
   return <><span className="flex min-w-0 items-center gap-2 font-medium leading-5">{pending ? <Spinner /> : <TaskStatusIcon status={task.status} pullRequestState={task.pullRequest?.state} />}<span className="min-w-0 truncate">{task.issueKey ? <span className="mr-2 text-muted-foreground">{task.issueKey}</span> : null}{task.title}</span></span>{task.blockedBy.length ? <p data-task-blocked-by className="mt-1 truncate text-muted-foreground">{blockedByLabel(task.blockedBy)}</p> : null}{task.humanQuestion ? <p className="mt-1 truncate text-muted-foreground">{task.humanQuestion.text}</p> : null}<TaskHealthBadges health={health} className="mt-2" /><span className="mt-2 flex min-w-0 items-center gap-1.5 text-muted-foreground"><ProjectLabel project={project} fallback={task.configuration.repository} />{task.status === "active" || task.status === "delivered" ? <TaskCardDuration key={task.statusChangedAt} task={task} /> : null}</span></>;
 }
 
-const BoardTaskCard = memo(function BoardTaskCard({ task, project, pending, health, lifted, animated, onDragStart, onDragEnd, onMove }: { task: TaskListTask; project: ApiProject | undefined; pending: boolean; health: TaskHealth | undefined; lifted: boolean; animated: boolean; onDragStart: (lift: BoardLift) => void; onDragEnd: () => void; onMove: (id: string, action: TaskAction) => Promise<void> }): ReactElement {
+const BoardTaskCard = memo(function BoardTaskCard({ task, project, pending, health, lifted, animated, onDragStart, onDragEnd, onMove }: { task: TaskListTask; project: ApiProject | undefined; pending: boolean; health: TaskHealth | undefined; lifted: boolean; animated: boolean; onDragStart: (lift: BoardLift) => void; onDragEnd: () => void; onMove: (id: string, action: BoardAction) => Promise<void> }): ReactElement {
   const moves = task.archivedAt ? [] : boardMovesFrom(task.status);
   const ref = useRef<HTMLLIElement>(null);
   useBoardLanding(ref, task.id, lifted, task.status);

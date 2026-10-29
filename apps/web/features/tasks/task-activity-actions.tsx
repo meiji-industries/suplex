@@ -1,4 +1,4 @@
-import { Archive, ArchiveRestore, ArrowUpToLine, CircleX, FastForward, Inbox, Link2, MessageSquare, Pencil, Play, type LucideIcon } from "lucide-react";
+import { Archive, ArchiveRestore, ArrowUpToLine, CircleX, FastForward, Inbox, Link2, MessageSquare, Pencil, Play, RotateCcw, type LucideIcon } from "lucide-react";
 import type { TaskActivityAction } from "../../contracts/generated/TaskActivityAction.js";
 import type { TaskActivityActionKind } from "../../contracts/generated/TaskActivityActionKind.js";
 import type { TaskActivityResponse } from "../../contracts/generated/TaskActivityResponse.js";
@@ -17,6 +17,7 @@ const actions: Record<TaskActivityActionKind, { icon: LucideIcon; text: string }
   task_dependencies_updated: { icon: Link2, text: "changed Blocked by." },
   task_archived: { icon: Archive, text: "archived the task." },
   task_unarchived: { icon: ArchiveRestore, text: "opened the task from the archive." },
+  task_sent_to_backlog: { icon: RotateCcw, text: "sent the task to the backlog. The next start is new work." },
 };
 
 /** What the actor did. A force start also tells what held the task, when Suplex recorded it. */

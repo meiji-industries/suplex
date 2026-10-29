@@ -256,6 +256,7 @@ crate::shared::wire_enum! {
         DependenciesUpdated = "task_dependencies_updated",
         Archived = "task_archived",
         Unarchived = "task_unarchived",
+        SentToBacklog = "task_sent_to_backlog",
     }
 }
 

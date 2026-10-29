@@ -1,7 +1,8 @@
-//! Archive a task only after native sessions and its live Git worktree are safe.
+//! Archive a task, or send it back to the backlog, only after native sessions
+//! and its live Git worktree are safe.
 //! Saved pane and worktree display fields do not decide whether cleanup may run.
 
-use crate::shared::time::now_millis_rfc3339;
+use crate::shared::time::{now_millis_rfc3339, rfc3339_millis};
 use crate::tasks::TaskError;
 use crate::tasks::control::TaskStatus;
 use std::{
@@ -14,6 +15,7 @@ use crate::tasks::response::TaskConfiguration;
 use rusqlite::params;
 
 use crate::{
+    coordination::{root_session_store, session_recovery},
     identity::companies,
     platform::database::{DatabaseResult, OpenMode, SuplexDatabase},
     runtimes::{
@@ -307,43 +309,18 @@ pub async fn archive_task(
         return Err(failure("Cancel the task before archiving it", 409));
     }
     let _guard = ArchiveGuard::acquire(task_id)?;
-    let sessions = archive_sessions(&database, task_id).map_err(cleanup_error)?;
-    let idle = archive_sessions_idle(sessions, database_path)
-        .await
-        .map_err(cleanup_error)?;
-    let displays = displays::prepare_task_displays(&database, task_id).map_err(cleanup_error)?;
-    // An idle OpenCode server still runs until its harness stops it.
-    for session in &idle {
-        session
-            .harness
-            .stop(&session.directory, session.native_session_id.as_deref())
-            .await
-            .map_err(|error| cleanup_error(error.into()))?;
-    }
-    reauthorize(&database, authority, task_id)?;
-
-    if configuration.repository_path.is_empty() {
-        return Err(TaskError::internal("Task repositoryPath is missing").into());
-    }
-    if configuration.worktree_root.is_empty() {
-        return Err(TaskError::internal("Task worktreeRoot is missing").into());
-    }
-    let intent = TaskWorktreeIntent {
-        task_id: task_id.to_owned(),
-        repository_path: PathBuf::from(&configuration.repository_path),
-        worktree_root: PathBuf::from(&configuration.worktree_root),
-        branch: configuration.branch.clone(),
-        starting_sha: configuration.starting_sha.clone(),
-    };
-    let cleanup = worktree::remove_local_task_worktree(&intent, confirm_discard_dirty, || {
-        reauthorize(&database, authority, task_id)
-    })
-    .map_err(cleanup_error)?;
-    if let WorktreeCleanup::ConfirmationRequired { dirty_file_paths } = cleanup {
+    if let Some(dirty_file_paths) = release_task_resources(
+        &mut database,
+        database_path,
+        authority,
+        task_id,
+        &configuration,
+        confirm_discard_dirty,
+    )
+    .await?
+    {
         return Ok(ArchiveOutcome::ConfirmationRequired(dirty_file_paths));
     }
-    reauthorize(&database, authority, task_id)?;
-    displays.close().map_err(cleanup_error)?;
     database.transaction(true, |database| {
         let (current, _) = task_scope(database, authority, task_id)?;
         if !current.status.archivable() {
@@ -368,11 +345,195 @@ pub async fn archive_task(
     })
 }
 
+/// Stop the task's idle native sessions, remove its live Git worktree, and close
+/// its displays. Returns the dirty files that need confirmation; the worktree
+/// and its files stay when they do. Archive and backlog share this cleanup.
+async fn release_task_resources(
+    database: &mut SuplexDatabase,
+    database_path: &Path,
+    authority: Authority<'_>,
+    task_id: &str,
+    configuration: &TaskConfiguration,
+    confirm_discard_dirty: bool,
+) -> DatabaseResult<Option<Vec<String>>> {
+    let sessions = archive_sessions(database, task_id).map_err(cleanup_error)?;
+    let idle = archive_sessions_idle(sessions, database_path)
+        .await
+        .map_err(cleanup_error)?;
+    let displays = displays::prepare_task_displays(database, task_id).map_err(cleanup_error)?;
+    // An idle OpenCode server still runs until its harness stops it.
+    for session in &idle {
+        session
+            .harness
+            .stop(&session.directory, session.native_session_id.as_deref())
+            .await
+            .map_err(|error| cleanup_error(error.into()))?;
+    }
+    reauthorize(database, authority, task_id)?;
+
+    if configuration.repository_path.is_empty() {
+        return Err(TaskError::internal("Task repositoryPath is missing").into());
+    }
+    if configuration.worktree_root.is_empty() {
+        return Err(TaskError::internal("Task worktreeRoot is missing").into());
+    }
+    let intent = TaskWorktreeIntent {
+        task_id: task_id.to_owned(),
+        repository_path: PathBuf::from(&configuration.repository_path),
+        worktree_root: PathBuf::from(&configuration.worktree_root),
+        branch: configuration.branch.clone(),
+        starting_sha: configuration.starting_sha.clone(),
+    };
+    let database = &*database;
+    let cleanup = worktree::remove_local_task_worktree(&intent, confirm_discard_dirty, || {
+        reauthorize(database, authority, task_id)
+    })
+    .map_err(cleanup_error)?;
+    if let WorktreeCleanup::ConfirmationRequired { dirty_file_paths } = cleanup {
+        return Ok(Some(dirty_file_paths));
+    }
+    reauthorize(database, authority, task_id)?;
+    displays.close().map_err(cleanup_error)?;
+    Ok(None)
+}
+
+#[derive(Debug)]
+pub enum BacklogOutcome {
+    Returned(TaskRecord),
+    ConfirmationRequired(Vec<String>),
+}
+
+/// Send a task back to the top of the backlog as fresh work. Active work is
+/// cancelled first; the old branch and its commits stay as archived work in
+/// progress, and the task gets a new branch name. Turns, usage, and audit stay.
+pub async fn backlog_local_task(
+    database_path: &Path,
+    actor_user_id: &str,
+    task_id: &str,
+    confirm_discard_dirty: bool,
+) -> DatabaseResult<BacklogOutcome> {
+    let authority = user_authority(actor_user_id);
+    let authority: Authority<'_> = &authority;
+    // No transaction stays open while native processes or Git are inspected.
+    let mut database = SuplexDatabase::open(database_path, OpenMode::ReadWrite)?;
+    let (task, _) = task_scope(&database, authority, task_id)?;
+    if in_progress(task_id) {
+        return Err(failure("Archive cleanup is in progress", 409));
+    }
+    if task.status == TaskStatus::Backlog && !archived(&database, task_id)? {
+        return Ok(BacklogOutcome::Returned(task));
+    }
+    let _guard = ArchiveGuard::acquire(task_id)?;
+    if matches!(task.status, TaskStatus::Active | TaskStatus::WaitingHuman) {
+        // The cleanup below stops the retired sessions; the host sweep stops any it leaves.
+        commands::cancel_user_task(
+            &mut database,
+            actor_user_id,
+            task_id,
+            chrono::Utc::now(),
+            |_| {},
+        )?;
+    }
+    session_recovery::stop_retired_sessions(&mut database, database_path, task_id)
+        .await
+        .map_err(cleanup_error)?;
+    let (_, configuration) = task_scope(&database, authority, task_id)?;
+    if let Some(dirty_file_paths) = release_task_resources(
+        &mut database,
+        database_path,
+        authority,
+        task_id,
+        &configuration,
+        confirm_discard_dirty,
+    )
+    .await?
+    {
+        return Ok(BacklogOutcome::ConfirmationRequired(dirty_file_paths));
+    }
+    let branch = fresh_branch_name(&task, &configuration);
+    let now = chrono::Utc::now();
+    let returned = database.transaction(true, |database| {
+        let (current, _) = task_scope(database, authority, task_id)?;
+        if matches!(current.status, TaskStatus::Active | TaskStatus::WaitingHuman) {
+            return Err(failure_code(
+                "The task changed while its worktree was removed",
+                409,
+                "illegal_command",
+            ));
+        }
+        root_session_store::return_to_backlog(database, task_id, now)?;
+        let time = rfc3339_millis(now);
+        let (configuration, intent): (String, String) = database.connection().query_row(
+            "SELECT t.configuration_json, c.delivery_intent_json FROM suplex_tasks t JOIN suplex_task_controls c ON c.task_id = t.id WHERE t.id = ?1",
+            [task_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+        let mut configuration: serde_json::Value = serde_json::from_str(&configuration)?;
+        let mut intent: serde_json::Value = serde_json::from_str(&intent)?;
+        if configuration.get("localBranch").is_some_and(|value| !value.is_null()) {
+            // A pinned branch or pull request source keeps its published branch.
+            configuration["localBranch"] = branch.clone().into();
+        } else {
+            configuration["branch"] = branch.clone().into();
+            intent["headBranch"] = branch.clone().into();
+            intent["pullRequestNumber"] = serde_json::Value::Null;
+        }
+        database.connection().execute(
+            "UPDATE suplex_task_controls SET delivery_intent_json = ?1 WHERE task_id = ?2",
+            params![intent.to_string(), task_id],
+        )?;
+        database.connection().execute(
+            "UPDATE suplex_tasks SET configuration_json = ?1, archived_at = NULL, updated_at = ?2 WHERE id = ?3",
+            params![configuration.to_string(), time, task_id],
+        )?;
+        repository::assert_task_pull_requests_available(database, task_id)?;
+        repository::task_by_id(database, task_id)?.ok_or_else(|| failure("Not found", 404))
+    })?;
+    commands::audit(
+        &database,
+        actor_user_id,
+        "task_sent_to_backlog",
+        &returned,
+        now,
+    )?;
+    Ok(BacklogOutcome::Returned(returned))
+}
+
+fn archived(database: &SuplexDatabase, task_id: &str) -> DatabaseResult<bool> {
+    Ok(database.connection().query_row(
+        "SELECT archived_at IS NOT NULL FROM suplex_tasks WHERE id = ?1",
+        [task_id],
+        |row| row.get(0),
+    )?)
+}
+
+/// A new task branch name, so the next start never reuses the old branch and
+/// its commits. Live Git decides whether a candidate name is already taken.
+fn fresh_branch_name(task: &TaskRecord, configuration: &TaskConfiguration) -> String {
+    let base = commands::task_branch_name(&task.title, &task.id);
+    let repository = git2::Repository::open(&configuration.repository_path).ok();
+    let mut candidate = String::new();
+    for _ in 0..8 {
+        let suffix = uuid::Uuid::new_v4().simple().to_string();
+        candidate = format!("{base}-{}", &suffix[..4]);
+        let taken = repository.as_ref().is_some_and(|repository| {
+            repository
+                .find_branch(&candidate, git2::BranchType::Local)
+                .is_ok()
+        });
+        if !taken {
+            break;
+        }
+    }
+    candidate
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::shared::time::rfc3339_millis;
     use crate::{
+        coordination::root_session_store,
         identity::auth,
         runtimes::headless::{HeadlessTurnRecord, RecordedProcessIdentity},
         tasks::repository::{PreparedTask, TaskCreator},
@@ -606,6 +767,318 @@ mod tests {
             )
             .unwrap();
         assert!(reopened);
+        drop(database);
+        fs::remove_dir_all(base).unwrap();
+    }
+
+    /// A Git repository with one commit, and a database with one project for it.
+    fn backlog_fixture(name: &str) -> (PathBuf, PathBuf, PathBuf, String, PathBuf, String) {
+        let base = std::env::temp_dir().join(format!("suplex-{name}-{}", uuid::Uuid::new_v4()));
+        let repository_path = base.join("repository");
+        let worktree_root = base.join("worktrees");
+        fs::create_dir_all(&repository_path).unwrap();
+        let repository = Repository::init(&repository_path).unwrap();
+        fs::write(repository_path.join("README.md"), "backlog fixture\n").unwrap();
+        let mut index = repository.index().unwrap();
+        index.add_path(Path::new("README.md")).unwrap();
+        let tree = repository.find_tree(index.write_tree().unwrap()).unwrap();
+        let signature = Signature::now("Suplex", "suplex@example.invalid").unwrap();
+        let sha = repository
+            .commit(Some("HEAD"), &signature, &signature, "Initial", &tree, &[])
+            .unwrap()
+            .to_string();
+        let database_path = base.join("suplex.sqlite");
+        let now = chrono::Utc::now();
+        let mut database = SuplexDatabase::open(&database_path, OpenMode::Migrate).unwrap();
+        let user = auth::development_sign_in(&mut database, now).unwrap().user;
+        let time = rfc3339_millis(now);
+        database.connection().execute("INSERT INTO suplex_companies (id,name,status,created_at) VALUES ('backlog_company','Backlog','active',?1)", [&time]).unwrap();
+        database.connection().execute("INSERT INTO suplex_projects (id,company_id,name,repository_path,worktree_root,repository_identity,base_branch,setup_command,verification_command,root_profile_id,worker_profile_id,created_at,updated_at) VALUES ('backlog_project','backlog_company','Project',?1,?2,NULL,'main','','','root_profile','worker_profile',?3,?3)", params![repository_path.to_string_lossy(),worktree_root.to_string_lossy(),time]).unwrap();
+        (
+            base,
+            repository_path,
+            worktree_root,
+            sha,
+            database_path,
+            user.id,
+        )
+    }
+
+    fn create_backlog_task(
+        database_path: &Path,
+        user_id: &str,
+        configuration: serde_json::Value,
+        delivery_intent: serde_json::Value,
+    ) -> TaskRecord {
+        let mut database = SuplexDatabase::open(database_path, OpenMode::ReadWrite).unwrap();
+        let profile = json!({"profileId":"profile_root","provider":"codex","model":"gpt-6-sol","reasoningLevel":"medium","serviceTier":"default"});
+        repository::create(
+            &mut database,
+            &PreparedTask {
+                id: repository::new_task_id(),
+                company_id: "backlog_company".into(),
+                project_id: "backlog_project".into(),
+                title: "Start the backlog work".into(),
+                description: "".into(),
+                configuration,
+                idempotency_key: "backlog-key".into(),
+                request_hash: "backlog-hash".into(),
+                creator: TaskCreator::User(user_id.into()),
+                delivery_target: "pull_request_draft".into(),
+                delivery_intent: serde_json::from_value(delivery_intent).unwrap(),
+                root_profile: serde_json::from_value(profile.clone()).unwrap(),
+                worker_profile: serde_json::from_value(profile).unwrap(),
+                advisor_profiles: serde_json::from_value(json!({})).unwrap(),
+                issue: None,
+                start_queued: false,
+                copied_from_task_id: None,
+                depends_on: vec![],
+                pull_request_dependencies: vec![],
+                workflow: crate::coordination::workflows::Workflow::Standard,
+            },
+            chrono::Utc::now(),
+        )
+        .unwrap()
+        .task
+    }
+
+    fn audit_count(database_path: &Path, action: &str) -> i64 {
+        let database = SuplexDatabase::open(database_path, OpenMode::ReadOnly).unwrap();
+        database
+            .connection()
+            .query_row(
+                "SELECT COUNT(*) FROM suplex_audit_events WHERE action = ?1",
+                [action],
+                |row| row.get(0),
+            )
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn backlog_resets_active_work_and_the_next_start_is_fresh() {
+        let (base, repository_path, worktree_root, sha, database_path, user_id) =
+            backlog_fixture("backlog-active");
+        let configuration = json!({"repository":"owner/repo","baseBranch":"main","baselineSha":sha,"capturedAt":"2026-10-29T00:00:00.000Z","repositoryPath":repository_path,"worktreeRoot":worktree_root,"branch":"task-backlog","startingSha":sha});
+        let task = create_backlog_task(
+            &database_path,
+            &user_id,
+            configuration,
+            json!({"repository":"owner/repo","headBranch":"task-backlog","baseBranch":"main","baselineSha":sha,"pullRequestNumber":3}),
+        );
+        let now = chrono::Utc::now();
+        let mut database = SuplexDatabase::open(&database_path, OpenMode::ReadWrite).unwrap();
+        repository::start(&mut database, &task.id, now)
+            .unwrap()
+            .unwrap();
+        let root = root_session_store::reserve_root(&mut database, &task.id, now).unwrap();
+        assert_eq!(root.generation, 1);
+        root_session_store::ensure_initial_prompt(&mut database, &root, "Start", now)
+            .unwrap()
+            .unwrap();
+        let intent = TaskWorktreeIntent {
+            task_id: task.id.clone(),
+            repository_path: repository_path.clone(),
+            worktree_root: worktree_root.clone(),
+            branch: "task-backlog".into(),
+            starting_sha: sha.clone(),
+        };
+        let worktree = worktree::prepare_local_task_worktree(&intent, None).unwrap();
+        // The saved worktree is a stale observation; live Git decides the cleanup.
+        database
+            .connection()
+            .execute(
+                "UPDATE suplex_task_controls SET worktree_json = ?1 WHERE task_id = ?2",
+                params![
+                    json!({"path":"/stale/display/path","branch":"stale"}).to_string(),
+                    task.id
+                ],
+            )
+            .unwrap();
+        drop(database);
+        // Work in progress: one commit on the old branch and one dirty file.
+        let checkout = Repository::open(&worktree.path).unwrap();
+        fs::write(worktree.path.join("progress.txt"), "old work\n").unwrap();
+        let mut index = checkout.index().unwrap();
+        index.add_path(Path::new("progress.txt")).unwrap();
+        index.write().unwrap();
+        let tree = checkout.find_tree(index.write_tree().unwrap()).unwrap();
+        let parent = checkout.head().unwrap().peel_to_commit().unwrap();
+        let signature = Signature::now("Suplex", "suplex@example.invalid").unwrap();
+        let old_commit = checkout
+            .commit(
+                Some("HEAD"),
+                &signature,
+                &signature,
+                "Old work",
+                &tree,
+                &[&parent],
+            )
+            .unwrap();
+        drop(tree);
+        drop(parent);
+        drop(checkout);
+        fs::write(worktree.path.join("draft.txt"), "keep\n").unwrap();
+
+        match backlog_local_task(&database_path, &user_id, &task.id, false)
+            .await
+            .unwrap()
+        {
+            BacklogOutcome::ConfirmationRequired(paths) => assert_eq!(paths, ["draft.txt"]),
+            BacklogOutcome::Returned(_) => panic!("dirty worktree needs confirmation"),
+        }
+        assert!(worktree.path.join("draft.txt").exists());
+        let database = SuplexDatabase::open(&database_path, OpenMode::ReadOnly).unwrap();
+        assert_eq!(
+            repository::task_by_id(&database, &task.id)
+                .unwrap()
+                .unwrap()
+                .status,
+            TaskStatus::Cancelled
+        );
+        drop(database);
+        assert_eq!(audit_count(&database_path, "task_cancelled"), 1);
+
+        // A retry from Cancelled continues the same operation.
+        let returned = match backlog_local_task(&database_path, &user_id, &task.id, true)
+            .await
+            .unwrap()
+        {
+            BacklogOutcome::Returned(returned) => returned,
+            BacklogOutcome::ConfirmationRequired(_) => panic!("confirmed cleanup must return"),
+        };
+        assert_eq!(returned.status, TaskStatus::Backlog);
+        assert!(!worktree.path.exists());
+        assert_eq!(audit_count(&database_path, "task_sent_to_backlog"), 1);
+        let database = SuplexDatabase::open(&database_path, OpenMode::ReadOnly).unwrap();
+        let (archived, cleared, state, priority): (bool, bool, String, i64) = database.connection().query_row(
+            "SELECT t.archived_at IS NOT NULL, c.worktree_json IS NULL AND c.pull_request_json IS NULL AND c.root_session_id IS NULL AND c.worker_session_id IS NULL, c.workflow_state_json, c.queue_priority FROM suplex_tasks t JOIN suplex_task_controls c ON c.task_id = t.id WHERE t.id = ?1",
+            [&task.id], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        ).unwrap();
+        assert!(!archived);
+        assert!(cleared);
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&state).unwrap(),
+            serde_json::to_value(crate::coordination::workflows::WorkflowState::default()).unwrap()
+        );
+        assert_eq!(priority, 0);
+        let current: i64 = database.connection().query_row(
+            "SELECT COUNT(*) FROM suplex_task_sessions WHERE task_id = ?1 AND (is_current = 1 OR stopped_at IS NULL)",
+            [&task.id], |row| row.get(0),
+        ).unwrap();
+        assert_eq!(current, 0);
+        let turns: i64 = database.connection().query_row(
+            "SELECT COUNT(*) FROM suplex_task_turns WHERE task_id = ?1 AND status = 'cancelled'",
+            [&task.id], |row| row.get(0),
+        ).unwrap();
+        assert_eq!(turns, 1);
+        let (branch, head_branch, pull_request_number): (String, String, Option<i64>) = database.connection().query_row(
+            "SELECT json_extract(t.configuration_json, '$.branch'), json_extract(c.delivery_intent_json, '$.headBranch'), json_extract(c.delivery_intent_json, '$.pullRequestNumber') FROM suplex_tasks t JOIN suplex_task_controls c ON c.task_id = t.id WHERE t.id = ?1",
+            [&task.id], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        ).unwrap();
+        assert!(branch.starts_with(&format!(
+            "{}-",
+            commands::task_branch_name(&task.title, &task.id)
+        )));
+        assert_eq!(head_branch, branch);
+        assert_eq!(pull_request_number, None);
+        drop(database);
+        // The old branch keeps its commits as archived work in progress.
+        let source = Repository::open(&repository_path).unwrap();
+        assert_eq!(
+            source
+                .find_branch("task-backlog", git2::BranchType::Local)
+                .unwrap()
+                .get()
+                .target()
+                .unwrap(),
+            old_commit
+        );
+        drop(source);
+
+        // A backlog task that is not archived is a no-op.
+        match backlog_local_task(&database_path, &user_id, &task.id, false)
+            .await
+            .unwrap()
+        {
+            BacklogOutcome::Returned(again) => assert_eq!(again.status, TaskStatus::Backlog),
+            BacklogOutcome::ConfirmationRequired(_) => panic!("no-op needs no confirmation"),
+        }
+        assert_eq!(audit_count(&database_path, "task_sent_to_backlog"), 1);
+
+        // The next start reserves a new Coordinator generation and a fresh worktree.
+        let mut database = SuplexDatabase::open(&database_path, OpenMode::ReadWrite).unwrap();
+        commands::start_user_task(
+            &mut database,
+            &user_id,
+            &task.id,
+            chrono::Utc::now(),
+            |_| {},
+        )
+        .unwrap();
+        let root =
+            root_session_store::reserve_root(&mut database, &task.id, chrono::Utc::now()).unwrap();
+        assert_eq!(root.generation, 2);
+        let fresh = worktree::prepare_local_task_worktree(
+            &TaskWorktreeIntent {
+                branch: branch.clone(),
+                ..intent
+            },
+            None,
+        )
+        .unwrap();
+        assert_eq!(fresh.head_sha, sha);
+        assert!(!fresh.path.join("progress.txt").exists());
+        drop(database);
+        fs::remove_dir_all(base).unwrap();
+    }
+
+    #[tokio::test]
+    async fn backlog_reopens_an_archived_pinned_task_with_a_new_local_branch() {
+        let (base, repository_path, worktree_root, sha, database_path, user_id) =
+            backlog_fixture("backlog-archived");
+        let configuration = json!({"repository":"owner/repo","baseBranch":"main","baselineSha":sha,"capturedAt":"2026-10-29T00:00:00.000Z","repositoryPath":repository_path,"worktreeRoot":worktree_root,"branch":"published","localBranch":"task-local","startingSha":sha,"source":{"kind":"branch","branch":"published"}});
+        let task = create_backlog_task(
+            &database_path,
+            &user_id,
+            configuration,
+            json!({"repository":"owner/repo","headBranch":"published","baseBranch":"main","baselineSha":sha,"pullRequestNumber":null}),
+        );
+        let database = SuplexDatabase::open(&database_path, OpenMode::ReadWrite).unwrap();
+        database
+            .connection()
+            .execute(
+                "UPDATE suplex_task_controls SET status = 'cancelled' WHERE task_id = ?1",
+                [&task.id],
+            )
+            .unwrap();
+        database
+            .connection()
+            .execute(
+                "UPDATE suplex_tasks SET archived_at = '2026-10-01T00:00:00.000Z' WHERE id = ?1",
+                [&task.id],
+            )
+            .unwrap();
+        drop(database);
+        // The worktree is already gone; the saved observation is missing too.
+        match backlog_local_task(&database_path, &user_id, &task.id, false)
+            .await
+            .unwrap()
+        {
+            BacklogOutcome::Returned(returned) => assert_eq!(returned.status, TaskStatus::Backlog),
+            BacklogOutcome::ConfirmationRequired(_) => panic!("no worktree to confirm"),
+        }
+        let database = SuplexDatabase::open(&database_path, OpenMode::ReadOnly).unwrap();
+        let (archived, branch, local_branch, head_branch): (bool, String, String, String) = database.connection().query_row(
+            "SELECT t.archived_at IS NOT NULL, json_extract(t.configuration_json, '$.branch'), json_extract(t.configuration_json, '$.localBranch'), json_extract(c.delivery_intent_json, '$.headBranch') FROM suplex_tasks t JOIN suplex_task_controls c ON c.task_id = t.id WHERE t.id = ?1",
+            [&task.id], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        ).unwrap();
+        assert!(!archived);
+        assert_eq!(
+            (branch.as_str(), head_branch.as_str()),
+            ("published", "published")
+        );
+        assert_ne!(local_branch, "task-local");
+        assert!(local_branch.starts_with(&commands::task_branch_name(&task.title, &task.id)));
         drop(database);
         fs::remove_dir_all(base).unwrap();
     }

@@ -323,6 +323,6 @@ test("only cards with a permitted move get the Task moves menu and drag", async 
   try {
     await act(async () => root.render(<ServerStateProvider><TaskDataProvider><TasksView mode="board" /></TaskDataProvider></ServerStateProvider>));
     const card = (id: string) => container.querySelector(`a[href="/board/${id}"]`)?.closest("li");
-    expect(["task-1", "task-2", "task-3", "task-4"].map(id => [Boolean(card(id)?.querySelector('[aria-label="Task moves"]')), card(id)?.querySelector("a")?.getAttribute("draggable")])).toEqual([[true, null], [false, "false"], [false, "false"], [false, "false"]]);
+    expect(["task-1", "task-2", "task-3", "task-4"].map(id => [Boolean(card(id)?.querySelector('[aria-label="Task moves"]')), card(id)?.querySelector("a")?.getAttribute("draggable")])).toEqual([[true, null], [true, null], [false, "false"], [false, "false"]]);
   } finally { await act(async () => root.unmount()); container.remove(); }
 });

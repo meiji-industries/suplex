@@ -121,6 +121,14 @@ export async function archiveTask(taskId: string, confirmDiscardDirty: boolean):
   });
 }
 
+/** Sends the task to the top of Backlog. Like archive, it asks before it discards uncommitted changes. */
+export async function sendTaskToBacklog(taskId: string, confirmDiscardDirty: boolean): Promise<Task | ArchiveConfirmation> {
+  return readJsonUnchecked<Task | ArchiveConfirmation>(taskPath(taskId, "/backlog"), {
+    method: "POST",
+    body: JSON.stringify({ confirmDiscardDirty }),
+  });
+}
+
 export function isArchiveConfirmation(result: Task | ArchiveConfirmation): result is ArchiveConfirmation {
   return "dirtyFilePaths" in result;
 }

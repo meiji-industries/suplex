@@ -1,6 +1,6 @@
 import { renameTask, runTaskAction } from "./lib/task-api.js";
 import { useState } from "react";
-import { Archive, ArchiveRestore, Copy, Ellipsis, Link, Pencil, RefreshCw, Square } from "lucide-react";
+import { Archive, ArchiveRestore, Copy, Ellipsis, Inbox, Link, Pencil, RefreshCw, Square } from "lucide-react";
 import type { Task } from "../../contracts/tasks.js";
 import { withCompany } from "../../lib/api.js";
 import { copyToClipboard } from "../../lib/clipboard.js";
@@ -13,10 +13,16 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigge
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "../../components/ui/dialog.js";
 import { Input } from "../../components/ui/input.js";
 
+/** Send to backlog applies to queued, active, waiting, cancelled, and archived tasks. */
+export function canSendToBacklog(task: Pick<Task, "status" | "archivedAt">): boolean {
+  return Boolean(task.archivedAt) || task.status === "queued" || task.status === "active" || task.status === "waiting_human" || task.status === "cancelled";
+}
+
 export function TaskOptions({ task, onChange, onError }: { task: Task; onChange: (task: Task) => void; onError: (error: string) => void }) {
   const [busy, setBusy] = useState(false);
   const [draft, setDraft] = useState<NewTaskDraft | null>(null);
   const [archiveOpen, setArchiveOpen] = useState(false);
+  const [backlogOpen, setBacklogOpen] = useState(false);
   const [renameOpen, setRenameOpen] = useState(false);
   const [title, setTitle] = useState(task.title);
   const duplicate = async () => {
@@ -34,7 +40,9 @@ export function TaskOptions({ task, onChange, onError }: { task: Task; onChange:
     catch (error) { onError(error instanceof Error ? error.message : "The task could not be renamed."); }
     finally { setBusy(false); }
   };
-  const act = async (action: "refresh" | "cancel" | "unarchive") => {
+  // A queued task only leaves the queue. Other work loses its worktree and starts fresh, so it needs confirmation.
+  const backlog = canSendToBacklog(task) ? task.status === "queued" && !task.archivedAt ? "disarm" : "dialog" : null;
+  const act = async (action: "refresh" | "cancel" | "unarchive" | "disarm") => {
     if (busy) return;
     setBusy(true); onError("");
     try { onChange(await runTaskAction(task.id, action)); }
@@ -46,6 +54,7 @@ export function TaskOptions({ task, onChange, onError }: { task: Task; onChange:
     <DropdownMenuItem disabled={busy} onClick={() => { setTitle(task.title); setRenameOpen(true); }}><Pencil />Rename</DropdownMenuItem>
     <DropdownMenuItem disabled={busy} onClick={() => void duplicate()}><Copy />Duplicate</DropdownMenuItem>
     {!terminal ? <DropdownMenuItem disabled={busy} onClick={() => void act("cancel")}><Square />Cancel task</DropdownMenuItem> : null}
+    {backlog ? <DropdownMenuItem disabled={busy} onClick={() => backlog === "disarm" ? void act("disarm") : setBacklogOpen(true)}><Inbox />Send to backlog</DropdownMenuItem> : null}
      {terminal || task.status === "backlog" || task.status === "queued" ? <DropdownMenuItem disabled={busy} onClick={() => task.archivedAt ? void act("unarchive") : setArchiveOpen(true)}>{task.archivedAt ? <ArchiveRestore /> : <Archive />}{task.archivedAt ? "Open from archive" : "Archive task"}</DropdownMenuItem> : null}
    </DropdownMenuContent></DropdownMenu>
       <ArchiveTaskDialog task={task} open={archiveOpen} onOpenChange={setArchiveOpen} onArchived={archived => {
@@ -54,6 +63,7 @@ export function TaskOptions({ task, onChange, onError }: { task: Task; onChange:
         const list = window.location.pathname === `/board/${task.id}` ? "/board" : window.location.pathname === `/tasks/${task.id}` ? "/tasks" : null;
         if (list) navigate(withCompany(list, task.companyId));
       }} />
+      <ArchiveTaskDialog kind="backlog" task={task} open={backlogOpen} onOpenChange={setBacklogOpen} onArchived={onChange} />
       <Dialog open={renameOpen} onOpenChange={open => { if (!busy) setRenameOpen(open); }}><DialogContent showCloseButton={false}><DialogHeader><DialogTitle>Rename task</DialogTitle></DialogHeader><form className="grid gap-6" onSubmit={event => { event.preventDefault(); void rename(); }}><Input aria-label="Task title" autoFocus disabled={busy} value={title} onChange={event => setTitle(event.target.value)} required /><DialogFooter><Button type="button" variant="outline" disabled={busy} onClick={() => setRenameOpen(false)}>Cancel</Button><Button type="submit" disabled={busy}>{busy ? "Renaming…" : "Rename"}</Button></DialogFooter></form></DialogContent></Dialog>
       {draft ? <NewTaskDialog open onOpenChange={open => { if (!open) setDraft(null); }} companyId={task.companyId} initialDraft={draft} onCreated={created => { setDraft(null); navigate(withCompany(`/tasks/${created.id}`, created.companyId)); }} /> : null}</>;
 }

@@ -1,14 +1,20 @@
 import type { TaskControlStatus } from "../../../contracts/task-control.js";
 import type { TaskAction } from "./task-api.js";
 
-export type BoardMove = { from: TaskControlStatus; to: TaskControlStatus; action: TaskAction; label: string };
+/** A board move runs a task action, or "backlog", which sends the task to the backlog in the background. */
+export type BoardAction = TaskAction | "backlog";
+export type BoardMove = { from: TaskControlStatus; to: TaskControlStatus; action: BoardAction; label: string };
 
-/** The board moves. Each one runs a task action, and a card moves one column at a time. The server decides the resulting status. */
+/** The board moves. Each one runs a task action, and a card moves one column at a time, or back to Backlog. The server decides the resulting status. */
 export const boardMoves: readonly BoardMove[] = [
   { from: "backlog", to: "queued", action: "start", label: "Start the task" },
   { from: "queued", to: "backlog", action: "disarm", label: "Move the task to Backlog" },
   { from: "queued", to: "active", action: "force-start", label: "Start the task now" },
   { from: "active", to: "cancelled", action: "cancel", label: "Cancel the task" },
+  // Started work returns to Backlog as fresh work. Suplex asks before it discards uncommitted changes.
+  { from: "active", to: "backlog", action: "backlog", label: "Send the task to the backlog" },
+  { from: "waiting_human", to: "backlog", action: "backlog", label: "Send the task to the backlog" },
+  { from: "cancelled", to: "backlog", action: "backlog", label: "Send the task to the backlog" },
 ];
 
 export function boardMove(from: TaskControlStatus, to: TaskControlStatus): BoardMove | undefined {

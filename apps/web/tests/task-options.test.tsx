@@ -4,7 +4,7 @@ import { createRoot } from "react-dom/client";
 import { afterEach, expect, test, vi } from "vitest";
 import { toast } from "sonner";
 import type { Task } from "../contracts/tasks.js";
-import { TaskOptions } from "../features/tasks/task-options.js";
+import { canSendToBacklog, TaskOptions } from "../features/tasks/task-options.js";
 import { ArchiveTaskDialog } from "../features/tasks/archive-task-dialog.js";
 
 vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
@@ -54,7 +54,7 @@ test("a background archive returns to the list only from the archived task page"
   const root = createRoot(container);
   try {
     await act(async () => root.render(<TaskOptions task={task} onChange={onChange} onError={vi.fn()} />));
-    const onArchived = vi.mocked(ArchiveTaskDialog).mock.lastCall![0].onArchived;
+    const onArchived = vi.mocked(ArchiveTaskDialog).mock.calls.findLast(([props]) => props.kind === undefined)![0].onArchived;
     const archived = { ...task, archivedAt: "2026-10-07T00:00:00.000Z" };
 
     window.history.replaceState({}, "", "/tasks/other-task?company=other-company");
@@ -66,6 +66,42 @@ test("a background archive returns to the list only from the archived task page"
     act(() => onArchived(archived));
     expect(onChange).toHaveBeenCalledTimes(2);
     expect(`${window.location.pathname}${window.location.search}`).toBe("/board?company=company%2Fa%26b");
+  } finally {
+    await act(async () => root.unmount());
+    container.remove();
+  }
+});
+
+test("Send to backlog shows for queued, active, waiting, cancelled, and archived tasks only", () => {
+  const visible = (["backlog", "queued", "active", "waiting_human", "cancelled", "delivered"] as const).filter(status => canSendToBacklog({ status, archivedAt: null }));
+  expect(visible).toEqual(["queued", "active", "waiting_human", "cancelled"]);
+  for (const status of ["backlog", "delivered"] as const) expect(canSendToBacklog({ status, archivedAt: "2026-10-07T00:00:00.000Z" })).toBe(true);
+});
+
+test("a queued task leaves the queue at once, and other work asks before it starts fresh", async () => {
+  const onChange = vi.fn();
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  const fetch = vi.spyOn(globalThis, "fetch").mockImplementation(async () => new Response(JSON.stringify({ ...taskFixture(), status: "backlog" }), { status: 200, headers: { "content-type": "application/json" } }));
+  const openMenu = async () => {
+    const trigger = container.querySelector<HTMLButtonElement>('button[aria-label="Task options"]')!;
+    await act(async () => { trigger.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, button: 0 })); trigger.click(); });
+    return Array.from(document.querySelectorAll<HTMLElement>('[role="menuitem"]')).find(item => item.textContent === "Send to backlog");
+  };
+  try {
+    await act(async () => root.render(<TaskOptions task={{ ...taskFixture(), status: "queued" }} onChange={onChange} onError={vi.fn()} />));
+    await act(async () => (await openMenu())!.click());
+    expect(fetch).toHaveBeenCalledExactlyOnceWith(expect.stringContaining("/api/tasks/task-url/disarm"), expect.objectContaining({ method: "POST" }));
+    expect(vi.mocked(ArchiveTaskDialog).mock.lastCall![0]).toMatchObject({ kind: "backlog", open: false });
+
+    await act(async () => root.render(<TaskOptions task={{ ...taskFixture(), status: "active" }} onChange={onChange} onError={vi.fn()} />));
+    await act(async () => (await openMenu())!.click());
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(ArchiveTaskDialog).mock.lastCall![0]).toMatchObject({ kind: "backlog", open: true, onArchived: onChange });
+
+    await act(async () => root.render(<TaskOptions task={taskFixture()} onChange={onChange} onError={vi.fn()} />));
+    expect(await openMenu()).toBeUndefined();
   } finally {
     await act(async () => root.unmount());
     container.remove();

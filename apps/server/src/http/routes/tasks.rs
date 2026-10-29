@@ -42,8 +42,10 @@ use crate::{
     },
     identity::companies,
     tasks::{
-        archive::operations::{self as archive, ArchiveOutcome},
-        commands, images, response as task_response,
+        archive::operations::{self as archive, ArchiveOutcome, BacklogOutcome},
+        commands, images,
+        repository::TaskRecord,
+        response as task_response,
     },
 };
 
@@ -123,6 +125,10 @@ pub fn router() -> Router<AppState> {
         .route(
             "/api/tasks/{task_id}/unarchive",
             axum::routing::post(unarchive_pending),
+        )
+        .route(
+            "/api/tasks/{task_id}/backlog",
+            axum::routing::post(backlog_pending),
         )
         .route("/api/tasks/{task_id}/refresh", axum::routing::post(refresh))
 }
@@ -233,6 +239,61 @@ async fn archive_pending(
     headers: HeaderMap,
     Valid(request): Valid<Option<TaskArchiveBody>>,
 ) -> Response {
+    cleanup_pending(
+        state,
+        headers,
+        request,
+        move |database_path, user_id, confirm| async move {
+            Ok(
+                match archive::archive_local_task(&database_path, &user_id, &id, confirm).await? {
+                    ArchiveOutcome::Archived(task) => Ok(task),
+                    ArchiveOutcome::ConfirmationRequired(paths) => Err(paths),
+                },
+            )
+        },
+    )
+    .await
+}
+
+/// Send a task back to the top of the backlog. Like archive, the operation
+/// removes the worktree and asks before it discards dirty files.
+async fn backlog_pending(
+    State(state): State<AppState>,
+    ValidPath(TaskIdParams { task_id: id }): TaskPath,
+    headers: HeaderMap,
+    Valid(request): Valid<Option<TaskArchiveBody>>,
+) -> Response {
+    cleanup_pending(
+        state,
+        headers,
+        request,
+        move |database_path, user_id, confirm| async move {
+            Ok(
+                match archive::backlog_local_task(&database_path, &user_id, &id, confirm).await? {
+                    BacklogOutcome::Returned(task) => Ok(task),
+                    BacklogOutcome::ConfirmationRequired(paths) => Err(paths),
+                },
+            )
+        },
+    )
+    .await
+}
+
+/// The task an operation that removes the worktree changed, or the dirty files
+/// that need confirmation first.
+type CleanupResult = Result<Result<TaskRecord, Vec<String>>, Box<dyn Error + Send + Sync>>;
+
+/// Run an archive or backlog operation that removes the task worktree.
+async fn cleanup_pending<F, O>(
+    state: AppState,
+    headers: HeaderMap,
+    request: Option<TaskArchiveBody>,
+    operation: F,
+) -> Response
+where
+    F: FnOnce(PathBuf, String, bool) -> O,
+    O: std::future::Future<Output = CleanupResult> + Send + 'static,
+{
     let (user_id, cookies) = match admit(&state, &headers, "POST") {
         Ok(value) => value,
         Err(response) => return *response,
@@ -245,19 +306,14 @@ async fn archive_pending(
             cookies,
         );
     };
-    let response_user_id = user_id.clone();
+    let pending = operation(
+        database_path,
+        user_id.clone(),
+        request.unwrap_or_default().confirm_discard_dirty,
+    );
     // Admission owns the spawned operation, including its in-process archive
     // guard, even if the HTTP waiter disconnects before Git cleanup finishes.
-    let operation = tokio::spawn(async move {
-        archive::archive_local_task(
-            &database_path,
-            &user_id,
-            &id,
-            request.unwrap_or_default().confirm_discard_dirty,
-        )
-        .await
-        .map_err(archive_error)
-    });
+    let operation = tokio::spawn(async move { pending.await.map_err(archive_error) });
     let Ok(result) = operation.await else {
         return with_cookies(
             auth::error(StatusCode::INTERNAL_SERVER_ERROR, "Internal server error"),
@@ -265,7 +321,7 @@ async fn archive_pending(
         );
     };
     match result {
-        Ok(ArchiveOutcome::ConfirmationRequired(paths)) => with_cookies(
+        Ok(Err(paths)) => with_cookies(
             Json(ArchiveConfirmation {
                 status: "confirmation_required",
                 dirty_file_count: paths.len(),
@@ -274,17 +330,12 @@ async fn archive_pending(
             .into_response(),
             cookies,
         ),
-        Ok(ArchiveOutcome::Archived(task)) => {
+        Ok(Ok(task)) => {
             state.host_terminals.close_task(&task.id, false);
             let result =
                 state.with_database(|database| -> Result<_, Box<dyn Error + Send + Sync>> {
-                    companies::require_company_access(
-                        database,
-                        &response_user_id,
-                        &task.company_id,
-                    )?;
-                    task_response::get(database, &task.id)?
-                        .ok_or_else(|| "archived task disappeared".into())
+                    companies::require_company_access(database, &user_id, &task.company_id)?;
+                    task_response::get(database, &task.id)?.ok_or_else(|| "task disappeared".into())
                 });
             match result {
                 Ok(task) => with_cookies(Json(task).into_response(), cookies),

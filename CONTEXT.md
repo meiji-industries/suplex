@@ -37,6 +37,14 @@ Backlog, which never starts by itself. APIs report lifecycle status in
 `status` and incomplete prerequisites in `queue.waitingOn`.
 _Avoid_: Auto-start flag, armed task.
 
+**Send to backlog**
+Return a task to the top of Backlog. A queued task keeps its state. An active,
+cancelled, or archived task is cancelled if necessary, loses its worktree, and
+gets a new branch name, so its next start is fresh work. The old branch, its
+commits, and any pull request stay as archived work. Turns, usage, and audit
+history stay with the task.
+_Avoid_: Reset, requeue, disarm (in UI text).
+
 **Coordinator**
 The continuing read-only agent that investigates the source, writes the plan
 and acceptance criteria, independently reviews the Worker's changes and check

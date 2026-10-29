@@ -188,6 +188,7 @@
   "POST /api/projects/:projectId/task-templates",
   "POST /api/tasks/:taskId/answer",
   "POST /api/tasks/:taskId/archive",
+  "POST /api/tasks/:taskId/backlog",
   "POST /api/tasks/:taskId/cancel",
   "POST /api/tasks/:taskId/continue-delivery",
   "POST /api/tasks/:taskId/disarm",

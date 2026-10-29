@@ -1604,4 +1604,56 @@ mod tests {
         assert_eq!(status, 200, "{}", renamed.text().await.unwrap());
         let _ = fs::remove_dir_all(&fixture.root);
     }
+
+    #[tokio::test]
+    async fn backlog_route_resets_active_work_and_needs_edit_access() {
+        let fixture = crate::http::routes::task_pane::tests::fixture();
+        let missing = fixture.root.join("missing");
+        fixture.execute(
+            "UPDATE suplex_tasks SET configuration_json = json_set(configuration_json, '$.repositoryPath', ?1, '$.worktreeRoot', ?2)",
+            &[&missing.join("repo").to_string_lossy(), &missing.join("worktrees").to_string_lossy()],
+        );
+        let address = fixture.serve().await;
+        let client = reqwest::Client::new();
+        let backlog = || {
+            client
+                .post(format!("http://{address}/api/tasks/{}/backlog", fixture.task_id))
+                .header("cookie", &fixture.cookie)
+                .header("host", "127.0.0.1:4113")
+                .header("origin", "http://127.0.0.1:4113")
+                .send()
+        };
+        fixture.execute("UPDATE suplex_users SET role = 'member'", &[]);
+        fixture.execute("INSERT INTO suplex_memberships (user_id, company_id, created_at, access) VALUES ('user_development', 'pane_company', '2026-09-24', 'read')", &[]);
+        let refused = backlog().await.unwrap();
+        assert_eq!(refused.status(), 403);
+        fixture.execute("UPDATE suplex_memberships SET access = 'edit'", &[]);
+        let returned = backlog().await.unwrap();
+        let status = returned.status();
+        let body: Value = returned.json().await.unwrap();
+        assert_eq!(status, 200, "{body}");
+        assert_eq!(body["status"], "backlog");
+        assert!(body["archivedAt"].is_null());
+        assert!(body["worktree"].is_null());
+        let current: i64 = fixture.state.with_database(|database| {
+            database.connection().query_row(
+                "SELECT COUNT(*) FROM suplex_task_sessions WHERE task_id = ?1 AND is_current = 1",
+                [&fixture.task_id],
+                |row| row.get(0),
+            )
+        }).unwrap();
+        assert_eq!(current, 0);
+        // A second request changes nothing.
+        let again = backlog().await.unwrap();
+        assert_eq!(again.status(), 200);
+        let audits: i64 = fixture.state.with_database(|database| {
+            database.connection().query_row(
+                "SELECT COUNT(*) FROM suplex_audit_events WHERE action = 'task_sent_to_backlog'",
+                [],
+                |row| row.get(0),
+            )
+        }).unwrap();
+        assert_eq!(audits, 1);
+        let _ = fs::remove_dir_all(&fixture.root);
+    }
 }

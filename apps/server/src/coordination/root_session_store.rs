@@ -371,6 +371,37 @@ pub fn cancel_task(
     Ok(cancelled)
 }
 
+/// Reset a task's durable intent to a fresh backlog task. Its sessions and open
+/// turns retire; its objective, profiles, workflow, turns, usage, and audit stay.
+/// The next start reserves a new Coordinator and prepares a new worktree.
+/// The caller observed every native session of the task idle and stopped it.
+pub fn return_to_backlog(
+    database: &mut SuplexDatabase,
+    task_id: &str,
+    now: DateTime<Utc>,
+) -> DatabaseResult<()> {
+    database.transaction(true, |database| {
+        let time = rfc3339_millis(now);
+        database.connection().execute(
+            "UPDATE suplex_task_sessions SET is_current = 0, lifecycle = 'cancelled', stop_requested_at = COALESCE(stop_requested_at, ?1), stopped_at = ?1, launch_owner = NULL, launch_owner_pid = NULL, launch_owner_start_time = NULL, launch_claimed_at = NULL, updated_at = ?1 WHERE task_id = ?2 AND stopped_at IS NULL",
+            params![time, task_id],
+        )?;
+        database.connection().execute(
+            "UPDATE suplex_task_sessions SET is_current = 0, updated_at = ?1 WHERE task_id = ?2 AND is_current = 1",
+            params![time, task_id],
+        )?;
+        cancel_open_turns(database, task_id, None, &time)?;
+        let changed = database.connection().execute(
+            "UPDATE suplex_task_controls SET status = 'backlog', queue_priority = 0, wake_at = NULL, human_question = NULL, human_question_id = NULL, human_question_options_json = '[]', limit_pause_json = NULL, recovery_turn_id = NULL, dispatch_notice_json = NULL, worktree_json = NULL, pull_request_json = NULL, root_session_id = NULL, worker_session_id = NULL, shell_pane_id = NULL, workflow_state_json = '{\"version\":1,\"reviews\":[],\"acceptedDelivery\":null,\"deliveryWait\":null,\"completion\":null,\"toolOwner\":null}', status_changed_at = ?1, updated_at = ?1 WHERE task_id = ?2",
+            params![time, task_id],
+        )?;
+        if changed != 1 {
+            return Err(TaskError::not_found().into());
+        }
+        observe_lifecycle(database, task_id)
+    })
+}
+
 /// The operator confirmed the interrupted turn's commands stopped: record the
 /// turn as interrupted, and wake the Coordinator for a Worker turn.
 fn record_confirmed_interruption(

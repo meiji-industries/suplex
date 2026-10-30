@@ -3,6 +3,7 @@
 //! before it decides and records an audit event. The agent API routes (W8)
 //! resolve the principal and call these functions.
 
+use crate::integrations::github_delivery::review_blocks_merge;
 use crate::shared::hash::sha256_hex;
 use crate::shared::time::{now_millis_rfc3339, rfc3339_millis};
 use crate::tasks::TaskError;
@@ -63,8 +64,8 @@ pub fn merge_blocker(
         Some("open") if observed.merge_state_status.as_deref() == Some("BEHIND") => {
             "The pull request is behind the base branch."
         }
-        Some("open") if observed.review_decision.as_deref() != Some("APPROVED") => {
-            "GitHub does not report an approved review."
+        Some("open") if review_blocks_merge(observed.review_decision.as_deref()) => {
+            "GitHub requires a review decision."
         }
         Some("open") => return None,
         _ => "The pull request is not open.",
@@ -759,11 +760,20 @@ mod tests {
             "The pull request is behind the base branch."
         );
         observed.merge_state_status = None;
-        observed.review_decision = None;
+        observed.review_decision = Some("REVIEW_REQUIRED".into());
         assert_eq!(
             merge_blocker(Some(&observed), None, Some(&head)).unwrap(),
-            "GitHub does not report an approved review."
+            "GitHub requires a review decision."
         );
+        observed.review_decision = Some("CHANGES_REQUESTED".into());
+        assert_eq!(
+            merge_blocker(Some(&observed), None, Some(&head)).unwrap(),
+            "GitHub requires a review decision."
+        );
+        observed.review_decision = None;
+        assert_eq!(merge_blocker(Some(&observed), None, Some(&head)), None);
+        observed.review_decision = Some("APPROVED".into());
+        assert_eq!(merge_blocker(Some(&observed), None, Some(&head)), None);
         assert!(!needs_reconciliation(Some(&observed)));
         observed.state = Some("merged".into());
         assert_eq!(

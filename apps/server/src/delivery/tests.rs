@@ -1245,7 +1245,11 @@ async fn paired_agent_delivery_keeps_authority_dependencies_receipts_and_provena
     );
     for (field, value, reason) in [
         ("draft", json!(true), "draft"),
-        ("reviewDecision", Value::Null, "approved review"),
+        (
+            "reviewDecision",
+            json!("REVIEW_REQUIRED"),
+            "review decision",
+        ),
         ("headSha", json!("f".repeat(40)), "not accepted"),
         ("checkConclusion", json!("FAILURE"), "check failed"),
         ("mergeable", json!("CONFLICTING"), "conflicts"),

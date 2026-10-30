@@ -147,6 +147,15 @@ pub struct Checks {
     pub runs: Vec<Value>,
 }
 
+/// GitHub reports `REVIEW_REQUIRED` or `CHANGES_REQUESTED` only when the repository
+/// requires reviews. A null decision means GitHub requires none, not that it is pending.
+pub fn review_blocks_merge(review_decision: Option<&str>) -> bool {
+    matches!(
+        review_decision,
+        Some("REVIEW_REQUIRED") | Some("CHANGES_REQUESTED")
+    )
+}
+
 /// TypeScript `GithubPullRequestObservation`.
 #[derive(Clone, Debug, Default, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]

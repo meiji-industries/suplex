@@ -8,7 +8,7 @@ use serde::Serialize;
 use ts_rs::TS;
 
 use crate::http::contracts::typed::tasks::TaskSource;
-use crate::integrations::github_delivery::Observation;
+use crate::integrations::github_delivery::{Observation, review_blocks_merge};
 use crate::tasks::control::TaskStatus;
 use crate::tasks::response::TaskResponse;
 
@@ -349,7 +349,7 @@ pub fn derive_action_required(
             false,
         );
     }
-    if pull.review_decision.as_deref() != Some("APPROVED") {
+    if review_blocks_merge(pull.review_decision.as_deref()) {
         return action(
             Human,
             ActionReason::PendingReview,
@@ -361,7 +361,7 @@ pub fn derive_action_required(
     action(
         Human,
         ActionReason::WaitingHuman,
-        "The pull request is approved and not merged. Merge the pull request.",
+        "The pull request is ready and not merged. Merge the pull request.",
         vec![format!("gh pr view {reference}")],
         true,
     )
@@ -465,6 +465,20 @@ mod tests {
                 "summary": "CI reports failed checks on the pull request. The task owner must read the checks and repair the build.",
                 "suggestedCommands": ["gh pr checks 7 --repo o/r"], "evidenceAt": "now"})
         );
+        observed.checks.failing = 0;
+        let unreviewed = derive_task_integration(&task, Some(&observed), None, "now");
+        assert_eq!(
+            derive_action_required(&task, &unreviewed, None)
+                .unwrap()
+                .reason_code,
+            ActionReason::WaitingHuman,
+            "a null review decision means GitHub requires no review"
+        );
+        observed.review_decision = Some("REVIEW_REQUIRED".into());
+        let pending = derive_task_integration(&task, Some(&observed), None, "now");
+        let pending = derive_action_required(&task, &pending, None).unwrap();
+        assert_eq!(pending.reason_code, ActionReason::PendingReview);
+        assert!(pending.human_approval_required);
         let unavailable = derive_task_integration(&task, None, Some("provider-unavailable"), "now");
         assert_eq!(
             derive_action_required(&task, &unavailable, None)

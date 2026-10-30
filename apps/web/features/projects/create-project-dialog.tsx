@@ -18,11 +18,13 @@ import { ProjectConnections, REPOSITORY_HOSTS, withRepositoryHost } from "./proj
 import { ProjectIntegrationSchema, type ProjectIntegration } from "../../contracts/project-integration.js";
 import { createProject } from "./lib/project-api.js";
 import { clearProjectDraft, readProjectDraft, writeProjectDraft } from "./lib/project-draft.js";
+import { inAppStoreShell } from "../../shell/app-store.js";
 
 const QUOTA_CODES = new Set(["project_limit_reached", "billing_unavailable"]);
 
 function quotaMessage(code: string, admin: boolean): string {
   if (code === "billing_unavailable") return "Suplex cannot check the subscription. Retry the request.";
+  if (inAppStoreShell()) return "This host can add no more projects.";
   return admin ? "The plan includes no more projects. Free includes 2 projects and Pro includes 25." : "The plan includes no more projects. Request Pro from an administrator.";
 }
 

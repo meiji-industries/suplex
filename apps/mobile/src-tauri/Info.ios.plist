@@ -5,5 +5,10 @@
 	<!-- The app uses only standard HTTPS, so App Store uploads need no export compliance documents. -->
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
+	<!-- A web page can offer the camera and the photo library for a picture upload (Settings > Profile). Without these texts iOS stops the app. -->
+	<key>NSCameraUsageDescription</key>
+	<string>Suplex uses the camera when you take a picture for your profile or company.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Suplex uses your photos when you choose a picture for your profile or company.</string>
 </dict>
 </plist>

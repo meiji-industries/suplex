@@ -7,6 +7,7 @@ import { Button } from "../../components/ui/button.js";
 import { Input } from "../../components/ui/input.js";
 import { Spinner } from "../../components/ui/spinner.js";
 import { ApiError } from "../../lib/api.js";
+import { inAppStoreShell } from "../../shell/app-store.js";
 import { getAccount, pollAccountLogin, startAccountLogin, type AccountProvider } from "./lib/account-api.js";
 
 const POLL_MS = 2_000;
@@ -43,15 +44,6 @@ function closeLoginWindow(loginWindow: RefObject<Window | null>): void {
   const opened = loginWindow.current;
   loginWindow.current = null;
   try { if (opened && !opened.closed) opened.close(); } catch { /* The tab tells the user to close it. */ }
-}
-
-/**
- * App Store guideline 4.8 asks for Sign in with Apple next to a third-party login, so the iOS shell offers only
- * Suplex's own email login; every method reaches the same account. Google Play has no such rule. The shell bridge
- * does not name its platform, so any mobile shell that is not Android counts as iOS.
- */
-export function emailLoginOnly(): boolean {
-  return Boolean(window.suplexMobile) && !/Android/i.test(navigator.userAgent);
 }
 
 export function AccountLoginView({ preview = false, previewState }: { preview?: boolean; previewState?: "browser" | "email" | undefined }): ReactElement {
@@ -160,11 +152,11 @@ export function AccountLoginView({ preview = false, previewState }: { preview?: 
           ) : (
             <div className="flex flex-col gap-3">
               {recovery ? <p className="pb-2 text-center text-sm text-muted-foreground">Log in to recover this host. Your account becomes its owner.</p> : unclaimed ? <p className="pb-2 text-center text-sm text-muted-foreground">This host has no owner. Log in to become its owner.</p> : null}
-              {emailLoginOnly() ? null : <>
+              {inAppStoreShell() ? null : <>
                 <Button size="lg" disabled={busy || canManage === undefined} onClick={() => void start("google")}>Continue with Google</Button>
                 <Button variant="outline" size="lg" disabled={busy || canManage === undefined} onClick={() => void start("github")}>Continue with GitHub</Button>
               </>}
-              <Button variant={emailLoginOnly() ? "default" : "outline"} size="lg" disabled={busy || canManage === undefined} onClick={() => { setEmailForm(true); setError(""); }}>Continue with email</Button>
+              <Button variant={inAppStoreShell() ? "default" : "outline"} size="lg" disabled={busy || canManage === undefined} onClick={() => { setEmailForm(true); setError(""); }}>Continue with email</Button>
             </div>
           )}
           {error ? <Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert> : null}

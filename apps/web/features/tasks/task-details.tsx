@@ -31,6 +31,7 @@ import { showWorktreeMenu, TaskWorktreeMenu } from "./task-worktree-menu.js";
 import { workflowDefinition } from "./workflow-presentation.js";
 import { copyToClipboard } from "../../lib/clipboard.js";
 import { TaskHealthBadges, type TaskHealth } from "./task-health.js";
+import { inAppStoreShell } from "../../shell/app-store.js";
 
 const emptyActivity: TaskActivity = { setup: { state: "none", exitStatus: null }, sessions: [], turns: [], actions: [], shellPaneId: null };
 
@@ -53,7 +54,7 @@ export function TaskQueueWaits({ task }: { task: Pick<Task, "companyId" | "queue
 export function backlogText(task: Pick<Task, "status" | "queue">): string {
   if (task.status === "queued") {
     if (task.queue.waitingOn.length) return task.queue.projectConcurrencyLimited ? "Queued. Prerequisites incomplete and project concurrency limit reached." : "Queued. Suplex starts this task when its prerequisites are complete.";
-    if (task.queue.planConcurrencyLimited) return "Queued. Free runs 3 tasks at a time. Suplex starts this task when a running task stops, or select Pro in Settings > Billing.";
+    if (task.queue.planConcurrencyLimited) return inAppStoreShell() ? "Queued. This host runs 3 tasks at a time. Suplex starts this task when a running task stops." : "Queued. Free runs 3 tasks at a time. Suplex starts this task when a running task stops, or select Pro in Settings > Billing.";
     return task.queue.projectConcurrencyLimited ? "Queued. Project concurrency limit reached." : "Queued. Suplex will start this task.";
   }
   return task.queue.waitingOn.length ? "Backlog. Start this task to queue it after its prerequisites." : "The task is ready to start.";

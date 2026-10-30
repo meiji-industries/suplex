@@ -24,6 +24,7 @@ import { ExternalAgentPairingCodeDialog } from "./external-agent-pairing-code-di
 import { ExternalAgentProjectGrantsDialog } from "./external-agent-project-grants-dialog.js";
 import { createExternalAgentActions } from "./external-agent-actions.js";
 import { LoadingState } from "../../components/app/loading-state.js";
+import { inAppStoreShell } from "../../shell/app-store.js";
 
 export function AdminView(): ReactElement {
   const { user, companies, currentCompany, loading, reloadCompanies } = useCompanyContext();
@@ -412,7 +413,7 @@ export function AdminView(): ReactElement {
         ) : null}
 
         {!isAgents && !isCompanies && currentCompany ? <CompanyInvitations companyId={currentCompany.id} invitations={invitations} open={inviteOpen} onOpenChange={setInviteOpen} onSaved={reload} /> : null}
-        {currentCompany ? <Dialog open={teamOnlyOpen} onOpenChange={setTeamOnlyOpen}><DialogContent><DialogHeader><DialogTitle>Team plan required</DialogTitle><DialogDescription>Only the Team plan can invite users. Change the plan in Billing to invite users.</DialogDescription></DialogHeader><DialogFooter><Button variant="outline" onClick={() => setTeamOnlyOpen(false)}>Cancel</Button>{window.suplexMobile ? null : <Button nativeButton={false} render={<a href={billingSettingsPath(currentCompany.id)} />}>Manage Plan</Button>}</DialogFooter></DialogContent></Dialog> : null}
+        {currentCompany ? <Dialog open={teamOnlyOpen} onOpenChange={setTeamOnlyOpen}><DialogContent><DialogHeader><DialogTitle>{inAppStoreShell() ? "Inviting users is not available" : "Team plan required"}</DialogTitle><DialogDescription>{inAppStoreShell() ? "This host cannot invite users." : "Only the Team plan can invite users. Change the plan in Billing to invite users."}</DialogDescription></DialogHeader><DialogFooter><Button variant="outline" onClick={() => setTeamOnlyOpen(false)}>Cancel</Button>{window.suplexMobile ? null : <Button nativeButton={false} render={<a href={billingSettingsPath(currentCompany.id)} />}>Manage Plan</Button>}</DialogFooter></DialogContent></Dialog> : null}
 
         {error ? (
           <div className="px-4 py-3 text-xs text-destructive">

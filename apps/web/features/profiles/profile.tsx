@@ -12,8 +12,8 @@ import { Save } from "lucide-react";
 import { useEffect, useState, type ReactElement } from "react";
 import { LoadingState } from "../../components/app/loading-state.js";
 import type { AccountResponse } from "../../contracts/generated/AccountResponse.js";
-import { emailLoginOnly } from "../account/account-login.js";
 import { getAccount, logoutAccount } from "../account/lib/account-api.js";
+import { inAppStoreShell } from "../../shell/app-store.js";
 import { EmailUpdatesSetting } from "./email-updates-setting.js";
 import { InputSoundSetting } from "./input-sound-setting.js";
 import { WebPushSetting } from "./web-push-setting.js";
@@ -78,7 +78,7 @@ export function ProfileView(): ReactElement {
         <Button type="button" variant="destructive" size="sm" onClick={() => void logout()}>Log out</Button>
       </SettingRow> : null}
       {account?.configured && account.account ? <SettingRow label="Delete Suplex account">
-        <Button variant="outline" size="sm" nativeButton={false} render={<a href={emailLoginOnly() ? "https://suplex.sh/account/delete?with=email" : "https://suplex.sh/account/delete"} target={window.suplexMobile ? undefined : "_blank"} rel="noreferrer" />}>Delete account</Button>
+        <Button variant="outline" size="sm" nativeButton={false} render={<a href={inAppStoreShell() ? "https://suplex.sh/account/delete?with=email" : "https://suplex.sh/account/delete"} target={window.suplexMobile ? undefined : "_blank"} rel="noreferrer" />}>Delete account</Button>
       </SettingRow> : null}
     </SettingsSection>
     {error ? <Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert> : null}

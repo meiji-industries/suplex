@@ -44,6 +44,7 @@ import { useShellRuns } from "../moves/lib/move-runs.js";
 import { LoadingState } from "../../components/app/loading-state.js";
 import { getBillingSummary } from "../settings/lib/billing-api.js";
 import { useProjects } from "../projects/lib/projects.js"; import { readTaskListFilters, taskListReturnHref, useTaskListScroll, useTaskListUrl } from "./lib/task-list-url-state.js";
+import { inAppStoreShell } from "../../shell/app-store.js";
 
 type BoardView = "compact" | "full";
 const boardShowOptions = [["all", "Tasks and moves", ListFilter], ["tasks", "Tasks", ClipboardList], ["moves", "Moves", Zap]] as const;
@@ -166,7 +167,7 @@ function PlanLimitCard({ queued, billingHref }: { queued: number; billingHref: s
   const [trial, setTrial] = useState(false);
   useEffect(() => { if (billingHref) void getBillingSummary().then(summary => setTrial(summary.trialAvailable), () => undefined); }, [billingHref]);
   return <li className="min-w-0"><Card highlighted size="sm" data-plan-limit-card>
-    <CardHeader><CardTitle>{queued === 1 ? "1 task is ready." : `${queued} tasks are ready.`} {FREE_RUNNING_TASKS} slots are full.</CardTitle><CardDescription>Free runs {FREE_RUNNING_TASKS} tasks at a time. Pro runs the full queue at the same time.</CardDescription></CardHeader>
+    <CardHeader><CardTitle>{queued === 1 ? "1 task is ready." : `${queued} tasks are ready.`} {FREE_RUNNING_TASKS} slots are full.</CardTitle><CardDescription>{inAppStoreShell() ? `This host runs ${FREE_RUNNING_TASKS} tasks at a time.` : `Free runs ${FREE_RUNNING_TASKS} tasks at a time. Pro runs the full queue at the same time.`}</CardDescription></CardHeader>
     {billingHref ? <CardContent><Button size="sm" nativeButton={false} render={<a href={billingHref} />}><Zap />{trial ? `Start ${queued === 1 ? "it" : `all ${queued}`} with a free trial` : `Go Pro and start ${queued === 1 ? "it" : `all ${queued}`}`}</Button>{trial ? <p className="text-xs text-muted-foreground">No credit card is necessary.</p> : null}</CardContent> : null}
   </Card></li>;
 }

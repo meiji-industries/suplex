@@ -1898,14 +1898,30 @@ impl Github {
         }
         let base = context.base_ref_name;
         let rules_path = repo_route(&repository, &["rules", "branches", &base]);
+        // GitHub Free answers rulesets on a private repository with 403 ("Upgrade to
+        // GitHub Pro"). That is not a token problem: the repository has no rules.
         let rules = self
             .retry_transient(|| async {
-                decode_response::<Vec<BranchRule>>(
-                    &self
-                        .response_body("GET", &rules_path, None, "branch rules")
-                        .await?,
-                    "GitHub branch rules are malformed",
-                )
+                match self
+                    .api(
+                        "GET",
+                        &rules_path,
+                        None,
+                        "branch rules",
+                        StatusHandling {
+                            accepted: &[403],
+                            ..StatusHandling::default()
+                        },
+                    )
+                    .await?
+                {
+                    Api::Json(body) => decode_response::<Vec<BranchRule>>(
+                        &body,
+                        "GitHub branch rules are malformed",
+                    ),
+                    Api::Accepted { .. } => Ok(Vec::new()),
+                    Api::NotFound => unreachable!("not found is a failure"),
+                }
             })
             .await?;
         if rules.iter().any(|rule| rule.r#type == "merge_queue") {

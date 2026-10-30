@@ -3,7 +3,7 @@
   "license": "Elastic-2.0",
   "productName": "Suplex",
   "private": true,
-  "version": "1.13.0",
+  "version": "1.13.1",
   "scripts": {
     "tauri": "tauri",
     "typecheck": "env -u RUSTUP_TOOLCHAIN cargo check --manifest-path src-tauri/Cargo.toml --all-targets",

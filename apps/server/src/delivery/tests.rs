@@ -37,6 +37,7 @@ struct Fake {
     origin: PathBuf,
     pulls: Vec<Value>,
     merge_refusal: bool,
+    rules_forbidden: bool,
     workflow_run: Value,
     rerun_calls: usize,
     rerun_denied: bool,
@@ -118,6 +119,13 @@ async fn patch_pull(
     pull["title"] = body["title"].clone();
     pull["body"] = body["body"].clone();
     Json(rest_pull(pull)).into_response()
+}
+
+async fn branch_rules(State(fake): State<Shared>) -> Response {
+    if fake.lock().unwrap().rules_forbidden {
+        return (StatusCode::FORBIDDEN, Json(json!({"message": "Upgrade to GitHub Pro or make this repository public to enable this feature.", "documentation_url": "https://docs.github.com/rest", "status": "403"}))).into_response();
+    }
+    Json(json!([])).into_response()
 }
 
 async fn merge_pull(
@@ -245,7 +253,7 @@ async fn fake_github(origin: PathBuf) -> (String, Shared) {
     let app = Router::new()
         .route("/repos/owner/repo", get(|| async { Json(json!({"allow_squash_merge": true, "allow_merge_commit": true, "allow_rebase_merge": true})) }))
         .route("/repos/owner/repo/branches/{*branch}", get(branch))
-        .route("/repos/owner/repo/rules/branches/{*branch}", get(|| async { Json(json!([])) }))
+        .route("/repos/owner/repo/rules/branches/{*branch}", get(branch_rules))
         .route("/repos/owner/repo/pulls", post(create_pull))
         .route("/repos/owner/repo/pulls/{number}", get(get_pull).patch(patch_pull))
         .route("/repos/owner/repo/pulls/{number}/merge", put(merge_pull))
@@ -837,6 +845,15 @@ async fn refused_merge_reports_github_evidence_and_merge_input_is_checked() {
     assert!(
         matches!(refused, MergeResult::Disposition { disposition: MergeDisposition::Blocked, ref message } if message.contains("no pending required checks"))
     );
+    fake.lock().unwrap().rules_forbidden = true;
+    let free_plan = github
+        .merge_conditionally("owner/repo", 1, &"a".repeat(40), false)
+        .await
+        .unwrap();
+    assert!(
+        matches!(free_plan, MergeResult::Disposition { disposition: MergeDisposition::Blocked, ref message } if message.contains("no pending required checks"))
+    );
+    fake.lock().unwrap().rules_forbidden = false;
     let changed = github
         .merge_conditionally("owner/repo", 1, &"d".repeat(40), false)
         .await

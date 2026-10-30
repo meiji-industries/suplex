@@ -545,7 +545,7 @@ mod tests {
             "background_loop",
             &[("loop", "off-switch")],
         );
-        let _ = std::panic::catch_unwind(|| panic!("/home/ada/secret token=sk-live"));
+        let _ = std::panic::catch_unwind(|| panic!("/home/zuzu/secret token=sk-live"));
         std::thread::sleep(std::time::Duration::from_millis(300));
         assert_eq!(f.count("SELECT COUNT(*) FROM billing_telemetry_events"), 0);
 
@@ -559,7 +559,7 @@ mod tests {
             &posthog.url,
         );
         hosted.route_exceptions("hosted", "suplex-hosted");
-        let _ = std::panic::catch_unwind(|| panic!("/home/ada/secret token=sk-live"));
+        let _ = std::panic::catch_unwind(|| panic!("/home/zuzu/secret token=sk-live"));
         crate::telemetry::exceptions::report_handled(
             "BackgroundLoopFailure",
             "background_loop",
@@ -587,7 +587,7 @@ mod tests {
         assert_eq!(panic["properties"]["$lib"], "suplex-hosted");
         assert_eq!(panic["properties"]["$exception_list"][0]["mechanism"]["handled"], false);
         let sent = batch.to_string();
-        for leak in ["ada", "secret", "sk-live", "/home", "/app/build"] {
+        for leak in ["zuzu", "secret", "sk-live", "/home", "/app/build"] {
             assert!(!sent.contains(leak), "{leak} in {sent}");
         }
         // The same failure repeats once an hour, and the queue is bounded.

@@ -10,10 +10,11 @@ import { getBillingSummary } from "../settings/lib/billing-api.js";
 import { OnboardingFrame, PrimaryButton } from "./onboarding-frame.js";
 import { startTrialIfAvailable, type OnboardingData } from "./onboarding.js";
 import type { StepProps } from "./onboarding-wizard.js";
+import { inAppStoreShell } from "../../shell/app-store.js";
 
 /** "Pro trial · 14 days" while a trial is available or running, else the plan. */
 export function planLabel(billing: BillingSummary | undefined, now = Date.now()): string | undefined {
-  if (!billing) return undefined;
+  if (!billing || inAppStoreShell()) return undefined;
   if (billing.subscriptionStatus === "trialing" && billing.accessUntil) {
     const days = Math.max(1, Math.ceil((Date.parse(billing.accessUntil) - now) / 86_400_000));
     return `Pro trial · ${days} ${days === 1 ? "day" : "days"}`;

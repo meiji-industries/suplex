@@ -14,6 +14,7 @@ import { withCompany } from "../lib/api.js";
 import { navigate } from "./navigation-state.js";
 import { activeCompanyStorageKey, useOptionalCompanyContext } from "./company-context.js";
 import { EntityAvatar } from "../components/app/entity-avatar.js";
+import { inAppStoreShell } from "./app-store.js";
 
 function SuplexMark(): ReactElement {
   return <span className="flex size-5 shrink-0 items-center justify-center rounded-[5px] bg-foreground text-xs font-bold text-background">F</span>;
@@ -27,7 +28,7 @@ function StatusBadge({ status }: { status: "active" | "paused" | "archived" }): 
 const planLabels = { free: "Free", pro: "Pro", team: "Team" } as const;
 
 function PlanBadge({ plan }: { plan: keyof typeof planLabels | null | undefined }): ReactElement | null {
-  return plan ? <Badge variant="secondary">{planLabels[plan]}</Badge> : null;
+  return plan && !inAppStoreShell() ? <Badge variant="secondary">{planLabels[plan]}</Badge> : null;
 }
 
 function CreateCompanyDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }): ReactElement {

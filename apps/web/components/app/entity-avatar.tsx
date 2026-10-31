@@ -37,6 +37,21 @@ export function EntityAvatar({ kind, id, name, seed, size = "sm" }: EntityAvatar
   </Avatar>;
 }
 
+/** The longest edge of a shrunk avatar image. Avatars show at no more than this size. */
+const SHRUNK_AVATAR_EDGE = 512;
+
+/** A phone camera photo is often larger than the upload limit, so a large image is drawn at most 512 px wide or high and saved as JPEG. */
+export async function shrinkImage(file: Blob): Promise<Blob> {
+  const bitmap = await createImageBitmap(file);
+  const scale = Math.min(1, SHRUNK_AVATAR_EDGE / Math.max(bitmap.width, bitmap.height));
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.max(1, Math.round(bitmap.width * scale));
+  canvas.height = Math.max(1, Math.round(bitmap.height * scale));
+  canvas.getContext("2d")?.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+  bitmap.close();
+  return await new Promise((resolve, reject) => { canvas.toBlob(blob => { if (blob) resolve(blob); else reject(new Error("The image could not be shrunk")); }, "image/jpeg", 0.9); });
+}
+
 /** Shape choice plus image upload. Saves on every change. */
 export function AvatarEditor({ kind, id, name, seed, compact = false }: Omit<EntityAvatarProps, "size"> & { compact?: boolean }): ReactElement {
   const context = useOptionalCompanyContext();
@@ -53,12 +68,16 @@ export function AvatarEditor({ kind, id, name, seed, compact = false }: Omit<Ent
     catch (reason) { setError(reason instanceof Error ? reason.message : "Unable to save the avatar"); }
     finally { setBusy(false); }
   };
-  const upload = (file: File | undefined): void => {
+  const upload = async (file: File | undefined): Promise<void> => {
     if (!file) return;
-    if (file.size > MAX_AVATAR_IMAGE_BYTES) { setError("Select an image up to 2 MB."); return; }
+    let image: Blob = file;
+    if (file.size > MAX_AVATAR_IMAGE_BYTES) {
+      try { image = await shrinkImage(file); } catch { image = file; }
+      if (image.size > MAX_AVATAR_IMAGE_BYTES) { setError("Select an image up to 2 MB."); return; }
+    }
     const reader = new FileReader();
-    reader.onload = () => void save({ image: { mimeType: file.type as NonNullable<AvatarUpdateBody["image"]>["mimeType"], base64: String(reader.result).split(",")[1] ?? "" } });
-    reader.readAsDataURL(file);
+    reader.onload = () => void save({ image: { mimeType: image.type as NonNullable<AvatarUpdateBody["image"]>["mimeType"], base64: String(reader.result).split(",")[1] ?? "" } });
+    reader.readAsDataURL(image);
   };
   return <div className="flex flex-wrap items-center gap-2">
     {compact ? <DropdownMenu open={menuOpen} onOpenChange={setMenuOpen}>
@@ -80,7 +99,7 @@ export function AvatarEditor({ kind, id, name, seed, compact = false }: Omit<Ent
     <Button type="button" variant="outline" size="sm" disabled={busy || !context} onClick={() => input.current?.click()}><Upload className="size-3.5" />Upload image</Button>
     {record?.imageVersion ? <Button type="button" variant="ghost" size="sm" disabled={busy} onClick={() => void save({ image: null })}><Trash2 className="size-3.5" />Delete image</Button> : null}
     </>}
-    <input ref={input} type="file" accept="image/png,image/jpeg,image/webp,image/gif" className="sr-only" aria-label="Avatar image" onChange={(event) => { upload(event.target.files?.[0]); event.target.value = ""; }} />
+    <input ref={input} type="file" accept="image/png,image/jpeg,image/webp,image/gif" className="sr-only" aria-label="Avatar image" onChange={(event) => { void upload(event.target.files?.[0]); event.target.value = ""; }} />
     {error ? <span className="text-xs text-destructive">{error}</span> : null}
   </div>;
 }

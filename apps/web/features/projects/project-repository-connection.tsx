@@ -43,6 +43,7 @@ export function ProjectRepositoryConnection({ projectId, repository, repositoryP
     finally { setDisconnecting(false); }
   };
   const checkout = result?.checkout;
+  const unchecked = checkout !== undefined && checkout !== "ready";
   const cloneCommand = checkout && checkout !== "ready" && repository ? `git clone https://github.com/${repository}.git ${repositoryPath}` : undefined;
   return <>
   <SettingRow label="Local checkout">
@@ -57,12 +58,12 @@ export function ProjectRepositoryConnection({ projectId, repository, repositoryP
     <div className="flex items-center justify-between gap-3">
       <div className="flex items-center gap-2">
         <span role="status" className="inline-flex items-center gap-2">
-          {state.kind === "checking" ? <><Spinner />Check in progress</> : <><StatusLight level={connected ? "green" : "red"} label={connected ? "Connected" : "Disconnected"} />{connected && result?.login ? `@${result.login}` : connected ? "Connected" : "Disconnected"}</>}
+          {state.kind === "checking" ? <><Spinner />Check in progress</> : unchecked ? <><StatusLight level="amber" label="Not checked" />Not checked</> : <><StatusLight level={connected ? "green" : "red"} label={connected ? "Connected" : "Disconnected"} />{connected && result?.login ? `@${result.login}` : connected ? "Connected" : "Disconnected"}</>}
         </span>
         <Button type="button" size="icon-xs" variant="ghost" aria-label="Check again" title="Check again" disabled={state.kind === "checking"} onClick={() => void check()}><RefreshCw /></Button>
         {connected ? <Button type="button" size="icon-xs" variant="ghost" aria-label="Disconnect GitHub" title="Disconnect GitHub" onClick={() => setConfirmDisconnect(true)}><Trash2 /></Button> : null}
       </div>
-      {state.kind !== "checking" && !connected ? result?.method === "cli"
+      {state.kind !== "checking" && !connected && !unchecked ? result?.method === "cli"
         ? <Button type="button" size="xs" onClick={() => void check()}>Connect</Button>
         : <GithubDeviceSignIn onConnected={check} label="Connect" primary /> : null}
     </div>

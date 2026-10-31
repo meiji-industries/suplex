@@ -3,9 +3,23 @@ use serde::{Deserialize, Serialize};
 use super::git::{Github, github_status, repository_coordinate, valid_repository};
 use crate::integrations::github::Access;
 
+crate::shared::wire_enum! {
+    pub enum CheckoutStatus {
+        Missing = "missing",
+        NotARepository = "not_a_repository",
+        Ready = "ready",
+    }
+}
+
+const MISSING_MESSAGE: &str =
+    "No checkout at this path. Clone the repository to this path, then check again.";
+const NOT_A_REPOSITORY_MESSAGE: &str =
+    "This path is not a Git repository. Clone the repository to this path or correct the path.";
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ConnectionStatus {
+    pub checkout: CheckoutStatus,
     pub status: &'static str,
     pub message: &'static str,
     pub method: &'static str,
@@ -40,27 +54,47 @@ pub async fn check(
     identity: Option<&str>,
     branch: &str,
 ) -> ConnectionStatus {
+    let path = path.to_owned();
+    let (checkout, origin) = tokio::task::spawn_blocking(move || {
+        if !std::path::Path::new(&path).is_dir() {
+            return (CheckoutStatus::Missing, None);
+        }
+        let Ok(repo) = git2::Repository::open(path) else {
+            return (CheckoutStatus::NotARepository, None);
+        };
+        let origin = repo
+            .config()
+            .ok()
+            .and_then(|config| config.get_string("remote.origin.url").ok())
+            .and_then(|url| repository_coordinate(&url))
+            .filter(|value| value.host == "github")
+            .map(|value| value.repository);
+        (CheckoutStatus::Ready, origin)
+    })
+    .await
+    .unwrap_or((CheckoutStatus::Ready, None));
     let mut result = ConnectionStatus {
+        checkout,
         status: "needs_repair",
         message: "Set a GitHub repository in owner/name format.",
         method: "device",
         origin_repository: None,
         login: None,
     };
+    match checkout {
+        CheckoutStatus::Missing => {
+            result.message = MISSING_MESSAGE;
+            return result;
+        }
+        CheckoutStatus::NotARepository => {
+            result.message = NOT_A_REPOSITORY_MESSAGE;
+            return result;
+        }
+        CheckoutStatus::Ready => {}
+    }
     let Some(identity) = identity.filter(|value| valid_repository(value)) else {
         return result;
     };
-    let path = path.to_owned();
-    let origin = tokio::task::spawn_blocking(move || {
-        let repo = git2::Repository::open(path).ok()?;
-        let url = repo.config().ok()?.get_string("remote.origin.url").ok()?;
-        repository_coordinate(&url)
-            .filter(|value| value.host == "github")
-            .map(|value| value.repository)
-    })
-    .await
-    .ok()
-    .flatten();
     result.origin_repository.clone_from(&origin);
     let Some(origin) = origin else {
         result.message =
@@ -182,6 +216,7 @@ mod tests {
         let path = root.to_str().unwrap();
         let connected = check(&github, path, Some("acme/renamed"), "main").await;
         assert_eq!(connected.status, "connected");
+        assert_eq!(connected.checkout, CheckoutStatus::Ready);
         assert_eq!(connected.login.as_deref(), Some("fixture-account"));
         assert_eq!(
             check(&github, path, Some("acme/different"), "main")
@@ -226,6 +261,25 @@ mod tests {
         let connected = check(&github, path, Some("acme/renamed"), "main").await;
         assert_eq!(connected.status, "connected");
         assert_eq!(connected.login.as_deref(), Some("fixture-account"));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn checkout_reports_missing_and_not_a_repository() {
+        let github = Github {
+            api: None,
+            git: None,
+        };
+        let root = temporary("checkout");
+        let missing = root.join("absent");
+        let result = check(&github, missing.to_str().unwrap(), Some("acme/x"), "main").await;
+        assert_eq!(result.checkout, CheckoutStatus::Missing);
+        assert_eq!(result.status, "needs_repair");
+        assert_eq!(result.message, MISSING_MESSAGE);
+        std::fs::create_dir_all(&missing).unwrap();
+        let result = check(&github, missing.to_str().unwrap(), Some("acme/x"), "main").await;
+        assert_eq!(result.checkout, CheckoutStatus::NotARepository);
+        assert_eq!(result.message, NOT_A_REPOSITORY_MESSAGE);
         std::fs::remove_dir_all(root).unwrap();
     }
 }

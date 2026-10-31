@@ -69,6 +69,7 @@ export type ProjectPatchBody = z.infer<typeof ProjectPatchBodySchema>;
 export type ProjectProviderInstance = z.infer<typeof ProjectProviderInstanceSchema>;
 
 export const ProjectRepositoryStatusSchema = z.object({
+  checkout: z.enum(["missing", "not_a_repository", "ready"]),
   status: z.enum(["connected", "sign_in_required", "needs_repair", "unavailable"]),
   message: z.string(),
   method: z.enum(["device", "cli"]),

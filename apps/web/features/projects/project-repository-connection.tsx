@@ -7,10 +7,13 @@ import { Spinner } from "../../components/ui/spinner.js";
 import { Button } from "../../components/ui/button.js";
 import { AlertDialog, AlertDialogContent, AlertDialogHeader, AlertDialogTitle, AlertDialogDescription, AlertDialogFooter, AlertDialogCancel } from "../../components/ui/alert-dialog.js";
 import { readJsonUnchecked } from "../../lib/api.js";
+import { SettingRow } from "../settings/settings-layout.js";
 
 type State = { kind: "checking" } | { kind: "failed" } | { kind: "ready"; result: ProjectRepositoryStatus };
 
-export function ProjectRepositoryConnection({ projectId }: { projectId: string }): ReactElement {
+const CHECKOUT_LABELS = { ready: "Ready", missing: "Missing", not_a_repository: "Not a repository" } as const;
+
+export function ProjectRepositoryConnection({ projectId, repository, repositoryPath }: { projectId: string; repository: string | null; repositoryPath: string }): ReactElement {
   const [state, setState] = useState<State>({ kind: "checking" });
   const generation = useRef(0);
   const [confirmDisconnect, setConfirmDisconnect] = useState(false);
@@ -39,7 +42,18 @@ export function ProjectRepositoryConnection({ projectId }: { projectId: string }
     } catch { setDisconnectError("Suplex could not disconnect GitHub."); }
     finally { setDisconnecting(false); }
   };
-  return <div className="w-full space-y-2 text-xs sm:w-80">
+  const checkout = result?.checkout;
+  const cloneCommand = checkout && checkout !== "ready" && repository ? `git clone https://github.com/${repository}.git ${repositoryPath}` : undefined;
+  return <>
+  <SettingRow label="Local checkout">
+    <div className="w-full space-y-2 text-xs sm:w-80">
+      {checkout ? <span role="status" className="inline-flex items-center gap-2"><StatusLight level={checkout === "ready" ? "green" : "red"} label={CHECKOUT_LABELS[checkout]} />{CHECKOUT_LABELS[checkout]}</span> : state.kind === "checking" ? <span role="status" className="inline-flex items-center gap-2"><Spinner />Check in progress</span> : null}
+      {checkout && checkout !== "ready" && result ? <p>{result.message}</p> : null}
+      {cloneCommand ? <code className="block select-all break-all">{cloneCommand}</code> : null}
+    </div>
+  </SettingRow>
+  <SettingRow label="GitHub connection">
+  <div className="w-full space-y-2 text-xs sm:w-80">
     <div className="flex items-center justify-between gap-3">
       <div className="flex items-center gap-2">
         <span role="status" className="inline-flex items-center gap-2">
@@ -60,7 +74,9 @@ export function ProjectRepositoryConnection({ projectId }: { projectId: string }
       </AlertDialogContent>
     </AlertDialog>
     {state.kind === "failed" ? <p role="alert">Repository check is not available.</p> : null}
-    {result && (result.status === "needs_repair" || result.status === "unavailable") ? <p>{result.message}</p> : null}
+    {result && checkout === "ready" && (result.status === "needs_repair" || result.status === "unavailable") ? <p>{result.message}</p> : null}
     {result?.method === "cli" && !connected ? <p>Sign in to GitHub on the Suplex host with <code>gh auth login -s workflow</code>, then select Connect.</p> : null}
-  </div>;
+  </div>
+  </SettingRow>
+  </>;
 }

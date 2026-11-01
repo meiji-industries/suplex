@@ -3,12 +3,21 @@ use serde::{Deserialize, Serialize};
 use super::git::{Github, github_status, repository_coordinate, valid_repository};
 use crate::integrations::github::Access;
 
+crate::shared::wire_enum! {
+    pub enum CheckoutStatus {
+        Missing = "missing",
+        NotARepository = "not_a_repository",
+        Ready = "ready",
+    }
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ConnectionStatus {
     pub status: &'static str,
     pub message: &'static str,
     pub method: &'static str,
+    pub checkout: CheckoutStatus,
     pub origin_repository: Option<String>,
     pub login: Option<String>,
 }
@@ -44,23 +53,46 @@ pub async fn check(
         status: "needs_repair",
         message: "Set a GitHub repository in owner/name format.",
         method: "device",
+        checkout: CheckoutStatus::Ready,
         origin_repository: None,
         login: None,
     };
+    // Observe the checkout before the identity check so the field stays truthful.
+    let path = path.to_owned();
+    let (checkout, origin) = tokio::task::spawn_blocking(move || {
+        if !std::path::Path::new(&path).is_dir() {
+            return (CheckoutStatus::Missing, None);
+        }
+        let Ok(repo) = git2::Repository::open(&path) else {
+            return (CheckoutStatus::NotARepository, None);
+        };
+        let origin = repo
+            .config()
+            .ok()
+            .and_then(|config| config.get_string("remote.origin.url").ok())
+            .and_then(|url| repository_coordinate(&url))
+            .filter(|value| value.host == "github")
+            .map(|value| value.repository);
+        (CheckoutStatus::Ready, origin)
+    })
+    .await
+    .unwrap_or((CheckoutStatus::Ready, None));
+    result.checkout = checkout;
     let Some(identity) = identity.filter(|value| valid_repository(value)) else {
         return result;
     };
-    let path = path.to_owned();
-    let origin = tokio::task::spawn_blocking(move || {
-        let repo = git2::Repository::open(path).ok()?;
-        let url = repo.config().ok()?.get_string("remote.origin.url").ok()?;
-        repository_coordinate(&url)
-            .filter(|value| value.host == "github")
-            .map(|value| value.repository)
-    })
-    .await
-    .ok()
-    .flatten();
+    match checkout {
+        CheckoutStatus::Missing => {
+            result.message =
+                "No checkout at this path. Clone the repository to this path, then check again.";
+            return result;
+        }
+        CheckoutStatus::NotARepository => {
+            result.message = "This path is not a Git repository. Clone the repository to this path or correct the path.";
+            return result;
+        }
+        CheckoutStatus::Ready => {}
+    }
     result.origin_repository.clone_from(&origin);
     let Some(origin) = origin else {
         result.message =
@@ -182,6 +214,7 @@ mod tests {
         let path = root.to_str().unwrap();
         let connected = check(&github, path, Some("acme/renamed"), "main").await;
         assert_eq!(connected.status, "connected");
+        assert_eq!(connected.checkout, CheckoutStatus::Ready);
         assert_eq!(connected.login.as_deref(), Some("fixture-account"));
         assert_eq!(
             check(&github, path, Some("acme/different"), "main")
@@ -226,6 +259,52 @@ mod tests {
         let connected = check(&github, path, Some("acme/renamed"), "main").await;
         assert_eq!(connected.status, "connected");
         assert_eq!(connected.login.as_deref(), Some("fixture-account"));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn connection_reports_missing_checkout_and_non_repository_path() {
+        let github = Github {
+            api: None,
+            git: None,
+        };
+        let root = temporary("connection-checkout");
+        let missing = root.join("missing");
+        let status = check(&github, missing.to_str().unwrap(), Some("acme/app"), "main").await;
+        assert_eq!(status.checkout, CheckoutStatus::Missing);
+        assert_eq!(status.status, "needs_repair");
+        assert_eq!(
+            status.message,
+            "No checkout at this path. Clone the repository to this path, then check again."
+        );
+        assert_eq!(
+            serde_json::to_value(&status).unwrap()["checkout"],
+            json!("missing")
+        );
+
+        let status = check(&github, root.to_str().unwrap(), Some("acme/app"), "main").await;
+        assert_eq!(status.checkout, CheckoutStatus::NotARepository);
+        assert_eq!(status.status, "needs_repair");
+        assert_eq!(
+            status.message,
+            "This path is not a Git repository. Clone the repository to this path or correct the path."
+        );
+
+        // An invalid identity keeps its message; the checkout field stays truthful.
+        let status = check(&github, missing.to_str().unwrap(), None, "main").await;
+        assert_eq!(status.checkout, CheckoutStatus::Missing);
+        assert_eq!(
+            status.message,
+            "Set a GitHub repository in owner/name format."
+        );
+
+        init(&root, false);
+        let status = check(&github, root.to_str().unwrap(), Some("acme/app"), "main").await;
+        assert_eq!(status.checkout, CheckoutStatus::Ready);
+        assert_eq!(
+            status.message,
+            "Open a local checkout with a GitHub origin. Correct the repository path below."
+        );
         std::fs::remove_dir_all(root).unwrap();
     }
 }

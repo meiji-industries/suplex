@@ -103,7 +103,16 @@ async fn repository_status(
     }
     let response = match result {
         Ok(result) => axum::Json(result).into_response(),
-        Err(_) => axum::Json(json!({"status":"unavailable", "message":"Repository check timed out. Try again.", "method":"device", "originRepository":null})).into_response(),
+        // The checkout was not observed; report Ready so the timeout shows no checkout repair.
+        Err(_) => axum::Json(crate::projects::connection::ConnectionStatus {
+            status: "unavailable",
+            message: "Repository check timed out. Try again.",
+            method: "device",
+            checkout: crate::projects::connection::CheckoutStatus::Ready,
+            origin_repository: None,
+            login: None,
+        })
+        .into_response(),
     };
     let mut response = with_cookies(response, cookies);
     response.headers_mut().insert(

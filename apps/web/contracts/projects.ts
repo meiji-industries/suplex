@@ -72,6 +72,7 @@ export const ProjectRepositoryStatusSchema = z.object({
   status: z.enum(["connected", "sign_in_required", "needs_repair", "unavailable"]),
   message: z.string(),
   method: z.enum(["device", "cli"]),
+  checkout: z.enum(["missing", "not_a_repository", "ready"]),
   originRepository: z.string().nullable(),
   login: z.string().nullable().optional(),
 });

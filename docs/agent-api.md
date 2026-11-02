@@ -99,10 +99,16 @@ Read responses (`GET` and `POST /api/agent/tasks`) also carry `implementation`,
 the task's pull request when the request was served, with `observation` set to
 `unavailable` and `integrated` left `false` when GitHub could not answer. Suplex
 never observes deployed runtimes, so `integration.deployed.included` is always
-`null`. `actionRequired` describes the observed owner and reason when work is
+`null`. `integration.pullRequest.codeOwnerReviewers` names the users and teams
+with an open code owner review request. `actionRequired` describes the observed owner and reason when work is
 outstanding. It does not grant command authority. `permittedCommands` is the
 authority signal. Human, Suplex, and upstream owners remain descriptive. Command replies omit these three
 fields because a command reports stored task state and reads no provider.
+
+A delivery wait with `blocker.reason` set to `review` needs a person to review
+the pull request on GitHub. `actionRequired` then reports the owner `human` and
+the reason `pending_review`. The agent has no repair to make. Suplex resumes the
+task when GitHub reports a change.
 
 `filter` selects on that observed health: `stale_delivery`,
 `conflicting_pull_request`, `failed_checks`, `pending_review`,

@@ -64,7 +64,13 @@ pub fn merge_blocker(
         Some("open") if observed.merge_state_status.as_deref() == Some("BEHIND") => {
             "The pull request is behind the base branch."
         }
-        Some("open") if review_blocks_merge(observed.review_decision.as_deref()) => {
+        Some("open")
+            if review_blocks_merge(
+                observed.review_decision.as_deref(),
+                observed.merge_state_status.as_deref(),
+                &observed.code_owner_reviewers,
+            ) =>
+        {
             "GitHub requires a review decision."
         }
         Some("open") => return None,

@@ -343,6 +343,19 @@ pub fn derive_action_required(
     if state == State::Absent {
         return None;
     }
+    if review_blocks_merge(
+        pull.review_decision.as_deref(),
+        pull.merge_state_status.as_deref(),
+        &pull.code_owner_reviewers,
+    ) {
+        return action(
+            Human,
+            ActionReason::PendingReview,
+            "The pull request waits for a review decision. Review the pull request.",
+            vec![format!("gh pr view {reference}")],
+            true,
+        );
+    }
     if pull.checks.pending > 0 {
         return action(
             Suplex,
@@ -350,15 +363,6 @@ pub fn derive_action_required(
             "CI checks are not complete on the pull request. Check the pull request after the checks finish.",
             vec![format!("gh pr checks {reference}")],
             false,
-        );
-    }
-    if review_blocks_merge(pull.review_decision.as_deref()) {
-        return action(
-            Human,
-            ActionReason::PendingReview,
-            "The pull request waits for a review decision. Review the pull request.",
-            vec![format!("gh pr view {reference}")],
-            true,
         );
     }
     action(
@@ -531,6 +535,16 @@ mod tests {
             assert_eq!(action.reason_code, ActionReason::PendingReview, "{state}");
         }
         observed.merge_state_status = Some("BLOCKED".into());
+        observed.checks.pending = 1;
+        let checks_running = derive_task_integration(&task, Some(&observed), None, "now");
+        assert_eq!(
+            derive_action_required(&task, &checks_running, None)
+                .unwrap()
+                .reason_code,
+            ActionReason::PendingReview,
+            "running checks do not hide the review a person owes"
+        );
+        observed.checks.pending = 0;
         observed.code_owner_reviewers.clear();
         let unrequested = derive_task_integration(&task, Some(&observed), None, "now");
         assert_eq!(

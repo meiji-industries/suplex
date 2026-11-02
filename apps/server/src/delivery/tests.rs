@@ -2130,6 +2130,10 @@ async fn work_the_coordinator_can_repair_is_never_parked_on_a_review() {
             json!({"mergeable": "CONFLICTING", "mergeStateStatus": "DIRTY"}),
         ),
         (
+            "conflict while GitHub requires a review",
+            json!({"reviewDecision": "REVIEW_REQUIRED", "mergeable": "CONFLICTING", "mergeStateStatus": "DIRTY"}),
+        ),
+        (
             "draft",
             json!({"reviewDecision": "REVIEW_REQUIRED", "draft": true}),
         ),
@@ -2183,6 +2187,10 @@ async fn a_review_wait_wakes_once_when_github_state_really_changes() {
         (
             "conflict",
             json!({"mergeable": "CONFLICTING", "mergeStateStatus": "DIRTY"}),
+        ),
+        (
+            "conflict while GitHub requires a review",
+            json!({"reviewDecision": "REVIEW_REQUIRED", "mergeable": "CONFLICTING", "mergeStateStatus": "DIRTY"}),
         ),
         (
             "changes requested",

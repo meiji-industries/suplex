@@ -147,13 +147,24 @@ pub struct Checks {
     pub runs: Vec<Value>,
 }
 
-/// GitHub reports `REVIEW_REQUIRED` or `CHANGES_REQUESTED` only when the repository
-/// requires reviews. A null decision means GitHub requires none, not that it is pending.
-pub fn review_blocks_merge(review_decision: Option<&str>) -> bool {
-    matches!(
-        review_decision,
-        Some("REVIEW_REQUIRED") | Some("CHANGES_REQUESTED")
-    )
+/// GitHub requires a review before it merges this pull request. A repository can
+/// require code owner review with zero required approvals: GitHub then reports a
+/// null decision and holds the merge state at `BLOCKED`, or at `UNKNOWN` while it
+/// recomputes. A null decision by itself says nothing about whether a review is
+/// necessary. After one owner approves, other requests can stay open, but the
+/// merge state leaves `BLOCKED`.
+pub fn review_blocks_merge(
+    review_decision: Option<&str>,
+    merge_state: Option<&str>,
+    code_owner_reviewers: &[String],
+) -> bool {
+    match review_decision {
+        Some("REVIEW_REQUIRED" | "CHANGES_REQUESTED") => true,
+        None => {
+            !code_owner_reviewers.is_empty() && matches!(merge_state, Some("BLOCKED" | "UNKNOWN"))
+        }
+        Some(_) => false,
+    }
 }
 
 /// TypeScript `GithubPullRequestObservation`.
@@ -438,7 +449,11 @@ struct PullRequestObservation {
     auto_merge_request: Option<serde_json::Map<String, Value>>,
     #[serde(deserialize_with = "Deserialize::deserialize")]
     review_decision: Option<String>,
-    #[serde(default, rename = "reviewRequests", deserialize_with = "code_owner_reviewers")]
+    #[serde(
+        default,
+        rename = "reviewRequests",
+        deserialize_with = "code_owner_reviewers"
+    )]
     code_owner_reviewers: Vec<String>,
     #[serde(deserialize_with = "Deserialize::deserialize")]
     author: Option<GraphAuthor>,
@@ -1701,13 +1716,23 @@ impl Github {
         let (owner, name) = repository
             .split_once('/')
             .ok_or_else(|| failure("wrong-remote", "Repository identity is invalid"))?;
-        let value = self
-            .graphql::<GraphObservation>(
-                OBSERVATION_QUERY,
-                json!({"owner": owner, "name": name, "number": number}),
-                "pull request observation",
-            )
-            .await;
+        let variables = json!({"owner": owner, "name": name, "number": number});
+        let operation = "pull request observation";
+        let value = match self
+            .graphql::<GraphObservation>(OBSERVATION_QUERY, variables.clone(), operation)
+            .await
+        {
+            // Without read:org GitHub rejects the whole query for its team fields.
+            Err(error) if error.summary.contains("required scopes") => {
+                self.graphql::<GraphObservation>(
+                    &OBSERVATION_QUERY.replace("...on Team{slug}", ""),
+                    variables,
+                    operation,
+                )
+                .await
+            }
+            value => value,
+        };
         let value = match value {
             Ok(value) => value,
             Err(error) if error.summary.to_lowercase().contains("could not resolve") => {
@@ -2757,7 +2782,10 @@ mod tests {
         ]})));
         let (github, server) = fake_api(
             vec![],
-            vec![("...on Team{slug}", rejection), ("reviewRequests", observed)],
+            vec![
+                ("...on Team{slug}", rejection),
+                ("reviewRequests", observed),
+            ],
         )
         .await;
         let observation = github

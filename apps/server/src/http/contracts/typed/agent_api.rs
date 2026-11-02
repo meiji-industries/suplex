@@ -261,6 +261,31 @@ pub struct GetTaskTool {
     pub known_revision: Option<String>,
 }
 
+/// The `GET /tasks/:taskId/turns` query.
+#[derive(Debug, Clone, Deserialize)]
+pub struct TaskTurnsQuery {
+    pub limit: u64,
+    pub cursor: Option<String>,
+}
+
+/// The `suplex_list_task_turns` arguments.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TaskTurnsTool {
+    pub task_id: String,
+    pub limit: u64,
+    pub cursor: Option<String>,
+}
+
+/// The `suplex_get_task_session_history` arguments.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TaskSessionHistoryTool {
+    pub task_id: String,
+    pub session_id: String,
+    pub before: Option<String>,
+}
+
 fn task_id() -> impl Fn(Option<&Value>) -> ContractResult<Value> + Copy {
     text(1, 100)
 }
@@ -540,6 +565,35 @@ impl Contract for GetTaskTool {
         Fields::new(input)?
             .req("taskId", task_id())
             .opt("knownRevision", text(1, 256))
+            .strict()
+    }
+}
+
+impl Contract for TaskTurnsQuery {
+    fn schema(input: Option<&Value>) -> ContractResult<Value> {
+        Fields::new(input)?
+            .or("limit", json!(50), coerced(1.0, 100.0))
+            .opt("cursor", text(1, 512))
+            .strict()
+    }
+}
+
+impl Contract for TaskTurnsTool {
+    fn schema(input: Option<&Value>) -> ContractResult<Value> {
+        Fields::new(input)?
+            .req("taskId", task_id())
+            .or("limit", json!(50), coerced(1.0, 100.0))
+            .opt("cursor", text(1, 512))
+            .strict()
+    }
+}
+
+impl Contract for TaskSessionHistoryTool {
+    fn schema(input: Option<&Value>) -> ContractResult<Value> {
+        Fields::new(input)?
+            .req("taskId", task_id())
+            .req("sessionId", text(1, MAX))
+            .opt("before", text(1, 512))
             .strict()
     }
 }

@@ -371,6 +371,41 @@ impl Bridge {
                 )
                 .await
             }
+            "suplex_list_task_turns" => {
+                let tool = super::turns_arguments(args).map_err(invalid)?;
+                let mut pairs = vec![("limit", tool.limit.to_string())];
+                pairs.extend(tool.cursor.map(|cursor| ("cursor", cursor)));
+                self.request(
+                    Method::GET,
+                    &format!(
+                        "/api/agent/tasks/{}/turns?{}",
+                        encode(&tool.task_id),
+                        query(&pairs)
+                    ),
+                    None,
+                    &[],
+                )
+                .await
+            }
+            "suplex_get_task_session_history" => {
+                let tool = super::session_history_arguments(args).map_err(invalid)?;
+                let pairs = tool
+                    .before
+                    .map(|before| vec![("before", before)])
+                    .unwrap_or_default();
+                self.request(
+                    Method::GET,
+                    &format!(
+                        "/api/agent/tasks/{}/sessions/{}/history?{}",
+                        encode(&tool.task_id),
+                        encode(&tool.session_id),
+                        query(&pairs)
+                    ),
+                    None,
+                    &[],
+                )
+                .await
+            }
             _ => Err(format!("Suplex MCP tool is unsupported: {name}")),
         }
     }

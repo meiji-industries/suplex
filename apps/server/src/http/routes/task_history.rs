@@ -4,7 +4,7 @@ use crate::http::error::ApiError;
 
 use crate::http::access::authorize;
 use crate::tasks::TaskError;
-use std::{collections::HashMap, error::Error, io, path::PathBuf};
+use std::error::Error;
 
 use axum::{
     Json, Router,
@@ -19,7 +19,6 @@ use axum::{
 use serde_json::{Value, json};
 
 use crate::{
-    coordination::root_session_store,
     http::{
         AppState,
         contracts::typed::{
@@ -29,12 +28,13 @@ use crate::{
         validation::{ValidPath, valid},
     },
     platform::database::SuplexDatabase,
-    runtimes::{task_harness::ReaderSession, task_harness_registry},
+    tasks::session_history::{
+        PAGE_SIZE, ScopedSession, native_history, ordered, page_end, session_scope,
+    },
 };
 
 use super::auth;
 
-const PAGE_SIZE: usize = 40;
 const MAX_BUFFERED_BYTES: usize = 4 * 1024 * 1024;
 
 pub fn router() -> Router<AppState> {
@@ -49,15 +49,6 @@ pub fn router() -> Router<AppState> {
         )
 }
 
-#[derive(Clone)]
-struct ScopedSession {
-    database_path: PathBuf,
-    session_id: String,
-    current: bool,
-    native_session_id: Option<String>,
-    instance_home_directory: Option<String>,
-}
-
 fn scoped_session(
     database: &SuplexDatabase,
     user_id: &str,
@@ -65,70 +56,12 @@ fn scoped_session(
     session_id: &str,
 ) -> Result<ScopedSession, Box<dyn Error + Send + Sync>> {
     crate::tasks::authorize_task(database, user_id, task_id)?;
-    let rows = root_session_store::root_observation_rows(database, task_id)?;
-    let session = rows.session(session_id).ok_or_else(TaskError::not_found)?;
-    let instance_home_directory = rows
-        .profile_of(session)
-        .instance_home_directory()
-        .map(str::to_owned);
-    Ok(ScopedSession {
-        database_path: PathBuf::from(
-            database
-                .connection()
-                .path()
-                .ok_or("Task database has no path")?,
-        ),
-        session_id: session_id.to_owned(),
-        current: session.current,
-        native_session_id: session.native_session_id.clone(),
-        instance_home_directory,
-    })
-}
-
-async fn native_history(scoped: &ScopedSession) -> io::Result<Vec<Value>> {
-    let Some(native_session_id) = scoped.native_session_id.as_deref() else {
-        return Ok(Vec::new());
-    };
-    task_harness_registry::native_session_reader(native_session_id)
-        .ok_or_else(|| io::Error::other("Native session history is not available"))?
-        .history(&ReaderSession {
-            database_path: &scoped.database_path,
-            session_id: &scoped.session_id,
-            native_session_id,
-            instance_home_directory: scoped
-                .instance_home_directory
-                .as_deref()
-                .map(std::path::Path::new),
-        })
-        .await
+    session_scope(database, task_id, session_id)
 }
 
 fn page(messages: &[Value], before: Option<&str>) -> Result<Value, TaskError> {
-    let mut ordered = Vec::new();
-    let mut slots = HashMap::new();
-    for message in messages {
-        match slots
-            .get(message["id"].as_str().unwrap_or_default())
-            .copied()
-        {
-            Some(index) => ordered[index] = message,
-            None => {
-                slots.insert(message["id"].as_str().unwrap_or_default(), ordered.len());
-                ordered.push(message);
-            }
-        }
-    }
-    let end = match before {
-        None => ordered.len(),
-        Some(before) => ordered
-            .iter()
-            .position(|message| message["id"] == before)
-            .ok_or_else(|| TaskError::Failure {
-                message: "The session history cursor is not available".into(),
-                status: 400,
-                code: "cursor_invalid",
-            })?,
-    };
+    let ordered = ordered(messages);
+    let end = page_end(&ordered, before)?;
     let start = end.saturating_sub(PAGE_SIZE);
     Ok(json!({
         "messages": &ordered[start..end],

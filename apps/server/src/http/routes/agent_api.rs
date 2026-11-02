@@ -26,7 +26,7 @@ use crate::{
     identity::external_agents::{self, Principal},
     moves,
     shared::js_json,
-    tasks::{agent_api, images::MAX_TASK_REQUEST_BYTES},
+    tasks::{agent_api, agent_transcript, agent_turns, images::MAX_TASK_REQUEST_BYTES},
 };
 
 use super::auth;
@@ -66,7 +66,12 @@ pub(crate) fn delivery(state: &AppState) -> Option<AgentDelivery> {
 
 /// `agentApiCapabilities`: the reported surface is the registered surface.
 /// Answers appear only for an agent that holds the answer grant.
-pub fn capabilities(agent_delivery: bool, answers: bool, moves_grant: bool) -> Value {
+pub fn capabilities(
+    agent_delivery: bool,
+    answers: bool,
+    moves_grant: bool,
+    transcripts_grant: bool,
+) -> Value {
     let mut autonomous = vec!["create_backlog_task", "create_queued_task", "update_task"];
     autonomous.extend(agent_api::task_commands(answers));
     if agent_delivery {
@@ -87,6 +92,9 @@ pub fn capabilities(agent_delivery: bool, answers: bool, moves_grant: bool) -> V
             "archive_move_run",
         ]);
     }
+    if transcripts_grant {
+        autonomous.push("get_task_session_history");
+    }
     let mut unavailable = Vec::new();
     if !answers {
         unavailable.push(contracts::ANSWER_HUMAN_QUESTION);
@@ -103,7 +111,7 @@ pub fn capabilities(agent_delivery: bool, answers: bool, moves_grant: bool) -> V
     json!({
         "apiVersion": "v1",
         "capabilities": {
-            "read": {"task": true, "workflows": true, "templates": true, "moves": moves_grant},
+            "read": {"task": true, "workflows": true, "templates": true, "moves": moves_grant, "transcripts": transcripts_grant},
             "create": {"backlogTask": true, "queuedTask": true, "deliveryTargets": ["local_worktree", "remote_branch", "pull_request_draft", "pull_request_ready", "merged"]},
             "taskControl": true, "delivery": agent_delivery, "merge": agent_delivery, "humanDecisions": answers,
         },
@@ -157,6 +165,14 @@ pub fn router() -> Router<AppState> {
             .route(
                 &format!("{prefix}/tasks/{{task_id}}"),
                 get(read).patch(update),
+            )
+            .route(
+                &format!("{prefix}/tasks/{{task_id}}/turns"),
+                get(task_turns),
+            )
+            .route(
+                &format!("{prefix}/tasks/{{task_id}}/sessions/{{session_id}}/history"),
+                get(task_session_history),
             )
             .route(
                 &format!("{prefix}/tasks/{{task_id}}/commands"),
@@ -583,6 +599,7 @@ async fn capabilities_route(State(state): State<AppState>, headers: HeaderMap) -
             delivery(&state).is_some(),
             principal.answer_grant.is_some(),
             principal.moves_grant,
+            principal.transcripts_grant,
         ),
     )
 }
@@ -703,6 +720,58 @@ async fn read(
         response.headers_mut().insert(header::ETAG, value);
     }
     response
+}
+
+async fn task_turns(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+    RawQuery(query): RawQuery,
+) -> Response {
+    let id = attempt!(task_id(&id, false));
+    let principal = attempt!(bearer(&state, &headers, false));
+    let query = attempt!(validated(
+        contracts::TaskTurnsQuery::parse(Some(&contracts::query_object(query.as_deref()))),
+        false
+    ));
+    respond(
+        agent_turns::read(&state, &principal, &id, &query)
+            .await
+            .and_then(|turns| Ok(serde_json::to_value(turns)?)),
+        StatusCode::OK,
+        false,
+    )
+}
+
+async fn task_session_history(
+    State(state): State<AppState>,
+    Path((task, session)): Path<(String, String)>,
+    headers: HeaderMap,
+    RawQuery(query): RawQuery,
+) -> Response {
+    let principal = attempt!(bearer(&state, &headers, true));
+    let params = attempt!(validated(
+        typed::tasks::TaskSessionParams::parse(Some(
+            &json!({"taskId": task, "sessionId": session})
+        )),
+        true
+    ));
+    let query = attempt!(validated(
+        typed::tasks::TaskHistoryQuery::parse(Some(&contracts::query_object(query.as_deref()))),
+        true
+    ));
+    respond(
+        agent_transcript::read(
+            &state,
+            &principal,
+            &params.task_id,
+            &params.session_id,
+            query.before.as_deref(),
+        )
+        .await,
+        StatusCode::OK,
+        true,
+    )
 }
 
 async fn command(

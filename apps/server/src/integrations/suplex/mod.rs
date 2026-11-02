@@ -12,7 +12,8 @@ use serde_json::{Map, Value, json};
 use crate::http::contracts::typed::{
     Contract, ContractFailure, ContractResult,
     agent_api::{
-        self, GetTaskTool, TaskCommandBody, TaskDependenciesBody, TaskTool, TaskUpdateBody,
+        self, GetTaskTool, TaskCommandBody, TaskDependenciesBody, TaskSessionHistoryTool, TaskTool,
+        TaskTurnsTool, TaskUpdateBody,
     },
 };
 use crate::moves::{MoveBody, MoveRunBody};
@@ -74,6 +75,16 @@ pub fn get_task_arguments(
 /// `{ taskId }`, strict.
 pub fn task_only_arguments(fields: &Map<String, Value>) -> Result<String, InvalidArguments> {
     arguments(agent_api::task_tool(Some(&Value::Object(fields.clone()))))
+}
+
+pub fn turns_arguments(fields: &Map<String, Value>) -> Result<TaskTurnsTool, InvalidArguments> {
+    parsed(fields)
+}
+
+pub fn session_history_arguments(
+    fields: &Map<String, Value>,
+) -> Result<TaskSessionHistoryTool, InvalidArguments> {
+    parsed(fields)
 }
 
 pub fn command_arguments(
@@ -197,7 +208,9 @@ mod tests {
                 "suplex_get_move_run",
                 "suplex_get_move_run_transcript",
                 "suplex_stop_move_run",
-                "suplex_archive_move_run"
+                "suplex_archive_move_run",
+                "suplex_list_task_turns",
+                "suplex_get_task_session_history"
             ]
         );
         let command = tool("suplex_command_task").unwrap();

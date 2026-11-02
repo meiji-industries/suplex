@@ -2747,6 +2747,28 @@ mod tests {
         );
     }
 
+    /// Reported third-party behavior: GitHub checks `read:org` for `Team` fields
+    /// and rejects the whole query, even when no team is requested.
+    #[tokio::test]
+    async fn a_token_without_read_org_still_observes_the_pull_request() {
+        let rejection = json!({"errors":[{"type":"INSUFFICIENT_SCOPES","message":"Your token has not been granted the required scopes to execute this query. The 'slug' field requires one of the following scopes: ['read:org', 'read:discussion'], but your token has only been granted the: ['repo'] scopes."}]});
+        let observed = observation_with_review_requests(Some(json!({"nodes":[
+            {"asCodeOwner":true,"requestedReviewer":{"__typename":"Team"}},
+        ]})));
+        let (github, server) = fake_api(
+            vec![],
+            vec![("...on Team{slug}", rejection), ("reviewRequests", observed)],
+        )
+        .await;
+        let observation = github
+            .observe_pull_request("owner/repo", "task", Some(7))
+            .await
+            .unwrap();
+        assert!(observation.exists);
+        assert_eq!(observation.code_owner_reviewers, [UNNAMED_CODE_OWNER]);
+        server.abort();
+    }
+
     #[test]
     fn rest_optional_metadata_preserves_absence_null_and_invalid_values() {
         let mut pull = json!({"number":3,"html_url":"https://github.com/a/b/pull/3","state":"open","draft":false,

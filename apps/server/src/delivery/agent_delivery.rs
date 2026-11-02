@@ -783,6 +783,37 @@ mod tests {
     }
 
     #[test]
+    fn merge_blocker_counts_an_open_code_owner_request() {
+        let head = "a".repeat(40);
+        let mut observed = open_pull();
+        observed.review_decision = None;
+        observed.merge_state_status = Some("BLOCKED".into());
+        assert_eq!(
+            merge_blocker(Some(&observed), None, Some(&head)),
+            None,
+            "no code owner request leaves a blocked pull request as it was"
+        );
+        observed.code_owner_reviewers = vec!["octo".into()];
+        for state in ["BLOCKED", "UNKNOWN"] {
+            observed.merge_state_status = Some(state.into());
+            assert_eq!(
+                merge_blocker(Some(&observed), None, Some(&head)).as_deref(),
+                Some("GitHub requires a review decision."),
+                "{state}"
+            );
+        }
+        observed.merge_state_status = Some("CLEAN".into());
+        assert_eq!(
+            merge_blocker(Some(&observed), None, Some(&head)),
+            None,
+            "another owner's request can stay open after an approval"
+        );
+        observed.merge_state_status = Some("BLOCKED".into());
+        observed.review_decision = Some("APPROVED".into());
+        assert_eq!(merge_blocker(Some(&observed), None, Some(&head)), None);
+    }
+
+    #[test]
     fn train_order_puts_dependencies_first() {
         let ordered = topological_order(vec![
             ("c".into(), vec!["b".into()]),

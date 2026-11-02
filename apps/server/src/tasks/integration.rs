@@ -492,6 +492,57 @@ mod tests {
     }
 
     #[test]
+    fn an_active_task_in_a_review_wait_reports_a_pending_review_for_a_person() {
+        let mut task = task(TaskStatus::Active, DeliveryTarget::Merged);
+        task.pull_request = Some(PullRequestReference {
+            repository: "o/r".into(),
+            number: 7,
+            url: "https://github.com/o/r/pull/7".into(),
+            head_sha: "abc".into(),
+            state: PullRequestState::Open,
+            merged_at: None,
+        });
+        task.workflow_state.delivery_wait = Some(crate::coordination::workflows::DeliveryWait {
+            head_sha: "abc".into(),
+            fingerprint: "{}".into(),
+            since: "now".into(),
+            reason: crate::coordination::workflows::DeliveryWaitReason::Review,
+        });
+        let mut observed = Observation {
+            exists: true,
+            number: Some(7),
+            state: Some("open".into()),
+            is_draft: Some(false),
+            head_sha: Some("abc".into()),
+            mergeable: Some("MERGEABLE".into()),
+            merge_state_status: Some("BLOCKED".into()),
+            code_owner_reviewers: vec!["octo".into(), "platform".into()],
+            ..Observation::default()
+        };
+        for state in ["BLOCKED", "UNKNOWN"] {
+            observed.merge_state_status = Some(state.into());
+            let integration = derive_task_integration(&task, Some(&observed), None, "now");
+            assert_eq!(
+                serde_json::to_value(&integration).unwrap()["pullRequest"]["codeOwnerReviewers"],
+                json!(["octo", "platform"])
+            );
+            let action = derive_action_required(&task, &integration, None).unwrap();
+            assert_eq!(action.owner, ActionOwner::Human, "{state}");
+            assert_eq!(action.reason_code, ActionReason::PendingReview, "{state}");
+        }
+        observed.merge_state_status = Some("BLOCKED".into());
+        observed.code_owner_reviewers.clear();
+        let unrequested = derive_task_integration(&task, Some(&observed), None, "now");
+        assert_eq!(
+            derive_action_required(&task, &unrequested, None)
+                .unwrap()
+                .reason_code,
+            ActionReason::WaitingHuman,
+            "no code owner request keeps today's reading"
+        );
+    }
+
+    #[test]
     fn upstream_follows_branch_source_and_base_branch() {
         let mut upstream = task(TaskStatus::Active, DeliveryTarget::Merged);
         upstream.id = "up".into();

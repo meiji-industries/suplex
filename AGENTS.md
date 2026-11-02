@@ -10,6 +10,15 @@ Suplex is a copilot: users can edit, adjust, or merge work directly. Adapt to
 current intent and external state. Delivery targets guide agent work; do not add
 target-based enforcement or mandatory evidence packets from inferred requirements.
 
+## Public repository
+
+This repository is public. Never write client or tenant information in a commit,
+pull request, issue, document, code comment, or test fixture. This includes their
+names, people, hostnames, ssh targets, repositories, pull request numbers, and
+task, project, and company IDs, and content from their tasks or transcripts. Say
+"a production host". Describe a defect by its mechanism, not by their data. Before
+you commit or open a pull request, search the text and the diff for these values.
+
 ## No mirror gates
 
 Read [the engineering principles](docs/architecture/principles.md) before adding

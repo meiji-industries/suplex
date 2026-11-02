@@ -1215,10 +1215,10 @@ mod tests {
         Report::panic(
             "host",
             false,
-            Some(("/home/ada/work/suplex/apps/server/src/tasks/mod.rs", 7, 3)),
-            Some("worker-ada"),
+            Some(("/home/zoe/work/suplex/apps/server/src/tasks/mod.rs", 7, 3)),
+            Some("worker-zoe"),
             &format!(
-                "   0: suplex::tasks::run\n             at /home/ada/work/suplex/apps/server/src/tasks/mod.rs:7:3\n   1: {secret}\n"
+                "   0: suplex::tasks::run\n             at /home/zoe/work/suplex/apps/server/src/tasks/mod.rs:7:3\n   1: {secret}\n"
             ),
         )
     }
@@ -1314,7 +1314,7 @@ mod tests {
     #[test]
     fn sent_exceptions_contain_no_message_path_or_user_content() {
         let reports: Vec<Report> = [
-            panic_report("/home/ada/secret-repo/src/lib.rs"),
+            panic_report("/home/zoe/secret-repo/src/lib.rs"),
             Report::new(
                 "host",
                 "InternalServerError",
@@ -1322,11 +1322,11 @@ mod tests {
                 true,
                 vec![],
             )
-            .attribute("http_route", "/Users/ada/Secret Repo/token=sk-live"),
+            .attribute("http_route", "/Users/zoe/Secret Repo/token=sk-live"),
         ]
         .into();
         let sent = serde_json::to_string(&exceptions::events(&test_config(), &reports)).unwrap();
-        for leak in ["ada", "secret", "Secret", "sk-live", "/home", "/Users", "@"] {
+        for leak in ["zoe", "secret", "Secret", "sk-live", "/home", "/Users", "@"] {
             assert!(!sent.contains(leak), "{leak} in {sent}");
         }
         assert!(sent.contains("apps/server/src/tasks/mod.rs"));

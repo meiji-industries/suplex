@@ -390,7 +390,7 @@ fn review_wait_problem(observed: &Observation) -> String {
         );
     }
     format!(
-        "GitHub requires a review from {}. GitHub has already notified them. {next}",
+        "GitHub reports this pull request as blocked, with open code owner review requests for {}. {next}",
         observed.code_owner_reviewers.join(", ")
     )
 }

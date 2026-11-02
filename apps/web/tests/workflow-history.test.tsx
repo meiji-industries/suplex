@@ -58,7 +58,7 @@ test("a code owner review wait parses from the server and shows its own label", 
   const root = createRoot(container);
   roots.push(root);
   await act(async () => { root.render(<WorkflowStatus task={{ ...task, workflow: "standard", workflowState: { ...task.workflowState, deliveryWait } }} />); });
-  expect(element<HTMLElement>(container, "[data-workflow-status]").textContent).toBe("Waiting for code owner review");
+  expect(element<HTMLElement>(container, "[data-workflow-status]").textContent).toBe("Review pending");
 });
 
 test("a reviewer row keeps compact facts visible while findings, verification, and Markdown expand", async () => {

@@ -2070,8 +2070,8 @@ async fn an_open_code_owner_request_parks_the_merge_without_a_merge_call() {
     for expected in [
         "octo",
         "platform",
-        "GitHub requires",
-        "notified",
+        "GitHub reports",
+        "code owner review requests",
         "End this turn",
     ] {
         assert!(problem.contains(expected), "{expected}: {problem}");

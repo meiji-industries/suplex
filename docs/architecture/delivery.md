@@ -79,8 +79,9 @@ counts an open `asCodeOwner` review request while the merge state is `BLOCKED` o
 `UNKNOWN`. A blocked pull request with a null decision and no such request reads
 as it always did.
 
-When a person's review is all that remains, the Coordinator's merge request makes
-no merge call. Suplex decides from a fresh GitHub read, stores a `review` delivery
+A token that GitHub lets bypass branch protection (`viewerCanMergeAsAdmin`) still
+requests the merge, as it did before. Otherwise, when a person's review is all that
+remains, the Coordinator's merge request makes no merge call. Suplex decides from a fresh GitHub read, stores a `review` delivery
 wait, and tells the Coordinator to end its turn. The wait stops only that merge
 attempt. A person can still merge on GitHub, archive, or cancel the task, and
 `recheck_delivery_wait` still works. The task stays `active` and keeps its project

@@ -188,6 +188,7 @@ pub struct Observation {
     pub auto_merge_enabled: Option<bool>,
     pub review_decision: Option<String>,
     pub code_owner_reviewers: Vec<String>,
+    pub viewer_can_merge_as_admin: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
 }
@@ -455,6 +456,8 @@ struct PullRequestObservation {
         deserialize_with = "code_owner_reviewers"
     )]
     code_owner_reviewers: Vec<String>,
+    #[serde(default)]
+    viewer_can_merge_as_admin: bool,
     #[serde(deserialize_with = "Deserialize::deserialize")]
     author: Option<GraphAuthor>,
     changed_files: u64,
@@ -703,6 +706,7 @@ impl PullRequestObservation {
             auto_merge_enabled: Some(self.auto_merge_request.is_some()),
             review_decision: self.review_decision,
             code_owner_reviewers: self.code_owner_reviewers,
+            viewer_can_merge_as_admin: self.viewer_can_merge_as_admin,
             title: self.title,
         })
     }
@@ -971,7 +975,7 @@ struct Diagnostic {
 const PULL_LIST_FIELDS: &str = "number url isDraft state headRefName headRefOid baseRefName baseRefOid title body author { login } updatedAt isCrossRepository";
 
 /// The `gh pr view` observation fields, with the latest commit's check rollup.
-const OBSERVATION_QUERY: &str = "query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){number url state isDraft headRefOid baseRefOid mergeable mergeStateStatus autoMergeRequest{enabledAt} reviewDecision reviewRequests(first:20){nodes{asCodeOwner requestedReviewer{__typename ...on User{login} ...on Team{slug}}}} author{login avatarUrl} changedFiles additions deletions title commits(last:1){nodes{commit{statusCheckRollup{contexts(first:100){nodes{__typename ...on StatusContext{context state targetUrl startedAt:createdAt} ...on CheckRun{name status conclusion startedAt completedAt detailsUrl checkSuite{workflowRun{workflow{name}}}}}}}}}}}}}";
+const OBSERVATION_QUERY: &str = "query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){number url state isDraft headRefOid baseRefOid mergeable mergeStateStatus autoMergeRequest{enabledAt} reviewDecision viewerCanMergeAsAdmin reviewRequests(first:20){nodes{asCodeOwner requestedReviewer{__typename ...on User{login} ...on Team{slug}}}} author{login avatarUrl} changedFiles additions deletions title commits(last:1){nodes{commit{statusCheckRollup{contexts(first:100){nodes{__typename ...on StatusContext{context state targetUrl startedAt:createdAt} ...on CheckRun{name status conclusion startedAt completedAt detailsUrl checkSuite{workflowRun{workflow{name}}}}}}}}}}}}}";
 
 struct Reply {
     status: u16,

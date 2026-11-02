@@ -206,7 +206,7 @@ async fn graphql(State(fake): State<Shared>, Json(body): Json<Value>) -> Respons
             "id": format!("PR_{number}"), "number": number, "url": format!("https://github.com/owner/repo/pull/{number}"),
             "state": gh_state(pull), "isDraft": pull["draft"], "headRefOid": pull["headSha"], "baseRefOid": pull["baseSha"],
             "baseRefName": pull["base"], "mergeable": pull.get("mergeable").cloned().unwrap_or(json!("MERGEABLE")), "mergeStateStatus": pull.get("mergeStateStatus").cloned().unwrap_or(json!("CLEAN")), "autoMergeRequest": null,
-            "reviewDecision": pull.get("reviewDecision").cloned().unwrap_or(json!("APPROVED")), "reviewRequests": pull.get("reviewRequests").cloned().unwrap_or(json!({"nodes": []})), "author": {"login": "suplex", "avatarUrl": "https://avatars.githubusercontent.com/suplex"},
+            "reviewDecision": pull.get("reviewDecision").cloned().unwrap_or(json!("APPROVED")), "reviewRequests": pull.get("reviewRequests").cloned().unwrap_or(json!({"nodes": []})), "viewerCanMergeAsAdmin": pull.get("viewerCanMergeAsAdmin").cloned().unwrap_or(json!(false)), "author": {"login": "suplex", "avatarUrl": "https://avatars.githubusercontent.com/suplex"},
             "changedFiles": 1, "additions": 1, "deletions": 0, "title": pull["title"],
             "commits": {"nodes": [{"commit": rollup}]},
         });
@@ -2059,6 +2059,18 @@ async fn request_merge(case: &WaitCase, head: &str, review: &ReviewRange) -> Val
 }
 
 #[tokio::test]
+async fn a_token_that_can_bypass_review_still_requests_the_merge() {
+    let (case, head, review) = reviewed_pull().await;
+    let mut pull = code_owner_review_open();
+    pull["viewerCanMergeAsAdmin"] = json!(true);
+    case.set_pull(pull);
+    let result = request_merge(&case, &head, &review).await;
+    assert_ne!(result["wait"]["reason"], "review", "{result}");
+    assert_eq!(case.merge_calls(), 1, "{result}");
+    case.cleanup();
+}
+
+#[tokio::test]
 async fn an_open_code_owner_request_parks_the_merge_without_a_merge_call() {
     let (case, head, review) = reviewed_pull().await;
     case.set_pull(code_owner_review_open());
@@ -2333,6 +2345,17 @@ async fn checks_and_merge_queue_waits_ignore_unknown_and_wake_on_a_real_change()
         case.assert_wakes_once(reason.as_str()).await;
         case.cleanup();
     }
+}
+
+#[tokio::test]
+async fn a_refused_merge_on_a_ready_pull_request_wakes_when_github_recomputes() {
+    use crate::coordination::workflows::DeliveryWaitReason::MergeQueue;
+    let case = open_pull().await;
+    case.set_pull(json!({"mergeable": "MERGEABLE", "mergeStateStatus": "CLEAN"}));
+    case.saved_wait(MergeQueue).await;
+    case.set_pull(recomputing());
+    case.assert_wakes_once("ready, then recomputing").await;
+    case.cleanup();
 }
 
 #[tokio::test]

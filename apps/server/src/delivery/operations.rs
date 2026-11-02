@@ -337,7 +337,9 @@ pub fn same_delivery_wait_fingerprint(stored: &str, observation: &Observation) -
 /// GitHub reports `UNKNOWN` while it recomputes mergeability, which it does when
 /// the base moves. A current `UNKNOWN` is not a delivery change. A question also
 /// ignores an `UNKNOWN` baseline. Another wait can wait for GitHub to settle, so
-/// it still wakes when an `UNKNOWN` baseline settles.
+/// it still wakes when an `UNKNOWN` baseline settles. It also wakes when a pull
+/// request that was ready to merge starts to recompute, because that is the only
+/// signal to retry a merge that GitHub refused while the base moved.
 fn delivery_wait_unchanged(wait: &DeliveryWait, observed: &Observation) -> bool {
     if same_delivery_wait_fingerprint(&wait.fingerprint, observed) {
         return true;
@@ -349,9 +351,15 @@ fn delivery_wait_unchanged(wait: &DeliveryWait, observed: &Observation) -> bool 
     let baseline_unknown = ["mergeable", "mergeState"]
         .iter()
         .any(|key| unknown(baseline.get(*key).and_then(Value::as_str)));
-    let ignore_merge_state = unknown(observed.mergeable.as_deref())
-        || unknown(observed.merge_state_status.as_deref())
-        || (wait.reason == DeliveryWaitReason::Question && baseline_unknown);
+    let question = wait.reason == DeliveryWaitReason::Question;
+    let baseline_ready = matches!(
+        baseline.get("mergeState").and_then(Value::as_str),
+        Some("CLEAN" | "UNSTABLE" | "HAS_HOOKS")
+    );
+    let recomputing =
+        unknown(observed.mergeable.as_deref()) || unknown(observed.merge_state_status.as_deref());
+    let ignore_merge_state =
+        (recomputing && (question || !baseline_ready)) || (question && baseline_unknown);
     if !ignore_merge_state {
         return false;
     }
@@ -365,10 +373,12 @@ fn delivery_wait_unchanged(wait: &DeliveryWait, observed: &Observation) -> bool 
 
 /// Only a person's review stands between this pull request and a merge. Requested
 /// changes, a failed check, a conflict, and a draft need other work, so they do
-/// not park the Coordinator. A review wait starts and ends on this same answer,
-/// so it cannot wake only to park again.
+/// not park the Coordinator. A token that can bypass branch protection can still
+/// merge. A review wait starts and ends on this same answer, so it cannot wake
+/// only to park again.
 fn only_review_remains(observed: &Observation) -> bool {
     observed.state.as_deref() == Some("open")
+        && !observed.viewer_can_merge_as_admin
         && review_blocks_merge(
             observed.review_decision.as_deref(),
             observed.merge_state_status.as_deref(),

@@ -1215,10 +1215,10 @@ mod tests {
         Report::panic(
             "host",
             false,
-            Some(("/home/ada/work/suplex/apps/server/src/tasks/mod.rs", 7, 3)),
-            Some("worker-ada"),
+            Some(("/home/zoe/work/suplex/apps/server/src/tasks/mod.rs", 7, 3)),
+            Some("worker-zoe"),
             &format!(
-                "   0: suplex::tasks::run\n             at /home/ada/work/suplex/apps/server/src/tasks/mod.rs:7:3\n   1: {secret}\n"
+                "   0: suplex::tasks::run\n             at /home/zoe/work/suplex/apps/server/src/tasks/mod.rs:7:3\n   1: {secret}\n"
             ),
         )
     }

@@ -166,7 +166,10 @@ pub fn router() -> Router<AppState> {
                 &format!("{prefix}/tasks/{{task_id}}"),
                 get(read).patch(update),
             )
-            .route(&format!("{prefix}/tasks/{{task_id}}/turns"), get(task_turns))
+            .route(
+                &format!("{prefix}/tasks/{{task_id}}/turns"),
+                get(task_turns),
+            )
             .route(
                 &format!("{prefix}/tasks/{{task_id}}/sessions/{{session_id}}/history"),
                 get(task_session_history),
@@ -748,7 +751,9 @@ async fn task_session_history(
 ) -> Response {
     let principal = attempt!(bearer(&state, &headers, true));
     let params = attempt!(validated(
-        typed::tasks::TaskSessionParams::parse(Some(&json!({"taskId": task, "sessionId": session}))),
+        typed::tasks::TaskSessionParams::parse(Some(
+            &json!({"taskId": task, "sessionId": session})
+        )),
         true
     ));
     let query = attempt!(validated(

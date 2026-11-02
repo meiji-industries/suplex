@@ -41,8 +41,8 @@ never returns a prompt or message text.
 Cost and tokens come from the native session reader, and Suplex does not store
 them for this route. A turn owns the usage whose provider reports its id. When a
 provider has its own turn ids, a turn owns the usage in its session that started
-after its prompt and before the next prompt. Usage that has no listed price reports a `null` cost
-instead of zero. When the native session cannot be read, the route still returns
+after its prompt and before the next prompt. Usage that has no listed price, or a provider that
+reports no usage, gives a `null` cost instead of zero. When the native session cannot be read, the route still returns
 the turns. `usage.observation` is `unavailable`, `usage.observationReason` names
 the failed system, and every cost, token, and `failed` field is `null`.
 Otherwise `usage.observation` is `observed`.
@@ -66,7 +66,10 @@ The first page has the newest messages, oldest first within the page. When
 page holds at most 40 messages and 60,000 bytes of serialized messages, and
 always at least one message. Suplex cuts every text, tool input, tool output,
 and tool error to 8,000 characters and ends the cut text with
-`[truncated: N characters removed]`. A bad `before` returns
+`[truncated: N characters removed]`. A very long field can stop earlier, at
+16,000 serialized bytes. When one message alone does not fit a page, its earliest
+content parts are removed and a `truncated` part says how many, and no page can
+return those parts. A bad `before` returns
 `400 cursor_invalid`. If the native session cannot be read, the route returns
 `503 native_session_unavailable` with `failedSystem: "native_session"` and
 `retryable: true`. It does not return an empty transcript.

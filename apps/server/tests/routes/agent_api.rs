@@ -2343,7 +2343,8 @@ pub(crate) mod tests {
             }
         }
         assert_eq!(seen, (0..60).map(|index| format!("msg_{index:04}")).collect::<Vec<_>>());
-        assert_eq!(agent.call(reqwest::Method::GET, &format!("{path}?before=missing"), None).await.0, 400);
+        let (status, invalid) = agent.call(reqwest::Method::GET, &format!("{path}?before=missing"), None).await;
+        assert_eq!((status, invalid["code"].as_str()), (400, Some("cursor_invalid")), "{invalid}");
 
         set_transcripts_grant(&agent, false);
         assert_eq!(agent.call(reqwest::Method::GET, &path, None).await.0, 404, "revocation applies to the next request");

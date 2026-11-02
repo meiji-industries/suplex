@@ -12,8 +12,8 @@ use serde_json::{Map, Value, json};
 use crate::http::contracts::typed::{
     Contract, ContractFailure, ContractResult,
     agent_api::{
-        self, GetTaskTool, TaskCommandBody, TaskDependenciesBody, TaskSessionHistoryTool,
-        TaskTool, TaskTurnsTool, TaskUpdateBody,
+        self, GetTaskTool, TaskCommandBody, TaskDependenciesBody, TaskSessionHistoryTool, TaskTool,
+        TaskTurnsTool, TaskUpdateBody,
     },
 };
 use crate::moves::{MoveBody, MoveRunBody};

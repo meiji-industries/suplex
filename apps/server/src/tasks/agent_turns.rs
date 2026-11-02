@@ -192,24 +192,29 @@ fn usage_by_turn<'a>(
     owned
 }
 
-/// The cost, tokens, and failure of one turn from its usage entries. A turn
-/// without entries, or with only unpriced ones, has no cost to report.
+/// The cost, tokens, and failure of one turn from its usage entries. A provider
+/// that reports no usage, such as Devin, has no cost or tokens to report, and a
+/// zero is not a measurement.
 fn turn_usage(own: &[&UsageEntry]) -> (Option<f64>, Option<AgentTurnTokens>, Option<bool>) {
     if own.is_empty() {
         return (None, None, None);
     }
     let cost: f64 = own.iter().map(|entry| entry.cost_usd).sum();
-    let wholly_unpriced = cost <= 0.0 && own.iter().any(|entry| limits::unpriced(entry));
-    let sum = |field: fn(&UsageEntry) -> f64| own.iter().map(|entry| field(entry)).sum::<f64>() as i64;
+    let sum =
+        |field: fn(&UsageEntry) -> f64| own.iter().map(|entry| field(entry)).sum::<f64>() as i64;
+    let tokens = AgentTurnTokens {
+        input: sum(|entry| entry.tokens.input),
+        output: sum(|entry| entry.tokens.output),
+        reasoning: sum(|entry| entry.tokens.reasoning),
+        cache_read: sum(|entry| entry.tokens.cache_read),
+        cache_write: sum(|entry| entry.tokens.cache_write),
+    };
+    let measured =
+        tokens.input + tokens.output + tokens.reasoning + tokens.cache_read + tokens.cache_write
+            > 0;
     (
-        (!wholly_unpriced).then_some(cost),
-        Some(AgentTurnTokens {
-            input: sum(|entry| entry.tokens.input),
-            output: sum(|entry| entry.tokens.output),
-            reasoning: sum(|entry| entry.tokens.reasoning),
-            cache_read: sum(|entry| entry.tokens.cache_read),
-            cache_write: sum(|entry| entry.tokens.cache_write),
-        }),
+        (cost > 0.0).then_some(cost),
+        measured.then_some(tokens),
         Some(own.iter().any(|entry| entry.failed)),
     )
 }
@@ -242,7 +247,7 @@ pub async fn read(
     rows.truncate(query.limit as usize);
     let (entries, estimated_cost_usd, observation, observation_reason) = match observed {
         Ok(entries) => {
-            let cost = limits::total_cost(&entries);
+            let cost = limits::total_cost(&entries).filter(|cost| *cost > 0.0);
             (entries, cost, UsageObservation::Observed, None)
         }
         Err(_) => (
@@ -252,9 +257,7 @@ pub async fn read(
             Some(NATIVE_SESSION_UNAVAILABLE.to_owned()),
         ),
     };
-    let next_cursor = has_more
-        .then(|| rows.last().map(encode_cursor))
-        .flatten();
+    let next_cursor = has_more.then(|| rows.last().map(encode_cursor)).flatten();
     let usage = usage_by_turn(&entries, &prompted);
     let turns = rows
         .into_iter()
@@ -299,7 +302,11 @@ mod tests {
         }
     }
 
-    fn usage(native_session_id: &str, turn_id: &str, started_at_ms: i64) -> (String, String, UsageEntry) {
+    fn usage(
+        native_session_id: &str,
+        turn_id: &str,
+        started_at_ms: i64,
+    ) -> (String, String, UsageEntry) {
         (
             native_session_id.to_owned(),
             "root".to_owned(),
@@ -341,8 +348,16 @@ mod tests {
         let count = |id: &str| owned.get(id).map_or(0, Vec::len);
         assert_eq!(count("turn_a1"), 2);
         assert_eq!(count("turn_a2"), 1);
-        assert_eq!(count("turn_b1"), 1, "another session's later prompt does not take this usage");
-        assert_eq!(owned.values().map(Vec::len).sum::<usize>(), 4, "usage before any prompt has no turn");
+        assert_eq!(
+            count("turn_b1"),
+            1,
+            "another session's later prompt does not take this usage"
+        );
+        assert_eq!(
+            owned.values().map(Vec::len).sum::<usize>(),
+            4,
+            "usage before any prompt has no turn"
+        );
     }
 
     #[test]
@@ -352,5 +367,17 @@ mod tests {
         let owned = usage_by_turn(&entries, &prompted);
         assert_eq!(owned["turn_1"].len(), 1);
         assert_eq!(owned["turn_2"].len(), 1);
+    }
+
+    #[test]
+    fn a_turn_without_measured_usage_reports_nothing_instead_of_zero() {
+        let entries = [usage("native", "turn_1", 0)];
+        let unmeasured = UsageEntry {
+            cost_usd: 0.0,
+            ..entries[0].2.clone()
+        };
+        let (cost, tokens, failed) = turn_usage(&[&unmeasured]);
+        assert_eq!((cost, tokens), (None, None));
+        assert_eq!(failed, Some(false));
     }
 }

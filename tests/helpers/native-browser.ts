@@ -96,7 +96,7 @@ export async function nativeFixture(host = "127.0.0.1", reachableAddress?: strin
     // Another parallel fixture can take a probed free port before this server binds.
     for (let attempt = 1; !stopRust; attempt++) {
       try { stopRust = await startRustServer(directory, port, options); }
-      catch (error) { if (reachableAddress || attempt === 3 || !String(error).includes("AddrInUse")) throw error; port = await loopbackPort(); }
+      catch (error) { if (reachableAddress || attempt === 3 || !/AddrInUse|Address already in use/.test(String(error))) throw error; port = await loopbackPort(); }
     }
     const base = `http://127.0.0.1:${port}`;
     const signIn = await fetch(`${base}/api/auth/me`);

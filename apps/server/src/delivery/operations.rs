@@ -36,7 +36,7 @@ use crate::{
         bitbucket::ReleasePort,
         github_delivery::{
             self, ActionsRunStatus, Github, GithubFailure, MergeDisposition, MergeResult,
-            Observation, PullRequest,
+            Observation, PullRequest, review_blocks_merge,
         },
         github_triggers_dispatches::{self, DeliveryPolicy},
         github_triggers_inspection::{self, PullRequestInspection},
@@ -332,6 +332,77 @@ pub fn same_delivery_wait_fingerprint(stored: &str, observation: &Observation) -
     }
     legacy.insert("checks".into(), json!(["pending"]));
     crate::shared::js_json::stringify(&Value::Object(legacy)) == current
+}
+
+/// GitHub reports `UNKNOWN` while it recomputes mergeability, which it does when
+/// the base moves. A current `UNKNOWN` is not a delivery change. A question also
+/// ignores an `UNKNOWN` baseline. Another wait can wait for GitHub to settle, so
+/// it still wakes when an `UNKNOWN` baseline settles. It also wakes when a pull
+/// request that was ready to merge starts to recompute, because that is the only
+/// signal to retry a merge that GitHub refused while the base moved.
+fn delivery_wait_unchanged(wait: &DeliveryWait, observed: &Observation) -> bool {
+    if same_delivery_wait_fingerprint(&wait.fingerprint, observed) {
+        return true;
+    }
+    let Ok(Value::Object(mut baseline)) = serde_json::from_str::<Value>(&wait.fingerprint) else {
+        return false;
+    };
+    let unknown = |value: Option<&str>| value == Some("UNKNOWN");
+    let baseline_unknown = ["mergeable", "mergeState"]
+        .iter()
+        .any(|key| unknown(baseline.get(*key).and_then(Value::as_str)));
+    let question = wait.reason == DeliveryWaitReason::Question;
+    let baseline_ready = matches!(
+        baseline.get("mergeState").and_then(Value::as_str),
+        Some("CLEAN" | "UNSTABLE" | "HAS_HOOKS")
+    );
+    let recomputing =
+        unknown(observed.mergeable.as_deref()) || unknown(observed.merge_state_status.as_deref());
+    let ignore_merge_state =
+        (recomputing && (question || !baseline_ready)) || (question && baseline_unknown);
+    if !ignore_merge_state {
+        return false;
+    }
+    baseline.insert("mergeable".into(), json!(observed.mergeable));
+    baseline.insert("mergeState".into(), json!(observed.merge_state_status));
+    same_delivery_wait_fingerprint(
+        &crate::shared::js_json::stringify(&Value::Object(baseline)),
+        observed,
+    )
+}
+
+/// Only a person's review stands between this pull request and a merge. Requested
+/// changes, a failed check, a conflict, and a draft need other work, so they do
+/// not park the Coordinator. A token that can bypass branch protection can still
+/// merge. A review wait starts and ends on this same answer, so it cannot wake
+/// only to park again.
+fn only_review_remains(observed: &Observation) -> bool {
+    observed.state.as_deref() == Some("open")
+        && !observed.viewer_can_merge_as_admin
+        && review_blocks_merge(
+            observed.review_decision.as_deref(),
+            observed.merge_state_status.as_deref(),
+            &observed.code_owner_reviewers,
+        )
+        && observed.review_decision.as_deref() != Some("CHANGES_REQUESTED")
+        && observed.is_draft != Some(true)
+        && observed.checks.failing == 0
+        && observed.mergeable.as_deref() != Some("CONFLICTING")
+        && observed.merge_state_status.as_deref() != Some("DIRTY")
+}
+
+fn review_wait_problem(observed: &Observation) -> String {
+    let next =
+        "Suplex wakes you when the pull request changes. End this turn and do not ask a person.";
+    if observed.code_owner_reviewers.is_empty() {
+        return format!(
+            "GitHub requires an approving review before it merges this pull request. {next}"
+        );
+    }
+    format!(
+        "GitHub reports this pull request as blocked, with open code owner review requests for {}. {next}",
+        observed.code_owner_reviewers.join(", ")
+    )
 }
 
 fn select_discovered_pull(
@@ -848,7 +919,13 @@ impl DeliveryOperations {
                 "GitHub evidence is available again (the head of {branch}). Retry the delivery operation with your current review; no source change is needed."
             )
         } else {
-            if observed.exists && same_delivery_wait_fingerprint(&wait.fingerprint, &observed) {
+            let unchanged = if wait.reason == DeliveryWaitReason::Review {
+                only_review_remains(&observed)
+                    && observed.head_sha.as_deref() == Some(wait.head_sha.as_str())
+            } else {
+                observed.exists && delivery_wait_unchanged(&wait, &observed)
+            };
+            if unchanged {
                 return Ok("unchanged");
             }
             if question {
@@ -2553,6 +2630,13 @@ impl DeliveryOperations {
             return Ok(wait);
         }
         self.recheck_before_merge(control, actual, recheck).await?;
+        if only_review_remains(&observed) {
+            let wait =
+                self.wait_for_merge(task_id, &head, &observed, DeliveryWaitReason::Review)?;
+            return Ok(
+                json!({"kind": "waiting", "problems": [review_wait_problem(&observed)], "wait": wait, "next": DELIVERY_WAIT_NEXT}),
+            );
+        }
         let requested = observed.number.unwrap_or(0);
         if let Some(wait) = self
             .request_merge(
@@ -3361,5 +3445,37 @@ pub(crate) mod tests {
         observed.checks.runs =
             vec![json!({"name":"unit","status":"failing","conclusion":"FAILURE"})];
         assert!(!same_delivery_wait_fingerprint(&stored, &observed));
+    }
+
+    #[test]
+    fn delivery_wait_unchanged_ignores_unknown_for_the_legacy_form() {
+        let mut observed = Observation {
+            exists: true,
+            number: Some(7),
+            head_sha: Some("a".repeat(40)),
+            state: Some("open".into()),
+            mergeable: Some("UNKNOWN".into()),
+            merge_state_status: Some("UNKNOWN".into()),
+            ..Observation::default()
+        };
+        observed.checks.pending = 1;
+        observed.checks.total = 1;
+        let mut wait = DeliveryWait {
+            head_sha: "a".repeat(40),
+            fingerprint: format!(
+                r#"{{"number":7,"head":"{}","draft":null,"review":null,"mergeable":"MERGEABLE","mergeState":"BLOCKED","state":"open","checks":["unit:pending:"]}}"#,
+                "a".repeat(40)
+            ),
+            since: "2026-09-25T00:00:00.000Z".into(),
+            reason: DeliveryWaitReason::MergeQueue,
+        };
+        assert!(delivery_wait_unchanged(&wait, &observed));
+        observed.head_sha = Some("b".repeat(40));
+        assert!(
+            !delivery_wait_unchanged(&wait, &observed),
+            "a new head is a change during UNKNOWN"
+        );
+        wait.fingerprint = "observation:the base".into();
+        assert!(!delivery_wait_unchanged(&wait, &observed));
     }
 }

@@ -69,6 +69,40 @@ provider failures return to Coordinator; an uncertain write must be observed
 before retrying. After requesting a rerun, Coordinator uses `observe_checks`
 and the existing delivery wait.
 
+## Code owner review waits
+
+A repository can require code owner review with zero required approvals. GitHub
+then reports `reviewDecision: null` while `mergeStateStatus` is `BLOCKED`, so the
+decision alone cannot show whether a review is necessary. `review_blocks_merge`
+gives the one answer for delivery, the agent API, and `actionRequired`. It also
+counts an open `asCodeOwner` review request while the merge state is `BLOCKED` or
+`UNKNOWN`. A blocked pull request with a null decision and no such request reads
+as it always did.
+
+A token that GitHub lets bypass branch protection (`viewerCanMergeAsAdmin`) still
+requests the merge, as it did before. Otherwise, when a person's review is all that
+remains, the Coordinator's merge request makes no merge call. Suplex decides from a fresh GitHub read, stores a `review` delivery
+wait, and tells the Coordinator to end its turn. The wait stops only that merge
+attempt. A person can still merge on GitHub, archive, or cancel the task, and
+`recheck_delivery_wait` still works. The task stays `active` and keeps its project
+slot. The wait is durable intent, so a restart keeps it.
+
+A `review` wait reads GitHub on each sweep and compares no fingerprint. It holds
+while the pull request is open at the same head and only a review blocks it. A
+new head, an approval, requested changes, a failed check, a conflict, or a closed
+pull request wakes the Coordinator once. An external merge finishes the task.
+
+GitHub reports `UNKNOWN` in `mergeable` and `mergeStateStatus` while it recomputes,
+which it does when the base moves. For every other wait, a current `UNKNOWN` is
+not a change. An open question also ignores an `UNKNOWN` baseline, so a person's
+pending answer survives the recompute. Another wait with an `UNKNOWN` baseline
+still wakes when GitHub settles, because it can wait for exactly that.
+
+GitHub can reject the whole observation query when a classic token without
+`read:org` selects team fields. Suplex then repeats the query without them, and
+each team reviewer reads as `a code owner`. A host with that token sends a second
+GraphQL request on each observation.
+
 ## Observation failures
 
 A failed GitHub read does not erase local task intent or prove that a remote

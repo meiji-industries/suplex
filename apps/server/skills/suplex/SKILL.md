@@ -326,9 +326,11 @@ returns `422` with `field`, `value`, and `reason`, and keeps the revision.
   Read `humanQuestion` and `blocker`. If `blocker.kind` is `"human_question"`,
   relay the question to the person you work for. You cannot answer it.
 - **`blocker.kind: "delivery_wait"`**: Suplex is waiting on delivery.
-  `blocker.reason` is `checks`, `mergeability`, `merge_queue`, or
-  `observation`. `recheck_delivery_wait` asks Suplex to look again; it is safe
-  and does not commit anything.
+  `blocker.reason` is `checks`, `mergeability`, `merge_queue`, `observation`, or
+  `review`. `recheck_delivery_wait` asks Suplex to look again; it is safe
+  and does not commit anything. `review` needs a person to review the pull
+  request on GitHub. It is not for you to fix. Tell the person you work for if
+  they ask; `integration.pullRequest.codeOwnerReviewers` names the reviewers.
 - **`actionRequired`**: the authoritative read of who must act next. `owner`
   is `agent`, `human`, `suplex`, or `upstream`. Act only when `owner` is
   `agent`, and even then stop and ask first if `humanApprovalRequired` is

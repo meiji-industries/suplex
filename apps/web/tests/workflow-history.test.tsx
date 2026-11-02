@@ -6,7 +6,8 @@ import { afterEach, expect, test } from "vitest";
 import type { Task } from "../contracts/tasks.js";
 import type { ReviewRecord } from "../contracts/generated/ReviewRecord.js";
 import type { TaskActivity } from "../features/tasks/task-work.js";
-import { WorkflowHistory } from "../features/tasks/workflow-history.js";
+import { DeliveryWaitSchema } from "../contracts/workflows.js";
+import { WorkflowHistory, WorkflowStatus } from "../features/tasks/workflow-history.js";
 
 const recordedAt = "2026-09-08T12:00:00.000Z";
 const profile = { profileId: "profile", provider: "codex", model: "model", reasoningLevel: "medium", serviceTier: "default" } as const;
@@ -48,6 +49,16 @@ async function click(button: HTMLButtonElement) {
 afterEach(async () => {
   await act(async () => { roots.splice(0).forEach(root => root.unmount()); });
   document.body.replaceChildren();
+});
+
+test("a code owner review wait parses from the server and shows its own label", async () => {
+  const deliveryWait = DeliveryWaitSchema.parse({ headSha: "b".repeat(40), fingerprint: "{}", since: recordedAt, reason: "review" });
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  roots.push(root);
+  await act(async () => { root.render(<WorkflowStatus task={{ ...task, workflow: "standard", workflowState: { ...task.workflowState, deliveryWait } }} />); });
+  expect(element<HTMLElement>(container, "[data-workflow-status]").textContent).toBe("Review pending");
 });
 
 test("a reviewer row keeps compact facts visible while findings, verification, and Markdown expand", async () => {

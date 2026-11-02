@@ -37,6 +37,7 @@ struct Fake {
     origin: PathBuf,
     pulls: Vec<Value>,
     merge_refusal: bool,
+    merge_calls: usize,
     rules_forbidden: bool,
     workflow_run: Value,
     rerun_calls: usize,
@@ -134,6 +135,7 @@ async fn merge_pull(
     Json(body): Json<Value>,
 ) -> Response {
     let mut fake = fake.lock().unwrap();
+    fake.merge_calls += 1;
     if fake.merge_refusal {
         return (StatusCode::METHOD_NOT_ALLOWED, Json(json!({"message": "Pull Request is not mergeable", "documentation_url": "https://docs.github.com/rest", "status": "405"}))).into_response();
     }
@@ -204,7 +206,7 @@ async fn graphql(State(fake): State<Shared>, Json(body): Json<Value>) -> Respons
             "id": format!("PR_{number}"), "number": number, "url": format!("https://github.com/owner/repo/pull/{number}"),
             "state": gh_state(pull), "isDraft": pull["draft"], "headRefOid": pull["headSha"], "baseRefOid": pull["baseSha"],
             "baseRefName": pull["base"], "mergeable": pull.get("mergeable").cloned().unwrap_or(json!("MERGEABLE")), "mergeStateStatus": pull.get("mergeStateStatus").cloned().unwrap_or(json!("CLEAN")), "autoMergeRequest": null,
-            "reviewDecision": pull.get("reviewDecision").cloned().unwrap_or(json!("APPROVED")), "author": {"login": "suplex", "avatarUrl": "https://avatars.githubusercontent.com/suplex"},
+            "reviewDecision": pull.get("reviewDecision").cloned().unwrap_or(json!("APPROVED")), "reviewRequests": pull.get("reviewRequests").cloned().unwrap_or(json!({"nodes": []})), "viewerCanMergeAsAdmin": pull.get("viewerCanMergeAsAdmin").cloned().unwrap_or(json!(false)), "author": {"login": "suplex", "avatarUrl": "https://avatars.githubusercontent.com/suplex"},
             "changedFiles": 1, "additions": 1, "deletions": 0, "title": pull["title"],
             "commits": {"nodes": [{"commit": rollup}]},
         });
@@ -1442,7 +1444,7 @@ async fn paired_agent_delivery_keeps_authority_dependencies_receipts_and_provena
 
 const QUESTION: &str = "The Migrations check was cancelled. How do you want a valid result?";
 
-struct QuestionCase {
+struct WaitCase {
     fixture: Fixture,
     api: String,
     operations: DeliveryOperations,
@@ -1459,14 +1461,13 @@ fn delivery_operations(fixture: &Fixture, api: &str) -> DeliveryOperations {
     )
 }
 
-/// A merge-target task whose open pull request has a failing check, and a
-/// delivery question the host asked about it.
-async fn delivery_question() -> QuestionCase {
+/// A merge-target task with an open pull request at its worktree head.
+async fn open_pull() -> WaitCase {
     let fixture = fixture("merged");
     let (api, fake) = fake_github(fixture.origin.clone()).await;
     let operations = delivery_operations(&fixture, &api);
     let head = control(&fixture).worktree.unwrap().head_sha;
-    fake.lock().unwrap().pulls.push(json!({"number":1,"state":"open","draft":false,"mergedAt":null,"head":"task-merged","headSha":head,"base":"main","baseSha":"b".repeat(40),"title":"Add line","body":BODY,"checkConclusion":"FAILURE"}));
+    fake.lock().unwrap().pulls.push(json!({"number":1,"state":"open","draft":false,"mergedAt":null,"head":"task-merged","headSha":head,"base":"main","baseSha":"b".repeat(40),"title":"Add line","body":BODY}));
     operations
         .set_pull_request(
             &fixture.task_id,
@@ -1481,18 +1482,7 @@ async fn delivery_question() -> QuestionCase {
             true,
         )
         .unwrap();
-    let mut database = SuplexDatabase::open(&fixture.database_path, OpenMode::ReadWrite).unwrap();
-    assert!(
-        root_session_store::ask_human(
-            &mut database,
-            &fixture.task_id,
-            QUESTION,
-            &json!([]),
-            Utc::now()
-        )
-        .unwrap()
-    );
-    QuestionCase {
+    WaitCase {
         fixture,
         api,
         operations,
@@ -1500,7 +1490,99 @@ async fn delivery_question() -> QuestionCase {
     }
 }
 
-impl QuestionCase {
+/// An open pull request with a failing check, and a delivery question the host
+/// asked about it.
+async fn delivery_question() -> WaitCase {
+    let case = open_pull().await;
+    case.fake.lock().unwrap().pulls[0]["checkConclusion"] = json!("FAILURE");
+    let mut database =
+        SuplexDatabase::open(&case.fixture.database_path, OpenMode::ReadWrite).unwrap();
+    assert!(
+        root_session_store::ask_human(
+            &mut database,
+            &case.fixture.task_id,
+            QUESTION,
+            &json!([]),
+            Utc::now()
+        )
+        .unwrap()
+    );
+    case
+}
+
+/// The state a repository with code owners and no required approvals reports
+/// before a code owner reviews.
+fn code_owner_review_open() -> Value {
+    json!({"draft": false, "reviewDecision": null, "mergeable": "MERGEABLE", "mergeStateStatus": "BLOCKED", "reviewRequests": {"nodes": [
+        {"asCodeOwner": true, "requestedReviewer": {"__typename": "User", "login": "octo"}},
+        {"asCodeOwner": true, "requestedReviewer": {"__typename": "Team", "slug": "platform"}},
+        {"asCodeOwner": false, "requestedReviewer": {"__typename": "User", "login": "bystander"}},
+    ]}})
+}
+
+fn recomputing() -> Value {
+    json!({"mergeable": "UNKNOWN", "mergeStateStatus": "UNKNOWN"})
+}
+
+impl WaitCase {
+    fn set_pull(&self, fields: Value) {
+        let mut fake = self.fake.lock().unwrap();
+        for (key, value) in fields.as_object().unwrap() {
+            fake.pulls[0][key] = value.clone();
+        }
+    }
+
+    /// Save a wait with the fingerprint of the current observation, as a host
+    /// that stopped during the wait left it.
+    async fn saved_wait(&self, reason: crate::coordination::workflows::DeliveryWaitReason) {
+        let observed = self
+            .operations
+            .checks_observation(&self.fixture.task_id)
+            .await
+            .unwrap()
+            .unwrap();
+        let wait = crate::coordination::workflows::DeliveryWait {
+            head_sha: observed.head_sha.clone().unwrap(),
+            fingerprint: super::operations::delivery_wait_fingerprint(&observed),
+            since: "2026-09-25T00:00:00.000Z".into(),
+            reason,
+        };
+        SuplexDatabase::open(&self.fixture.database_path, OpenMode::ReadWrite)
+            .unwrap()
+            .connection()
+            .execute(
+                "UPDATE suplex_task_controls SET workflow_state_json = json_set(workflow_state_json, '$.deliveryWait', json(?1)) WHERE task_id = ?2",
+                rusqlite::params![serde_json::to_string(&wait).unwrap(), self.fixture.task_id],
+            )
+            .unwrap();
+    }
+
+    async fn observe_wait(&self) -> &'static str {
+        self.operations
+            .observe_delivery_wait(&self.fixture.task_id)
+            .await
+            .unwrap()
+    }
+
+    fn merge_calls(&self) -> usize {
+        self.fake.lock().unwrap().merge_calls
+    }
+
+    /// The wait wakes Coordinator exactly once and is consumed.
+    async fn assert_wakes_once(&self, change: &str) {
+        assert_eq!(self.observe_wait().await, "changed", "{change}");
+        let prompts = self.root_prompts();
+        assert_eq!(prompts.len(), 1, "{change}: one Coordinator wake");
+        assert!(
+            prompts[0].starts_with("Delivery state changed while Suplex waited"),
+            "{change}: {}",
+            prompts[0]
+        );
+        assert_eq!(self.wait(), None, "{change}");
+        assert_eq!(self.observe_wait().await, "none", "{change}");
+        assert_eq!(self.root_prompts().len(), 1, "{change}: consumed once");
+    }
+
     async fn sweep(&self) {
         self.operations
             .observe_host_task(&self.fixture.task_id)
@@ -1919,4 +2001,371 @@ async fn ci_rerun_uses_live_pull_and_run_not_local_receipts() {
     assert_eq!(fake.lock().unwrap().rerun_calls, before + 1);
     drop(db);
     std::fs::remove_dir_all(&fixture.base).unwrap();
+}
+
+/// A pull request the Coordinator reviewed and opened, ready for a merge request.
+async fn reviewed_pull() -> (WaitCase, String, ReviewRange) {
+    let fixture = fixture("merged");
+    let (api, fake) = fake_github(fixture.origin.clone()).await;
+    let operations = delivery_operations(&fixture, &api);
+    let (head, review) = reviewed(&operations, &fixture.root).await;
+    for operation in [
+        DeliveryOperation::PushBranch,
+        DeliveryOperation::CreateOrAdoptPullRequest,
+    ] {
+        operations
+            .execute(
+                &fixture.root,
+                None,
+                &DeliveryRequest {
+                    operation,
+                    expected_head: Some(&head),
+                    review: Some(&review),
+                    pull_request_title: Some("Add line"),
+                    pull_request_body: Some(BODY),
+                },
+            )
+            .await
+            .unwrap();
+    }
+    fake.lock().unwrap().pulls[0]["draft"] = json!(false);
+    (
+        WaitCase {
+            fixture,
+            api,
+            operations,
+            fake,
+        },
+        head,
+        review,
+    )
+}
+
+async fn request_merge(case: &WaitCase, head: &str, review: &ReviewRange) -> Value {
+    case.operations
+        .execute(
+            &case.fixture.root,
+            None,
+            &DeliveryRequest {
+                operation: DeliveryOperation::MergePullRequest,
+                expected_head: Some(head),
+                review: Some(review),
+                pull_request_title: None,
+                pull_request_body: None,
+            },
+        )
+        .await
+        .unwrap()
+}
+
+#[tokio::test]
+async fn a_token_that_can_bypass_review_still_requests_the_merge() {
+    let (case, head, review) = reviewed_pull().await;
+    let mut pull = code_owner_review_open();
+    pull["viewerCanMergeAsAdmin"] = json!(true);
+    case.set_pull(pull);
+    let result = request_merge(&case, &head, &review).await;
+    assert_ne!(result["wait"]["reason"], "review", "{result}");
+    assert_eq!(case.merge_calls(), 1, "{result}");
+    case.cleanup();
+}
+
+#[tokio::test]
+async fn an_open_code_owner_request_parks_the_merge_without_a_merge_call() {
+    let (case, head, review) = reviewed_pull().await;
+    case.set_pull(code_owner_review_open());
+    let parked = request_merge(&case, &head, &review).await;
+    assert_eq!(parked["kind"], "waiting", "{parked}");
+    assert_eq!(parked["wait"]["reason"], "review", "{parked}");
+    assert_eq!(parked["next"], super::operations::DELIVERY_WAIT_NEXT);
+    let problem = parked["problems"][0].as_str().unwrap();
+    for expected in [
+        "octo",
+        "platform",
+        "GitHub reports",
+        "code owner review requests",
+        "End this turn",
+    ] {
+        assert!(problem.contains(expected), "{expected}: {problem}");
+    }
+    assert!(!problem.contains("bystander"), "{problem}");
+    assert_eq!(case.merge_calls(), 0, "GitHub receives no merge call");
+    let control = control(&case.fixture);
+    assert_eq!(control.status, crate::tasks::control::TaskStatus::Active);
+    assert_eq!(control.human_question, None, "no person is asked");
+    assert_eq!(
+        serde_json::json!(control.workflow_state)["deliveryWait"]["reason"],
+        "review"
+    );
+    assert!(case.root_prompts().is_empty());
+    case.cleanup();
+}
+
+#[tokio::test]
+async fn a_required_review_with_no_named_reviewer_parks_without_claiming_a_notification() {
+    let (case, head, review) = reviewed_pull().await;
+    case.set_pull(json!({"reviewDecision": "REVIEW_REQUIRED", "mergeable": "MERGEABLE", "mergeStateStatus": "BLOCKED"}));
+    let parked = request_merge(&case, &head, &review).await;
+    assert_eq!(parked["wait"]["reason"], "review", "{parked}");
+    assert!(
+        !parked["problems"][0].as_str().unwrap().contains("notified"),
+        "{parked}"
+    );
+    assert_eq!(case.merge_calls(), 0);
+    case.cleanup();
+}
+
+#[tokio::test]
+async fn a_blocked_pull_request_with_no_code_owner_request_keeps_its_merge_request() {
+    let (case, head, review) = reviewed_pull().await;
+    case.set_pull(
+        json!({"reviewDecision": null, "mergeable": "MERGEABLE", "mergeStateStatus": "BLOCKED"}),
+    );
+    case.fake.lock().unwrap().merge_refusal = true;
+    let requested = request_merge(&case, &head, &review).await;
+    assert_eq!(requested["kind"], "merge_requested", "{requested}");
+    assert_eq!(requested["wait"]["reason"], "merge_queue", "{requested}");
+    assert_eq!(case.merge_calls(), 1);
+    case.cleanup();
+}
+
+#[tokio::test]
+async fn work_the_coordinator_can_repair_is_never_parked_on_a_review() {
+    for (repair, fields) in [
+        (
+            "changes requested",
+            json!({"reviewDecision": "CHANGES_REQUESTED"}),
+        ),
+        ("failed check", json!({"checkConclusion": "FAILURE"})),
+        (
+            "conflict",
+            json!({"mergeable": "CONFLICTING", "mergeStateStatus": "DIRTY"}),
+        ),
+        (
+            "conflict while GitHub requires a review",
+            json!({"reviewDecision": "REVIEW_REQUIRED", "mergeable": "CONFLICTING", "mergeStateStatus": "DIRTY"}),
+        ),
+        (
+            "draft",
+            json!({"reviewDecision": "REVIEW_REQUIRED", "draft": true}),
+        ),
+    ] {
+        let (case, head, review) = reviewed_pull().await;
+        case.set_pull(code_owner_review_open());
+        case.set_pull(fields);
+        case.fake.lock().unwrap().merge_refusal = true;
+        let requested = request_merge(&case, &head, &review).await;
+        assert_eq!(
+            requested["wait"]["reason"], "merge_queue",
+            "{repair}: {requested}"
+        );
+        assert_eq!(case.merge_calls(), 1, "{repair}");
+        case.cleanup();
+    }
+}
+
+#[tokio::test]
+async fn a_review_wait_stays_parked_while_github_recomputes_the_merge_state() {
+    use crate::coordination::workflows::DeliveryWaitReason::Review;
+    let case = open_pull().await;
+    case.set_pull(code_owner_review_open());
+    case.saved_wait(Review).await;
+    let saved = case.wait();
+    assert_eq!(case.observe_wait().await, "unchanged", "state unchanged");
+    case.set_pull(recomputing());
+    assert_eq!(case.observe_wait().await, "unchanged", "flipped to UNKNOWN");
+    case.set_pull(json!({"baseSha": "e".repeat(40)}));
+    case.sweep().await;
+    case.set_pull(json!({"mergeable": "MERGEABLE", "mergeStateStatus": "BLOCKED"}));
+    assert_eq!(case.observe_wait().await, "unchanged", "settled again");
+    assert_eq!(case.wait(), saved, "the wait survives every observation");
+    assert!(case.root_prompts().is_empty(), "no turn queued");
+    case.cleanup();
+}
+
+#[tokio::test]
+async fn a_review_wait_wakes_once_when_github_state_really_changes() {
+    use crate::coordination::workflows::DeliveryWaitReason::Review;
+    for (change, fields) in [
+        (
+            "approval with another owner request open",
+            json!({"mergeStateStatus": "CLEAN"}),
+        ),
+        (
+            "last request answered",
+            json!({"reviewRequests": {"nodes": []}}),
+        ),
+        ("new head", json!({"headSha": "d".repeat(40)})),
+        (
+            "conflict",
+            json!({"mergeable": "CONFLICTING", "mergeStateStatus": "DIRTY"}),
+        ),
+        (
+            "conflict while GitHub requires a review",
+            json!({"reviewDecision": "REVIEW_REQUIRED", "mergeable": "CONFLICTING", "mergeStateStatus": "DIRTY"}),
+        ),
+        (
+            "changes requested",
+            json!({"reviewDecision": "CHANGES_REQUESTED"}),
+        ),
+        ("failed check", json!({"checkConclusion": "FAILURE"})),
+        ("closed", json!({"state": "closed"})),
+    ] {
+        let case = open_pull().await;
+        case.set_pull(code_owner_review_open());
+        case.saved_wait(Review).await;
+        case.set_pull(fields);
+        case.assert_wakes_once(change).await;
+        case.cleanup();
+    }
+}
+
+#[tokio::test]
+async fn an_external_merge_during_a_review_wait_finishes_the_task() {
+    use crate::coordination::workflows::DeliveryWaitReason::Review;
+    let case = open_pull().await;
+    case.set_pull(code_owner_review_open());
+    case.saved_wait(Review).await;
+    case.set_pull(json!({"state": "closed", "mergedAt": "2026-09-25T02:00:00Z"}));
+    assert_eq!(case.observe_wait().await, "finished");
+    let finished = control(&case.fixture);
+    assert_eq!(
+        finished.status,
+        crate::tasks::control::TaskStatus::Delivered
+    );
+    assert_eq!(finished.workflow_state.delivery_wait, None);
+    assert!(case.root_prompts().is_empty());
+    assert_eq!(case.merge_calls(), 0);
+    case.cleanup();
+}
+
+#[tokio::test]
+async fn cancelling_a_task_ends_its_review_wait() {
+    use crate::coordination::workflows::DeliveryWaitReason::Review;
+    let case = open_pull().await;
+    case.set_pull(code_owner_review_open());
+    case.saved_wait(Review).await;
+    let mut database =
+        SuplexDatabase::open(&case.fixture.database_path, OpenMode::ReadWrite).unwrap();
+    assert!(
+        root_session_store::cancel_task(&mut database, &case.fixture.task_id, Utc::now()).unwrap()
+    );
+    drop(database);
+    assert_eq!(case.observe_wait().await, "none");
+    assert_eq!(
+        control(&case.fixture).status,
+        crate::tasks::control::TaskStatus::Cancelled
+    );
+    case.cleanup();
+}
+
+#[tokio::test]
+async fn a_review_wait_saved_before_a_restart_behaves_the_same_after_it() {
+    use crate::coordination::workflows::DeliveryWaitReason::Review;
+    let case = open_pull().await;
+    case.set_pull(code_owner_review_open());
+    case.saved_wait(Review).await;
+    let restarted = delivery_operations(&case.fixture, &case.api);
+    let observe = || restarted.observe_delivery_wait(&case.fixture.task_id);
+    assert_eq!(observe().await.unwrap(), "unchanged");
+    case.set_pull(recomputing());
+    assert_eq!(observe().await.unwrap(), "unchanged");
+    case.set_pull(json!({"mergeable": "MERGEABLE", "mergeStateStatus": "CLEAN"}));
+    assert_eq!(observe().await.unwrap(), "changed");
+    assert_eq!(case.root_prompts().len(), 1);
+    case.cleanup();
+}
+
+#[tokio::test]
+async fn an_approval_lets_the_coordinator_merge_after_the_wait() {
+    let (case, head, review) = reviewed_pull().await;
+    case.set_pull(code_owner_review_open());
+    request_merge(&case, &head, &review).await;
+    case.set_pull(recomputing());
+    assert_eq!(case.observe_wait().await, "unchanged");
+    case.set_pull(json!({"reviewDecision": "APPROVED", "mergeable": "MERGEABLE", "mergeStateStatus": "CLEAN", "reviewRequests": {"nodes": []}}));
+    case.assert_wakes_once("approval").await;
+    let merged = request_merge(&case, &head, &review).await;
+    assert_eq!(merged["state"], "merged", "{merged}");
+    assert_eq!(case.merge_calls(), 1);
+    assert_eq!(
+        control(&case.fixture).status,
+        crate::tasks::control::TaskStatus::Delivered
+    );
+    case.cleanup();
+}
+
+#[tokio::test]
+async fn github_recomputing_the_merge_state_does_not_withdraw_a_question() {
+    let case = delivery_question().await;
+    case.set_pull(json!({"mergeable": "MERGEABLE", "mergeStateStatus": "BLOCKED"}));
+    case.sweep().await;
+    let baseline = case.wait().expect("the sweep records the baseline");
+    case.set_pull(recomputing());
+    case.sweep().await;
+    case.assert_still_asking();
+    case.set_pull(json!({"mergeable": "MERGEABLE", "mergeStateStatus": "BLOCKED"}));
+    case.sweep().await;
+    case.assert_still_asking();
+    assert_eq!(case.wait(), Some(baseline));
+    case.set_pull(json!({"headSha": "d".repeat(40)}));
+    case.sweep().await;
+    case.assert_withdrawn();
+    case.cleanup();
+}
+
+#[tokio::test]
+async fn a_question_baseline_captured_while_github_recomputes_survives_the_settling() {
+    let case = delivery_question().await;
+    case.set_pull(recomputing());
+    case.sweep().await;
+    assert!(case.wait().is_some(), "the sweep records the baseline");
+    case.set_pull(json!({"mergeable": "MERGEABLE", "mergeStateStatus": "BLOCKED"}));
+    case.sweep().await;
+    case.assert_still_asking();
+    case.set_pull(json!({"headSha": "d".repeat(40)}));
+    case.sweep().await;
+    case.assert_withdrawn();
+    case.cleanup();
+}
+
+#[tokio::test]
+async fn checks_and_merge_queue_waits_ignore_unknown_and_wake_on_a_real_change() {
+    use crate::coordination::workflows::DeliveryWaitReason::{Checks, MergeQueue};
+    for reason in [Checks, MergeQueue] {
+        let case = open_pull().await;
+        case.set_pull(json!({"mergeable": "MERGEABLE", "mergeStateStatus": "BLOCKED"}));
+        case.saved_wait(reason).await;
+        case.set_pull(recomputing());
+        assert_eq!(case.observe_wait().await, "unchanged", "{reason} flipped");
+        case.set_pull(json!({"mergeable": "MERGEABLE", "mergeStateStatus": "BLOCKED"}));
+        assert_eq!(case.observe_wait().await, "unchanged", "{reason} settled");
+        assert!(case.root_prompts().is_empty(), "{reason}");
+        case.set_pull(json!({"headSha": "d".repeat(40)}));
+        case.assert_wakes_once(reason.as_str()).await;
+        case.cleanup();
+    }
+}
+
+#[tokio::test]
+async fn a_refused_merge_on_a_ready_pull_request_wakes_when_github_recomputes() {
+    use crate::coordination::workflows::DeliveryWaitReason::MergeQueue;
+    let case = open_pull().await;
+    case.set_pull(json!({"mergeable": "MERGEABLE", "mergeStateStatus": "CLEAN"}));
+    case.saved_wait(MergeQueue).await;
+    case.set_pull(recomputing());
+    case.assert_wakes_once("ready, then recomputing").await;
+    case.cleanup();
+}
+
+#[tokio::test]
+async fn a_merge_queue_wait_with_an_unknown_baseline_wakes_once_github_settles() {
+    use crate::coordination::workflows::DeliveryWaitReason::MergeQueue;
+    let case = open_pull().await;
+    case.set_pull(recomputing());
+    case.saved_wait(MergeQueue).await;
+    assert_eq!(case.observe_wait().await, "unchanged", "still recomputing");
+    case.set_pull(json!({"mergeable": "MERGEABLE", "mergeStateStatus": "CLEAN"}));
+    case.assert_wakes_once("settled").await;
+    case.cleanup();
 }

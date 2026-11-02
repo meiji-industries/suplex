@@ -64,7 +64,13 @@ pub fn merge_blocker(
         Some("open") if observed.merge_state_status.as_deref() == Some("BEHIND") => {
             "The pull request is behind the base branch."
         }
-        Some("open") if review_blocks_merge(observed.review_decision.as_deref()) => {
+        Some("open")
+            if review_blocks_merge(
+                observed.review_decision.as_deref(),
+                observed.merge_state_status.as_deref(),
+                &observed.code_owner_reviewers,
+            ) =>
+        {
             "GitHub requires a review decision."
         }
         Some("open") => return None,
@@ -780,6 +786,37 @@ mod tests {
             merge_blocker(Some(&observed), None, Some(&head)).unwrap(),
             "GitHub merged the pull request."
         );
+    }
+
+    #[test]
+    fn merge_blocker_counts_an_open_code_owner_request() {
+        let head = "a".repeat(40);
+        let mut observed = open_pull();
+        observed.review_decision = None;
+        observed.merge_state_status = Some("BLOCKED".into());
+        assert_eq!(
+            merge_blocker(Some(&observed), None, Some(&head)),
+            None,
+            "no code owner request leaves a blocked pull request as it was"
+        );
+        observed.code_owner_reviewers = vec!["octo".into()];
+        for state in ["BLOCKED", "UNKNOWN"] {
+            observed.merge_state_status = Some(state.into());
+            assert_eq!(
+                merge_blocker(Some(&observed), None, Some(&head)).as_deref(),
+                Some("GitHub requires a review decision."),
+                "{state}"
+            );
+        }
+        observed.merge_state_status = Some("CLEAN".into());
+        assert_eq!(
+            merge_blocker(Some(&observed), None, Some(&head)),
+            None,
+            "another owner's request can stay open after an approval"
+        );
+        observed.merge_state_status = Some("BLOCKED".into());
+        observed.review_decision = Some("APPROVED".into());
+        assert_eq!(merge_blocker(Some(&observed), None, Some(&head)), None);
     }
 
     #[test]

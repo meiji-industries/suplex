@@ -147,13 +147,24 @@ pub struct Checks {
     pub runs: Vec<Value>,
 }
 
-/// GitHub reports `REVIEW_REQUIRED` or `CHANGES_REQUESTED` only when the repository
-/// requires reviews. A null decision means GitHub requires none, not that it is pending.
-pub fn review_blocks_merge(review_decision: Option<&str>) -> bool {
-    matches!(
-        review_decision,
-        Some("REVIEW_REQUIRED") | Some("CHANGES_REQUESTED")
-    )
+/// GitHub requires a review before it merges this pull request. A repository can
+/// require code owner review with zero required approvals: GitHub then reports a
+/// null decision and holds the merge state at `BLOCKED`, or at `UNKNOWN` while it
+/// recomputes. A null decision by itself says nothing about whether a review is
+/// necessary. After one owner approves, other requests can stay open, but the
+/// merge state leaves `BLOCKED`.
+pub fn review_blocks_merge(
+    review_decision: Option<&str>,
+    merge_state: Option<&str>,
+    code_owner_reviewers: &[String],
+) -> bool {
+    match review_decision {
+        Some("REVIEW_REQUIRED" | "CHANGES_REQUESTED") => true,
+        None => {
+            !code_owner_reviewers.is_empty() && matches!(merge_state, Some("BLOCKED" | "UNKNOWN"))
+        }
+        Some(_) => false,
+    }
 }
 
 /// TypeScript `GithubPullRequestObservation`.
@@ -176,6 +187,8 @@ pub struct Observation {
     pub deletions: Option<u64>,
     pub auto_merge_enabled: Option<bool>,
     pub review_decision: Option<String>,
+    pub code_owner_reviewers: Vec<String>,
+    pub viewer_can_merge_as_admin: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
 }
@@ -437,6 +450,14 @@ struct PullRequestObservation {
     auto_merge_request: Option<serde_json::Map<String, Value>>,
     #[serde(deserialize_with = "Deserialize::deserialize")]
     review_decision: Option<String>,
+    #[serde(
+        default,
+        rename = "reviewRequests",
+        deserialize_with = "code_owner_reviewers"
+    )]
+    code_owner_reviewers: Vec<String>,
+    #[serde(default)]
+    viewer_can_merge_as_admin: bool,
     #[serde(deserialize_with = "Deserialize::deserialize")]
     author: Option<GraphAuthor>,
     changed_files: u64,
@@ -455,6 +476,31 @@ struct GraphAuthor {
     #[serde(default, deserialize_with = "optional_metadata")]
     avatar_url: Option<String>,
 }
+
+/// GitHub hides a reviewer the token cannot read. The request still counts, so
+/// it keeps this name.
+const UNNAMED_CODE_OWNER: &str = "a code owner";
+
+fn code_owner_reviewers<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Vec<String>, D::Error> {
+    let requests = Value::deserialize(deserializer)?;
+    Ok(requests["nodes"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|request| request["asCodeOwner"] == true)
+        .map(|request| {
+            let reviewer = &request["requestedReviewer"];
+            reviewer["login"]
+                .as_str()
+                .or(reviewer["slug"].as_str())
+                .unwrap_or(UNNAMED_CODE_OWNER)
+                .to_owned()
+        })
+        .collect())
+}
+
 fn commit_checks<'de, D: serde::Deserializer<'de>>(
     deserializer: D,
 ) -> Result<Vec<CheckContext>, D::Error> {
@@ -659,6 +705,8 @@ impl PullRequestObservation {
             deletions: Some(self.deletions),
             auto_merge_enabled: Some(self.auto_merge_request.is_some()),
             review_decision: self.review_decision,
+            code_owner_reviewers: self.code_owner_reviewers,
+            viewer_can_merge_as_admin: self.viewer_can_merge_as_admin,
             title: self.title,
         })
     }
@@ -927,7 +975,7 @@ struct Diagnostic {
 const PULL_LIST_FIELDS: &str = "number url isDraft state headRefName headRefOid baseRefName baseRefOid title body author { login } updatedAt isCrossRepository";
 
 /// The `gh pr view` observation fields, with the latest commit's check rollup.
-const OBSERVATION_QUERY: &str = "query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){number url state isDraft headRefOid baseRefOid mergeable mergeStateStatus autoMergeRequest{enabledAt} reviewDecision author{login avatarUrl} changedFiles additions deletions title commits(last:1){nodes{commit{statusCheckRollup{contexts(first:100){nodes{__typename ...on StatusContext{context state targetUrl startedAt:createdAt} ...on CheckRun{name status conclusion startedAt completedAt detailsUrl checkSuite{workflowRun{workflow{name}}}}}}}}}}}}}";
+const OBSERVATION_QUERY: &str = "query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){number url state isDraft headRefOid baseRefOid mergeable mergeStateStatus autoMergeRequest{enabledAt} reviewDecision viewerCanMergeAsAdmin reviewRequests(first:20){nodes{asCodeOwner requestedReviewer{__typename ...on User{login} ...on Team{slug}}}} author{login avatarUrl} changedFiles additions deletions title commits(last:1){nodes{commit{statusCheckRollup{contexts(first:100){nodes{__typename ...on StatusContext{context state targetUrl startedAt:createdAt} ...on CheckRun{name status conclusion startedAt completedAt detailsUrl checkSuite{workflowRun{workflow{name}}}}}}}}}}}}}";
 
 struct Reply {
     status: u16,
@@ -1672,13 +1720,23 @@ impl Github {
         let (owner, name) = repository
             .split_once('/')
             .ok_or_else(|| failure("wrong-remote", "Repository identity is invalid"))?;
-        let value = self
-            .graphql::<GraphObservation>(
-                OBSERVATION_QUERY,
-                json!({"owner": owner, "name": name, "number": number}),
-                "pull request observation",
-            )
-            .await;
+        let variables = json!({"owner": owner, "name": name, "number": number});
+        let operation = "pull request observation";
+        let value = match self
+            .graphql::<GraphObservation>(OBSERVATION_QUERY, variables.clone(), operation)
+            .await
+        {
+            // Without read:org GitHub rejects the whole query for its team fields.
+            Err(error) if error.summary.contains("required scopes") => {
+                self.graphql::<GraphObservation>(
+                    &OBSERVATION_QUERY.replace("...on Team{slug}", ""),
+                    variables,
+                    operation,
+                )
+                .await
+            }
+            value => value,
+        };
         let value = match value {
             Ok(value) => value,
             Err(error) if error.summary.to_lowercase().contains("could not resolve") => {
@@ -2677,6 +2735,70 @@ mod tests {
             read(&pull).unwrap_err().summary,
             "GitHub pull request observation is malformed"
         );
+    }
+
+    fn observation_with_review_requests(requests: Option<Value>) -> Value {
+        let mut pull = json!({"number": 7, "url":"https://github.com/owner/repo/pull/7", "state":"OPEN", "isDraft":false,
+            "headRefOid":"a".repeat(40), "baseRefOid":"b".repeat(40), "mergeable":"MERGEABLE", "mergeStateStatus":"BLOCKED",
+            "autoMergeRequest":null, "reviewDecision":null, "author":{"login":"octo"}, "changedFiles":1, "additions":1, "deletions":0});
+        if let Some(requests) = requests {
+            pull["reviewRequests"] = requests;
+        }
+        json!({"data":{"repository":{"pullRequest":pull}}})
+    }
+
+    #[test]
+    fn observation_reads_only_code_owner_review_requests() {
+        let read = |requests| {
+            decode_response::<GraphObservation>(
+                &observation_with_review_requests(requests).to_string(),
+                "GitHub pull request observation is malformed",
+            )
+            .unwrap()
+            .pull()
+            .unwrap()
+            .normalize()
+            .unwrap()
+            .code_owner_reviewers
+        };
+        assert!(read(None).is_empty(), "an older fixture has no field");
+        assert!(read(Some(Value::Null)).is_empty());
+        assert!(read(Some(json!({"nodes":[]}))).is_empty());
+        assert_eq!(
+            read(Some(json!({"nodes":[
+                {"asCodeOwner":true,"requestedReviewer":{"__typename":"User","login":"octo"}},
+                {"asCodeOwner":true,"requestedReviewer":{"__typename":"Team","slug":"platform"}},
+                {"asCodeOwner":false,"requestedReviewer":{"__typename":"User","login":"bystander"}},
+                {"requestedReviewer":{"__typename":"User","login":"older"}},
+                {"asCodeOwner":true,"requestedReviewer":null},
+            ]}))),
+            ["octo", "platform", UNNAMED_CODE_OWNER]
+        );
+    }
+
+    /// Reported third-party behavior: GitHub checks `read:org` for `Team` fields
+    /// and rejects the whole query, even when no team is requested.
+    #[tokio::test]
+    async fn a_token_without_read_org_still_observes_the_pull_request() {
+        let rejection = json!({"errors":[{"type":"INSUFFICIENT_SCOPES","message":"Your token has not been granted the required scopes to execute this query. The 'slug' field requires one of the following scopes: ['read:org', 'read:discussion'], but your token has only been granted the: ['repo'] scopes."}]});
+        let observed = observation_with_review_requests(Some(json!({"nodes":[
+            {"asCodeOwner":true,"requestedReviewer":{"__typename":"Team"}},
+        ]})));
+        let (github, server) = fake_api(
+            vec![],
+            vec![
+                ("...on Team{slug}", rejection),
+                ("reviewRequests", observed),
+            ],
+        )
+        .await;
+        let observation = github
+            .observe_pull_request("owner/repo", "task", Some(7))
+            .await
+            .unwrap();
+        assert!(observation.exists);
+        assert_eq!(observation.code_owner_reviewers, [UNNAMED_CODE_OWNER]);
+        server.abort();
     }
 
     #[test]

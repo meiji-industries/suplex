@@ -45,6 +45,7 @@ export function WorkflowStatus({ task }: { task: Task }) {
   else if (task.pullRequest?.state === "merged") items.push("Merged");
   else if (task.status === "delivered" || state.completion?.kind === "workflow") items.push("Delivered");
   else if (state.deliveryWait?.reason === "merge_queue") items.push("Merge requested");
+  else if (state.deliveryWait?.reason === "review") items.push("Review pending");
   else if (state.deliveryWait && state.deliveryWait.reason !== "question") items.push(state.deliveryWait.reason === "observation" ? "GitHub observation pending" : "CI pending");
   if (task.workflow === "approve_then_build") items.push(state.planApproval?.approved ? "Plan approved" : "Plan not approved");
   if (role) {

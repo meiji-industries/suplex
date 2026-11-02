@@ -39,7 +39,9 @@ The response has `taskId`, `limits` (`budgetUsd` and `maxTurns`), and `usage`.
 never returns a prompt or message text.
 
 Cost and tokens come from the native session reader, and Suplex does not store
-them for this route. Usage that has no listed price reports a `null` cost
+them for this route. A turn owns the usage whose provider reports its id. When a
+provider has its own turn ids, a turn owns the usage in its session that started
+after its prompt and before the next prompt. Usage that has no listed price reports a `null` cost
 instead of zero. When the native session cannot be read, the route still returns
 the turns. `usage.observation` is `unavailable`, `usage.observationReason` names
 the failed system, and every cost, token, and `failed` field is `null`.

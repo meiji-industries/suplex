@@ -176,6 +176,7 @@ pub struct Observation {
     pub deletions: Option<u64>,
     pub auto_merge_enabled: Option<bool>,
     pub review_decision: Option<String>,
+    pub code_owner_reviewers: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
 }
@@ -437,6 +438,8 @@ struct PullRequestObservation {
     auto_merge_request: Option<serde_json::Map<String, Value>>,
     #[serde(deserialize_with = "Deserialize::deserialize")]
     review_decision: Option<String>,
+    #[serde(default, rename = "reviewRequests", deserialize_with = "code_owner_reviewers")]
+    code_owner_reviewers: Vec<String>,
     #[serde(deserialize_with = "Deserialize::deserialize")]
     author: Option<GraphAuthor>,
     changed_files: u64,
@@ -455,6 +458,31 @@ struct GraphAuthor {
     #[serde(default, deserialize_with = "optional_metadata")]
     avatar_url: Option<String>,
 }
+
+/// GitHub hides a reviewer the token cannot read. The request still counts, so
+/// it keeps this name.
+const UNNAMED_CODE_OWNER: &str = "a code owner";
+
+fn code_owner_reviewers<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Vec<String>, D::Error> {
+    let requests = Value::deserialize(deserializer)?;
+    Ok(requests["nodes"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|request| request["asCodeOwner"] == true)
+        .map(|request| {
+            let reviewer = &request["requestedReviewer"];
+            reviewer["login"]
+                .as_str()
+                .or(reviewer["slug"].as_str())
+                .unwrap_or(UNNAMED_CODE_OWNER)
+                .to_owned()
+        })
+        .collect())
+}
+
 fn commit_checks<'de, D: serde::Deserializer<'de>>(
     deserializer: D,
 ) -> Result<Vec<CheckContext>, D::Error> {
@@ -659,6 +687,7 @@ impl PullRequestObservation {
             deletions: Some(self.deletions),
             auto_merge_enabled: Some(self.auto_merge_request.is_some()),
             review_decision: self.review_decision,
+            code_owner_reviewers: self.code_owner_reviewers,
             title: self.title,
         })
     }
@@ -927,7 +956,7 @@ struct Diagnostic {
 const PULL_LIST_FIELDS: &str = "number url isDraft state headRefName headRefOid baseRefName baseRefOid title body author { login } updatedAt isCrossRepository";
 
 /// The `gh pr view` observation fields, with the latest commit's check rollup.
-const OBSERVATION_QUERY: &str = "query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){number url state isDraft headRefOid baseRefOid mergeable mergeStateStatus autoMergeRequest{enabledAt} reviewDecision author{login avatarUrl} changedFiles additions deletions title commits(last:1){nodes{commit{statusCheckRollup{contexts(first:100){nodes{__typename ...on StatusContext{context state targetUrl startedAt:createdAt} ...on CheckRun{name status conclusion startedAt completedAt detailsUrl checkSuite{workflowRun{workflow{name}}}}}}}}}}}}}";
+const OBSERVATION_QUERY: &str = "query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){number url state isDraft headRefOid baseRefOid mergeable mergeStateStatus autoMergeRequest{enabledAt} reviewDecision reviewRequests(first:20){nodes{asCodeOwner requestedReviewer{__typename ...on User{login} ...on Team{slug}}}} author{login avatarUrl} changedFiles additions deletions title commits(last:1){nodes{commit{statusCheckRollup{contexts(first:100){nodes{__typename ...on StatusContext{context state targetUrl startedAt:createdAt} ...on CheckRun{name status conclusion startedAt completedAt detailsUrl checkSuite{workflowRun{workflow{name}}}}}}}}}}}}}";
 
 struct Reply {
     status: u16,
@@ -2676,6 +2705,45 @@ mod tests {
         assert_eq!(
             read(&pull).unwrap_err().summary,
             "GitHub pull request observation is malformed"
+        );
+    }
+
+    fn observation_with_review_requests(requests: Option<Value>) -> Value {
+        let mut pull = json!({"number": 7, "url":"https://github.com/owner/repo/pull/7", "state":"OPEN", "isDraft":false,
+            "headRefOid":"a".repeat(40), "baseRefOid":"b".repeat(40), "mergeable":"MERGEABLE", "mergeStateStatus":"BLOCKED",
+            "autoMergeRequest":null, "reviewDecision":null, "author":{"login":"octo"}, "changedFiles":1, "additions":1, "deletions":0});
+        if let Some(requests) = requests {
+            pull["reviewRequests"] = requests;
+        }
+        json!({"data":{"repository":{"pullRequest":pull}}})
+    }
+
+    #[test]
+    fn observation_reads_only_code_owner_review_requests() {
+        let read = |requests| {
+            decode_response::<GraphObservation>(
+                &observation_with_review_requests(requests).to_string(),
+                "GitHub pull request observation is malformed",
+            )
+            .unwrap()
+            .pull()
+            .unwrap()
+            .normalize()
+            .unwrap()
+            .code_owner_reviewers
+        };
+        assert!(read(None).is_empty(), "an older fixture has no field");
+        assert!(read(Some(Value::Null)).is_empty());
+        assert!(read(Some(json!({"nodes":[]}))).is_empty());
+        assert_eq!(
+            read(Some(json!({"nodes":[
+                {"asCodeOwner":true,"requestedReviewer":{"__typename":"User","login":"octo"}},
+                {"asCodeOwner":true,"requestedReviewer":{"__typename":"Team","slug":"platform"}},
+                {"asCodeOwner":false,"requestedReviewer":{"__typename":"User","login":"bystander"}},
+                {"requestedReviewer":{"__typename":"User","login":"older"}},
+                {"asCodeOwner":true,"requestedReviewer":null},
+            ]}))),
+            ["octo", "platform", UNNAMED_CODE_OWNER]
         );
     }
 

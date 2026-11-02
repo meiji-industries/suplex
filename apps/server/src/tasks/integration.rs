@@ -78,6 +78,7 @@ pub struct IntegrationPullRequest {
     pub mergeable: Option<String>,
     pub merge_state_status: Option<String>,
     pub review_decision: Option<String>,
+    pub code_owner_reviewers: Vec<String>,
     pub checks: CheckCounts,
 }
 
@@ -181,6 +182,8 @@ pub fn derive_task_integration(
             mergeable: observation.and_then(|o| o.mergeable.clone()),
             merge_state_status: observation.and_then(|o| o.merge_state_status.clone()),
             review_decision: observation.and_then(|o| o.review_decision.clone()),
+            code_owner_reviewers: observation
+                .map_or_else(Vec::new, |o| o.code_owner_reviewers.clone()),
             checks,
         },
         observed_at: observed_at.to_owned(),
@@ -417,7 +420,7 @@ mod tests {
                 "integrated": true,
                 "pullRequest": {"state": "absent", "number": null, "url": null, "targetBranch": "main",
                     "headSha": null, "baseSha": null, "mergeable": null, "mergeStateStatus": null,
-                    "reviewDecision": null, "checks": {"total": 0, "pending": 0, "failing": 0, "successful": 0}},
+                    "reviewDecision": null, "codeOwnerReviewers": [], "checks": {"total": 0, "pending": 0, "failing": 0, "successful": 0}},
                 "observedAt": "2026-09-25T00:00:00.000Z",
                 "observation": "observed",
                 "observationReason": null,

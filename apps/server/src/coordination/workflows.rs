@@ -202,6 +202,7 @@ crate::shared::wire_enum! {
         MergeQueue = "merge_queue",
         Observation = "observation",
         Question = "question",
+        Review = "review",
     }
 }
 

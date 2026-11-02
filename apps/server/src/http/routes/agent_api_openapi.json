@@ -1646,7 +1646,8 @@
                                 "mergeability",
                                 "merge_queue",
                                 "observation",
-                                "question"
+                                "question",
+                                "review"
                               ]
                             }
                           },
@@ -1756,7 +1757,8 @@
                                     "mergeability",
                                     "merge_queue",
                                     "observation",
-                                    "question"
+                                    "question",
+                                    "review"
                                   ]
                                 },
                                 "since": {
@@ -1886,6 +1888,12 @@
                                   "nullable": true,
                                   "type": "string"
                                 },
+                                "codeOwnerReviewers": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "string"
+                                  }
+                                },
                                 "checks": {
                                   "type": "object",
                                   "properties": {
@@ -1929,6 +1937,7 @@
                                 "mergeable",
                                 "mergeStateStatus",
                                 "reviewDecision",
+                                "codeOwnerReviewers",
                                 "checks"
                               ],
                               "additionalProperties": false
@@ -2626,7 +2635,8 @@
                             "mergeability",
                             "merge_queue",
                             "observation",
-                            "question"
+                            "question",
+                            "review"
                           ]
                         }
                       },
@@ -2736,7 +2746,8 @@
                                 "mergeability",
                                 "merge_queue",
                                 "observation",
-                                "question"
+                                "question",
+                                "review"
                               ]
                             },
                             "since": {
@@ -2866,6 +2877,12 @@
                               "nullable": true,
                               "type": "string"
                             },
+                            "codeOwnerReviewers": {
+                              "type": "array",
+                              "items": {
+                                "type": "string"
+                              }
+                            },
                             "checks": {
                               "type": "object",
                               "properties": {
@@ -2909,6 +2926,7 @@
                             "mergeable",
                             "mergeStateStatus",
                             "reviewDecision",
+                            "codeOwnerReviewers",
                             "checks"
                           ],
                           "additionalProperties": false
@@ -4636,7 +4654,8 @@
                             "mergeability",
                             "merge_queue",
                             "observation",
-                            "question"
+                            "question",
+                            "review"
                           ]
                         }
                       },
@@ -4746,7 +4765,8 @@
                                 "mergeability",
                                 "merge_queue",
                                 "observation",
-                                "question"
+                                "question",
+                                "review"
                               ]
                             },
                             "since": {
@@ -4876,6 +4896,12 @@
                               "nullable": true,
                               "type": "string"
                             },
+                            "codeOwnerReviewers": {
+                              "type": "array",
+                              "items": {
+                                "type": "string"
+                              }
+                            },
                             "checks": {
                               "type": "object",
                               "properties": {
@@ -4919,6 +4945,7 @@
                             "mergeable",
                             "mergeStateStatus",
                             "reviewDecision",
+                            "codeOwnerReviewers",
                             "checks"
                           ],
                           "additionalProperties": false
@@ -5830,7 +5857,8 @@
                             "mergeability",
                             "merge_queue",
                             "observation",
-                            "question"
+                            "question",
+                            "review"
                           ]
                         }
                       },
@@ -5940,7 +5968,8 @@
                                 "mergeability",
                                 "merge_queue",
                                 "observation",
-                                "question"
+                                "question",
+                                "review"
                               ]
                             },
                             "since": {
@@ -7412,7 +7441,8 @@
                                 "mergeability",
                                 "merge_queue",
                                 "observation",
-                                "question"
+                                "question",
+                                "review"
                               ]
                             }
                           },
@@ -7522,7 +7552,8 @@
                                     "mergeability",
                                     "merge_queue",
                                     "observation",
-                                    "question"
+                                    "question",
+                                    "review"
                                   ]
                                 },
                                 "since": {
@@ -8547,7 +8578,8 @@
                             "mergeability",
                             "merge_queue",
                             "observation",
-                            "question"
+                            "question",
+                            "review"
                           ]
                         }
                       },
@@ -8657,7 +8689,8 @@
                                 "mergeability",
                                 "merge_queue",
                                 "observation",
-                                "question"
+                                "question",
+                                "review"
                               ]
                             },
                             "since": {

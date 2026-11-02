@@ -2,4 +2,4 @@
 import type { CheckCounts } from "./CheckCounts.js";
 import type { IntegrationPullRequestState } from "./IntegrationPullRequestState.js";
 
-export type IntegrationPullRequest = { state: IntegrationPullRequestState, number: number | null, url: string | null, targetBranch: string, headSha: string | null, baseSha: string | null, mergeable: string | null, mergeStateStatus: string | null, reviewDecision: string | null, checks: CheckCounts, };
+export type IntegrationPullRequest = { state: IntegrationPullRequestState, number: number | null, url: string | null, targetBranch: string, headSha: string | null, baseSha: string | null, mergeable: string | null, mergeStateStatus: string | null, reviewDecision: string | null, codeOwnerReviewers: Array<string>, checks: CheckCounts, };

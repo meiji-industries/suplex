@@ -217,6 +217,31 @@ fn require_readable(
     Ok(row)
 }
 
+/// The caller can read the task; a denial is the same concealed `404` as `read`.
+pub(crate) fn authorize_read(
+    database: &SuplexDatabase,
+    principal: &Principal,
+    task_id: &str,
+) -> DatabaseResult<()> {
+    require_readable(database, principal, task_id).map(|_| ())
+}
+
+/// Transcripts need read access and the live transcript grant. A missing grant
+/// answers like a missing task.
+pub(crate) fn authorize_transcript(
+    database: &SuplexDatabase,
+    principal: &Principal,
+    task_id: &str,
+) -> DatabaseResult<()> {
+    require_readable(database, principal, task_id)?;
+    let granted: bool = database.connection().query_row(
+        "SELECT transcripts_granted_at IS NOT NULL FROM suplex_external_agents WHERE id = ?1",
+        [&principal.agent_id],
+        |row| row.get(0),
+    )?;
+    if granted { Ok(()) } else { Err(not_found()) }
+}
+
 /// Commands, dependency writes, and delivery operations are open to any agent
 /// with access to the task's project, as on the board.
 fn require_owned(
@@ -682,9 +707,10 @@ pub fn identity(database: &SuplexDatabase, principal: &Principal) -> DatabaseRes
     )?;
     Ok(json!({
         "agent": {"id": principal.agent_id, "name": name, "profileId": principal.profile_id},
-        "capabilities": {"taskDiscovery": true, "taskRead": true, "taskCreate": true, "humanAnswers": principal.answer_grant.is_some(), "moves": principal.moves_grant, "taskCommands": task_commands(principal.answer_grant.is_some())},
+        "capabilities": {"taskDiscovery": true, "taskRead": true, "taskCreate": true, "humanAnswers": principal.answer_grant.is_some(), "moves": principal.moves_grant, "transcripts": principal.transcripts_grant, "taskCommands": task_commands(principal.answer_grant.is_some())},
         "answerGrant": principal.answer_grant.as_ref().map(|grant| json!({"userId": grant.user_id, "userName": grant.user_name})),
         "movesGrant": principal.moves_grant,
+        "transcriptsGrant": principal.transcripts_grant,
         "projects": projects_json,
     }))
 }

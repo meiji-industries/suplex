@@ -1,4 +1,6 @@
 pub mod agent_api;
+pub mod agent_transcript;
+pub mod agent_turns;
 pub mod analytics;
 pub mod archive;
 pub mod artifacts;
@@ -17,6 +19,7 @@ pub mod preparation;
 pub mod pull_request_dependencies;
 pub mod repository;
 pub mod response;
+pub mod session_history;
 pub mod sources;
 pub mod templates;
 pub mod timeline;

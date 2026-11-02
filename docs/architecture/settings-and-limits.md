@@ -58,7 +58,10 @@ Spend comes from observed native usage and pricing estimates. Incomplete usage
 can produce a partial estimate; it must not be advertised as a complete bill.
 An unavailable estimate does not become a fabricated budget overrun, and the
 turn limit can still apply independently. A failed native read can require a
-retry. See [analytics](../analytics.md) for measurement and pricing limits.
+retry. When a dispatch reaches the turn limit, Suplex still tries to read spend
+so the limit question can state it. A failed read leaves the spend unknown and
+the turn limit still pauses the task. The check that runs every 15 seconds while
+the task waits does not read usage again. See [analytics](../analytics.md) for measurement and pricing limits.
 
 When an allowance is reached, the task presents a specific limit question. The
 operator can add the proposed allowance, change the limits, or cancel the task.

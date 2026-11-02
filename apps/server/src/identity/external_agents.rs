@@ -55,6 +55,8 @@ pub struct Principal {
     pub answer_grant: Option<AnswerGrant>,
     /// Read from the database on every request, so revocation applies immediately.
     pub moves_grant: bool,
+    /// Read from the database on every request, so revocation applies immediately.
+    pub transcripts_grant: bool,
 }
 
 crate::shared::wire_enum! {
@@ -96,6 +98,8 @@ pub struct AdminAgent {
     pub answer_granted_at: Option<String>,
     pub moves_granted_by_user_id: Option<String>,
     pub moves_granted_at: Option<String>,
+    pub transcripts_granted_by_user_id: Option<String>,
+    pub transcripts_granted_at: Option<String>,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -401,7 +405,7 @@ const ADMIN_COLUMNS: &str = "SELECT e.id, ag.name, ag.avatar_seed, e.company_id,
     e.paired_at, \
     (SELECT c.created_at FROM suplex_external_agent_credentials c WHERE c.agent_id = e.id AND c.revoked_at IS NULL ORDER BY c.created_at DESC LIMIT 1) AS credential_created_at, \
     CASE WHEN EXISTS (SELECT 1 FROM suplex_oauth_grants og WHERE og.agent_id = e.id) THEN 'oauth' ELSE 'credential' END AS connection_kind, \
-    e.last_used_at, e.revoked_at, e.created_at, e.updated_at, e.answer_granted_by_user_id, e.answer_granted_at, e.moves_granted_by_user_id, e.moves_granted_at \
+    e.last_used_at, e.revoked_at, e.created_at, e.updated_at, e.answer_granted_by_user_id, e.answer_granted_at, e.moves_granted_by_user_id, e.moves_granted_at, e.transcripts_granted_by_user_id, e.transcripts_granted_at \
     FROM suplex_external_agents e JOIN suplex_agents ag ON ag.id = e.id";
 
 fn admin_row(row: &Row<'_>) -> rusqlite::Result<AdminAgent> {
@@ -424,6 +428,8 @@ fn admin_row(row: &Row<'_>) -> rusqlite::Result<AdminAgent> {
         answer_granted_at: row.get(15)?,
         moves_granted_by_user_id: row.get(16)?,
         moves_granted_at: row.get(17)?,
+        transcripts_granted_by_user_id: row.get(18)?,
+        transcripts_granted_at: row.get(19)?,
         created_at: row.get(12)?,
         updated_at: row.get(13)?,
     })
@@ -644,6 +650,30 @@ pub fn set_moves_grant(
     admin_agent(database, agent_id)
 }
 
+/// Let an external agent read task transcripts, or revoke that authority.
+pub fn set_transcripts_grant(
+    database: &mut SuplexDatabase,
+    actor_user_id: &str,
+    agent_id: &str,
+    granted: bool,
+    now: DateTime<Utc>,
+) -> DatabaseResult<AdminAgent> {
+    require_admin(database, actor_user_id)?;
+    if !valid_id(agent_id) {
+        return Err(not_found("agent_not_found"));
+    }
+    let stamp = rfc3339_millis(now);
+    database.transaction(false, |database| {
+        let company_id = match agent_state(database, agent_id)? { Some((company_id, status)) if status != ExternalAgentStatus::Revoked => company_id, _ => return Err(not_found("agent_not_found")) };
+        database.connection().execute(
+            "UPDATE suplex_external_agents SET transcripts_granted_by_user_id = ?1, transcripts_granted_at = ?2, updated_at = ?4 WHERE id = ?3",
+            params![granted.then_some(actor_user_id), granted.then_some(&stamp), agent_id, stamp],
+        )?;
+        audit(database, (Some(actor_user_id), None), "external_agent_transcripts_grant_updated", &company_id, metadata(&[("agentId", agent_id), ("transcriptsGranted", if granted { "true" } else { "false" })]), now)
+    })?;
+    admin_agent(database, agent_id)
+}
+
 fn issue_pairing(
     database: &mut SuplexDatabase,
     actor_user_id: &str,
@@ -823,7 +853,7 @@ pub fn authenticate(
         };
         let project_ids = grants(database, &agent_id)?;
         let answer_grant = answer_grant_repository::read(database, &agent_id)?;
-        let moves_grant: bool = database.connection().query_row("SELECT moves_granted_at IS NOT NULL FROM suplex_external_agents WHERE id = ?1", [&agent_id], |row| row.get(0))?;
+        let (moves_grant, transcripts_grant): (bool, bool) = database.connection().query_row("SELECT moves_granted_at IS NOT NULL, transcripts_granted_at IS NOT NULL FROM suplex_external_agents WHERE id = ?1", [&agent_id], |row| Ok((row.get(0)?, row.get(1)?)))?;
         database.connection().execute(
             "UPDATE suplex_external_agent_credentials SET last_used_at = ?1 WHERE id = ?2",
             params![now_iso, credential_id],
@@ -840,6 +870,7 @@ pub fn authenticate(
             cursor_key: credential_hash,
             answer_grant,
             moves_grant,
+            transcripts_grant,
         })
     })
 }
@@ -926,6 +957,7 @@ pub fn provision_oauth_agent(
         cursor_key: input.cursor_key.to_owned(),
         answer_grant: None,
         moves_grant: false,
+        transcripts_grant: false,
     })
 }
 
@@ -950,7 +982,7 @@ pub fn oauth_principal(
         };
         let project_ids = grants(database, agent_id)?;
         let answer_grant = answer_grant_repository::read(database, agent_id)?;
-        let moves_grant: bool = database.connection().query_row("SELECT moves_granted_at IS NOT NULL FROM suplex_external_agents WHERE id = ?1", [agent_id], |row| row.get(0))?;
+        let (moves_grant, transcripts_grant): (bool, bool) = database.connection().query_row("SELECT moves_granted_at IS NOT NULL, transcripts_granted_at IS NOT NULL FROM suplex_external_agents WHERE id = ?1", [agent_id], |row| Ok((row.get(0)?, row.get(1)?)))?;
         database.connection().execute(
             "UPDATE suplex_external_agents SET last_used_at = ?1, updated_at = ?1 WHERE id = ?2",
             params![now_iso, agent_id],
@@ -963,6 +995,7 @@ pub fn oauth_principal(
             cursor_key: cursor_key.to_owned(),
             answer_grant,
             moves_grant,
+            transcripts_grant,
         })
     })
 }

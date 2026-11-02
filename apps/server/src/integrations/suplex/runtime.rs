@@ -16,7 +16,10 @@ use crate::{
     http::{AppState, routes::agent_api as routes},
     identity::external_agents::Principal,
     moves,
-    tasks::agent_api::{self, Creation},
+    tasks::{
+        agent_api::{self, Creation},
+        agent_transcript, agent_turns,
+    },
 };
 
 use super::{InvalidArguments, TOOLS};
@@ -50,6 +53,7 @@ impl SuplexMcpRuntime {
                     self.agent_delivery,
                     principal.answer_grant.is_some(),
                     principal.moves_grant,
+                    principal.transcripts_grant,
                 ),
             )),
             "suplex_list_workflows" => {
@@ -234,6 +238,29 @@ impl SuplexMcpRuntime {
                 state.with_database(|db| moves::agent_archive(db, principal, &id))?;
                 state.host_terminals.close(&moves::shell::terminal_id(&id));
                 Ok((204, Value::Null))
+            }
+            "suplex_list_task_turns" => {
+                let tool = super::turns_arguments(args)?;
+                let query = crate::http::contracts::typed::agent_api::TaskTurnsQuery {
+                    limit: tool.limit,
+                    cursor: tool.cursor,
+                };
+                let turns = agent_turns::read(state, principal, &tool.task_id, &query).await?;
+                Ok((200, serde_json::to_value(turns)?))
+            }
+            "suplex_get_task_session_history" => {
+                let tool = super::session_history_arguments(args)?;
+                Ok((
+                    200,
+                    agent_transcript::read(
+                        state,
+                        principal,
+                        &tool.task_id,
+                        &tool.session_id,
+                        tool.before.as_deref(),
+                    )
+                    .await?,
+                ))
             }
             _ => Err(format!("Suplex MCP tool is unsupported: {name}").into()),
         }
@@ -525,7 +552,7 @@ mod tests {
         .await;
         assert_eq!(
             capabilities["result"]["structuredContent"]["body"],
-            crate::http::routes::agent_api::capabilities(true, false, true)
+            crate::http::routes::agent_api::capabilities(true, false, true, false)
         );
     }
 }

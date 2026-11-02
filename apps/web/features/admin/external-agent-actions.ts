@@ -2,7 +2,7 @@ import { readJsonUnchecked } from "../../lib/api.js";
 import { copyToClipboard } from "../../lib/clipboard.js";
 import type { ApiExternalAgent } from "../../shell/view-shared.js";
 import { externalAgentSetupInstructions } from "./external-agent-setup-instructions.js";
-import { replaceExternalAgentProjects, revokeExternalAgent as revokeAgent, setExternalAgentAnswerGrant, setExternalAgentMovesGrant } from "./external-agent-api.js";
+import { replaceExternalAgentProjects, revokeExternalAgent as revokeAgent, setExternalAgentAnswerGrant, setExternalAgentMovesGrant, setExternalAgentTranscriptsGrant } from "./external-agent-api.js";
 import type { Dispatch, SetStateAction } from "react";
 
 type PairingCode = {
@@ -181,6 +181,14 @@ export function createExternalAgentActions({
       setError("Unable to update Move permission");
     }
   };
+  const setTranscriptsGrant = async (agent: ApiExternalAgent, granted: boolean): Promise<void> => {
+    try {
+      await setExternalAgentTranscriptsGrant(agent.id, granted);
+      await reload();
+    } catch {
+      setError("Unable to update transcript permission");
+    }
+  };
   const copyPairingCode = async (): Promise<void> => {
     if (!pairingCodeData?.code) return;
     if (await copyToClipboard(pairingCodeData.code, "Copied the pairing code to clipboard")) {
@@ -212,6 +220,7 @@ export function createExternalAgentActions({
     saveExternalAgentProjects,
     setAnswerGrant,
     setMovesGrant,
+    setTranscriptsGrant,
     copyPairingCode,
     copyExternalAgentSetupInstructions,
   };

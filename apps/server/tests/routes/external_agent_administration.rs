@@ -339,4 +339,30 @@ pub(crate) mod tests {
         assert_eq!(server.request(reqwest::Method::GET, "/api/agent/moves?projectId=project_api", &headers, None).await.status(), 404);
         assert_eq!(server.send(reqwest::Method::PUT, &format!("/api/admin/external-agents/{id}/moves-grant"), Some(server.member_cookie.as_str()), Some(json!({"granted":true}))).await.0, 404);
     }
+
+    #[tokio::test]
+    async fn administrators_toggle_transcript_grants_for_paired_agents() {
+        let server = server(None).await;
+        let admin = Some(server.admin_cookie.as_str());
+        let (_, created) = server.send(reqwest::Method::POST, "/api/admin/external-agents", admin, Some(json!({"name":"Transcript agent","companyId":"company_api","projectIds":["project_api"]}))).await;
+        assert!(created["agent"]["transcriptsGrantedAt"].is_null());
+        let id = created["agent"]["id"].as_str().unwrap();
+        let (_, paired) = server.send(reqwest::Method::POST, "/api/agent/pairing/exchange", None, Some(json!({"pairingCode":created["pairingCode"],"profileId":"transcripts"}))).await;
+        let bearer = format!("Bearer {}", paired["credential"].as_str().unwrap());
+        let headers = [("authorization", bearer.as_str())];
+        async fn me(server: &Server, headers: &[(&str, &str)]) -> Value {
+            server.request(reqwest::Method::GET, "/api/agent/me", headers, None).await.json::<Value>().await.unwrap()
+        }
+        assert_eq!(me(&server, &headers).await["transcriptsGrant"], false);
+        let (status, granted) = server.send(reqwest::Method::PUT, &format!("/api/admin/external-agents/{id}/transcripts-grant"), admin, Some(json!({"granted":true}))).await;
+        assert_eq!(status, 200);
+        assert!(granted["agent"]["transcriptsGrantedAt"].is_string());
+        assert!(granted["agent"]["transcriptsGrantedByUserId"].is_string());
+        assert_eq!(me(&server, &headers).await["capabilities"]["transcripts"], true);
+        let (status, revoked) = server.send(reqwest::Method::PUT, &format!("/api/admin/external-agents/{id}/transcripts-grant"), admin, Some(json!({"granted":false}))).await;
+        assert_eq!(status, 200);
+        assert!(revoked["agent"]["transcriptsGrantedAt"].is_null());
+        assert_eq!(me(&server, &headers).await["transcriptsGrant"], false);
+        assert_eq!(server.send(reqwest::Method::PUT, &format!("/api/admin/external-agents/{id}/transcripts-grant"), Some(server.member_cookie.as_str()), Some(json!({"granted":true}))).await.0, 404);
+    }
 }

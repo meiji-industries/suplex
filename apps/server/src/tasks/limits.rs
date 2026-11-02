@@ -21,7 +21,7 @@ pub(crate) struct ObservedTaskLimitUsage {
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(crate) struct TaskLimits {
+pub struct TaskLimits {
     pub(crate) budget_usd: f64,
     pub(crate) max_turns: i64,
 }
@@ -204,7 +204,7 @@ pub fn answer_task_limit(
     observe_lifecycle(database, task_id)
 }
 
-fn admitted_turn_count(database: &SuplexDatabase, task_id: &str) -> DatabaseResult<i64> {
+pub(crate) fn admitted_turn_count(database: &SuplexDatabase, task_id: &str) -> DatabaseResult<i64> {
     Ok(database.connection().query_row(
         "SELECT COUNT(*) FROM suplex_task_turns WHERE task_id = ?1 AND prompted_at IS NOT NULL",
         [task_id],
@@ -427,11 +427,11 @@ use crate::{
 use std::{path::Path, sync::OnceLock};
 /// A native session whose usage counts toward the task limits: Suplex id,
 /// native id, kind, and instance home directory.
-type UsageSession = (String, String, String, Option<String>);
+pub(crate) type UsageSession = (String, String, String, Option<String>);
 
 /// The sessions with admitted turns, the effective budget and turn limit, and
 /// the admitted turn count.
-fn usage_scope(
+pub(crate) fn usage_scope(
     database: &SuplexDatabase,
     task_id: &str,
 ) -> DatabaseResult<(Vec<UsageSession>, f64, i64, i64)> {
@@ -466,7 +466,7 @@ fn usage_scope(
 }
 
 /// The pricing catalog, read only when some observed usage is unpriced.
-async fn pricing_for_unpriced(
+pub(crate) async fn pricing_for_unpriced(
     observed: &[(String, String, NativeTimeline)],
 ) -> Option<std::sync::Arc<crate::profiles::model_pricing::ModelPricingCatalog>> {
     static PRICING: OnceLock<Result<ModelsDevCatalogReader, String>> = OnceLock::new();
@@ -484,26 +484,12 @@ async fn pricing_for_unpriced(
     }
 }
 
-/// TypeScript `observeTaskLimitUsage`. `require_complete` reports no cost
-/// unless every session has settled, fully priced usage.
-pub(crate) async fn observed_usage(
-    database: &mut SuplexDatabase,
+/// The native timeline of each session, in session order.
+async fn read_timelines(
     database_path: &Path,
-    task_id: &str,
-    require_complete: bool,
-) -> DatabaseResult<ObservedTaskLimitUsage> {
-    let (sessions, budget, max_turns, admitted_turns) = usage_scope(database, task_id)?;
-    if (max_turns > 0 && admitted_turns >= max_turns) || budget == 0.0 {
-        return Ok(ObservedTaskLimitUsage {
-            estimated_cost_usd: None,
-        });
-    }
-    if sessions.is_empty() {
-        return Ok(ObservedTaskLimitUsage {
-            estimated_cost_usd: (!require_complete).then_some(0.0),
-        });
-    }
-    let mut observed: Vec<(String, String, NativeTimeline)> = Vec::new();
+    sessions: Vec<UsageSession>,
+) -> DatabaseResult<Vec<(String, String, NativeTimeline)>> {
+    let mut observed = Vec::new();
     for (session_id, native_id, role, instance) in sessions {
         let reader = task_harness_registry::native_session_reader(&native_id)
             .ok_or("Native task usage is not available. Suplex will retry the observation.")?;
@@ -519,6 +505,62 @@ pub(crate) async fn observed_usage(
             .map_err(|error| error.to_string())?;
         observed.push((native_id, role, timeline));
     }
+    Ok(observed)
+}
+
+/// The priced usage of the given sessions, one entry per native message.
+/// Nothing is written.
+pub(crate) async fn observe_priced_usage(
+    database_path: &Path,
+    sessions: Vec<UsageSession>,
+) -> DatabaseResult<Vec<(String, String, UsageEntry)>> {
+    let mut observed = read_timelines(database_path, sessions).await?;
+    if let Some(pricing) = pricing_for_unpriced(&observed).await {
+        for (_, _, timeline) in &mut observed {
+            estimate_unpriced_usage(&mut timeline.usage, &pricing);
+        }
+    }
+    Ok(dedupe_usage(observed))
+}
+
+/// TypeScript `observeTaskLimitUsage`. `require_complete` reports no cost
+/// unless every session has settled, fully priced usage. At the turn limit
+/// the dispatch path reads spend for the limit question on a best-effort
+/// basis, so a failed read leaves the turn limit to apply on its own.
+pub(crate) async fn observed_usage(
+    database: &mut SuplexDatabase,
+    database_path: &Path,
+    task_id: &str,
+    require_complete: bool,
+) -> DatabaseResult<ObservedTaskLimitUsage> {
+    let (sessions, budget, max_turns, admitted_turns) = usage_scope(database, task_id)?;
+    let unknown = ObservedTaskLimitUsage {
+        estimated_cost_usd: None,
+    };
+    let at_turn_limit = max_turns > 0 && admitted_turns >= max_turns;
+    if budget == 0.0 || (at_turn_limit && require_complete) {
+        return Ok(unknown);
+    }
+    let usage = read_usage(database, database_path, task_id, sessions, require_complete).await;
+    if at_turn_limit {
+        return Ok(usage.unwrap_or(unknown));
+    }
+    usage
+}
+
+async fn read_usage(
+    database: &mut SuplexDatabase,
+    database_path: &Path,
+    task_id: &str,
+    sessions: Vec<UsageSession>,
+    require_complete: bool,
+) -> DatabaseResult<ObservedTaskLimitUsage> {
+    if sessions.is_empty() {
+        return Ok(ObservedTaskLimitUsage {
+            estimated_cost_usd: (!require_complete).then_some(0.0),
+        });
+    }
+    let observed = read_timelines(database_path, sessions).await?;
     // TypeScript `observeTaskLimitUsage`: a session without usage leaves the
     // observation incomplete; dispatch continues with the partial cost.
     let pricing = pricing_for_unpriced(&observed).await;
@@ -564,7 +606,7 @@ pub(crate) fn settle_usage(
 }
 
 /// TypeScript `usageIsUnpriced`.
-fn unpriced(entry: &UsageEntry) -> bool {
+pub(crate) fn unpriced(entry: &UsageEntry) -> bool {
     let tokens = entry.tokens;
     entry.cost_usd == 0.0
         && tokens.input + tokens.output + tokens.reasoning + tokens.cache_read + tokens.cache_write
@@ -584,23 +626,45 @@ pub(crate) fn estimate_unpriced_usage(
     }
 }
 
+/// One usage entry per native session and message; a later observation
+/// replaces an earlier one.
+pub(crate) fn dedupe_usage(
+    observed: Vec<(String, String, NativeTimeline)>,
+) -> Vec<(String, String, UsageEntry)> {
+    let mut entries: Vec<(String, String, UsageEntry)> = Vec::new();
+    for (native_id, role, timeline) in observed {
+        for entry in timeline.usage {
+            entries.retain(|(session, _, kept)| {
+                session != &native_id || kept.message_id != entry.message_id
+            });
+            entries.push((native_id.clone(), role.clone(), entry));
+        }
+    }
+    entries
+}
+
+/// TypeScript `usageMetrics(usage).cost`: no cost when there is no usage, or
+/// when all usage is unpriced.
+pub(crate) fn total_cost(entries: &[(String, String, UsageEntry)]) -> Option<f64> {
+    let cost: f64 = entries.iter().map(|(_, _, entry)| entry.cost_usd).sum();
+    let wholly_unpriced = cost <= 0.0 && entries.iter().any(|(_, _, entry)| unpriced(entry));
+    (!entries.is_empty() && !wholly_unpriced).then_some(cost)
+}
+
 /// TypeScript `replaceNativeUsage`, keyed by native session and message.
-/// Returns TypeScript `usageMetrics(usage).cost`: no cost when there is no
-/// usage, or when all usage is unpriced.
+/// Returns TypeScript `usageMetrics(usage).cost`.
 pub(crate) fn replace_observed_usage(
     database: &mut SuplexDatabase,
     task_id: &str,
     observed: Vec<(String, String, NativeTimeline)>,
 ) -> DatabaseResult<Option<f64>> {
-    let mut snapshots: Vec<(String, bool, serde_json::Value)> = Vec::new();
-    for (native_id, role, timeline) in observed {
-        for entry in timeline.usage {
-            snapshots.retain(|(session, _, snapshot)| {
-                session != &native_id || snapshot["messageId"] != entry.message_id.as_str()
-            });
-            snapshots.push((
-                native_id.clone(),
-                unpriced(&entry),
+    let entries = dedupe_usage(observed);
+    let cost = total_cost(&entries);
+    let snapshots: Vec<(&str, serde_json::Value)> = entries
+        .iter()
+        .map(|(native_id, role, entry)| {
+            (
+                native_id.as_str(),
                 serde_json::json!({
                     "sessionId":native_id,"messageId":entry.message_id,"turnId":entry.turn_id,
                     "role":role,"provider":entry.provider,"model":entry.model,
@@ -613,16 +677,11 @@ pub(crate) fn replace_observed_usage(
                     "generationMs":entry.completed_at_ms.and(entry.generation_ms),
                     "firstResponseMs":entry.first_response_ms,
                 }),
-            ));
-        }
-    }
-    let cost: f64 = snapshots
-        .iter()
-        .map(|(_, _, snapshot)| snapshot["cost"].as_f64().unwrap_or_default())
-        .sum();
-    let wholly_unpriced = cost <= 0.0 && snapshots.iter().any(|(_, unpriced, _)| *unpriced);
+            )
+        })
+        .collect();
     database.transaction(false, |database| {
-        for (session_id, _, _) in &snapshots {
+        for (session_id, _) in &snapshots {
             let belongs: bool = database.connection().query_row(
                 "SELECT EXISTS(SELECT 1 FROM suplex_task_sessions WHERE task_id = ?1 AND native_session_id = ?2)",
                 rusqlite::params![task_id, session_id], |row| row.get(0),
@@ -631,7 +690,7 @@ pub(crate) fn replace_observed_usage(
         }
         database.connection().execute("DELETE FROM suplex_task_usage WHERE task_id = ?1", [task_id])?;
         let time = now_millis_rfc3339();
-        for (session_id, _, snapshot) in &snapshots {
+        for (session_id, snapshot) in &snapshots {
             database.connection().execute(
                 "INSERT INTO suplex_task_usage (task_id,session_id,message_id,snapshot,observed_at) VALUES (?1,?2,?3,?4,?5)",
                 rusqlite::params![task_id, session_id, snapshot["messageId"].as_str(), snapshot.to_string(), time],
@@ -639,7 +698,7 @@ pub(crate) fn replace_observed_usage(
         }
         Ok(())
     })?;
-    Ok((!snapshots.is_empty() && !wholly_unpriced).then_some(cost))
+    Ok(cost)
 }
 
 pub(crate) fn needs_admission_usage(

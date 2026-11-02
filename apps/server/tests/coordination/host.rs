@@ -1363,6 +1363,102 @@ mod host_tests {
         fs::remove_dir_all(base).unwrap();
     }
 
+    #[tokio::test]
+    async fn the_turn_limit_pause_states_spend_when_the_read_succeeds_and_holds_when_it_fails() {
+        let (base, database_path, task_id) = fixture_task();
+        let now = Utc::now();
+        let root = root_controller::prepare_root(
+            &mut SuplexDatabase::open(&database_path, OpenMode::ReadWrite).unwrap(),
+            &task_id,
+        )
+        .unwrap();
+        let turn_id = {
+            let mut database = SuplexDatabase::open(&database_path, OpenMode::ReadWrite).unwrap();
+            assert!(
+                root_session_store::bind_native_session(&mut database, &root, "pi-1234-abcd", now)
+                    .unwrap()
+            );
+            let turn = root_session_store::pending_turns(&database, &root.id)
+                .unwrap()
+                .remove(0);
+            database
+                .connection()
+                .execute(
+                    "UPDATE suplex_task_turns SET status = 'prompted', prompted_at = ?1 WHERE id = ?2",
+                    rusqlite::params![now.to_rfc3339(), turn.id],
+                )
+                .unwrap();
+            database
+                .connection()
+                .execute(
+                    "UPDATE suplex_task_controls SET status = 'active', budget_usd = 15.0, max_turns = 1 WHERE task_id = ?1",
+                    [&task_id],
+                )
+                .unwrap();
+            turn.id
+        };
+        let directory = session_reader::session_directory(&database_path, &root.id).unwrap();
+        fs::create_dir_all(&directory).unwrap();
+        fs::write(
+            directory.join(format!("turn-{turn_id}.jsonl")),
+            include_str!("../../src/runtimes/pi/fixtures/turn.jsonl"),
+        )
+        .unwrap();
+        let open = || SuplexDatabase::open(&database_path, OpenMode::ReadWrite).unwrap();
+        let spend = |require| {
+            let database_path = database_path.clone();
+            let task_id = task_id.clone();
+            async move {
+                observed_usage(
+                    &mut SuplexDatabase::open(&database_path, OpenMode::ReadWrite).unwrap(),
+                    &database_path,
+                    &task_id,
+                    require,
+                )
+                .await
+                .unwrap()
+            }
+        };
+        let pause_question = |usage| {
+            let database = open();
+            assert!(matches!(
+                crate::tasks::limits::check_admission(&database, &task_id, usage, now).unwrap(),
+                crate::tasks::limits::Admission::Blocked
+            ));
+            let (status, question, pause): (String, String, String) = database
+                .connection()
+                .query_row(
+                    "SELECT status, human_question, limit_pause_json FROM suplex_task_controls WHERE task_id = ?1",
+                    [&task_id],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                )
+                .unwrap();
+            assert_eq!(status, "waiting_human");
+            assert!(pause.contains("\"reason\":\"turns\""), "{pause}");
+            database
+                .connection()
+                .execute(
+                    "UPDATE suplex_task_controls SET status = 'active', limit_pause_json = NULL, human_question = NULL, human_question_id = NULL WHERE task_id = ?1",
+                    [&task_id],
+                )
+                .unwrap();
+            question
+        };
+
+        let read = spend(false).await;
+        assert!((read.estimated_cost_usd.unwrap() - 0.00034).abs() < 1e-12);
+        assert!(pause_question(read).contains("Estimated spend is $0.00 of $15.00."));
+        assert_eq!(spend(true).await.estimated_cost_usd, None);
+
+        fs::remove_dir_all(&directory).unwrap();
+        fs::write(&directory, "not a directory").unwrap();
+        let failed = spend(false).await;
+        assert_eq!(failed.estimated_cost_usd, None);
+        assert!(pause_question(failed).contains("Estimated spend is not available."));
+        fs::remove_file(&directory).unwrap();
+        fs::remove_dir_all(base).unwrap();
+    }
+
     /// `tests/task-limits.test.ts`: the budget proposed at a budget pause.
     #[test]
     fn a_budget_suggestion_rounds_spend_plus_allowance() {

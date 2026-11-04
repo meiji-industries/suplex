@@ -23,7 +23,7 @@ const instance = { id: "instance_1", provider: "claude-code", label: "Work lapto
 
 function mockReads(overrides: { providers?: typeof providersResponse; instances?: typeof instance[] } = {}) {
   api.readJsonUnchecked.mockImplementation(async (url: string, init?: RequestInit) => {
-    if (init?.method === "POST" && url.endsWith("/login")) return { paneId: "pane-9" };
+    if (init?.method === "POST" && (url.endsWith("/login") || url.endsWith("/install"))) return { paneId: "pane-9" };
     if (init?.method === "POST" && url === "/api/admin/provider-instances") return { id: "instance_new" };
     if (init?.method === "DELETE") return {};
     if (url === "/api/admin/providers") return overrides.providers ?? providersResponse;
@@ -83,6 +83,60 @@ test("sign in opens the sticky terminal, polls status, and Done closes it", asyn
   expect(done).not.toBeNull();
   await act(async () => { done!.click(); });
   expect(api.readJsonUnchecked).toHaveBeenCalledWith("/api/admin/provider-login/pane-9", { method: "DELETE" });
+  expect(container.querySelector("[data-pane-terminal]")).toBeNull();
+});
+
+test("a missing provider offers Install and no Login, and an installed provider offers Login and no Install", async () => {
+  const missing = { ...providersResponse.providers[0]!, id: "codex", label: "Codex CLI", status: "missing" };
+  mockReads({ providers: { ...providersResponse, providers: [...providersResponse.providers, missing] }, instances: [] });
+  const container = document.createElement("div");
+  document.body.append(container);
+  await act(async () => { createRoot(container).render(<ProviderSettingsView />); });
+
+  expect(container.querySelector('[aria-label="Install Codex CLI"]')?.textContent).toBe("Install");
+  expect(container.querySelector('[aria-label="Login to Codex CLI"]')).toBeNull();
+  expect(container.textContent).toContain("npm install -g @openai/codex");
+  expect(container.textContent).toContain("Suplex can install a missing provider on the machine that runs Suplex.");
+  expect(container.querySelector('[aria-label="Login to Claude Code"]')).not.toBeNull();
+  expect(container.querySelector('[aria-label="Install Claude Code"]')).toBeNull();
+  expect(container.querySelector('[aria-label="Install Devin CLI"]')).toBeNull();
+});
+
+test("Install opens the install terminal, and the row changes to Login after the installation", async () => {
+  const missing = { ...providersResponse.providers[0]!, status: "missing" };
+  mockReads({ providers: { ...providersResponse, providers: [missing] }, instances: [] });
+  const container = document.createElement("div");
+  document.body.append(container);
+  await act(async () => { createRoot(container).render(<ProviderSettingsView />); });
+
+  await act(async () => { container.querySelector<HTMLButtonElement>('[aria-label="Install Claude Code"]')!.click(); });
+  expect(api.readJsonUnchecked).toHaveBeenCalledWith("/api/admin/providers/claude-code/install", { method: "POST" });
+  expect(container.querySelector<HTMLElement>("[data-pane-terminal]")?.dataset.paneTerminal).toBe("/api/admin/provider-login/pane-9/terminal");
+  expect(container.querySelector('[role="region"]')?.getAttribute("aria-label")).toBe("Install terminal for Claude Code");
+  expect(container.textContent).toContain("Install: Claude Code");
+
+  // The next poll observes the installed provider while the pane stays open.
+  mockReads({ providers: providersResponse, instances: [] });
+  await act(async () => { await vi.advanceTimersByTimeAsync(3_100); });
+  expect(container.querySelector('[aria-label="Install Claude Code"]')).toBeNull();
+  expect(container.querySelector('[aria-label="Login to Claude Code"]')).not.toBeNull();
+  expect(container.querySelector("[data-pane-terminal]")).not.toBeNull();
+});
+
+test("an install pane failure shows the server error", async () => {
+  const missing = { ...providersResponse.providers[0]!, status: "missing" };
+  mockReads({ providers: { ...providersResponse, providers: [missing] }, instances: [] });
+  const base = api.readJsonUnchecked.getMockImplementation()!;
+  api.readJsonUnchecked.mockImplementation(async (url: string, init?: RequestInit) => {
+    if (url.endsWith("/install")) throw new Error("Suplex could not open an install pane. Check Herdr on the Suplex host.");
+    return base(url, init);
+  });
+  const container = document.createElement("div");
+  document.body.append(container);
+  await act(async () => { createRoot(container).render(<ProviderSettingsView />); });
+
+  await act(async () => { container.querySelector<HTMLButtonElement>('[aria-label="Install Claude Code"]')!.click(); });
+  expect(container.querySelector('[role="alert"]')?.textContent).toBe("Suplex could not open an install pane. Check Herdr on the Suplex host.");
   expect(container.querySelector("[data-pane-terminal]")).toBeNull();
 });
 

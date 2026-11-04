@@ -2,7 +2,6 @@ import { useCallback, useEffect, useState, type ReactElement, type ReactNode } f
 
 import { GithubDeviceSignIn } from "../../components/app/github-device-sign-in.js";
 import { ProviderIcon } from "../../components/app/provider-icons.js";
-import { PROVIDER_INSTALLATIONS } from "../../components/app/provider-installation.js";
 import { HerdrInstallButton, useSystemHealth } from "../../components/app/system-health.js";
 import { ToolIcon, type ToolIconId } from "../../components/app/tool-icons.js";
 import type { HealthCheck } from "../../contracts/health.js";
@@ -111,8 +110,7 @@ function AddEndpointRow({ onAdded }: { onAdded: () => Promise<void> }): ReactEle
   </Row>;
 }
 
-function ProviderRow({ provider, revealed, busy, onSignIn }: { provider: CliProviderSummary; revealed: boolean; busy: boolean; onSignIn: () => void }): ReactElement {
-  const [open, setOpen] = useState(false);
+function ProviderRow({ provider, revealed, busy, onSignIn, onInstall }: { provider: CliProviderSummary; revealed: boolean; busy: boolean; onSignIn: () => void; onInstall: () => void }): ReactElement {
   const [later, setLater] = useState(false);
   const icon = <ProviderIcon provider={provider.id} />;
   if (!revealed) return <Row icon={icon} name={provider.label} detail="Checking this subscription" status={<Checking />} />;
@@ -121,14 +119,12 @@ function ProviderRow({ provider, revealed, busy, onSignIn }: { provider: CliProv
     return <Row icon={icon} name={provider.label} detail={`${provider.connection.account ? `Signed in as ${provider.connection.account}` : "Signed in"} · ${models}`} status={<Done label="Connected" />} />;
   }
   if (later) return <Row icon={icon} name={provider.label} detail="Add it later in Settings" status={<button className="back" type="button" style={{ fontSize: 13, padding: "0 10px" }} onClick={() => setLater(false)}>Undo</button>} />;
-  const laterButton = <button className="back" type="button" style={{ fontSize: 13, padding: "0 10px" }} onClick={() => { setLater(true); setOpen(false); }}>Add later</button>;
-  if (provider.status === "missing") return <Row icon={icon} name={provider.label} detail="Not installed" status={<>{laterButton}<button className="pill p-mute" type="button" aria-expanded={open} style={{ cursor: "pointer" }} onClick={() => setOpen(value => !value)}>Install {open ? "↑" : "↓"}</button></>}>
-    {open ? <CopyCommand command={PROVIDER_INSTALLATIONS[provider.id].command} /> : null}
-  </Row>;
+  const laterButton = <button className="back" type="button" style={{ fontSize: 13, padding: "0 10px" }} onClick={() => setLater(true)}>Add later</button>;
+  if (provider.status === "missing") return <Row icon={icon} name={provider.label} detail="Not installed" status={<>{laterButton}<button className="btn2" type="button" aria-label={`Install ${provider.label}`} style={SMALL_BUTTON} disabled={busy} onClick={onInstall}>Install</button></>} />;
   return <Row icon={icon} name={provider.label} detail={provider.connection.summary || "Not signed in"} status={<>{laterButton}<button className="btn2" type="button" style={{ height: 30, fontSize: 12, padding: "0 12px" }} disabled={busy} onClick={onSignIn}>Sign in</button></>} />;
 }
 
-export function StackStep({ onBack, onNext, data, startLogin, loginPending }: StepProps & { data: OnboardingData; startLogin: (key: string, label: string, url: string) => Promise<void>; loginPending: string | null }): ReactElement {
+export function StackStep({ onBack, onNext, data, startLogin, startInstall, loginPending }: StepProps & { data: OnboardingData; startLogin: (key: string, label: string, url: string) => Promise<void>; startInstall: (key: string, label: string, url: string) => Promise<void>; loginPending: string | null }): ReactElement {
   const { user } = useCompanyContext();
   const { snapshot, refresh, refreshing } = useSystemHealth();
   const { state, loading, reload } = data;
@@ -142,6 +138,10 @@ export function StackStep({ onBack, onNext, data, startLogin, loginPending }: St
   const signIn = (provider: CliProviderSummary): void => {
     setError("");
     void startLogin(`provider:${provider.id}`, provider.label, `/api/admin/providers/${provider.id}/login`).catch(reason => setError(reason instanceof Error ? reason.message : "Suplex could not open a sign-in pane."));
+  };
+  const install = (provider: CliProviderSummary): void => {
+    setError("");
+    void startInstall(`install:${provider.id}`, provider.label, `/api/admin/providers/${provider.id}/install`).catch(reason => setError(reason instanceof Error ? reason.message : "Suplex could not open an install pane."));
   };
   const checkAgain = (): void => { void refresh(); void reload(); };
   // Stable, so the GitHub sign-in poll is not rescheduled on every render.
@@ -168,7 +168,7 @@ export function StackStep({ onBack, onNext, data, startLogin, loginPending }: St
         {state.providers.length === 0 ? <Row icon={<span />} name="Agent subscriptions" detail="Checking the subscriptions on this computer" status={<Checking />} />
           : state.providers.map((provider, index) => provider.kind === "local-endpoint"
             ? <EndpointRow key={provider.id} provider={provider} revealed={shown > ONBOARDING_TOOL_CHECKS.length + index} />
-            : <ProviderRow key={provider.id} provider={provider} revealed={shown > ONBOARDING_TOOL_CHECKS.length + index} busy={loginPending !== null} onSignIn={() => signIn(provider)} />)}
+            : <ProviderRow key={provider.id} provider={provider} revealed={shown > ONBOARDING_TOOL_CHECKS.length + index} busy={loginPending !== null} onSignIn={() => signIn(provider)} onInstall={() => install(provider)} />)}
         {state.providers.length > 0 && user?.role === "admin" ? <AddEndpointRow onAdded={reload} /> : null}
       </div>
       {connected.length && shown > ONBOARDING_TOOL_CHECKS.length ? <div className="row onb-fade-in" role="status" style={{ fontSize: 13.5, color: "#cfcfcf" }}>

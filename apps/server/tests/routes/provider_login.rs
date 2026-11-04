@@ -170,6 +170,87 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn provider_install_opens_its_own_pane_with_the_install_command_and_closes() {
+        let mut fixture = fixture();
+        let (herdr, calls) = login_herdr();
+        fixture.state.herdr = herdr;
+        let address = fixture.serve().await;
+        let client = reqwest::Client::new();
+        let request = |method: Method, path: &str| {
+            client
+                .request(method, format!("http://{address}{path}"))
+                .header("host", "127.0.0.1:4113")
+                .header("origin", "http://127.0.0.1:4113")
+                .header("cookie", &fixture.cookie)
+        };
+        let post = |path: &'static str| request(Method::POST, path).send();
+
+        let started = post("/api/admin/providers/devin/install").await.unwrap();
+        assert_eq!(started.status(), 200);
+        assert_eq!(started.headers()["cache-control"], "private, no-store");
+        assert_eq!(
+            started.json::<Value>().await.unwrap(),
+            json!({"paneId":"pane-login-1"})
+        );
+        let (command, _) = crate::profiles::provider_readiness::install_remedy("devin");
+        assert!(
+            calls
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|call| call.iter().any(|arg| arg.contains(command))),
+            "the pane runs the install command"
+        );
+
+        let reused: Value = post("/api/admin/providers/devin/install")
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(reused["paneId"], "pane-login-1");
+
+        // The sign-in has its own target, so it does not reuse the install pane.
+        let login: Value = post("/api/admin/providers/devin/login")
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(login["paneId"], "pane-login-2");
+        let install: Value = post("/api/admin/providers/devin/install")
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(install["paneId"], "pane-login-3");
+
+        assert_eq!(
+            post("/api/admin/providers/openai/install")
+                .await
+                .unwrap()
+                .status(),
+            400
+        );
+        let closed = request(Method::DELETE, "/api/admin/provider-login/pane-login-3")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(closed.status(), 204);
+
+        fixture.execute("UPDATE suplex_users SET role = 'member'", &[]);
+        assert_eq!(
+            post("/api/admin/providers/devin/install")
+                .await
+                .unwrap()
+                .status(),
+            403
+        );
+        let _ = std::fs::remove_dir_all(&fixture.root);
+    }
+
+    #[tokio::test]
     async fn the_sign_in_terminal_is_admin_only_and_bridges_control_input() {
         let mut fixture = fixture();
         let frame = r#"{"type":"terminal.frame","seq":1,"full":true,"width":80,"height":24,"bytes":"aGk="}"#;

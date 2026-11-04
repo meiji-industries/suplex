@@ -24,7 +24,7 @@ export function OnboardingView(): ReactElement {
   const { currentCompany } = useCompanyContext();
   const companyId = currentCompany?.id ?? "";
   const data = useOnboardingData(currentCompany);
-  const { login, loginPending, startLogin, closeLogin } = useProviderLogin({ reload: data.reload });
+  const { login, loginPending, startLogin, startInstall, closeLogin } = useProviderLogin({ reload: data.reload });
   // Without a company the first screen is unknown; show the empty window instead of a screen that jumps.
   if (!currentCompany) return <div className="onb" />;
   const step = requestedStep() ?? firstStep(data.state);
@@ -40,7 +40,7 @@ export function OnboardingView(): ReactElement {
       <IntroSlide key={step} id={step as IntroStepId} />
     </OnboardingFrame>
     : step === "you" ? <YouStep {...props} data={data} />
-    : step === "stack" ? <StackStep {...props} data={data} startLogin={startLogin} loginPending={loginPending} />
+    : step === "stack" ? <StackStep {...props} data={data} startLogin={startLogin} startInstall={startInstall} loginPending={loginPending} />
     : step === "team" ? <TeamStep {...props} data={data} />
     : step === "project" ? <ProjectStep {...props} data={data} />
     : <FirstTaskStep {...props} data={data} />;

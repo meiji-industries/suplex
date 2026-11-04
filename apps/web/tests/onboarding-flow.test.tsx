@@ -7,12 +7,14 @@ const fixture = vi.hoisted(() => ({
   company: { id: "company-1", name: "Acme", issueCode: "ACME" as string | undefined, status: "active" },
   projects: [] as unknown[],
   checks: [] as unknown[],
+  providers: [] as unknown[],
 }));
+const login = vi.hoisted(() => ({ startLogin: vi.fn(async () => undefined), startInstall: vi.fn(async () => undefined) }));
 vi.mock("../shell/company-context.js", () => ({ useCompanyContext: () => ({ currentCompany: fixture.company, user: { id: "user-1", role: "admin", displayName: "Ada", username: "ada", avatarSeed: "ada", title: "" }, updateProfile: vi.fn(), renameCompany: vi.fn(), setCompanyIssueCode: vi.fn(), reloadCompanies: vi.fn() }), useOptionalCompanyContext: () => undefined }));
-vi.mock("../features/onboarding/onboarding.js", async importOriginal => ({ ...(await importOriginal()), useOnboardingData: () => ({ state: { company: fixture.company, checks: fixture.checks, providers: [], profiles: [], projects: fixture.projects }, loading: false, error: "", reload: vi.fn(async () => undefined) }) }));
+vi.mock("../features/onboarding/onboarding.js", async importOriginal => ({ ...(await importOriginal()), useOnboardingData: () => ({ state: { company: fixture.company, checks: fixture.checks, providers: fixture.providers, profiles: [], projects: fixture.projects }, loading: false, error: "", reload: vi.fn(async () => undefined) }) }));
 vi.mock("../features/settings/lib/billing-api.js", () => ({ getBillingSummary: vi.fn(), startTrial: vi.fn(async () => ({})) }));
 vi.mock("../features/account/lib/account-api.js", async importOriginal => ({ ...(await importOriginal()), getAccount: vi.fn(async () => ({ account: { email: "ada@example.com" } })), getEmailUpdates: vi.fn(async () => ({ available: true, subscribed: false })), setEmailUpdates: vi.fn(async (subscribed: boolean) => ({ available: true, subscribed })) }));
-vi.mock("../features/settings/provider-login.js", () => ({ ProviderLoginTerminal: () => null, useProviderLogin: () => ({ login: null, loginPending: null, startLogin: vi.fn(), closeLogin: vi.fn() }) }));
+vi.mock("../features/settings/provider-login.js", () => ({ ProviderLoginTerminal: () => null, useProviderLogin: () => ({ login: null, loginPending: null, startLogin: login.startLogin, startInstall: login.startInstall, closeLogin: vi.fn() }) }));
 vi.mock("../components/app/system-health.js", () => ({ useSystemHealth: () => ({ snapshot: { checks: fixture.checks }, refresh: vi.fn(), refreshing: false }), HerdrInstallButton: () => null }));
 vi.mock("../features/projects/lib/project-api.js", () => ({ createProject: vi.fn(), listRecentRepositories: vi.fn(async () => ({ repositories: [], nextPage: null })) }));
 vi.mock("../features/projects/create-project-dialog.js", () => ({ CreateProjectDialog: () => null }));
@@ -53,6 +55,7 @@ afterEach(async () => {
   fixture.company.issueCode = "ACME";
   fixture.projects = [];
   fixture.checks = [];
+  fixture.providers = [];
   vi.clearAllMocks();
 });
 
@@ -98,6 +101,32 @@ test("You Continue still moves on when the trial cannot start", async () => {
   setValue(container.querySelector<HTMLInputElement>("#onb-name")!, "Ada Lovelace");
   await act(async () => button("Continue").click());
   expect(window.location.search).toContain("step=stack");
+});
+
+test("a missing agent offers Install and Add later, and an installed agent offers Sign in", async () => {
+  const signedOut = { status: "not-connected", summary: "Not signed in" };
+  fixture.providers = [
+    { id: "codex", label: "Codex CLI", modelCount: 0, models: [], status: "missing", connection: signedOut },
+    { id: "devin", label: "Devin CLI", modelCount: 2, models: [], status: "configured", connection: signedOut },
+  ];
+  vi.useFakeTimers();
+  try {
+    await render("/onboarding?step=stack");
+    // The rows show their result one after another.
+    for (let step = 0; step < fixture.providers.length + 5; step += 1) await act(async () => { await vi.advanceTimersByTimeAsync(500); });
+  } finally {
+    vi.useRealTimers();
+  }
+  const row = (name: string): HTMLElement => Array.from(container.querySelectorAll<HTMLElement>(".sr")).find(candidate => candidate.querySelector("b")?.textContent === name)!;
+  const labels = (name: string): string[] => Array.from(row(name).querySelectorAll("button")).map(candidate => candidate.textContent?.trim() ?? "");
+
+  expect(labels("Codex CLI")).toEqual(["Add later", "Install"]);
+  expect(row("Codex CLI").querySelector(".cmd")).toBeNull();
+  expect(labels("Devin CLI")).toEqual(["Add later", "Sign in"]);
+
+  await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="Install Codex CLI"]')!.click());
+  expect(login.startInstall).toHaveBeenCalledWith("install:codex", "Codex CLI", "/api/admin/providers/codex/install");
+  expect(login.startLogin).not.toHaveBeenCalled();
 });
 
 test("adding a repo at the Free project limit starts the trial and adds it again", async () => {

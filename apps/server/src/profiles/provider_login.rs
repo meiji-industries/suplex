@@ -8,7 +8,9 @@ use crate::{
     terminals::host::{HostTerminals, Spec},
 };
 
-use super::provider_readiness::{binary_name, claude_routing_variable, resolve_executable};
+use super::provider_readiness::{
+    binary_name, claude_routing_variable, install_remedy, resolve_executable,
+};
 use crate::tasks::control::HarnessKind;
 
 pub const PROVIDER_LOGIN_WORKSPACE_LABEL: &str = "suplex-provider-login";
@@ -104,6 +106,18 @@ pub fn scoped_command(provider: &str, home_directory: Option<&str>, command: Str
 
 pub fn login_command(provider: &str, home_directory: Option<&str>) -> String {
     provider_login_command(provider, home_directory, resolve_executable(provider))
+}
+
+/// The provider install command for a pane. A Herdr pane keeps its shell when
+/// the command ends. A host terminal ends with its command, so the command
+/// continues in a shell that keeps a failure on screen.
+pub fn install_command(provider: &str, host: bool) -> String {
+    let (command, _) = install_remedy(provider);
+    if host {
+        format!("{command}; exec \"$SHELL\" -l")
+    } else {
+        command.to_owned()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -292,6 +306,19 @@ pub(crate) mod tests {
             }
             _ => fake::envelope(json!({})),
         })
+    }
+
+    #[test]
+    fn the_install_command_comes_from_readiness_and_a_host_terminal_keeps_its_result() {
+        for provider in ["opencode", "claude-code", "devin", "codex", "pi", "omp"] {
+            let (remedy, _) = install_remedy(provider);
+            assert!(!remedy.is_empty(), "{provider}");
+            assert_eq!(install_command(provider, false), remedy);
+            assert_eq!(
+                install_command(provider, true),
+                format!("{remedy}; exec \"$SHELL\" -l")
+            );
+        }
     }
 
     #[test]

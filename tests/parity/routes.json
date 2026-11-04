@@ -156,6 +156,7 @@
   "POST /api/admin/profiles/defaults",
   "POST /api/admin/provider-instances",
   "POST /api/admin/provider-instances/:instanceId/login",
+  "POST /api/admin/providers/:providerId/install",
   "POST /api/admin/providers/:providerId/login",
   "POST /api/admin/users/:userId/revoke",
   "POST /api/admin/workflows",

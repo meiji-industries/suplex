@@ -2,6 +2,7 @@
 //! what it started. The tasks own their own status.
 
 mod agent;
+pub mod draft;
 pub mod prompt;
 pub mod recommend;
 pub mod shell;

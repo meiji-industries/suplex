@@ -1,5 +1,6 @@
 import { readJsonUnchecked } from "../../../lib/api.js";
-import type { MoveBody, MoveRunBody } from "../../../contracts/moves.js";
+import type { MoveBody, MoveDraftBody, MoveRunBody } from "../../../contracts/moves.js";
+import type { MoveDraftResponse } from "../../../contracts/generated/MoveDraftResponse.js";
 import type { MoveResponse } from "../../../contracts/generated/MoveResponse.js";
 import type { MoveRunResponse } from "../../../contracts/generated/MoveRunResponse.js";
 import type { MoveRunsResponse } from "../../../contracts/generated/MoveRunsResponse.js";
@@ -47,6 +48,11 @@ export async function endMoveRun(runId: string): Promise<void> {
 /** The project's default Worker reads the repository and proposes moves. It can take minutes. */
 export function recommendMoves(projectId: string, signal?: AbortSignal): Promise<MoveRecommendationsResponse> {
   return readJsonUnchecked<MoveRecommendationsResponse>(`/api/projects/${encodeURIComponent(projectId)}/move-recommendations`, { method: "POST", ...(signal ? { signal } : {}) });
+}
+
+/** The project's default Worker turns a description into one move draft or a rejection. It can take minutes. */
+export function draftMove(projectId: string, body: MoveDraftBody, signal?: AbortSignal): Promise<MoveDraftResponse> {
+  return readJsonUnchecked<MoveDraftResponse>(`/api/projects/${encodeURIComponent(projectId)}/move-drafts`, { method: "POST", body: JSON.stringify(body), ...(signal ? { signal } : {}) });
 }
 
 export async function listProfiles(): Promise<ApiProfile[]> {

@@ -27,3 +27,9 @@ export const MoveRunBodySchema = z.object({
 }).strict();
 
 export type MoveRunBody = z.infer<typeof MoveRunBodySchema>;
+
+export const MoveDraftBodySchema = z.object({
+  description: z.string().trim().min(1).max(2000),
+}).strict();
+
+export type MoveDraftBody = z.infer<typeof MoveDraftBodySchema>;

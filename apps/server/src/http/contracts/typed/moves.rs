@@ -79,6 +79,22 @@ impl Contract for MoveRunBody {
     }
 }
 
+/// A plain-language description of a move for the project's default Worker.
+/// `moves::draft` checks its length, so that a bad length is a 422.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MoveDraftBody {
+    pub description: String,
+}
+
+impl Contract for MoveDraftBody {
+    fn schema(input: Option<&Value>) -> ContractResult<Value> {
+        Fields::new(input)?
+            .req("description", text(0, MAX))
+            .strict()
+    }
+}
+
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CompanyMovesParams {

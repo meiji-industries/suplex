@@ -77,7 +77,7 @@ part of each claim, not optional qualifications.
 
 | Integration | Implemented scope | Boundary |
 | --- | --- | --- |
-| Git | Repository and task worktree operations. | Git transport authentication is separate from issue-tracker and repository API credentials. Validate clone and push with the actual host account. |
+| Git | Repository and task worktree operations. | HTTPS operations against github.com use the machine's own Git credentials first, then the signed-in GitHub token, so a fresh machine needs no credential helper. SSH remotes and other hosts use the machine's credentials only. |
 | GitHub | Repository onboarding, issues, pull requests, check observation, delivery, and PR-label triggers. | Repository permissions, required checks, reviews, and merge policy still apply. See [GitHub delivery](../apps/server/src/integrations/github_delivery.rs). |
 | Bitbucket Cloud | Repository/PR API access and delivery to a local worktree, remote branch, or draft PR. | Automatic ready and merged targets are unsupported. See [Bitbucket integration](../apps/server/src/integrations/bitbucket.rs) and [target support](../apps/server/src/tasks/control.rs). |
 | Jira Cloud | A project can select Jira independently of its repository host, read issue context, and publish task artifacts/comments. | Configuration targets an Atlassian Cloud site and project. Publication does not change issue status, Sprint, or Fix Version. See [issue tracker](../apps/server/src/integrations/issue_tracker/jira.rs) and [issue publication](../apps/server/src/delivery/issue_evidence.rs). |

@@ -299,7 +299,7 @@ fn clone(
     token: Option<&str>,
 ) -> Result<(), git2::Error> {
     if !git::libgit2_transport() {
-        return git::system_clone(github, url, target);
+        return git::system_clone(github, url, target, token);
     }
     let transport_url = git::github_transport_url(url, token);
     let url = transport_url.as_deref().unwrap_or(url);
@@ -450,7 +450,7 @@ fn publish(
         options.remote_callbacks(callbacks);
         origin.push(&[refspec.as_str()], Some(&mut options))?;
     } else {
-        git::system_push(&repository, &refspec)?;
+        git::system_push(&repository, &refspec, token)?;
     }
     let mut config = repository.config()?;
     config.set_str(&format!("branch.{branch}.remote"), "origin")?;

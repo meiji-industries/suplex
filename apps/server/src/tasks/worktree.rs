@@ -195,7 +195,12 @@ pub fn published_base_commit(
                 .remote_callbacks(callbacks);
             origin.fetch(&[published_sha.to_string()], Some(&mut options), None)?;
         } else {
-            crate::projects::git::system_fetch(repository, &[&published_sha.to_string()], false)?;
+            crate::projects::git::system_fetch(
+                repository,
+                &[&published_sha.to_string()],
+                false,
+                github_token,
+            )?;
         }
         repository.find_commit(published_sha)?;
     }

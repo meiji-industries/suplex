@@ -31,10 +31,10 @@
 .onb button { font: inherit; }
 
 /* Window chrome */
-.onb .bar { height: 44px; flex: none; }
-.onb .nav-back, .onb .skip { position: absolute; z-index: 2; top: 64px; font-family: var(--mono); font-size: 12px; letter-spacing: .04em; line-height: 1; color: var(--fg2); text-decoration: none; background: none; border: 0; padding: 0; cursor: pointer; }
-.onb .nav-back { left: 48px; }
-.onb .skip { right: 48px; }
+/* Back and Skip sit in the bar, so the body starts below them and never scrolls under them. */
+.onb .bar { height: 84px; flex: none; display: flex; align-items: flex-end; justify-content: space-between; padding: 0 48px 8px; }
+.onb .nav-back, .onb .skip { font-family: var(--mono); font-size: 12px; letter-spacing: .04em; line-height: 1; color: var(--fg2); text-decoration: none; background: none; border: 0; padding: 0; cursor: pointer; }
+.onb .skip { margin-left: auto; }
 .onb .nav-back:hover, .onb .skip:hover, .onb .back:hover { color: var(--fg); }
 .onb .body { flex: 1; min-height: 0; display: flex; flex-direction: column; align-items: center; justify-content: flex-start; gap: 56px; padding: 12px 56px 0; overflow-y: auto; }
 /* Centered while it fits, scrolls from the top when it does not. */
@@ -192,9 +192,8 @@
   .onb .s-split .preview, .onb .s-split .preview-wrap { display: none; }
 }
 @media (max-width: 760px) {
-  .onb .nav-back { left: 20px; top: 52px; }
-  .onb .skip { right: 20px; top: 52px; }
-  .onb .body { padding: 40px 20px 0; gap: 32px; }
+  .onb .bar { height: 72px; padding: 0 20px 8px; }
+  .onb .body { padding: 12px 20px 0; gap: 32px; }
   .onb .foot { padding: 12px 20px 20px; }
   .onb .foot { gap: 16px; }
   .onb .segs { flex: 1; min-width: 0; }

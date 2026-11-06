@@ -6090,12 +6090,13 @@ dependencies = [
 
 [[package]]
 name = "suplex"
-version = "1.13.3"
+version = "1.13.4"
 dependencies = [
  "axum",
  "base64 0.22.1",
  "chrono",
  "elkrs",
+ "futures",
  "garde",
  "getrandom 0.4.3",
  "git2",
@@ -6145,7 +6146,7 @@ dependencies = [
 
 [[package]]
 name = "suplex-desktop"
-version = "1.13.3"
+version = "1.13.4"
 dependencies = [
  "base64 0.22.1",
  "block2",

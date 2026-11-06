@@ -1,9 +1,19 @@
 //! One row per agent tool.
 
 use crate::shared::time::rfc3339_millis;
-use std::{collections::HashMap, fs, path::Path};
+use std::{
+    collections::HashMap,
+    fs,
+    hash::Hash,
+    path::Path,
+    sync::{LazyLock, Mutex},
+};
 
 use chrono::Utc;
+use futures::{
+    FutureExt,
+    future::{BoxFuture, Future, Shared, join_all},
+};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
@@ -162,76 +172,39 @@ async fn read_pi_models(cli: &PiCli, environment: &HashMap<String, String>) -> V
 /// model ids; neither observation sends a model request. `probe` checks each sign-in.
 /// Each local endpoint follows the tool rows as its own row; `probe` asks it for its models.
 pub async fn read_providers(directory: &str, probe: bool, endpoints: &[LocalEndpoint]) -> Value {
-    let native = crate::runtimes::opencode::providers::read_providers(Path::new(directory), None)
-        .await
-        .unwrap_or_else(|_| {
-            json!({"directory": directory, "observedAt": rfc3339_millis(Utc::now()), "providers": []})
-        });
-    let open_code_models = native["providers"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .flat_map(|vendor| {
-            vendor["models"].as_array().into_iter().flatten().map(move |model| {
-                json!({
-                    "id": format!("{}/{}", vendor["id"].as_str().unwrap_or_default(), model["id"].as_str().unwrap_or_default()),
-                    "label": format!("{} ({})", model["label"].as_str().unwrap_or_default(), vendor["label"].as_str().unwrap_or_default()),
-                })
-            })
-        })
-        .collect::<Vec<_>>();
-    let environment = std::env::vars().collect::<HashMap<_, _>>();
-    let home = crate::profiles::agent_profiles::home_directory();
-    let codex_home = environment
-        .get("CODEX_HOME")
-        .map(std::path::PathBuf::from)
-        .or_else(|| home.as_ref().map(|home| home.join(".codex")))
-        .unwrap_or_default();
-    let rows = [
-        (&OPENCODE, "opencode", open_code_models),
-        (&CLAUDE, "claude-code", models(CLAUDE_CODE_MODELS)),
-        (&DEVIN, "devin", models(DEVIN_MODELS)),
-        (&CODEX, "codex", read_codex_models(&codex_home)),
-        (
-            &pi_cli::PI.executable,
-            pi_cli::PI.provider,
-            read_pi_models(&pi_cli::PI, &environment).await,
-        ),
-        (
-            &pi_cli::OMP.executable,
-            pi_cli::OMP.provider,
-            read_pi_models(&pi_cli::OMP, &environment).await,
-        ),
-    ];
-    let installed = rows
+    let listing = single_flight(
+        &TOOL_LISTINGS,
+        (directory.to_owned(), probe),
+        read_tools(directory.to_owned(), probe),
+    )
+    .await;
+    let installed = listing
+        .tools
         .iter()
-        .filter(|(spec, ..)| resolve_executable(spec, None, &environment, home.as_deref()).is_ok())
-        .map(|(_, id, _)| *id)
+        .filter(|tool| tool.installed)
+        .map(|tool| tool.id)
         .collect::<Vec<_>>();
     let endpoint_harness = ENDPOINT_HARNESSES
         .into_iter()
         .find(|harness| installed.contains(harness));
-    let mut providers = Vec::new();
-    for (spec, id, mut models) in rows {
-        let installed = installed.contains(&id);
-        // Pi and OMP also run each endpoint model when they are installed.
-        if installed && Some(id) != endpoint_harness && ENDPOINT_HARNESSES.contains(&id) {
-            models.extend(endpoints.iter().map(endpoint_model));
-        }
-        let connection = if probe {
-            crate::profiles::provider_connection::provider_connection(id).await
-        } else {
-            json!({"status": "unknown", "summary": "Suplex did not check the sign-in."})
-        };
-        providers.push(json!({
-            "id": id, "kind": "cli", "harness": id, "label": spec.label, "modelCount": models.len(), "models": models,
-            "status": if installed { "configured" } else { "missing" },
-            "connection": connection,
-        }));
-    }
+    let mut providers = listing
+        .tools
+        .into_iter()
+        .map(|mut tool| {
+            // Pi and OMP also run each endpoint model when they are installed.
+            if tool.installed && Some(tool.id) != endpoint_harness && ENDPOINT_HARNESSES.contains(&tool.id) {
+                tool.models.extend(endpoints.iter().map(endpoint_model));
+            }
+            json!({
+                "id": tool.id, "kind": "cli", "harness": tool.id, "label": tool.label, "modelCount": tool.models.len(), "models": tool.models,
+                "status": if tool.installed { "configured" } else { "missing" },
+                "connection": tool.connection,
+            })
+        })
+        .collect::<Vec<_>>();
     providers.sort_by(|left, right| left["label"].as_str().cmp(&right["label"].as_str()));
-    for endpoint in endpoints {
-        let connection = match endpoint_harness {
+    let connections = join_all(endpoints.iter().map(|endpoint| async move {
+        match endpoint_harness {
             None => {
                 json!({"status": "not-connected", "summary": "OpenCode, Pi, or OMP is necessary to run the model of this endpoint."})
             }
@@ -246,14 +219,137 @@ pub async fn read_providers(directory: &str, probe: bool, endpoints: &[LocalEndp
                 )
                 .await,
             ),
-        };
+        }
+    }))
+    .await;
+    for (endpoint, connection) in endpoints.iter().zip(connections) {
         providers.push(endpoint_row(
             endpoint,
             endpoint_harness.unwrap_or(ENDPOINT_HARNESSES[0]),
             connection,
         ));
     }
-    json!({"directory": native["directory"], "observedAt": native["observedAt"], "providers": providers})
+    json!({"directory": listing.directory, "observedAt": listing.observed_at, "providers": providers})
+}
+
+/// One agent tool row before its endpoint models are added.
+#[derive(Clone)]
+struct Tool {
+    id: &'static str,
+    label: &'static str,
+    installed: bool,
+    models: Vec<Value>,
+    connection: Value,
+}
+
+#[derive(Clone)]
+struct ToolListing {
+    directory: Value,
+    observed_at: Value,
+    tools: Vec<Tool>,
+}
+
+type InFlight<K, T> = Mutex<HashMap<K, Shared<BoxFuture<'static, T>>>>;
+
+/// The tool listings that are running, per directory and probe. The onboarding
+/// page asks for the providers and the default agents at the same time, and a
+/// sign-in pane polls every few seconds: each would start its own OpenCode
+/// server and probe every CLI again.
+static TOOL_LISTINGS: LazyLock<InFlight<(String, bool), ToolListing>> =
+    LazyLock::new(Default::default);
+
+/// Runs `run` for `key`, unless a run for `key` is in flight: then it awaits that
+/// run's result instead.
+async fn single_flight<K: Clone + Eq + Hash, T: Clone>(
+    in_flight: &InFlight<K, T>,
+    key: K,
+    run: impl Future<Output = T> + Send + 'static,
+) -> T {
+    let shared = in_flight
+        .lock()
+        .expect("tool listings lock poisoned")
+        .entry(key.clone())
+        .or_insert_with(|| run.boxed().shared())
+        .clone();
+    let value = shared.clone().await;
+    let mut in_flight = in_flight.lock().expect("tool listings lock poisoned");
+    if in_flight
+        .get(&key)
+        .is_some_and(|current| current.ptr_eq(&shared))
+    {
+        in_flight.remove(&key);
+    }
+    value
+}
+
+/// Every CLI observation at once: the OpenCode vendor listing, the Pi and OMP
+/// model listings, then one sign-in probe per tool. Each has its own timeout, so
+/// the listing takes the slowest one, not their sum.
+async fn read_tools(directory: String, probe: bool) -> ToolListing {
+    let environment = std::env::vars().collect::<HashMap<_, _>>();
+    let (native, pi_models, omp_models) = tokio::join!(
+        crate::runtimes::opencode::providers::read_providers(Path::new(&directory), None),
+        read_pi_models(&pi_cli::PI, &environment),
+        read_pi_models(&pi_cli::OMP, &environment),
+    );
+    let native = native.unwrap_or_else(|_| {
+        json!({"directory": directory, "observedAt": rfc3339_millis(Utc::now()), "providers": []})
+    });
+    let open_code_models = native["providers"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .flat_map(|vendor| {
+            vendor["models"].as_array().into_iter().flatten().map(move |model| {
+                json!({
+                    "id": format!("{}/{}", vendor["id"].as_str().unwrap_or_default(), model["id"].as_str().unwrap_or_default()),
+                    "label": format!("{} ({})", model["label"].as_str().unwrap_or_default(), vendor["label"].as_str().unwrap_or_default()),
+                })
+            })
+        })
+        .collect::<Vec<_>>();
+    let home = crate::profiles::agent_profiles::home_directory();
+    let codex_home = environment
+        .get("CODEX_HOME")
+        .map(std::path::PathBuf::from)
+        .or_else(|| home.as_ref().map(|home| home.join(".codex")))
+        .unwrap_or_default();
+    let rows = [
+        (&OPENCODE, "opencode", open_code_models),
+        (&CLAUDE, "claude-code", models(CLAUDE_CODE_MODELS)),
+        (&DEVIN, "devin", models(DEVIN_MODELS)),
+        (&CODEX, "codex", read_codex_models(&codex_home)),
+        (&pi_cli::PI.executable, pi_cli::PI.provider, pi_models),
+        (&pi_cli::OMP.executable, pi_cli::OMP.provider, omp_models),
+    ];
+    let connections = if probe {
+        join_all(
+            rows.iter()
+                .map(|(_, id, _)| crate::profiles::provider_connection::provider_connection(id)),
+        )
+        .await
+    } else {
+        vec![
+            json!({"status": "unknown", "summary": "Suplex did not check the sign-in."});
+            rows.len()
+        ]
+    };
+    let tools = rows
+        .into_iter()
+        .zip(connections)
+        .map(|((spec, id, models), connection)| Tool {
+            id,
+            label: spec.label,
+            installed: resolve_executable(spec, None, &environment, home.as_deref()).is_ok(),
+            models,
+            connection,
+        })
+        .collect();
+    ToolListing {
+        directory: native["directory"].clone(),
+        observed_at: native["observedAt"].clone(),
+        tools,
+    }
 }
 
 /// The runtimes that can run an endpoint model, in the order that its row prefers them.
@@ -404,6 +500,26 @@ mod tests {
         drop(app);
         drop(state);
         let _ = fs::remove_file(filename);
+    }
+
+    #[tokio::test]
+    async fn concurrent_callers_share_one_run_and_a_later_caller_starts_another() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        static RUNS: AtomicUsize = AtomicUsize::new(0);
+        static IN_FLIGHT: LazyLock<InFlight<&'static str, usize>> = LazyLock::new(Default::default);
+        let run = || async {
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            RUNS.fetch_add(1, Ordering::SeqCst)
+        };
+        let (first, second) = tokio::join!(
+            single_flight(&IN_FLIGHT, "key", run()),
+            single_flight(&IN_FLIGHT, "key", run()),
+        );
+        assert_eq!((first, second), (0, 0));
+        assert_eq!(RUNS.load(Ordering::SeqCst), 1);
+        assert_eq!(single_flight(&IN_FLIGHT, "key", run()).await, 1);
+        assert_eq!(RUNS.load(Ordering::SeqCst), 2);
+        assert!(IN_FLIGHT.lock().unwrap().is_empty());
     }
 
     #[tokio::test]

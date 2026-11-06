@@ -158,7 +158,7 @@ export function CreateProjectDialog({
       setRepository("");
       setFindings([]);
       setError("");
-      await onCreated().catch(() => undefined);
+      void onCreated().catch(() => undefined);
     } catch (reason) {
       if (await reconcileScopedNotFound(reason, reloadCompanies)) return;
       if (github && confirmGitHubAuthRequired(reason)) {

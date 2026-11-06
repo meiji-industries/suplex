@@ -36,10 +36,11 @@ function slotAgents(profiles: readonly ApiProfile[]): (ApiProfile | undefined)[]
   });
 }
 
-function AgentCard({ slot, agent, providers, left, onChange, busy }: { slot: Slot; agent: ApiProfile; providers: readonly ProviderSummary[]; left: number; onChange: (agent: ApiProfile, body: AgentProfileChanges) => void; busy: boolean }): ReactElement {
+function AgentCard({ slot, agent, providers, checking, left, onChange, busy }: { slot: Slot; agent: ApiProfile; providers: readonly ProviderSummary[]; checking: boolean; left: number; onChange: (agent: ApiProfile, body: AgentProfileChanges) => void; busy: boolean }): ReactElement {
   const listed = (candidate: ProviderSummary): boolean => candidate.harness === agent.provider && candidate.models.some(model => model.id === agent.model);
   const provider = providers.find(listed) ?? providers.find(candidate => candidate.id === agent.provider);
-  const available = providers.some(listed);
+  // Until the providers arrive, the current model is the only choice and not yet a warning.
+  const available = checking || providers.some(listed);
   const selectId = `onb-model-${agent.id}`;
   return <div className="ag" style={{ left, ...(slot.optional ? { borderStyle: "dashed", borderColor: "#333" } : {}) }}>
     <div className="row">
@@ -55,6 +56,7 @@ function AgentCard({ slot, agent, providers, left, onChange, busy }: { slot: Slo
       <span className="sel" style={available ? undefined : { borderColor: "#80612a" }}>
         <select id={selectId} className="mdl" disabled={busy} value={available ? `${agent.provider}\n${agent.model}` : ""} onChange={event => { const [nextProvider, model] = event.target.value.split("\n"); if (nextProvider && model) onChange(agent, { provider: nextProvider as ApiProfile["provider"], model }); }}>
           {available ? null : <option value="" disabled>Pick a model</option>}
+          {checking ? <option value={`${agent.provider}\n${agent.model}`}>{agent.model}</option> : null}
           {providers.map(candidate => <optgroup key={candidate.id} label={candidate.label}>{candidate.models.map(model => <option key={model.id} value={`${candidate.harness}\n${model.id}`}>{modelName(candidate, model)}</option>)}</optgroup>)}
         </select>
         {CHEVRON}
@@ -105,8 +107,8 @@ export function TeamStep({ onBack, onNext, data }: StepProps & { data: Onboardin
             {SLOTS.map((slot, index) => {
               const agent = agents[index];
               const left = index * 344;
-              return agent ? <AgentCard key={slot.id} slot={slot} agent={agent} providers={providers} left={left} onChange={change} busy={busy} />
-                : <div key={slot.id} className="ag" style={{ left, borderStyle: "dashed", borderColor: "#333", alignItems: "center", justifyContent: "center", color: "#8a8a8a", fontSize: 13.5, textAlign: "center" }}>{loading ? <Spinner /> : slot.optional ? "Add an Alt Coordinator for a second opinion." : `Add a ${slot.label} to continue.`}</div>;
+              return agent ? <AgentCard key={slot.id} slot={slot} agent={agent} providers={providers} checking={loading && providers.length === 0} left={left} onChange={change} busy={busy} />
+                : <div key={slot.id} className="ag" style={{ left, borderStyle: "dashed", borderColor: "#333", alignItems: "center", justifyContent: "center", color: "#8a8a8a", fontSize: 13.5, textAlign: "center" }}>{loading && !state.profiles.length ? <Spinner /> : slot.optional ? "Add an Alt Coordinator for a second opinion." : `Add a ${slot.label} to continue.`}</div>;
             })}
           </div>
         </div>

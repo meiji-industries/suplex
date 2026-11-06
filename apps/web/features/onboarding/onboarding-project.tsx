@@ -74,7 +74,8 @@ export function ProjectStep({ onBack, onNext, data }: StepProps & { data: Onboar
         if (!(reason instanceof ApiError && reason.code === "project_limit_reached") || !await startTrialIfAvailable().catch(() => false)) throw reason;
         await createProject(companyId, body);
       }
-      await reload();
+      // The project list arrives first; the provider probe inside the reload takes seconds and must not hold the buttons.
+      void reload();
     } catch (reason) {
       if (hasApiFinding(reason, "github-auth-unavailable")) setGithubAuthRequired(true);
       else setError(reason instanceof ApiError && reason.findings?.length ? reason.findings.map(finding => finding.message).join(" ") : reason instanceof Error ? reason.message : `Suplex could not add ${each.repository}.`);

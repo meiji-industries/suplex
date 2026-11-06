@@ -8,10 +8,12 @@ const fixture = vi.hoisted(() => ({
   projects: [] as unknown[],
   checks: [] as unknown[],
   providers: [] as unknown[],
+  profiles: [] as unknown[],
+  loading: false,
 }));
 const login = vi.hoisted(() => ({ startLogin: vi.fn(async () => undefined), startInstall: vi.fn(async () => undefined) }));
 vi.mock("../shell/company-context.js", () => ({ useCompanyContext: () => ({ currentCompany: fixture.company, user: { id: "user-1", role: "admin", displayName: "Ada", username: "ada", avatarSeed: "ada", title: "" }, updateProfile: vi.fn(), renameCompany: vi.fn(), setCompanyIssueCode: vi.fn(), reloadCompanies: vi.fn() }), useOptionalCompanyContext: () => undefined }));
-vi.mock("../features/onboarding/onboarding.js", async importOriginal => ({ ...(await importOriginal()), useOnboardingData: () => ({ state: { company: fixture.company, checks: fixture.checks, providers: fixture.providers, profiles: [], projects: fixture.projects }, loading: false, error: "", reload: vi.fn(async () => undefined) }) }));
+vi.mock("../features/onboarding/onboarding.js", async importOriginal => ({ ...(await importOriginal()), useOnboardingData: () => ({ state: { company: fixture.company, checks: fixture.checks, providers: fixture.providers, profiles: fixture.profiles, projects: fixture.projects }, loading: fixture.loading, error: "", reload: vi.fn(async () => undefined) }) }));
 vi.mock("../features/settings/lib/billing-api.js", () => ({ getBillingSummary: vi.fn(), startTrial: vi.fn(async () => ({})) }));
 vi.mock("../features/account/lib/account-api.js", async importOriginal => ({ ...(await importOriginal()), getAccount: vi.fn(async () => ({ account: { email: "ada@example.com" } })), getEmailUpdates: vi.fn(async () => ({ available: true, subscribed: false })), setEmailUpdates: vi.fn(async (subscribed: boolean) => ({ available: true, subscribed })) }));
 vi.mock("../features/settings/provider-login.js", () => ({ ProviderLoginTerminal: () => null, useProviderLogin: () => ({ login: null, loginPending: null, startLogin: login.startLogin, startInstall: login.startInstall, closeLogin: vi.fn() }) }));
@@ -20,7 +22,7 @@ vi.mock("../features/projects/lib/project-api.js", () => ({ createProject: vi.fn
 vi.mock("../features/projects/create-project-dialog.js", () => ({ CreateProjectDialog: () => null }));
 vi.mock("../features/tasks/lib/task-api.js", () => ({ createTask: vi.fn(async () => ({ id: "task-1", companyId: "company-1" })) }));
 vi.mock("../features/tasks/task-data.js", () => ({ useTaskCache: () => vi.fn() }));
-vi.mock("../components/app/entity-avatar.js", () => ({ AvatarEditor: () => null }));
+vi.mock("../components/app/entity-avatar.js", () => ({ AvatarEditor: () => null, EntityAvatar: () => null }));
 
 import { OnboardingView } from "../features/onboarding/onboarding-wizard.js";
 import { getBillingSummary, startTrial } from "../features/settings/lib/billing-api.js";
@@ -56,6 +58,8 @@ afterEach(async () => {
   fixture.projects = [];
   fixture.checks = [];
   fixture.providers = [];
+  fixture.profiles = [];
+  fixture.loading = false;
   vi.clearAllMocks();
 });
 
@@ -127,6 +131,17 @@ test("a missing agent offers Install and Add later, and an installed agent offer
   await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="Install Codex CLI"]')!.click());
   expect(login.startInstall).toHaveBeenCalledWith("install:codex", "Codex CLI", "/api/admin/providers/codex/install");
   expect(login.startLogin).not.toHaveBeenCalled();
+});
+
+test("the team shows its agents and their models before the providers arrive", async () => {
+  fixture.loading = true;
+  fixture.profiles = [{ id: "profile_native_root", role: "root", provider: "codex", model: "gpt-5.6-sol", archivedAt: null }, { id: "profile_native_worker", role: "worker", provider: "codex", model: "gpt-5.6-sol", archivedAt: null }];
+  await render("/onboarding?step=team");
+  const selects = Array.from(container.querySelectorAll<HTMLSelectElement>("select.mdl")).filter(select => select.id.startsWith("onb-model-"));
+  expect(selects.map(select => select.value)).toEqual(["codex\ngpt-5.6-sol", "codex\ngpt-5.6-sol"]);
+  expect(container.textContent).not.toContain("Pick a model");
+  expect(container.querySelector('[role="status"]')).toBeNull();
+  expect(container.textContent).toContain("Add an Alt Coordinator");
 });
 
 test("adding a repo at the Free project limit starts the trial and adds it again", async () => {

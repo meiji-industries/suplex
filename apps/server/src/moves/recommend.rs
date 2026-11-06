@@ -2,27 +2,14 @@
 //! once and read-only, and proposes moves for the commands the project
 //! already defines. Nothing is saved; the person imports the ones they want.
 
-use std::{collections::HashSet, error::Error, time::Duration};
+use std::{collections::HashSet, error::Error};
 
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
-use super::{
-    MoveRunner,
-    agent::{self, Endpoint},
-};
-use crate::{
-    http::AppState,
-    projects::service as projects,
-    runtimes::pi::cli::{OMP, PI},
-    tasks::{
-        TaskError,
-        control::{HarnessKind, TaskProfile},
-    },
-};
+use super::{MoveRunner, agent};
+use crate::http::AppState;
 
-/// An agent that reads a large repository can take a few minutes.
-const TIME_LIMIT: Duration = Duration::from_secs(300);
 const MAX_RECOMMENDATIONS: usize = 20;
 
 /// One proposed move. The browser imports it through the normal create route.
@@ -86,124 +73,6 @@ Write each name as a short sentence-case action of 40 characters or fewer, such 
 Reply with only this JSON object, with no other text:
 {"moves":[{"name":"Run tests","runner":"script","prompt":"npm run test","source":"package.json","reason":"Runs the unit tests."}]}"#;
 
-/// The agent's one-shot command line, with tools that can change files or run
-/// commands turned off.
-fn command(profile: &TaskProfile, endpoint: Option<&Endpoint>) -> String {
-    let effort = profile.reasoning_level.as_str();
-    let codex_effort = format!("model_reasoning_effort=\"{effort}\"");
-    let (environment, args) = match profile.provider {
-        HarnessKind::ClaudeCode => (
-            None,
-            vec![
-                "-p",
-                PROMPT,
-                "--output-format",
-                "json",
-                "--model",
-                &profile.model,
-                "--effort",
-                effort,
-                // Only file reading: no shell, edits, web, subagents, or MCP servers.
-                "--tools",
-                "Read,Glob,Grep",
-                "--strict-mcp-config",
-            ],
-        ),
-        HarnessKind::Codex => (
-            None,
-            vec![
-                "exec",
-                "--skip-git-repo-check",
-                "-m",
-                &profile.model,
-                "-c",
-                &codex_effort,
-                "-c",
-                "approval_policy=\"never\"",
-                "-c",
-                "sandbox_mode=\"read-only\"",
-                PROMPT,
-            ],
-        ),
-        // OpenCode does not offer a denied tool to the model.
-        HarnessKind::Opencode => (
-            Some((
-                "OPENCODE_PERMISSION",
-                r#"{"*":"deny","read":"allow","glob":"allow","grep":"allow","list":"allow"}"#,
-            )),
-            vec![
-                "run",
-                "--model",
-                &profile.model,
-                "--variant",
-                effort,
-                PROMPT,
-            ],
-        ),
-        // In print mode, `auto` runs only read-only tools and rejects the rest.
-        HarnessKind::Devin => (
-            None,
-            vec![
-                "--model",
-                &profile.model,
-                "--permission-mode",
-                "auto",
-                "--respect-workspace-trust",
-                "false",
-                "--print",
-                PROMPT,
-            ],
-        ),
-        HarnessKind::Pi | HarnessKind::Omp => {
-            let cli = if profile.provider == HarnessKind::Pi {
-                &PI
-            } else {
-                &OMP
-            };
-            let mut args = vec!["-p", "--model", &profile.model, "--thinking", effort];
-            args.extend(["--tools", cli.read_only_tools]);
-            args.extend(cli.turn_args);
-            args.push(PROMPT);
-            (None, args)
-        }
-    };
-    agent::line(profile, endpoint, environment.as_slice(), &args)
-}
-
-/// The first JSON object with a `moves` list in the text.
-// Tries a parse at each `{`, quadratic in the worst case; agent
-// replies are small, so a streaming scanner is not worth it yet.
-fn moves_in(text: &str) -> Option<Vec<Draft>> {
-    text.match_indices('{').find_map(|(index, _)| {
-        serde_json::Deserializer::from_str(&text[index..])
-            .into_iter::<Payload>()
-            .next()?
-            .ok()
-            .map(|payload| payload.moves)
-    })
-}
-
-/// Claude Code prints a result event, alone or last in an array of events,
-/// with the reply in `result`; the other agents print the reply as is.
-fn extract(stdout: &str) -> Option<Vec<Draft>> {
-    let events = match serde_json::from_str::<serde_json::Value>(stdout.trim()) {
-        Ok(serde_json::Value::Array(events)) => events,
-        Ok(event @ serde_json::Value::Object(_)) => vec![event],
-        _ => Vec::new(),
-    };
-    events
-        .iter()
-        .rev()
-        .filter(|event| event["type"] == "result" || event.get("result").is_some())
-        .find_map(|event| {
-            serde_json::from_value::<Payload>(event["structured_output"].clone())
-                .ok()
-                .map(|payload| payload.moves)
-                .or_else(|| moves_in(event["result"].as_str()?))
-        })
-        .or_else(|| moves_in(stdout))
-}
-
 /// Usable, distinct recommendations whose names the project does not use yet.
 fn admitted(drafts: Vec<Draft>, existing: &[String]) -> Vec<MoveRecommendation> {
     let mut seen = existing
@@ -221,9 +90,9 @@ fn admitted(drafts: Vec<Draft>, existing: &[String]) -> Vec<MoveRecommendation> 
             let name = draft.name.trim().to_owned();
             let prompt = draft.prompt.trim().to_owned();
             let usable = !name.is_empty()
-                && name.chars().count() <= 80
+                && name.chars().count() <= agent::MAX_NAME
                 && !prompt.is_empty()
-                && prompt.chars().count() <= 20_000;
+                && prompt.chars().count() <= agent::MAX_PROMPT;
             (usable && seen.insert(name.to_lowercase())).then(|| MoveRecommendation {
                 name,
                 runner,
@@ -237,74 +106,18 @@ fn admitted(drafts: Vec<Draft>, existing: &[String]) -> Vec<MoveRecommendation> 
 }
 
 /// Reads the project with its default Worker and returns proposed moves.
-/// A cancelled request ends the agent, because the child dies with the future.
 pub async fn recommend(
     state: &AppState,
     user_id: &str,
     project_id: &str,
 ) -> Result<MoveRecommendationsResponse, Box<dyn Error + Send + Sync>> {
-    let (project, profile, existing, database_path) = state.with_database(|database| {
-        let project = projects::get(database, user_id, project_id)?;
-        crate::identity::companies::require_company_edit(database, user_id, &project.company_id)?;
-        let profile = crate::tasks::commands::selected_profile(
-            database,
-            &project,
-            None,
-            &project.worker_profile_id,
-            "worker",
-        )?;
-        let mut statement = database
-            .connection()
-            .prepare("SELECT name FROM suplex_moves WHERE project_id = ?1")?;
-        let existing = statement
-            .query_map([&project.id], |row| row.get::<_, String>(0))?
-            .collect::<rusqlite::Result<Vec<_>>>()?;
-        let path = database.connection().path().map(std::path::PathBuf::from);
-        Ok::<_, Box<dyn Error + Send + Sync>>((
-            project,
-            profile,
-            existing,
-            path.unwrap_or_default(),
-        ))
-    })?;
-    // Dropped when the agent ends or the request is cancelled.
-    let endpoint = Endpoint::register(
-        &database_path,
-        &profile,
-        &format!("recommendation-{}", uuid::Uuid::new_v4().simple()),
-    )?;
-    let child = tokio::process::Command::new("/bin/sh")
-        .arg("-c")
-        .arg(command(&profile, endpoint.as_ref()))
-        .current_dir(&project.repository_path)
-        .env_clear()
-        .envs(crate::terminals::host::user_environment())
-        .envs(
-            endpoint
-                .iter()
-                .flat_map(|endpoint| endpoint.environment.clone()),
-        )
-        .stdin(std::process::Stdio::null())
-        .kill_on_drop(true)
-        .output();
-    let output = tokio::time::timeout(TIME_LIMIT, child)
-        .await
-        .map_err(|_| TaskError::new("The agent did not finish in 5 minutes", 504))??;
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let Some(drafts) = extract(&stdout) else {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        let detail = stderr.trim().lines().last().unwrap_or("").to_owned();
-        return Err(TaskError::new(
-            format!("The agent did not return moves. {detail}")
-                .trim_end()
-                .to_owned(),
-            502,
-        )
-        .into());
-    };
+    let reader = agent::Reader::open(state, user_id, project_id)?;
+    let payload = reader
+        .ask::<Payload>("recommendation", PROMPT, "The agent did not return moves.")
+        .await?;
     Ok(MoveRecommendationsResponse {
-        recommendations: admitted(drafts, &existing),
-        profile_id: profile.profile_id,
+        recommendations: admitted(payload.moves, &reader.existing),
+        profile_id: reader.profile.profile_id,
     })
 }
 
@@ -328,14 +141,25 @@ mod tests {
         let events = serde_json::json!([{"type": "system", "subtype": "init"}, {"type": "assistant", "message": {"content": "{}"}}, result]).to_string();
         let codex = format!("I read package.json.\n{REPLY}\n");
         for stdout in [claude, events, codex] {
-            assert_eq!(extract(&stdout).map(|moves| moves.len()), Some(6));
+            assert_eq!(
+                agent::extract::<Payload>(&stdout).map(|payload| payload.moves.len()),
+                Some(6)
+            );
         }
-        assert!(extract(r#"{"type":"result","result":"I could not read the files."}"#).is_none());
+        assert!(
+            agent::extract::<Payload>(
+                r#"{"type":"result","result":"I could not read the files."}"#
+            )
+            .is_none()
+        );
     }
 
     #[test]
     fn only_new_distinct_usable_moves_are_recommended() {
-        let moves = admitted(extract(REPLY).unwrap(), &["deploy".to_owned()]);
+        let moves = admitted(
+            agent::extract::<Payload>(REPLY).unwrap().moves,
+            &["deploy".to_owned()],
+        );
         let names = moves
             .iter()
             .map(|item| item.name.as_str())

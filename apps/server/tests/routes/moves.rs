@@ -239,6 +239,59 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_move_draft_needs_a_session_and_a_description_of_a_valid_length() {
+        let (state, _filename) = super::super::auth::tests::state();
+        let admin = state.with_database(|database| {
+            crate::http::routes::auth::tests::verified_sign_in(database, Utc::now()).unwrap()
+        });
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(
+            axum::serve(
+                listener,
+                crate::http::router(state.clone())
+                    .into_make_service_with_connect_info::<std::net::SocketAddr>(),
+            )
+            .into_future(),
+        );
+        let client = reqwest::Client::new();
+        let send = |cookie: Option<String>, body: Value| {
+            let request = client
+                .post(format!(
+                    "http://{address}/api/projects/project_moves/move-drafts"
+                ))
+                .header("host", "suplex.example.test:4111")
+                .header("x-forwarded-host", "suplex.example.test:4111")
+                .header("x-forwarded-proto", "https")
+                .header("origin", "https://suplex.example.test:4111")
+                .json(&body);
+            match cookie {
+                Some(cookie) => request.header("cookie", cookie),
+                None => request,
+            }
+            .send()
+        };
+        let cookie = format!("sid_v1={}", admin.session_token);
+        let status = |response: reqwest::Response| response.status();
+
+        let anonymous = send(None, json!({"description":"Run the tests"}));
+        assert_eq!(status(anonymous.await.unwrap()), StatusCode::UNAUTHORIZED);
+        for description in [json!(""), json!("  \n "), json!("x".repeat(2001))] {
+            let response = send(Some(cookie.clone()), json!({"description":description}));
+            assert_eq!(
+                status(response.await.unwrap()),
+                StatusCode::UNPROCESSABLE_ENTITY
+            );
+        }
+        let missing = send(Some(cookie.clone()), json!({}));
+        assert_eq!(status(missing.await.unwrap()), StatusCode::BAD_REQUEST);
+        // A valid length reaches the project check. The project does not exist here.
+        let unknown = send(Some(cookie), json!({"description":"x".repeat(2000)}));
+        assert_eq!(status(unknown.await.unwrap()), StatusCode::NOT_FOUND);
+        server.abort();
+    }
+
+    #[tokio::test]
     async fn task_moves_keep_their_settings_and_start_one_task() {
         let _transport = crate::projects::git::fixtures::Libgit2Transport::on();
         let root = crate::projects::git::fixtures::temporary("suplex-task-move");

@@ -114,7 +114,7 @@ mod tests {
         assert_eq!(headers[header::CACHE_CONTROL], "private, no-store");
         assert_eq!(
             json_body(&body),
-            json!({"minFreeDiskGb":5,"defaultBudgetUsd":15,"defaultMaxTurns":40,"todayPageEnabled":false,"hostTerminalEnabled":false,"git2Enabled":false,"telemetryEnabled":true})
+            json!({"minFreeDiskGb":5,"defaultBudgetUsd":15,"defaultMaxTurns":40,"todayPageEnabled":false,"hostTerminalEnabled":false,"git2Enabled":false,"telemetryEnabled":true,"autoArchiveAfterDays":30})
         );
         let patch = |body: &str| {
             fixture.call(
@@ -126,7 +126,7 @@ mod tests {
         };
         assert_eq!(
             json_body(&patch(r#"{"minFreeDiskGb":7.5}"#).await.2),
-            json!({"minFreeDiskGb":7.5,"defaultBudgetUsd":15,"defaultMaxTurns":40,"todayPageEnabled":false,"hostTerminalEnabled":false,"git2Enabled":false,"telemetryEnabled":true})
+            json!({"minFreeDiskGb":7.5,"defaultBudgetUsd":15,"defaultMaxTurns":40,"todayPageEnabled":false,"hostTerminalEnabled":false,"git2Enabled":false,"telemetryEnabled":true,"autoArchiveAfterDays":30})
         );
         assert_eq!(
             json_body(
@@ -134,7 +134,7 @@ mod tests {
                     .await
                     .2
             ),
-            json!({"minFreeDiskGb":7.5,"defaultBudgetUsd":20,"defaultMaxTurns":30,"todayPageEnabled":false,"hostTerminalEnabled":false,"git2Enabled":false,"telemetryEnabled":true})
+            json!({"minFreeDiskGb":7.5,"defaultBudgetUsd":20,"defaultMaxTurns":30,"todayPageEnabled":false,"hostTerminalEnabled":false,"git2Enabled":false,"telemetryEnabled":true,"autoArchiveAfterDays":30})
         );
         assert_eq!(
             json_body(&patch(r#"{"todayPageEnabled":true}"#).await.2)["todayPageEnabled"],
@@ -155,7 +155,15 @@ mod tests {
                     .await
                     .2
             ),
-            json!({"minFreeDiskGb":7.5,"defaultBudgetUsd":20,"defaultMaxTurns":30,"todayPageEnabled":true,"hostTerminalEnabled":true,"git2Enabled":true,"telemetryEnabled":true})
+            json!({"minFreeDiskGb":7.5,"defaultBudgetUsd":20,"defaultMaxTurns":30,"todayPageEnabled":true,"hostTerminalEnabled":true,"git2Enabled":true,"telemetryEnabled":true,"autoArchiveAfterDays":30})
+        );
+        assert_eq!(
+            json_body(&patch(r#"{"autoArchiveAfterDays":0}"#).await.2)["autoArchiveAfterDays"],
+            0
+        );
+        assert_eq!(
+            json_body(&patch(r#"{"autoArchiveAfterDays":45}"#).await.2)["autoArchiveAfterDays"],
+            45
         );
         // The transport is process-wide: put it back for parallel tests.
         assert_eq!(
@@ -172,6 +180,9 @@ mod tests {
             r#"{"hostTerminalEnabled":"yes"}"#,
             r#"{"git2Enabled":"yes"}"#,
             r#"{"telemetryEnabled":"yes"}"#,
+            r#"{"autoArchiveAfterDays":-1}"#,
+            r#"{"autoArchiveAfterDays":1.5}"#,
+            r#"{"autoArchiveAfterDays":"30"}"#,
         ] {
             assert_eq!(patch(invalid).await.0, StatusCode::BAD_REQUEST, "{invalid}");
         }

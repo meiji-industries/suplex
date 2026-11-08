@@ -7,7 +7,8 @@ import type { TaskQueue } from "./TaskQueue.js";
  */
 export type TaskActivityAction = { id: string, action: TaskActivityActionKind, 
 /**
- * The display name of the person, or the name of the paired agent.
+ * The display name of the person, the name of the paired agent, or
+ * `Suplex` for a command that Suplex sent itself, such as an automatic archive.
  */
 actorName: string, createdAt: string, 
 /**

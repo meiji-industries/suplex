@@ -266,7 +266,8 @@ crate::shared::wire_enum! {
 pub struct TaskActivityAction {
     pub id: String,
     pub action: TaskActivityActionKind,
-    /// The display name of the person, or the name of the paired agent.
+    /// The display name of the person, the name of the paired agent, or
+    /// `Suplex` for a command that Suplex sent itself, such as an automatic archive.
     pub actor_name: String,
     pub created_at: String,
     /// What held the queued task when it was started anyway. Absent on other

@@ -546,4 +546,50 @@ mod migration_regressions {
         drop(database);
         fs::remove_dir_all(root).unwrap();
     }
+
+    #[test]
+    fn automatic_archive_stays_off_for_existing_installations_and_defaults_to_30_for_new_ones() {
+        const OFF: &str = "20261108152541937_keep_auto_archive_off_for_existing_installations.sql";
+        let days = |database: &SuplexDatabase| -> i64 {
+            database
+                .connection
+                .query_row(
+                    "SELECT auto_archive_after_days FROM suplex_environment_settings WHERE id = 'host'",
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap()
+        };
+        let earlier = MIGRATIONS
+            .iter()
+            .filter(|file| file.name < OFF)
+            .map(|file| EmbeddedFile {
+                name: file.name,
+                bytes: file.bytes,
+            })
+            .collect::<Vec<_>>();
+        assert!(earlier.len() < MIGRATIONS.len());
+        // A new installation: every migration runs on an empty database.
+        let mut fresh = memory_database();
+        fresh.apply_migrations(MIGRATIONS).unwrap();
+        assert_eq!(days(&fresh), 30);
+        // An installation in use: data exists before the upgrade runs.
+        for seed in [
+            "INSERT INTO suplex_users (id,display_name,username,role,status,created_at,updated_at,identity_version) VALUES ('existing_user','Existing','existing','admin','active','2026-10-01T00:00:00.000Z','2026-10-01T00:00:00.000Z',1)",
+            "INSERT INTO suplex_companies (id,name,status,created_at) VALUES ('existing_company','Existing','active','2026-10-01T00:00:00.000Z')",
+        ] {
+            let mut existing = memory_database();
+            existing.apply_migrations(&earlier).unwrap();
+            existing.connection.execute_batch(seed).unwrap();
+            existing.apply_migrations(MIGRATIONS).unwrap();
+            assert_eq!(days(&existing), 0, "{seed}");
+            // A value that an administrator saves stays after later starts.
+            existing
+                .connection
+                .execute_batch("UPDATE suplex_environment_settings SET auto_archive_after_days = 30")
+                .unwrap();
+            existing.apply_migrations(MIGRATIONS).unwrap();
+            assert_eq!(days(&existing), 30, "{seed}");
+        }
+    }
 }

@@ -392,8 +392,8 @@ mod tests {
 
         fixture.set_days(30);
         let report = fixture.sweep().await;
-        assert_eq!(report.failed, [broken.clone()]);
-        assert_eq!(report.skipped, [dirty.clone()]);
+        assert_eq!(report.failed, [broken.as_str()]);
+        assert_eq!(report.skipped, [dirty.as_str()]);
         assert_eq!(report.archived, [delivered.clone(), cancelled.clone()]);
         assert!(fixture.archived_at(&delivered).is_some());
         assert!(fixture.archived_at(&cancelled).is_some());
@@ -440,7 +440,7 @@ mod tests {
         // A later pass retries the skipped task once its files are committed or gone.
         fs::remove_file(dirty_path.join("draft.txt")).unwrap();
         let report = fixture.sweep().await;
-        assert_eq!(report.archived, [dirty.clone()]);
+        assert_eq!(report.archived, [dirty.as_str()]);
         assert_eq!(report.failed, [broken]);
         assert!(!dirty_path.exists());
         // Archived tasks are not selected again.
@@ -507,7 +507,7 @@ mod tests {
         database.connection().execute("INSERT INTO suplex_task_sessions (id,task_id,kind,generation,is_current,lifecycle,created_at,updated_at,launch_owner_pid,launch_owner_start_time) VALUES ('busy_session',?1,'root',1,1,'reserved',?2,?2,?3,?4)", params![busy, OLD, owner.pid, owner.start_time]).unwrap();
         drop(database);
         let report = fixture.sweep().await;
-        assert_eq!(report.failed, [busy.clone()]);
+        assert_eq!(report.failed, [busy.as_str()]);
         assert_eq!(report.archived, [other]);
         assert!(fixture.archived_at(&busy).is_none());
         assert!(path.exists());
@@ -515,7 +515,7 @@ mod tests {
         let database = SuplexDatabase::open(&fixture.database_path, OpenMode::ReadWrite).unwrap();
         database.connection().execute("UPDATE suplex_task_sessions SET launch_owner_pid = NULL, launch_owner_start_time = NULL", []).unwrap();
         drop(database);
-        assert_eq!(fixture.sweep().await.archived, [busy.clone()]);
+        assert_eq!(fixture.sweep().await.archived, [busy.as_str()]);
         assert!(!path.exists());
         fs::remove_dir_all(fixture.base).unwrap();
     }

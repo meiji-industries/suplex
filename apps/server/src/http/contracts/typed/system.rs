@@ -174,7 +174,7 @@ pub struct EnvironmentSettingsResponse {
     pub host_terminal_enabled: bool,
     pub git2_enabled: bool,
     pub telemetry_enabled: bool,
-    /// Days after its last activity that a cancelled or delivered task is
+    /// Days after its last activity that a delivered task is
     /// archived. 0 turns automatic archiving off.
     #[ts(type = "number")]
     pub auto_archive_after_days: i64,

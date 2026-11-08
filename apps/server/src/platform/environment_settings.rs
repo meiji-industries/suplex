@@ -10,7 +10,7 @@ pub const DEFAULT_MIN_FREE_DISK_GB: f64 = 5.0;
 pub const MAX_MIN_FREE_DISK_GB: f64 = 1024.0;
 pub const DEFAULT_TASK_BUDGET_USD: f64 = 15.0;
 pub const DEFAULT_TASK_MAX_TURNS: i64 = 40;
-/// Days after its last activity that a cancelled or delivered task is archived.
+/// Days after its last activity that a delivered task is archived automatically.
 pub const DEFAULT_AUTO_ARCHIVE_AFTER_DAYS: i64 = 30;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -27,7 +27,7 @@ pub struct EnvironmentSettings {
     pub git2_enabled: bool,
     /// Send product telemetry. On by default. docs/telemetry.md lists it.
     pub telemetry_enabled: bool,
-    /// Archive cancelled and delivered tasks this many days after their last
+    /// Archive delivered tasks this many days after their last
     /// activity. 0 turns automatic archiving off.
     pub auto_archive_after_days: i64,
 }

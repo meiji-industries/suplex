@@ -5,7 +5,7 @@
  */
 export type EnvironmentSettingsResponse = { minFreeDiskGb: number, defaultBudgetUsd: number, defaultMaxTurns: number, todayPageEnabled: boolean, hostTerminalEnabled: boolean, git2Enabled: boolean, telemetryEnabled: boolean, 
 /**
- * Days after its last activity that a cancelled or delivered task is
+ * Days after its last activity that a delivered task is
  * archived. 0 turns automatic archiving off.
  */
 autoArchiveAfterDays: number, };

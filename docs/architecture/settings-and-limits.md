@@ -90,15 +90,16 @@ not a shipped hard limit or a requirement to add a broad worktree blocker.
 
 ## Automatic archive
 
-The **Archive finished tasks after** environment setting (`autoArchiveAfterDays`,
+The **Archive delivered tasks after** environment setting (`autoArchiveAfterDays`,
 0 turns it off) frees disk space on the host. A new installation starts with 30
 days. An installation that already had users, companies, or tasks when it
 upgraded starts with 0 (off) until an administrator sets a number of days, so an
 upgrade never starts archiving work by itself. Once at host start and
 then every hour, the task host reads the setting and selects, in one query, the
-oldest cancelled or delivered tasks that are not archived and whose last activity
+oldest delivered tasks that are not archived and whose last activity
 (the latest of the task's and its control's `updated_at` and `status_changed_at`)
-is older than that many days. It archives at most 25 of them, one at a time,
+is older than that many days. A cancelled task is never archived automatically;
+only a person archives it. It archives at most 25 of them, one at a time,
 through the same archive operation as the Archive command: idle sessions stop,
 the worktree is removed, displays close, and `archived_at` is set. The branch
 stays. The audit records `task_archived` with no user or agent, and the task

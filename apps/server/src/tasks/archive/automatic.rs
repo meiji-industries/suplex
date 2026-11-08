@@ -1,5 +1,6 @@
-//! Archive finished tasks after the host's configured number of days without
-//! activity, so their worktrees stop using disk space.
+//! Archive delivered tasks after the host's configured number of days without
+//! activity, so their worktrees stop using disk space. Only a delivered task
+//! is archived automatically. A cancelled task stays until a person archives it.
 //!
 //! Each pass reads the setting and the candidates from the database, then
 //! archives them one at a time through [`archive_task`]. Archive stops idle
@@ -28,7 +29,7 @@ use crate::{
     },
 };
 
-/// How often the host looks for finished tasks to archive.
+/// How often the host looks for delivered tasks to archive.
 pub const PERIOD: Duration = Duration::from_secs(60 * 60);
 /// The most tasks one pass archives.
 pub const MAX_ARCHIVES_PER_PASS: usize = 25;
@@ -59,10 +60,10 @@ fn cutoff(days: i64, now: DateTime<Utc>) -> Option<String> {
     now.checked_sub_signed(age).map(rfc3339_millis)
 }
 
-/// The oldest finished, unarchived tasks whose last activity is before `cutoff`.
+/// The oldest delivered, unarchived tasks whose last activity is before `cutoff`.
 fn candidates(database: &SuplexDatabase, cutoff: &str) -> DatabaseResult<Vec<String>> {
     let mut statement = database.connection().prepare(&format!(
-        "SELECT t.id FROM suplex_task_controls c JOIN suplex_tasks t ON t.id = c.task_id WHERE c.status IN ('cancelled', 'delivered') AND t.archived_at IS NULL AND {LAST_ACTIVITY} < ?1 ORDER BY {LAST_ACTIVITY}, t.id LIMIT ?2"
+        "SELECT t.id FROM suplex_task_controls c JOIN suplex_tasks t ON t.id = c.task_id WHERE c.status = 'delivered' AND t.archived_at IS NULL AND {LAST_ACTIVITY} < ?1 ORDER BY {LAST_ACTIVITY}, t.id LIMIT ?2"
     ))?;
     Ok(statement
         .query_map(params![cutoff, MAX_CANDIDATES_PER_PASS], |row| row.get(0))?
@@ -76,12 +77,12 @@ fn still_eligible(
     task: &TaskRecord,
     cutoff: &str,
 ) -> DatabaseResult<()> {
-    let eligible = matches!(task.status, TaskStatus::Cancelled | TaskStatus::Delivered)
+    let eligible = task.status == TaskStatus::Delivered
         && database
             .connection()
             .query_row(
                 &format!(
-                    "SELECT 1 FROM suplex_task_controls c JOIN suplex_tasks t ON t.id = c.task_id WHERE t.id = ?1 AND t.archived_at IS NULL AND {LAST_ACTIVITY} < ?2"
+                    "SELECT 1 FROM suplex_task_controls c JOIN suplex_tasks t ON t.id = c.task_id WHERE t.id = ?1 AND c.status = 'delivered' AND t.archived_at IS NULL AND {LAST_ACTIVITY} < ?2"
                 ),
                 params![task.id, cutoff],
                 |_| Ok(()),
@@ -346,7 +347,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn sweep_archives_only_old_finished_tasks_and_keeps_dirty_files() {
+    async fn sweep_archives_only_old_delivered_tasks_and_keeps_dirty_files() {
         let fixture = fixture();
         // Oldest first: the failing and dirty candidates come before the others.
         let (broken, _) = fixture.task(
@@ -359,21 +360,28 @@ mod tests {
         database.connection().execute("UPDATE suplex_tasks SET configuration_json = json_set(configuration_json, '$.repositoryPath', '') WHERE id = ?1", [&broken]).unwrap();
         drop(database);
         let (dirty, dirty_path) =
-            fixture.task("dirty", "cancelled", Some("2025-12-02T00:00:00.000Z"), true);
+            fixture.task("dirty", "delivered", Some("2025-12-02T00:00:00.000Z"), true);
         fs::write(dirty_path.join("draft.txt"), "keep\n").unwrap();
         let (delivered, delivered_path) = fixture.task("delivered", "delivered", Some(OLD), true);
-        let (cancelled, _) = fixture.task(
-            "cancelled",
-            "cancelled",
+        let (second, _) = fixture.task(
+            "second",
+            "delivered",
             Some("2026-01-02T00:00:00.000Z"),
             false,
+        );
+        // Only a delivered task is archived automatically, never a cancelled one.
+        let (cancelled, cancelled_path) = fixture.task(
+            "cancelled",
+            "cancelled",
+            Some("2025-11-01T00:00:00.000Z"),
+            true,
         );
         let (recent, recent_path) = fixture.task("recent", "delivered", None, true);
         let mut unfinished = Vec::new();
         for status in ["backlog", "queued", "active", "waiting_human"] {
             unfinished.push(fixture.task(status, status, Some(OLD), true));
         }
-        let (archived, _) = fixture.task("archived", "cancelled", Some(OLD), false);
+        let (archived, _) = fixture.task("archived", "delivered", Some(OLD), false);
         let database = SuplexDatabase::open(&fixture.database_path, OpenMode::ReadWrite).unwrap();
         database
             .connection()
@@ -394,9 +402,11 @@ mod tests {
         let report = fixture.sweep().await;
         assert_eq!(report.failed, [broken.as_str()]);
         assert_eq!(report.skipped, [dirty.as_str()]);
-        assert_eq!(report.archived, [delivered.clone(), cancelled.clone()]);
+        assert_eq!(report.archived, [delivered.clone(), second.clone()]);
         assert!(fixture.archived_at(&delivered).is_some());
-        assert!(fixture.archived_at(&cancelled).is_some());
+        assert!(fixture.archived_at(&second).is_some());
+        assert!(fixture.archived_at(&cancelled).is_none());
+        assert!(cancelled_path.exists());
         assert!(!delivered_path.exists());
         // The branch stays after the worktree is removed.
         let source = Repository::open(&fixture.repository_path).unwrap();
@@ -469,7 +479,17 @@ mod tests {
             .unwrap();
         let record = repository::task_by_id(&database, &task).unwrap().unwrap();
         assert!(still_eligible(&database, &record, &cutoff).is_err());
-        // New activity on a finished task restarts its count of days.
+        // A cancelled task is not archived automatically.
+        database
+            .connection()
+            .execute(
+                "UPDATE suplex_task_controls SET status = 'cancelled' WHERE task_id = ?1",
+                [&task],
+            )
+            .unwrap();
+        let record = repository::task_by_id(&database, &task).unwrap().unwrap();
+        assert!(still_eligible(&database, &record, &cutoff).is_err());
+        // New activity on a delivered task restarts its count of days.
         database
             .connection()
             .execute(
@@ -498,7 +518,7 @@ mod tests {
         let (busy, path) = fixture.task("busy", "delivered", Some(OLD), true);
         let (other, _) = fixture.task(
             "other",
-            "cancelled",
+            "delivered",
             Some("2026-01-02T00:00:00.000Z"),
             false,
         );
@@ -523,7 +543,7 @@ mod tests {
     #[tokio::test]
     async fn a_pass_stops_when_the_host_shuts_down() {
         let fixture = fixture();
-        let (task, _) = fixture.task("shutdown", "cancelled", Some(OLD), false);
+        let (task, _) = fixture.task("shutdown", "delivered", Some(OLD), false);
         let (_shutdown_tx, shutdown) = watch::channel(true);
         let report = sweep(&fixture.database_path, &shutdown, Utc::now())
             .await

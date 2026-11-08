@@ -124,10 +124,10 @@ export function EnvironmentSettingsView(): ReactElement {
           <p className="text-xs text-muted-foreground">Set a limit to 0 to disable it. A native turn already in progress can finish before Suplex pauses.</p>
         </form>
       </SettingsSection>
-      <SettingsSection title="Archive" description="Suplex archives finished tasks to make disk space available. Archive removes the worktree and keeps the branch.">
-        <SettingRow label="Archive finished tasks after" description="Suplex archives a cancelled or delivered task after this number of days with no activity. Set the value to 0 to stop automatic archive.">
+      <SettingsSection title="Archive" description="Suplex archives delivered tasks to make disk space available. Archive removes the worktree and keeps the branch.">
+        <SettingRow label="Archive delivered tasks after" description="Suplex archives a delivered task after this number of days with no activity. Set the value to 0 to stop automatic archive. Suplex does not archive a cancelled task.">
           <form className="flex items-center gap-2" onSubmit={(event) => void saveArchive(event)}>
-            <div className="w-28"><Input size="sm" aria-label="Days before Suplex archives a finished task" type="number" min="0" step="1" inputMode="numeric" value={autoArchiveAfterDays} onChange={(event) => { setAutoArchiveAfterDays(event.target.value); setMessage(""); }} /></div>
+            <div className="w-28"><Input size="sm" aria-label="Days before Suplex archives a delivered task" type="number" min="0" step="1" inputMode="numeric" value={autoArchiveAfterDays} onChange={(event) => { setAutoArchiveAfterDays(event.target.value); setMessage(""); }} /></div>
             <span className="text-xs text-muted-foreground">Days</span>
             <Button size="sm" type="submit" disabled={!archiveChanged || saving}>{saving ? "Saving…" : "Save"}</Button>
           </form>

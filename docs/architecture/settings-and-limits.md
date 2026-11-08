@@ -5,6 +5,7 @@ a setting affects and how resource limits differ from readiness observations.
 Sources: [Settings navigation](../../apps/web/features/settings/settings-nav.ts),
 [environment settings](../../apps/server/src/platform/environment_settings.rs),
 [task admission limits](../../apps/server/src/tasks/limits.rs),
+[automatic archive](../../apps/server/src/tasks/archive/automatic.rs),
 [workflow storage](../../apps/server/src/coordination/workflow_records.rs), and
 [provider login instances](../../apps/server/src/profiles/provider_instances.rs).
 
@@ -86,5 +87,23 @@ The minimum-free-disk setting is read by host health. Although the Settings
 copy says it blocks worktree operations, the inspected Rust references do not
 establish that enforcement. Treat this as a [documentation/UI discrepancy](unknowns.md),
 not a shipped hard limit or a requirement to add a broad worktree blocker.
+
+## Automatic archive
+
+The **Archive finished tasks after** environment setting (`autoArchiveAfterDays`,
+default 30, 0 turns it off) frees disk space on the host. Once at host start and
+then every hour, the task host reads the setting and selects, in one query, the
+oldest cancelled or delivered tasks that are not archived and whose last activity
+(the latest of the task's and its control's `updated_at` and `status_changed_at`)
+is older than that many days. It archives at most 25 of them, one at a time,
+through the same archive operation as the Archive command: idle sessions stop,
+the worktree is removed, displays close, and `archived_at` is set. The branch
+stays. The audit records `task_archived` with no user or agent, and the task
+activity names Suplex.
+
+Automatic archive never discards files. A task with uncommitted worktree changes,
+an active session operation or agent, or any other archive failure stays as it
+is, and a later pass tries it again. Archive checks the task at each step, so a
+task that a person starts, edits, or moves during the pass is not archived.
 
 [Architecture index](README.md)

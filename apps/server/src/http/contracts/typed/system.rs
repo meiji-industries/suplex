@@ -9,7 +9,7 @@ use serde_json::Value;
 use super::{
     Contract, ContractResult, Fields, MAX, flag, formatted, int, number, one_of, rule, text,
 };
-use crate::platform::environment_settings::MAX_MIN_FREE_DISK_GB;
+use crate::platform::environment_settings::{self, EnvironmentSettings, MAX_MIN_FREE_DISK_GB};
 
 pub const CLIENT_STATES: &[&str] = &[
     "startup",
@@ -157,6 +157,49 @@ crate::shared::wire_enum! {
     }
 }
 
+/// The host environment settings that administrators edit.
+#[derive(Debug, Clone, Serialize, ts_rs::TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct EnvironmentSettingsResponse {
+    #[serde(serialize_with = "js_number")]
+    #[ts(type = "number")]
+    pub min_free_disk_gb: f64,
+    #[serde(serialize_with = "js_number")]
+    #[ts(type = "number")]
+    pub default_budget_usd: f64,
+    #[ts(type = "number")]
+    pub default_max_turns: i64,
+    pub today_page_enabled: bool,
+    pub host_terminal_enabled: bool,
+    pub git2_enabled: bool,
+    pub telemetry_enabled: bool,
+    /// Days after its last activity that a cancelled or delivered task is
+    /// archived. 0 turns automatic archiving off.
+    #[ts(type = "number")]
+    pub auto_archive_after_days: i64,
+}
+
+/// A whole number prints without a fraction, as JavaScript prints it.
+fn js_number<S: serde::Serializer>(value: &f64, serializer: S) -> Result<S::Ok, S::Error> {
+    environment_settings::js_number(*value).serialize(serializer)
+}
+
+impl From<EnvironmentSettings> for EnvironmentSettingsResponse {
+    fn from(settings: EnvironmentSettings) -> Self {
+        Self {
+            min_free_disk_gb: settings.min_free_disk_gb,
+            default_budget_usd: settings.default_budget_usd,
+            default_max_turns: settings.default_max_turns,
+            today_page_enabled: settings.today_page_enabled,
+            host_terminal_enabled: settings.host_terminal_enabled,
+            git2_enabled: settings.git2_enabled,
+            telemetry_enabled: settings.telemetry_enabled,
+            auto_archive_after_days: settings.auto_archive_after_days,
+        }
+    }
+}
+
 /// `EnvironmentSettingsBodySchema`: at least one bounded setting.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -168,6 +211,7 @@ pub struct EnvironmentPatch {
     pub host_terminal_enabled: Option<bool>,
     pub git2_enabled: Option<bool>,
     pub telemetry_enabled: Option<bool>,
+    pub auto_archive_after_days: Option<i64>,
 }
 
 impl Contract for EnvironmentPatch {
@@ -179,7 +223,8 @@ impl Contract for EnvironmentPatch {
             .opt("todayPageEnabled", flag)
             .opt("hostTerminalEnabled", flag)
             .opt("git2Enabled", flag)
-            .opt("telemetryEnabled", flag);
+            .opt("telemetryEnabled", flag)
+            .opt("autoArchiveAfterDays", int(0.0, f64::MAX));
         if fields.refinable()
             && [
                 "minFreeDiskGb",
@@ -189,6 +234,7 @@ impl Contract for EnvironmentPatch {
                 "hostTerminalEnabled",
                 "git2Enabled",
                 "telemetryEnabled",
+                "autoArchiveAfterDays",
             ]
             .iter()
             .all(|name| fields.raw(name).is_none())

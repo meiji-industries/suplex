@@ -10,6 +10,8 @@ pub const DEFAULT_MIN_FREE_DISK_GB: f64 = 5.0;
 pub const MAX_MIN_FREE_DISK_GB: f64 = 1024.0;
 pub const DEFAULT_TASK_BUDGET_USD: f64 = 15.0;
 pub const DEFAULT_TASK_MAX_TURNS: i64 = 40;
+/// Days after its last activity that a cancelled or delivered task is archived.
+pub const DEFAULT_AUTO_ARCHIVE_AFTER_DAYS: i64 = 30;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct EnvironmentSettings {
@@ -25,6 +27,9 @@ pub struct EnvironmentSettings {
     pub git2_enabled: bool,
     /// Send product telemetry. On by default. docs/telemetry.md lists it.
     pub telemetry_enabled: bool,
+    /// Archive cancelled and delivered tasks this many days after their last
+    /// activity. 0 turns automatic archiving off.
+    pub auto_archive_after_days: i64,
 }
 
 /// JSON number as JavaScript prints it: whole numbers without a fraction.
@@ -36,25 +41,11 @@ pub fn js_number(value: f64) -> Value {
     }
 }
 
-impl EnvironmentSettings {
-    pub fn to_json(self) -> Value {
-        json!({
-            "minFreeDiskGb": js_number(self.min_free_disk_gb),
-            "defaultBudgetUsd": js_number(self.default_budget_usd),
-            "defaultMaxTurns": self.default_max_turns,
-            "todayPageEnabled": self.today_page_enabled,
-            "hostTerminalEnabled": self.host_terminal_enabled,
-            "git2Enabled": self.git2_enabled,
-            "telemetryEnabled": self.telemetry_enabled,
-        })
-    }
-}
-
 pub fn read(database: &SuplexDatabase) -> DatabaseResult<EnvironmentSettings> {
     Ok(database
         .connection()
         .query_row(
-            "SELECT min_free_disk_gb, default_budget_usd, default_max_turns, today_page_enabled, host_terminal_enabled, git2_enabled, telemetry_enabled FROM suplex_environment_settings WHERE id = 'host'",
+            "SELECT min_free_disk_gb, default_budget_usd, default_max_turns, today_page_enabled, host_terminal_enabled, git2_enabled, telemetry_enabled, auto_archive_after_days FROM suplex_environment_settings WHERE id = 'host'",
             [],
             |row| {
                 Ok(EnvironmentSettings {
@@ -65,6 +56,7 @@ pub fn read(database: &SuplexDatabase) -> DatabaseResult<EnvironmentSettings> {
                     host_terminal_enabled: row.get(4)?,
                     git2_enabled: row.get(5)?,
                     telemetry_enabled: row.get(6)?,
+                    auto_archive_after_days: row.get(7)?,
                 })
             },
         )
@@ -77,6 +69,7 @@ pub fn read(database: &SuplexDatabase) -> DatabaseResult<EnvironmentSettings> {
             host_terminal_enabled: false,
             git2_enabled: false,
             telemetry_enabled: true,
+            auto_archive_after_days: DEFAULT_AUTO_ARCHIVE_AFTER_DAYS,
         }))
 }
 
@@ -100,9 +93,14 @@ pub fn update(
             "Default maximum turns must be a whole number greater than or equal to 0".into(),
         );
     }
+    if settings.auto_archive_after_days < 0 {
+        return Err(
+            "Automatic archive days must be a whole number greater than or equal to 0".into(),
+        );
+    }
     database.transaction(false, |database| {
         database.connection().execute(
-            "INSERT INTO suplex_environment_settings (id, min_free_disk_gb, default_budget_usd, default_max_turns, today_page_enabled, host_terminal_enabled, git2_enabled, telemetry_enabled, updated_at) VALUES ('host', ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8) ON CONFLICT(id) DO UPDATE SET min_free_disk_gb = excluded.min_free_disk_gb, default_budget_usd = excluded.default_budget_usd, default_max_turns = excluded.default_max_turns, today_page_enabled = excluded.today_page_enabled, host_terminal_enabled = excluded.host_terminal_enabled, git2_enabled = excluded.git2_enabled, telemetry_enabled = excluded.telemetry_enabled, updated_at = excluded.updated_at",
+            "INSERT INTO suplex_environment_settings (id, min_free_disk_gb, default_budget_usd, default_max_turns, today_page_enabled, host_terminal_enabled, git2_enabled, telemetry_enabled, auto_archive_after_days, updated_at) VALUES ('host', ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9) ON CONFLICT(id) DO UPDATE SET min_free_disk_gb = excluded.min_free_disk_gb, default_budget_usd = excluded.default_budget_usd, default_max_turns = excluded.default_max_turns, today_page_enabled = excluded.today_page_enabled, host_terminal_enabled = excluded.host_terminal_enabled, git2_enabled = excluded.git2_enabled, telemetry_enabled = excluded.telemetry_enabled, auto_archive_after_days = excluded.auto_archive_after_days, updated_at = excluded.updated_at",
             params![
                 settings.min_free_disk_gb,
                 settings.default_budget_usd,
@@ -111,10 +109,74 @@ pub fn update(
                 settings.host_terminal_enabled,
                 settings.git2_enabled,
                 settings.telemetry_enabled,
+                settings.auto_archive_after_days,
                 now_millis_rfc3339()
             ],
         )?;
         Ok(())
     })?;
     read(database)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::platform::database::OpenMode;
+
+    fn database() -> (std::path::PathBuf, SuplexDatabase) {
+        let directory =
+            std::env::temp_dir().join(format!("suplex-environment-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let database =
+            SuplexDatabase::open(&directory.join("suplex.sqlite"), OpenMode::Migrate).unwrap();
+        (directory, database)
+    }
+
+    #[test]
+    fn automatic_archive_defaults_to_30_days_and_rejects_negative_days() {
+        let (directory, mut database) = database();
+        assert_eq!(
+            read(&database).unwrap().auto_archive_after_days,
+            DEFAULT_AUTO_ARCHIVE_AFTER_DAYS
+        );
+        let current = read(&database).unwrap();
+        // Saving the other settings keeps the default.
+        update(&mut database, current).unwrap();
+        assert_eq!(read(&database).unwrap().auto_archive_after_days, 30);
+        for days in [0, 7, 365] {
+            let updated = update(
+                &mut database,
+                EnvironmentSettings {
+                    auto_archive_after_days: days,
+                    ..current
+                },
+            )
+            .unwrap();
+            assert_eq!(updated.auto_archive_after_days, days);
+            assert_eq!(read(&database).unwrap().auto_archive_after_days, days);
+        }
+        assert!(
+            update(
+                &mut database,
+                EnvironmentSettings {
+                    auto_archive_after_days: -1,
+                    ..current
+                },
+            )
+            .is_err()
+        );
+        assert_eq!(read(&database).unwrap().auto_archive_after_days, 365);
+        // The schema rejects a negative value written past the validation too.
+        assert!(
+            database
+                .connection()
+                .execute(
+                    "UPDATE suplex_environment_settings SET auto_archive_after_days = -1",
+                    []
+                )
+                .is_err()
+        );
+        drop(database);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
 }

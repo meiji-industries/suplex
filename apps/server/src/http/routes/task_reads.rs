@@ -237,12 +237,12 @@ fn turn_author(
 
 /// The task's audited commands, each with the name of who sent it. The caller
 /// already checked that the reader can read the task.
-fn task_actions(
+pub(crate) fn task_actions(
     database: &SuplexDatabase,
     task_id: &str,
 ) -> Result<Vec<TaskActivityAction>, Box<dyn Error + Send + Sync>> {
     let mut statement = database.connection().prepare(
-        "SELECT e.id, e.action, COALESCE(u.display_name, a.name), e.created_at, json_extract(e.metadata_json, '$.queue') FROM suplex_audit_events e LEFT JOIN suplex_users u ON u.id = e.actor_user_id LEFT JOIN suplex_agents a ON a.id = e.actor_agent_id WHERE json_extract(e.metadata_json, '$.taskId') = ?1 AND e.company_id = (SELECT company_id FROM suplex_tasks WHERE id = ?1) ORDER BY e.created_at, e.rowid",
+        "SELECT e.id, e.action, COALESCE(u.display_name, a.name, CASE WHEN e.actor_user_id IS NULL AND e.actor_agent_id IS NULL THEN 'Suplex' END), e.created_at, json_extract(e.metadata_json, '$.queue') FROM suplex_audit_events e LEFT JOIN suplex_users u ON u.id = e.actor_user_id LEFT JOIN suplex_agents a ON a.id = e.actor_agent_id WHERE json_extract(e.metadata_json, '$.taskId') = ?1 AND e.company_id = (SELECT company_id FROM suplex_tasks WHERE id = ?1) ORDER BY e.created_at, e.rowid",
     )?;
     let rows = statement.query_map([task_id], |row| {
         Ok((

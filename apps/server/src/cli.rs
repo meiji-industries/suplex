@@ -49,6 +49,10 @@ Diagnostic Commands:
   task        Show the stored state of one task
   serve       Run the server in the foreground
 
+Agent Commands:
+  mcp         Run the stdio MCP bridge for a paired external agent
+              (reads SUPLEX_BASE_URL and SUPLEX_AGENT_CREDENTIAL)
+
 Operator Commands:
   hosted      Run the hosted billing, account, and suplex.sh service (hosted serve)
   billing     Rotate a hosted billing credential (billing rotate-credential)

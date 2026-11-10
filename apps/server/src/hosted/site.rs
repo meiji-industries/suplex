@@ -5,7 +5,7 @@
 use axum::{
     Router,
     extract::{Query, Request, State},
-    http::{HeaderMap, StatusCode, header},
+    http::{HeaderMap, StatusCode, Uri, header},
     middleware::Next,
     response::{Html, IntoResponse, Response},
     routing::get,
@@ -58,6 +58,7 @@ struct DownloadQuery {
 async fn download(
     State(accounts): State<Accounts>,
     Query(query): Query<DownloadQuery>,
+    uri: Uri,
     headers: HeaderMap,
 ) -> Response {
     let platform = query.platform.as_deref().unwrap_or("macos-arm64");
@@ -98,6 +99,12 @@ async fn download(
         return response;
     }
     remember_visitor(&accounts, &headers, query.visitor.as_deref(), &mut response);
+    crate::accounts::hosted::attribution::remember(
+        &accounts.hosted.config.origin,
+        &headers,
+        uri.query(),
+        &mut response,
+    );
     // Anonymous: a fresh id and no person profile (docs/telemetry.md).
     let source = headers
         .get(header::USER_AGENT)

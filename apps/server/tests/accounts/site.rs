@@ -145,6 +145,15 @@ mod tests {
         assert_eq!(dnt.status(), 302);
         assert!(dnt.headers().get("set-cookie").is_none());
         assert_eq!(f.events().len(), 2);
+
+        // The processor pass sends the queued downloads.
+        f.answer("POST /batch/", 200, "{}");
+        f.accounts.hosted.run_processor_pass().await.unwrap();
+        let body: serde_json::Value =
+            serde_json::from_slice(&f.calls("/batch/")[0].body).unwrap();
+        let sent = body["batch"].as_array().unwrap();
+        assert_eq!(sent.len(), 2);
+        assert!(sent.iter().all(|event| event["event"] == "download_started"));
     }
 
     #[tokio::test]

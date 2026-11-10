@@ -109,6 +109,8 @@ pub fn line(
     args: &[&str],
 ) -> String {
     let provider = profile.provider.as_str();
+    let isolated =
+        profile.provider == HarnessKind::ClaudeCode && profile.instance_home_directory().is_some();
     let line = environment
         .iter()
         .map(|(name, value)| format!("{name}={}", shell_quoted(value)))
@@ -120,6 +122,7 @@ pub fn line(
                 .map(|arg| shell_quoted(arg)),
         )
         .chain(args.iter().map(|arg| shell_quoted(arg)))
+        .chain(isolated.then(|| "--setting-sources ''".to_owned()))
         .collect::<Vec<_>>()
         .join(" ");
     scoped_command(provider, profile.instance_home_directory(), line)
@@ -155,6 +158,17 @@ mod tests {
         )
         .unwrap();
         (base, path, endpoint.model())
+    }
+
+    #[test]
+    fn a_dedicated_claude_login_ignores_host_settings() {
+        let mut dedicated = profile("claude-code", "opus");
+        dedicated.instance_home_directory = Some(Some("/instance".into()));
+        assert!(line(&dedicated, None, &[], &["-p"]).ends_with("'-p' --setting-sources ''"));
+        assert!(
+            !line(&profile("claude-code", "opus"), None, &[], &["-p"])
+                .contains("--setting-sources")
+        );
     }
 
     #[test]

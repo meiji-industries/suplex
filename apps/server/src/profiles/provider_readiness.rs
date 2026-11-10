@@ -422,10 +422,8 @@ pub async fn check(
                         .and_then(|environment| environment.get("CLAUDE_CONFIG_DIR").cloned())
                 })
                 .flatten();
-            let mut args = auth_args(kind).to_vec();
-            if directory.is_some() {
-                args.extend(["--setting-sources", ""]);
-            }
+            // `claude auth` subcommands reject `--setting-sources`.
+            let args = auth_args(kind);
             let environment = environment.map(|environment| {
                 if kind == HarnessKind::ClaudeCode.as_str() {
                     claude_environment(directory.as_deref(), environment)
@@ -433,7 +431,7 @@ pub async fn check(
                     environment
                 }
             });
-            Some(probe_command(path, &args, environment.as_ref()).await)
+            Some(probe_command(path, args, environment.as_ref()).await)
         }
         Err(_) => None,
     };

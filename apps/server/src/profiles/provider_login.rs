@@ -98,7 +98,7 @@ pub fn scoped_command(provider: &str, home_directory: Option<&str>, command: Str
         .join(" ");
     let anthropic = std::path::Path::new(home).join("anthropic");
     format!(
-        "env {removed} CLAUDE_CONFIG_DIR={} ANTHROPIC_CONFIG_DIR={} {command} --setting-sources ''",
+        "env {removed} CLAUDE_CONFIG_DIR={} ANTHROPIC_CONFIG_DIR={} {command}",
         quoted(home),
         quoted(&anthropic.to_string_lossy())
     )
@@ -331,7 +331,8 @@ pub(crate) mod tests {
         );
         assert!(
             provider_login_command("claude-code", Some("/home/work laptop"), resolved("/opt/claude cli/claude"))
-                .contains("CLAUDE_CONFIG_DIR='/home/work laptop' ANTHROPIC_CONFIG_DIR='/home/work laptop/anthropic' '/opt/claude cli/claude' auth login --setting-sources ''")
+                .contains("CLAUDE_CONFIG_DIR='/home/work laptop' ANTHROPIC_CONFIG_DIR='/home/work laptop/anthropic' '/opt/claude cli/claude' auth login")
+                && !provider_login_command("claude-code", Some("/home"), resolved("/c")).contains("--setting-sources")
         );
         assert!(
             provider_login_command("claude-code", Some("/home"), resolved("/c"))

@@ -22,12 +22,16 @@ vi.mock("../features/projects/lib/project-api.js", () => ({ createProject: vi.fn
 vi.mock("../features/projects/create-project-dialog.js", () => ({ CreateProjectDialog: () => null }));
 vi.mock("../features/tasks/lib/task-api.js", () => ({ createTask: vi.fn(async () => ({ id: "task-1", companyId: "company-1" })) }));
 vi.mock("../features/tasks/task-data.js", () => ({ useTaskCache: () => vi.fn() }));
+vi.mock("../features/onboarding/onboarding-api.js", () => ({ completeOnboarding: vi.fn(async () => undefined) }));
+vi.mock("../shell/telemetry-api.js", () => ({ getTelemetry: vi.fn(async () => ({ noticeRequired: true, enabled: false })), acknowledgeTelemetry: vi.fn(async () => undefined) }));
 vi.mock("../components/app/entity-avatar.js", () => ({ AvatarEditor: () => null, EntityAvatar: () => null }));
 
 import { OnboardingView } from "../features/onboarding/onboarding-wizard.js";
 import { getBillingSummary, startTrial } from "../features/settings/lib/billing-api.js";
 import { setEmailUpdates } from "../features/account/lib/account-api.js";
 import { createTask } from "../features/tasks/lib/task-api.js";
+import { completeOnboarding } from "../features/onboarding/onboarding-api.js";
+import { acknowledgeTelemetry } from "../shell/telemetry-api.js";
 import { createProject, listRecentRepositories } from "../features/projects/lib/project-api.js";
 import { ApiError } from "../lib/api.js";
 
@@ -161,6 +165,7 @@ test("Create task starts the task with a ready pull request and opens it", async
   await act(async () => button("+Create task").click());
   expect(createTask).toHaveBeenCalledWith("company-1", expect.objectContaining({ projectId: "project-1", title: "Fix the login page", startImmediately: true, deliveryTarget: "pull_request_ready", workflow: "standard" }));
   expect(window.location.pathname).toBe("/tasks/task-1");
+  expect(completeOnboarding).toHaveBeenCalledWith("company-1", "first_task");
 });
 
 test("Skip for now leaves onboarding without a task", async () => {
@@ -168,4 +173,16 @@ test("Skip for now leaves onboarding without a task", async () => {
   await act(async () => button("Skip for now").click());
   expect(window.location.pathname).toBe("/today");
   expect(createTask).not.toHaveBeenCalled();
+  expect(completeOnboarding).toHaveBeenCalledWith("company-1", "skipped");
+});
+
+test("the usage data notice shows in onboarding before the company is named", async () => {
+  fixture.company.issueCode = undefined;
+  await render("/onboarding?step=you");
+  await act(async () => undefined);
+  const notice = container.querySelector("[data-telemetry-notice]");
+  expect(notice?.textContent).toContain("Allow Suplex to collect usage data");
+  await act(async () => button("Accept").click());
+  expect(acknowledgeTelemetry).toHaveBeenCalledTimes(1);
+  expect(container.querySelector("[data-telemetry-notice]")).toBeNull();
 });

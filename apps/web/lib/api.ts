@@ -91,7 +91,7 @@ export async function readJson(url: string, init?: RequestInit): Promise<unknown
     const error = errorField(body, "error");
     const findings = errorField(body, "findings");
     const code = errorField(body, "code");
-    reportApiFailure({ url, status: response.status, ...(typeof code === "string" ? { code } : {}) });
+    reportApiFailure({ url, method, status: response.status, ...(typeof code === "string" ? { code } : {}) });
     throw new ApiError(
       typeof error === "string" ? error : "Request failed",
       response.status,

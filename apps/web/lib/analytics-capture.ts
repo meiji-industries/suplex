@@ -1,4 +1,4 @@
-type ApiFailure = { url: string; status: number; code?: string };
+type ApiFailure = { url: string; method?: string; status: number; code?: string };
 
 let apiFailureCapture: ((failure: ApiFailure) => void) | undefined;
 

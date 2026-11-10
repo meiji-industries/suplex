@@ -20,6 +20,19 @@ The host sends only when all of these are true:
 Rows written before the notice, or while telemetry is off, are never sent. The
 next send starts from the rows that exist then.
 
+The notice shows in the application frame and in the onboarding wizard, at the
+top of every onboarding screen. Onboarding runs outside the application frame,
+so before this a new installation could create its first project before anyone
+could answer the notice. An administrator who accepts the notice during
+onboarding sends `project_created` for the first project. The host seeds its
+first company at its first start, before any person can answer the notice, so
+that `company_created` row is never sent. Instead, the first time onboarding
+gives that company its company code, the host sends `company_created` with
+`via` set to `onboarding`. This happens only for a company that existed before
+the notice was answered, and only for its first code, so a company is counted
+once. A company created after the notice sends its own `company_created` with
+`via` set to `created`.
+
 The host reads committed rows once a minute and sends them in one batch to
 `https://us.i.posthog.com/batch/` (`SUPLEX_POSTHOG_HOST` overrides the host). A
 failed send is retried on the next minute. Telemetry never blocks or changes a
@@ -33,9 +46,10 @@ user action.
   owner's account is the linked account; an invited member's account is the
   one they accepted the invitation with. The browser and the host use the same
   IDs.
-- Events that no user caused (host lifecycle, daily counts, task lifecycle,
-  pull requests, and agent actions) use `<installation ID>:host`. That person is
-  never a user and never merges into one.
+- Events that no user caused (host lifecycle, daily counts, task lifecycle
+  including `task_started`, pull requests, agent actions, and agent-surface
+  events) use `<installation ID>:host`. That person is never a user and never
+  merges into one.
 - Every event carries the PostHog groups `host` (the installation ID) and,
   when the event belongs to a company, `company` (the company ID).
 - After a link, the host sends one `$set` with `distinct_id` set to the account
@@ -62,26 +76,90 @@ Native usage events have these properties: `app_version` (the semantic version),
 | `host_started` | first send after the host starts | none |
 | `$set` | first send after an account is linked | `$set.email` on the account person |
 | `host_upgraded` | first observation of a different semantic version | `previous_app_version`, `previous_app_revision` |
-| `company_created` | audit event | none |
-| `project_created` | audit event | `git_host` (`github`, `bitbucket`, or `none`), `tracker` (`github`, `jira`, or `none`) |
-| `membership_added` | audit event | none |
-| `workflow_created` | audit event | none |
-| `task_created` | audit event | `source` (`user` or `agent`), `has_image`, task context |
-| `task_started` | audit event | task context |
+| `company_created` | audit event, or the first company code of the seeded company (see [When Suplex sends](#when-suplex-sends)) | `via` (`created` or `onboarding`) |
+| `project_created` | audit event | `project_id`, `git_host` (`github`, `bitbucket`, or `none`), `tracker` (`github`, `jira`, or `none`) |
+| `membership_added` | audit event: an administrator adds a member, or an invited person accepts the invitation | `via` (`admin` or `invitation`) |
+| `workflow_created` | audit event: an administrator creates a workflow | none |
+| `onboarding_completed` | audit event: the onboarding wizard finishes, once per company | `outcome` (`first_task` or `skipped`) |
+| `task_created` | audit event | task context, `has_image` |
+| `task_started` | the first `active` lifecycle row of a task | task context |
 | `task_answered` | audit event | task context |
 | `task_cancelled` | audit event | task context, `duration_s` when measurable |
 | `task_waiting_human` | task lifecycle | task context |
 | `task_delivered` | task lifecycle | task context, `duration_s` (created to delivered) |
-| `pr_opened` | a task records a pull request | `git_host` |
-| `pr_merged` | the task's pull request is merged | `git_host` |
+| `pr_opened` | a task records a pull request | task context, `git_host` |
+| `pr_merged` | the task's pull request is merged | task context, `git_host` |
+| `agent_paired` | audit event: a pairing code exchange, a credential rotation, or an OAuth approval | `agent_id`, `method` (`pairing_code`, `rotation`, or `oauth`), `project_count`, `project_id` when the agent has exactly one project, `profile_id` when the client sent one, `cli_version` when the client was `suplex mcp` |
+| `agent_pairing_failed` | the pairing exchange returns an error | `status`, `error_code` |
+| `mcp_connected` | `/mcp` authenticates an agent, once per agent and hour | `agent_id`, `profile_id` when known |
+| `mcp_auth_failed` | `/mcp` returns 401 or 403 | `status`, `error_code` |
+| `cli_invoked` | `suplex mcp` calls the Agent API, once per agent and hour | `command` (`mcp`), `cli_version`, `agent_id`, `profile_id` when known |
+| `agent_request_failed` | an Agent API, pairing, or `/mcp` request returns 400 or more | see [Agent request failures](#agent-request-failures) |
 | `host_daily` | once a day | `users`, `companies`, `projects`, `tasks_running`, `tasks_created_7d`, `tasks_delivered_7d`, `move_runs_7d`, `task_templates`, `github_triggers_enabled`, provider profile counts |
 | `$groupidentify` | once a day per active company | `seats` (members that are not revoked), `projects`, `plan` (the installation plan, `free`, `pro`, or `team`) |
 
-Task context contains the built-in `workflow`, `delivery_target`,
-`coordinator_provider`, `worker_provider`, and `advisor_count`. Unavailable task
-context is omitted. Provider profile counts are `profiles_opencode`,
+Task context is the same for every task event and pull request event. It
+contains `task_id`, `project_id`, `source` (`user` when a user created the task,
+`agent` when an agent created it), and for an agent-created task `agent_id` (the
+creating agent) and `profile_id` when that external agent has a client profile
+ID. It also contains the built-in `workflow`, `delivery_target`,
+`coordinator_provider`, `worker_provider`, and `advisor_count`. Unavailable
+values are omitted. Provider profile counts are `profiles_opencode`,
 `profiles_claude_code`, `profiles_devin`, `profiles_codex`, `profiles_pi`, and
 `profiles_omp`.
+
+A client profile ID is text that an agent client chooses, so `profile_id` is
+never that text. It is the first 16 hexadecimal characters of a SHA-256 hash of
+the ID, which groups events of one profile without showing its name.
+
+`task_started` comes from the task lifecycle, not from the audit log. Every
+path that makes a task active writes a lifecycle row: a user start, the Agent API
+`start_task` command, queue admission, a force start, and a task that starts when
+it is created. The first `active` row of a task sends `task_started`. A task that
+waits for a person and runs again is not started again, and its event ID is the
+same if a send repeats. Because no user is attached to a lifecycle row,
+`task_started` uses the host person.
+
+### Agent surfaces
+
+The host records the agent events above in `suplex_telemetry_events` and sends
+them with the rest of its telemetry, under the same gates. It records them only
+while `DO_NOT_TRACK` and `SUPLEX_TELEMETRY` allow it, the Environment setting is
+on, and the notice was answered. When telemetry turns off, waiting rows are
+deleted. At most 1000 rows wait. Each row has a deduplication key, so
+`mcp_connected` and `cli_invoked` are recorded once per agent and hour, and a
+failure is recorded once per agent, route, status, and code each hour. The
+host deletes sent rows after two days.
+
+`suplex mcp` sends the client header `User-Agent: suplex-mcp/<version>`. The
+host reads a version only when the header has exactly that shape with a
+`<major>.<minor>.<patch>` version. Other header text is not kept. A pairing
+exchange from `suplex mcp` stores that version in its audit row. No other
+`suplex` command calls the Agent API; the operator commands, such as `suplex
+task` and `suplex doctor`, send no usage event.
+
+Properties never hold a pairing code, a credential, an access token, a request
+or response body, an error message, a client name, a profile ID in clear text,
+a path, or header text.
+
+### Agent request failures
+
+`agent_request_failed` has these properties:
+
+- `exception_source`: `agent_api` for `/api/agent`, `/api/hermes`, and the
+  pairing exchange, `mcp` for `/mcp`, and `cli` for an Agent API request from
+  `suplex mcp`;
+- `http_method` (`GET`, `POST`, `PUT`, `PATCH`, `DELETE`, `HEAD`, `OPTIONS`, or
+  `OTHER`) and `http_route`, the matched route template such as
+  `/api/agent/tasks/{task_id}`, never the path;
+- `status`, the HTTP status;
+- `error_code`: the response `code` (the `error` field for `/mcp`) when it is
+  in the host's allowlist, `other` for any other code, or `none`;
+- `agent_id` and `profile_id` when the request authenticated an agent, and
+  `cli_version` from `suplex mcp`.
+
+A tool error inside a successful `/mcp` JSON-RPC response is not an HTTP
+failure and is not recorded.
 
 ## Browser analytics
 
@@ -93,15 +171,23 @@ Settings changes notify the current tab and other tabs; a periodic refresh also
 checks the authoritative host setting.
 
 Session replay is disabled and has no setting or feature flag. Console logs are
-not captured. Captured routes replace resource IDs with placeholders and remove
-query strings and fragments.
+not captured. Captured routes replace resource IDs with `:id` and remove query
+strings and fragments. A segment stays when it is a static segment of the
+application's screens or of the server route table, such as
+`/api/agent/tasks/:id`, `/api/agent/pairing/exchange`,
+`/api/tasks/:id/commands`, and `/api/companies/:id/projects`. A segment that has
+the shape of a generated ID (`prefix_hex`, a UUID, a number, or long hex) and
+any other text become `:id`. A unit test checks the static list against the
+server route table.
 
 Browser events include `$pageview`, `screen_viewed`, `session_engaged`, sanitized
 exceptions for PostHog Error Tracking, and `api_request_failed`. Properties
 include the screen, app version/revision, browser or desktop platform, user role,
 company plan, and PostHog browser/OS/session metadata. Engagement adds
-`duration_s`; API failures add the route, numeric status, and an allowlisted error
-code. Error text must not contain original application messages or user content.
+`duration_s`. `api_request_failed` adds `api_route` (the sanitized route),
+`http_method` (`GET`, `POST`, `PUT`, `PATCH`, `DELETE`, `HEAD`, `OPTIONS`, or
+`OTHER`), the numeric `status`, and `error_code`, the response `code` when it is
+in the browser's allowlist, else `unknown`. Error text must not contain original application messages or user content.
 Feature flags are optional presentation controls and never decide task authority,
 paid access, or delivery permission.
 
@@ -218,8 +304,20 @@ The hosted account service at `suplex.sh` sends `account_signed_up` when a login
 creates an account and `account_logged_in` when it reuses one. `distinct_id` is
 the account ID. Properties are `provider` (`google`, `github`, or `email`),
 `$lib` (`suplex-hosted`), `$groups.host` (the installation ID), and `$set.email`.
-These events use the hosted outbox and need `BILLING_TELEMETRY`. See
-[Suplex accounts](accounts.md).
+These events use the hosted outbox and need `BILLING_TELEMETRY` and
+`BILLING_POSTHOG_KEY` on the hosted service. Without both, the service queues
+and sends nothing, so a deployment without them shows no signups. The billing
+processor pass drains the outbox.
+
+`account_signed_up` also carries first-touch attribution when the browser has
+it: `utm_source`, `utm_medium`, `utm_campaign`, `utm_content`, `utm_term`, and
+`referring_domain`. The first visit to `/download`, `/start`, or `/auth/start`
+that has UTM parameters or a referrer from another site keeps them in the
+first-party `suplex_attribution` cookie for 30 days, next to `suplex_visitor`.
+A later visit never replaces it. Each UTM value is 1 to 64 letters, digits,
+spaces, or `._~+-`; other values are dropped. The referrer keeps its hostname
+only, never its path or query. A request with `DNT: 1` keeps nothing.
+`account_logged_in` carries no attribution. See [Suplex accounts](accounts.md).
 
 ## Billing and monetization
 
@@ -275,7 +373,9 @@ events are separate from consented website download clicks.
 ## Local state
 
 `suplex_telemetry` holds the notice time, last observed version,
-the send position, and when telemetry last turned on (`exceptions_since`).
+the send positions (`audit_cursor`, `lifecycle_cursor`, and `event_cursor`), and
+when telemetry last turned on (`exceptions_since`). `suplex_telemetry_events`
+holds agent-surface events until they are sent.
 Waiting exception reports are files in `exceptions/` in the installation
 directory. `suplex_account.identify_sent_at` records the account merge. `suplex_telemetry_pull_requests` records
 which pull requests were reported. Hosted billing has a separate analytics

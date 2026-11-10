@@ -663,4 +663,51 @@ pub(crate) mod tests {
             .insert("192.0.2.2".into(), Vec::new());
         assert!(super::throttle(&server.state, "192.0.2.2").is_ok());
     }
+
+    /// One `mcp_connected` per agent and hour, and a failed bearer sends its status and code only.
+    #[tokio::test]
+    async fn mcp_connections_and_auth_failures_send_bounded_events() {
+        let server = server(None).await;
+        server
+            .state
+            .with_database(crate::telemetry::tests::sent_for_test);
+        let client = register(&server, "Claude").await;
+        let verifier = "t".repeat(43);
+        let code = authorize(&server, &client, &verifier, "state").await;
+        let token = exchange(&server, &client, &code, &verifier).await.1["access_token"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        for _ in 0..3 {
+            assert_eq!(mcp_status(&server, &token).await, 200);
+        }
+        assert_eq!(mcp_status(&server, "not-a-token-secret").await, 401);
+        let agent_id = agent_of(&server, &client);
+        let sent = server
+            .state
+            .with_database(crate::telemetry::tests::sent_for_test);
+        let named = |name: &str| {
+            sent.iter()
+                .filter(|event| event["event"] == name)
+                .map(|event| event["properties"].clone())
+                .collect::<Vec<_>>()
+        };
+        let connected = named("mcp_connected");
+        assert_eq!(connected.len(), 1, "{sent:?}");
+        assert_eq!(connected[0]["agent_id"], agent_id.as_str());
+        assert!(connected[0].get("profile_id").is_none());
+        let failed = named("mcp_auth_failed");
+        assert_eq!(failed.len(), 1, "{sent:?}");
+        assert_eq!((&failed[0]["status"], &failed[0]["error_code"]), (&json!(401), &json!("invalid_token")));
+        let request = named("agent_request_failed");
+        assert_eq!(request.len(), 1, "{sent:?}");
+        assert_eq!(request[0]["exception_source"], "mcp");
+        assert_eq!(request[0]["http_route"], "/mcp");
+        assert_eq!(request[0]["http_method"], "POST");
+        assert!(named("agent_paired").iter().any(|paired| paired["method"] == "oauth"));
+        let text = serde_json::to_string(&sent).unwrap();
+        for leak in ["secret", token.as_str(), "Claude"] {
+            assert!(!text.contains(leak), "{leak} in {text}");
+        }
+    }
 }

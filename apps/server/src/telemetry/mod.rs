@@ -37,23 +37,40 @@ use crate::{
     tasks::control::{DeliveryTarget, TaskProfile},
 };
 
+pub mod agent;
 pub mod exceptions;
 
 const DEFAULT_HOST: &str = "https://us.i.posthog.com";
 const PERIOD: Duration = Duration::from_secs(60);
 const BATCH: i64 = 500;
 
-/// Audit actions forwarded under the same event name.
+/// Audit actions forwarded under the same event name. `task_started` comes
+/// from the task lifecycle instead: every path that starts a task records it there.
 const AUDIT_ACTIONS: [&str; 8] = [
     "company_created",
     "project_created",
     "task_created",
-    "task_started",
     "task_answered",
     "task_cancelled",
     "workflow_created",
     "membership_added",
+    "onboarding_completed",
 ];
+
+/// Audit actions forwarded under another event name.
+fn audit_event_name(action: &str) -> Option<&'static str> {
+    if let Some(name) = AUDIT_ACTIONS.into_iter().find(|name| *name == action) {
+        return Some(name);
+    }
+    match action {
+        "external_agent_paired" | "external_agent_rotated" | "external_agent_oauth_authorized" => {
+            Some("agent_paired")
+        }
+        // The first company is named in onboarding; see `named_company`.
+        "company_issue_code_updated" => Some("company_created"),
+        _ => None,
+    }
+}
 
 #[derive(Clone, Debug)]
 pub struct Config {
@@ -95,6 +112,7 @@ struct State {
     notice_at: Option<String>,
     audit_cursor: Option<i64>,
     lifecycle_cursor: Option<i64>,
+    event_cursor: Option<i64>,
     daily_at: Option<String>,
     last_app_version: Option<String>,
     last_app_revision: Option<String>,
@@ -106,7 +124,7 @@ fn state(database: &SuplexDatabase) -> DatabaseResult<Option<State>> {
     Ok(database
         .connection()
         .query_row(
-            "SELECT notice_at, audit_cursor, lifecycle_cursor, daily_at, last_app_version, last_app_revision, exceptions_since FROM suplex_telemetry WHERE id = 'host'",
+            "SELECT notice_at, audit_cursor, lifecycle_cursor, daily_at, last_app_version, last_app_revision, exceptions_since, event_cursor FROM suplex_telemetry WHERE id = 'host'",
             [],
             |row| {
                 Ok(State {
@@ -117,6 +135,7 @@ fn state(database: &SuplexDatabase) -> DatabaseResult<Option<State>> {
                     last_app_version: row.get(4)?,
                     last_app_revision: row.get(5)?,
                     exceptions_since: row.get(6)?,
+                    event_cursor: row.get(7)?,
                 })
             },
         )
@@ -136,9 +155,12 @@ pub fn acknowledge(database: &mut SuplexDatabase, now: DateTime<Utc>) -> Databas
 /// never sent. The next send starts from the rows that exist then.
 fn forget(database: &SuplexDatabase) -> DatabaseResult<()> {
     database.connection().execute(
-        "UPDATE suplex_telemetry SET audit_cursor = NULL, lifecycle_cursor = NULL, exceptions_since = NULL WHERE id = 'host'",
+        "UPDATE suplex_telemetry SET audit_cursor = NULL, lifecycle_cursor = NULL, event_cursor = NULL, exceptions_since = NULL WHERE id = 'host'",
         [],
     )?;
+    database
+        .connection()
+        .execute("DELETE FROM suplex_telemetry_events", [])?;
     Ok(())
 }
 
@@ -148,7 +170,7 @@ fn forget(database: &SuplexDatabase) -> DatabaseResult<()> {
 fn baseline(database: &mut SuplexDatabase) -> DatabaseResult<()> {
     database.transaction(true, |database| {
         database.connection().execute(
-            "UPDATE suplex_telemetry SET audit_cursor = (SELECT COALESCE(MAX(rowid), 0) FROM suplex_audit_events), lifecycle_cursor = (SELECT COALESCE(MAX(id), 0) FROM suplex_task_analytics_events), exceptions_since = ?1 WHERE id = 'host'",
+            "UPDATE suplex_telemetry SET audit_cursor = (SELECT COALESCE(MAX(rowid), 0) FROM suplex_audit_events), lifecycle_cursor = (SELECT COALESCE(MAX(id), 0) FROM suplex_task_analytics_events), event_cursor = (SELECT COALESCE(MAX(id), 0) FROM suplex_telemetry_events), exceptions_since = ?1 WHERE id = 'host'",
             [Utc::now().timestamp_millis()],
         )?;
         database.connection().execute(
@@ -165,6 +187,7 @@ struct Collected {
     events: Vec<Value>,
     audit_cursor: i64,
     lifecycle_cursor: i64,
+    event_cursor: i64,
     pull_requests: Vec<(String, bool)>,
     /// The linked account this batch merges with the installation person.
     identified: Option<String>,
@@ -276,6 +299,12 @@ fn deterministic_uuid(seed: &str) -> String {
 struct AuditMetadata {
     project_id: Option<String>,
     task_id: Option<String>,
+    agent_id: Option<String>,
+    profile_id: Option<String>,
+    client_version: Option<String>,
+    previous_issue_code: Option<String>,
+    outcome: Option<String>,
+    via: Option<String>,
 }
 
 struct TaskMetrics {
@@ -284,20 +313,19 @@ struct TaskMetrics {
     root: TaskProfile,
     worker: TaskProfile,
     advisor_count: usize,
-    created_at: String,
 }
 
 fn task_metrics(database: &SuplexDatabase, task_id: &str) -> DatabaseResult<Option<TaskMetrics>> {
-    let raw: Option<(String, String, String, String, String, String)> = database
+    let raw: Option<(String, String, String, String, String)> = database
         .connection()
         .query_row(
-            "SELECT c.workflow, c.delivery_target, c.root_profile_json, c.worker_profile_json, c.advisor_profiles_json, t.created_at FROM suplex_tasks t JOIN suplex_task_controls c ON c.task_id = t.id WHERE t.id = ?1",
+            "SELECT c.workflow, c.delivery_target, c.root_profile_json, c.worker_profile_json, c.advisor_profiles_json FROM suplex_task_controls c WHERE c.task_id = ?1",
             [task_id],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?)),
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)),
         )
         .optional()?;
-    Ok(raw.and_then(
-        |(workflow, delivery_target, root, worker, advisors, created_at)| {
+    Ok(
+        raw.and_then(|(workflow, delivery_target, root, worker, advisors)| {
             Some(TaskMetrics {
                 workflow: serde_json::from_value(json!(workflow)).ok()?,
                 delivery_target: serde_json::from_value(json!(delivery_target)).ok()?,
@@ -306,31 +334,144 @@ fn task_metrics(database: &SuplexDatabase, task_id: &str) -> DatabaseResult<Opti
                 advisor_count: serde_json::from_str::<BTreeMap<String, TaskProfile>>(&advisors)
                     .ok()?
                     .len(),
-                created_at,
             })
-        },
-    ))
+        }),
+    )
 }
 
-fn task_properties(metrics: &TaskMetrics) -> Map<String, Value> {
-    Map::from_iter([
-        ("workflow".into(), json!(metrics.workflow)),
-        ("delivery_target".into(), json!(metrics.delivery_target)),
-        ("coordinator_provider".into(), json!(metrics.root.provider)),
-        ("worker_provider".into(), json!(metrics.worker.provider)),
-        ("advisor_count".into(), json!(metrics.advisor_count)),
-    ])
+/// What every task event says about its task: who created it, where, and how it runs.
+struct TaskContext {
+    task_id: String,
+    project_id: Option<String>,
+    /// The creating agent; `None` when a user created the task.
+    agent_id: Option<String>,
+    /// The external creating agent's client profile ID, when it has one.
+    profile_id: Option<String>,
+    created_at: Option<String>,
+    metrics: Option<TaskMetrics>,
 }
 
-fn audit_properties(
+/// The one task-context resolver for audit, lifecycle, and pull request events.
+fn task_context(database: &SuplexDatabase, task_id: &str) -> DatabaseResult<TaskContext> {
+    let row: Option<(String, Option<String>, Option<String>, String)> = database
+        .connection()
+        .query_row(
+            "SELECT t.project_id, t.creator_agent_id, e.client_profile_id, t.created_at FROM suplex_tasks t LEFT JOIN suplex_external_agents e ON e.id = t.creator_agent_id WHERE t.id = ?1",
+            [task_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )
+        .optional()?;
+    let (project_id, agent_id, profile_id, created_at) = match row {
+        Some((project, agent, profile, created)) => (Some(project), agent, profile, Some(created)),
+        None => (None, None, None, None),
+    };
+    Ok(TaskContext {
+        task_id: task_id.to_owned(),
+        project_id,
+        agent_id,
+        profile_id,
+        created_at,
+        metrics: task_metrics(database, task_id)?,
+    })
+}
+
+impl TaskContext {
+    /// `task_id`, `project_id`, `source`, the creating agent, and the task's
+    /// configuration. Unknown values are omitted. The profile ID is hashed.
+    fn properties(&self) -> Map<String, Value> {
+        let mut properties = Map::from_iter([
+            ("task_id".into(), json!(self.task_id)),
+            (
+                "source".into(),
+                json!(if self.agent_id.is_some() {
+                    "agent"
+                } else {
+                    "user"
+                }),
+            ),
+        ]);
+        if let Some(project_id) = &self.project_id {
+            properties.insert("project_id".into(), json!(project_id));
+        }
+        if let Some(agent_id) = &self.agent_id {
+            properties.insert("agent_id".into(), json!(agent_id));
+        }
+        if let Some(profile_id) = &self.profile_id {
+            properties.insert("profile_id".into(), json!(agent::profile_hash(profile_id)));
+        }
+        if let Some(metrics) = &self.metrics {
+            properties.extend([
+                ("workflow".into(), json!(metrics.workflow)),
+                ("delivery_target".into(), json!(metrics.delivery_target)),
+                ("coordinator_provider".into(), json!(metrics.root.provider)),
+                ("worker_provider".into(), json!(metrics.worker.provider)),
+                ("advisor_count".into(), json!(metrics.advisor_count)),
+            ]);
+        }
+        properties
+    }
+
+    /// Seconds from task creation to `observed_at`, when both parse.
+    fn seconds_until(&self, observed_at: &str) -> Option<i64> {
+        self.created_at
+            .as_deref()
+            .and_then(|created| DateTime::parse_from_rfc3339(created).ok())
+            .zip(DateTime::parse_from_rfc3339(observed_at).ok())
+            .map(|(created, observed)| (observed - created).num_seconds().max(0))
+    }
+}
+
+/// One audit row as the collector reads it.
+struct AuditRow {
+    rowid: i64,
+    action: String,
+    company_id: Option<String>,
+    actor_agent_id: Option<String>,
+    metadata: String,
+    created_at: String,
+}
+
+/// The first issue code of a company that existed before the notice was
+/// answered. Onboarding names the company that the host seeded at its first
+/// start, so this is the first observation of that company. A company created
+/// after the notice sends its own `company_created` row instead.
+fn named_company(
     database: &SuplexDatabase,
-    action: &str,
-    by_agent: bool,
-    metadata: &str,
-    observed_at: &str,
-) -> DatabaseResult<Value> {
-    let metadata = serde_json::from_str::<AuditMetadata>(metadata).unwrap_or_default();
-    Ok(match action {
+    row: &AuditRow,
+    metadata: &AuditMetadata,
+    notice_at: Option<&str>,
+) -> DatabaseResult<bool> {
+    let (Some(company_id), Some(notice_at)) = (row.company_id.as_deref(), notice_at) else {
+        return Ok(false);
+    };
+    if metadata.previous_issue_code.as_deref() != Some("") {
+        return Ok(false);
+    }
+    Ok(database.connection().query_row(
+        "SELECT NOT EXISTS(SELECT 1 FROM suplex_audit_events WHERE company_id = ?1 AND action = 'company_created' AND julianday(created_at) >= julianday(?2)) AND NOT EXISTS(SELECT 1 FROM suplex_audit_events WHERE company_id = ?1 AND action = 'company_issue_code_updated' AND rowid < ?3 AND json_extract(metadata_json, '$.previousIssueCode') = '')",
+        params![company_id, notice_at, row.rowid],
+        |row| row.get(0),
+    )?)
+}
+
+/// The event and its properties for one audit row, or `None` when it sends nothing.
+fn audit_event(
+    database: &SuplexDatabase,
+    row: &AuditRow,
+    notice_at: Option<&str>,
+) -> DatabaseResult<Option<(&'static str, Value)>> {
+    let Some(name) = audit_event_name(&row.action) else {
+        return Ok(None);
+    };
+    let metadata = serde_json::from_str::<AuditMetadata>(&row.metadata).unwrap_or_default();
+    let properties = match row.action.as_str() {
+        "company_created" => json!({"via": "created"}),
+        "company_issue_code_updated" => {
+            if !named_company(database, row, &metadata, notice_at)? {
+                return Ok(None);
+            }
+            json!({"via": "onboarding"})
+        }
         "project_created" => {
             let (git_host, tracker): (Option<String>, Option<String>) = database
                 .connection()
@@ -341,91 +482,142 @@ fn audit_properties(
                 )
                 .optional()?
                 .unwrap_or_default();
-            json!({
+            let mut properties = json!({
                 "git_host": git_host.unwrap_or_else(|| "none".to_owned()),
                 "tracker": tracker.unwrap_or_else(|| "none".to_owned()),
-            })
-        }
-        "task_created" | "task_started" | "task_answered" | "task_cancelled" => {
-            let task_id = metadata.task_id.as_deref().unwrap_or("");
-            let has_image: bool = database.connection().query_row(
-                "SELECT EXISTS(SELECT 1 FROM suplex_artifacts WHERE task_id = ?1 AND kind = 'task-image')",
-                [task_id],
-                |row| row.get(0),
-            )?;
-            let Some(metrics) = task_metrics(database, task_id)? else {
-                return Ok(if action == "task_created" {
-                    json!({"source": if by_agent { "agent" } else { "user" }, "has_image": has_image})
-                } else {
-                    json!({})
-                });
-            };
-            let duration_s = DateTime::parse_from_rfc3339(&metrics.created_at)
-                .ok()
-                .zip(DateTime::parse_from_rfc3339(observed_at).ok())
-                .map(|(created, observed)| (observed - created).num_seconds().max(0));
-            let mut properties = Value::Object(task_properties(&metrics));
-            if action == "task_created" {
-                properties["source"] = json!(if by_agent { "agent" } else { "user" });
-                properties["has_image"] = json!(has_image);
+            });
+            if let Some(project_id) = &metadata.project_id {
+                properties["project_id"] = json!(project_id);
             }
-            if action == TaskActivityActionKind::Cancelled.as_str() {
-                properties["duration_s"] = json!(duration_s);
+            properties
+        }
+        "task_created" | "task_answered" | "task_cancelled" => {
+            let task_id = metadata.task_id.as_deref().unwrap_or("");
+            let context = task_context(database, task_id)?;
+            let mut properties = context.properties();
+            if row.action == "task_created" {
+                let has_image: bool = database.connection().query_row(
+                    "SELECT EXISTS(SELECT 1 FROM suplex_artifacts WHERE task_id = ?1 AND kind = 'task-image')",
+                    [task_id],
+                    |row| row.get(0),
+                )?;
+                properties.insert("has_image".into(), json!(has_image));
+            }
+            if row.action == TaskActivityActionKind::Cancelled.as_str() {
+                properties.insert(
+                    "duration_s".into(),
+                    json!(context.seconds_until(&row.created_at)),
+                );
+            }
+            Value::Object(properties)
+        }
+        "membership_added" => json!({
+            "via": if metadata.via.as_deref() == Some("invitation") { "invitation" } else { "admin" },
+        }),
+        "onboarding_completed" => json!({
+            "outcome": if metadata.outcome.as_deref() == Some("first_task") { "first_task" } else { "skipped" },
+        }),
+        "external_agent_paired" | "external_agent_rotated" | "external_agent_oauth_authorized" => {
+            let Some(agent_id) = row.actor_agent_id.clone().or(metadata.agent_id.clone()) else {
+                return Ok(None);
+            };
+            let projects = database
+                .connection()
+                .prepare(
+                    "SELECT project_id FROM suplex_external_agent_project_grants WHERE agent_id = ?1 ORDER BY project_id",
+                )?
+                .query_map([&agent_id], |row| row.get::<_, String>(0))?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            let mut properties = json!({
+                "agent_id": agent_id,
+                "method": match row.action.as_str() {
+                    "external_agent_rotated" => "rotation",
+                    "external_agent_oauth_authorized" => "oauth",
+                    _ => "pairing_code",
+                },
+                "project_count": projects.len(),
+            });
+            if let [project_id] = projects.as_slice() {
+                properties["project_id"] = json!(project_id);
+            }
+            if let Some(profile_id) = &metadata.profile_id {
+                properties["profile_id"] = json!(agent::profile_hash(profile_id));
+            }
+            if let Some(version) = metadata
+                .client_version
+                .as_deref()
+                .filter(|version| agent::semantic_version(version))
+            {
+                properties["cli_version"] = json!(version);
             }
             properties
         }
         _ => json!({}),
-    })
+    };
+    Ok(Some((name, properties)))
 }
 
 fn collect_audit(
     database: &SuplexDatabase,
     config: &Config,
     cursor: i64,
+    notice_at: Option<&str>,
     collected: &mut Collected,
 ) -> DatabaseResult<()> {
     collected.audit_cursor = cursor;
     let mut statement = database.connection().prepare(
-        "SELECT e.rowid, e.action, e.company_id, e.actor_agent_id IS NOT NULL, e.metadata_json, e.created_at, e.actor_user_id, a.account_id FROM suplex_audit_events e LEFT JOIN suplex_account_users a ON a.user_id = e.actor_user_id WHERE e.rowid > ?1 ORDER BY e.rowid LIMIT ?2",
+        "SELECT e.rowid, e.action, e.company_id, e.actor_agent_id, e.metadata_json, e.created_at, e.actor_user_id, a.account_id FROM suplex_audit_events e LEFT JOIN suplex_account_users a ON a.user_id = e.actor_user_id WHERE e.rowid > ?1 ORDER BY e.rowid LIMIT ?2",
     )?;
     let rows = statement
         .query_map(params![cursor, BATCH], |row| {
             Ok((
-                row.get::<_, i64>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, Option<String>>(2)?,
-                row.get::<_, bool>(3)?,
-                row.get::<_, String>(4)?,
-                row.get::<_, String>(5)?,
+                AuditRow {
+                    rowid: row.get(0)?,
+                    action: row.get(1)?,
+                    company_id: row.get(2)?,
+                    actor_agent_id: row.get(3)?,
+                    metadata: row.get(4)?,
+                    created_at: row.get(5)?,
+                },
                 row.get::<_, Option<String>>(6)?,
                 row.get::<_, Option<String>>(7)?,
             ))
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
-    for (rowid, action, company_id, by_agent, metadata, created_at, actor, account_id) in rows {
-        collected.audit_cursor = rowid;
-        if AUDIT_ACTIONS.contains(&action.as_str()) {
-            let properties = audit_properties(database, &action, by_agent, &metadata, &created_at)?;
-            let mut event = durable_event(
-                config,
-                &action,
-                company_id.as_deref(),
-                &created_at,
-                properties,
-                &format!("audit:{rowid}"),
+    for (row, actor, account_id) in rows {
+        collected.audit_cursor = row.rowid;
+        let Some((name, properties)) = audit_event(database, &row, notice_at)? else {
+            continue;
+        };
+        let mut event = durable_event(
+            config,
+            name,
+            row.company_id.as_deref(),
+            &row.created_at,
+            properties,
+            &format!("audit:{}", row.rowid),
+        );
+        // A user's person is their hosted account, else this user on this
+        // host. The browser uses the same IDs.
+        if let Some(actor) = actor {
+            event["distinct_id"] = json!(
+                account_id.unwrap_or_else(|| format!("{}:user:{actor}", config.installation_id))
             );
-            // A user's person is their hosted account, else this user on this
-            // host. The browser uses the same IDs.
-            if let Some(actor) = actor {
-                event["distinct_id"] = json!(
-                    account_id
-                        .unwrap_or_else(|| format!("{}:user:{actor}", config.installation_id))
-                );
-            }
-            collected.events.push(event);
         }
+        collected.events.push(event);
     }
     Ok(())
+}
+
+/// `task_started` is the first `active` row of a task, whichever path started
+/// it: a user, an agent command, the queue, a force start, or creation. A task
+/// that pauses and runs again is counted once.
+fn first_start(database: &SuplexDatabase, task_id: &str, id: i64) -> DatabaseResult<bool> {
+    Ok(database.connection().query_row(
+        "SELECT NOT EXISTS(SELECT 1 FROM suplex_task_analytics_events WHERE task_id = ?1 AND status = 'active' AND id < ?2)",
+        params![task_id, id],
+        |row| row.get(0),
+    )?)
 }
 
 fn collect_lifecycle(
@@ -436,7 +628,7 @@ fn collect_lifecycle(
 ) -> DatabaseResult<()> {
     collected.lifecycle_cursor = cursor;
     let mut statement = database.connection().prepare(
-        "SELECT e.id, e.task_id, e.status, e.observed_at, t.company_id, t.created_at FROM suplex_task_analytics_events e LEFT JOIN suplex_tasks t ON t.id = e.task_id WHERE e.id > ?1 ORDER BY e.id LIMIT ?2",
+        "SELECT e.id, e.task_id, e.status, e.observed_at, t.company_id FROM suplex_task_analytics_events e LEFT JOIN suplex_tasks t ON t.id = e.task_id WHERE e.id > ?1 ORDER BY e.id LIMIT ?2",
     )?;
     let rows = statement
         .query_map(params![cursor, BATCH], |row| {
@@ -446,35 +638,77 @@ fn collect_lifecycle(
                 row.get::<_, String>(2)?,
                 row.get::<_, String>(3)?,
                 row.get::<_, Option<String>>(4)?,
-                row.get::<_, Option<String>>(5)?,
             ))
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
-    for (id, task_id, status, observed_at, company_id, created_at) in rows {
+    for (id, task_id, status, observed_at, company_id) in rows {
         collected.lifecycle_cursor = id;
-        let metrics = task_metrics(database, &task_id)?;
-        let properties = match status.as_str() {
-            "waiting_human" => {
-                Value::Object(metrics.as_ref().map(task_properties).unwrap_or_default())
+        let (name, source_key) = match status.as_str() {
+            "active" if first_start(database, &task_id, id)? => {
+                ("task_started", format!("task-started:{task_id}"))
             }
-            "delivered" => {
-                let seconds = created_at
-                    .and_then(|created| DateTime::parse_from_rfc3339(&created).ok())
-                    .zip(DateTime::parse_from_rfc3339(&observed_at).ok())
-                    .map(|(created, delivered)| (delivered - created).num_seconds().max(0));
-                let mut properties = metrics.as_ref().map(task_properties).unwrap_or_default();
-                properties.insert("duration_s".into(), json!(seconds));
-                Value::Object(properties)
-            }
+            "waiting_human" => ("task_waiting_human", format!("lifecycle:{id}")),
+            "delivered" => ("task_delivered", format!("lifecycle:{id}")),
             _ => continue,
+        };
+        let context = task_context(database, &task_id)?;
+        let mut properties = context.properties();
+        if status == "delivered" {
+            properties.insert(
+                "duration_s".into(),
+                json!(context.seconds_until(&observed_at)),
+            );
+        }
+        collected.events.push(durable_event(
+            config,
+            name,
+            company_id.as_deref(),
+            &observed_at,
+            Value::Object(properties),
+            &source_key,
+        ));
+    }
+    Ok(())
+}
+
+/// Agent-surface observations from `suplex_telemetry_events`.
+fn collect_events(
+    database: &SuplexDatabase,
+    config: &Config,
+    cursor: i64,
+    collected: &mut Collected,
+) -> DatabaseResult<()> {
+    collected.event_cursor = cursor;
+    let mut statement = database.connection().prepare(
+        "SELECT id, event, company_id, properties_json, dedupe_key, created_at FROM suplex_telemetry_events WHERE id > ?1 ORDER BY id LIMIT ?2",
+    )?;
+    let rows = statement
+        .query_map(params![cursor, BATCH], |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, Option<String>>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, String>(4)?,
+                row.get::<_, String>(5)?,
+            ))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    for (id, name, company_id, properties, key, created_at) in rows {
+        collected.event_cursor = id;
+        let Some(name) = agent::EVENTS.into_iter().find(|event| *event == name) else {
+            continue;
+        };
+        let Ok(properties @ Value::Object(_)) = serde_json::from_str::<Value>(&properties) else {
+            continue;
         };
         collected.events.push(durable_event(
             config,
-            &format!("task_{status}"),
+            name,
             company_id.as_deref(),
-            &observed_at,
+            &created_at,
             properties,
-            &format!("lifecycle:{id}"),
+            &format!("agent-event:{key}"),
         ));
     }
     Ok(())
@@ -501,7 +735,9 @@ fn collect_pull_requests(
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     for (task_id, company_id, merged, git_host, reported) in rows {
-        let properties = json!({"git_host": git_host});
+        let mut properties = task_context(database, &task_id)?.properties();
+        properties.insert("git_host".into(), json!(git_host));
+        let properties = Value::Object(properties);
         if reported.is_none() {
             collected.events.push(durable_event(
                 config,
@@ -648,12 +884,19 @@ fn collect(
         database,
         config,
         state.audit_cursor.unwrap_or(0),
+        state.notice_at.as_deref(),
         &mut collected,
     )?;
     collect_lifecycle(
         database,
         config,
         state.lifecycle_cursor.unwrap_or(0),
+        &mut collected,
+    )?;
+    collect_events(
+        database,
+        config,
+        state.event_cursor.unwrap_or(0),
         &mut collected,
     )?;
     collect_pull_requests(database, config, &stamp, &mut collected)?;
@@ -671,7 +914,7 @@ fn collect(
 fn commit(database: &mut SuplexDatabase, collected: &Collected, now: &str) -> DatabaseResult<()> {
     database.transaction(true, |database| {
         database.connection().execute(
-            "UPDATE suplex_telemetry SET audit_cursor = ?1, lifecycle_cursor = ?2, daily_at = CASE WHEN ?4 THEN ?3 ELSE daily_at END, last_app_version = CASE WHEN ?5 THEN ?6 ELSE last_app_version END, last_app_revision = CASE WHEN ?5 THEN ?7 ELSE last_app_revision END WHERE id = 'host'",
+            "UPDATE suplex_telemetry SET audit_cursor = ?1, lifecycle_cursor = ?2, daily_at = CASE WHEN ?4 THEN ?3 ELSE daily_at END, last_app_version = CASE WHEN ?5 THEN ?6 ELSE last_app_version END, last_app_revision = CASE WHEN ?5 THEN ?7 ELSE last_app_revision END, event_cursor = ?8 WHERE id = 'host'",
             params![
                 collected.audit_cursor,
                 collected.lifecycle_cursor,
@@ -679,9 +922,13 @@ fn commit(database: &mut SuplexDatabase, collected: &Collected, now: &str) -> Da
                 collected.daily,
                 collected.version_observed,
                 env!("CARGO_PKG_VERSION"),
-                env!("SUPLEX_REVISION")
+                env!("SUPLEX_REVISION"),
+                collected.event_cursor
             ],
         )?;
+        if let Ok(now) = DateTime::parse_from_rfc3339(now) {
+            agent::prune(database, collected.event_cursor, now.with_timezone(&Utc));
+        }
         if let Some(account_id) = &collected.identified {
             database.connection().execute(
                 "UPDATE suplex_account SET identify_sent_at = COALESCE(identify_sent_at, ?1) WHERE id = 'host' AND account_id = ?2",
@@ -718,6 +965,12 @@ fn prepare(
     }
     if current.audit_cursor.is_none() || current.lifecycle_cursor.is_none() {
         baseline(database)?;
+    } else if current.event_cursor.is_none() {
+        // A host that sent before the event table existed starts it at the rows that exist now.
+        database.connection().execute(
+            "UPDATE suplex_telemetry SET event_cursor = (SELECT COALESCE(MAX(id), 0) FROM suplex_telemetry_events) WHERE id = 'host'",
+            [],
+        )?;
     }
     let current = state(database)?.ok_or("Telemetry state disappeared")?;
     let account = crate::accounts::linked(database)?;
@@ -822,7 +1075,7 @@ pub fn spawn(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     fn test_config() -> Config {
@@ -969,13 +1222,27 @@ mod tests {
         for status in ["active", "waiting_human", "delivered"] {
             connection.execute("INSERT INTO suplex_task_analytics_events (task_id, status, observed_at) VALUES ('t', ?1, '2026-10-02T00:01:30.000Z')", [status]).unwrap();
         }
-        let collected = prepare(&mut database, &test_config(), now, false)
+        let mut collected = prepare(&mut database, &test_config(), now, false)
             .unwrap()
             .unwrap();
         assert_eq!(
             names(&collected),
-            ["task_waiting_human", "task_delivered", "pr_opened"]
+            [
+                "task_started",
+                "task_waiting_human",
+                "task_delivered",
+                "pr_opened"
+            ]
         );
+        collected.events.remove(0);
+        for event in &collected.events {
+            let properties = &event["properties"];
+            assert_eq!(properties["task_id"], "t", "{event}");
+            assert_eq!(properties["project_id"], "p", "{event}");
+            assert_eq!(properties["source"], "user", "{event}");
+            assert_eq!(properties["workflow"], "standard", "{event}");
+            assert!(properties.get("agent_id").is_none(), "{event}");
+        }
         assert_eq!(collected.events[1]["properties"]["duration_s"], 90);
         assert_eq!(
             collected.events[1]["properties"]["delivery_target"],
@@ -997,9 +1264,9 @@ mod tests {
         let collected = prepare(&mut database, &test_config(), now, false)
             .unwrap()
             .unwrap();
-        assert_eq!(collected.events[1]["uuid"], delivered_uuid);
+        assert_eq!(collected.events[2]["uuid"], delivered_uuid);
         assert_eq!(
-            collected.events[1]["properties"]["coordinator_provider"],
+            collected.events[2]["properties"]["coordinator_provider"],
             "opencode"
         );
         commit(&mut database, &collected, &rfc3339_millis(now)).unwrap();
@@ -1068,7 +1335,7 @@ mod tests {
         let actions = |database: &mut SuplexDatabase| {
             for actor in [Some("user_development"), Some("user_chris"), None] {
                 database.connection().execute(
-                    "INSERT INTO suplex_audit_events (id, actor_user_id, action, company_id, metadata_json, created_at) VALUES (?1, ?2, 'task_started', 'company_1', '{}', '2026-10-02T00:00:00.000Z')",
+                    "INSERT INTO suplex_audit_events (id, actor_user_id, action, company_id, metadata_json, created_at) VALUES (?1, ?2, 'task_answered', 'company_1', '{}', '2026-10-02T00:00:00.000Z')",
                     params![format!("audit_{}", uuid::Uuid::new_v4().simple()), actor],
                 ).unwrap();
             }
@@ -1079,7 +1346,7 @@ mod tests {
             collected
                 .events
                 .iter()
-                .filter(|event| event["event"] == "task_started")
+                .filter(|event| event["event"] == "task_answered")
                 .map(|event| {
                     assert_eq!(event["properties"]["$groups"]["host"], "install-1");
                     assert_eq!(event["properties"]["$groups"]["company"], "company_1");
@@ -1364,5 +1631,270 @@ mod tests {
         assert!(
             std::fs::read_dir(&spool).unwrap().count() <= suplex_exception::spool::MAX_PENDING + 1
         );
+    }
+
+    /// Accepts the notice and sends the baseline, so later rows are the ones a test writes.
+    fn accepted(database: &mut SuplexDatabase, now: DateTime<Utc>) {
+        acknowledge(database, now).unwrap();
+        let collected = prepare(database, &test_config(), now, false)
+            .unwrap()
+            .unwrap();
+        commit(database, &collected, &rfc3339_millis(now)).unwrap();
+    }
+
+    fn send(database: &mut SuplexDatabase, now: DateTime<Utc>) -> Collected {
+        let collected = prepare(database, &test_config(), now, false)
+            .unwrap()
+            .unwrap();
+        commit(database, &collected, &rfc3339_millis(now)).unwrap();
+        collected
+    }
+
+    /// A project, an external agent with a client profile ID, and a task it created.
+    fn agent_task(database: &SuplexDatabase, task_id: &str) {
+        database.connection().execute_batch(
+            "INSERT OR IGNORE INTO suplex_projects (id,company_id,name,repository_path,worktree_root,repository_identity,base_branch,setup_command,verification_command,root_profile_id,worker_profile_id,created_at,updated_at) VALUES ('p','company_1','P','/tmp/r','/tmp/w',NULL,'main','','','root','worker','2026-10-02T00:00:00.000Z','2026-10-02T00:00:00.000Z');
+             INSERT OR IGNORE INTO suplex_agents (id,kind,name,avatar_seed,created_at,updated_at) VALUES ('agent_bot','external','Bot','seed','now','now');
+             INSERT OR IGNORE INTO suplex_external_agents (id,company_id,client_profile_id,status,created_at,updated_at) VALUES ('agent_bot','company_1','ada-laptop','paired','now','now');",
+        ).unwrap();
+        database.connection().execute("INSERT INTO suplex_tasks (id,company_id,project_id,title,description,configuration_json,idempotency_key,request_hash,creator_agent_id,created_at,updated_at) VALUES (?1,'company_1','p','Secret title','','{}',?1,'h','agent_bot','2026-10-02T00:00:00.000Z','2026-10-02T00:00:00.000Z')", [task_id]).unwrap();
+        database.connection().execute("INSERT INTO suplex_task_controls (task_id,objective,delivery_target,delivery_intent_json,status,root_profile_json,worker_profile_json,workflow,advisor_profiles_json,workflow_state_json,status_changed_at,created_at,updated_at) VALUES (?1,'T','local_worktree','{}','backlog','{\"profileId\":\"r\",\"provider\":\"codex\",\"model\":\"gpt\",\"reasoningLevel\":\"medium\",\"serviceTier\":\"default\"}','{\"profileId\":\"w\",\"provider\":\"codex\",\"model\":\"gpt\",\"reasoningLevel\":\"medium\",\"serviceTier\":\"default\"}','standard','{}','{}','2026-10-02T00:00:00.000Z','2026-10-02T00:00:00.000Z','2026-10-02T00:00:00.000Z')", [task_id]).unwrap();
+    }
+
+    fn lifecycle(database: &SuplexDatabase, task_id: &str, status: &str) {
+        database.connection().execute("INSERT INTO suplex_task_analytics_events (task_id, status, observed_at) VALUES (?1, ?2, '2026-10-02T00:01:00.000Z')", [task_id, status]).unwrap();
+    }
+
+    #[test]
+    fn a_task_is_started_once_whatever_starts_it_and_names_its_agent() {
+        let mut database = database();
+        let now = Utc::now();
+        accepted(&mut database, now);
+        agent_task(&database, "task_agent");
+        database.connection().execute("INSERT INTO suplex_audit_events (id, actor_agent_id, action, company_id, metadata_json, created_at) VALUES ('audit_created', 'agent_bot', 'task_created', 'company_1', '{\"taskId\":\"task_agent\"}', '2026-10-02T00:00:00.000Z')", []).unwrap();
+        // An agent command or the queue writes `active`; the audit row of a start is not an event.
+        database.connection().execute("INSERT INTO suplex_audit_events (id, actor_agent_id, action, company_id, metadata_json, created_at) VALUES ('audit_started', 'agent_bot', 'task_started', 'company_1', '{\"taskId\":\"task_agent\"}', '2026-10-02T00:00:00.000Z')", []).unwrap();
+        for status in ["queued", "active", "waiting_human", "active", "delivered"] {
+            lifecycle(&database, "task_agent", status);
+        }
+        let collected = send(&mut database, now);
+        assert_eq!(
+            names(&collected),
+            [
+                "task_created",
+                "task_started",
+                "task_waiting_human",
+                "task_delivered"
+            ]
+        );
+        let hashed = agent::profile_hash("ada-laptop");
+        for event in &collected.events {
+            let properties = &event["properties"];
+            assert_eq!(properties["task_id"], "task_agent", "{event}");
+            assert_eq!(properties["project_id"], "p", "{event}");
+            assert_eq!(properties["source"], "agent", "{event}");
+            assert_eq!(properties["agent_id"], "agent_bot", "{event}");
+            assert_eq!(properties["profile_id"], hashed.as_str(), "{event}");
+            assert_eq!(properties["worker_provider"], "codex", "{event}");
+            assert_eq!(event["properties"]["$groups"]["company"], "company_1");
+        }
+        let sent = serde_json::to_string(&collected.events).unwrap();
+        assert!(!sent.contains("ada-laptop") && !sent.contains("Secret"));
+        // A task that runs again after a restart of the host is not started twice.
+        lifecycle(&database, "task_agent", "active");
+        assert!(names(&send(&mut database, now)).is_empty());
+    }
+
+    #[test]
+    fn the_first_company_named_in_onboarding_counts_once_and_older_rows_stay_unsent() {
+        let mut database = database();
+        let before = Utc::now() - chrono::Duration::minutes(5);
+        let now = Utc::now();
+        // The host seeds its first company and the wizard creates nothing before the notice.
+        database.connection().execute("INSERT INTO suplex_audit_events (id, actor_user_id, action, company_id, metadata_json, created_at) VALUES ('audit_seed', NULL, 'company_created', 'company_1', '{}', ?1)", [rfc3339_millis(before)]).unwrap();
+        database.connection().execute("INSERT INTO suplex_audit_events (id, actor_user_id, action, company_id, metadata_json, created_at) VALUES ('audit_early_project', NULL, 'project_created', 'company_1', '{\"projectId\":\"p_early\"}', ?1)", [rfc3339_millis(before)]).unwrap();
+        accepted(&mut database, now);
+        // After the notice, onboarding names the company, creates a project, and finishes.
+        let issue_code = |database: &SuplexDatabase, id: &str, company: &str, previous: &str| {
+            database.connection().execute("INSERT INTO suplex_audit_events (id, actor_user_id, action, company_id, metadata_json, created_at) VALUES (?1, NULL, 'company_issue_code_updated', ?2, ?3, ?4)", params![id, company, format!("{{\"previousIssueCode\":\"{previous}\",\"newIssueCode\":\"ACME\"}}"), rfc3339_millis(now)]).unwrap();
+        };
+        issue_code(&database, "audit_named", "company_1", "");
+        audit(&database, "project_created", r#"{"projectId":"p"}"#);
+        audit(
+            &database,
+            "onboarding_completed",
+            r#"{"outcome":"first_task"}"#,
+        );
+        audit(
+            &database,
+            "onboarding_completed",
+            r#"{"outcome":"Ada's secret"}"#,
+        );
+        // A second naming, a code change, and a company created after the notice send no second event.
+        issue_code(&database, "audit_renamed", "company_1", "ACME");
+        database.connection().execute("INSERT INTO suplex_audit_events (id, actor_user_id, action, company_id, metadata_json, created_at) VALUES ('audit_cleared', NULL, 'company_issue_code_updated', 'company_1', '{\"previousIssueCode\":\"\",\"newIssueCode\":\"\"}', ?1)", [rfc3339_millis(now)]).unwrap();
+        database.connection().execute("INSERT INTO suplex_companies (id, name, status, created_at) VALUES ('company_2', 'Beta', 'active', '2026-10-02T00:00:00.000Z')", []).unwrap();
+        database.connection().execute("INSERT INTO suplex_audit_events (id, actor_user_id, action, company_id, metadata_json, created_at) VALUES ('audit_second', NULL, 'company_created', 'company_2', '{}', ?1)", [rfc3339_millis(now)]).unwrap();
+        issue_code(&database, "audit_second_named", "company_2", "");
+        let collected = send(&mut database, now);
+        assert_eq!(
+            names(&collected),
+            [
+                "company_created",
+                "project_created",
+                "onboarding_completed",
+                "onboarding_completed",
+                "company_created"
+            ]
+        );
+        assert_eq!(collected.events[0]["properties"]["via"], "onboarding");
+        assert_eq!(
+            collected.events[0]["properties"]["$groups"]["company"],
+            "company_1"
+        );
+        assert_eq!(collected.events[1]["properties"]["project_id"], "p");
+        assert_eq!(collected.events[2]["properties"]["outcome"], "first_task");
+        assert_eq!(collected.events[3]["properties"]["outcome"], "skipped");
+        assert_eq!(collected.events[4]["properties"]["via"], "created");
+        assert_eq!(
+            collected.events[4]["properties"]["$groups"]["company"],
+            "company_2"
+        );
+        let sent = serde_json::to_string(&collected.events).unwrap();
+        assert!(!sent.contains("p_early") && !sent.contains("ACME") && !sent.contains("secret"));
+    }
+
+    #[test]
+    fn pairing_and_invitations_forward_from_the_audit_log_without_codes() {
+        let mut database = database();
+        let now = Utc::now();
+        accepted(&mut database, now);
+        database.connection().execute_batch(
+            "INSERT INTO suplex_agents (id,kind,name,avatar_seed,created_at,updated_at) VALUES ('agent_bot','external','Bot','seed','now','now');
+             INSERT INTO suplex_external_agents (id,company_id,status,created_at,updated_at) VALUES ('agent_bot','company_1','paired','now','now');
+             INSERT INTO suplex_projects (id,company_id,name,repository_path,worktree_root,repository_identity,base_branch,setup_command,verification_command,root_profile_id,worker_profile_id,created_at,updated_at) VALUES ('p','company_1','P','/tmp/r','/tmp/w',NULL,'main','','','root','worker','now','now');
+             INSERT INTO suplex_external_agent_project_grants (agent_id, company_id, project_id, created_at) VALUES ('agent_bot', 'company_1', 'p', 'now');
+             INSERT INTO suplex_audit_events (id, actor_agent_id, action, company_id, metadata_json, created_at) VALUES ('audit_paired', 'agent_bot', 'external_agent_paired', 'company_1', '{\"profileId\":\"ada-laptop\",\"clientVersion\":\"1.13.6\"}', 'now');
+             INSERT INTO suplex_audit_events (id, actor_agent_id, action, company_id, metadata_json, created_at) VALUES ('audit_rotated', 'agent_bot', 'external_agent_rotated', 'company_1', '{\"clientVersion\":\"1.13.6 secret\"}', 'now');
+             INSERT INTO suplex_audit_events (id, actor_user_id, action, company_id, metadata_json, created_at) VALUES ('audit_oauth', 'user_development', 'external_agent_oauth_authorized', 'company_1', '{\"agentId\":\"agent_bot\",\"clientId\":\"client-secret-id\"}', 'now');
+             INSERT INTO suplex_audit_events (id, actor_user_id, action, company_id, metadata_json, created_at) VALUES ('audit_joined', 'user_development', 'membership_added', 'company_1', '{\"via\":\"invitation\"}', 'now');",
+        ).unwrap();
+        let collected = send(&mut database, now);
+        assert_eq!(
+            names(&collected),
+            [
+                "agent_paired",
+                "agent_paired",
+                "agent_paired",
+                "membership_added"
+            ]
+        );
+        let paired = &collected.events[0]["properties"];
+        assert_eq!(paired["agent_id"], "agent_bot");
+        assert_eq!(paired["method"], "pairing_code");
+        assert_eq!(paired["project_id"], "p");
+        assert_eq!(paired["project_count"], 1);
+        assert_eq!(paired["cli_version"], "1.13.6");
+        assert_eq!(
+            paired["profile_id"],
+            agent::profile_hash("ada-laptop").as_str()
+        );
+        assert_eq!(collected.events[1]["properties"]["method"], "rotation");
+        assert!(
+            collected.events[1]["properties"]
+                .get("cli_version")
+                .is_none()
+        );
+        assert_eq!(collected.events[2]["properties"]["method"], "oauth");
+        assert_eq!(collected.events[3]["properties"]["via"], "invitation");
+        let sent = serde_json::to_string(&collected.events).unwrap();
+        for leak in ["ada-laptop", "secret"] {
+            assert!(!sent.contains(leak), "{leak} in {sent}");
+        }
+    }
+
+    #[test]
+    fn agent_surface_events_follow_the_gates_and_send_once() {
+        let mut database = database();
+        let now = Utc::now();
+        let record = |database: &SuplexDatabase, key: &str| {
+            agent::record(
+                database,
+                "cli_invoked",
+                Some("company_1"),
+                Map::from_iter([
+                    ("command".into(), json!("mcp")),
+                    ("cli_version".into(), json!("1.13.6")),
+                ]),
+                key,
+                now,
+            );
+        };
+        let key = |name: &str| format!("{name}:{}", uuid::Uuid::new_v4().simple());
+        // Before the notice nothing is recorded.
+        record(&database, &key("before"));
+        let count = |database: &SuplexDatabase| -> i64 {
+            database
+                .connection()
+                .query_row("SELECT COUNT(*) FROM suplex_telemetry_events", [], |row| {
+                    row.get(0)
+                })
+                .unwrap()
+        };
+        assert_eq!(count(&database), 0);
+        accepted(&mut database, now);
+        let once = key("once");
+        record(&database, &once);
+        record(&database, &once);
+        let collected = send(&mut database, now);
+        assert_eq!(names(&collected), ["cli_invoked"]);
+        let event = &collected.events[0];
+        assert_eq!(event["properties"]["command"], "mcp");
+        assert_eq!(event["properties"]["cli_version"], "1.13.6");
+        assert_eq!(event["properties"]["$groups"]["company"], "company_1");
+        assert_eq!(event["distinct_id"], "install-1:host");
+        assert!(names(&send(&mut database, now)).is_empty());
+        // While the setting is off nothing is recorded, and turning it off forgets what waited.
+        record(&database, &key("waiting"));
+        set_enabled(&mut database, false);
+        assert!(
+            prepare(&mut database, &test_config(), now, false)
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(count(&database), 0);
+        record(&database, &key("off"));
+        assert_eq!(count(&database), 0);
+        set_enabled(&mut database, true);
+        assert!(names(&send(&mut database, now)).is_empty());
+    }
+
+    #[test]
+    fn a_host_that_sent_before_the_event_table_starts_it_without_resending_history() {
+        let mut database = database();
+        let now = Utc::now();
+        accepted(&mut database, now);
+        database
+            .connection()
+            .execute(
+                "UPDATE suplex_telemetry SET event_cursor = NULL WHERE id = 'host'",
+                [],
+            )
+            .unwrap();
+        database.connection().execute("INSERT INTO suplex_telemetry_events (event, company_id, properties_json, dedupe_key, created_at) VALUES ('mcp_connected', NULL, '{}', 'old', 'now')", []).unwrap();
+        audit(&database, "project_created", r#"{"projectId":"p"}"#);
+        assert_eq!(names(&send(&mut database, now)), ["project_created"]);
+    }
+
+    /// For route tests: accepts the notice once, then returns what one send carries.
+    pub(crate) fn sent_for_test(database: &mut SuplexDatabase) -> Vec<Value> {
+        let now = Utc::now();
+        if state(database)
+            .unwrap()
+            .is_none_or(|state| state.notice_at.is_none())
+        {
+            accepted(database, now);
+        }
+        send(database, now).events
     }
 }

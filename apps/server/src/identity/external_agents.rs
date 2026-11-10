@@ -752,6 +752,17 @@ pub fn exchange(
     profile_id: Option<&str>,
     now: DateTime<Utc>,
 ) -> DatabaseResult<Exchanged> {
+    exchange_from_client(database, pairing_code, profile_id, None, now)
+}
+
+/// `exchange`, recording the `suplex-mcp` client version in the audit row when the client sent one.
+pub fn exchange_from_client(
+    database: &mut SuplexDatabase,
+    pairing_code: &str,
+    profile_id: Option<&str>,
+    client_version: Option<&str>,
+    now: DateTime<Utc>,
+) -> DatabaseResult<Exchanged> {
     if !secret_shape(pairing_code, "fhp_") {
         return Err(pairing_failure());
     }
@@ -808,7 +819,12 @@ pub fn exchange(
             params![profile_id, now_iso, agent_id],
         )?;
         let action = if purpose == "rotation" { "external_agent_rotated" } else { "external_agent_paired" };
-        let details = profile_id.as_deref().map(|profile| metadata(&[("profileId", profile)])).unwrap_or_default();
+        let details = metadata(
+            &[("profileId", profile_id.as_deref()), ("clientVersion", client_version)]
+                .into_iter()
+                .filter_map(|(key, value)| Some((key, value?)))
+                .collect::<Vec<_>>(),
+        );
         audit(database, (None, Some(&agent_id)), action, &company_id, details, now)?;
         Ok(agent_id)
     });

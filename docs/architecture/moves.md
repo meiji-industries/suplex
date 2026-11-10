@@ -4,6 +4,7 @@ For contributors who change Moves, this page explains what a move stores, how a
 run starts work, which system owns each fact, and where each part of the
 feature lives. Sources:
 [domain and tests](../../apps/server/src/moves/mod.rs),
+[one-shot agent reads](../../apps/server/src/moves/agent.rs),
 [terminal runners](../../apps/server/src/moves/shell.rs),
 [input rendering](../../apps/server/src/moves/prompt.rs),
 [request contracts](../../apps/server/src/http/contracts/typed/moves.rs),
@@ -92,7 +93,7 @@ route.
   every tool that is not read-only. Pi and OMP run `-p` with `--tools` set to
   their read-only tools. OMP still offers `write`, but it reaches only its
   `xd://` devices.
-- **Local endpoints.** A prompt move or a recommendation registers the
+- **Local endpoints.** A prompt move or a one-shot read registers the
   [local endpoint](../../apps/server/src/profiles/local_endpoints.rs) of an
   OpenCode, Pi, or OMP model as a task run does
   ([`agent.rs`](../../apps/server/src/moves/agent.rs)). OpenCode receives the
@@ -101,16 +102,16 @@ route.
   `runtime/move-endpoints`, and receive the API key in
   `SUPLEX_ENDPOINT_API_KEY`. The key is only in the agent's environment,
   never in an argument or a file. The directory is removed when the move
-  terminal ends or the recommendation finishes. A deleted or changed endpoint
+  terminal ends or the read finishes. A deleted or changed endpoint
   stops the start with a 422.
 - **Prompt.** It lists dozens of places where projects define commands
   (package manifests, task runners, build files, CI, deploy configs, scripts,
   and docs). It explains the runners and the placeholder syntax, and asks for
   5 to 15 moves as one JSON object. It tells the agent to use only commands it
   found.
-- **Parsing.** `extract` reads the result event, alone or last in an array of
-  events, then the reply text, and takes the first JSON object with a `moves`
-  list. `admitted` keeps only `script` and `prompt` moves with a name and text,
+- **Parsing.** `agent::extract` reads the result event, alone or last in an
+  array of events, then the reply text, and takes the first JSON object with a
+  `moves` list. `admitted` keeps only `script` and `prompt` moves with a name and text,
   drops names that repeat or that the project uses already, and keeps at most
   20.
 - **Limits.** The call has a 5-minute limit (504). A reply without moves
@@ -127,6 +128,44 @@ Recommendations whose names the project already uses stay hidden, so an import
 never starts another read. With no moves, the Moves page starts reading at
 once, under the empty state. With moves, "Recommend moves" in the header opens
 the same panel in a dialog.
+
+## Describe a move
+
+`POST /api/projects/{project_id}/move-drafts`
+([`draft.rs`](../../apps/server/src/moves/draft.rs)) takes `{ description }`,
+trimmed, 1 to 2,000 characters (422 otherwise). It runs the project's default
+Worker once, with the agent run of [recommendations](#recommendations), the same
+access checks, and the same read-only tools
+([`agent::Reader`](../../apps/server/src/moves/agent.rs)). It saves nothing.
+
+- **Prompt.** It gives the description and the project's move names as JSON, the
+  runners, and the placeholder syntax. It asks for one JSON object: `draft` or
+  `rejected`. A script uses only commands that the agent finds in the
+  repository. The agent rejects a description that is not about a move for this
+  project, is unsafe or destructive, or needs something the syntax cannot
+  express, and says what to change. For a selection of several values, it uses
+  one choice or a text input and explains this in `note`. For a member, the
+  prompt names only the `task` and `pull_request_tasks` runners.
+- **Admission.** `MoveDraftResponse` has `outcome` (`draft` or `rejected`),
+  `draft` (name, runner, prompt, confirm, optional note), `reason`, and
+  `profile_id`. `admitted` trims the fields. It turns a draft into a rejection
+  when the runner is not valid, when a member receives `prompt` or `script` (as
+  the create route refuses them), when the name or text is empty, when the name
+  is over 80 characters, or when the text is over 20,000 characters. A `task`
+  draft has `confirm` false. A name that the project uses already stays in the
+  draft; the create route reports the conflict.
+- **Limits.** The call has a 5-minute limit (504). A reply with no draft and no
+  rejection returns 502 with the last line of the agent's error output. A
+  cancelled request ends the agent.
+
+In the browser, a new move in `move-dialog.tsx` shows the description field and
+"Draft move" above the name. The request goes to the project in the selector,
+which stays locked with the rest of the form until the agent replies. Closing the
+dialog cancels the request. `applyMoveDraft`
+([`move-draft.ts`](../../apps/web/features/moves/lib/move-draft.ts)) fills the
+name, text, runner, and start option for review. A `prompt` or `script` draft
+becomes a task for a member. A note, a rejection reason, or an HTTP error shows
+under the field. The description stays, so you can change it and draft again.
 
 ## Inputs
 
@@ -209,6 +248,7 @@ Deleting a move deletes its runs (the foreign key cascades).
 | `PATCH`, `DELETE /api/moves/{move_id}` | Edit or delete a move. |
 | `GET`, `POST /api/moves/{move_id}/runs` | Read up to 50 unarchived runs, newest first, or start a run. |
 | `POST /api/projects/{project_id}/move-recommendations` | Ask the default Worker to propose moves. Saves nothing. |
+| `POST /api/projects/{project_id}/move-drafts` | Ask the default Worker for one move draft from a description, or a rejection with a reason. Saves nothing. |
 | `GET /api/move-runs/{run_id}` | Read one run, archived or not. |
 | `POST /api/move-runs/{run_id}/archive` | Archive a run. |
 | `GET /api/move-runs/{run_id}/transcript` | Read a saved terminal. |
@@ -218,7 +258,7 @@ Deleting a move deletes its runs (the foreign key cascades).
 Every route checks the session and the CSRF rule, then project access through
 the move. Browser types come from `apps/web/contracts/generated`
 (`MoveResponse`, `MoveRunResponse`, `MoveRunsResponse`, `MovesResponse`,
-`MoveRunTranscript`, `MoveRunner`). Fetches live in
+`MoveRunTranscript`, `MoveRunner`, `MoveDraftResponse`). Fetches live in
 [`move-api.ts`](../../apps/web/features/moves/lib/move-api.ts).
 
 ## Storage
@@ -241,7 +281,7 @@ and add the task settings columns.
 | Moves list | `moves.tsx`, `MoveRow` | Tabs All, Live, and Ended; the ⌘K filter; the project filter; columns Move, Project, Runs, Status, and Last run; Start; a row menu with Delete. "Recommend moves" in the header, or the empty state, shows [recommendations](#recommendations). |
 | Move page | `moves.tsx`, `RunHistory` | Run history. Live rows offer Stop, ended rows offer Archive, every row offers Start again. A row opens its terminal or task. Empty history offers Run now. |
 | Run view | `move-run.tsx` | The terminal inside the app frame, with a bar for project, inputs, status, starter, Stop, Start again, full screen, and Close. Full screen shows the Suplex logo. |
-| Editor | `move-dialog.tsx` | The New Task layout. A plain field for a prompt, a terminal-styled `ScriptEditor` for a script, and the option bar "Run … with … and …". For a task, the bar is "Run as a task using … with … then …" and reuses the New Task dialog's workflow icons and its tests, proof, and delivery controls (`task-settings-options.tsx`). Changing the runner resets the fields that no longer apply. A "Placeholders" link (`placeholders-help.tsx`) opens on hover or click, explains the input syntax, and lists the inputs in the draft. `DeleteMoveDialog` is shared with the row menu. |
+| Editor | `move-dialog.tsx` | The New Task layout. A plain field for a prompt, a terminal-styled `ScriptEditor` for a script, and the option bar "Run … with … and …". For a task, the bar is "Run as a task using … with … then …" and reuses the New Task dialog's workflow icons and its tests, proof, and delivery controls (`task-settings-options.tsx`). Changing the runner resets the fields that no longer apply. A "Placeholders" link (`placeholders-help.tsx`) opens on hover or click, explains the input syntax, and lists the inputs in the draft. A new move also offers [Describe a move](#describe-a-move). `DeleteMoveDialog` is shared with the row menu. |
 | Start | `start-move-dialog.tsx` | Inputs, pull request exclusions, and the confirmation. |
 | Activity | `features/tasks/recent-tasks.tsx` | Each move's latest terminal run, sorted by time with tasks. A Live badge offers Stop on hover; an Ended badge offers Archive. |
 | Board | `features/tasks/tasks.tsx` | Terminal runs are cards in Delivered, newest first with tasks. The "Tasks and moves" filter (`?show=`) selects tasks, moves, or both. |

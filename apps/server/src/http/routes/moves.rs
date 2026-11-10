@@ -17,7 +17,7 @@ use chrono::Utc;
 use crate::{
     http::{
         AppState,
-        contracts::typed::moves::{CompanyMovesParams, MoveBody, MoveRunBody},
+        contracts::typed::moves::{CompanyMovesParams, MoveBody, MoveDraftBody, MoveRunBody},
         session,
         validation::{Valid, ValidPath},
     },
@@ -41,6 +41,7 @@ pub fn router() -> Router<AppState> {
             "/api/projects/{project_id}/move-recommendations",
             post(recommend),
         )
+        .route("/api/projects/{project_id}/move-drafts", post(draft))
         .route("/api/move-runs/{run_id}", get(run))
         .route("/api/move-runs/{run_id}/archive", post(archive))
         .route("/api/move-runs/{run_id}/transcript", get(transcript))
@@ -259,6 +260,27 @@ async fn recommend(
         Ok(recommendations) => Json(recommendations).into_response(),
         Err(error) => ApiError::response(error),
     };
+    auth::append_cookies(&mut response, cookies);
+    response
+}
+
+/// One move draft for a project from a description, or a rejection with a
+/// reason. Written by its default Worker. Nothing is saved.
+async fn draft(
+    State(state): State<AppState>,
+    Path(project_id): Path<String>,
+    headers: HeaderMap,
+    Valid(body): Valid<MoveDraftBody>,
+) -> Response {
+    let (user_id, cookies) = match admitted(&state, &headers, &Method::POST) {
+        Ok(value) => value,
+        Err(response) => return *response,
+    };
+    let mut response =
+        match moves::draft::draft(&state, &user_id, &project_id, &body.description).await {
+            Ok(draft) => Json(draft).into_response(),
+            Err(error) => ApiError::response(error),
+        };
     auth::append_cookies(&mut response, cookies);
     response
 }

@@ -27,3 +27,9 @@ export const MoveRunBodySchema = z.object({
 }).strict();
 
 export type MoveRunBody = z.infer<typeof MoveRunBodySchema>;
+
+export const MoveDraftBodySchema = z.object({
+  description: z.string().trim().min(1).max(2000), // bound: the server sends it to the agent as one process argument
+}).strict();
+
+export type MoveDraftBody = z.infer<typeof MoveDraftBodySchema>;

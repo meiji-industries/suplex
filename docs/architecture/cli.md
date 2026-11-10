@@ -29,11 +29,12 @@ start a server. The server starts only through an explicit command:
 | `update` (`upgrade`) | Installs the newest `Suplex.app` and restarts what was running. See [Updates](#updates). |
 | `doctor` | Read-only installation report. See [Doctor](#doctor). |
 | `version` (`--version`, `-V`) | Prints the version of this `suplex` binary. |
+| `mcp` | Runs the stdio MCP bridge for a paired external agent. It reads `SUPLEX_BASE_URL` and `SUPLEX_AGENT_CREDENTIAL` from the process environment. See [the MCP guide](../agent-mcp.md). |
 | `logs`, `task` | Read the log directory and one task's durable state. |
 | `setup`, `install`, `migrate`, `recover` | Configure, install dependencies, migrate, and issue a recovery link. |
 | `backup`, `verify-backup`, `restore` | See [Backup and restore](backup-and-restore.md). |
 
-Help omits internal commands: `mcp`, `mcp root`, `mcp advisor`, `display …`,
+Help omits internal commands: `mcp root`, `mcp advisor`, `display …`,
 `codex-display`, `pi-display`, `omp-display`, `update-apply`, and `github-store-credential`. Agent runtimes,
 the supervisor, and the updater start them.
 

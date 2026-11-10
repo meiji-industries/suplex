@@ -45,6 +45,64 @@ Hermes can supply the two variables through its existing profile-specific
 environment configuration. This is a Hermes host instruction, not behavior
 implemented by the skill or bridge.
 
+### Grok Bot
+
+Grok Bot runs shell commands on a persistent Linux machine. It has no
+`$HERMES_HOME` and no local MCP configuration file. Use the Python client
+through the shell.
+
+1. Exchange the pairing code. Use `curl` and read the JSON body from a heredoc.
+   This keeps the code off the command line and out of shell history.
+   Replace the origin with your Suplex origin:
+
+   ```bash
+   umask 077
+   curl -sS --fail -X POST https://suplex.example.com/api/agent/pairing/exchange \
+     -H 'Content-Type: application/json' \
+     --data-binary @- -o pairing-response.json <<'JSON'
+   {"pairingCode": "PAIRING-CODE"}
+   JSON
+   ```
+
+2. Write the two values to an environment file, set its mode to 600, and
+   delete the raw response:
+
+   ```bash
+   mkdir -p ~/.config/suplex
+   python3 - <<'PY'
+   import json, os, pathlib
+   response = json.loads(pathlib.Path("pairing-response.json").read_text())
+   path = pathlib.Path.home() / ".config/suplex/agent.env"
+   fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+   with os.fdopen(fd, "w") as env_file:
+       env_file.write("export SUPLEX_BASE_URL=https://suplex.example.com\n")
+       env_file.write(f"export SUPLEX_AGENT_CREDENTIAL={response['credential']}\n")
+   PY
+   chmod 600 ~/.config/suplex/agent.env
+   rm -f pairing-response.json
+   ```
+
+   Source the file only in the process that calls Suplex. Do not source it in
+   a shell profile.
+
+3. Copy the skill to a local directory:
+
+   ```bash
+   mkdir -p ~/skills
+   cp -R apps/server/skills/suplex ~/skills/suplex
+   ```
+
+4. Run the checks in [Verify](#verify) from that directory:
+
+   ```bash
+   cd ~/skills/suplex
+   (. ~/.config/suplex/agent.env && python3 suplex_client.py --self-check && python3 smoke_test.py)
+   ```
+
+Grok Bot can also register a remote HTTP MCP connector. Thus the Streamable
+HTTP `/mcp` endpoint with OAuth in [the MCP guide](agent-mcp.md) is an option.
+This path is not verified for Grok Bot.
+
 ## Verify
 
 Run both checks from the installed skill directory:

@@ -108,7 +108,10 @@ fn signup_identity(
     let Some(email) = email else {
         return Ok(None);
     };
-    Ok(Some((email, accounts::find_account_attribution(db, &user)?)))
+    Ok(Some((
+        email,
+        accounts::find_account_attribution(db, &user)?,
+    )))
 }
 
 /// Records the session once. `true` only for the first request.
@@ -121,7 +124,11 @@ fn record(db: &Connection, session_id: &str, now: &str) -> rusqlite::Result<bool
 
 impl Hosted {
     /// The `subscribe` push for the return page, or an empty string.
-    pub async fn checkout_conversion(&self, session_id: Option<&str>, headers: &HeaderMap) -> String {
+    pub async fn checkout_conversion(
+        &self,
+        session_id: Option<&str>,
+        headers: &HeaderMap,
+    ) -> String {
         let Some(session_id) = session_id.filter(|id| valid_session_id(id)) else {
             return String::new();
         };
@@ -139,17 +146,19 @@ impl Hosted {
             return String::new();
         };
         // Best effort: without a Suplex account the event has no gclid or hash.
-        let identity = session
-            .customer_id
-            .as_deref()
-            .and_then(|customer| self.query(|db| signup_identity(db, customer)).ok().flatten());
+        let identity = session.customer_id.as_deref().and_then(|customer| {
+            self.query(|db| signup_identity(db, customer))
+                .ok()
+                .flatten()
+        });
         let (email, attribution) = identity.unzip();
         // The account keeps the consented first touch; else this browser's cookie.
         let gclid = attribution
             .flatten()
             .and_then(|kept| kept.get("gclid").map(str::to_owned))
             .or_else(|| {
-                Attribution::for_signup(headers).and_then(|cookie| cookie.get("gclid").map(str::to_owned))
+                Attribution::for_signup(headers)
+                    .and_then(|cookie| cookie.get("gclid").map(str::to_owned))
             });
         if let Some(gclid) = gclid {
             event.insert("gclid".into(), json!(gclid));

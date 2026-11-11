@@ -203,7 +203,10 @@ async fn done_page(
     Query(query): Query<DoneQuery>,
 ) -> Html<String> {
     let conversion = accounts.signup_script(query.signup.as_deref(), None, Plan::Free);
-    Html(page::layout("Logged in", &format!("{conversion}{DONE_CONTENT}")))
+    Html(page::layout(
+        "Logged in",
+        &format!("{conversion}{DONE_CONTENT}"),
+    ))
 }
 
 async fn require_enabled(

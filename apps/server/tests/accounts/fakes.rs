@@ -21,11 +21,11 @@ use serde_json::{Value, json};
 
 use super::{AccountConfig, Accounts, providers::Endpoints, store as account_store};
 use crate::{
-    accounts::wire::{challenge, random_token},
+    accounts::wire::{LoginClient, challenge, random_token},
     billing::{
         hosted::{
             Hosted,
-            fakes::{Recorded, hosted_config, spawn, start_ms},
+            fakes::{Fake, Recorded, StripeState, fake_stripe, hosted_config, spawn, start_ms},
             revenuecat::RevenueCatClient,
             store, stripe::StripeClient, telemetry,
         },
@@ -91,6 +91,8 @@ pub struct Fixture {
     pub stub: String,
     pub accounts: Accounts,
     pub clock: Arc<AtomicI64>,
+    /// Kept with the fixture; tests read Stripe through the pages.
+    _stripe: Option<Fake<StripeState>>,
     answers: Answers,
     calls: Arc<Mutex<Vec<Recorded>>>,
     directory: PathBuf,
@@ -109,6 +111,15 @@ impl Fixture {
     }
 
     pub async fn with(config: Option<AccountConfig>) -> Self {
+        Self::build(config, false).await
+    }
+
+    /// The fixture with the billing fake of Stripe, so a trial can start.
+    pub async fn with_stripe() -> Self {
+        Self::build(Some(account_config()), true).await
+    }
+
+    async fn build(config: Option<AccountConfig>, with_stripe: bool) -> Self {
         let answers: Answers = Arc::new(Mutex::new(default_answers()));
         let calls = Arc::new(Mutex::new(Vec::new()));
         let stub = {
@@ -138,6 +149,14 @@ impl Fixture {
             .await
         };
         let clock = Arc::new(AtomicI64::new(start_ms()));
+        let stripe = if with_stripe {
+            Some(fake_stripe(clock.clone()).await)
+        } else {
+            None
+        };
+        let stripe_url = stripe
+            .as_ref()
+            .map_or_else(|| "http://127.0.0.1:9".to_owned(), |stripe| stripe.url.clone());
         let directory =
             std::env::temp_dir().join(format!("suplex-accounts-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&directory).unwrap();
@@ -154,7 +173,7 @@ impl Fixture {
             Hosted::new(
                 billing,
                 connection,
-                StripeClient::new("http://127.0.0.1:9", "sk_test_fake"),
+                StripeClient::new(&stripe_url, "sk_test_fake"),
                 RevenueCatClient::new("http://127.0.0.1:9", "rc_secret", "rc_public"),
                 Arc::new(move || clock.load(Ordering::SeqCst)),
             )
@@ -174,6 +193,7 @@ impl Fixture {
             stub,
             accounts,
             clock,
+            _stripe: stripe,
             answers,
             calls,
             directory,
@@ -284,11 +304,15 @@ impl Fixture {
 
     /// A new attempt and its verifier.
     pub async fn attempt(&self) -> (String, String) {
+        self.attempt_for(LoginClient::Desktop).await
+    }
+
+    pub async fn attempt_for(&self, client: LoginClient) -> (String, String) {
         let verifier = random_token().unwrap();
         let (status, body) = self
             .post(
                 "/v1/auth/attempts",
-                &json!({"challenge": challenge(&verifier), "installationId": INSTALLATION}),
+                &json!({"challenge": challenge(&verifier), "installationId": INSTALLATION, "client": client}),
             )
             .await;
         assert_eq!(status, 200, "{body}");
@@ -350,6 +374,22 @@ impl Fixture {
         assert_eq!(status, 200, "{body}");
         body
     }
+}
+
+/// The marker of a signup redirect, or `None` for a returning login.
+pub fn signup_marker(location: &str) -> Option<String> {
+    let url = url::Url::parse(&format!("{ORIGIN}{location}")).unwrap();
+    query(&url, "signup")
+}
+
+/// The event and email hash arguments of the page's conversion script, or
+/// `None` when the page pushes none.
+pub fn conversion(html: &str) -> Option<(Value, Value)> {
+    let script = &html[html.find("(function (event, emailHash)")?..];
+    let rest = &script[script.find("})(")? + 3..];
+    let end = rest.find(");\n</script>")?;
+    let args: Value = serde_json::from_str(&format!("[{}]", &rest[..end])).unwrap();
+    Some((args[0].clone(), args[1].clone()))
 }
 
 pub fn query(url: &url::Url, name: &str) -> Option<String> {

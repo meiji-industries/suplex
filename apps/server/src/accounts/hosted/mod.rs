@@ -13,9 +13,9 @@ use subtle::ConstantTimeEq;
 
 use crate::{
     accounts::wire::{
-        AuthAttemptBody, AuthEmailBody, AuthPollBody, AuthPollResponse, AuthProvider, HostedAccount,
-        LoginClient,
-        challenge, random_token, token_shape, valid_attempt_id, valid_email,
+        AuthAttemptBody, AuthEmailBody, AuthPollBody, AuthPollResponse, AuthProvider,
+        HostedAccount, LoginClient, challenge, random_token, token_shape, valid_attempt_id,
+        valid_email,
     },
     billing::{
         Plan,
@@ -484,15 +484,17 @@ impl Accounts {
                 (true, false) => format!("{path}&{signup}"),
                 (false, false) => format!("{path}?{signup}"),
             };
-            Ok(Some(if attempt.installation_id == start::SITE_INSTALLATION {
-                with_signup(&format!("/start/done?attempt={attempt_id}"))
-            } else if deleting {
-                format!("/account/delete/confirm?attempt={attempt_id}")
-            } else if attempt.client == LoginClient::Web {
-                with_signup("/auth/done?client=web")
-            } else {
-                with_signup("/auth/done")
-            }))
+            Ok(Some(
+                if attempt.installation_id == start::SITE_INSTALLATION {
+                    with_signup(&format!("/start/done?attempt={attempt_id}"))
+                } else if deleting {
+                    format!("/account/delete/confirm?attempt={attempt_id}")
+                } else if attempt.client == LoginClient::Web {
+                    with_signup("/auth/done?client=web")
+                } else {
+                    with_signup("/auth/done")
+                },
+            ))
         })?;
         completed.ok_or_else(expired)
     }

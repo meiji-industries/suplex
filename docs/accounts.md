@@ -66,7 +66,7 @@ The wire types are in `apps/server/src/accounts/wire.rs`.
 | `GET /auth/callback/{google,github}` | Exchanges the code, completes the attempt, 303 to `/auth/done`. |
 | `GET /auth/email/verify?token=` | A one-button form. It does not consume the link, because mail scanners fetch links. |
 | `POST /auth/email/verify` | Consumes the link once, completes the attempt, 303 to `/auth/done`. |
-| `GET /auth/done` | Static: "You are signed in. Return to Suplex." |
+| `GET /auth/done` | "You are signed in. Return to Suplex." With `?signup=<marker>` from a signup, it also pushes `signup_complete` once ([conversion events](#conversion-events)). |
 | `GET /account/delete` | Account deletion, linked from Settings > Profile (App Store guideline 5.1.1(v)). The person logs in with an attempt for the installation `suplex.sh-delete`; the callback goes to `GET /account/delete/confirm?attempt=`, and `POST` there deletes the account, its tokens and attempts, and the invitations it sent. Billing records stay. A subscription that renews must be cancelled first; if Suplex cannot read the subscription, the page asks for a retry. |
 | `GET /download?platform=&format=&visitor=` | 302 to the file in the live release manifest. Unknown platform or format is 404; a missing manifest or file is 502. |
 
@@ -89,6 +89,7 @@ account token is minted at poll time, so no plaintext token rests in SQLite.
 | --- | --- |
 | `accounts` | `user_<uuid>`, unique email, optional name. |
 | `account_attribution` | The first-touch campaign of a new account: the five UTM values, `referring_domain`, and the click IDs `gclid`, `gbraid`, `wbraid`, `msclkid`, and `fbclid`. Written once, at signup; a later login never changes it. Deleted with the account. Read it with `store::find_account_attribution`. |
+| `account_signup_conversions` | The SHA-256 of each signup marker, its account and provider, and when a done page used it. Expires after one hour; swept with attempts. Deleted with the account. |
 | `account_attempts` | Challenge, installation ID, provider and OAuth state, the browser's attribution, the completed account. Swept one hour after expiry. |
 | `account_magic_links` | Token hash, attempt, email, `used_at`. Deleted with their attempt. |
 | `account_tokens` | Token hash, account, installation. |
@@ -329,11 +330,37 @@ with `Sec-GPC: 1` or `DNT: 1` stores no click ID from the cookie.
 ([telemetry](telemetry.md)). Click IDs are not sent to PostHog; they stay on the
 account row for ad conversion uploads. Stripe Checkout sessions do not carry
 them: checkout belongs to a billing account, which is usually a company, not
-the person whose browser signed up.
+the person whose browser signed up. The `subscribe` push on `/checkout/return`
+reads `gclid` from the Suplex account of the billing account, when it has one
+([conversion events](#conversion-events)).
 
 These pages, the login and billing pages, and the legal pages load Google Tag
 Manager (`GTM-N739QG5C`, except the legal pages) and the shared consent banner.
 See [PostHog](posthog.md#shared-consent-banner).
+
+### Conversion events
+
+Two pages push one event to that container's `dataLayer`. The script is
+`apps/server/src/shared/conversion.js`, rendered by `shared::page::conversion_script`.
+The server encodes each value for an inline script.
+
+- `signup_complete`, `{method, plan}`: a login that creates an account
+  redirects with `signup=<marker>` to `/auth/done`, `/auth/done?client=web`,
+  or `/start/done`. The page consumes the marker in one SQL statement and
+  pushes the event only for that first request. A returning login, a reload,
+  or an unknown or expired marker pushes nothing. `method` is the provider.
+  `plan` is `free`, or `pro` on `/start/done` when the trial is active. The
+  push comes before `/auth/done` opens the app; a web login waits 1.5 seconds
+  before its backup `window.close()`.
+- `subscribe`, `{value, currency, transaction_id, plan, gclid?}`: on
+  `/checkout/return?session_id=<id>` (see [billing](billing.md)).
+
+The server adds the SHA-256 hex of the trimmed, lowercase account email as a
+script argument. The browser adds it to the event as
+`user_data.sha256_email_address` only when
+`localStorage["suplex.analytics.consent.v1"]` is `granted` and Global Privacy
+Control is off. Otherwise the event has no `user_data`. No raw email, name, or
+UTM value goes into the script.
 
 ### Residual risk
 

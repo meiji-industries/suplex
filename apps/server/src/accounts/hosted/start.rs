@@ -24,7 +24,7 @@ use serde::Deserialize;
 use super::{Accounts, store};
 use crate::{
     accounts::wire::{AuthAttemptBody, AuthEmailBody, LoginClient, challenge, random_token},
-    billing::wire::HostedPlan,
+    billing::{Plan, wire::HostedPlan},
 };
 
 pub const SITE_INSTALLATION: &str = "suplex.sh";
@@ -37,7 +37,9 @@ const FONT: &[u8] = include_bytes!("../../../../web/fonts/InterTight-Variable.wo
 const QUERY_COOKIE: &str = "suplex_start_query";
 /// Keys that a link on these pages sets itself. The incoming query never
 /// replaces them.
-const OWNED_KEYS: [&str; 6] = ["plan", "with", "attempt", "provider", "platform", "format"];
+const OWNED_KEYS: [&str; 7] = [
+    "plan", "with", "attempt", "provider", "platform", "format", "signup",
+];
 const MAX_KEY: usize = 64;
 const MAX_VALUE: usize = 512;
 const MAX_PAIRS: usize = 32;
@@ -338,6 +340,8 @@ async fn send_email(accounts: &Accounts, body: &AuthEmailBody, forward: &str) ->
 #[derive(Deserialize)]
 struct DoneQuery {
     attempt: Option<String>,
+    /// The one-time marker of a signup, for its `signup_complete` push.
+    signup: Option<String>,
 }
 
 /// The browser arrives here after the login. Repeating the request shows the
@@ -386,6 +390,12 @@ async fn done(
         },
         Err(error) => Err(error),
     };
+    // The trial this page starts is Pro; an account without one is Free.
+    let current = match &plan {
+        Ok(HostedPlan { state, .. }) if state.active => Plan::Pro,
+        _ => Plan::Free,
+    };
+    let conversion = accounts.signup_script(query.signup.as_deref(), Some(&account.id), current);
     let (heading, text) = match plan {
         Ok(HostedPlan { state, .. }) if state.active => {
             let until = state
@@ -420,7 +430,10 @@ async fn done(
     html(
         StatusCode::OK,
         heading,
-        &message(heading, &text, &downloads(&forward)),
+        &format!(
+            "{conversion}{}",
+            message(heading, &text, &downloads(&forward))
+        ),
     )
 }
 

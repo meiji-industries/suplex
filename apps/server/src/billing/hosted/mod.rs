@@ -25,6 +25,7 @@ use store::{AccountKey, AccountRow, NewAccount};
 use stripe::StripeClient;
 
 pub mod commands;
+pub mod conversion;
 pub mod events;
 pub mod plan;
 pub mod revenuecat;

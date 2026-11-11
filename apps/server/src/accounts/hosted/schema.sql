@@ -61,6 +61,18 @@ CREATE TABLE IF NOT EXISTS account_attribution (
   created_at TEXT NOT NULL
 );
 
+-- One signup_complete conversion for each new account. The done page that the
+-- signup lands on consumes the row once; a reload or a later login finds none.
+-- Only the SHA-256 of the marker in the redirect is kept.
+CREATE TABLE IF NOT EXISTS account_signup_conversions (
+  marker_hash TEXT PRIMARY KEY,
+  account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  provider TEXT NOT NULL CHECK (provider IN ('google', 'github', 'email')),
+  created_at TEXT NOT NULL,
+  expires_at TEXT NOT NULL,
+  consumed_at TEXT
+);
+
 CREATE TABLE IF NOT EXISTS account_tokens (
   token_hash TEXT PRIMARY KEY,
   account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,

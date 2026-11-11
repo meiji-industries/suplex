@@ -1,17 +1,21 @@
 import { readFileSync } from "node:fs";
-import { expect, test, vi } from "vitest";
+import { afterEach, expect, test, vi } from "vitest";
+
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 const page = readFileSync(new URL("../apps/server/src/accounts/hosted/done.html", import.meta.url), "utf8");
 const script = /<script>([\s\S]*?)<\/script>/.exec(page)?.[1] ?? "";
 
 /** Runs the page script against stand-ins for the browser globals it uses. */
-function run(search: string): { close: ReturnType<typeof vi.fn>; replace: ReturnType<typeof vi.fn>; link: { remove: ReturnType<typeof vi.fn> }; text: { textContent: string } } {
+function run(search: string, dataLayer?: unknown[]): { close: ReturnType<typeof vi.fn>; replace: ReturnType<typeof vi.fn>; link: { remove: ReturnType<typeof vi.fn> }; text: { textContent: string } } {
   const close = vi.fn();
   const replace = vi.fn();
   const link = { remove: vi.fn() };
   const text = { textContent: "Return to Suplex to continue. You can close this tab." };
   const document = { querySelector: (selector: string) => (selector === "a" ? link : selector === "p" ? text : null) };
-  new Function("location", "document", "window", script)({ search, replace }, document, { close });
+  new Function("location", "document", "window", script)({ search, replace }, document, { close, dataLayer });
   return { close, replace, link, text };
 }
 
@@ -30,4 +34,18 @@ test("a desktop login opens the app and does not close the tab", () => {
   expect(desktop.close).not.toHaveBeenCalled();
   expect(desktop.link.remove).not.toHaveBeenCalled();
   expect(desktop.text.textContent).toBe("Return to Suplex to continue. You can close this tab.");
+});
+
+test("after a signup_complete push a web login waits before it closes the tab", () => {
+  vi.useFakeTimers();
+  const web = run("?client=web&signup=marker", [{ event: "gtm.js" }, { event: "signup_complete", method: "google", plan: "free" }]);
+  expect(web.close).not.toHaveBeenCalled();
+  expect(web.link.remove).toHaveBeenCalled();
+  vi.advanceTimersByTime(1500);
+  expect(web.close).toHaveBeenCalledTimes(1);
+});
+
+test("a desktop signup still opens the app at once", () => {
+  const desktop = run("?signup=marker", [{ event: "signup_complete", method: "email", plan: "free" }]);
+  expect(desktop.replace).toHaveBeenCalledWith("suplex://auth/done");
 });

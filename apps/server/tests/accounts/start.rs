@@ -1,6 +1,10 @@
 #[cfg(test)]
 mod tests {
-    use crate::accounts::hosted::fakes::{Fixture, ORIGIN, query};
+    use crate::{
+        accounts::hosted::fakes::{Fixture, ORIGIN, conversion, query},
+        shared::hash::sha256_hex,
+    };
+    use serde_json::json;
 
     /// What a getsuplex.ai link brings: Conversion Linker, click ids, UTM,
     /// the PostHog visitor, and the consent choice.
@@ -172,7 +176,10 @@ mod tests {
             Some(ACCOUNT_ATTRIBUTION)
         );
         let location = finished.headers()["location"].to_str().unwrap().to_owned();
-        assert_eq!(location, format!("/start/done?attempt={attempt}"));
+        assert!(
+            location.starts_with(&format!("/start/done?attempt={attempt}&signup=")),
+            "{location}"
+        );
         let done = f.get(&location, &[("cookie", &kept)]).await;
         assert_eq!(done.status(), 200);
         let html = done.text().await.unwrap();
@@ -250,7 +257,10 @@ mod tests {
         // The link opens in another browser: no cookie. The attempt kept the attribution.
         let verified = f.post_form("/auth/email/verify", &[("token", token)]).await;
         let location = verified.headers()["location"].to_str().unwrap().to_owned();
-        assert_eq!(location, format!("/start/done?attempt={attempt}"));
+        assert!(
+            location.starts_with(&format!("/start/done?attempt={attempt}&signup=")),
+            "{location}"
+        );
         assert_eq!(
             f.account_attribution("ada@example.com").as_deref(),
             Some(ACCOUNT_ATTRIBUTION)
@@ -456,7 +466,10 @@ height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
         let finished = f.sign_in(&attempt, "google", None).await;
         assert_eq!(finished.status(), 303);
         let location = finished.headers()["location"].to_str().unwrap().to_owned();
-        assert_eq!(location, format!("/start/done?attempt={attempt}"));
+        assert!(
+            location.starts_with(&format!("/start/done?attempt={attempt}&signup=")),
+            "{location}"
+        );
 
         // The fixture's Stripe is not reachable: the page still names the
         // account and offers the downloads.
@@ -465,6 +478,15 @@ height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
         let html = done.text().await.unwrap();
         assert!(html.contains("Suplex cannot start the trial now"), "{html}");
         assert!(html.contains("ada@example.com"));
+        // No trial started, so the new account is on Free.
+        assert_eq!(
+            conversion(&html).unwrap().0,
+            json!({"event": "signup_complete", "method": "google", "plan": "free"})
+        );
+        // A reload shows the same page and pushes nothing.
+        let reload = f.get(&location, &[]).await.text().await.unwrap();
+        assert!(reload.contains("ada@example.com"));
+        assert_eq!(conversion(&reload), None);
         assert!(html.contains("/download?platform=macos-arm64"));
         // The trial belongs to the Suplex account that logged in.
         assert_eq!(
@@ -487,5 +509,42 @@ height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
             )
             .await;
         assert!(query(&authorize, "state").is_some());
+    }
+
+    #[tokio::test]
+    async fn a_trial_signup_reports_pro_once_and_a_returning_login_reports_nothing() {
+        let f = Fixture::with_stripe().await;
+        let attempt = attempt_in(&f.get("/start?plan=pro", &[]).await.text().await.unwrap());
+        let finished = f.sign_in(&attempt, "github", None).await;
+        let location = finished.headers()["location"].to_str().unwrap().to_owned();
+        let html = f.get(&location, &[]).await.text().await.unwrap();
+        assert!(html.contains("Your Pro trial is active"), "{html}");
+        let (event, hash) = conversion(&html).unwrap();
+        assert_eq!(
+            event,
+            json!({"event": "signup_complete", "method": "github", "plan": "pro"})
+        );
+        assert_eq!(hash, json!(sha256_hex("ada@example.com")));
+        // The page shows the email in its text, never in the conversion script.
+        let script_start = html.find("(function (event, emailHash)").unwrap();
+        let script = &html[script_start..script_start + html[script_start..].find("</script>").unwrap()];
+        assert!(!script.contains("ada@example.com") && !script.contains("Ada"));
+        assert_eq!(conversion(&f.get(&location, &[]).await.text().await.unwrap()), None);
+
+        // The same account logs in again: no marker and no push.
+        let again = attempt_in(&f.get("/start?plan=pro", &[]).await.text().await.unwrap());
+        let finished = f.sign_in(&again, "google", None).await;
+        let location = finished.headers()["location"].to_str().unwrap().to_owned();
+        assert_eq!(location, format!("/start/done?attempt={again}"));
+        let html = f.get(&location, &[]).await.text().await.unwrap();
+        assert_eq!(conversion(&html), None);
+        // A marker from elsewhere pushes nothing either.
+        let forged = f
+            .get(&format!("{location}&signup={}", "a".repeat(43)), &[])
+            .await
+            .text()
+            .await
+            .unwrap();
+        assert_eq!(conversion(&forged), None);
     }
 }

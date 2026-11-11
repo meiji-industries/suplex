@@ -181,8 +181,13 @@ pub fn delete_attempt(db: &Connection, id: &str) -> rusqlite::Result<Option<(Str
     .optional()
 }
 
-/// Deletes attempts, and their magic links, that expired before `cutoff`.
+/// Deletes attempts, their magic links, and signup markers that expired
+/// before `cutoff`.
 pub fn sweep(db: &Connection, cutoff: &str) -> rusqlite::Result<usize> {
+    db.execute(
+        "DELETE FROM account_signup_conversions WHERE expires_at <= ?1",
+        [cutoff],
+    )?;
     db.execute(
         "DELETE FROM account_attempts WHERE expires_at <= ?1",
         [cutoff],
@@ -264,6 +269,37 @@ pub fn find_account_attribution(
             }
             Ok(Attribution::from_pairs(pairs))
         },
+    )
+    .optional()
+}
+
+/// Keeps the signup marker of a new account until a done page consumes it.
+pub fn insert_signup_conversion(
+    db: &Connection,
+    marker_hash: &str,
+    account_id: &str,
+    provider: AuthProvider,
+    now: &str,
+    expires_at: &str,
+) -> rusqlite::Result<()> {
+    db.execute(
+        "INSERT INTO account_signup_conversions (marker_hash, account_id, provider, created_at, expires_at) VALUES (?1, ?2, ?3, ?4, ?5)",
+        params![marker_hash, account_id, provider, now, expires_at],
+    )?;
+    Ok(())
+}
+
+/// Consumes an unexpired signup marker once and returns its account and
+/// provider. One statement, so two concurrent requests cannot both read it.
+pub fn consume_signup_conversion(
+    db: &Connection,
+    marker_hash: &str,
+    now: &str,
+) -> rusqlite::Result<Option<(String, AuthProvider)>> {
+    db.query_row(
+        "UPDATE account_signup_conversions SET consumed_at = ?2 WHERE marker_hash = ?1 AND consumed_at IS NULL AND expires_at > ?2 RETURNING account_id, provider",
+        params![marker_hash, now],
+        |row| Ok((row.get(0)?, row.get(1)?)),
     )
     .optional()
 }

@@ -478,7 +478,11 @@ impl Hosted {
                     price_id,
                     quantity,
                     automatic_tax: self.config.automatic_tax,
-                    success_url: &format!("{}/checkout/return", self.config.origin),
+                    // Stripe fills in the session id; the return page reads it from Stripe.
+                    success_url: &format!(
+                        "{}/checkout/return?session_id={{CHECKOUT_SESSION_ID}}",
+                        self.config.origin
+                    ),
                     cancel_url: &format!("{}/checkout/cancel", self.config.origin),
                     metadata: &[
                         ("app_user_id", app_user_id.clone()),

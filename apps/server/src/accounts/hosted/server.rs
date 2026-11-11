@@ -18,7 +18,10 @@ use crate::{
         AuthAttemptBody, AuthAttemptResponse, AuthEmailBody, AuthPollBody, AuthProvider,
         token_shape,
     },
-    billing::hosted::{HostedError, HostedResult, server::JsonBody},
+    billing::{
+        Plan,
+        hosted::{HostedError, HostedResult, server::JsonBody},
+    },
     shared::page,
 };
 
@@ -188,8 +191,22 @@ async fn verify(
     )
 }
 
-async fn done_page() -> Html<String> {
-    Html(page::layout("Logged in", DONE_CONTENT))
+#[derive(Deserialize)]
+struct DoneQuery {
+    signup: Option<String>,
+}
+
+/// A new account has no subscription yet, so its plan is Free. The push
+/// comes before the page script, which opens the app or closes the tab.
+async fn done_page(
+    State(accounts): State<Accounts>,
+    Query(query): Query<DoneQuery>,
+) -> Html<String> {
+    let conversion = accounts.signup_script(query.signup.as_deref(), None, Plan::Free);
+    Html(page::layout(
+        "Logged in",
+        &format!("{conversion}{DONE_CONTENT}"),
+    ))
 }
 
 async fn require_enabled(

@@ -7,7 +7,10 @@ mod tests {
     use crate::{
         accounts::{
             hosted::{
-                fakes::{Fixture, INSTALLATION, ORIGIN, account_config, query},
+                fakes::{
+                    Fixture, INSTALLATION, ORIGIN, account_config, conversion, query,
+                    signup_marker,
+                },
                 load_config,
             },
             wire::{random_token, token_shape, valid_account_id},
@@ -42,7 +45,8 @@ mod tests {
             .callback("google", &state, Some("theme=dark; suplex_visitor=visitor-12345"))
             .await;
         assert_eq!(response.status(), 303);
-        assert_eq!(response.headers()["location"], "/auth/done");
+        let location = response.headers()["location"].to_str().unwrap().to_owned();
+        assert!(location.starts_with("/auth/done?signup="), "{location}");
         assert_eq!(response.headers()["cache-control"], "no-store");
         assert_eq!(response.headers()["referrer-policy"], "no-referrer");
         let exchange = &f.calls("/token")[0];
@@ -109,6 +113,75 @@ mod tests {
             ("$identify", id)
         );
         assert_eq!(events[1].2["$anon_distinct_id"], "visitor-12345");
+    }
+
+    #[tokio::test]
+    async fn a_signup_done_page_pushes_signup_complete_once() {
+        let f = Fixture::new().await;
+        let (attempt, _) = f.attempt().await;
+        let response = f.sign_in(&attempt, "google", None).await;
+        let location = response.headers()["location"].to_str().unwrap().to_owned();
+        let marker = signup_marker(&location).unwrap();
+        assert!(token_shape(&marker));
+        // Only the marker's hash is kept.
+        assert_eq!(
+            f.count(&format!(
+                "SELECT COUNT(*) FROM account_signup_conversions WHERE marker_hash = '{}'",
+                sha256_hex(&marker)
+            )),
+            1
+        );
+
+        let html = f.get(&location, &[]).await.text().await.unwrap();
+        let (event, hash) = conversion(&html).unwrap();
+        assert_eq!(
+            event,
+            json!({"event": "signup_complete", "method": "google", "plan": "free"})
+        );
+        assert_eq!(hash, json!(sha256_hex("ada@example.com")));
+        assert!(!html.contains("ada@example.com") && !html.contains("Ada"));
+        // The push runs before the page script opens the app.
+        let push = html.find("(function (event, emailHash)").unwrap();
+        assert!(push < html.find("location.replace(\"suplex://auth/done\")").unwrap());
+        assert!(html.contains("href=\"suplex://auth/done\""));
+
+        // A reload, the same marker again, or a forged marker push nothing.
+        let reload = f.get(&location, &[]).await.text().await.unwrap();
+        assert_eq!(conversion(&reload), None);
+        assert!(reload.contains("suplex://auth/done"));
+        for forged in ["/auth/done?signup=forged", &format!("/auth/done?signup={}", "b".repeat(43))] {
+            assert_eq!(conversion(&f.get(forged, &[]).await.text().await.unwrap()), None);
+        }
+
+        // A returning login has no marker and pushes nothing.
+        let (attempt, _) = f.attempt().await;
+        let response = f.sign_in(&attempt, "github", None).await;
+        assert_eq!(response.headers()["location"], "/auth/done");
+        assert_eq!(conversion(&f.get("/auth/done", &[]).await.text().await.unwrap()), None);
+
+        // An expired marker pushes nothing, and the sweep removes it.
+        let other = Fixture::new().await;
+        let (attempt, _) = other.attempt().await;
+        let response = other.sign_in(&attempt, "google", None).await;
+        let location = response.headers()["location"].to_str().unwrap().to_owned();
+        other.advance(61 * MINUTE);
+        assert_eq!(conversion(&other.get(&location, &[]).await.text().await.unwrap()), None);
+        other.advance(61 * MINUTE);
+        other.accounts.sweep().unwrap();
+        assert_eq!(other.count("SELECT COUNT(*) FROM account_signup_conversions"), 0);
+    }
+
+    #[tokio::test]
+    async fn a_web_signup_pushes_before_the_tab_closes() {
+        let f = Fixture::new().await;
+        let (attempt, _) = f.attempt_for(crate::accounts::wire::LoginClient::Web).await;
+        let response = f.sign_in(&attempt, "google", None).await;
+        let location = response.headers()["location"].to_str().unwrap().to_owned();
+        assert!(location.starts_with("/auth/done?client=web&signup="), "{location}");
+        let html = f.get(&location, &[]).await.text().await.unwrap();
+        let push = html.find("(function (event, emailHash)").unwrap();
+        assert!(push < html.find("window.close()").unwrap());
+        assert_eq!(conversion(&html).unwrap().0["event"], "signup_complete");
     }
 
     #[tokio::test]
@@ -245,7 +318,13 @@ mod tests {
 
         let verified = f.post_form("/auth/email/verify", &[("token", token)]).await;
         assert_eq!(verified.status(), 303);
-        assert_eq!(verified.headers()["location"], "/auth/done");
+        let location = verified.headers()["location"].to_str().unwrap().to_owned();
+        assert!(signup_marker(&location).is_some(), "{location}");
+        let done = f.get(&location, &[]).await.text().await.unwrap();
+        assert_eq!(
+            conversion(&done).unwrap().0,
+            json!({"event": "signup_complete", "method": "email", "plan": "free"})
+        );
         let again = f.post_form("/auth/email/verify", &[("token", token)]).await;
         assert_eq!(again.status(), 400);
 
@@ -427,7 +506,8 @@ mod tests {
         // A login that started in a web browser does not open the desktop app.
         let finished = f.callback("google", &state, None).await;
         assert_eq!(finished.status(), 303);
-        assert_eq!(finished.headers()["location"], "/auth/done?client=web");
+        let location = finished.headers()["location"].to_str().unwrap();
+        assert!(location.starts_with("/auth/done?client=web&signup="), "{location}");
         let LoginPoll::Complete { token, account } = client.poll_login(&attempt).await.unwrap()
         else {
             panic!("the attempt did not complete");

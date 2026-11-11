@@ -5,10 +5,16 @@
 //! A start attempt is an ordinary login attempt with the installation
 //! `suplex.sh`. Its verifier is discarded, so no account token is ever
 //! minted for it; the attempt only names the account that logged in.
+//!
+//! Every link and form on these pages keeps the query the visitor arrived
+//! with (`_gl`, `gclid`, `utm_*`, `visitor`, `consent`, and so on), so
+//! attribution and the consent choice survive each step. The login leaves
+//! suplex.sh, so `/start?plan=pro` also keeps that query in a short-lived
+//! cookie that `/start/done` reads.
 
 use axum::{
     Form, Router,
-    extract::{Query, State},
+    extract::{Query, RawQuery, State},
     http::{HeaderMap, StatusCode, Uri, header},
     response::{Html, IntoResponse, Redirect, Response},
     routing::{get, post},
@@ -27,9 +33,121 @@ const WORDMARK: &str = include_str!("../../../../web/assets/suplex-wordmark.svg"
 const BACKGROUND: &[u8] = include_bytes!("../../../../web/assets/account-background.png");
 const FONT: &[u8] = include_bytes!("../../../../web/fonts/InterTight-Variable.woff2");
 
-const DOWNLOADS: &str = "<div class=\"stack\"><a class=\"button primary\" href=\"/download?platform=macos-arm64\">Download for macOS</a><a class=\"button outline\" href=\"/download?platform=macos-x64\">Download for macOS Intel</a><a class=\"button outline\" href=\"/download?platform=linux-x64\">Download for Linux x64</a><a class=\"button outline\" href=\"/download?platform=linux-arm64\">Download for Linux Arm64</a></div>";
-const TERMS: &str = "<p class=\"terms\">When you continue, you agree to the <a href=\"/terms\" target=\"_blank\" rel=\"noreferrer\">Terms of Service</a> and <a href=\"/privacy\" target=\"_blank\" rel=\"noreferrer\">Privacy Policy</a>.</p>";
-const RETRY: &str = "<a class=\"button primary\" href=\"/start?plan=pro\">Retry</a>";
+/// Keeps the forwarded query of a trial login until `/start/done`.
+const QUERY_COOKIE: &str = "suplex_start_query";
+/// Keys that a link on these pages sets itself. The incoming query never
+/// replaces them.
+const OWNED_KEYS: [&str; 6] = ["plan", "with", "attempt", "provider", "platform", "format"];
+const MAX_KEY: usize = 64;
+const MAX_VALUE: usize = 512;
+const MAX_PAIRS: usize = 32;
+const MAX_QUERY: usize = 2048;
+
+/// The incoming query that internal links keep, URL-encoded and without the
+/// keys a link sets itself. The first value of a repeated key wins. Pairs
+/// past the size bounds are dropped.
+pub(crate) fn forwarded(raw: Option<&str>) -> String {
+    let mut keys: Vec<String> = Vec::new();
+    let mut query = String::new();
+    for (key, value) in url::form_urlencoded::parse(raw.unwrap_or_default().as_bytes()) {
+        if key.is_empty()
+            || key.len() > MAX_KEY
+            || value.len() > MAX_VALUE
+            || keys.len() >= MAX_PAIRS
+            || OWNED_KEYS.contains(&key.as_ref())
+            || keys.iter().any(|seen| *seen == key)
+        {
+            continue;
+        }
+        let pair = url::form_urlencoded::Serializer::new(String::new())
+            .append_pair(&key, &value)
+            .finish();
+        if query.len() + pair.len() + 1 > MAX_QUERY {
+            continue;
+        }
+        if !query.is_empty() {
+            query.push('&');
+        }
+        query.push_str(&pair);
+        keys.push(key.into_owned());
+    }
+    query
+}
+
+/// An HTML attribute value: `base`, which can have its own query, then the
+/// forwarded query.
+fn link(base: &str, forwarded: &str) -> String {
+    if forwarded.is_empty() {
+        return escape(base);
+    }
+    let separator = if base.contains('?') { '&' } else { '?' };
+    escape(&format!("{base}{separator}{forwarded}"))
+}
+
+fn downloads(query: &str) -> String {
+    format!(
+        "<div class=\"stack\"><a class=\"button primary\" href=\"{}\">Download for macOS</a><a class=\"button outline\" href=\"{}\">Download for macOS Intel</a><a class=\"button outline\" href=\"{}\">Download for Linux x64</a><a class=\"button outline\" href=\"{}\">Download for Linux Arm64</a></div>",
+        link("/download?platform=macos-arm64", query),
+        link("/download?platform=macos-x64", query),
+        link("/download?platform=linux-x64", query),
+        link("/download?platform=linux-arm64", query),
+    )
+}
+
+fn terms(query: &str) -> String {
+    format!(
+        "<p class=\"terms\">When you continue, you agree to the <a href=\"{}\" target=\"_blank\" rel=\"noreferrer\">Terms of Service</a> and <a href=\"{}\" target=\"_blank\" rel=\"noreferrer\">Privacy Policy</a>.</p>",
+        link("/terms", query),
+        link("/privacy", query),
+    )
+}
+
+fn retry(query: &str) -> String {
+    format!(
+        "<a class=\"button primary\" href=\"{}\">Retry</a>",
+        link("/start?plan=pro", query)
+    )
+}
+
+fn cancel(query: &str) -> String {
+    format!(
+        "<a class=\"button ghost\" href=\"{}\">Cancel</a>",
+        link("/start?plan=pro", query)
+    )
+}
+
+/// Keeps the forwarded query for an hour on `/start` paths, for the
+/// `/start/done` page after the login. An empty query clears an older one.
+/// `DNT: 1` keeps nothing.
+fn remember_query(accounts: &Accounts, headers: &HeaderMap, query: &str, response: &mut Response) {
+    if headers.get("dnt").is_some_and(|value| value == "1") {
+        return;
+    }
+    let secure = if accounts.hosted.config.origin.starts_with("https:") {
+        "; Secure"
+    } else {
+        ""
+    };
+    let age = if query.is_empty() { 0 } else { 3600 };
+    let cookie = format!(
+        "{QUERY_COOKIE}={query}; Max-Age={age}; Path=/start; HttpOnly; SameSite=Lax{secure}"
+    );
+    if let Ok(cookie) = cookie.parse() {
+        response.headers_mut().append(header::SET_COOKIE, cookie);
+    }
+}
+
+fn remembered_query(headers: &HeaderMap) -> String {
+    let raw = headers
+        .get_all(header::COOKIE)
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .flat_map(|value| value.split(';'))
+        .filter_map(|pair| pair.trim().split_once('='))
+        .find(|(name, _)| *name == QUERY_COOKIE)
+        .map(|(_, query)| query);
+    forwarded(raw)
+}
 
 pub(super) fn escape(value: &str) -> String {
     value
@@ -64,14 +182,19 @@ async fn start(
     uri: Uri,
     headers: HeaderMap,
 ) -> Response {
+    let forward = forwarded(uri.query());
     let mut response = if query.plan.as_deref() == Some("pro") {
-        trial_login(&accounts, query.with.as_deref() == Some("email"))
+        let mut response = trial_login(&accounts, query.with.as_deref() == Some("email"), &forward);
+        remember_query(&accounts, &headers, &forward, &mut response);
+        response
     } else {
         html(
             StatusCode::OK,
             "Start Suplex for free",
             &format!(
-                "<p class=\"center\">Free includes 1 company, 2 projects, 3 tasks at a time, and 50 tasks each month. No credit card is necessary.</p>{DOWNLOADS}<p class=\"center\">Download Suplex, then log in with your Suplex account. Want more? <a href=\"/start?plan=pro\">Start a 14-day Pro trial</a>.</p>"
+                "<p class=\"center\">Free includes 1 company, 2 projects, 3 tasks at a time, and 50 tasks each month. No credit card is necessary.</p>{}<p class=\"center\">Download Suplex, then log in with your Suplex account. Want more? <a href=\"{}\">Start a 14-day Pro trial</a>.</p>",
+                downloads(&forward),
+                link("/start?plan=pro", &forward),
             ),
         )
     };
@@ -90,7 +213,7 @@ async fn start(
     response
 }
 
-fn trial_login(accounts: &Accounts, email_form: bool) -> Response {
+fn trial_login(accounts: &Accounts, email_form: bool, forward: &str) -> Response {
     let attempt = random_token().ok().and_then(|verifier| {
         accounts
             .create_attempt(&AuthAttemptBody {
@@ -107,17 +230,29 @@ fn trial_login(accounts: &Accounts, email_form: bool) -> Response {
             &message(
                 "Log in is not available",
                 "Suplex cannot start the trial now. Download Suplex, then start the trial in Settings &gt; Billing.",
-                DOWNLOADS,
+                &downloads(forward),
             ),
         );
     };
     let content = if email_form {
         format!(
-            "<form class=\"stack\" method=\"post\" action=\"/start/email\"><input type=\"hidden\" name=\"attempt\" value=\"{attempt}\"><input type=\"email\" name=\"email\" required autofocus autocomplete=\"email\" placeholder=\"Email address\" aria-label=\"Email address\"><button class=\"button primary\" type=\"submit\">Continue</button><a class=\"button ghost\" href=\"/start?plan=pro\">Cancel</a></form>"
+            "<form class=\"stack\" method=\"post\" action=\"{}\"><input type=\"hidden\" name=\"attempt\" value=\"{attempt}\"><input type=\"email\" name=\"email\" required autofocus autocomplete=\"email\" placeholder=\"Email address\" aria-label=\"Email address\"><button class=\"button primary\" type=\"submit\">Continue</button>{}</form>",
+            link("/start/email", forward),
+            cancel(forward),
         )
     } else {
         format!(
-            "<div class=\"stack\"><p class=\"note center\">No credit card is necessary. Log in to start the trial.</p><a class=\"button primary\" href=\"/auth/start?attempt={attempt}&amp;provider=google\">Continue with Google</a><a class=\"button outline\" href=\"/auth/start?attempt={attempt}&amp;provider=github\">Continue with GitHub</a><a class=\"button outline\" href=\"/start?plan=pro&amp;with=email\">Continue with email</a></div>{TERMS}"
+            "<div class=\"stack\"><p class=\"note center\">No credit card is necessary. Log in to start the trial.</p><a class=\"button primary\" href=\"{}\">Continue with Google</a><a class=\"button outline\" href=\"{}\">Continue with GitHub</a><a class=\"button outline\" href=\"{}\">Continue with email</a></div>{}",
+            link(
+                &format!("/auth/start?attempt={attempt}&provider=google"),
+                forward
+            ),
+            link(
+                &format!("/auth/start?attempt={attempt}&provider=github"),
+                forward
+            ),
+            link("/start?plan=pro&with=email", forward),
+            terms(forward),
         )
     };
     html(StatusCode::OK, "Start your Pro trial", &content)
@@ -129,7 +264,12 @@ struct EmailForm {
     email: Option<String>,
 }
 
-async fn email(State(accounts): State<Accounts>, Form(form): Form<EmailForm>) -> Response {
+async fn email(
+    State(accounts): State<Accounts>,
+    RawQuery(raw): RawQuery,
+    Form(form): Form<EmailForm>,
+) -> Response {
+    let forward = forwarded(raw.as_deref());
     let body = AuthEmailBody {
         attempt_id: form.attempt.unwrap_or_default(),
         email: form.email.unwrap_or_default(),
@@ -145,7 +285,10 @@ async fn email(State(accounts): State<Accounts>, Form(form): Form<EmailForm>) ->
                     "Suplex sent a login link to <strong>{}</strong>. Open it to start the trial.",
                     escape(body.email.trim())
                 ),
-                "<a class=\"button outline\" href=\"/start?plan=pro\">Cancel</a>",
+                &format!(
+                    "<a class=\"button outline\" href=\"{}\">Cancel</a>",
+                    link("/start?plan=pro", &forward)
+                ),
             ),
         ),
         Err(error) => html(
@@ -154,7 +297,7 @@ async fn email(State(accounts): State<Accounts>, Form(form): Form<EmailForm>) ->
             &message(
                 "Suplex did not send the link",
                 "The login attempt expired, or Suplex limits login emails. Retry later.",
-                RETRY,
+                &retry(&forward),
             ),
         ),
     }
@@ -166,8 +309,18 @@ struct DoneQuery {
 }
 
 /// The browser arrives here after the login. Repeating the request shows the
-/// same trial.
-async fn done(State(accounts): State<Accounts>, Query(query): Query<DoneQuery>) -> Response {
+/// same trial. Its links keep the query of this request, or else the query
+/// that `/start?plan=pro` kept.
+async fn done(
+    State(accounts): State<Accounts>,
+    Query(query): Query<DoneQuery>,
+    RawQuery(raw): RawQuery,
+    headers: HeaderMap,
+) -> Response {
+    let forward = match forwarded(raw.as_deref()) {
+        forward if forward.is_empty() => remembered_query(&headers),
+        forward => forward,
+    };
     let now = accounts.hosted.now_iso();
     let account = accounts.hosted.query(|db| {
         let Some(attempt) = store::find_attempt(db, query.attempt.as_deref().unwrap_or(""), &now)?
@@ -188,7 +341,7 @@ async fn done(State(accounts): State<Accounts>, Query(query): Query<DoneQuery>) 
             &message(
                 "The login expired",
                 "Log in again to start the trial.",
-                RETRY,
+                &retry(&forward),
             ),
         );
     };
@@ -232,7 +385,11 @@ async fn done(State(accounts): State<Accounts>, Query(query): Query<DoneQuery>) 
             ),
         ),
     };
-    html(StatusCode::OK, heading, &message(heading, &text, DOWNLOADS))
+    html(
+        StatusCode::OK,
+        heading,
+        &message(heading, &text, &downloads(&forward)),
+    )
 }
 
 fn asset(content_type: &'static str, bytes: &'static [u8]) -> Response {

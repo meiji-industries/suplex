@@ -1,5 +1,6 @@
 /*
- * Suplex website analytics for Framer Custom Code (end of <body>).
+ * Suplex website analytics for Framer Custom Code (end of <body>), with
+ * <script src="https://suplex.sh/consent.js"></script> before or after it (docs/posthog.md).
  * The project token is a public, write-only PostHog key. No personal API key belongs here.
  */
 (function suplexWebsiteAnalytics(window, document) {
@@ -275,80 +276,47 @@
     document.addEventListener("click", function (event) { captureAnnotatedClick(event.target); });
   }
 
+  // The banner, its settings button, the `consent` URL parameter, and the links to suplex.sh
+  // belong to the shared consent script (https://suplex.sh/consent.js). This file follows its
+  // choice, in either load order.
+  function sharedConsent() { return window.SuplexConsent; }
 
-  function removeConsentBanner() {
-    var banner = document.getElementById("suplex-analytics-consent");
-    if (banner) banner.remove();
+  function followConsent(choice) {
+    if (choice === "granted") {
+      if (privacySignal()) return;
+      updateAttribution();
+      if (!started) { loadSdk(); return; }
+      if (posthog) { posthog.opt_in_capturing(); capturePageview(); }
+      return;
+    }
+    storageRemove(config.attributionStorageKey);
+    if (posthog) { posthog.opt_out_capturing(); }
   }
 
-  function removeSettingsButton() {
-    var button = document.getElementById("suplex-analytics-settings");
-    if (button) button.remove();
-  }
-
-  function showSettingsButton() {
-    if (privacySignal() || document.getElementById("suplex-analytics-settings")) return;
-    var button = document.createElement("button");
-    button.id = "suplex-analytics-settings";
-    button.type = "button";
-    button.textContent = "Analytics settings";
-    button.setAttribute("aria-label", "Open analytics settings");
-    button.style.cssText = "position:fixed;z-index:2147483647;left:16px;bottom:16px;padding:6px 10px;border:1px solid #a3a3a3;background:#fff;color:#171717;font:13px/1.4 system-ui,sans-serif;cursor:pointer";
-    button.addEventListener("click", function () { window.SuplexAnalytics.clearConsent(); });
-    document.body.appendChild(button);
-  }
-
-  function showConsentBanner() {
-    if (consent() || document.getElementById("suplex-analytics-consent")) return;
-    var banner = document.createElement("div");
-    banner.id = "suplex-analytics-consent";
-    banner.setAttribute("role", "dialog");
-    banner.setAttribute("aria-label", "Website analytics consent");
-    banner.style.cssText = "position:fixed;z-index:2147483647;right:16px;bottom:16px;max-width:420px;padding:12px;border:1px solid #d4d4d4;background:#fff;color:#171717;font:14px/1.4 system-ui,sans-serif;display:flex;gap:12px;align-items:center";
-    var text = document.createElement("span");
-    text.textContent = "Suplex collects usage data to improve the product.";
-    var reject = document.createElement("button");
-    reject.type = "button";
-    reject.textContent = "Reject";
-    reject.style.cssText = "padding:6px 10px;border:1px solid #a3a3a3;background:#fff;color:#171717;cursor:pointer";
-    var allow = document.createElement("button");
-    allow.type = "button";
-    allow.textContent = "Accept";
-    allow.style.cssText = "padding:6px 10px;border:1px solid #171717;background:#171717;color:#fff;cursor:pointer";
-    reject.addEventListener("click", function () { window.SuplexAnalytics.denyConsent(); });
-    allow.addEventListener("click", function () { window.SuplexAnalytics.grantConsent(); });
-    banner.append(text, reject, allow);
-    document.body.appendChild(banner);
+  function choose(choice) {
+    var shared = sharedConsent();
+    if (shared) {
+      if (choice === "granted") shared.grant();
+      else if (choice === "denied") shared.deny();
+      else shared.clear();
+      return;
+    }
+    if (choice) storageWrite(config.consentStorageKey, choice);
+    else storageRemove(config.consentStorageKey);
+    followConsent(choice);
   }
 
   window.SuplexAnalytics = {
     grantConsent: function () {
       if (privacySignal()) return;
-      storageWrite(config.consentStorageKey, "granted");
-      updateAttribution();
-      removeConsentBanner();
-      showSettingsButton();
-      if (!started) { loadSdk(); return; }
-      if (posthog) { posthog.opt_in_capturing(); capturePageview(); }
+      choose("granted");
     },
-    denyConsent: function () {
-      storageWrite(config.consentStorageKey, "denied");
-      storageRemove(config.attributionStorageKey);
-      removeConsentBanner();
-      showSettingsButton();
-      if (posthog) { posthog.opt_out_capturing(); }
-    },
-    clearConsent: function () {
-      storageRemove(config.consentStorageKey);
-      storageRemove(config.attributionStorageKey);
-      if (posthog) { posthog.opt_out_capturing(); }
-      removeSettingsButton();
-      showConsentBanner();
-    },
+    denyConsent: function () { choose("denied"); },
+    clearConsent: function () { choose(null); },
   };
 
-  if (privacySignal()) return;
-  if (consent() === "granted") { showSettingsButton(); loadSdk(); }
-  else if (consent() === "denied") showSettingsButton();
-  else showConsentBanner();
+  if (sharedConsent()) sharedConsent().subscribe(followConsent);
+  else (window.SuplexConsentListeners = window.SuplexConsentListeners || []).push(followConsent);
+
+  if (!privacySignal() && consent() === "granted") loadSdk();
 }(window, document));

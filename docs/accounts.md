@@ -263,13 +263,41 @@ when `BILLING_TELEMETRY=true` and `BILLING_POSTHOG_KEY` are set.
   `distinct_id` = account ID, `$lib=suplex-hosted`, `provider`,
   `$groups.host` = installation ID, and `$set.email`.
 - The Framer snippet adds the consented PostHog distinct ID as
-  `?visitor=` to `suplex.sh/download` links. `/download` keeps a valid value
+  `?visitor=` to `suplex.sh/start` and `suplex.sh/download` links. `/start`
+  and `/download` keep a valid value
   (`^[A-Za-z0-9._:-]{8,64}$`) in the first-party cookie `suplex_visitor` for a
   year, unless the request sends `DNT: 1`. When the login callback sees that
   cookie, it also queues `$identify` with
   `$anon_distinct_id` = visitor, which joins the website visitor to the account.
 - `/download` queues an anonymous `download_started` (`$lib=suplex-web`,
   `platform`, `source`) with a new random ID, unless the request sends `DNT: 1`.
+
+### suplex.sh signup pages
+
+Every link and form on `/start`, `/start?plan=pro`, `/start?plan=pro&with=email`,
+the `/start/email` result pages, and `/start/done` keeps the query the visitor
+arrived with: `_gl`, `gclid`, `fbclid`, `utm_*`, `visitor`, `consent`, and any
+other key. This includes the `/auth/start` and `/download` links. A link's own
+keys (`plan`, `with`, `attempt`, `provider`, `platform`, `format`) are never
+taken from the incoming query. Keys and values are URL-encoded and
+HTML-escaped. A key over 64 bytes, a value over 512 bytes, pairs after the 32nd,
+and pairs past 2048 bytes in total are dropped.
+
+The login goes through Google, GitHub, or an email link, so `/start?plan=pro`
+also keeps the query in the cookie `suplex_start_query` (`Path=/start`, one
+hour, `HttpOnly`, `SameSite=Lax`). `/start/done` uses its own query, or else
+that cookie. A trial login without a query clears the cookie, and `DNT: 1`
+stores nothing. An email link opened in another browser shows the downloads
+without the query. Logins from the app do not use the cookie.
+
+This cookie only rebuilds links. It is separate from `suplex_visitor` (the
+PostHog visitor for `$identify`) and `suplex_attribution` (the 30-day first-touch
+UTM values for `account_signed_up`, [telemetry](telemetry.md)). One `/start`
+response can set all three; each is its own `Set-Cookie` header.
+
+These pages, the login and billing pages, and the legal pages load Google Tag
+Manager (`GTM-N739QG5C`, except the legal pages) and the shared consent banner.
+See [PostHog](posthog.md#shared-consent-banner).
 
 ### Residual risk
 
@@ -370,9 +398,13 @@ GitHub, Resend, Stripe, RevenueCat, 1Password, and Framer.
    that `scripts/billing-dev.env` reads. Until the sandbox fields exist,
    `mise run hosted:dev` runs with sign-in off.
 7. Run the `fly secrets set` command in Deploy. Fly restarts the machine.
-8. Paste the updated `apps/server/src/hosted/framer-attribution.js` into Framer.
-   In a private browser, check that a download link gets `?visitor=` only
-   after you accept analytics.
+8. Install the Framer Custom Code as described in
+   [PostHog](posthog.md#install-on-framer): the Google Tag Manager snippet,
+   `<script src="https://suplex.sh/consent.js"></script>`, and the updated
+   `apps/server/src/hosted/framer-attribution.js`. Remove the earlier copy of
+   the snippet, which had its own banner. In a private browser, check that a
+   download link gets `?visitor=` only after you accept analytics, and that a
+   Start link gets `consent=` after you make a choice.
 9. Import the people who subscribed before the Resend sync shipped, once:
    `suplex hosted email-updates > subscribers.csv`, then import the file into
    Resend contacts. Test the sync with a throwaway address as described in

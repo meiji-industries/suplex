@@ -126,14 +126,57 @@ money properties, so they cannot double count Stripe cash.
 
 ## Install on Framer
 
-`apps/server/src/hosted/framer-attribution.js` is paste-ready Framer Custom Code
-for the end of `<body>`. Its `phc_` token is a public, write-only project token,
-not a management secret. The snippet sends through `https://meta.suplex.sh` and
-uses `https://us.posthog.com` for PostHog UI links.
+Framer Custom Code has three parts:
 
-When there is no saved choice, the snippet shows a compact Accept/Reject consent
-bar and does not load PostHog until the visitor allows analytics. A custom site
-consent control can call exactly one of:
+1. Start of `<head>`: the Google Tag Manager snippet for `GTM-N739QG5C` with its
+   Consent Mode defaults. `apps/server/src/shared/page.html` has the same
+   snippet; copy it from there, without changes.
+2. End of `<body>`: `<script src="https://suplex.sh/consent.js"></script>`.
+3. End of `<body>`: `apps/server/src/hosted/framer-attribution.js`, pasted as
+   is. Parts 2 and 3 can be in either order.
+
+`framer-attribution.js` holds the PostHog setup. Its `phc_` token is a public,
+write-only project token, not a management secret. The snippet sends through
+`https://meta.suplex.sh` and uses `https://us.posthog.com` for PostHog UI links.
+
+### Shared consent banner
+
+`apps/server/src/hosted/consent.js` is the only copy of the consent banner and
+its **Analytics settings** button. suplex.sh serves it at
+`https://suplex.sh/consent.js`. getsuplex.ai loads it from there, and the
+suplex.sh pages load it too: every page made with `shared/page.html` (`/start`,
+login, and billing pages) and the legal pages. Do not copy the banner text or
+styles into Framer.
+
+- The choice is `localStorage["suplex.analytics.consent.v1"]`, `granted` or
+  `denied`, on each site.
+- A `consent=granted` or `consent=denied` URL parameter is stored as the choice
+  on either site. Other values are ignored. On getsuplex.ai the stored parameter
+  starts or stops PostHog as Accept or Reject does.
+- localStorage is per origin, so links carry the choice. When a link to the
+  other site (`https://suplex.sh`, `https://getsuplex.ai`) is opened, the script
+  sets its `consent` parameter to the stored choice. Same-site links that
+  already have `consent` get the current choice, or lose the parameter when no
+  choice is stored. The suplex.sh redirect to getsuplex.ai keeps a valid
+  `consent` parameter.
+- The banner shows only when no choice is stored and no valid `consent`
+  parameter arrived.
+- Global Privacy Control or Do Not Track: the choice is always `denied`.
+  `granted` is never stored, even from a `consent=granted` parameter, and the
+  banner and settings button do not show. Links carry `consent=denied`.
+- Consent Mode starts with every type denied. Only the Google Tag Manager
+  snippet grants the ad types, when the stored choice is `granted` and Global
+  Privacy Control is off. When a `granted` choice is withdrawn, `consent.js`
+  sends a denied Consent Mode update.
+
+suplex.sh has no PostHog browser SDK. Its signup pages only keep the incoming
+query, including `consent` and `visitor`, in each link
+([Suplex accounts](accounts.md#suplexsh-signup-pages)).
+
+### PostHog on getsuplex.ai
+
+PostHog does not load until the visitor allows analytics. A custom site consent
+control can call exactly one of:
 
 ```js
 window.SuplexAnalytics.grantConsent()
@@ -176,7 +219,7 @@ matches `^[A-Za-z0-9._:-]{8,64}$`. The download service keeps it in a
 first-party `suplex_visitor` cookie on suplex.sh. A later Suplex account login
 in the same browser sends `$identify`, which joins this visitor to the account.
 See [Suplex accounts](accounts.md#posthog-identity-bridge). Without consent, or
-with a Do Not Track or Global Privacy Control signal, links stay unchanged.
+with a Do Not Track or Global Privacy Control signal, links get no `visitor`.
 
 Only the CTA label, destination hostname, platform, version, safe page fields,
 and bounded attribution fields are sent. Destination and referrer query strings
@@ -186,7 +229,9 @@ URL properties pass through the same query and fragment scrubber before send.
 Browser Do Not Track and Global Privacy Control signals prevent both the SDK and
 consent controls from loading. After a visitor accepts or rejects analytics, a
 compact **Analytics settings** button remains at the bottom left. It revokes the
-saved choice, stops capture, and reopens the Accept/Reject bar.
+saved choice, stops capture, and reopens the Accept/Reject bar. Without
+`consent.js` on the page, `window.SuplexAnalytics` still stores the choice and
+controls PostHog, but no banner shows.
 
 Every consented CTA or download also emits a local `suplex:conversion` browser
 event. `window.SUPLEX_POSTHOG_CONFIG = { enableDataLayer: true }`, set before the
@@ -198,4 +243,7 @@ pixel ID are supplied and approved.
 Framer publication and consent-banner wiring are external operations. Verify the
 published site in a private browser: reject consent, accept consent, navigate
 without a reload, and click each annotated download platform. Then confirm that
-PostHog receives only the documented properties.
+PostHog receives only the documented properties. Open a Start link: suplex.sh
+shows no banner and the URL has `consent`. Select **Analytics settings** on
+suplex.sh, select the other choice, and open the Suplex link on a legal page:
+getsuplex.ai uses that choice.

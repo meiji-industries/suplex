@@ -3,6 +3,8 @@ import { Window as HappyWindow } from "happy-dom";
 import { expect, test, vi } from "vitest";
 
 const source = await readFile(new URL("../apps/server/src/hosted/framer-attribution.js", import.meta.url), "utf8");
+// Framer loads the shared banner from https://suplex.sh/consent.js next to this file.
+const consentSource = await readFile(new URL("../apps/server/src/hosted/consent.js", import.meta.url), "utf8");
 
 type AnalyticsWindow = Window & typeof globalThis & {
   SuplexAnalytics: { grantConsent(): void; denyConsent(): void; clearConsent(): void };
@@ -15,6 +17,7 @@ function fixture(url = "https://suplex.sh/download?utm_source=github&utm_campaig
   window.document.write("<!doctype html><title>Download</title><script></script><a id='download' href='https://suplex.sh/download?platform=macos-arm64&token=private'>Download</a>");
   Object.defineProperty(window.document, "referrer", { configurable: true, value: "https://news.example/story?private=yes" });
   if (privacySignal) Object.defineProperty(window.navigator, "globalPrivacyControl", { configurable: true, value: true });
+  window.eval(consentSource);
   window.eval(source);
   return window;
 }

@@ -610,16 +610,20 @@ mod tests {
                 [&task.id],
             ).unwrap();
         });
+        let missing_base = diff_summary_with_access(
+            state.clone(),
+            task.id.clone(),
+            headers.clone(),
+            Some(access()),
+        )
+        .await;
+        assert_eq!(missing_base.status(), StatusCode::OK);
         assert_eq!(
-            diff_summary_with_access(
-                state.clone(),
-                task.id.clone(),
-                headers.clone(),
-                Some(access())
+            serde_json::from_slice::<Value>(
+                &to_bytes(missing_base.into_body(), usize::MAX).await.unwrap()
             )
-            .await
-            .status(),
-            StatusCode::INTERNAL_SERVER_ERROR
+            .unwrap(),
+            json!({"available":false,"files":0})
         );
         state.with_database(|database| {
             database.connection().execute(
@@ -687,6 +691,205 @@ mod tests {
         );
         assert_eq!(
             execution(State(state.clone()), Path(task.id), headers)
+                .await
+                .status(),
+            StatusCode::UNAUTHORIZED
+        );
+        api_task.abort();
+        drop(state);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn diff_summary_is_unavailable_when_git_or_github_cannot_report_it() {
+        let logs = crate::platform::system_events::install_for_test();
+        let root = std::env::temp_dir().join(format!("suplex-diff-unobservable-{}", uuid::Uuid::new_v4()));
+        fs::create_dir(&root).unwrap();
+        let mut database =
+            SuplexDatabase::open(&root.join("suplex.sqlite"), OpenMode::Migrate).unwrap();
+        let now = Utc::now();
+        let admin = crate::http::routes::auth::tests::verified_sign_in(&mut database, now).unwrap();
+        let stamp = now.to_rfc3339();
+        database.connection().execute(
+            "INSERT INTO suplex_companies (id,name,status,created_at) VALUES ('diff_company','Diff','active',?1)",
+            [&stamp],
+        ).unwrap();
+        database.connection().execute(
+            "INSERT INTO suplex_projects (id,company_id,name,repository_path,worktree_root,repository_identity,base_branch,setup_command,verification_command,root_profile_id,worker_profile_id,created_at,updated_at) VALUES ('diff_project','diff_company','Diff','/tmp/repo','/tmp/worktrees',NULL,'main','','','profile_root','profile_worker',?1,?1)",
+            [&stamp],
+        ).unwrap();
+        let task = repository::create(&mut database, &PreparedTask {
+            id: repository::new_task_id(), company_id: "diff_company".into(), project_id: "diff_project".into(),
+            title: "Observe the diff".into(), description: "Count changed files".into(),
+            configuration: json!({"branch":"task-diff","baseBranch":"main","repository":"acme/demo"}),
+            idempotency_key: "diff-1".into(), request_hash: "diff-hash".into(),
+            creator: TaskCreator::User(admin.user.id.clone()), delivery_target: "local_worktree".into(),
+            delivery_intent: serde_json::from_value(json!({"repository":"acme/demo","headBranch":"task-diff","baseBranch":"main","baselineSha":"head","pullRequestNumber":null})).unwrap(),
+            root_profile: serde_json::from_value(json!({"profileId":"profile_root","provider":"codex","model":"gpt-6-sol","reasoningLevel":"medium","serviceTier":"default"})).unwrap(),
+            worker_profile: serde_json::from_value(json!({"profileId":"profile_worker","provider":"codex","model":"gpt-6-sol","reasoningLevel":"medium","serviceTier":"default"})).unwrap(),
+            advisor_profiles: serde_json::from_value(json!({})).unwrap(), issue: None, start_queued: true,
+            copied_from_task_id: None, depends_on: vec![], pull_request_dependencies: vec![], workflow: crate::coordination::workflows::Workflow::Standard,
+        }, now).unwrap().task;
+        let state = AppState::new(
+            database,
+            session::SessionConfig {
+                port: 4113,
+                reachable_address: "https://suplex.example.test:4113".into(),
+                tailscale_exposure: "serve".into(),
+            },
+        );
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            crate::http::session::VERIFIED_HTTPS_HEADER,
+            "1".parse().unwrap(),
+        );
+        headers.insert("host", HeaderValue::from_static("suplex.example.test:4113"));
+        headers.insert(
+            "cookie",
+            HeaderValue::from_str(&format!("sid_v1={}", admin.session_token)).unwrap(),
+        );
+
+        // The published repository. Its main branch is the authority for the base.
+        let source = root.join("source");
+        git(&["init", "--quiet", "--initial-branch=main", source.to_str().unwrap()], &root);
+        git(&["config", "user.name", "Probe"], &source);
+        git(&["config", "user.email", "probe@example.invalid"], &source);
+        fs::write(source.join("README.md"), "Base\n").unwrap();
+        git(&["add", "README.md"], &source);
+        git(&["commit", "--quiet", "-m", "Base"], &source);
+        let published = git(&["rev-parse", "HEAD"], &source);
+        let api = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let api_url = format!("http://{}", api.local_addr().unwrap());
+        let published_for_api = published.clone();
+        let api_task = tokio::spawn(async move {
+            use tokio::io::{AsyncReadExt, AsyncWriteExt};
+            loop {
+                let Ok((mut socket, _)) = api.accept().await else {
+                    break;
+                };
+                let mut request = [0_u8; 8192];
+                let bytes = socket.read(&mut request).await.unwrap();
+                let request = String::from_utf8_lossy(&request[..bytes]);
+                let (status, body) = if request.starts_with("GET /repos/acme/demo/branches/main ") {
+                    ("200 OK", format!("{{\"commit\":{{\"sha\":\"{published_for_api}\"}}}}"))
+                } else {
+                    ("404 Not Found", "{\"message\":\"Not Found\"}".to_owned())
+                };
+                let response = format!(
+                    "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                socket.write_all(response.as_bytes()).await.unwrap();
+            }
+        });
+        let set_worktree = |path: &std::path::Path, base_branch: &str| {
+            state.with_database(|database| {
+                database.connection().execute(
+                    "UPDATE suplex_tasks SET configuration_json = json_set(configuration_json,'$.baseBranch',?1) WHERE id = ?2",
+                    rusqlite::params![base_branch, task.id],
+                ).unwrap();
+                database.connection().execute(
+                    "UPDATE suplex_task_controls SET worktree_json = ?1 WHERE task_id = ?2",
+                    rusqlite::params![json!({"path":path,"branch":"task-diff","baseSha":"f".repeat(40),"headSha":"f".repeat(40),"dirty":false}).to_string(), task.id],
+                ).unwrap();
+            });
+        };
+        let read = |kind: DiffKind| {
+            read_diff(
+                state.clone(),
+                task.id.clone(),
+                headers.clone(),
+                Some(Access::for_api(&api_url, None).unwrap()),
+                kind,
+            )
+        };
+        async fn body(response: Response) -> (StatusCode, Value) {
+            let status = response.status();
+            let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+            (status, serde_json::from_slice(&bytes).unwrap())
+        }
+        let unavailable = (StatusCode::OK, json!({"available":false,"files":0}));
+
+        // An observable worktree reports its changed files.
+        let worktree = root.join("worktree");
+        git(&["clone", "--quiet", source.to_str().unwrap(), worktree.to_str().unwrap()], &root);
+        fs::write(worktree.join("README.md"), "Changed\n").unwrap();
+        set_worktree(&worktree, "main");
+        assert_eq!(
+            body(read(DiffKind::Summary).await).await,
+            (StatusCode::OK, json!({"available":true,"files":1}))
+        );
+
+        // GitHub cannot read the configured base branch.
+        set_worktree(&worktree, "renamed-base");
+        let response = read(DiffKind::Summary).await;
+        assert_eq!(response.headers()[CACHE_CONTROL], "private, no-store");
+        assert_eq!(body(response).await, unavailable);
+        // The patch response is unchanged.
+        assert_eq!(
+            read(DiffKind::Patch).await.status(),
+            StatusCode::INTERNAL_SERVER_ERROR
+        );
+
+        // The saved worktree directory no longer exists.
+        set_worktree(&root.join("removed-worktree"), "main");
+        assert_eq!(body(read(DiffKind::Summary).await).await, unavailable);
+
+        // The saved worktree path is not a Git repository.
+        let plain = root.join("plain");
+        fs::create_dir(&plain).unwrap();
+        set_worktree(&plain, "main");
+        assert_eq!(body(read(DiffKind::Summary).await).await, unavailable);
+
+        // The published commit is absent and the repository has no origin to fetch it from.
+        let no_origin = root.join("no-origin");
+        git(&["init", "--quiet", "--initial-branch=main", no_origin.to_str().unwrap()], &root);
+        set_worktree(&no_origin, "main");
+        assert_eq!(body(read(DiffKind::Summary).await).await, unavailable);
+
+        // HEAD is unborn although the published commit is present.
+        let unborn = root.join("unborn");
+        git(&["init", "--quiet", "--initial-branch=main", unborn.to_str().unwrap()], &root);
+        git(&["fetch", "--quiet", source.to_str().unwrap(), "main"], &unborn);
+        set_worktree(&unborn, "main");
+        assert_eq!(body(read(DiffKind::Summary).await).await, unavailable);
+
+        // The worktree history shares no merge base with the published commit.
+        let unrelated = root.join("unrelated");
+        git(&["init", "--quiet", "--initial-branch=main", unrelated.to_str().unwrap()], &root);
+        git(&["config", "user.name", "Probe"], &unrelated);
+        git(&["config", "user.email", "probe@example.invalid"], &unrelated);
+        fs::write(unrelated.join("OTHER.md"), "Other\n").unwrap();
+        git(&["add", "OTHER.md"], &unrelated);
+        git(&["commit", "--quiet", "-m", "Other"], &unrelated);
+        git(&["fetch", "--quiet", source.to_str().unwrap(), "main"], &unrelated);
+        set_worktree(&unrelated, "main");
+        assert_eq!(body(read(DiffKind::Summary).await).await, unavailable);
+
+        // The reason is in the host log, not in the response.
+        let logged = fs::read_dir(&logs)
+            .unwrap()
+            .filter_map(|entry| fs::read_to_string(entry.unwrap().path()).ok())
+            .collect::<String>();
+        let reasons = logged
+            .lines()
+            .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+            .filter(|event| event["type"] == "task_diff" && event["taskId"] == task.id.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(reasons.len(), 6, "{reasons:?}");
+        assert!(reasons.iter().all(|event| event["state"] == "unavailable"
+            && !event["reason"].as_str().unwrap().is_empty()));
+
+        // Authorization still applies, and an unknown task keeps its status.
+        assert_eq!(
+            diff_summary(State(state.clone()), Path(repository::new_task_id()), headers.clone())
+                .await
+                .status(),
+            StatusCode::NOT_FOUND
+        );
+        headers.remove("cookie");
+        assert_eq!(
+            diff_summary(State(state.clone()), Path(task.id.clone()), headers.clone())
                 .await
                 .status(),
             StatusCode::UNAUTHORIZED

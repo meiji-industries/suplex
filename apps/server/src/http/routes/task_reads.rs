@@ -36,7 +36,10 @@ use crate::{
         },
         validation::ValidPath,
     },
-    integrations::github::Access,
+    integrations::{
+        github::Access,
+        github_delivery::{Github, GithubResult},
+    },
     platform::database::SuplexDatabase,
     runtimes::{task_harness::ReaderSession, task_harness_registry},
     tasks::control::SessionRow,
@@ -69,6 +72,15 @@ async fn checks(
     ValidPath(TaskIdParams { task_id }): ValidPath<TaskIdParams>,
     headers: HeaderMap,
 ) -> Response {
+    checks_with_github(state, task_id, headers, None).await
+}
+
+async fn checks_with_github(
+    state: AppState,
+    task_id: String,
+    headers: HeaderMap,
+    github_override: Option<GithubResult<Github>>,
+) -> Response {
     let (user_id, cookies) = match authorize(&state, &headers) {
         Ok(value) => value,
         Err(response) => return *response,
@@ -92,29 +104,42 @@ async fn checks(
                 )
             }))
     });
-    let intent = intent.map_err(|error| error.to_string());
     let (number, repository, branch) = match intent {
         Ok(Some(intent)) => intent,
         Ok(None) => return respond(Ok(json!({"available":false,"runs":[]})), cookies),
-        Err(error) => return respond::<Value>(Err(error.into()), cookies),
+        Err(error) => return respond::<Value>(Err(error), cookies),
     };
     // Check observations use GitHub for every repository connection.
     let observed = async {
-        let github = crate::integrations::github_delivery::Github::load().await?;
+        let github = match github_override {
+            Some(github) => github?,
+            None => Github::load().await?,
+        };
         github
             .observe_pull_request(&repository, &branch, Some(number))
             .await
     };
-    let observation = match observed.await {
-        Ok(observation) => observation,
-        Err(error) => return respond::<Value>(Err(Box::new(error)), cookies),
+    let value = match observed.await {
+        Ok(observation) => {
+            let pull_request_state = match observation.state.as_deref() {
+                Some("open") if observation.is_draft == Some(false) => json!("ready"),
+                Some("open") => json!("draft"),
+                other => json!(other),
+            };
+            json!({"available": observation.exists, "runs": observation.checks.runs, "pullRequestState": pull_request_state})
+        }
+        // GitHub owns the checks. When it cannot report them, for example
+        // with an unusable credential, an unreachable API, a rate limit, or an
+        // unreadable pull request, the checks are unavailable, and the reason
+        // goes only to the host log.
+        Err(error) => {
+            crate::platform::system_events::emit(json!({
+                "type": "task_checks", "state": "unavailable", "level": 40,
+                "taskId": task_id, "reason": error.to_string(),
+            }));
+            json!({"available": false, "runs": []})
+        }
     };
-    let pull_request_state = match observation.state.as_deref() {
-        Some("open") if observation.is_draft == Some(false) => json!("ready"),
-        Some("open") => json!("draft"),
-        other => json!(other),
-    };
-    let value = json!({"available": observation.exists, "runs": observation.checks.runs, "pullRequestState": pull_request_state});
     let scope = state.with_database(|database| read_task(database, &user_id, &task_id));
     respond(scope.map(|_| value), cookies)
 }

@@ -594,7 +594,7 @@ async fn read_diff(
         Ok(intent) => intent,
         Err(error) => return respond::<Value>(Err(error), cookies),
     };
-    let (path, repository, mut base_branch, pull_request) = match intent {
+    let (path, repository, base_branch, pull_request) = match intent {
         DiffIntent::NoWorktree => {
             let value = match kind {
                 DiffKind::Patch => DiffResponse::Patch(TaskDiffResponse {
@@ -616,30 +616,74 @@ async fn read_diff(
             pull_request,
         } => (path, repository, base_branch, pull_request),
     };
+    let value = match observe_local_diff(
+        path,
+        repository,
+        base_branch,
+        pull_request,
+        access_override,
+        kind,
+    )
+    .await
+    {
+        Ok(value) => value,
+        // Git and GitHub own the diff. When they cannot report it, the summary
+        // is unavailable, and the reason goes only to the host log.
+        Err(DiffFailure::Unobservable(error)) if matches!(kind, DiffKind::Summary) => {
+            crate::platform::system_events::emit(json!({
+                "type": "task_diff", "state": "unavailable", "level": 40,
+                "taskId": task_id, "reason": error.to_string(),
+            }));
+            DiffResponse::Summary(TaskDiffSummaryResponse {
+                available: false,
+                files: 0,
+            })
+        }
+        Err(DiffFailure::Unobservable(error) | DiffFailure::Internal(error)) => {
+            return respond::<Value>(Err(error), cookies);
+        }
+    };
+    let scope = state.with_database(|database| read_task(database, &user_id, &task_id));
+    respond(scope.map(|_| value), cookies)
+}
+
+enum DiffFailure {
+    /// Git or GitHub could not report the diff: for example a missing branch
+    /// or worktree, an unusable credential, an unreachable remote, an unborn
+    /// HEAD, or unrelated history.
+    Unobservable(Box<dyn Error + Send + Sync>),
+    /// A server defect, such as a panicked blocking task.
+    Internal(Box<dyn Error + Send + Sync>),
+}
+
+async fn observe_local_diff(
+    path: PathBuf,
+    repository: String,
+    mut base_branch: String,
+    pull_request: Option<u64>,
+    access_override: Option<Access>,
+    kind: DiffKind,
+) -> Result<DiffResponse, DiffFailure> {
     if let Some(number) = pull_request {
         let pull = async {
             let github = crate::integrations::github_delivery::Github::load().await?;
             github.get_pull_request(&repository, number).await
         };
-        match pull.await {
-            Ok(pull) => base_branch = pull.base_branch,
-            Err(error) => return respond::<Value>(Err(Box::new(error)), cookies),
-        }
+        base_branch = pull
+            .await
+            .map_err(|error| DiffFailure::Unobservable(Box::new(error)))?
+            .base_branch;
     }
-    let access_result = match access_override {
-        Some(access) => Ok(access),
-        None => Access::load().await,
+    let access = match access_override {
+        Some(access) => access,
+        None => Access::load().await.map_err(DiffFailure::Unobservable)?,
     };
-    let access = match access_result {
-        Ok(access) => access,
-        Err(error) => return respond::<Value>(Err(error), cookies),
-    };
-    let published_sha = match access.published_branch_sha(&repository, &base_branch).await {
-        Ok(sha) => sha,
-        Err(error) => return respond::<Value>(Err(error), cookies),
-    };
+    let published_sha = access
+        .published_branch_sha(&repository, &base_branch)
+        .await
+        .map_err(DiffFailure::Unobservable)?;
     let token = access.token().map(str::to_owned);
-    let observed = tokio::task::spawn_blocking(move || {
+    tokio::task::spawn_blocking(move || {
         let result = match kind {
             DiffKind::Patch => worktree::local_diff_patch(&path, published_sha, token.as_deref())
                 .map(|patch| {
@@ -660,16 +704,10 @@ async fn read_diff(
                 )
             }
         };
-        result.map_err(|error| error.to_string())
+        result.map_err(|error| DiffFailure::Unobservable(error.to_string().into()))
     })
-    .await;
-    let value = match observed {
-        Ok(Ok(value)) => value,
-        Ok(Err(error)) => return respond::<Value>(Err(error.into()), cookies),
-        Err(error) => return respond::<Value>(Err(Box::new(error)), cookies),
-    };
-    let scope = state.with_database(|database| read_task(database, &user_id, &task_id));
-    respond(scope.map(|_| value), cookies)
+    .await
+    .map_err(|error| DiffFailure::Internal(Box::new(error)))?
 }
 
 #[cfg(test)]

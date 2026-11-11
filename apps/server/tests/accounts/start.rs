@@ -90,6 +90,14 @@ mod tests {
 
     const DOWNLOADS: [&str; 4] = ["/download"; 4];
 
+    /// What the cookie keeps from ATTRIBUTION, in query order: click IDs and
+    /// UTM values, not `_gl`, `visitor`, or `consent`.
+    const COOKIE_ATTRIBUTION: &str =
+        "gclid=Cj0K-abc_1&fbclid=IwAR-x.y&utm_source=getsuplex&utm_campaign=launch+week";
+    /// The same values on the account, in column order.
+    const ACCOUNT_ATTRIBUTION: &str =
+        "utm_source=getsuplex&utm_campaign=launch+week&gclid=Cj0K-abc_1&fbclid=IwAR-x.y";
+
     #[tokio::test]
     async fn start_pages_keep_the_incoming_query_in_every_link() {
         let f = Fixture::new().await;
@@ -151,9 +159,18 @@ mod tests {
             )
             .await;
         assert_eq!(authorize.status(), 303);
+        assert_eq!(
+            cookie(&authorize, "suplex_attribution"),
+            format!("suplex_attribution={COOKIE_ATTRIBUTION}")
+        );
 
         // The login leaves suplex.sh. `/start/done` gets the query from the cookie.
         let finished = f.sign_in(&attempt, "google", None).await;
+        // The callback has no cookie here; the attempt kept the attribution.
+        assert_eq!(
+            f.account_attribution("ada@example.com").as_deref(),
+            Some(ACCOUNT_ATTRIBUTION)
+        );
         let location = finished.headers()["location"].to_str().unwrap().to_owned();
         assert_eq!(location, format!("/start/done?attempt={attempt}"));
         let done = f.get(&location, &[("cookie", &kept)]).await;
@@ -205,6 +222,10 @@ mod tests {
             .post_form(path, &[("attempt", &attempt), ("email", "ada@example.com")])
             .await;
         assert_eq!(sent.status(), 200);
+        assert_eq!(
+            cookie(&sent, "suplex_attribution"),
+            format!("suplex_attribution={COOKIE_ATTRIBUTION}")
+        );
         let html = sent.text().await.unwrap();
         assert!(html.contains("Check your email"), "{html}");
         assert_kept(&html, &["/start"]);
@@ -226,9 +247,14 @@ mod tests {
         let token = link
             .strip_prefix(&format!("{ORIGIN}/auth/email/verify?token="))
             .unwrap();
+        // The link opens in another browser: no cookie. The attempt kept the attribution.
         let verified = f.post_form("/auth/email/verify", &[("token", token)]).await;
         let location = verified.headers()["location"].to_str().unwrap().to_owned();
         assert_eq!(location, format!("/start/done?attempt={attempt}"));
+        assert_eq!(
+            f.account_attribution("ada@example.com").as_deref(),
+            Some(ACCOUNT_ATTRIBUTION)
+        );
         let done = f.get(&location, &[("cookie", &kept)]).await;
         assert_kept(&done.text().await.unwrap(), &DOWNLOADS);
     }

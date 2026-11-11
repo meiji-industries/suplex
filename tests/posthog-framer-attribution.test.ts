@@ -243,7 +243,7 @@ function open(window: HappyWindow, selector: string, type: "click" | "auxclick" 
   const event = type === "submit"
     ? new window.Event("submit", { bubbles: true, cancelable: true })
     : new window.MouseEvent(type, { bubbles: true, cancelable: true, button: type === "auxclick" ? 1 : type === "contextmenu" ? 2 : 0 });
-  element.dispatchEvent(event as unknown as Event);
+  element.dispatchEvent(event);
   return href(window, selector);
 }
 

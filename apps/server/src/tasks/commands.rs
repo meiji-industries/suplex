@@ -896,6 +896,21 @@ pub fn cancel_user_task(
     Ok(cancelled)
 }
 
+/// The Coordinator stops its own task after the user chose to stop. The bridge
+/// already checked that the caller is the current Coordinator of this task.
+/// The host scan finds the stop request; the task activity names Suplex.
+pub fn cancel_task_for_coordinator(
+    database: &mut SuplexDatabase,
+    task_id: &str,
+    now: DateTime<Utc>,
+) -> DatabaseResult<()> {
+    if !root_session_store::cancel_task(database, task_id, now)? {
+        return Err(TaskError::new("This task cannot be cancelled", 409).into());
+    }
+    let cancelled = repository::task_by_id(database, task_id)?.ok_or_else(TaskError::not_found)?;
+    system_audit(database, "task_cancelled", &cancelled, now)
+}
+
 /// Send a human note to an active Root, or resume the retained Root of a
 /// delivered task. The targeted host wake follows the durable prompt commit.
 pub fn send_user_note(

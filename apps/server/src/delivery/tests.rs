@@ -785,18 +785,13 @@ async fn direct_merge_completes_and_stale_local_pull_request_is_replaced() {
         .await
         .unwrap();
     // A stale cached pull request never blocks: GitHub's current match replaces it.
-    operations
-        .set_pull_request(
-            &fixture.task_id,
-            Some(&crate::tasks::control::PullRequestReference {
-                repository: "owner/repo".into(),
-                number: 1,
-                url: "https://github.com/owner/repo/pull/1".into(),
-                head_sha: "f".repeat(40),
-                state: crate::tasks::control::PullRequestState::Closed,
-                merged_at: None,
-            }),
-            true,
+    // The cache row is written directly; GitHub never reported this state.
+    SuplexDatabase::open(&fixture.database_path, OpenMode::ReadWrite)
+        .unwrap()
+        .connection()
+        .execute(
+            "UPDATE suplex_task_controls SET pull_request_json = json_set(pull_request_json, '$.headSha', ?1, '$.state', 'closed') WHERE task_id = ?2",
+            rusqlite::params!["f".repeat(40), fixture.task_id],
         )
         .unwrap();
     let observed = operations.observe(&fixture.task_id).await.unwrap().unwrap();
@@ -2368,4 +2363,61 @@ async fn a_merge_queue_wait_with_an_unknown_baseline_wakes_once_github_settles()
     case.set_pull(json!({"mergeable": "MERGEABLE", "mergeStateStatus": "CLEAN"}));
     case.assert_wakes_once("settled").await;
     case.cleanup();
+}
+
+#[tokio::test]
+async fn a_pull_request_closed_without_a_merge_asks_the_user_once() {
+    use crate::tasks::control::TaskStatus;
+    let (case, _, _) = reviewed_pull().await;
+    let task_id = case.fixture.task_id.as_str();
+    case.fake.lock().unwrap().pulls[0]["state"] = json!("closed");
+    case.operations.observe(task_id).await.unwrap();
+    let asked = control(&case.fixture);
+    assert_eq!(asked.status, TaskStatus::WaitingHuman);
+    assert_eq!(
+        asked.human_question.as_deref(),
+        Some("Pull request #1 is closed and was not merged. Do you want to stop this task?")
+    );
+    // The user continues. The same closed state does not ask again.
+    case.answer(&asked.human_question_id.unwrap()).unwrap();
+    case.operations.observe(task_id).await.unwrap();
+    let continued = control(&case.fixture);
+    assert_eq!(continued.status, TaskStatus::Active);
+    assert_eq!(continued.human_question, None);
+    case.cleanup();
+}
+
+#[tokio::test]
+async fn a_closed_pull_request_without_a_recorded_open_state_asks_nothing() {
+    let (case, _, _) = reviewed_pull().await;
+    // The local observation is missing, as after a restart or a reset.
+    case.execute("UPDATE suplex_task_controls SET pull_request_json = NULL WHERE task_id = ?1");
+    case.fake.lock().unwrap().pulls[0]["state"] = json!("closed");
+    let _ = case.operations.observe(&case.fixture.task_id).await;
+    assert_eq!(
+        control(&case.fixture).status,
+        crate::tasks::control::TaskStatus::Active
+    );
+    case.cleanup();
+}
+
+#[tokio::test]
+async fn the_coordinator_stops_its_task_and_no_idle_wake_follows() {
+    let fixture = fixture("merged");
+    let mut database = SuplexDatabase::open(&fixture.database_path, OpenMode::ReadWrite).unwrap();
+    let result =
+        crate::coordination::root_controller::stop_task(&mut database, &fixture.root).unwrap();
+    assert_eq!(result["status"], "cancelled");
+    assert_eq!(
+        control(&fixture).status,
+        crate::tasks::control::TaskStatus::Cancelled
+    );
+    assert!(
+        root_session_store::wake_idle_root(&mut database, &fixture.task_id, "Observe", Utc::now())
+            .unwrap()
+            .is_none()
+    );
+    // A Coordinator of a stopped task is not current; it cannot stop it again.
+    assert!(crate::coordination::root_controller::stop_task(&mut database, &fixture.root).is_err());
+    std::fs::remove_dir_all(&fixture.base).unwrap();
 }

@@ -91,8 +91,8 @@ The AARRR dashboard uses the following evidence:
 | --- | --- | --- |
 | Acquisition | consented website `$pageview`, browser-local first source, and last campaign | attribution is bounded to the current browser; it is not cross-device identity |
 | Activation | `project_created` → `task_started` → `task_delivered` | grouped by the native host installation |
-| Retention | weekly return to `task_started` | this measures native task activity |
-| Referral proxy | `membership_added` | collaboration proxy only; it does not prove an invitation or referral |
+| Retention | weekly return to `task_started` | this measures native task activity; `task_started` uses the host person, so group retention by the `host` group, not by person |
+| Referral proxy | `membership_added` | collaboration proxy; `via=invitation` marks an accepted invitation, not a referral |
 | Revenue | production `billing_invoice_paid`, `amount_paid_minor`, and `currency` from verified Stripe webhooks | Stripe minor-unit totals grouped by currency; not MRR |
 
 The dashboard does not label invoice cash as MRR, ARR, churn, or ARPA. Exact

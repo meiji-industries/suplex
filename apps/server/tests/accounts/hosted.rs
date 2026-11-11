@@ -455,4 +455,85 @@ mod tests {
         crate::accounts::hosted::store::insert_attempt(&db, "a", "c", "i", crate::accounts::wire::LoginClient::Web, "1", "3").unwrap();
         assert_eq!(crate::accounts::hosted::store::find_attempt(&db, "a", "2").unwrap().unwrap().client, crate::accounts::wire::LoginClient::Web);
     }
+
+    /// The first campaign visit is kept for the signup; the outbox sends it with the processor pass.
+    #[tokio::test]
+    async fn a_signup_carries_first_touch_attribution_and_the_processor_sends_it() {
+        let f = Fixture::new().await;
+        let entry = f
+            .get(
+                "/start?utm_source=newsletter&utm_medium=email&utm_campaign=launch&utm_term=ai%20agents&gclid=click-1",
+                &[("referer", "https://News.Example.com/post/42?reader=ada@example.com")],
+            )
+            .await;
+        assert_eq!(entry.status(), 200);
+        let cookie = entry
+            .headers()
+            .get_all("set-cookie")
+            .iter()
+            .filter_map(|value| value.to_str().ok())
+            .find(|value| value.starts_with("suplex_attribution="))
+            .expect("the first visit keeps its attribution")
+            .split(';')
+            .next()
+            .unwrap()
+            .to_owned();
+        // A later visit with other parameters keeps the first touch.
+        let later = f
+            .get("/start?utm_source=other", &[("cookie", cookie.as_str())])
+            .await;
+        assert!(
+            later
+                .headers()
+                .get_all("set-cookie")
+                .iter()
+                .all(|value| !value.to_str().unwrap().starts_with("suplex_attribution="))
+        );
+        let (attempt, _) = f.attempt().await;
+        assert_eq!(f.sign_in(&attempt, "google", Some(&cookie)).await.status(), 303);
+        let (attempt, _) = f.attempt().await;
+        assert_eq!(f.sign_in(&attempt, "google", Some(&cookie)).await.status(), 303);
+        let events = f.events();
+        assert_eq!(
+            events.iter().map(|event| event.0.as_str()).collect::<Vec<_>>(),
+            ["account_signed_up", "account_logged_in"]
+        );
+        assert_eq!(
+            events[0].2,
+            json!({
+                "$lib": "suplex-hosted",
+                "provider": "google",
+                "$groups": {"host": INSTALLATION},
+                "$set": {"email": "ada@example.com"},
+                "utm_source": "newsletter",
+                "utm_medium": "email",
+                "utm_campaign": "launch",
+                "utm_term": "ai agents",
+                "referring_domain": "news.example.com",
+            })
+        );
+        assert!(events[1].2.get("utm_source").is_none());
+
+        // The processor pass delivers the outbox to PostHog once.
+        f.answer("POST /batch/", 200, "{}");
+        f.accounts.hosted.run_processor_pass().await.unwrap();
+        let batches = f.calls("/batch/");
+        assert_eq!(batches.len(), 1);
+        let body: serde_json::Value = serde_json::from_slice(&batches[0].body).unwrap();
+        assert_eq!(body["api_key"], "phc_test");
+        let sent = body["batch"].as_array().unwrap();
+        let signed_up = sent
+            .iter()
+            .find(|event| event["event"] == "account_signed_up")
+            .unwrap();
+        assert_eq!(signed_up["properties"]["utm_source"], "newsletter");
+        assert_eq!(signed_up["properties"]["$groups"]["host"], INSTALLATION);
+        assert!(sent.iter().any(|event| event["event"] == "account_logged_in"));
+        assert_eq!(
+            f.count("SELECT COUNT(*) FROM billing_telemetry_events WHERE sent_at IS NULL"),
+            0
+        );
+        f.accounts.hosted.run_processor_pass().await.unwrap();
+        assert_eq!(f.calls("/batch/").len(), 1);
+    }
 }

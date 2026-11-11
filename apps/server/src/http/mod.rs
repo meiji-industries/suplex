@@ -29,6 +29,7 @@ use crate::terminals::host::HostTerminals;
 
 pub mod access;
 pub mod agent_api_runtime;
+pub(crate) mod agent_telemetry;
 pub mod contracts;
 pub mod error;
 mod logging;
@@ -278,6 +279,10 @@ pub fn router(state: AppState) -> Router {
         .method_not_allowed_fallback(not_found)
         .fallback(not_found)
         .layer(axum::middleware::from_fn(panics::contain))
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            agent_telemetry::observe,
+        ))
         .layer(axum::middleware::from_fn(access::cookie_refresh))
         .layer(axum::middleware::from_fn(logging::request))
         .layer(axum::middleware::from_fn_with_state(

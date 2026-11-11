@@ -21,6 +21,7 @@ use crate::{
 };
 use providers::{Endpoints, Profile};
 
+pub mod attribution;
 pub mod delete;
 pub mod email_updates;
 pub mod invitations;
@@ -257,6 +258,7 @@ impl Accounts {
         code: &str,
         state: &str,
         visitor: Option<&str>,
+        attribution: Option<&attribution::Attribution>,
     ) -> HostedResult<String> {
         let config = self.config()?;
         if provider == AuthProvider::Email || !token_shape(state) || code.is_empty() {
@@ -276,7 +278,7 @@ impl Accounts {
             &self.redirect_uri(provider),
         )
         .await?;
-        self.complete(&attempt_id, provider, profile, visitor)
+        self.complete(&attempt_id, provider, profile, visitor, attribution)
     }
 
     /// Sends a magic link for the attempt. Five sends per address per hour.
@@ -294,7 +296,7 @@ impl Accounts {
         {
             let profile = Profile { email, name: None };
             return self
-                .complete(&body.attempt_id, AuthProvider::Email, profile, None)
+                .complete(&body.attempt_id, AuthProvider::Email, profile, None, None)
                 .map(Some);
         }
         let token = random_token().map_err(internal)?;
@@ -339,7 +341,12 @@ impl Accounts {
         Ok(None)
     }
 
-    pub fn verify_magic_link(&self, token: &str, visitor: Option<&str>) -> HostedResult<String> {
+    pub fn verify_magic_link(
+        &self,
+        token: &str,
+        visitor: Option<&str>,
+        attribution: Option<&attribution::Attribution>,
+    ) -> HostedResult<String> {
         self.config()?;
         if !token_shape(token) {
             return Err(expired());
@@ -350,7 +357,13 @@ impl Accounts {
             .query(|db| store::consume_magic_link(db, &sha256_hex(token), &now))?
             .ok_or_else(expired)?;
         let profile = Profile { email, name: None };
-        self.complete(&attempt_id, AuthProvider::Email, profile, visitor)
+        self.complete(
+            &attempt_id,
+            AuthProvider::Email,
+            profile,
+            visitor,
+            attribution,
+        )
     }
 
     /// Binds the account to the attempt. Signup and login differ only in
@@ -362,6 +375,7 @@ impl Accounts {
         provider: AuthProvider,
         profile: Profile,
         visitor: Option<&str>,
+        attribution: Option<&attribution::Attribution>,
     ) -> HostedResult<String> {
         let email = normalize_email(&profile.email).ok_or_else(providers::unverified)?;
         let name = profile
@@ -391,17 +405,20 @@ impl Accounts {
             } else {
                 "account_logged_in"
             };
-            self.track(
-                db,
-                event,
-                &account.id,
-                json!({
-                    "$lib": "suplex-hosted",
-                    "provider": provider,
-                    "$groups": {"host": attempt.installation_id},
-                    "$set": {"email": email},
-                }),
-            )?;
+            let mut properties = json!({
+                "$lib": "suplex-hosted",
+                "provider": provider,
+                "$groups": {"host": attempt.installation_id},
+                "$set": {"email": email},
+            });
+            // First-touch campaign attribution belongs to the signup only.
+            if created
+                && let (Some(attribution), Value::Object(properties)) =
+                    (attribution, &mut properties)
+            {
+                properties.extend(attribution.properties());
+            }
+            self.track(db, event, &account.id, properties)?;
             if let Some(visitor) = visitor {
                 self.track(
                     db,

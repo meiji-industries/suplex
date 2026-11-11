@@ -15,7 +15,7 @@
 use axum::{
     Form, Router,
     extract::{Query, RawQuery, State},
-    http::{HeaderMap, StatusCode, header},
+    http::{HeaderMap, StatusCode, Uri, header},
     response::{Html, IntoResponse, Redirect, Response},
     routing::{get, post},
 };
@@ -179,10 +179,10 @@ struct StartQuery {
 async fn start(
     State(accounts): State<Accounts>,
     Query(query): Query<StartQuery>,
-    RawQuery(raw): RawQuery,
+    uri: Uri,
     headers: HeaderMap,
 ) -> Response {
-    let forward = forwarded(raw.as_deref());
+    let forward = forwarded(uri.query());
     let mut response = if query.plan.as_deref() == Some("pro") {
         let mut response = trial_login(&accounts, query.with.as_deref() == Some("email"), &forward);
         remember_query(&accounts, &headers, &forward, &mut response);
@@ -202,6 +202,12 @@ async fn start(
         &accounts,
         &headers,
         query.visitor.as_deref(),
+        &mut response,
+    );
+    super::attribution::remember(
+        &accounts.hosted.config.origin,
+        &headers,
+        uri.query(),
         &mut response,
     );
     response

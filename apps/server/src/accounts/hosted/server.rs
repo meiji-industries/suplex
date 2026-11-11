@@ -4,7 +4,7 @@
 use axum::{
     Form, Json, Router,
     extract::{DefaultBodyLimit, Path, Query, Request, State},
-    http::{HeaderMap, HeaderValue, StatusCode, header},
+    http::{HeaderMap, HeaderValue, StatusCode, Uri, header},
     middleware::{self, Next},
     response::{Html, IntoResponse, Redirect, Response},
     routing::{get, post},
@@ -12,7 +12,7 @@ use axum::{
 use serde::Deserialize;
 use serde_json::Value;
 
-use super::{Accounts, visitor_cookie};
+use super::{Accounts, attribution::Attribution, visitor_cookie};
 use crate::{
     accounts::wire::{
         AuthAttemptBody, AuthAttemptResponse, AuthEmailBody, AuthPollBody, AuthProvider,
@@ -97,18 +97,30 @@ struct StartQuery {
     provider: Option<String>,
 }
 
-async fn start(State(accounts): State<Accounts>, Query(query): Query<StartQuery>) -> Response {
+async fn start(
+    State(accounts): State<Accounts>,
+    Query(query): Query<StartQuery>,
+    uri: Uri,
+    headers: HeaderMap,
+) -> Response {
     let (Some(attempt), Some(provider)) = (
         query.attempt,
         query.provider.as_deref().and_then(AuthProvider::parse),
     ) else {
         return page(Err(super::invalid()));
     };
-    page(
+    let mut response = page(
         accounts
             .start_oauth(&attempt, provider)
             .map(|url| Redirect::to(&url).into_response()),
-    )
+    );
+    super::attribution::remember(
+        &accounts.hosted.config.origin,
+        &headers,
+        uri.query(),
+        &mut response,
+    );
+    response
 }
 
 #[derive(Deserialize)]
@@ -129,7 +141,13 @@ async fn callback(
         return page(Err(super::invalid()));
     };
     let finished = accounts
-        .finish_oauth(provider, &code, &state, visitor_cookie(&headers))
+        .finish_oauth(
+            provider,
+            &code,
+            &state,
+            visitor_cookie(&headers),
+            Attribution::from_cookie(&headers).as_ref(),
+        )
         .await;
     page(finished.map(done))
 }
@@ -160,7 +178,11 @@ async fn verify(
     let token = form.token.unwrap_or_default();
     page(
         accounts
-            .verify_magic_link(&token, visitor_cookie(&headers))
+            .verify_magic_link(
+                &token,
+                visitor_cookie(&headers),
+                Attribution::from_cookie(&headers).as_ref(),
+            )
             .map(done),
     )
 }

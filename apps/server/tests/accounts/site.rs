@@ -135,16 +135,32 @@ mod tests {
             })
         );
 
+        // A link from `/start` brings its whole attribution query.
+        let linked = f
+            .get(
+                "/download?platform=macos-arm64&_gl=1*abc&gclid=Cj0K&utm_source=getsuplex&consent=granted&visitor=0190a1b2-c3d4-7e5f",
+                &[],
+            )
+            .await;
+        assert_eq!(linked.status(), 302);
+        assert!(
+            linked.headers()["set-cookie"]
+                .to_str()
+                .unwrap()
+                .starts_with("suplex_visitor=0190a1b2-c3d4-7e5f;")
+        );
+        assert_eq!(f.events().len(), 2);
+
         let invalid = f.get("/download?visitor=short", &[]).await;
         assert!(invalid.headers().get("set-cookie").is_none());
-        assert_eq!(f.events()[1].2["source"], "browser");
+        assert_eq!(f.events()[2].2["source"], "browser");
 
         let dnt = f
             .get("/download?visitor=0190a1b2-c3d4-7e5f", &[("dnt", "1")])
             .await;
         assert_eq!(dnt.status(), 302);
         assert!(dnt.headers().get("set-cookie").is_none());
-        assert_eq!(f.events().len(), 2);
+        assert_eq!(f.events().len(), 3);
     }
 
     #[tokio::test]
@@ -186,6 +202,46 @@ mod tests {
             location(&f, "/pricing", &[]).await,
             (302, "https://getsuplex.ai/".to_owned())
         );
+        // The website shows a consent choice made here. GPC never carries `granted`.
+        for (path, headers, website) in [
+            (
+                "/?consent=granted",
+                &[][..],
+                "https://getsuplex.ai/?consent=granted",
+            ),
+            (
+                "/pricing?_gl=1*abc&consent=denied",
+                &[][..],
+                "https://getsuplex.ai/?consent=denied",
+            ),
+            ("/?consent=granted%22%3E", &[][..], "https://getsuplex.ai/"),
+            (
+                "/?consent=granted",
+                &[("sec-gpc", "1")][..],
+                "https://getsuplex.ai/",
+            ),
+            (
+                "/?consent=denied",
+                &[("sec-gpc", "1")][..],
+                "https://getsuplex.ai/?consent=denied",
+            ),
+        ] {
+            assert_eq!(
+                location(&f, path, headers).await,
+                (302, website.to_owned()),
+                "{path}"
+            );
+        }
+        let consent = f.get("/consent.js", &[]).await;
+        assert_eq!(consent.status(), 200);
+        assert_eq!(
+            consent.headers()["content-type"],
+            "text/javascript; charset=utf-8"
+        );
+        assert_eq!(consent.headers()["cache-control"], "public, max-age=300");
+        let consent = consent.text().await.unwrap();
+        assert!(consent.contains("suplex.analytics.consent.v1"));
+        assert!(consent.contains("Suplex collects usage data to improve the product."));
         for (path, title, policy) in [
             ("/terms", "Suplex terms of service", "14-day first-purchase guarantee"),
             ("/privacy", "Suplex privacy policy", "separately and explicitly opt in"),
@@ -200,6 +256,8 @@ mod tests {
             assert!(html.contains("Meiji Heavy Industries, Inc."));
             assert!(!html.contains("not yet published"));
             assert!(!html.contains("[CONFIRM"));
+            // The banner, and the `consent` choice on the link to getsuplex.ai.
+            assert!(html.contains("<script src=\"/consent.js\" defer></script>"));
         }
     }
 }

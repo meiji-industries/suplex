@@ -238,9 +238,10 @@ mod tests {
             f.poll(&attempt, &verifier).await,
             (200, json!({"status": "pending"}))
         );
-        let bad = f.get("/auth/email/verify?token=<script>", &[]).await;
+        let bad = f.get("/auth/email/verify?token=<script>bad()", &[]).await;
         assert_eq!(bad.status(), 400);
-        assert!(!bad.text().await.unwrap().contains("<script>"));
+        // The page has its own scripts (Google Tag Manager); the token is not one of them.
+        assert!(!bad.text().await.unwrap().contains("<script>bad"));
 
         let verified = f.post_form("/auth/email/verify", &[("token", token)]).await;
         assert_eq!(verified.status(), 303);

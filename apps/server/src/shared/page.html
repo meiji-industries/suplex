@@ -2,6 +2,35 @@
 <html lang="en">
   <head>
     <meta charset="utf-8">
+<!-- Suplex: consent defaults + Google Tag Manager (managed by Ads bot) -->
+<script>
+window.dataLayer = window.dataLayer || [];
+function gtag(){dataLayer.push(arguments);}
+gtag('consent', 'default', {ad_storage:'denied', ad_user_data:'denied', ad_personalization:'denied', analytics_storage:'denied', wait_for_update: 500});
+(function(){
+  var KEY = 'suplex.analytics.consent.v1', last;
+  function check(){
+    var v = null;
+    try { v = window.localStorage.getItem(KEY); } catch (e) {}
+    if (navigator.globalPrivacyControl === true) v = 'denied';
+    if (v === last) return;
+    last = v;
+    if (v === 'granted') {
+      gtag('consent', 'update', {ad_storage:'granted', ad_user_data:'granted', ad_personalization:'granted'});
+      dataLayer.push({event:'suplex_consent_granted'});
+    }
+  }
+  check();
+  setInterval(check, 1000);
+})();
+</script>
+<script>(function(w,d,s,l,i){w[l]=w[l]||[];w[l].push({'gtm.start':
+new Date().getTime(),event:'gtm.js'});var f=d.getElementsByTagName(s)[0],
+j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src=
+'https://www.googletagmanager.com/gtm.js?id='+i+dl;f.parentNode.insertBefore(j,f);
+})(window,document,'script','dataLayer','GTM-N739QG5C');</script>
+<!-- End Google Tag Manager -->
+    <script src="/consent.js" defer></script>
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="color-scheme" content="dark">
     <meta name="referrer" content="no-referrer">
@@ -58,6 +87,10 @@
     </style>
   </head>
   <body>
+<!-- Google Tag Manager (noscript) -->
+<noscript><iframe src="https://www.googletagmanager.com/ns.html?id=GTM-N739QG5C"
+height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
+<!-- End Google Tag Manager (noscript) -->
     <main>
       <div class="art"><img src="/start/background.png" alt=""></div>
       <div class="panel">

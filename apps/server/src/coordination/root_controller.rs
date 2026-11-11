@@ -1178,6 +1178,25 @@ pub fn ask_human(
     )?)
 }
 
+/// The user chose to stop: the Coordinator cancels its own task, so no idle
+/// wake follows. Git, GitHub, and the worktree stay as they are.
+pub fn stop_task(database: &mut SuplexDatabase, root: &RootIdentity) -> DatabaseResult<Value> {
+    root_session_store::assert_current_root(
+        database,
+        &root.task_id,
+        &root.session_id,
+        root.generation,
+    )?;
+    crate::tasks::commands::cancel_task_for_coordinator(
+        database,
+        &root.task_id,
+        chrono::Utc::now(),
+    )?;
+    Ok(
+        json!({"status":"cancelled","next":"End this Coordinator turn now. Suplex stops this session."}),
+    )
+}
+
 const PLAN_APPROVAL_NEXT: &str = "End this Coordinator turn now. Suplex sends the user's answer as a new turn on this same session. Do not delegate Worker before the user approves the plan.";
 
 /// Approve then build: record the plan and wait for the user to approve it.

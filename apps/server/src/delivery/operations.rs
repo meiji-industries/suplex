@@ -614,15 +614,28 @@ impl DeliveryOperations {
                 serde_json::to_value(pull).map(|pull| crate::shared::js_json::stringify(&pull))
             })
             .transpose()?;
-        let changed = database.transaction(true, |database| {
-            let status: Option<TaskStatus> = database
+        let (changed, closed_now) = database.transaction(true, |database| {
+            let (status, recorded): (Option<TaskStatus>, Option<String>) = database
                 .connection()
                 .query_row(
-                    "SELECT status FROM suplex_task_controls WHERE task_id = ?1",
+                    "SELECT status, pull_request_json FROM suplex_task_controls WHERE task_id = ?1",
                     [task_id],
-                    |row| row.get(0),
+                    |row| Ok((row.get(0)?, row.get(1)?)),
                 )
-                .optional()?;
+                .optional()?
+                .unwrap_or_default();
+            // GitHub reports that the open pull request of an active task
+            // closed without a merge. Only the first such observation counts.
+            let closed_now = status == Some(TaskStatus::Active)
+                && pull.is_some_and(|pull| {
+                    pull.state == PullRequestState::Closed
+                        && recorded
+                            .and_then(|raw| serde_json::from_str::<PullRequestReference>(&raw).ok())
+                            .is_some_and(|before| {
+                                before.number == pull.number
+                                    && before.state == PullRequestState::Open
+                            })
+                });
             if let Some(pull) = pull.filter(|_| claim)
                 && matches!(status, Some(TaskStatus::Active | TaskStatus::WaitingHuman))
             {
@@ -633,13 +646,31 @@ impl DeliveryOperations {
                     pull.number as i64,
                 )?;
             }
-            Ok(database.connection().execute(
+            let changed = database.connection().execute(
                 "UPDATE suplex_task_controls SET pull_request_json = ?1, updated_at = ?2 WHERE task_id = ?3 AND status IN ('active', 'waiting_human', 'delivered', 'cancelled')",
                 params![value, crate::shared::time::now_millis_rfc3339(), task_id],
-            )?)
+            )?;
+            Ok((changed, closed_now))
         })?;
         if changed != 1 {
             return Err(DeliveryError::internal("task_not_active").into());
+        }
+        if let Some(pull) = pull.filter(|_| closed_now) {
+            // Whether to stop or continue is the user's decision. The answer
+            // returns to the Coordinator, which can call stop_task.
+            root_session_store::ask_human(
+                &mut database,
+                task_id,
+                &format!(
+                    "Pull request #{} is closed and was not merged. Do you want to stop this task?",
+                    pull.number
+                ),
+                &json!([
+                    {"label": "Stop the task", "description": "Suplex cancels the task. The worktree and the branch stay as they are.", "recommended": true},
+                    {"label": "Continue the task", "description": "The Coordinator continues the work. It can open a new pull request.", "recommended": false},
+                ]),
+                Utc::now(),
+            )?;
         }
         Ok(())
     }

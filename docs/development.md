@@ -72,6 +72,12 @@ pnpm test
 pnpm run test:rust
 ```
 
+`test:rust` requires [cargo-nextest](https://nexte.st). Install it with
+`cargo install cargo-nextest --locked`. The test scripts build the server with
+`SUPLEX_DEV_EMBED_FRONTEND=0`, the same value the development stack uses, so
+tests and `mise run dev` share one build. The fixtures read the frontend from
+`apps/web/dist`.
+
 Use the narrower projects when you need them:
 
 ```sh

@@ -22,6 +22,10 @@ debug = "line-tables-only"
 # Keep local edit/rebuild cycles incremental; the wrapper caches eligible dependencies.
 incremental = true
 
+# Unoptimized SQLite made each test's migrated database cost about one second.
+[profile.dev.package.libsqlite3-sys]
+opt-level = 3
+
 # Xcode 27 hides swift-rs's runtime exports, so the iOS link fails (Brendonovich/swift-rs#81).
 # Pinned to the fix in Brendonovich/swift-rs#82; drop this once a swift-rs release includes it.
 [patch.crates-io]

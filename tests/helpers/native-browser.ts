@@ -129,7 +129,8 @@ export async function nativeFixture(host = "127.0.0.1", reachableAddress?: strin
     await git("git", ["-C", repositoryPath, "remote", "add", "origin", "https://github.com/owner/repo.git"]);
     await git("git", ["-C", repositoryPath, "config", `url.file://${bare}.insteadOf`, "https://github.com/owner/repo.git"]);
     await git("git", ["-C", repositoryPath, "push", "--quiet", "origin", "main"]);
-    database = new DatabaseSync(databasePath);
+    // The running server writes to this database. Wait for its lock, as the server does.
+    database = new DatabaseSync(databasePath, { timeout: 5_000 });
     const project = { id: "project_browser", companyId: company.id, name: "Repository", repository: "owner/repo", repositoryPath, worktreeRoot, rootProfileId: "profile_native_root", workerProfileId: "profile_native_worker" };
     const now = new Date().toISOString();
     database.prepare("INSERT INTO suplex_projects (id,company_id,name,repository_path,worktree_root,repository_identity,base_branch,setup_command,verification_command,root_profile_id,worker_profile_id,created_at,updated_at) VALUES (?,?,?,?,?,?,'main','','',?,?,?,?)")

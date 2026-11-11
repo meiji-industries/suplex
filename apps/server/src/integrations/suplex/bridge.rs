@@ -69,7 +69,11 @@ impl Bridge {
     pub fn new(settings: Settings) -> Self {
         Self {
             settings,
-            client: reqwest::Client::new(),
+            // A fixed client header: the host counts `suplex mcp` use by version only.
+            client: reqwest::Client::builder()
+                .user_agent(crate::telemetry::agent::bridge_user_agent())
+                .build()
+                .unwrap_or_default(),
         }
     }
 

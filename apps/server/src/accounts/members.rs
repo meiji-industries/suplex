@@ -167,7 +167,23 @@ pub fn accept(
             if invitations == 0 { return Err(PublicFailure::new(403, "The invitation expired or was removed").into()); }
             database.connection().execute("UPDATE suplex_account_users SET account_id = ?2 WHERE user_id = ?1", params![id, account.id])?;
             database.connection().execute("UPDATE suplex_users SET status = 'active', updated_at = ?2 WHERE id = ?1", params![id, timestamp])?;
+            // Accepting an invitation adds the membership the invitation reserved.
+            let joined = database.connection().prepare("SELECT DISTINCT company_id FROM suplex_company_invitations WHERE user_id = ?1 AND revoked_at IS NULL AND sent_at IS NOT NULL AND accepted_at IS NULL AND expires_at > ?2 ORDER BY company_id")?
+                .query_map(params![id, timestamp], |row| row.get::<_, String>(0))?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
             database.connection().execute("UPDATE suplex_company_invitations SET accepted_at = ?2 WHERE user_id = ?1 AND revoked_at IS NULL AND sent_at IS NOT NULL AND accepted_at IS NULL AND expires_at > ?2", params![id, timestamp])?;
+            for company_id in &joined {
+                crate::identity::audit::record(database, &crate::identity::audit::AuditEvent {
+                    id: &random_hex_id("audit")?,
+                    actor_user_id: Some(&id),
+                    actor_agent_id: None,
+                    action: "membership_added",
+                    target_user_id: Some(&id),
+                    company_id: Some(company_id),
+                    metadata_json: r#"{"via":"invitation"}"#,
+                    created_at: &timestamp,
+                })?;
+            }
             id
         };
         let token = auth::create_session_with_provenance(database, &user_id, "automatic", now)?;
@@ -325,6 +341,9 @@ mod tests {
             let token = accept(db, &invited, now).unwrap();
             let user = auth::get_user_by_session(db, &token, now).unwrap().unwrap();
             assert_eq!(user.company_ids, vec!["company_test"]);
+            // Joining records the membership once, for telemetry's `membership_added`.
+            let joined = |db: &SuplexDatabase, user_id: &str| db.connection().query_row("SELECT COUNT(*) FROM suplex_audit_events WHERE action = 'membership_added' AND company_id = 'company_test' AND actor_user_id = ?1 AND target_user_id = ?1 AND metadata_json = '{\"via\":\"invitation\"}'", [user_id], |row| row.get::<_, i64>(0)).unwrap();
+            assert_eq!(joined(db, &user.id), 1);
             assert!(session_verified(db, &token, &user).unwrap());
             assert_eq!(super::super::linked(db).unwrap().unwrap().account_id, owner.id);
             // After the member deletes the Suplex account, a new account for the same email logs in again; the old session no longer verifies.
@@ -333,6 +352,7 @@ mod tests {
             let same = auth::get_user_by_session(db, &again, now).unwrap().unwrap();
             assert_eq!(same.id, user.id);
             assert!(session_verified(db, &again, &same).unwrap());
+            assert_eq!(joined(db, &same.id), 1, "logging in again adds no membership");
             assert!(!session_verified(db, &token, &same).unwrap());
             // Current membership remains authoritative even when a session survives restart.
             crate::billing::tests::grant_team(db);

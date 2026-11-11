@@ -9,7 +9,7 @@
 use axum::{
     Form, Router,
     extract::{Query, State},
-    http::{HeaderMap, StatusCode, header},
+    http::{HeaderMap, StatusCode, Uri, header},
     response::{Html, IntoResponse, Redirect, Response},
     routing::{get, post},
 };
@@ -61,6 +61,7 @@ struct StartQuery {
 async fn start(
     State(accounts): State<Accounts>,
     Query(query): Query<StartQuery>,
+    uri: Uri,
     headers: HeaderMap,
 ) -> Response {
     let mut response = if query.plan.as_deref() == Some("pro") {
@@ -78,6 +79,12 @@ async fn start(
         &accounts,
         &headers,
         query.visitor.as_deref(),
+        &mut response,
+    );
+    super::attribution::remember(
+        &accounts.hosted.config.origin,
+        &headers,
+        uri.query(),
         &mut response,
     );
     response

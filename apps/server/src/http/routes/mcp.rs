@@ -109,6 +109,11 @@ async fn mcp(State(state): State<AppState>, request: Request) -> Response {
     else {
         return unauthorized();
     };
+    crate::http::agent_telemetry::authenticated(
+        &principal.agent_id,
+        &principal.company_id,
+        principal.profile_id.as_deref(),
+    );
     let agent_delivery = agent_api::delivery(&state).is_some();
     let runtime_state = state.clone();
     let service = StreamableHttpService::new(

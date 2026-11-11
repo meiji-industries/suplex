@@ -15,7 +15,7 @@ use crate::{
     http::{
         contracts::typed::auth::{
             CompanyIdParams, CompanyIssueCodeBody, CompanyNameBody, CompanyStatusParams,
-            MembershipAccessBody, MembershipBody, MembershipParams,
+            MembershipAccessBody, MembershipBody, MembershipParams, OnboardingCompletionParams,
         },
         validation::{Valid, ValidPath},
     },
@@ -64,6 +64,10 @@ pub fn router() -> Router<AppState> {
         .route(
             "/api/admin/companies/{company_id}/members",
             post(add_membership),
+        )
+        .route(
+            "/api/admin/companies/{company_id}/onboarding/{outcome}",
+            post(complete_onboarding),
         )
         .route(
             "/api/admin/companies/{company_id}/members/{user_id}",
@@ -199,6 +203,26 @@ async fn status(
         StatusCode::OK,
         |database, user| {
             companies::set_company_status(database, &user.id, &company_id, status, Utc::now())
+        },
+    )
+}
+
+/// The onboarding wizard's finish. It records `onboarding_completed` once per company.
+async fn complete_onboarding(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    ValidPath(OnboardingCompletionParams {
+        company_id,
+        outcome,
+    }): ValidPath<OnboardingCompletionParams>,
+) -> Response {
+    respond(
+        &state,
+        &headers,
+        Some("POST"),
+        StatusCode::NO_CONTENT,
+        |database, user| {
+            companies::complete_onboarding(database, &user.id, &company_id, outcome, Utc::now())
         },
     )
 }

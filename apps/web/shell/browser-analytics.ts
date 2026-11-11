@@ -11,8 +11,36 @@ export type BrowserAnalyticsContext = {
   platform: "desktop" | "mobile" | "browser";
 };
 
-const staticSegments = new Set(["access", "admin", "agents", "analytics", "api", "api-mcp", "auth", "backups", "billing", "board", "companies", "environment", "health", "moves", "notice", "onboarding", "profile", "projects", "providers", "settings", "setup", "tasks", "telemetry", "templates", "terminal", "timeline", "today", "triggers", "workflows"]);
-const apiErrorCodes = new Set(["authentication_required", "request_origin_invalid", "administrator_required", "billing_unavailable", "forbidden", "not_found", "validation_failed", "conflict"]);
+/**
+ * Static route segments: the app's screens and every static segment of the
+ * server's `/api` and `/mcp` route table (`apps/server/src/http/routes`). A test
+ * checks this list against that table. Anything else is an identifier.
+ */
+const staticSegments = new Set([
+  "access", "account", "activity", "admin", "agent", "agents", "analytics", "answer", "answer-grant", "api",
+  "api-mcp", "approvals", "approve", "apps", "archive", "artifacts", "audit", "auth", "avatars", "backlog",
+  "backups", "billing", "board", "cancel", "capabilities", "change", "check", "checkout", "checks",
+  "client-lifecycle", "commands", "companies", "company_invite", "consent", "continue-delivery", "decision",
+  "defaults", "delivery", "deny", "dependencies", "device", "diff", "disarm", "disconnect", "duplicate",
+  "email-updates", "environment", "exchange", "execution", "experiments", "external-agents", "factory-reset",
+  "force-start", "github", "github-labels", "github-triggers", "health", "herdr", "hermes", "hermes-agents",
+  "history", "images", "install", "invitations", "issue", "issue-code", "issues", "key", "licenses", "live",
+  "local-endpoints", "log", "login", "logout", "mcp", "me", "members", "merge", "merge-train", "models",
+  "move-recommendations", "move-runs", "move-to-front", "moves", "moves-grant", "note", "notice", "oauth",
+  "onboarding", "open", "openapi.json", "pair", "pairing", "pairing-code", "pane", "poll", "portal",
+  "profile", "profiles", "projects", "provenance", "provider-instances", "provider-login", "providers",
+  "quick-shell", "recent-repositories", "refresh", "rename", "repair", "replace-coordinator",
+  "replace-worker", "repositories", "repository-defaults", "repository-owners", "repository-status",
+  "restart", "restore", "revoke", "role", "rotate", "runs", "save-as-template", "select-agent", "sessions",
+  "settings", "setup", "sign-out", "start", "status", "subscription", "summary", "sync", "system",
+  "task-agents", "task-costs", "task-sources", "task-templates", "tasks", "telemetry", "templates",
+  "terminal", "test", "timeline", "today", "transcript", "transcripts-grant", "transfer", "trial",
+  "triggers", "turns", "unarchive", "update", "users", "web-push", "workflows", "worktree",
+]);
+/** Generated identifiers: `prefix_hex`, `prefix-hex`, UUIDs, numbers, and long hex. */
+const idShape = /^(?:[a-z]+(?:[_-][a-z]+)*[_-][0-9a-f]{6,}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|\d+|[0-9a-f]{12,})$/i;
+const apiErrorCodes = new Set(["authentication_required", "request_origin_invalid", "administrator_required", "billing_unavailable", "forbidden", "not_found", "resource_not_found", "validation_failed", "conflict", "request_invalid", "revision_stale", "illegal_command", "command_in_progress", "plan_limit_reached", "company_read_only", "membership_duplicate", "last_admin", "rate_limited", "payload_too_large", "unsupported_media_type", "internal_error"]);
+const httpMethods = new Set(["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"]);
 
 let client: PostHog | undefined;
 let initializedKey: string | undefined;
@@ -25,10 +53,11 @@ let refreshTimer: number | undefined;
 let routeStartedAt = Date.now();
 let lastScreenScope: string | undefined;
 
+/** The route template of a path: static segments stay, identifiers and other text become `:id`. */
 export function sanitizeRoute(pathname: string): string {
   const segments = pathname.split("/").filter(Boolean).map((segment) => {
     const decoded = (() => { try { return decodeURIComponent(segment); } catch { return segment; } })();
-    return staticSegments.has(decoded) ? decoded : ":id";
+    return !idShape.test(decoded) && staticSegments.has(decoded) ? decoded : ":id";
   });
   return `/${segments.join("/")}` || "/";
 }
@@ -252,13 +281,15 @@ export function captureReactError(kind: "uncaught" | "caught" | "recoverable", e
   captureBrowserException(error, { mechanism: `react.${kind}` });
 }
 
-function captureApiFailure({ url, status, code }: { url: string; status: number; code?: string }): void {
+function captureApiFailure({ url, method, status, code }: { url: string; method?: string; status: number; code?: string }): void {
   if (!client || !currentTelemetry?.enabled) return;
   let pathname = "/";
   try { pathname = new URL(url, window.location.origin).pathname; } catch { /* Use the root route. */ }
+  const upper = method?.toUpperCase() ?? "GET";
   client.capture("api_request_failed", {
     ...baseProperties(),
     api_route: sanitizeRoute(pathname),
+    http_method: httpMethods.has(upper) ? upper : "OTHER",
     status,
     error_code: code && apiErrorCodes.has(code) ? code : "unknown",
   });

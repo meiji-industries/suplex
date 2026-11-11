@@ -493,7 +493,14 @@ pub(crate) fn authenticate(
         .map(crate::identity::auth::js_trim)
         .filter(|token| !token.is_empty())
         .ok_or_else(external_agents::authentication_failure)?;
-    state.with_database(|database| external_agents::authenticate(database, token, Utc::now()))
+    let principal = state
+        .with_database(|database| external_agents::authenticate(database, token, Utc::now()))?;
+    crate::http::agent_telemetry::authenticated(
+        &principal.agent_id,
+        &principal.company_id,
+        principal.profile_id.as_deref(),
+    );
+    Ok(principal)
 }
 
 fn bearer(state: &AppState, headers: &HeaderMap, runtime: bool) -> Result<Principal, Rejection> {

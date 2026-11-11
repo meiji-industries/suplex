@@ -15,7 +15,11 @@ const sdk = vi.hoisted(() => {
 vi.mock("posthog-js", () => ({ default: sdk.posthog, posthog: sdk.posthog }));
 
 import type { TelemetryResponse } from "../contracts/generated/TelemetryResponse.js";
-import { applyTelemetry, captureBrowserException, captureReactError, sanitizeRoute, updateBrowserAnalyticsContext } from "../shell/browser-analytics.js";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { resolve } from "node:path";
+
+import { readJson } from "../lib/api.js";
+import { applyTelemetry, captureBrowserException, captureReactError, installBrowserAnalytics, sanitizeRoute, updateBrowserAnalyticsContext } from "../shell/browser-analytics.js";
 
 function active(overrides: Partial<TelemetryResponse> = {}): TelemetryResponse {
   return {
@@ -45,6 +49,33 @@ beforeEach(() => {
 test("sanitizes route identifiers", () => {
   expect(sanitizeRoute("/tasks/task_secret")).toBe("/tasks/:id");
   expect(sanitizeRoute("/admin/environment")).toBe("/admin/environment");
+});
+
+test("routes keep their static segments and replace identifiers", () => {
+  expect(sanitizeRoute("/api/agent/tasks/task_0123abcd")).toBe("/api/agent/tasks/:id");
+  expect(sanitizeRoute("/api/agent/pairing/exchange")).toBe("/api/agent/pairing/exchange");
+  expect(sanitizeRoute("/api/tasks/task_0123abcd/commands")).toBe("/api/tasks/:id/commands");
+  expect(sanitizeRoute("/api/tasks/task_0123abcd/turns/turn_45ef6789/transcript")).toBe("/api/tasks/:id/turns/:id/transcript");
+  expect(sanitizeRoute("/api/companies/company_0123abcd/projects")).toBe("/api/companies/:id/projects");
+  expect(sanitizeRoute("/api/admin/external-agents/agent_0123abcd/pairing-code")).toBe("/api/admin/external-agents/:id/pairing-code");
+  // Identifier shapes win even when the text matches a static segment.
+  expect(sanitizeRoute("/api/tasks/550e8400-e29b-41d4-a716-446655440000")).toBe("/api/tasks/:id");
+  expect(sanitizeRoute("/api/tasks/42")).toBe("/api/tasks/:id");
+  expect(sanitizeRoute("/projects/Acme%20Secret/templates")).toBe("/projects/:id/templates");
+});
+
+test("every static segment of the server route table is kept", () => {
+  const directory = [resolve(process.cwd(), "../server/src/http/routes"), resolve(process.cwd(), "apps/server/src/http/routes")].find(existsSync)!;
+  const segments = new Set<string>();
+  for (const file of readdirSync(directory).filter(name => name.endsWith(".rs"))) {
+    const source = readFileSync(resolve(directory, file), "utf8");
+    for (const [, route] of source.matchAll(/"((?:\/api\/|\/mcp|\{prefix\}\/)[^"]*)"/g)) {
+      for (const segment of route!.split("/")) if (segment && !segment.startsWith("{")) segments.add(segment);
+    }
+  }
+  expect(segments.size).toBeGreaterThan(100);
+  const dropped = [...segments].filter(segment => sanitizeRoute(`/api/${segment}`) !== `/api/${segment}` && !/[0-9a-f]{6,}$/.test(segment));
+  expect(dropped).toEqual([]);
 });
 
 test("loads PostHog only for active consent and stops immediately after opt out", async () => {
@@ -194,4 +225,28 @@ test("exceptions are not captured without consent", async () => {
   captureBrowserException(new Error("x"), { mechanism: "onerror" });
   captureReactError("uncaught", new Error("x"));
   expect(sdk.posthog.captureException).not.toHaveBeenCalled();
+});
+
+// Last: installing analytics initializes the shared PostHog client.
+test("api failures carry the route template, method, status, and an allowlisted code", async () => {
+  const fetch = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+    const url = String(input);
+    if (url === "/api/telemetry") return new Response(JSON.stringify(active()), { status: 200 });
+    if (url.includes("commands")) return new Response(JSON.stringify({ error: "Task revision is stale for Secret title", code: "revision_stale" }), { status: 412 });
+    return new Response(JSON.stringify({ error: "Secret detail", code: "Secret detail" }), { status: 400 });
+  });
+  const uninstall = installBrowserAnalytics();
+  try {
+    await vi.waitFor(() => expect(sdk.posthog.opt_in_capturing).toHaveBeenCalled());
+    await expect(readJson("/api/tasks/task_0123abcd/commands?company=company_1", { method: "post", body: "{}" })).rejects.toThrow();
+    await expect(readJson("/api/companies/company_0123abcd/projects")).rejects.toThrow();
+    const failures = sdk.posthog.capture.mock.calls.filter(([event]) => event === "api_request_failed").map(([, properties]) => properties as Record<string, unknown>);
+    expect(failures).toHaveLength(2);
+    expect(failures[0]).toMatchObject({ api_route: "/api/tasks/:id/commands", http_method: "POST", status: 412, error_code: "revision_stale" });
+    expect(failures[1]).toMatchObject({ api_route: "/api/companies/:id/projects", http_method: "GET", status: 400, error_code: "unknown" });
+    expect(JSON.stringify(failures)).not.toMatch(/Secret|task_0123abcd|company_1/);
+  } finally {
+    uninstall();
+    fetch.mockRestore();
+  }
 });

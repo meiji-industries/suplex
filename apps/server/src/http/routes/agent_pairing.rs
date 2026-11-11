@@ -53,11 +53,18 @@ async fn exchange(State(state): State<AppState>, headers: HeaderMap, bytes: Byte
     if !session::csrf_allowed(&state.session_config, &headers, "POST", false) {
         return auth::error(StatusCode::FORBIDDEN, "request_origin_invalid");
     }
+    // Only a `suplex-mcp/<version>` client header gives a version; other header text is not kept.
+    let client_version = crate::telemetry::agent::client_version(
+        headers
+            .get(header::USER_AGENT)
+            .and_then(|value| value.to_str().ok()),
+    );
     match state.with_database(|database| {
-        external_agents::exchange(
+        external_agents::exchange_from_client(
             database,
             &request.pairing_code,
             request.profile_id.as_deref(),
+            client_version.as_deref(),
             Utc::now(),
         )
     }) {

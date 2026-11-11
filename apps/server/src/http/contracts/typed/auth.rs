@@ -108,6 +108,21 @@ impl Contract for CompanyStatusParams {
             .finish()
     }
 }
+/// How onboarding ended for a company.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OnboardingCompletionParams {
+    pub company_id: String,
+    pub outcome: crate::identity::companies::OnboardingOutcome,
+}
+impl Contract for OnboardingCompletionParams {
+    fn schema(input: Option<&Value>) -> ContractResult<Value> {
+        Fields::new(input)?
+            .req("companyId", text(1, 256))
+            .req("outcome", one_of(&["first_task", "skipped"]))
+            .finish()
+    }
+}
 /// `CompanyIdParamsSchema.merge(UserIdParamsSchema)`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

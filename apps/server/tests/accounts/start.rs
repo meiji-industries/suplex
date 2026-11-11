@@ -45,7 +45,7 @@ mod tests {
     /// Each link keeps every attribution pair once, and its own keys.
     fn assert_kept(html: &str, paths: &[&str]) -> Vec<url::Url> {
         let links = links(html);
-        let mut found: Vec<&str> = links.iter().map(|link| link.path()).collect();
+        let mut found: Vec<&str> = links.iter().map(url::Url::path).collect();
         found.sort_unstable();
         let mut expected = paths.to_vec();
         expected.sort_unstable();

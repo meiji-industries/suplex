@@ -939,6 +939,13 @@ process.on("SIGTERM", () => server.close(() => process.exit(0)));
             .process_group(0)
             .spawn()
             .unwrap();
+        // Right after spawn the kernel may not have set argv yet, and identity is unknowable.
+        for _ in 0..100 {
+            if crate::runtimes::process::inspect_process(child.id()).is_some() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
         let reused = reference(child.id(), "/repo", "replacement");
         stop_server(&reused).unwrap();
         std::thread::sleep(Duration::from_millis(100));

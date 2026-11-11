@@ -448,12 +448,95 @@ mod tests {
 
     #[test]
     fn apply_schema_adds_the_client_column_to_an_older_database() {
+        use crate::accounts::hosted::{attribution::Attribution, store};
         let db = rusqlite::Connection::open_in_memory().unwrap();
-        db.execute_batch("CREATE TABLE accounts (id TEXT PRIMARY KEY); CREATE TABLE account_attempts (id TEXT PRIMARY KEY, challenge TEXT NOT NULL, installation_id TEXT NOT NULL, provider TEXT, provider_state TEXT UNIQUE, account_id TEXT, created_at TEXT NOT NULL, expires_at TEXT NOT NULL)").unwrap();
-        crate::accounts::hosted::store::apply_schema(&db).unwrap();
-        crate::accounts::hosted::store::apply_schema(&db).unwrap();
-        crate::accounts::hosted::store::insert_attempt(&db, "a", "c", "i", crate::accounts::wire::LoginClient::Web, "1", "3").unwrap();
-        assert_eq!(crate::accounts::hosted::store::find_attempt(&db, "a", "2").unwrap().unwrap().client, crate::accounts::wire::LoginClient::Web);
+        db.execute_batch("PRAGMA foreign_keys = ON; CREATE TABLE accounts (id TEXT PRIMARY KEY, email TEXT NOT NULL UNIQUE, name TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL); CREATE TABLE account_attempts (id TEXT PRIMARY KEY, challenge TEXT NOT NULL, installation_id TEXT NOT NULL, provider TEXT, provider_state TEXT UNIQUE, account_id TEXT, created_at TEXT NOT NULL, expires_at TEXT NOT NULL); INSERT INTO accounts VALUES ('user_1', 'ada@example.com', NULL, '1', '1'); INSERT INTO account_attempts (id, challenge, installation_id, created_at, expires_at) VALUES ('old', 'c', 'i', '1', '3')").unwrap();
+        store::apply_schema(&db).unwrap();
+        store::apply_schema(&db).unwrap();
+        store::insert_attempt(&db, "a", "c", "i", crate::accounts::wire::LoginClient::Web, "1", "3").unwrap();
+        assert_eq!(store::find_attempt(&db, "a", "2").unwrap().unwrap().client, crate::accounts::wire::LoginClient::Web);
+        // An attempt from before the upgrade has no attribution.
+        let old = store::find_attempt(&db, "old", "2").unwrap().unwrap();
+        assert_eq!(old.client, crate::accounts::wire::LoginClient::Desktop);
+        assert!(old.attribution.is_empty());
+        let attribution = Attribution::decode("utm_source=ads&gclid=g-1");
+        store::set_attempt_attribution(&db, "old", &attribution, "2").unwrap();
+        assert_eq!(store::find_attempt(&db, "old", "2").unwrap().unwrap().attribution, attribution);
+        // An account from before the upgrade has no attribution, and can get one once.
+        assert_eq!(store::find_account_attribution(&db, "user_1").unwrap(), None);
+        store::insert_account_attribution(&db, "user_1", &attribution, "2").unwrap();
+        store::insert_account_attribution(&db, "user_1", &Attribution::decode("utm_source=other"), "3").unwrap();
+        assert_eq!(store::find_account_attribution(&db, "user_1").unwrap(), Some(attribution));
+        // A value written outside Suplex is checked again when read.
+        db.execute("UPDATE account_attribution SET utm_medium = 'bad<value>', fbclid = 'f b'", []).unwrap();
+        assert_eq!(store::find_account_attribution(&db, "user_1").unwrap().unwrap().encode(), "utm_source=ads&gclid=g-1");
+        // Deleting the account deletes its attribution.
+        db.execute("DELETE FROM accounts WHERE id = 'user_1'", []).unwrap();
+        assert_eq!(db.query_row("SELECT COUNT(*) FROM account_attribution", [], |row| row.get::<_, i64>(0)).unwrap(), 0);
+    }
+
+    /// The OAuth callback stores the cookie's click IDs and UTM values on a
+    /// new account. A later login keeps them as they are; PostHog gets no click ID.
+    #[tokio::test]
+    async fn an_oauth_signup_keeps_consented_click_ids_on_the_account() {
+        let f = Fixture::new().await;
+        let entry = f
+            .get(
+                "/start?utm_source=ads&utm_medium=cpc&gclid=Cj0K-test_1&gbraid=gb.1&wbraid=wb~1&msclkid=ms-1&fbclid=fb_1&consent=granted",
+                &[],
+            )
+            .await;
+        let cookie = entry
+            .headers()
+            .get_all("set-cookie")
+            .iter()
+            .filter_map(|value| value.to_str().ok())
+            .find(|value| value.starts_with("suplex_attribution="))
+            .unwrap()
+            .split(';')
+            .next()
+            .unwrap()
+            .to_owned();
+        let kept = "utm_source=ads&utm_medium=cpc&gclid=Cj0K-test_1&gbraid=gb.1&wbraid=wb%7E1&msclkid=ms-1&fbclid=fb_1";
+        assert_eq!(cookie, format!("suplex_attribution={kept}"));
+        let (attempt, _) = f.attempt().await;
+        assert_eq!(f.sign_in(&attempt, "google", Some(&cookie)).await.status(), 303);
+        assert_eq!(f.account_attribution("ada@example.com").as_deref(), Some(kept));
+        let events = f.events();
+        assert_eq!(events[0].0, "account_signed_up");
+        assert_eq!(events[0].2["utm_source"], "ads");
+        assert!(!events[0].2.to_string().contains("Cj0K"), "{}", events[0].2);
+
+        // A login with another campaign does not change the account.
+        let (attempt, _) = f.attempt().await;
+        let other = "suplex_attribution=utm_source=other&gclid=other-1";
+        assert_eq!(f.sign_in(&attempt, "github", Some(other)).await.status(), 303);
+        assert_eq!(f.events()[1].0, "account_logged_in");
+        assert_eq!(f.account_attribution("ada@example.com").as_deref(), Some(kept));
+        assert_eq!(f.count("SELECT COUNT(*) FROM account_attribution"), 1);
+    }
+
+    /// A signup request with `Sec-GPC: 1` keeps the UTM values but no click ID.
+    #[tokio::test]
+    async fn a_signup_with_a_privacy_signal_keeps_no_click_id() {
+        let f = Fixture::new().await;
+        let (attempt, _) = f.attempt().await;
+        let authorize = f.start(&attempt, "google").await;
+        let state = crate::accounts::hosted::fakes::query(&authorize, "state").unwrap();
+        let response = f
+            .get(
+                &format!("/auth/callback/google?code=code-1&state={state}"),
+                &[
+                    ("cookie", "suplex_attribution=utm_source=ads&gclid=g-1"),
+                    ("sec-gpc", "1"),
+                ],
+            )
+            .await;
+        assert_eq!(response.status(), 303);
+        assert_eq!(
+            f.account_attribution("ada@example.com").as_deref(),
+            Some("utm_source=ads")
+        );
     }
 
     /// The first campaign visit is kept for the signup; the outbox sends it with the processor pass.
@@ -513,6 +596,11 @@ mod tests {
             })
         );
         assert!(events[1].2.get("utm_source").is_none());
+        // Without `consent=granted` the click ID was not kept.
+        assert_eq!(
+            f.account_attribution("ada@example.com").as_deref(),
+            Some("utm_source=newsletter&utm_medium=email&utm_campaign=launch&utm_term=ai+agents&referring_domain=news.example.com")
+        );
 
         // The processor pass delivers the outbox to PostHog once.
         f.answer("POST /batch/", 200, "{}");

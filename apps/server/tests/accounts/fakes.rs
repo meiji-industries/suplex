@@ -212,6 +212,21 @@ impl Fixture {
             .unwrap()
     }
 
+    /// The attribution kept for the account with `email`, as URL-encoded pairs.
+    pub fn account_attribution(&self, email: &str) -> Option<String> {
+        self.accounts
+            .hosted
+            .query(|db| {
+                let id: String =
+                    db.query_row("SELECT id FROM accounts WHERE email = ?1", [email], |row| {
+                        row.get(0)
+                    })?;
+                account_store::find_account_attribution(db, &id)
+            })
+            .unwrap()
+            .map(|attribution| attribution.encode())
+    }
+
     /// Queued PostHog events as (event, distinct_id, properties).
     pub fn events(&self) -> Vec<(String, String, Value)> {
         self.accounts

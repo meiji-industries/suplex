@@ -183,8 +183,11 @@ async fn start(
     headers: HeaderMap,
 ) -> Response {
     let forward = forwarded(uri.query());
+    let mut attempt = None;
     let mut response = if query.plan.as_deref() == Some("pro") {
-        let mut response = trial_login(&accounts, query.with.as_deref() == Some("email"), &forward);
+        let (mut response, created) =
+            trial_login(&accounts, query.with.as_deref() == Some("email"), &forward);
+        attempt = created;
         remember_query(&accounts, &headers, &forward, &mut response);
         response
     } else {
@@ -204,16 +207,20 @@ async fn start(
         query.visitor.as_deref(),
         &mut response,
     );
-    super::attribution::remember(
+    let attribution = super::attribution::remember(
         &accounts.hosted.config.origin,
         &headers,
         uri.query(),
         &mut response,
     );
+    if let Some(attempt) = attempt {
+        accounts.note_attribution(&attempt, &attribution);
+    }
     response
 }
 
-fn trial_login(accounts: &Accounts, email_form: bool, forward: &str) -> Response {
+/// The login page and the attempt it started.
+fn trial_login(accounts: &Accounts, email_form: bool, forward: &str) -> (Response, Option<String>) {
     let attempt = random_token().ok().and_then(|verifier| {
         accounts
             .create_attempt(&AuthAttemptBody {
@@ -224,7 +231,7 @@ fn trial_login(accounts: &Accounts, email_form: bool, forward: &str) -> Response
             .ok()
     });
     let Some(attempt) = attempt else {
-        return html(
+        let page = html(
             StatusCode::SERVICE_UNAVAILABLE,
             "Log in is not available",
             &message(
@@ -233,6 +240,7 @@ fn trial_login(accounts: &Accounts, email_form: bool, forward: &str) -> Response
                 &downloads(forward),
             ),
         );
+        return (page, None);
     };
     let content = if email_form {
         format!(
@@ -255,7 +263,10 @@ fn trial_login(accounts: &Accounts, email_form: bool, forward: &str) -> Response
             terms(forward),
         )
     };
-    html(StatusCode::OK, "Start your Pro trial", &content)
+    (
+        html(StatusCode::OK, "Start your Pro trial", &content),
+        Some(attempt),
+    )
 }
 
 #[derive(Deserialize)]
@@ -267,6 +278,7 @@ struct EmailForm {
 async fn email(
     State(accounts): State<Accounts>,
     RawQuery(raw): RawQuery,
+    headers: HeaderMap,
     Form(form): Form<EmailForm>,
 ) -> Response {
     let forward = forwarded(raw.as_deref());
@@ -274,7 +286,27 @@ async fn email(
         attempt_id: form.attempt.unwrap_or_default(),
         email: form.email.unwrap_or_default(),
     };
-    match accounts.send_magic_link(&body).await {
+    // The attempt keeps the attribution before the link is sent, so a link
+    // opened in another browser still brings it to the signup.
+    let mut cookies = Response::default();
+    let attribution = super::attribution::remember(
+        &accounts.hosted.config.origin,
+        &headers,
+        raw.as_deref(),
+        &mut cookies,
+    );
+    accounts.note_attribution(&body.attempt_id, &attribution);
+    let mut response = send_email(&accounts, &body, &forward).await;
+    for cookie in cookies.headers().get_all(header::SET_COOKIE) {
+        response
+            .headers_mut()
+            .append(header::SET_COOKIE, cookie.clone());
+    }
+    response
+}
+
+async fn send_email(accounts: &Accounts, body: &AuthEmailBody, forward: &str) -> Response {
+    match accounts.send_magic_link(body).await {
         Ok(Some(next)) => Redirect::to(&next).into_response(),
         Ok(None) => html(
             StatusCode::OK,
@@ -287,7 +319,7 @@ async fn email(
                 ),
                 &format!(
                     "<a class=\"button outline\" href=\"{}\">Cancel</a>",
-                    link("/start?plan=pro", &forward)
+                    link("/start?plan=pro", forward)
                 ),
             ),
         ),
@@ -297,7 +329,7 @@ async fn email(
             &message(
                 "Suplex did not send the link",
                 "The login attempt expired, or Suplex limits login emails. Retry later.",
-                &retry(&forward),
+                &retry(forward),
             ),
         ),
     }

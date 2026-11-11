@@ -88,7 +88,8 @@ account token is minted at poll time, so no plaintext token rests in SQLite.
 | Table | Rows |
 | --- | --- |
 | `accounts` | `user_<uuid>`, unique email, optional name. |
-| `account_attempts` | Challenge, installation ID, provider and OAuth state, the completed account. Swept one hour after expiry. |
+| `account_attribution` | The first-touch campaign of a new account: the five UTM values, `referring_domain`, and the click IDs `gclid`, `gbraid`, `wbraid`, `msclkid`, and `fbclid`. Written once, at signup; a later login never changes it. Deleted with the account. Read it with `store::find_account_attribution`. |
+| `account_attempts` | Challenge, installation ID, provider and OAuth state, the browser's attribution, the completed account. Swept one hour after expiry. |
 | `account_magic_links` | Token hash, attempt, email, `used_at`. Deleted with their attempt. |
 | `account_tokens` | Token hash, account, installation. |
 | `company_invitations` | Invitation hash, owner account, company, recipient, host address, expiry, and delivery time. |
@@ -96,7 +97,9 @@ account token is minted at poll time, so no plaintext token rests in SQLite.
 | `account_resend_outbox` | Resend contact changes, events, and contact deletions to send, by email. Retried with backoff and never dropped. Keeps the latest sent contact change per email; a sent deletion removes every row for its email. Not deleted with the account. |
 
 At startup the service also upgrades an older `account_email_updates` table to
-accept the `email` source. It rebuilds the table and keeps every row and ID.
+accept the `email` source. It rebuilds the table and keeps every row and ID. It
+adds missing `account_attempts` columns (`client`, `attribution`) to an older
+database.
 
 ### Product update emails
 
@@ -262,8 +265,9 @@ when `BILLING_TELEMETRY=true` and `BILLING_POSTHOG_KEY` are set.
 - A completed login queues `account_signed_up` or `account_logged_in` with
   `distinct_id` = account ID, `$lib=suplex-hosted`, `provider`,
   `$groups.host` = installation ID, and `$set.email`.
-- The Framer snippet adds the consented PostHog distinct ID as
-  `?visitor=` to `suplex.sh/start` and `suplex.sh/download` links. `/start`
+- With consent, the Framer snippet adds the PostHog distinct ID as
+  `?visitor=` to each `https://suplex.sh` link and form
+  ([PostHog](posthog.md#links-to-suplexsh)). `/start`
   and `/download` keep a valid value
   (`^[A-Za-z0-9._:-]{8,64}$`) in the first-party cookie `suplex_visitor` for a
   year, unless the request sends `DNT: 1`. When the login callback sees that
@@ -292,8 +296,40 @@ without the query. Logins from the app do not use the cookie.
 
 This cookie only rebuilds links. It is separate from `suplex_visitor` (the
 PostHog visitor for `$identify`) and `suplex_attribution` (the 30-day first-touch
-UTM values for `account_signed_up`, [telemetry](telemetry.md)). One `/start`
-response can set all three; each is its own `Set-Cookie` header.
+campaign for the signup). One `/start` response can set all three; each is its
+own `Set-Cookie` header.
+
+### Signup attribution
+
+`/download`, `/start`, `/start/email`, and `/auth/start` keep campaign values in
+`suplex_attribution` (`apps/server/src/accounts/hosted/attribution.rs`):
+
+- The five UTM values and the referring hostname, as before. A request with
+  `DNT: 1` adds nothing.
+- The click IDs `gclid`, `gbraid`, `wbraid`, `msclkid`, and `fbclid`, only when
+  the query has `consent=granted` and the request has no `DNT: 1` or
+  `Sec-GPC: 1` header. Each is 1 to 256 letters, digits, or `._~-`; another
+  value is dropped. `consent=denied`, `DNT: 1`, or `Sec-GPC: 1` removes kept
+  click IDs from the cookie.
+- Each value is first touch. The UTM values and the referrer are one touch: a
+  later visit adds them only when the cookie has none. A later visit can add a
+  missing click ID, so a cookie with only UTM values can gain a `gclid`. A kept
+  value is never replaced. Each read checks every value again, so a forged
+  cookie keeps only valid known fields.
+
+`/start?plan=pro`, `/start/email`, and `/auth/start` also copy these values to
+the login attempt (`account_attempts.attribution`). When the login creates an
+account, through the OAuth callback or `/auth/email/verify`, the service
+writes the cookie's values, then the attempt's missing values, to
+`account_attribution`. So an email link opened in another browser keeps the
+campaign. A login to an existing account changes nothing, and a signup request
+with `Sec-GPC: 1` or `DNT: 1` stores no click ID from the cookie.
+
+`account_signed_up` carries the UTM values and `referring_domain`
+([telemetry](telemetry.md)). Click IDs are not sent to PostHog; they stay on the
+account row for ad conversion uploads. Stripe Checkout sessions do not carry
+them: checkout belongs to a billing account, which is usually a company, not
+the person whose browser signed up.
 
 These pages, the login and billing pages, and the legal pages load Google Tag
 Manager (`GTM-N739QG5C`, except the legal pages) and the shared consent banner.

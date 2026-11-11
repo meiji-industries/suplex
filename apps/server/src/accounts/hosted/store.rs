@@ -4,6 +4,7 @@
 use rusqlite::{Connection, OptionalExtension, params};
 use serde_json::Value;
 
+use super::attribution::{Attribution, FIELDS};
 use crate::accounts::wire::{AuthProvider, HostedAccount, LoginClient};
 
 const SCHEMA: &str = include_str!("schema.sql");
@@ -11,16 +12,34 @@ const SCHEMA: &str = include_str!("schema.sql");
 /// Creates the account tables and upgrades the tables an older database has.
 pub fn apply_schema(db: &Connection) -> rusqlite::Result<()> {
     db.execute_batch(SCHEMA)?;
-    // Two ad hoc upgrades, no migration runner. Add one at the third.
-    let has_client = db
-        .prepare("SELECT 1 FROM pragma_table_info('account_attempts') WHERE name = 'client'")?
-        .exists([])?;
-    if !has_client {
-        db.execute_batch(
-            "ALTER TABLE account_attempts ADD COLUMN client TEXT NOT NULL DEFAULT 'desktop'",
-        )?;
-    }
+    // Ad hoc upgrades, no migration runner. A new table needs none: SCHEMA
+    // creates it. A new column needs an `add_column` line.
+    add_column(
+        db,
+        "account_attempts",
+        "client",
+        "TEXT NOT NULL DEFAULT 'desktop'",
+    )?;
+    add_column(db, "account_attempts", "attribution", "TEXT")?;
     allow_email_source(db)
+}
+
+/// Adds `column` to `table` when an older database does not have it.
+fn add_column(
+    db: &Connection,
+    table: &str,
+    column: &str,
+    definition: &str,
+) -> rusqlite::Result<()> {
+    let exists = db
+        .prepare("SELECT 1 FROM pragma_table_info(?1) WHERE name = ?2")?
+        .exists(params![table, column])?;
+    if !exists {
+        db.execute_batch(&format!(
+            "ALTER TABLE {table} ADD COLUMN {column} {definition}"
+        ))?;
+    }
+    Ok(())
 }
 
 /// SQLite cannot change a CHECK constraint, so a table without the `email`
@@ -53,6 +72,8 @@ pub struct Attempt {
     pub installation_id: String,
     pub account_id: Option<String>,
     pub client: LoginClient,
+    /// Checked again when read.
+    pub attribution: Attribution,
 }
 
 pub fn insert_attempt(
@@ -74,7 +95,7 @@ pub fn insert_attempt(
 /// An attempt that has not expired.
 pub fn find_attempt(db: &Connection, id: &str, now: &str) -> rusqlite::Result<Option<Attempt>> {
     db.query_row(
-        "SELECT challenge, installation_id, account_id, client FROM account_attempts WHERE id = ?1 AND expires_at > ?2",
+        "SELECT challenge, installation_id, account_id, client, attribution FROM account_attempts WHERE id = ?1 AND expires_at > ?2",
         params![id, now],
         |row| {
             Ok(Attempt {
@@ -82,10 +103,28 @@ pub fn find_attempt(db: &Connection, id: &str, now: &str) -> rusqlite::Result<Op
                 installation_id: row.get(1)?,
                 account_id: row.get(2)?,
                 client: row.get(3)?,
+                attribution: row
+                    .get::<_, Option<String>>(4)?
+                    .map(|raw| Attribution::decode(&raw))
+                    .unwrap_or_default(),
             })
         },
     )
     .optional()
+}
+
+/// Replaces the attribution of an attempt that has not completed.
+pub fn set_attempt_attribution(
+    db: &Connection,
+    id: &str,
+    attribution: &Attribution,
+    now: &str,
+) -> rusqlite::Result<()> {
+    db.execute(
+        "UPDATE account_attempts SET attribution = ?2 WHERE id = ?1 AND account_id IS NULL AND expires_at > ?3",
+        params![id, attribution.encode(), now],
+    )?;
+    Ok(())
 }
 
 /// Starts an OAuth round trip. A later start replaces the earlier state.
@@ -181,6 +220,52 @@ pub fn find_account(db: &Connection, id: &str) -> rusqlite::Result<HostedAccount
         [id],
         account,
     )
+}
+
+/// Keeps the attribution of a new account. An account keeps its first row.
+pub fn insert_account_attribution(
+    db: &Connection,
+    account_id: &str,
+    attribution: &Attribution,
+    now: &str,
+) -> rusqlite::Result<()> {
+    let values: Vec<Option<&str>> = FIELDS.iter().map(|key| attribution.get(key)).collect();
+    db.execute(
+        &format!(
+            "INSERT INTO account_attribution (account_id, created_at, {}) VALUES (?1, ?2, {}) ON CONFLICT(account_id) DO NOTHING",
+            FIELDS.join(", "),
+            (3..FIELDS.len() + 3).map(|index| format!("?{index}")).collect::<Vec<_>>().join(", ")
+        ),
+        rusqlite::params_from_iter(
+            [Some(account_id), Some(now)].into_iter().chain(values),
+        ),
+    )?;
+    Ok(())
+}
+
+/// The attribution kept for an account, with every value checked again.
+/// `None` when the signup brought none.
+pub fn find_account_attribution(
+    db: &Connection,
+    account_id: &str,
+) -> rusqlite::Result<Option<Attribution>> {
+    db.query_row(
+        &format!(
+            "SELECT {} FROM account_attribution WHERE account_id = ?1",
+            FIELDS.join(", ")
+        ),
+        [account_id],
+        |row| {
+            let mut pairs = Vec::new();
+            for (index, key) in FIELDS.into_iter().enumerate() {
+                if let Some(value) = row.get::<_, Option<String>>(index)? {
+                    pairs.push((key, value));
+                }
+            }
+            Ok(Attribution::from_pairs(pairs))
+        },
+    )
+    .optional()
 }
 
 pub fn insert_magic_link(

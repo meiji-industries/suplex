@@ -213,13 +213,41 @@ Set `window.SUPLEX_POSTHOG_CONFIG = { downloadVersion: "1.2.3" }` before the
 snippet when Framer has the current release version; a link-level
 `data-suplex-version` overrides it.
 
-After consent, a click on a `https://suplex.sh/download` link also sets its
-`visitor` query parameter to the visitor's PostHog distinct ID, if that ID
-matches `^[A-Za-z0-9._:-]{8,64}$`. The download service keeps it in a
-first-party `suplex_visitor` cookie on suplex.sh. A later Suplex account login
-in the same browser sends `$identify`, which joins this visitor to the account.
-See [Suplex accounts](accounts.md#posthog-identity-bridge). Without consent, or
-with a Do Not Track or Global Privacy Control signal, links get no `visitor`.
+#### Links to suplex.sh
+
+With granted consent and no Do Not Track or Global Privacy Control signal, the
+script decorates every link and form whose target origin is
+`https://suplex.sh`, not only the classified CTAs. It adds the parameters in the
+capture phase of `click`, `auxclick`, `contextmenu`, and `submit`, as the
+consent script adds `consent`. It adds:
+
+- The click IDs `gclid`, `gbraid`, `wbraid`, `msclkid`, and `fbclid`, and the
+  UTM values `utm_source`, `utm_medium`, `utm_campaign`, `utm_term`, and
+  `utm_content`, from one stored touch: the last touch when it has a campaign
+  value, else the first touch. A referrer-only last touch falls back to the
+  first touch.
+- `_gl`, from the current page URL, or else from the landing URL.
+- `visitor`, the visitor's PostHog distinct ID, when it matches
+  `^[A-Za-z0-9._:-]{8,64}$`.
+
+A parameter that the link already has is kept, never replaced. When the choice
+is withdrawn, the script removes the parameters it added. Links to other
+origins and same-site links get none of them. Without consent, or with a
+privacy signal, nothing is stored and no link gets a click ID, UTM value,
+`visitor`, or `_gl`.
+
+The script keeps the landing URL's touch and `_gl` in memory, never in
+storage, until the visitor accepts. Accept stores that touch even when Framer
+changed the URL without a reload first. A click ID over 256 characters, or with
+a character outside `A-Z`, `a-z`, `0-9`, and `._~-`, is dropped, not cut.
+
+suplex.sh keeps these values for the signup and stores them on a new account
+([Suplex accounts](accounts.md#signup-attribution)). The `/download` and
+`/start` pages keep `visitor` in a first-party `suplex_visitor` cookie. A later
+Suplex account login in the same browser sends `$identify`, which joins this
+visitor to the account. See
+[Suplex accounts](accounts.md#posthog-identity-bridge). Click IDs are not
+PostHog event properties on suplex.sh.
 
 Only the CTA label, destination hostname, platform, version, safe page fields,
 and bounded attribution fields are sent. Destination and referrer query strings

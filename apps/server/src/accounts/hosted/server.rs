@@ -114,12 +114,13 @@ async fn start(
             .start_oauth(&attempt, provider)
             .map(|url| Redirect::to(&url).into_response()),
     );
-    super::attribution::remember(
+    let attribution = super::attribution::remember(
         &accounts.hosted.config.origin,
         &headers,
         uri.query(),
         &mut response,
     );
+    accounts.note_attribution(&attempt, &attribution);
     response
 }
 
@@ -146,7 +147,7 @@ async fn callback(
             &code,
             &state,
             visitor_cookie(&headers),
-            Attribution::from_cookie(&headers).as_ref(),
+            Attribution::for_signup(&headers).as_ref(),
         )
         .await;
     page(finished.map(done))
@@ -181,7 +182,7 @@ async fn verify(
             .verify_magic_link(
                 &token,
                 visitor_cookie(&headers),
-                Attribution::from_cookie(&headers).as_ref(),
+                Attribution::for_signup(&headers).as_ref(),
             )
             .map(done),
     )

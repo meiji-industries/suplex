@@ -229,6 +229,27 @@ impl Accounts {
         Ok(id)
     }
 
+    /// Adds the browser's attribution to a login attempt that has not
+    /// completed, so the signup has it even when the magic link opens in
+    /// another browser. Kept values are not replaced. Best effort: a failure
+    /// never stops the login.
+    pub fn note_attribution(&self, attempt_id: &str, attribution: &attribution::Attribution) {
+        if attribution.is_empty() || !valid_attempt_id(attempt_id) {
+            return;
+        }
+        let now = self.hosted.now_iso();
+        let _ = self.hosted.immediate(|db| {
+            let Some(attempt) = store::find_attempt(db, attempt_id, &now)?
+                .filter(|attempt| attempt.account_id.is_none())
+            else {
+                return Ok(());
+            };
+            let mut kept = attempt.attribution;
+            kept.merge(attribution);
+            store::set_attempt_attribution(db, attempt_id, &kept, &now)
+        });
+    }
+
     /// Returns the provider authorization URL for the browser.
     pub fn start_oauth(&self, attempt_id: &str, provider: AuthProvider) -> HostedResult<String> {
         let config = self.config()?;
@@ -392,6 +413,13 @@ impl Accounts {
             };
             let (account, created) =
                 store::upsert_account(db, &candidate, &email, name.as_deref(), &now)?;
+            // The browser cookie first, then what the login attempt kept.
+            let mut attribution = attribution.cloned().unwrap_or_default();
+            attribution.merge(&attempt.attribution);
+            // First-touch attribution belongs to the signup only.
+            if created && !attribution.is_empty() {
+                store::insert_account_attribution(db, &account.id, &attribution, &now)?;
+            }
             let review = self
                 .config
                 .as_ref()
@@ -411,11 +439,8 @@ impl Accounts {
                 "$groups": {"host": attempt.installation_id},
                 "$set": {"email": email},
             });
-            // First-touch campaign attribution belongs to the signup only.
-            if created
-                && let (Some(attribution), Value::Object(properties)) =
-                    (attribution, &mut properties)
-            {
+            // UTM values and the referrer only: click IDs stay on the account row.
+            if created && let Value::Object(properties) = &mut properties {
                 properties.extend(attribution.properties());
             }
             self.track(db, event, &account.id, properties)?;

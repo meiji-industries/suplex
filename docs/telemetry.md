@@ -311,13 +311,16 @@ processor pass drains the outbox.
 
 `account_signed_up` also carries first-touch attribution when the browser has
 it: `utm_source`, `utm_medium`, `utm_campaign`, `utm_content`, `utm_term`, and
-`referring_domain`. The first visit to `/download`, `/start`, or `/auth/start`
-that has UTM parameters or a referrer from another site keeps them in the
-first-party `suplex_attribution` cookie for 30 days, next to `suplex_visitor`.
-A later visit never replaces it. Each UTM value is 1 to 64 letters, digits,
-spaces, or `._~+-`; other values are dropped. The referrer keeps its hostname
-only, never its path or query. A request with `DNT: 1` keeps nothing.
-`account_logged_in` carries no attribution. See [Suplex accounts](accounts.md).
+`referring_domain`. The first visit to `/download`, `/start`, `/start/email`,
+or `/auth/start` that has UTM parameters or a referrer from another site keeps
+them in the first-party `suplex_attribution` cookie for 30 days, next to
+`suplex_visitor`. A later visit never replaces them. Each UTM value is 1 to 64
+letters, digits, spaces, or `._~+-`; other values are dropped. The referrer
+keeps its hostname only, never its path or query. A request with `DNT: 1` keeps
+nothing. The cookie can also keep consented ad click IDs; they are stored on
+the new account and are never event properties.
+`account_logged_in` carries no attribution. See
+[Suplex accounts](accounts.md#signup-attribution).
 
 ## Billing and monetization
 

@@ -61,6 +61,13 @@ CREATE TABLE IF NOT EXISTS billing_telemetry_events (
   last_error TEXT
 );
 
+-- Each Stripe Checkout Session that /checkout/return reported to the page as a
+-- subscribe conversion. The first insert wins, so a reload reports nothing.
+CREATE TABLE IF NOT EXISTS billing_checkout_conversions (
+  session_id TEXT PRIMARY KEY,
+  created_at TEXT NOT NULL
+);
+
 CREATE UNIQUE INDEX IF NOT EXISTS billing_accounts_credential_hash_unique ON billing_accounts (credential_hash);
 CREATE UNIQUE INDEX IF NOT EXISTS billing_operations_pending_mutation_unique ON billing_operations (account_id) WHERE kind IN ('checkout', 'seat_change') AND state IN ('prepared', 'provider_pending');
 CREATE INDEX IF NOT EXISTS billing_operations_account_state ON billing_operations (account_id, state);

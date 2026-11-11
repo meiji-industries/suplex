@@ -6,7 +6,7 @@ use std::path::Path;
 use axum::{
     Json, Router,
     body::Bytes,
-    extract::{DefaultBodyLimit, FromRequest, Request, State},
+    extract::{DefaultBodyLimit, FromRequest, Query, Request, State},
     http::{HeaderMap, HeaderValue, StatusCode, header},
     middleware,
     response::{Html, IntoResponse, Response},
@@ -398,6 +398,29 @@ fn return_page(heading: &str, message: &str) -> Html<String> {
     Html(page::render(heading, &format!("<p>{message}</p>")))
 }
 
+#[derive(serde::Deserialize)]
+struct ReturnQuery {
+    session_id: Option<String>,
+}
+
+/// The static page, with a `subscribe` push before it for the first
+/// request about a checkout that Stripe confirms.
+async fn checkout_return(
+    State(hosted): State<Hosted>,
+    Query(query): Query<ReturnQuery>,
+    headers: HeaderMap,
+) -> Html<String> {
+    let conversion = hosted
+        .checkout_conversion(query.session_id.as_deref(), &headers)
+        .await;
+    Html(page::render(
+        "Checkout is complete",
+        &format!(
+            "{conversion}<p>Return to Suplex. The subscription can take a few seconds to show. You can close this tab.</p>"
+        ),
+    ))
+}
+
 async fn health(State(hosted): State<Hosted>) -> Reply {
     let pending = hosted.query(store::count_pending_events)?;
     Ok(Json(json!({"ok": true, "events": {"pending": pending}})))
@@ -420,15 +443,7 @@ pub fn router(hosted: Hosted) -> Router {
         .route("/v1/portal", post(portal))
         .route("/webhooks/stripe", post(stripe_webhook))
         .route("/webhooks/revenuecat", post(revenuecat_webhook))
-        .route(
-            "/checkout/return",
-            get(|| async {
-                return_page(
-                    "Checkout is complete",
-                    "Return to Suplex. The subscription can take a few seconds to show. You can close this tab.",
-                )
-            }),
-        )
+        .route("/checkout/return", get(checkout_return))
         .route(
             "/checkout/cancel",
             get(|| async {

@@ -13,11 +13,15 @@ use subtle::ConstantTimeEq;
 
 use crate::{
     accounts::wire::{
-        AuthAttemptBody, AuthEmailBody, AuthPollBody, AuthPollResponse, AuthProvider, LoginClient,
+        AuthAttemptBody, AuthEmailBody, AuthPollBody, AuthPollResponse, AuthProvider, HostedAccount,
+        LoginClient,
         challenge, random_token, token_shape, valid_attempt_id, valid_email,
     },
-    billing::hosted::{Hosted, HostedError, HostedResult, iso},
-    shared::{hash::sha256_hex, ids::random_hex_id},
+    billing::{
+        Plan,
+        hosted::{Hosted, HostedError, HostedResult, iso},
+    },
+    shared::{hash::sha256_hex, ids::random_hex_id, page},
 };
 use providers::{Endpoints, Profile};
 
@@ -41,6 +45,8 @@ const ATTEMPT_MS: i64 = 15 * 60 * 1000;
 const HOUR_MS: i64 = 60 * 60 * 1000;
 const MAGIC_LINKS_PER_HOUR: i64 = 5;
 const MAX_NAME: usize = 200;
+/// How long the done page of a signup can still report it.
+const SIGNUP_CONVERSION_MS: i64 = HOUR_MS;
 const ACCOUNT_VARIABLES: [&str; 6] = [
     "ACCOUNT_GOOGLE_CLIENT_ID",
     "ACCOUNT_GOOGLE_CLIENT_SECRET",
@@ -404,7 +410,10 @@ impl Accounts {
             .map(|name| name.trim().chars().take(MAX_NAME).collect::<String>())
             .filter(|name| !name.is_empty());
         let candidate = format!("user_{}", uuid::Uuid::new_v4());
-        let now = self.hosted.now_iso();
+        // The done page of a signup reports it once with this marker.
+        let marker = random_token().map_err(internal)?;
+        let now_ms = self.hosted.now_ms();
+        let now = iso(now_ms);
         let completed = self.hosted.immediate(|db| {
             let Some(attempt) = store::find_attempt(db, attempt_id, &now)?
                 .filter(|attempt| attempt.account_id.is_none())
@@ -456,19 +465,80 @@ impl Accounts {
                     }),
                 )?;
             }
-            Ok(Some(
-                if attempt.installation_id == start::SITE_INSTALLATION {
-                    format!("/start/done?attempt={attempt_id}")
-                } else if attempt.installation_id == delete::DELETE_INSTALLATION {
-                    format!("/account/delete/confirm?attempt={attempt_id}")
-                } else if attempt.client == LoginClient::Web {
-                    "/auth/done?client=web".to_owned()
-                } else {
-                    "/auth/done".to_owned()
-                },
-            ))
+            let deleting = attempt.installation_id == delete::DELETE_INSTALLATION;
+            let signup = if created && !deleting {
+                store::insert_signup_conversion(
+                    db,
+                    &sha256_hex(&marker),
+                    &account.id,
+                    provider,
+                    &now,
+                    &iso(now_ms + SIGNUP_CONVERSION_MS),
+                )?;
+                format!("signup={marker}")
+            } else {
+                String::new()
+            };
+            let with_signup = |path: &str| match (path.contains('?'), signup.is_empty()) {
+                (_, true) => path.to_owned(),
+                (true, false) => format!("{path}&{signup}"),
+                (false, false) => format!("{path}?{signup}"),
+            };
+            Ok(Some(if attempt.installation_id == start::SITE_INSTALLATION {
+                with_signup(&format!("/start/done?attempt={attempt_id}"))
+            } else if deleting {
+                format!("/account/delete/confirm?attempt={attempt_id}")
+            } else if attempt.client == LoginClient::Web {
+                with_signup("/auth/done?client=web")
+            } else {
+                with_signup("/auth/done")
+            }))
         })?;
         completed.ok_or_else(expired)
+    }
+
+    /// Consumes the signup marker of a done page. `Some` only on the first
+    /// request with a marker that `complete` issued for a new account, and,
+    /// when `account_id` is given, only for that account.
+    pub fn consume_signup(
+        &self,
+        marker: Option<&str>,
+        account_id: Option<&str>,
+    ) -> Option<(HostedAccount, AuthProvider)> {
+        let marker = marker.filter(|marker| token_shape(marker))?;
+        let now = self.hosted.now_iso();
+        self.hosted
+            .immediate(|db| {
+                let Some((id, provider)) =
+                    store::consume_signup_conversion(db, &sha256_hex(marker), &now)?
+                else {
+                    return Ok(None);
+                };
+                if account_id.is_some_and(|expected| expected != id) {
+                    return Ok(None);
+                }
+                Ok(Some((store::find_account(db, &id)?, provider)))
+            })
+            .ok()
+            .flatten()
+    }
+
+    /// The `signup_complete` push for the done page of a new account, or
+    /// nothing when `marker` is missing, forged, expired, or already used.
+    /// `plan` is the plan the account has when the page renders.
+    pub fn signup_script(
+        &self,
+        marker: Option<&str>,
+        account_id: Option<&str>,
+        plan: Plan,
+    ) -> String {
+        let Some((account, provider)) = self.consume_signup(marker, account_id) else {
+            return String::new();
+        };
+        page::conversion_script(
+            &json!({"event": "signup_complete", "method": provider, "plan": plan}),
+            Some(&page::email_hash(&account.email)),
+        )
     }
 
     /// `Complete` once: the token is minted here and only its hash is kept.

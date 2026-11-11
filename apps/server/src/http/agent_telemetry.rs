@@ -9,7 +9,7 @@
 use std::cell::RefCell;
 
 use axum::{
-    body::{Body, to_bytes},
+    body::{Body, HttpBody, to_bytes},
     extract::{MatchedPath, Request, State},
     http::header,
     middleware::Next,
@@ -107,14 +107,19 @@ pub(crate) async fn observe(
         })
         .await;
     let status = response.status().as_u16();
-    let (response, code) = if status >= 400 {
+    // Only a body known to be small is read, so the response always reaches the client whole.
+    let small = response
+        .body()
+        .size_hint()
+        .upper()
+        .is_some_and(|size| size <= MAX_ERROR_BODY as u64);
+    let (response, code) = if status >= 400 && small {
         let (parts, body) = response.into_parts();
         match to_bytes(body, MAX_ERROR_BODY).await {
             Ok(bytes) => {
                 let code = response_code(surface, &bytes);
                 (Response::from_parts(parts, Body::from(bytes)), code)
             }
-            // The body is gone; the status and headers still answer the request.
             Err(_) => (Response::from_parts(parts, Body::empty()), None),
         }
     } else {

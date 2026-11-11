@@ -90,9 +90,9 @@ Native usage events have these properties: `app_version` (the semantic version),
 | `pr_opened` | a task records a pull request | task context, `git_host` |
 | `pr_merged` | the task's pull request is merged | task context, `git_host` |
 | `agent_paired` | audit event: a pairing code exchange, a credential rotation, or an OAuth approval | `agent_id`, `method` (`pairing_code`, `rotation`, or `oauth`), `project_count`, `project_id` when the agent has exactly one project, `profile_id` when the client sent one, `cli_version` when the client was `suplex mcp` |
-| `agent_pairing_failed` | the pairing exchange returns an error | `status`, `error_code` |
+| `agent_pairing_failed` | the pairing exchange returns an error, once per status and code each hour | `status`, `error_code` |
 | `mcp_connected` | `/mcp` authenticates an agent, once per agent and hour | `agent_id`, `profile_id` when known |
-| `mcp_auth_failed` | `/mcp` returns 401 or 403 | `status`, `error_code` |
+| `mcp_auth_failed` | `/mcp` returns 401 or 403, once per status and code each hour | `status`, `error_code` |
 | `cli_invoked` | `suplex mcp` calls the Agent API, once per agent and hour | `command` (`mcp`), `cli_version`, `agent_id`, `profile_id` when known |
 | `agent_request_failed` | an Agent API, pairing, or `/mcp` request returns 400 or more | see [Agent request failures](#agent-request-failures) |
 | `host_daily` | once a day | `users`, `companies`, `projects`, `tasks_running`, `tasks_created_7d`, `tasks_delivered_7d`, `move_runs_7d`, `task_templates`, `github_triggers_enabled`, provider profile counts |

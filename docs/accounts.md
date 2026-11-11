@@ -290,6 +290,11 @@ that cookie. A trial login without a query clears the cookie, and `DNT: 1`
 stores nothing. An email link opened in another browser shows the downloads
 without the query. Logins from the app do not use the cookie.
 
+This cookie only rebuilds links. It is separate from `suplex_visitor` (the
+PostHog visitor for `$identify`) and `suplex_attribution` (the 30-day first-touch
+UTM values for `account_signed_up`, [telemetry](telemetry.md)). One `/start`
+response can set all three; each is its own `Set-Cookie` header.
+
 These pages, the login and billing pages, and the legal pages load Google Tag
 Manager (`GTM-N739QG5C`, except the legal pages) and the shared consent banner.
 See [PostHog](posthog.md#shared-consent-banner).

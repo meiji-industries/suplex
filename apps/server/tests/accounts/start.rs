@@ -279,6 +279,37 @@ mod tests {
         );
     }
 
+    /// The visitor, first-touch attribution, and forwarded query cookies are
+    /// separate `Set-Cookie` headers on one response; none replaces another.
+    #[tokio::test]
+    async fn a_trial_login_sets_every_cookie_on_one_response() {
+        let f = Fixture::new().await;
+        let page = f
+            .get(
+                "/start?plan=pro&visitor=0190a1b2-c3d4-7e5f&utm_source=newsletter&_gl=1*abc",
+                &[],
+            )
+            .await;
+        assert_eq!(page.status(), 200);
+        let mut names: Vec<String> = set_cookies(&page)
+            .iter()
+            .map(|cookie| cookie.split_once('=').unwrap().0.to_owned())
+            .collect();
+        names.sort();
+        assert_eq!(
+            names,
+            ["suplex_attribution", "suplex_start_query", "suplex_visitor"]
+        );
+        assert_eq!(
+            cookie(&page, "suplex_start_query"),
+            "suplex_start_query=visitor=0190a1b2-c3d4-7e5f&utm_source=newsletter&_gl=1*abc"
+        );
+        assert_eq!(
+            cookie(&page, "suplex_attribution"),
+            "suplex_attribution=utm_source=newsletter"
+        );
+    }
+
     /// The production Google Tag Manager snippet, byte for byte.
     const GTM_HEAD: &str = r#"<!-- Suplex: consent defaults + Google Tag Manager (managed by Ads bot) -->
 <script>

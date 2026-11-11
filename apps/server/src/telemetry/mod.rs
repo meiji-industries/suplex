@@ -653,7 +653,7 @@ fn collect_lifecycle(
         };
         let context = task_context(database, &task_id)?;
         let mut properties = context.properties();
-        if status == "delivered" {
+        if name == "task_delivered" {
             properties.insert(
                 "duration_s".into(),
                 json!(context.seconds_until(&observed_at)),

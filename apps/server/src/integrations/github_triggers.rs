@@ -508,30 +508,14 @@ fn local_failure(message: impl Into<String>, status: u16) -> Box<dyn Error + Sen
     })
 }
 
-/// The task profile snapshot of one live profile, or the unavailable-profile refusal.
+/// The task profile snapshot of one live profile, with its provider login, or
+/// the unavailable-profile refusal.
 fn profile_snapshot(
     database: &SuplexDatabase,
     id: &str,
     role: &str,
 ) -> DatabaseResult<TaskProfile> {
-    database
-        .connection()
-        .query_row(
-            "SELECT id, provider, model, reasoning_level, service_tier FROM suplex_profiles WHERE id = ?1 AND role = ?2 AND archived_at IS NULL",
-            params![id, role],
-            |row| {
-                Ok(TaskProfile {
-                    profile_id: row.get(0)?,
-                    provider: row.get(1)?,
-                    model: row.get(2)?,
-                    reasoning_level: row.get(3)?,
-                    service_tier: row.get(4)?,
-                    provider_instance_id: None,
-                    instance_home_directory: None,
-                })
-            },
-        )
-        .optional()?
+    crate::profiles::agent_profiles::read_profile(database, id, role)?
         .ok_or_else(|| local_failure("Selected workflow profile is unavailable", 422))
 }
 
@@ -2304,6 +2288,23 @@ mod tests {
 
     use super::*;
     use crate::http::routes::avatars::tests::{call, json_body};
+
+    #[test]
+    fn a_workflow_profile_keeps_its_provider_login() {
+        let path = std::env::temp_dir().join(format!(
+            "suplex-trigger-profile-{}.db",
+            uuid::Uuid::new_v4()
+        ));
+        let database =
+            SuplexDatabase::open(&path, crate::platform::database::OpenMode::Migrate).unwrap();
+        database.connection().execute_batch(
+            "INSERT INTO suplex_provider_instances (id,provider,label,home_directory,created_at,updated_at) VALUES ('instance_a','claude-code','A','/instances/a','t','t');
+             INSERT INTO suplex_profiles (id,name,role,avatar_seed,provider,model,reasoning_level,service_tier,created_at,updated_at,provider_instance_id) VALUES ('profile_a','Dedicated','root','s','claude-code','opus','high','default','t','t','instance_a');",
+        ).unwrap();
+        let profile = profile_snapshot(&database, "profile_a", "root").unwrap();
+        assert_eq!(profile.provider_instance_id(), Some("instance_a"));
+        assert_eq!(profile.instance_home_directory(), Some("/instances/a"));
+    }
 
     type Replies = Arc<std::sync::Mutex<HashMap<String, (u16, Value)>>>;
 
@@ -4353,7 +4354,7 @@ mod tests {
         );
         assert_eq!(
             profiles,
-            r#"{"root":{"profileId":"profile_native_root","provider":"codex","model":"gpt-5.6-sol","reasoningLevel":"medium","serviceTier":"default"},"worker":{"profileId":"profile_native_worker","provider":"codex","model":"gpt-5.6-luna","reasoningLevel":"max","serviceTier":"priority"},"advisors":{"planner_a":{"profileId":"profile_native_root","provider":"codex","model":"gpt-5.6-sol","reasoningLevel":"medium","serviceTier":"default"},"planner_b":{"profileId":"profile_native_root","provider":"codex","model":"gpt-5.6-sol","reasoningLevel":"medium","serviceTier":"default"}}}"#
+            r#"{"root":{"profileId":"profile_native_root","provider":"codex","model":"gpt-5.6-sol","reasoningLevel":"medium","serviceTier":"default","providerInstanceId":null,"instanceHomeDirectory":null},"worker":{"profileId":"profile_native_worker","provider":"codex","model":"gpt-5.6-luna","reasoningLevel":"max","serviceTier":"priority","providerInstanceId":null,"instanceHomeDirectory":null},"advisors":{"planner_a":{"profileId":"profile_native_root","provider":"codex","model":"gpt-5.6-sol","reasoningLevel":"medium","serviceTier":"default","providerInstanceId":null,"instanceHomeDirectory":null},"planner_b":{"profileId":"profile_native_root","provider":"codex","model":"gpt-5.6-sol","reasoningLevel":"medium","serviceTier":"default","providerInstanceId":null,"instanceHomeDirectory":null}}}"#
         );
         assert!(still_eligible(&dispatch, &pull, &rule));
         let other = Rule {

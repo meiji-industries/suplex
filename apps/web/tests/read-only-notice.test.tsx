@@ -20,7 +20,9 @@ async function render(company: Record<string, unknown>, role = "member"): Promis
 
 test("a read-only member, a lapsed Team, and edit access", async () => {
   expect(await render({ access: "read" })).toContain("You can read work in Acme.");
-  expect(await render({ access: "read", teamLapsed: true }, "admin")).toContain("Team endedWork is read-only until an administrator selects Team again.Select Team");
-  expect(await render({ access: "read", teamLapsed: true })).not.toContain("Select Team");
+  expect(await render({ access: "read", teamLapsed: true }, "admin")).toContain("The Team plan endedAll work is read-only. Suplex keeps all work. Select the Team plan again to edit work.Open billing");
+  const member = await render({ access: "read", teamLapsed: true });
+  expect(member).toContain("An administrator must select the Team plan again.");
+  expect(member).not.toContain("Open billing");
   expect(await render({ access: "edit" })).toBe("");
 });

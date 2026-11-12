@@ -70,7 +70,8 @@ A host never loses work when its plan ends:
 - **Team ends**: `suplex_plan` keeps `plan = 'team'`, so `billing::team_lapsed`
   tells it from Free. Work in every company is read-only for everyone, admins
   too, until someone selects Team again; a banner says so and links an
-  administrator to Settings > Billing. Company scoping stays, so a lapse never
+  administrator to Settings > Billing, and the plan badge in the company
+  switcher says "Team ended" in place of "Free". Company scoping stays, so a lapse never
   shows a member more. Administrators can still manage billing and users.
   Paying again restores edit access. See [member access](accounts.md#member-access).
 

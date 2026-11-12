@@ -429,9 +429,10 @@ a lapse never widens access. Administrators can still manage billing and users.
 External agents keep their own grants. When Pro ends, the host is Free and
 nothing becomes read-only ([downgrades](billing.md#downgrades)).
 
-In the web app, a banner under the header says why work is read-only: "Team
-ended", with Select Team for an administrator, or "You can read work in …" for
-a read-only member. Settings > Users marks read-only members and offers Make
+In the web app, a banner under the header says why work is read-only: "The
+Team plan ended", with Open billing for an administrator, or "You can read
+work in …" for a read-only member. The plan badge in the company switcher
+says "Team ended" in place of "Free". Settings > Users marks read-only members and offers Make
 read-only or Allow edits. `/api/companies` returns each company's `access` and
 `teamLapsed`; `PATCH /api/admin/companies/{companyId}/members/{userId}` with
 `{access}` changes it.

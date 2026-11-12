@@ -64,8 +64,9 @@ def _host(base_url: str) -> str:
 class SuplexClient:
     """Thin typed-route client over the Suplex Agent API.
 
-    Prefer the Suplex MCP tools when the bridge is configured; this client is
-    the documented HTTP fallback and speaks only routes that exist in Suplex.
+    Prefer registered Suplex MCP tools or the hosted `/mcp` endpoint; this
+    client is the documented HTTP fallback and speaks only routes that exist
+    in Suplex. It needs no Suplex CLI.
     """
 
     def __init__(self, base_url: str | None = None, credential: str | None = None, env: dict | None = None):

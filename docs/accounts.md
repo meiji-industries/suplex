@@ -331,7 +331,8 @@ with `Sec-GPC: 1` or `DNT: 1` stores no click ID from the cookie.
 account row for ad conversion uploads. Stripe Checkout sessions do not carry
 them: checkout belongs to a billing account, which is usually a company, not
 the person whose browser signed up. The `subscribe` push on `/checkout/return`
-reads `gclid` from the Suplex account of the billing account, when it has one
+reads `gclid`, `gbraid`, and `wbraid` from the Suplex account of the billing
+account, when it has one
 ([conversion events](#conversion-events)).
 
 These pages, the login and billing pages, and the legal pages load Google Tag
@@ -352,7 +353,7 @@ The server encodes each value for an inline script.
   `plan` is `free`, or `pro` on `/start/done` when the trial is active. The
   push comes before `/auth/done` opens the app; a web login waits 1.5 seconds
   before its backup `window.close()`.
-- `subscribe`, `{value, currency, transaction_id, plan, gclid?}`: on
+- `subscribe`, `{value, currency, transaction_id, plan, gclid?, gbraid?, wbraid?}`: on
   `/checkout/return?session_id=<id>` (see [billing](billing.md)).
 
 The server adds the SHA-256 hex of the trimmed, lowercase account email as a

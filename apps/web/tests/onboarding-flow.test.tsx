@@ -7,23 +7,31 @@ const fixture = vi.hoisted(() => ({
   company: { id: "company-1", name: "Acme", issueCode: "ACME" as string | undefined, status: "active" },
   projects: [] as unknown[],
   checks: [] as unknown[],
+  providers: [] as unknown[],
+  profiles: [] as unknown[],
+  loading: false,
 }));
+const login = vi.hoisted(() => ({ startLogin: vi.fn(async () => undefined), startInstall: vi.fn(async () => undefined) }));
 vi.mock("../shell/company-context.js", () => ({ useCompanyContext: () => ({ currentCompany: fixture.company, user: { id: "user-1", role: "admin", displayName: "Ada", username: "ada", avatarSeed: "ada", title: "" }, updateProfile: vi.fn(), renameCompany: vi.fn(), setCompanyIssueCode: vi.fn(), reloadCompanies: vi.fn() }), useOptionalCompanyContext: () => undefined }));
-vi.mock("../features/onboarding/onboarding.js", async importOriginal => ({ ...(await importOriginal()), useOnboardingData: () => ({ state: { company: fixture.company, checks: fixture.checks, providers: [], profiles: [], projects: fixture.projects }, loading: false, error: "", reload: vi.fn(async () => undefined) }) }));
+vi.mock("../features/onboarding/onboarding.js", async importOriginal => ({ ...(await importOriginal()), useOnboardingData: () => ({ state: { company: fixture.company, checks: fixture.checks, providers: fixture.providers, profiles: fixture.profiles, projects: fixture.projects }, loading: fixture.loading, error: "", reload: vi.fn(async () => undefined) }) }));
 vi.mock("../features/settings/lib/billing-api.js", () => ({ getBillingSummary: vi.fn(), startTrial: vi.fn(async () => ({})) }));
 vi.mock("../features/account/lib/account-api.js", async importOriginal => ({ ...(await importOriginal()), getAccount: vi.fn(async () => ({ account: { email: "ada@example.com" } })), getEmailUpdates: vi.fn(async () => ({ available: true, subscribed: false })), setEmailUpdates: vi.fn(async (subscribed: boolean) => ({ available: true, subscribed })) }));
-vi.mock("../features/settings/provider-login.js", () => ({ ProviderLoginTerminal: () => null, useProviderLogin: () => ({ login: null, loginPending: null, startLogin: vi.fn(), closeLogin: vi.fn() }) }));
+vi.mock("../features/settings/provider-login.js", () => ({ ProviderLoginTerminal: () => null, useProviderLogin: () => ({ login: null, loginPending: null, startLogin: login.startLogin, startInstall: login.startInstall, closeLogin: vi.fn() }) }));
 vi.mock("../components/app/system-health.js", () => ({ useSystemHealth: () => ({ snapshot: { checks: fixture.checks }, refresh: vi.fn(), refreshing: false }), HerdrInstallButton: () => null }));
 vi.mock("../features/projects/lib/project-api.js", () => ({ createProject: vi.fn(), listRecentRepositories: vi.fn(async () => ({ repositories: [], nextPage: null })) }));
 vi.mock("../features/projects/create-project-dialog.js", () => ({ CreateProjectDialog: () => null }));
 vi.mock("../features/tasks/lib/task-api.js", () => ({ createTask: vi.fn(async () => ({ id: "task-1", companyId: "company-1" })) }));
 vi.mock("../features/tasks/task-data.js", () => ({ useTaskCache: () => vi.fn() }));
-vi.mock("../components/app/entity-avatar.js", () => ({ AvatarEditor: () => null }));
+vi.mock("../features/onboarding/onboarding-api.js", () => ({ completeOnboarding: vi.fn(async () => undefined) }));
+vi.mock("../shell/telemetry-api.js", () => ({ getTelemetry: vi.fn(async () => ({ noticeRequired: true, enabled: false })), acknowledgeTelemetry: vi.fn(async () => undefined) }));
+vi.mock("../components/app/entity-avatar.js", () => ({ AvatarEditor: () => null, EntityAvatar: () => null }));
 
 import { OnboardingView } from "../features/onboarding/onboarding-wizard.js";
 import { getBillingSummary, startTrial } from "../features/settings/lib/billing-api.js";
 import { setEmailUpdates } from "../features/account/lib/account-api.js";
 import { createTask } from "../features/tasks/lib/task-api.js";
+import { completeOnboarding } from "../features/onboarding/onboarding-api.js";
+import { acknowledgeTelemetry } from "../shell/telemetry-api.js";
 import { createProject, listRecentRepositories } from "../features/projects/lib/project-api.js";
 import { ApiError } from "../lib/api.js";
 
@@ -53,6 +61,9 @@ afterEach(async () => {
   fixture.company.issueCode = "ACME";
   fixture.projects = [];
   fixture.checks = [];
+  fixture.providers = [];
+  fixture.profiles = [];
+  fixture.loading = false;
   vi.clearAllMocks();
 });
 
@@ -100,6 +111,43 @@ test("You Continue still moves on when the trial cannot start", async () => {
   expect(window.location.search).toContain("step=stack");
 });
 
+test("a missing agent offers Install and Add later, and an installed agent offers Sign in", async () => {
+  const signedOut = { status: "not-connected", summary: "Not signed in" };
+  fixture.providers = [
+    { id: "codex", label: "Codex CLI", modelCount: 0, models: [], status: "missing", connection: signedOut },
+    { id: "devin", label: "Devin CLI", modelCount: 2, models: [], status: "configured", connection: signedOut },
+  ];
+  vi.useFakeTimers();
+  try {
+    await render("/onboarding?step=stack");
+    // The rows show their result one after another.
+    for (let step = 0; step < fixture.providers.length + 5; step += 1) await act(async () => { await vi.advanceTimersByTimeAsync(500); });
+  } finally {
+    vi.useRealTimers();
+  }
+  const row = (name: string): HTMLElement => Array.from(container.querySelectorAll<HTMLElement>(".sr")).find(candidate => candidate.querySelector("b")?.textContent === name)!;
+  const labels = (name: string): string[] => Array.from(row(name).querySelectorAll("button")).map(candidate => candidate.textContent?.trim() ?? "");
+
+  expect(labels("Codex CLI")).toEqual(["Add later", "Install"]);
+  expect(row("Codex CLI").querySelector(".cmd")).toBeNull();
+  expect(labels("Devin CLI")).toEqual(["Add later", "Sign in"]);
+
+  await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="Install Codex CLI"]')!.click());
+  expect(login.startInstall).toHaveBeenCalledWith("install:codex", "Codex CLI", "/api/admin/providers/codex/install");
+  expect(login.startLogin).not.toHaveBeenCalled();
+});
+
+test("the team shows its agents and their models before the providers arrive", async () => {
+  fixture.loading = true;
+  fixture.profiles = [{ id: "profile_native_root", role: "root", provider: "codex", model: "gpt-5.6-sol", archivedAt: null }, { id: "profile_native_worker", role: "worker", provider: "codex", model: "gpt-5.6-sol", archivedAt: null }];
+  await render("/onboarding?step=team");
+  const selects = Array.from(container.querySelectorAll<HTMLSelectElement>("select.mdl")).filter(select => select.id.startsWith("onb-model-"));
+  expect(selects.map(select => select.value)).toEqual(["codex\ngpt-5.6-sol", "codex\ngpt-5.6-sol"]);
+  expect(container.textContent).not.toContain("Pick a model");
+  expect(container.querySelector('[role="status"]')).toBeNull();
+  expect(container.textContent).toContain("Add an Alt Coordinator");
+});
+
 test("adding a repo at the Free project limit starts the trial and adds it again", async () => {
   vi.mocked(listRecentRepositories).mockResolvedValue({ repositories: [{ repository: "acme/api", defaultBranch: "main", pushedAt: new Date().toISOString(), ownerAvatarUrl: null }], nextPage: null });
   vi.mocked(createProject).mockRejectedValueOnce(new ApiError("Free includes 2 projects. Select Pro in Settings > Billing.", 402, undefined, undefined, "project_limit_reached")).mockResolvedValueOnce({} as Awaited<ReturnType<typeof createProject>>);
@@ -117,6 +165,7 @@ test("Create task starts the task with a ready pull request and opens it", async
   await act(async () => button("+Create task").click());
   expect(createTask).toHaveBeenCalledWith("company-1", expect.objectContaining({ projectId: "project-1", title: "Fix the login page", startImmediately: true, deliveryTarget: "pull_request_ready", workflow: "standard" }));
   expect(window.location.pathname).toBe("/tasks/task-1");
+  expect(completeOnboarding).toHaveBeenCalledWith("company-1", "first_task");
 });
 
 test("Skip for now leaves onboarding without a task", async () => {
@@ -124,4 +173,16 @@ test("Skip for now leaves onboarding without a task", async () => {
   await act(async () => button("Skip for now").click());
   expect(window.location.pathname).toBe("/today");
   expect(createTask).not.toHaveBeenCalled();
+  expect(completeOnboarding).toHaveBeenCalledWith("company-1", "skipped");
+});
+
+test("the usage data notice shows in onboarding before the company is named", async () => {
+  fixture.company.issueCode = undefined;
+  await render("/onboarding?step=you");
+  await act(async () => undefined);
+  const notice = container.querySelector("[data-telemetry-notice]");
+  expect(notice?.textContent).toContain("Allow Suplex to collect usage data");
+  await act(async () => button("Accept").click());
+  expect(acknowledgeTelemetry).toHaveBeenCalledTimes(1);
+  expect(container.querySelector("[data-telemetry-notice]")).toBeNull();
 });

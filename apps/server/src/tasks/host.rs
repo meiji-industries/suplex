@@ -80,6 +80,7 @@ pub fn spawn_task_host(
     };
     crate::tasks::analytics::collector::spawn(database_path.clone(), shutdown_rx.clone());
     crate::web_push::spawn(database_path.clone(), shutdown_rx.clone());
+    crate::tasks::archive::automatic::spawn(database_path.clone(), shutdown_rx.clone());
     let poller_host = handle.clone();
     crate::integrations::github_triggers::spawn_poller(
         database_path.clone(),

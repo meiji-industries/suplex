@@ -13,14 +13,19 @@ use subtle::ConstantTimeEq;
 
 use crate::{
     accounts::wire::{
-        AuthAttemptBody, AuthEmailBody, AuthPollBody, AuthPollResponse, AuthProvider, LoginClient,
-        challenge, random_token, token_shape, valid_attempt_id, valid_email,
+        AuthAttemptBody, AuthEmailBody, AuthPollBody, AuthPollResponse, AuthProvider,
+        HostedAccount, LoginClient, challenge, random_token, token_shape, valid_attempt_id,
+        valid_email,
     },
-    billing::hosted::{Hosted, HostedError, HostedResult, iso},
-    shared::{hash::sha256_hex, ids::random_hex_id},
+    billing::{
+        Plan,
+        hosted::{Hosted, HostedError, HostedResult, iso},
+    },
+    shared::{hash::sha256_hex, ids::random_hex_id, page},
 };
 use providers::{Endpoints, Profile};
 
+pub mod attribution;
 pub mod delete;
 pub mod email_updates;
 pub mod invitations;
@@ -40,6 +45,8 @@ const ATTEMPT_MS: i64 = 15 * 60 * 1000;
 const HOUR_MS: i64 = 60 * 60 * 1000;
 const MAGIC_LINKS_PER_HOUR: i64 = 5;
 const MAX_NAME: usize = 200;
+/// How long the done page of a signup can still report it.
+const SIGNUP_CONVERSION_MS: i64 = HOUR_MS;
 const ACCOUNT_VARIABLES: [&str; 6] = [
     "ACCOUNT_GOOGLE_CLIENT_ID",
     "ACCOUNT_GOOGLE_CLIENT_SECRET",
@@ -228,6 +235,27 @@ impl Accounts {
         Ok(id)
     }
 
+    /// Adds the browser's attribution to a login attempt that has not
+    /// completed, so the signup has it even when the magic link opens in
+    /// another browser. Kept values are not replaced. Best effort: a failure
+    /// never stops the login.
+    pub fn note_attribution(&self, attempt_id: &str, attribution: &attribution::Attribution) {
+        if attribution.is_empty() || !valid_attempt_id(attempt_id) {
+            return;
+        }
+        let now = self.hosted.now_iso();
+        let _ = self.hosted.immediate(|db| {
+            let Some(attempt) = store::find_attempt(db, attempt_id, &now)?
+                .filter(|attempt| attempt.account_id.is_none())
+            else {
+                return Ok(());
+            };
+            let mut kept = attempt.attribution;
+            kept.merge(attribution);
+            store::set_attempt_attribution(db, attempt_id, &kept, &now)
+        });
+    }
+
     /// Returns the provider authorization URL for the browser.
     pub fn start_oauth(&self, attempt_id: &str, provider: AuthProvider) -> HostedResult<String> {
         let config = self.config()?;
@@ -257,6 +285,7 @@ impl Accounts {
         code: &str,
         state: &str,
         visitor: Option<&str>,
+        attribution: Option<&attribution::Attribution>,
     ) -> HostedResult<String> {
         let config = self.config()?;
         if provider == AuthProvider::Email || !token_shape(state) || code.is_empty() {
@@ -276,7 +305,7 @@ impl Accounts {
             &self.redirect_uri(provider),
         )
         .await?;
-        self.complete(&attempt_id, provider, profile, visitor)
+        self.complete(&attempt_id, provider, profile, visitor, attribution)
     }
 
     /// Sends a magic link for the attempt. Five sends per address per hour.
@@ -294,7 +323,7 @@ impl Accounts {
         {
             let profile = Profile { email, name: None };
             return self
-                .complete(&body.attempt_id, AuthProvider::Email, profile, None)
+                .complete(&body.attempt_id, AuthProvider::Email, profile, None, None)
                 .map(Some);
         }
         let token = random_token().map_err(internal)?;
@@ -339,7 +368,12 @@ impl Accounts {
         Ok(None)
     }
 
-    pub fn verify_magic_link(&self, token: &str, visitor: Option<&str>) -> HostedResult<String> {
+    pub fn verify_magic_link(
+        &self,
+        token: &str,
+        visitor: Option<&str>,
+        attribution: Option<&attribution::Attribution>,
+    ) -> HostedResult<String> {
         self.config()?;
         if !token_shape(token) {
             return Err(expired());
@@ -350,7 +384,13 @@ impl Accounts {
             .query(|db| store::consume_magic_link(db, &sha256_hex(token), &now))?
             .ok_or_else(expired)?;
         let profile = Profile { email, name: None };
-        self.complete(&attempt_id, AuthProvider::Email, profile, visitor)
+        self.complete(
+            &attempt_id,
+            AuthProvider::Email,
+            profile,
+            visitor,
+            attribution,
+        )
     }
 
     /// Binds the account to the attempt. Signup and login differ only in
@@ -362,6 +402,7 @@ impl Accounts {
         provider: AuthProvider,
         profile: Profile,
         visitor: Option<&str>,
+        attribution: Option<&attribution::Attribution>,
     ) -> HostedResult<String> {
         let email = normalize_email(&profile.email).ok_or_else(providers::unverified)?;
         let name = profile
@@ -369,7 +410,10 @@ impl Accounts {
             .map(|name| name.trim().chars().take(MAX_NAME).collect::<String>())
             .filter(|name| !name.is_empty());
         let candidate = format!("user_{}", uuid::Uuid::new_v4());
-        let now = self.hosted.now_iso();
+        // The done page of a signup reports it once with this marker.
+        let marker = random_token().map_err(internal)?;
+        let now_ms = self.hosted.now_ms();
+        let now = iso(now_ms);
         let completed = self.hosted.immediate(|db| {
             let Some(attempt) = store::find_attempt(db, attempt_id, &now)?
                 .filter(|attempt| attempt.account_id.is_none())
@@ -378,6 +422,13 @@ impl Accounts {
             };
             let (account, created) =
                 store::upsert_account(db, &candidate, &email, name.as_deref(), &now)?;
+            // The browser cookie first, then what the login attempt kept.
+            let mut attribution = attribution.cloned().unwrap_or_default();
+            attribution.merge(&attempt.attribution);
+            // First-touch attribution belongs to the signup only.
+            if created && !attribution.is_empty() {
+                store::insert_account_attribution(db, &account.id, &attribution, &now)?;
+            }
             let review = self
                 .config
                 .as_ref()
@@ -391,17 +442,17 @@ impl Accounts {
             } else {
                 "account_logged_in"
             };
-            self.track(
-                db,
-                event,
-                &account.id,
-                json!({
-                    "$lib": "suplex-hosted",
-                    "provider": provider,
-                    "$groups": {"host": attempt.installation_id},
-                    "$set": {"email": email},
-                }),
-            )?;
+            let mut properties = json!({
+                "$lib": "suplex-hosted",
+                "provider": provider,
+                "$groups": {"host": attempt.installation_id},
+                "$set": {"email": email},
+            });
+            // UTM values and the referrer only: click IDs stay on the account row.
+            if created && let Value::Object(properties) = &mut properties {
+                properties.extend(attribution.properties());
+            }
+            self.track(db, event, &account.id, properties)?;
             if let Some(visitor) = visitor {
                 self.track(
                     db,
@@ -414,19 +465,82 @@ impl Accounts {
                     }),
                 )?;
             }
+            let deleting = attempt.installation_id == delete::DELETE_INSTALLATION;
+            let signup = if created && !deleting {
+                store::insert_signup_conversion(
+                    db,
+                    &sha256_hex(&marker),
+                    &account.id,
+                    provider,
+                    &now,
+                    &iso(now_ms + SIGNUP_CONVERSION_MS),
+                )?;
+                format!("signup={marker}")
+            } else {
+                String::new()
+            };
+            let with_signup = |path: &str| match (path.contains('?'), signup.is_empty()) {
+                (_, true) => path.to_owned(),
+                (true, false) => format!("{path}&{signup}"),
+                (false, false) => format!("{path}?{signup}"),
+            };
             Ok(Some(
                 if attempt.installation_id == start::SITE_INSTALLATION {
-                    format!("/start/done?attempt={attempt_id}")
-                } else if attempt.installation_id == delete::DELETE_INSTALLATION {
+                    with_signup(&format!("/start/done?attempt={attempt_id}"))
+                } else if deleting {
                     format!("/account/delete/confirm?attempt={attempt_id}")
                 } else if attempt.client == LoginClient::Web {
-                    "/auth/done?client=web".to_owned()
+                    with_signup("/auth/done?client=web")
                 } else {
-                    "/auth/done".to_owned()
+                    with_signup("/auth/done")
                 },
             ))
         })?;
         completed.ok_or_else(expired)
+    }
+
+    /// Consumes the signup marker of a done page. `Some` only on the first
+    /// request with a marker that `complete` issued for a new account, and,
+    /// when `account_id` is given, only for that account.
+    pub fn consume_signup(
+        &self,
+        marker: Option<&str>,
+        account_id: Option<&str>,
+    ) -> Option<(HostedAccount, AuthProvider)> {
+        let marker = marker.filter(|marker| token_shape(marker))?;
+        let now = self.hosted.now_iso();
+        self.hosted
+            .immediate(|db| {
+                let Some((id, provider)) =
+                    store::consume_signup_conversion(db, &sha256_hex(marker), &now)?
+                else {
+                    return Ok(None);
+                };
+                if account_id.is_some_and(|expected| expected != id) {
+                    return Ok(None);
+                }
+                Ok(Some((store::find_account(db, &id)?, provider)))
+            })
+            .ok()
+            .flatten()
+    }
+
+    /// The `signup_complete` push for the done page of a new account, or
+    /// nothing when `marker` is missing, forged, expired, or already used.
+    /// `plan` is the plan the account has when the page renders.
+    pub fn signup_script(
+        &self,
+        marker: Option<&str>,
+        account_id: Option<&str>,
+        plan: Plan,
+    ) -> String {
+        let Some((account, provider)) = self.consume_signup(marker, account_id) else {
+            return String::new();
+        };
+        page::conversion_script(
+            &json!({"event": "signup_complete", "method": provider, "plan": plan}),
+            Some(&page::email_hash(&account.email)),
+        )
     }
 
     /// `Complete` once: the token is minted here and only its hash is kept.

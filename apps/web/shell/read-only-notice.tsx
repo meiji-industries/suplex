@@ -11,10 +11,11 @@ export function ReadOnlyNotice(): ReactElement | null {
   const company = context?.currentCompany;
   if (!company || company.access !== "read") return null;
   if (company.teamLapsed) {
+    const admin = context.user?.role === "admin";
     return <div className="px-3 pt-3 lg:px-6"><Alert>
-      <AlertTitle>Team ended</AlertTitle>
-      <AlertDescription>Work is read-only until an administrator selects Team again.</AlertDescription>
-      {context.user?.role === "admin" && !window.suplexMobile ? <AlertAction><Button size="sm" nativeButton={false} render={<a href={billingSettingsPath(company.id)} />}>Select Team</Button></AlertAction> : null}
+      <AlertTitle>The Team plan ended</AlertTitle>
+      <AlertDescription>All work is read-only. Suplex keeps all work. {admin ? "Select the Team plan again to edit work." : "An administrator must select the Team plan again."}</AlertDescription>
+      {admin && !window.suplexMobile ? <AlertAction><Button size="sm" nativeButton={false} render={<a href={billingSettingsPath(company.id)} />}>Open billing</Button></AlertAction> : null}
     </Alert></div>;
   }
   return <div className="px-3 pt-3 lg:px-6"><Alert><AlertDescription>You can read work in {company.name}. An administrator gives edit access.</AlertDescription></Alert></div>;

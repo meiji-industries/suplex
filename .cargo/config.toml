@@ -4,3 +4,8 @@
 TS_RS_EXPORT_DIR = { value = "apps/web/contracts/generated", relative = true }
 TS_RS_LARGE_INT = "number"
 TS_RS_IMPORT_EXTENSION = "js"
+
+# Inside a Suplex Worker, tests and `cargo run` get the real Git instead of
+# the Worker Git guard. See scripts/cargo-runner.sh.
+[target.'cfg(unix)']
+runner = "scripts/cargo-runner.sh"

@@ -53,6 +53,10 @@ pub fn router() -> Router<AppState> {
             "/api/admin/providers/{provider_id}/login",
             post(provider_login),
         )
+        .route(
+            "/api/admin/providers/{provider_id}/install",
+            post(provider_install),
+        )
         .route("/api/admin/provider-login/{pane_id}", delete(close_login))
         .route(
             "/api/admin/provider-login/{pane_id}/terminal",
@@ -132,18 +136,18 @@ async fn delete_instance(
     with_cookies(response, cookies)
 }
 
-/// Opens the sign-in pane; a Herdr or terminal failure is a 503 the admin
-/// can act on.
-async fn start(
+/// Opens a sign-in or install pane; a Herdr or terminal failure is a 503 the
+/// admin can act on. `command` receives whether the pane is a host terminal.
+async fn open_pane(
     state: AppState,
     target: String,
     label: String,
-    provider: String,
-    home: Option<String>,
+    purpose: &str,
+    command: impl FnOnce(bool) -> String + Send + 'static,
 ) -> Response {
     let host = state.with_database(|database| terminals::host_enabled(database));
     let opened = tokio::task::spawn_blocking(move || {
-        let command = provider_login::login_command(&provider, home.as_deref());
+        let command = command(host);
         let cwd = std::env::current_dir()
             .map(|path| path.to_string_lossy().into_owned())
             .unwrap_or_default();
@@ -170,13 +174,26 @@ async fn start(
         }
         _ if host => auth::error(
             StatusCode::SERVICE_UNAVAILABLE,
-            "Suplex could not open a sign-in terminal.",
+            &format!("Suplex could not open {purpose} terminal."),
         ),
         _ => auth::error(
             StatusCode::SERVICE_UNAVAILABLE,
-            "Suplex could not open a sign-in pane. Check Herdr on the Suplex host.",
+            &format!("Suplex could not open {purpose} pane. Check Herdr on the Suplex host."),
         ),
     }
+}
+
+async fn start(
+    state: AppState,
+    target: String,
+    label: String,
+    provider: String,
+    home: Option<String>,
+) -> Response {
+    open_pane(state, target, label, "a sign-in", move |_| {
+        provider_login::login_command(&provider, home.as_deref())
+    })
+    .await
 }
 
 async fn provider_login(
@@ -197,6 +214,29 @@ async fn provider_login(
         provider_id.clone(),
         provider_id,
         None,
+    )
+    .await;
+    with_cookies(response, cookies)
+}
+
+async fn provider_install(
+    State(state): State<AppState>,
+    Path(provider_id): Path<String>,
+    headers: HeaderMap,
+) -> Response {
+    if let Err(response) = valid::<ProviderParams>(json!({"providerId": provider_id})) {
+        return *response;
+    }
+    let (_, cookies) = match authorize(&state, &headers, "POST", true) {
+        Ok(value) => value,
+        Err(response) => return *response,
+    };
+    let response = open_pane(
+        state,
+        format!("install:{provider_id}"),
+        provider_id.clone(),
+        "an install",
+        move |host| provider_login::install_command(&provider_id, host),
     )
     .await;
     with_cookies(response, cookies)

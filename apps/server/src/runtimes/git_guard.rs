@@ -69,14 +69,22 @@ fn which(executable: &str, inherited: &HashMap<String, String>) -> Option<PathBu
 
 /// Preserve the source SUPLEX_GIT_BIN override before looking up Git. The
 /// GitHub CLI is optional because its guard denies all writes either way.
+///
+/// Inside a guard (a host that a Worker starts), PATH finds that guard's
+/// wrappers. A guard around a wrapper would exec itself without end, so the
+/// real binaries that the outer guard recorded are used instead.
 pub fn resolve_guard_binaries(
     inherited: &HashMap<String, String>,
 ) -> io::Result<(PathBuf, Option<PathBuf>)> {
-    let git = inherited
-        .get("SUPLEX_GIT_BIN")
-        .map(|path| path.trim())
-        .filter(|path| !path.is_empty())
-        .map(PathBuf::from)
+    let configured = |name: &str| {
+        inherited
+            .get(name)
+            .map(|path| path.trim())
+            .filter(|path| !path.is_empty())
+            .map(PathBuf::from)
+    };
+    let git = configured("SUPLEX_GIT_BIN")
+        .or_else(|| configured("SUPLEX_GIT_REAL_BIN"))
         .or_else(|| which("git", inherited))
         .ok_or_else(|| {
             io::Error::new(
@@ -84,7 +92,12 @@ pub fn resolve_guard_binaries(
                 "Git is not available for the guarded Worker",
             )
         })?;
-    Ok((git, which("gh", inherited)))
+    let gh = if configured("SUPLEX_GIT_GUARD_DIR").is_some() {
+        configured("SUPLEX_GH_REAL_BIN")
+    } else {
+        which("gh", inherited)
+    };
+    Ok((git, gh))
 }
 
 fn write_executable(path: &Path, content: &str) -> io::Result<()> {
@@ -234,6 +247,30 @@ mod tests {
         ]);
         let (git, _) = resolve_guard_binaries(&inherited).unwrap();
         assert_eq!(git, Path::new("/custom/git"));
+    }
+
+    #[test]
+    fn a_guard_inside_a_guard_wraps_the_real_binaries() {
+        let root =
+            std::env::temp_dir().join(format!("suplex-guard-nested-{}", uuid::Uuid::new_v4()));
+        let inherited = std::env::vars().collect::<HashMap<_, _>>();
+        let git = which("git", &inherited).unwrap();
+        let outer =
+            create_git_command_guard(&root, &git, Some(Path::new("/real/gh")), &inherited).unwrap();
+        let (nested_git, nested_gh) = resolve_guard_binaries(&outer.environment).unwrap();
+        assert_eq!(nested_git, git);
+        assert_eq!(nested_gh.as_deref(), Some(Path::new("/real/gh")));
+        let inner =
+            create_git_command_guard(&root.join("inner"), &nested_git, None, &outer.environment)
+                .unwrap();
+        let version = Command::new(inner.directory.join("git"))
+            .arg("--version")
+            .env_clear()
+            .envs(&inner.environment)
+            .output()
+            .unwrap();
+        assert!(version.status.success());
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

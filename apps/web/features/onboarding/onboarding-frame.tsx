@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, type ButtonHTMLAttributes, type ReactElement, type ReactNode } from "react";
 
+import { TelemetryNotice } from "../../shell/telemetry-notice.js";
 import { INTRO_STEPS, ONBOARDING_STEPS, SETUP_STEPS, type OnboardingStepId } from "./onboarding.js";
 import "./onboarding.css";
 
@@ -13,7 +14,9 @@ export function OnboardingFrame({ step, onBack, skip, action, bodyClassName, chi
   children: ReactNode;
 }): ReactElement {
   useEffect(() => { document.title = "Suplex · Onboarding"; }, []);
+  // Onboarding has no application frame, so the usage data notice shows here, before the company and project exist.
   return <div className="onb">
+    <TelemetryNotice />
     <div className="bar" data-tauri-drag-region="deep">
       {onBack ? <button className="nav-back" type="button" onClick={onBack}>← Back</button> : null}
       {skip}

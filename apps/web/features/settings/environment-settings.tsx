@@ -21,13 +21,15 @@ export function EnvironmentSettingsView(): ReactElement {
   const [savedDefaultBudgetUsd, setSavedDefaultBudgetUsd] = useState<number | null>(null);
   const [defaultMaxTurns, setDefaultMaxTurns] = useState("40");
   const [savedDefaultMaxTurns, setSavedDefaultMaxTurns] = useState<number | null>(null);
+  const [autoArchiveAfterDays, setAutoArchiveAfterDays] = useState("30");
+  const [savedAutoArchiveAfterDays, setSavedAutoArchiveAfterDays] = useState<number | null>(null);
   const [experimentSettings, setExperimentSettings] = useState<ExperimentSettings | null>(null);
   const [message, setMessage] = useState("");
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     void getEnvironmentSettings()
-      .then((settings) => { setMinFreeDiskGb(String(settings.minFreeDiskGb)); setSavedMinFreeDiskGb(settings.minFreeDiskGb); setDefaultBudgetUsd(String(settings.defaultBudgetUsd)); setSavedDefaultBudgetUsd(settings.defaultBudgetUsd); setDefaultMaxTurns(String(settings.defaultMaxTurns)); setSavedDefaultMaxTurns(settings.defaultMaxTurns); setExperimentSettings({ todayPageEnabled: settings.todayPageEnabled, git2Enabled: settings.git2Enabled, telemetryEnabled: settings.telemetryEnabled }); })
+      .then((settings) => { setMinFreeDiskGb(String(settings.minFreeDiskGb)); setSavedMinFreeDiskGb(settings.minFreeDiskGb); setDefaultBudgetUsd(String(settings.defaultBudgetUsd)); setSavedDefaultBudgetUsd(settings.defaultBudgetUsd); setDefaultMaxTurns(String(settings.defaultMaxTurns)); setSavedDefaultMaxTurns(settings.defaultMaxTurns); setAutoArchiveAfterDays(String(settings.autoArchiveAfterDays)); setSavedAutoArchiveAfterDays(settings.autoArchiveAfterDays); setExperimentSettings({ todayPageEnabled: settings.todayPageEnabled, git2Enabled: settings.git2Enabled, telemetryEnabled: settings.telemetryEnabled }); })
       .catch((error: unknown) => setMessage(error instanceof Error ? error.message : "Environment settings could not be loaded"));
   }, []);
 
@@ -39,6 +41,25 @@ export function EnvironmentSettingsView(): ReactElement {
   const validMaxTurns = defaultMaxTurns.trim() !== "" && Number.isInteger(parsedMaxTurns) && parsedMaxTurns >= 0;
   const valid = validDisk && validBudget && validMaxTurns;
   const changed = valid && (parsed !== savedMinFreeDiskGb || parsedBudget !== savedDefaultBudgetUsd || parsedMaxTurns !== savedDefaultMaxTurns);
+  const parsedArchiveDays = Number(autoArchiveAfterDays);
+  const validArchiveDays = autoArchiveAfterDays.trim() !== "" && Number.isInteger(parsedArchiveDays) && parsedArchiveDays >= 0;
+  const archiveChanged = validArchiveDays && parsedArchiveDays !== savedAutoArchiveAfterDays;
+  const saveArchive = async (event: FormEvent): Promise<void> => {
+    event.preventDefault();
+    if (!archiveChanged) return;
+    setSaving(true);
+    setMessage("");
+    try {
+      const settings = await updateEnvironmentSettings({ autoArchiveAfterDays: parsedArchiveDays });
+      setAutoArchiveAfterDays(String(settings.autoArchiveAfterDays));
+      setSavedAutoArchiveAfterDays(settings.autoArchiveAfterDays);
+      setMessage("Environment settings saved");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Environment settings could not be saved");
+    } finally {
+      setSaving(false);
+    }
+  };
   const save = async (event: FormEvent): Promise<void> => {
     event.preventDefault();
     if (!changed) return;
@@ -103,6 +124,16 @@ export function EnvironmentSettingsView(): ReactElement {
           <p className="text-xs text-muted-foreground">Set a limit to 0 to disable it. A native turn already in progress can finish before Suplex pauses.</p>
         </form>
       </SettingsSection>
+      <SettingsSection title="Archive" description="Suplex archives delivered tasks to make disk space available. Archive removes the worktree and keeps the branch.">
+        <SettingRow label="Archive delivered tasks after" description="Suplex archives a delivered task after this number of days with no activity. Set the value to 0 to stop automatic archive. Suplex does not archive a cancelled task.">
+          <form className="flex items-center gap-2" onSubmit={(event) => void saveArchive(event)}>
+            <div className="w-28"><Input size="sm" aria-label="Days before Suplex archives a delivered task" type="number" min="0" step="1" inputMode="numeric" value={autoArchiveAfterDays} onChange={(event) => { setAutoArchiveAfterDays(event.target.value); setMessage(""); }} /></div>
+            <span className="text-xs text-muted-foreground">Days</span>
+            <Button size="sm" type="submit" disabled={!archiveChanged || saving}>{saving ? "Saving…" : "Save"}</Button>
+          </form>
+        </SettingRow>
+        <p className="text-xs text-muted-foreground">Suplex does not archive a task when its worktree has changes that are not committed or an agent is active. Suplex tries again later.</p>
+      </SettingsSection>
       <SettingsSection title="Experiments" description="Try features that are not complete. Each setting applies to all users on this host.">
         <SettingRow label="Today page" description="Show the Today page in the navigation." htmlFor="experiment-today-page">
           <Switch id="experiment-today-page" checked={experimentSettings?.todayPageEnabled ?? false} disabled={experimentSettings === null} onCheckedChange={(checked) => void toggleExperiment("todayPageEnabled", checked)} />
@@ -119,6 +150,7 @@ export function EnvironmentSettingsView(): ReactElement {
       {!validDisk ? <p className="text-xs text-destructive" role="alert">Enter a value from 0 to 1024 GB.</p> : null}
       {!validBudget ? <p className="text-xs text-destructive" role="alert">Enter a budget of 0 USD or more.</p> : null}
       {!validMaxTurns ? <p className="text-xs text-destructive" role="alert">Enter a whole number of 0 or more turns.</p> : null}
+      {!validArchiveDays ? <p className="text-xs text-destructive" role="alert">Enter a whole number of 0 or more days.</p> : null}
       {message ? <p className="text-xs text-muted-foreground" role="status">{message}</p> : null}
     </SettingsContent>
   </SettingsLayout>;

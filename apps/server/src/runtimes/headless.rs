@@ -133,7 +133,8 @@ where
     let prompt_file = File::open(&prompt_path)?;
     let log_file = private_file(&log_path, true)?;
     let stderr_file = private_file(&stderr_path, true)?;
-    let script = "\"$0\" \"$@\"; code=$?; printf \"%s\\n\" \"$code\" > \"$SUPLEX_HEADLESS_EXIT_FILE\"; exit \"$code\"";
+    // A reader must never see the exit file created but not yet written.
+    let script = "\"$0\" \"$@\"; code=$?; printf \"%s\\n\" \"$code\" > \"$SUPLEX_HEADLESS_EXIT_FILE.tmp\" && mv \"$SUPLEX_HEADLESS_EXIT_FILE.tmp\" \"$SUPLEX_HEADLESS_EXIT_FILE\"; exit \"$code\"";
     let mut command = Command::new("/bin/sh");
     command
         .arg("-c")

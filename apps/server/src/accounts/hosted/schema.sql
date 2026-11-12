@@ -17,7 +17,10 @@ CREATE TABLE IF NOT EXISTS account_attempts (
   account_id TEXT REFERENCES accounts(id) ON DELETE CASCADE,
   created_at TEXT NOT NULL,
   expires_at TEXT NOT NULL,
-  client TEXT NOT NULL DEFAULT 'desktop' CHECK (client IN ('desktop', 'web'))
+  client TEXT NOT NULL DEFAULT 'desktop' CHECK (client IN ('desktop', 'web')),
+  -- URL-encoded campaign attribution of the browser that started the login
+  -- (accounts/hosted/attribution.rs). The signup copies it to the account.
+  attribution TEXT
 );
 
 CREATE TABLE IF NOT EXISTS account_magic_links (
@@ -37,6 +40,37 @@ CREATE TABLE IF NOT EXISTS account_welcome_emails (
   next_attempt_at TEXT,
   created_at TEXT NOT NULL,
   sent_at TEXT
+);
+
+-- The first-touch campaign attribution of an account, written once when the
+-- account is created. A later login never changes it. Each value is checked
+-- by accounts/hosted/attribution.rs before it is written and when it is read.
+CREATE TABLE IF NOT EXISTS account_attribution (
+  account_id TEXT PRIMARY KEY REFERENCES accounts(id) ON DELETE CASCADE,
+  utm_source TEXT,
+  utm_medium TEXT,
+  utm_campaign TEXT,
+  utm_content TEXT,
+  utm_term TEXT,
+  referring_domain TEXT,
+  gclid TEXT,
+  gbraid TEXT,
+  wbraid TEXT,
+  msclkid TEXT,
+  fbclid TEXT,
+  created_at TEXT NOT NULL
+);
+
+-- One signup_complete conversion for each new account. The done page that the
+-- signup lands on consumes the row once; a reload or a later login finds none.
+-- Only the SHA-256 of the marker in the redirect is kept.
+CREATE TABLE IF NOT EXISTS account_signup_conversions (
+  marker_hash TEXT PRIMARY KEY,
+  account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  provider TEXT NOT NULL CHECK (provider IN ('google', 'github', 'email')),
+  created_at TEXT NOT NULL,
+  expires_at TEXT NOT NULL,
+  consumed_at TEXT
 );
 
 CREATE TABLE IF NOT EXISTS account_tokens (

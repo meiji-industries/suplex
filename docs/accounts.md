@@ -20,7 +20,10 @@ it builds (Stripe return pages, OAuth callbacks, magic links) uses
 
 The site serves `/download`, `/install.sh`, `/install.ps1`, `/bootstrap.sh`, `/terms`,
 `/privacy`, `/support`, and a 302 to `https://getsuplex.ai/` for every other
-path. Its pages are compiled into the binary from `apps/server/src/hosted`:
+path. The 302 keeps the request query unchanged, so ad click ids, `utm_*`,
+`visitor`, and `_gl` reach the website; it removes only a `consent` parameter
+that is not valid (docs/posthog.md). Its pages are compiled into the binary
+from `apps/server/src/hosted`:
 the three scripts are `include_str!` of `install.sh`, `install.ps1`, and
 `bootstrap.sh` (`text/plain`, `max-age=300`), and the other pages come from
 `legal/`. `bootstrap.sh` installs `suplex-bootstrap` from
@@ -66,7 +69,7 @@ The wire types are in `apps/server/src/accounts/wire.rs`.
 | `GET /auth/callback/{google,github}` | Exchanges the code, completes the attempt, 303 to `/auth/done`. |
 | `GET /auth/email/verify?token=` | A one-button form. It does not consume the link, because mail scanners fetch links. |
 | `POST /auth/email/verify` | Consumes the link once, completes the attempt, 303 to `/auth/done`. |
-| `GET /auth/done` | Static: "You are signed in. Return to Suplex." |
+| `GET /auth/done` | "You are signed in. Return to Suplex." With `?signup=<marker>` from a signup, it also pushes `signup_complete` once ([conversion events](#conversion-events)). |
 | `GET /account/delete` | Account deletion, linked from Settings > Profile (App Store guideline 5.1.1(v)). The person logs in with an attempt for the installation `suplex.sh-delete`; the callback goes to `GET /account/delete/confirm?attempt=`, and `POST` there deletes the account, its tokens and attempts, and the invitations it sent. Billing records stay. A subscription that renews must be cancelled first; if Suplex cannot read the subscription, the page asks for a retry. |
 | `GET /download?platform=&format=&visitor=` | 302 to the file in the live release manifest. Unknown platform or format is 404; a missing manifest or file is 502. |
 
@@ -88,7 +91,9 @@ account token is minted at poll time, so no plaintext token rests in SQLite.
 | Table | Rows |
 | --- | --- |
 | `accounts` | `user_<uuid>`, unique email, optional name. |
-| `account_attempts` | Challenge, installation ID, provider and OAuth state, the completed account. Swept one hour after expiry. |
+| `account_attribution` | The first-touch campaign of a new account: the five UTM values, `referring_domain`, and the click IDs `gclid`, `gbraid`, `wbraid`, `msclkid`, and `fbclid`. Written once, at signup; a later login never changes it. Deleted with the account. Read it with `store::find_account_attribution`. |
+| `account_signup_conversions` | The SHA-256 of each signup marker, its account and provider, and when a done page used it. Expires after one hour; swept with attempts. Deleted with the account. |
+| `account_attempts` | Challenge, installation ID, provider and OAuth state, the browser's attribution, the completed account. Swept one hour after expiry. |
 | `account_magic_links` | Token hash, attempt, email, `used_at`. Deleted with their attempt. |
 | `account_tokens` | Token hash, account, installation. |
 | `company_invitations` | Invitation hash, owner account, company, recipient, host address, expiry, and delivery time. |
@@ -96,7 +101,9 @@ account token is minted at poll time, so no plaintext token rests in SQLite.
 | `account_resend_outbox` | Resend contact changes, events, and contact deletions to send, by email. Retried with backoff and never dropped. Keeps the latest sent contact change per email; a sent deletion removes every row for its email. Not deleted with the account. |
 
 At startup the service also upgrades an older `account_email_updates` table to
-accept the `email` source. It rebuilds the table and keeps every row and ID.
+accept the `email` source. It rebuilds the table and keeps every row and ID. It
+adds missing `account_attempts` columns (`client`, `attribution`) to an older
+database.
 
 ### Product update emails
 
@@ -262,14 +269,102 @@ when `BILLING_TELEMETRY=true` and `BILLING_POSTHOG_KEY` are set.
 - A completed login queues `account_signed_up` or `account_logged_in` with
   `distinct_id` = account ID, `$lib=suplex-hosted`, `provider`,
   `$groups.host` = installation ID, and `$set.email`.
-- The Framer snippet adds the consented PostHog distinct ID as
-  `?visitor=` to `suplex.sh/download` links. `/download` keeps a valid value
+- With consent, the Framer snippet adds the PostHog distinct ID as
+  `?visitor=` to each `https://suplex.sh` link and form
+  ([PostHog](posthog.md#links-to-suplexsh)). `/start`
+  and `/download` keep a valid value
   (`^[A-Za-z0-9._:-]{8,64}$`) in the first-party cookie `suplex_visitor` for a
   year, unless the request sends `DNT: 1`. When the login callback sees that
   cookie, it also queues `$identify` with
   `$anon_distinct_id` = visitor, which joins the website visitor to the account.
 - `/download` queues an anonymous `download_started` (`$lib=suplex-web`,
   `platform`, `source`) with a new random ID, unless the request sends `DNT: 1`.
+
+### suplex.sh signup pages
+
+Every link and form on `/start`, `/start?plan=pro`, `/start?plan=pro&with=email`,
+the `/start/email` result pages, and `/start/done` keeps the query the visitor
+arrived with: `_gl`, `gclid`, `fbclid`, `utm_*`, `visitor`, `consent`, and any
+other key. This includes the `/auth/start` and `/download` links. A link's own
+keys (`plan`, `with`, `attempt`, `provider`, `platform`, `format`) are never
+taken from the incoming query. Keys and values are URL-encoded and
+HTML-escaped. A key over 64 bytes, a value over 512 bytes, pairs after the 32nd,
+and pairs past 2048 bytes in total are dropped.
+
+The login goes through Google, GitHub, or an email link, so `/start?plan=pro`
+also keeps the query in the cookie `suplex_start_query` (`Path=/start`, one
+hour, `HttpOnly`, `SameSite=Lax`). `/start/done` uses its own query, or else
+that cookie. A trial login without a query clears the cookie, and `DNT: 1`
+stores nothing. An email link opened in another browser shows the downloads
+without the query. Logins from the app do not use the cookie.
+
+This cookie only rebuilds links. It is separate from `suplex_visitor` (the
+PostHog visitor for `$identify`) and `suplex_attribution` (the 30-day first-touch
+campaign for the signup). One `/start` response can set all three; each is its
+own `Set-Cookie` header.
+
+### Signup attribution
+
+`/download`, `/start`, `/start/email`, and `/auth/start` keep campaign values in
+`suplex_attribution` (`apps/server/src/accounts/hosted/attribution.rs`):
+
+- The five UTM values and the referring hostname, as before. A request with
+  `DNT: 1` adds nothing.
+- The click IDs `gclid`, `gbraid`, `wbraid`, `msclkid`, and `fbclid`, only when
+  the query has `consent=granted` and the request has no `DNT: 1` or
+  `Sec-GPC: 1` header. Each is 1 to 256 letters, digits, or `._~-`; another
+  value is dropped. `consent=denied`, `DNT: 1`, or `Sec-GPC: 1` removes kept
+  click IDs from the cookie.
+- Each value is first touch. The UTM values and the referrer are one touch: a
+  later visit adds them only when the cookie has none. A later visit can add a
+  missing click ID, so a cookie with only UTM values can gain a `gclid`. A kept
+  value is never replaced. Each read checks every value again, so a forged
+  cookie keeps only valid known fields.
+
+`/start?plan=pro`, `/start/email`, and `/auth/start` also copy these values to
+the login attempt (`account_attempts.attribution`). When the login creates an
+account, through the OAuth callback or `/auth/email/verify`, the service
+writes the cookie's values, then the attempt's missing values, to
+`account_attribution`. So an email link opened in another browser keeps the
+campaign. A login to an existing account changes nothing, and a signup request
+with `Sec-GPC: 1` or `DNT: 1` stores no click ID from the cookie.
+
+`account_signed_up` carries the UTM values and `referring_domain`
+([telemetry](telemetry.md)). Click IDs are not sent to PostHog; they stay on the
+account row for ad conversion uploads. Stripe Checkout sessions do not carry
+them: checkout belongs to a billing account, which is usually a company, not
+the person whose browser signed up. The `subscribe` push on `/checkout/return`
+reads `gclid`, `gbraid`, and `wbraid` from the Suplex account of the billing
+account, when it has one
+([conversion events](#conversion-events)).
+
+These pages, the login and billing pages, and the legal pages load Google Tag
+Manager (`GTM-N739QG5C`, except the legal pages) and the shared consent banner.
+See [PostHog](posthog.md#shared-consent-banner).
+
+### Conversion events
+
+Two pages push one event to that container's `dataLayer`. The script is
+`apps/server/src/shared/conversion.js`, rendered by `shared::page::conversion_script`.
+The server encodes each value for an inline script.
+
+- `signup_complete`, `{method, plan}`: a login that creates an account
+  redirects with `signup=<marker>` to `/auth/done`, `/auth/done?client=web`,
+  or `/start/done`. The page consumes the marker in one SQL statement and
+  pushes the event only for that first request. A returning login, a reload,
+  or an unknown or expired marker pushes nothing. `method` is the provider.
+  `plan` is `free`, or `pro` on `/start/done` when the trial is active. The
+  push comes before `/auth/done` opens the app; a web login waits 1.5 seconds
+  before its backup `window.close()`.
+- `subscribe`, `{value, currency, transaction_id, plan, gclid?, gbraid?, wbraid?}`: on
+  `/checkout/return?session_id=<id>` (see [billing](billing.md)).
+
+The server adds the SHA-256 hex of the trimmed, lowercase account email as a
+script argument. The browser adds it to the event as
+`user_data.sha256_email_address` only when
+`localStorage["suplex.analytics.consent.v1"]` is `granted` and Global Privacy
+Control is off. Otherwise the event has no `user_data`. No raw email, name, or
+UTM value goes into the script.
 
 ### Residual risk
 
@@ -335,9 +430,10 @@ a lapse never widens access. Administrators can still manage billing and users.
 External agents keep their own grants. When Pro ends, the host is Free and
 nothing becomes read-only ([downgrades](billing.md#downgrades)).
 
-In the web app, a banner under the header says why work is read-only: "Team
-ended", with Select Team for an administrator, or "You can read work in …" for
-a read-only member. Settings > Users marks read-only members and offers Make
+In the web app, a banner under the header says why work is read-only: "The
+Team plan ended", with Open billing for an administrator, or "You can read
+work in …" for a read-only member. The plan badge in the company switcher
+says "Team ended" in place of "Free". Settings > Users marks read-only members and offers Make
 read-only or Allow edits. `/api/companies` returns each company's `access` and
 `teamLapsed`; `PATCH /api/admin/companies/{companyId}/members/{userId}` with
 `{access}` changes it.
@@ -370,9 +466,13 @@ GitHub, Resend, Stripe, RevenueCat, 1Password, and Framer.
    that `scripts/billing-dev.env` reads. Until the sandbox fields exist,
    `mise run hosted:dev` runs with sign-in off.
 7. Run the `fly secrets set` command in Deploy. Fly restarts the machine.
-8. Paste the updated `apps/server/src/hosted/framer-attribution.js` into Framer.
-   In a private browser, check that a download link gets `?visitor=` only
-   after you accept analytics.
+8. Install the Framer Custom Code as described in
+   [PostHog](posthog.md#install-on-framer): the Google Tag Manager snippet,
+   `<script src="https://suplex.sh/consent.js"></script>`, and the updated
+   `apps/server/src/hosted/framer-attribution.js`. Remove the earlier copy of
+   the snippet, which had its own banner. In a private browser, check that a
+   download link gets `?visitor=` only after you accept analytics, and that a
+   Start link gets `consent=` after you make a choice.
 9. Import the people who subscribed before the Resend sync shipped, once:
    `suplex hosted email-updates > subscribers.csv`, then import the file into
    Resend contacts. Test the sync with a throwaway address as described in

@@ -63,6 +63,14 @@ requirement for a human checkpoint. Detailed arbitration and objection
 mechanisms from older proposals are not established as implemented; see
 [unresolved work](unknowns.md).
 
+When the user chooses to stop, Coordinator calls `suplex_root` with
+`{"kind":"stop_task"}`. Suplex cancels the task and stops its sessions, so no
+idle wake follows. The worktree, the branch, and the pull request stay as they
+are. When GitHub reports that the open pull request of an active task closed
+without a merge, Suplex asks the user once whether to stop or continue. The
+answer returns to Coordinator. A closed state with no recorded open state, as
+after a restart, asks nothing.
+
 Delivery reads Git and the repository service again. It retains external edits
 and merges and applies the operation's own authorization and review rules.
 See [repository delivery](delivery.md).

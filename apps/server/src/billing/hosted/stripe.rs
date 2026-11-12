@@ -129,6 +129,13 @@ pub struct CheckoutLine {
 pub struct CheckoutSession {
     pub id: String,
     pub status: Option<String>,
+    /// `paid`, `unpaid`, or `no_payment_required`.
+    pub payment_status: Option<String>,
+    /// The total in the minor unit of `currency`.
+    pub amount_total: Option<i64>,
+    /// The lowercase ISO 4217 code.
+    pub currency: Option<String>,
+    pub customer_id: Option<String>,
     pub url: Option<String>,
     pub metadata: HashMap<String, String>,
     pub line_items: Vec<CheckoutLine>,
@@ -337,6 +344,10 @@ pub fn normalize_checkout_session(session: &Value) -> CheckoutSession {
     CheckoutSession {
         id: text(session, "id").unwrap_or_default(),
         status: text(session, "status"),
+        payment_status: text(session, "payment_status"),
+        amount_total: session.get("amount_total").and_then(Value::as_i64),
+        currency: text(session, "currency"),
+        customer_id: expandable_id(session.get("customer")),
         url: text(session, "url"),
         metadata: metadata(session),
         line_items: session

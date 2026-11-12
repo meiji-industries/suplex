@@ -21,7 +21,8 @@ use crate::{
     http::{
         AppState,
         contracts::typed::system::{
-            EnvironmentPatch, ExperimentsResponse, TelemetryResponse, TelemetryUserRole,
+            EnvironmentPatch, EnvironmentSettingsResponse, ExperimentsResponse, TelemetryResponse,
+            TelemetryUserRole,
         },
         session,
         validation::Valid,
@@ -182,7 +183,7 @@ async fn read_environment(State(state): State<AppState>, headers: HeaderMap) -> 
         Err(response) => return *response,
     };
     let response = match state.with_database(|database| environment_settings::read(database)) {
-        Ok(settings) => private(Json(settings.to_json()).into_response()),
+        Ok(settings) => private(Json(EnvironmentSettingsResponse::from(settings)).into_response()),
         Err(_) => internal(),
     };
     finish(response, cookies)
@@ -314,6 +315,9 @@ async fn update_environment(
                 telemetry_enabled: patch
                     .telemetry_enabled
                     .unwrap_or(previous.telemetry_enabled),
+                auto_archive_after_days: patch
+                    .auto_archive_after_days
+                    .unwrap_or(previous.auto_archive_after_days),
             },
         )?;
         record_audit(
@@ -335,6 +339,8 @@ async fn update_environment(
                 "git2Enabled": updated.git2_enabled.to_string(),
                 "previousTelemetryEnabled": previous.telemetry_enabled.to_string(),
                 "telemetryEnabled": updated.telemetry_enabled.to_string(),
+                "previousAutoArchiveAfterDays": previous.auto_archive_after_days.to_string(),
+                "autoArchiveAfterDays": updated.auto_archive_after_days.to_string(),
             }),
         )?;
         Ok::<_, Box<dyn std::error::Error + Send + Sync>>(updated)
@@ -343,7 +349,7 @@ async fn update_environment(
         crate::projects::git::set_libgit2_transport(settings.git2_enabled);
     }
     let response = match result {
-        Ok(settings) => private(Json(settings.to_json()).into_response()),
+        Ok(settings) => private(Json(EnvironmentSettingsResponse::from(settings)).into_response()),
         Err(_) => internal(),
     };
     finish(response, cookies)

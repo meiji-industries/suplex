@@ -45,9 +45,9 @@ Both the HTTP and stdio transports expose the same tools:
 
 Suplex re-reads the agent, administrator authority, company access, and project grants for each access or refresh. Revocation takes effect without restarting Suplex. Access tokens apply only to `/mcp`.
 
-`suplex_get_task_session_history` requires both the administrator's transcript grant and a current grant to the task's project. Without them it returns the same concealed `404` as a missing task. See [the runtime API guide](agent-api.md#task-transcripts).
+`suplex_get_task_session_history` requires both the administrator's transcript grant and a current grant to the task's project. Without the project grant it returns the same concealed `404` as a missing task. Without the transcript grant it returns `403` `transcripts_grant_required`, and the message names the setting to turn on. See [the runtime API guide](agent-api.md#task-transcripts).
 
-Moves require both the administrator's Move grant and a current grant to the Move's project. A prompt Move may still require a person at its interactive terminal; MCP and the Agent API do not provide remote terminal interaction.
+Moves require both the administrator's Move grant and a current grant to the Move's project. Without the Move grant, each Move tool returns `403` `moves_grant_required`, and the message names the setting to turn on: **Manage and run Moves** in the agent's actions on the Agents page. A prompt Move may still require a person at its interactive terminal; MCP and the Agent API do not provide remote terminal interaction.
 
 `suplex_update_task` changes a backlog or queued task directly. A queued task stays queued with the same prerequisites. To hold a queued task while it changes, send `disarm_task` with `suplex_command_task`, update the task, then send `start_task` to queue it again. An empty `advisorProfileIds` object returns each Advisor role to its default. An active or delivered task accepts only a later `deliveryTarget`: the Coordinator continues toward the new target, and a delivered task reopens. Other task states return `illegal_command`.
 

@@ -6,6 +6,7 @@ import { navigate } from "../../shell/navigation-state.js";
 import { supportsDeliveryTarget } from "../tasks/lib/delivery-target-capabilities.js";
 import { createTask } from "../tasks/lib/task-api.js";
 import { useTaskCache } from "../tasks/task-data.js";
+import { completeOnboarding, type OnboardingOutcome } from "./onboarding-api.js";
 import { Fit, OnboardingFrame } from "./onboarding-frame.js";
 import type { OnboardingData } from "./onboarding.js";
 import type { StepProps } from "./onboarding-wizard.js";
@@ -55,7 +56,11 @@ export function FirstTaskStep({ onBack, data }: StepProps & { data: OnboardingDa
   };
   useEffect(() => { const timer = window.setTimeout(() => pick(1), 500); return () => { window.clearTimeout(timer); window.clearInterval(typing.current); }; }, []);
 
-  const finish = (path: string): void => navigate(withCompany(path, companyId));
+  const finish = (path: string, outcome: OnboardingOutcome): void => {
+    // A failed record never keeps the person in onboarding.
+    void completeOnboarding(companyId, outcome).catch(() => undefined);
+    navigate(withCompany(path, companyId));
+  };
   const create = async (): Promise<void> => {
     if (busy || !project || !title.trim()) return;
     setBusy(true);
@@ -63,14 +68,14 @@ export function FirstTaskStep({ onBack, data }: StepProps & { data: OnboardingDa
     try {
       const task = await createTask(companyId, { projectId: project.id, title: title.trim(), description: description.trim(), startImmediately: true, deliveryTarget: ready ? "pull_request_ready" : "pull_request_draft", runProjectTests: true, workflow: "standard", idempotencyKey: idempotencyKey.current });
       cacheTask(task);
-      finish(`/tasks/${task.id}`);
+      finish(`/tasks/${task.id}`, "first_task");
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Suplex could not create the task.");
       setBusy(false);
     }
   };
 
-  return <OnboardingFrame step="first-task" onBack={onBack} action={<button className="back" type="button" style={{ fontSize: 15 }} onClick={() => finish("/today")}>Skip for now →</button>}>
+  return <OnboardingFrame step="first-task" onBack={onBack} action={<button className="back" type="button" style={{ fontSize: 15 }} onClick={() => finish("/today", "skipped")}>Skip for now →</button>}>
     <Fit gap={64}>
       <div className="copy" style={{ gap: 8 }}>
         <h1 className="h1">Give your team its first job.</h1>

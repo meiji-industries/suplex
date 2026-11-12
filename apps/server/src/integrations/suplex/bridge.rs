@@ -69,7 +69,11 @@ impl Bridge {
     pub fn new(settings: Settings) -> Self {
         Self {
             settings,
-            client: reqwest::Client::new(),
+            // A fixed client header: the host counts `suplex mcp` use by version only.
+            client: reqwest::Client::builder()
+                .user_agent(crate::telemetry::agent::bridge_user_agent())
+                .build()
+                .unwrap_or_default(),
         }
     }
 
@@ -691,10 +695,10 @@ mod tests {
             json!({"status": status, "body": body})
         };
         // The credential is valid but Move authority is absent until the
-        // persisted grant is changed.  This must conceal the resource.
+        // persisted grant is changed.
         assert_eq!(
             call("suplex_list_moves", json!({"projectId": "project_api"})).await["status"],
-            404
+            403
         );
         agent.server.state.with_database(|database| {
             database
@@ -794,10 +798,19 @@ mod tests {
                 )
                 .unwrap();
         });
-        assert_eq!(
-            call("suplex_get_move", json!({"moveId":move_id})).await["status"],
-            404
-        );
+        // Without the grant, a deleted Move and an unknown Move answer alike,
+        // and the answer names the setting an administrator turns on.
+        for id in [move_id.as_str(), "move_unknown"] {
+            let denied = call("suplex_get_move", json!({"moveId":id})).await;
+            assert_eq!(denied["status"], 403);
+            assert_eq!(denied["body"]["code"], "moves_grant_required");
+            assert!(
+                denied["body"]["error"]
+                    .as_str()
+                    .unwrap()
+                    .contains("Manage and run Moves")
+            );
+        }
     }
 
     #[test]

@@ -83,12 +83,14 @@ fn main() {
 
     let revision = git(&manifest, &["rev-parse", "HEAD"]).unwrap_or_else(|| "unknown".to_owned());
     println!("cargo:rustc-env=SUPLEX_REVISION={revision}");
-    if let Some(head) = git(&manifest, &["rev-parse", "--git-path", "HEAD"]) {
-        println!("cargo:rerun-if-changed={head}");
-    }
-    if let Some(branch) = git(&manifest, &["symbolic-ref", "--quiet", "HEAD"])
-        && let Some(reference) = git(&manifest, &["rev-parse", "--git-path", &branch])
-    {
-        println!("cargo:rerun-if-changed={reference}");
+    // Cargo treats a watched path that does not exist as always changed, and Git keeps a
+    // packed branch out of refs/heads. The reflog records every move of HEAD.
+    let branch = git(&manifest, &["symbolic-ref", "--quiet", "HEAD"]);
+    for name in ["HEAD", "logs/HEAD"].into_iter().chain(branch.as_deref()) {
+        if let Some(path) = git(&manifest, &["rev-parse", "--git-path", name])
+            && manifest.join(&path).exists()
+        {
+            println!("cargo:rerun-if-changed={path}");
+        }
     }
 }

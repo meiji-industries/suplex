@@ -405,7 +405,7 @@ fn local_harness(settings: Value) -> (Harness, WebviewWindow<MockRuntime>, Strin
         settings.to_string(),
     )
     .unwrap();
-    let port = crate::local_runtime::free_port(0).unwrap();
+    let port = crate::local_runtime::test_port();
     std::fs::write(harness.data.path().join("install.json"), json!({ "completedAt": "2026-10-03T00:00:00Z", "runtimeStamp": "0.0.0-fixture", "port": port }).to_string()).unwrap();
     tauri::async_runtime::block_on(harness.shell.network.start_preferred()).unwrap();
     let origin = harness.shell.local_origin().unwrap();

@@ -62,6 +62,7 @@ enum RootCall {
         options: Value,
     },
     RequestPlanApproval(String),
+    StopTask,
 }
 
 #[derive(Deserialize)]
@@ -99,6 +100,7 @@ enum WireCall {
     RequestPlanApproval {
         plan: String,
     },
+    StopTask(Empty),
 }
 
 #[derive(Deserialize)]
@@ -417,6 +419,7 @@ fn parse_call(mut input: Map<String, Value>) -> Result<RootCall, String> {
             Ok(RootCall::DelegateAdvisor { role, brief })
         }
         WireCall::DelegatePlanners(_) => Ok(RootCall::DelegatePlanners),
+        WireCall::StopTask(_) => Ok(RootCall::StopTask),
         WireCall::RequestPlanApproval { plan } => {
             let plan = js_trim(&plan).to_owned();
             if plan.is_empty() {
@@ -466,7 +469,7 @@ fn tool() -> Tool {
         serde_json::from_value::<Map<String, Value>>(json!({
             "type":"object",
             "properties":{
-                "kind":{"type":"string","enum":["observe","rerun_failed_checks","read_image","read_worker_evidence","delegate_worker","delegate_advisor","delegate_planners","replace_worker","request_delivery","ask_human","request_plan_approval"],"description":"Fields per kind. observe: no other fields. rerun_failed_checks: required runId (GitHub Actions workflow run ID). After diagnosing a retryable CI failure, retry failed jobs for the current task pull request. Read GitHub state after an uncertain result before retrying. read_image: required artifactId. read_worker_evidence: required turnId; optional toolId, field (input/output/error), position (head/tail), cursor, maxCharacters (1000..20000). delegate_worker: required acceptanceCriteria, instruction; plan is required when mode is planned or omitted; optional mode (planned or direct; direct only for Direct build), purpose (implementation or verification), advisorTurnId (Pull request repair: the latest valid Rater report turn), candidateTurnIds (Combined planning: the Plan A and Plan B report turns), advisorSessionId and candidateSessionIds (legacy session forms). delegate_advisor: required role (reviewer, planner_a, planner_b, rater); optional brief (Reviewer only: your plan and acceptance criteria). delegate_planners: no other fields; Combined planning reserves Plan A and Plan B together. replace_worker: required sessionId and reason; optional handoff. request_delivery: required operation; expectedHead and review are required for push_branch, create_or_adopt_pull_request, request_review, and merge_pull_request; pullRequestTitle and pullRequestBody create a pull request. ask_human: required question, options. request_plan_approval: required plan; Approve then build only. Suplex shows the complete plan to the user and waits for approval or change requests."},
+                "kind":{"type":"string","enum":["observe","rerun_failed_checks","read_image","read_worker_evidence","delegate_worker","delegate_advisor","delegate_planners","replace_worker","request_delivery","ask_human","request_plan_approval","stop_task"],"description":"Fields per kind. observe: no other fields. rerun_failed_checks: required runId (GitHub Actions workflow run ID). After diagnosing a retryable CI failure, retry failed jobs for the current task pull request. Read GitHub state after an uncertain result before retrying. read_image: required artifactId. read_worker_evidence: required turnId; optional toolId, field (input/output/error), position (head/tail), cursor, maxCharacters (1000..20000). delegate_worker: required acceptanceCriteria, instruction; plan is required when mode is planned or omitted; optional mode (planned or direct; direct only for Direct build), purpose (implementation or verification), advisorTurnId (Pull request repair: the latest valid Rater report turn), candidateTurnIds (Combined planning: the Plan A and Plan B report turns), advisorSessionId and candidateSessionIds (legacy session forms). delegate_advisor: required role (reviewer, planner_a, planner_b, rater); optional brief (Reviewer only: your plan and acceptance criteria). delegate_planners: no other fields; Combined planning reserves Plan A and Plan B together. replace_worker: required sessionId and reason; optional handoff. request_delivery: required operation; expectedHead and review are required for push_branch, create_or_adopt_pull_request, request_review, and merge_pull_request; pullRequestTitle and pullRequestBody create a pull request. ask_human: required question, options. request_plan_approval: required plan; Approve then build only. Suplex shows the complete plan to the user and waits for approval or change requests. stop_task: no other fields. Cancels this task and ends this session. Call it only after the user chose to stop the task. Tell the user why in your message before the call. It publishes nothing and keeps the worktree and the pull request as they are."},
                 "sessionId":{"type":"string","minLength":1},
                 "reason":{"type":"string","minLength":1},
                 "handoff":{"type":"string"},
@@ -578,6 +581,7 @@ impl RootBridgeServer {
                     RootCall::RequestPlanApproval(plan) => {
                         root_controller::request_plan_approval(db, &root, &plan)
                     }
+                    RootCall::StopTask => root_controller::stop_task(db, &root),
                 }
                 .map_err(|error| error.to_string())
             }
@@ -829,7 +833,8 @@ mod tests {
                 "replace_worker",
                 "request_delivery",
                 "ask_human",
-                "request_plan_approval"
+                "request_plan_approval",
+                "stop_task"
             ])
         );
         assert_eq!(

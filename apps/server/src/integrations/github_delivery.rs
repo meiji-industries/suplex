@@ -2322,6 +2322,7 @@ pub fn push_normal(
         return crate::projects::git::system_push(
             &repository,
             &format!("{head_sha}:refs/heads/{branch}"),
+            token,
         )
         .map_err(unavailable);
     }

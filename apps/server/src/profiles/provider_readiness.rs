@@ -296,7 +296,7 @@ fn label(kind: &str) -> &'static str {
 }
 
 // Sources: official OpenCode, Claude Code, Devin CLI, Codex, Pi, and omp installation guides.
-fn install_remedy(kind: &str) -> (&'static str, &'static str) {
+pub fn install_remedy(kind: &str) -> (&'static str, &'static str) {
     match kind {
         "opencode" => ("curl -fsSL https://opencode.ai/install | bash", "command"),
         "claude-code" => ("curl -fsSL https://claude.ai/install.sh | bash", "command"),
@@ -422,10 +422,8 @@ pub async fn check(
                         .and_then(|environment| environment.get("CLAUDE_CONFIG_DIR").cloned())
                 })
                 .flatten();
-            let mut args = auth_args(kind).to_vec();
-            if directory.is_some() {
-                args.extend(["--setting-sources", ""]);
-            }
+            // `claude auth` subcommands reject `--setting-sources`.
+            let args = auth_args(kind);
             let environment = environment.map(|environment| {
                 if kind == HarnessKind::ClaudeCode.as_str() {
                     claude_environment(directory.as_deref(), environment)
@@ -433,7 +431,7 @@ pub async fn check(
                     environment
                 }
             });
-            Some(probe_command(path, &args, environment.as_ref()).await)
+            Some(probe_command(path, args, environment.as_ref()).await)
         }
         Err(_) => None,
     };

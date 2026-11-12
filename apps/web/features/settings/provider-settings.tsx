@@ -67,7 +67,7 @@ export function ProviderSettingsView(): ReactElement {
       if (!silent) setView({ status: "failed", message: reason instanceof Error ? reason.message : "Provider configuration is not available." });
     }
   }, []);
-  const { login, loginPending, startLogin, closeLogin } = useProviderLogin({ reload: load });
+  const { login, loginPending, startLogin, startInstall, closeLogin } = useProviderLogin({ reload: load });
   const endpointForm = useLocalEndpointForm(() => load(true));
   useEffect(() => { void load(); }, [load]);
   const rows = view.status === "loaded" ? view.data.providers : [];
@@ -108,13 +108,17 @@ export function ProviderSettingsView(): ReactElement {
   const loginButton = (key: string, rowLabel: string, url: string): ReactElement => (
     <Button size="sm" variant="outline" aria-label={`Login to ${rowLabel}`} disabled={loginPending !== null} onClick={() => void startLogin(key, rowLabel, url).catch(reason => setError(reason instanceof Error ? reason.message : "Suplex could not open a sign-in pane."))}>{loginPending === key ? "Opening" : "Login"}</Button>
   );
+  const installButton = (provider: CliProviderSummary): ReactElement => {
+    const key = `install:${provider.id}`;
+    return <Button size="sm" aria-label={`Install ${provider.label}`} disabled={loginPending !== null} onClick={() => void startInstall(key, provider.label, `/api/admin/providers/${encodeURIComponent(provider.id)}/install`).catch(reason => setError(reason instanceof Error ? reason.message : "Suplex could not open an install pane."))}>{loginPending === key ? "Opening" : "Install"}</Button>;
+  };
   return <SettingsLayout title="Providers" companyId={companyId} backHref={withCompany("/", companyId)} activeHref={withCompany("/admin/providers", companyId)}>
     <SettingsContent width="wide" title="Providers" description="Suplex runs agents with these provider logins. Add a named login to give a project its own account." actions={<>
       <Button size="sm" variant="outline" disabled={view.status === "loading"} onClick={() => void load()}>Refresh</Button>
       <NewButton onClick={() => { setError(""); setAddOpen(true); }}>Add Provider</NewButton>
      </>}>
      {error ? <p role="alert" className="mb-3 text-xs text-destructive">{error}</p> : null}
-     {providers.some(provider => provider.status !== "configured") ? <p className="mb-3 text-xs text-muted-foreground">Install a missing provider on the machine that runs Suplex. Then select Refresh.</p> : null}
+     {providers.some(provider => provider.status !== "configured") ? <p className="mb-3 text-xs text-muted-foreground">Suplex can install a missing provider on the machine that runs Suplex. After that, sign in to the provider.</p> : null}
     <SettingsDataTable label="Providers" columns={columns}>
       {view.status === "loading" ? <SettingsTableLoading columnCount={columns.length} /> : <SettingsTableGroup label="System" count={providers.length} columnCount={columns.length}>
         {providers.map((provider) => <SettingsTableRow key={`provider:${provider.id}`} className={rowHeight}>
@@ -124,7 +128,7 @@ export function ProviderSettingsView(): ReactElement {
             : <div className="flex min-w-0 items-center gap-2"><Badge variant="destructive">Not installed</Badge><ProviderInstallCommand provider={provider.id} /></div>}</SettingsTableCell>
           <SettingsTableCell className="text-center tabular-nums">{provider.modelCount}</SettingsTableCell>
           <SettingsTableCell><ConnectionBadge connection={provider.connection} /></SettingsTableCell>
-          <SettingsTableCell>{provider.connection.status !== "connected" ? loginButton(`provider:${provider.id}`, provider.label, `/api/admin/providers/${encodeURIComponent(provider.id)}/login`) : null}</SettingsTableCell>
+          <SettingsTableCell>{provider.status !== "configured" ? installButton(provider) : provider.connection.status !== "connected" ? loginButton(`provider:${provider.id}`, provider.label, `/api/admin/providers/${encodeURIComponent(provider.id)}/login`) : null}</SettingsTableCell>
         </SettingsTableRow>)}
       </SettingsTableGroup>}
       {instances.length ? <SettingsTableGroup label="Company" count={instances.length} columnCount={columns.length}>

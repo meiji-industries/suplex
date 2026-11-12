@@ -7,7 +7,10 @@ mod tests {
     use crate::{
         accounts::{
             hosted::{
-                fakes::{Fixture, INSTALLATION, ORIGIN, account_config, query},
+                fakes::{
+                    Fixture, INSTALLATION, ORIGIN, account_config, conversion, query,
+                    signup_marker,
+                },
                 load_config,
             },
             wire::{random_token, token_shape, valid_account_id},
@@ -42,7 +45,8 @@ mod tests {
             .callback("google", &state, Some("theme=dark; suplex_visitor=visitor-12345"))
             .await;
         assert_eq!(response.status(), 303);
-        assert_eq!(response.headers()["location"], "/auth/done");
+        let location = response.headers()["location"].to_str().unwrap().to_owned();
+        assert!(location.starts_with("/auth/done?signup="), "{location}");
         assert_eq!(response.headers()["cache-control"], "no-store");
         assert_eq!(response.headers()["referrer-policy"], "no-referrer");
         let exchange = &f.calls("/token")[0];
@@ -109,6 +113,75 @@ mod tests {
             ("$identify", id)
         );
         assert_eq!(events[1].2["$anon_distinct_id"], "visitor-12345");
+    }
+
+    #[tokio::test]
+    async fn a_signup_done_page_pushes_signup_complete_once() {
+        let f = Fixture::new().await;
+        let (attempt, _) = f.attempt().await;
+        let response = f.sign_in(&attempt, "google", None).await;
+        let location = response.headers()["location"].to_str().unwrap().to_owned();
+        let marker = signup_marker(&location).unwrap();
+        assert!(token_shape(&marker));
+        // Only the marker's hash is kept.
+        assert_eq!(
+            f.count(&format!(
+                "SELECT COUNT(*) FROM account_signup_conversions WHERE marker_hash = '{}'",
+                sha256_hex(&marker)
+            )),
+            1
+        );
+
+        let html = f.get(&location, &[]).await.text().await.unwrap();
+        let (event, hash) = conversion(&html).unwrap();
+        assert_eq!(
+            event,
+            json!({"event": "signup_complete", "method": "google", "plan": "free"})
+        );
+        assert_eq!(hash, json!(sha256_hex("ada@example.com")));
+        assert!(!html.contains("ada@example.com") && !html.contains("Ada"));
+        // The push runs before the page script opens the app.
+        let push = html.find("(function (event, emailHash)").unwrap();
+        assert!(push < html.find("location.replace(\"suplex://auth/done\")").unwrap());
+        assert!(html.contains("href=\"suplex://auth/done\""));
+
+        // A reload, the same marker again, or a forged marker push nothing.
+        let reload = f.get(&location, &[]).await.text().await.unwrap();
+        assert_eq!(conversion(&reload), None);
+        assert!(reload.contains("suplex://auth/done"));
+        for forged in ["/auth/done?signup=forged", &format!("/auth/done?signup={}", "b".repeat(43))] {
+            assert_eq!(conversion(&f.get(forged, &[]).await.text().await.unwrap()), None);
+        }
+
+        // A returning login has no marker and pushes nothing.
+        let (attempt, _) = f.attempt().await;
+        let response = f.sign_in(&attempt, "github", None).await;
+        assert_eq!(response.headers()["location"], "/auth/done");
+        assert_eq!(conversion(&f.get("/auth/done", &[]).await.text().await.unwrap()), None);
+
+        // An expired marker pushes nothing, and the sweep removes it.
+        let other = Fixture::new().await;
+        let (attempt, _) = other.attempt().await;
+        let response = other.sign_in(&attempt, "google", None).await;
+        let location = response.headers()["location"].to_str().unwrap().to_owned();
+        other.advance(61 * MINUTE);
+        assert_eq!(conversion(&other.get(&location, &[]).await.text().await.unwrap()), None);
+        other.advance(61 * MINUTE);
+        other.accounts.sweep().unwrap();
+        assert_eq!(other.count("SELECT COUNT(*) FROM account_signup_conversions"), 0);
+    }
+
+    #[tokio::test]
+    async fn a_web_signup_pushes_before_the_tab_closes() {
+        let f = Fixture::new().await;
+        let (attempt, _) = f.attempt_for(crate::accounts::wire::LoginClient::Web).await;
+        let response = f.sign_in(&attempt, "google", None).await;
+        let location = response.headers()["location"].to_str().unwrap().to_owned();
+        assert!(location.starts_with("/auth/done?client=web&signup="), "{location}");
+        let html = f.get(&location, &[]).await.text().await.unwrap();
+        let push = html.find("(function (event, emailHash)").unwrap();
+        assert!(push < html.find("window.close()").unwrap());
+        assert_eq!(conversion(&html).unwrap().0["event"], "signup_complete");
     }
 
     #[tokio::test]
@@ -238,13 +311,20 @@ mod tests {
             f.poll(&attempt, &verifier).await,
             (200, json!({"status": "pending"}))
         );
-        let bad = f.get("/auth/email/verify?token=<script>", &[]).await;
+        let bad = f.get("/auth/email/verify?token=<script>bad()", &[]).await;
         assert_eq!(bad.status(), 400);
-        assert!(!bad.text().await.unwrap().contains("<script>"));
+        // The page has its own scripts (Google Tag Manager); the token is not one of them.
+        assert!(!bad.text().await.unwrap().contains("<script>bad"));
 
         let verified = f.post_form("/auth/email/verify", &[("token", token)]).await;
         assert_eq!(verified.status(), 303);
-        assert_eq!(verified.headers()["location"], "/auth/done");
+        let location = verified.headers()["location"].to_str().unwrap().to_owned();
+        assert!(signup_marker(&location).is_some(), "{location}");
+        let done = f.get(&location, &[]).await.text().await.unwrap();
+        assert_eq!(
+            conversion(&done).unwrap().0,
+            json!({"event": "signup_complete", "method": "email", "plan": "free"})
+        );
         let again = f.post_form("/auth/email/verify", &[("token", token)]).await;
         assert_eq!(again.status(), 400);
 
@@ -426,7 +506,8 @@ mod tests {
         // A login that started in a web browser does not open the desktop app.
         let finished = f.callback("google", &state, None).await;
         assert_eq!(finished.status(), 303);
-        assert_eq!(finished.headers()["location"], "/auth/done?client=web");
+        let location = finished.headers()["location"].to_str().unwrap();
+        assert!(location.starts_with("/auth/done?client=web&signup="), "{location}");
         let LoginPoll::Complete { token, account } = client.poll_login(&attempt).await.unwrap()
         else {
             panic!("the attempt did not complete");
@@ -447,11 +528,180 @@ mod tests {
 
     #[test]
     fn apply_schema_adds_the_client_column_to_an_older_database() {
+        use crate::accounts::hosted::{attribution::Attribution, store};
         let db = rusqlite::Connection::open_in_memory().unwrap();
-        db.execute_batch("CREATE TABLE accounts (id TEXT PRIMARY KEY); CREATE TABLE account_attempts (id TEXT PRIMARY KEY, challenge TEXT NOT NULL, installation_id TEXT NOT NULL, provider TEXT, provider_state TEXT UNIQUE, account_id TEXT, created_at TEXT NOT NULL, expires_at TEXT NOT NULL)").unwrap();
-        crate::accounts::hosted::store::apply_schema(&db).unwrap();
-        crate::accounts::hosted::store::apply_schema(&db).unwrap();
-        crate::accounts::hosted::store::insert_attempt(&db, "a", "c", "i", crate::accounts::wire::LoginClient::Web, "1", "3").unwrap();
-        assert_eq!(crate::accounts::hosted::store::find_attempt(&db, "a", "2").unwrap().unwrap().client, crate::accounts::wire::LoginClient::Web);
+        db.execute_batch("PRAGMA foreign_keys = ON; CREATE TABLE accounts (id TEXT PRIMARY KEY, email TEXT NOT NULL UNIQUE, name TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL); CREATE TABLE account_attempts (id TEXT PRIMARY KEY, challenge TEXT NOT NULL, installation_id TEXT NOT NULL, provider TEXT, provider_state TEXT UNIQUE, account_id TEXT, created_at TEXT NOT NULL, expires_at TEXT NOT NULL); INSERT INTO accounts VALUES ('user_1', 'ada@example.com', NULL, '1', '1'); INSERT INTO account_attempts (id, challenge, installation_id, created_at, expires_at) VALUES ('old', 'c', 'i', '1', '3')").unwrap();
+        store::apply_schema(&db).unwrap();
+        store::apply_schema(&db).unwrap();
+        store::insert_attempt(&db, "a", "c", "i", crate::accounts::wire::LoginClient::Web, "1", "3").unwrap();
+        assert_eq!(store::find_attempt(&db, "a", "2").unwrap().unwrap().client, crate::accounts::wire::LoginClient::Web);
+        // An attempt from before the upgrade has no attribution.
+        let old = store::find_attempt(&db, "old", "2").unwrap().unwrap();
+        assert_eq!(old.client, crate::accounts::wire::LoginClient::Desktop);
+        assert!(old.attribution.is_empty());
+        let attribution = Attribution::decode("utm_source=ads&gclid=g-1");
+        store::set_attempt_attribution(&db, "old", &attribution, "2").unwrap();
+        assert_eq!(store::find_attempt(&db, "old", "2").unwrap().unwrap().attribution, attribution);
+        // An account from before the upgrade has no attribution, and can get one once.
+        assert_eq!(store::find_account_attribution(&db, "user_1").unwrap(), None);
+        store::insert_account_attribution(&db, "user_1", &attribution, "2").unwrap();
+        store::insert_account_attribution(&db, "user_1", &Attribution::decode("utm_source=other"), "3").unwrap();
+        assert_eq!(store::find_account_attribution(&db, "user_1").unwrap(), Some(attribution));
+        // A value written outside Suplex is checked again when read.
+        db.execute("UPDATE account_attribution SET utm_medium = 'bad<value>', fbclid = 'f b'", []).unwrap();
+        assert_eq!(store::find_account_attribution(&db, "user_1").unwrap().unwrap().encode(), "utm_source=ads&gclid=g-1");
+        // Deleting the account deletes its attribution.
+        db.execute("DELETE FROM accounts WHERE id = 'user_1'", []).unwrap();
+        assert_eq!(db.query_row("SELECT COUNT(*) FROM account_attribution", [], |row| row.get::<_, i64>(0)).unwrap(), 0);
+    }
+
+    /// The OAuth callback stores the cookie's click IDs and UTM values on a
+    /// new account. A later login keeps them as they are; PostHog gets no click ID.
+    #[tokio::test]
+    async fn an_oauth_signup_keeps_consented_click_ids_on_the_account() {
+        let f = Fixture::new().await;
+        let entry = f
+            .get(
+                "/start?utm_source=ads&utm_medium=cpc&gclid=Cj0K-test_1&gbraid=gb.1&wbraid=wb~1&msclkid=ms-1&fbclid=fb_1&consent=granted",
+                &[],
+            )
+            .await;
+        let cookie = entry
+            .headers()
+            .get_all("set-cookie")
+            .iter()
+            .filter_map(|value| value.to_str().ok())
+            .find(|value| value.starts_with("suplex_attribution="))
+            .unwrap()
+            .split(';')
+            .next()
+            .unwrap()
+            .to_owned();
+        let kept = "utm_source=ads&utm_medium=cpc&gclid=Cj0K-test_1&gbraid=gb.1&wbraid=wb%7E1&msclkid=ms-1&fbclid=fb_1";
+        assert_eq!(cookie, format!("suplex_attribution={kept}"));
+        let (attempt, _) = f.attempt().await;
+        assert_eq!(f.sign_in(&attempt, "google", Some(&cookie)).await.status(), 303);
+        assert_eq!(f.account_attribution("ada@example.com").as_deref(), Some(kept));
+        let events = f.events();
+        assert_eq!(events[0].0, "account_signed_up");
+        assert_eq!(events[0].2["utm_source"], "ads");
+        assert!(!events[0].2.to_string().contains("Cj0K"), "{}", events[0].2);
+
+        // A login with another campaign does not change the account.
+        let (attempt, _) = f.attempt().await;
+        let other = "suplex_attribution=utm_source=other&gclid=other-1";
+        assert_eq!(f.sign_in(&attempt, "github", Some(other)).await.status(), 303);
+        assert_eq!(f.events()[1].0, "account_logged_in");
+        assert_eq!(f.account_attribution("ada@example.com").as_deref(), Some(kept));
+        assert_eq!(f.count("SELECT COUNT(*) FROM account_attribution"), 1);
+    }
+
+    /// A signup request with `Sec-GPC: 1` keeps the UTM values but no click ID.
+    #[tokio::test]
+    async fn a_signup_with_a_privacy_signal_keeps_no_click_id() {
+        let f = Fixture::new().await;
+        let (attempt, _) = f.attempt().await;
+        let authorize = f.start(&attempt, "google").await;
+        let state = crate::accounts::hosted::fakes::query(&authorize, "state").unwrap();
+        let response = f
+            .get(
+                &format!("/auth/callback/google?code=code-1&state={state}"),
+                &[
+                    ("cookie", "suplex_attribution=utm_source=ads&gclid=g-1"),
+                    ("sec-gpc", "1"),
+                ],
+            )
+            .await;
+        assert_eq!(response.status(), 303);
+        assert_eq!(
+            f.account_attribution("ada@example.com").as_deref(),
+            Some("utm_source=ads")
+        );
+    }
+
+    /// The first campaign visit is kept for the signup; the outbox sends it with the processor pass.
+    #[tokio::test]
+    async fn a_signup_carries_first_touch_attribution_and_the_processor_sends_it() {
+        let f = Fixture::new().await;
+        let entry = f
+            .get(
+                "/start?utm_source=newsletter&utm_medium=email&utm_campaign=launch&utm_term=ai%20agents&gclid=click-1",
+                &[("referer", "https://News.Example.com/post/42?reader=ada@example.com")],
+            )
+            .await;
+        assert_eq!(entry.status(), 200);
+        let cookie = entry
+            .headers()
+            .get_all("set-cookie")
+            .iter()
+            .filter_map(|value| value.to_str().ok())
+            .find(|value| value.starts_with("suplex_attribution="))
+            .expect("the first visit keeps its attribution")
+            .split(';')
+            .next()
+            .unwrap()
+            .to_owned();
+        // A later visit with other parameters keeps the first touch.
+        let later = f
+            .get("/start?utm_source=other", &[("cookie", cookie.as_str())])
+            .await;
+        assert!(
+            later
+                .headers()
+                .get_all("set-cookie")
+                .iter()
+                .all(|value| !value.to_str().unwrap().starts_with("suplex_attribution="))
+        );
+        let (attempt, _) = f.attempt().await;
+        assert_eq!(f.sign_in(&attempt, "google", Some(&cookie)).await.status(), 303);
+        let (attempt, _) = f.attempt().await;
+        assert_eq!(f.sign_in(&attempt, "google", Some(&cookie)).await.status(), 303);
+        let events = f.events();
+        assert_eq!(
+            events.iter().map(|event| event.0.as_str()).collect::<Vec<_>>(),
+            ["account_signed_up", "account_logged_in"]
+        );
+        assert_eq!(
+            events[0].2,
+            json!({
+                "$lib": "suplex-hosted",
+                "provider": "google",
+                "$groups": {"host": INSTALLATION},
+                "$set": {"email": "ada@example.com"},
+                "utm_source": "newsletter",
+                "utm_medium": "email",
+                "utm_campaign": "launch",
+                "utm_term": "ai agents",
+                "referring_domain": "news.example.com",
+            })
+        );
+        assert!(events[1].2.get("utm_source").is_none());
+        // Without `consent=granted` the click ID was not kept.
+        assert_eq!(
+            f.account_attribution("ada@example.com").as_deref(),
+            Some("utm_source=newsletter&utm_medium=email&utm_campaign=launch&utm_term=ai+agents&referring_domain=news.example.com")
+        );
+
+        // The processor pass delivers the outbox to PostHog once.
+        f.answer("POST /batch/", 200, "{}");
+        f.accounts.hosted.run_processor_pass().await.unwrap();
+        let batches = f.calls("/batch/");
+        assert_eq!(batches.len(), 1);
+        let body: serde_json::Value = serde_json::from_slice(&batches[0].body).unwrap();
+        assert_eq!(body["api_key"], "phc_test");
+        let sent = body["batch"].as_array().unwrap();
+        let signed_up = sent
+            .iter()
+            .find(|event| event["event"] == "account_signed_up")
+            .unwrap();
+        assert_eq!(signed_up["properties"]["utm_source"], "newsletter");
+        assert_eq!(signed_up["properties"]["$groups"]["host"], INSTALLATION);
+        assert!(sent.iter().any(|event| event["event"] == "account_logged_in"));
+        assert_eq!(
+            f.count("SELECT COUNT(*) FROM billing_telemetry_events WHERE sent_at IS NULL"),
+            0
+        );
+        f.accounts.hosted.run_processor_pass().await.unwrap();
+        assert_eq!(f.calls("/batch/").len(), 1);
     }
 }

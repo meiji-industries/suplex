@@ -135,16 +135,41 @@ mod tests {
             })
         );
 
+        // A link from `/start` brings its whole attribution query.
+        let linked = f
+            .get(
+                "/download?platform=macos-arm64&_gl=1*abc&gclid=Cj0K&utm_source=getsuplex&consent=granted&visitor=0190a1b2-c3d4-7e5f",
+                &[],
+            )
+            .await;
+        assert_eq!(linked.status(), 302);
+        assert!(
+            linked.headers()["set-cookie"]
+                .to_str()
+                .unwrap()
+                .starts_with("suplex_visitor=0190a1b2-c3d4-7e5f;")
+        );
+        assert_eq!(f.events().len(), 2);
+
         let invalid = f.get("/download?visitor=short", &[]).await;
         assert!(invalid.headers().get("set-cookie").is_none());
-        assert_eq!(f.events()[1].2["source"], "browser");
+        assert_eq!(f.events()[2].2["source"], "browser");
 
         let dnt = f
             .get("/download?visitor=0190a1b2-c3d4-7e5f", &[("dnt", "1")])
             .await;
         assert_eq!(dnt.status(), 302);
         assert!(dnt.headers().get("set-cookie").is_none());
-        assert_eq!(f.events().len(), 2);
+        assert_eq!(f.events().len(), 3);
+
+        // The processor pass sends the queued downloads.
+        f.answer("POST /batch/", 200, "{}");
+        f.accounts.hosted.run_processor_pass().await.unwrap();
+        let body: serde_json::Value =
+            serde_json::from_slice(&f.calls("/batch/")[0].body).unwrap();
+        let sent = body["batch"].as_array().unwrap();
+        assert_eq!(sent.len(), 3);
+        assert!(sent.iter().all(|event| event["event"] == "download_started"));
     }
 
     #[tokio::test]
@@ -178,14 +203,81 @@ mod tests {
             "text/plain; charset=utf-8"
         );
         assert!(windows.text().await.unwrap().contains("function Install-Suplex"));
+        // Every other path goes to the website root with the query unchanged.
+        // The website shows a consent choice made here. GPC never carries `granted`.
+        for (path, headers, website) in [
+            ("/", &[][..], "https://getsuplex.ai/"),
+            ("/?", &[][..], "https://getsuplex.ai/"),
+            ("/pricing", &[][..], "https://getsuplex.ai/"),
+            ("/pricing?", &[][..], "https://getsuplex.ai/"),
+            (
+                "/?gclid=abc&utm_source=google&_gl=xyz",
+                &[][..],
+                "https://getsuplex.ai/?gclid=abc&utm_source=google&_gl=xyz",
+            ),
+            (
+                "/pricing?wbraid=w1&gbraid=g1&fbclid=f1&msclkid=m1&visitor=0190a1b2-c3d4-7e5f",
+                &[][..],
+                "https://getsuplex.ai/?wbraid=w1&gbraid=g1&fbclid=f1&msclkid=m1&visitor=0190a1b2-c3d4-7e5f",
+            ),
+            (
+                "/?utm_campaign=a%20b%26c&utm_term=x+y&utm_source=b&utm_source=a",
+                &[][..],
+                "https://getsuplex.ai/?utm_campaign=a%20b%26c&utm_term=x+y&utm_source=b&utm_source=a",
+            ),
+            (
+                "/?consent=granted",
+                &[][..],
+                "https://getsuplex.ai/?consent=granted",
+            ),
+            (
+                "/pricing?_gl=1*abc&consent=denied",
+                &[][..],
+                "https://getsuplex.ai/?_gl=1*abc&consent=denied",
+            ),
+            ("/?consent=granted%22%3E", &[][..], "https://getsuplex.ai/"),
+            (
+                "/?gclid=abc&consent=granted%22%3E&utm_source=google",
+                &[][..],
+                "https://getsuplex.ai/?gclid=abc&utm_source=google",
+            ),
+            (
+                "/?consent=maybe&gclid=abc",
+                &[][..],
+                "https://getsuplex.ai/?gclid=abc",
+            ),
+            (
+                "/?gclid=abc&consent=granted",
+                &[("sec-gpc", "1")][..],
+                "https://getsuplex.ai/?gclid=abc",
+            ),
+            (
+                "/?consent=granted",
+                &[("sec-gpc", "1")][..],
+                "https://getsuplex.ai/",
+            ),
+            (
+                "/?consent=denied",
+                &[("sec-gpc", "1")][..],
+                "https://getsuplex.ai/?consent=denied",
+            ),
+        ] {
+            assert_eq!(
+                location(&f, path, headers).await,
+                (302, website.to_owned()),
+                "{path}"
+            );
+        }
+        let consent = f.get("/consent.js", &[]).await;
+        assert_eq!(consent.status(), 200);
         assert_eq!(
-            location(&f, "/", &[]).await,
-            (302, "https://getsuplex.ai/".to_owned())
+            consent.headers()["content-type"],
+            "text/javascript; charset=utf-8"
         );
-        assert_eq!(
-            location(&f, "/pricing", &[]).await,
-            (302, "https://getsuplex.ai/".to_owned())
-        );
+        assert_eq!(consent.headers()["cache-control"], "public, max-age=300");
+        let consent = consent.text().await.unwrap();
+        assert!(consent.contains("suplex.analytics.consent.v1"));
+        assert!(consent.contains("Suplex collects usage data to improve the product."));
         for (path, title, policy) in [
             ("/terms", "Suplex terms of service", "14-day first-purchase guarantee"),
             ("/privacy", "Suplex privacy policy", "separately and explicitly opt in"),
@@ -200,6 +292,8 @@ mod tests {
             assert!(html.contains("Meiji Heavy Industries, Inc."));
             assert!(!html.contains("not yet published"));
             assert!(!html.contains("[CONFIRM"));
+            // The banner, and the `consent` choice on the link to getsuplex.ai.
+            assert!(html.contains("<script src=\"/consent.js\" defer></script>"));
         }
     }
 }

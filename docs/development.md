@@ -72,6 +72,12 @@ pnpm test
 pnpm run test:rust
 ```
 
+`test:rust` requires [cargo-nextest](https://nexte.st). Install it with
+`cargo install cargo-nextest --locked`. The test scripts build the server with
+`SUPLEX_DEV_EMBED_FRONTEND=0`, the same value the development stack uses, so
+tests and `mise run dev` share one build. The fixtures read the frontend from
+`apps/web/dist`.
+
 Use the narrower projects when you need them:
 
 ```sh
@@ -82,6 +88,13 @@ pnpm test:packaged
 `test:packaged` requires the desktop package from `desktop:dist`.
 `pnpm test:guarded` runs the default suite inside the production Worker Git
 guard and confirms that the guard remains active after the suite exits.
+
+Tests run correctly inside a Suplex Worker. The Worker Git guard blocks
+commands such as `git push` and `git worktree`, which test fixtures run in
+temporary repositories. The TypeScript tests remove the guard in
+`tests/helpers/setup-git-environment.ts`. Cargo starts each Rust test binary
+through `scripts/cargo-runner.sh`, which does the same. Do not skip a test
+because of the guard.
 
 ```sh
 pnpm verify

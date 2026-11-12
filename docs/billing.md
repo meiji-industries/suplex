@@ -70,7 +70,8 @@ A host never loses work when its plan ends:
 - **Team ends**: `suplex_plan` keeps `plan = 'team'`, so `billing::team_lapsed`
   tells it from Free. Work in every company is read-only for everyone, admins
   too, until someone selects Team again; a banner says so and links an
-  administrator to Settings > Billing. Company scoping stays, so a lapse never
+  administrator to Settings > Billing, and the plan badge in the company
+  switcher says "Team ended" in place of "Free". Company scoping stays, so a lapse never
   shows a member more. Administrators can still manage billing and users.
   Paying again restores edit access. See [member access](accounts.md#member-access).
 
@@ -340,6 +341,7 @@ credential created at registration. Only SHA-256 hashes are stored.
 | `POST /webhooks/stripe` | Signature-verified durable event ingestion. |
 | `POST /webhooks/revenuecat` | Authorization-header-verified durable event ingestion. |
 | `GET /checkout/return`, `GET /checkout/cancel`, `GET /portal/return` | Non-sensitive return pages. |
+| `GET /checkout/return?session_id=<id>` | Stripe adds the Checkout Session id to `success_url`. The page reads that session from Stripe. For a session that is `complete`, `paid` or `no_payment_required`, and created by this service, the first request pushes `subscribe` to the Google Tag Manager `dataLayer`: `value` in major units (zero-decimal currencies unchanged), upper-case ISO `currency`, the session id as `transaction_id`, `plan` (`pro` or `team`), and the Google Ads click IDs `gclid`, `gbraid`, and `wbraid` that were captured. All of them come from one source: the Suplex account's `account_attribution` when it has any of them, else the browser's attribution cookie. An absent or empty ID is left out. `billing_checkout_conversions` keeps each reported session id, so a reload pushes nothing. Any other case, including Stripe errors, shows the same page without an event. See [conversion events](accounts.md#conversion-events). |
 | `GET /health` | Liveness without account or secret data. |
 
 Accepted webhook work is persisted before the service responds. A durable

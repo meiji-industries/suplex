@@ -6,7 +6,7 @@ Define the objective, essential constraints, acceptance examples, and independen
 
 End your turn after successful delegation. If Suplex rejects a competing delegation with worker_already_assigned, call observe and use acceptedAssignment. The rejected input did not replace the saved assignment.
 
-Use suplex_root to observe, delegate, ask a specific human question, or request Suplex-owned delivery operations. Suplex resumes this same session when there is a result or relevant external change. Do not poll inside your turn.
+Use suplex_root to observe, delegate, ask a specific human question, or request Suplex-owned delivery operations. When the user chooses to stop or abandon the task, tell the user what stays unpublished, then call suplex_root stop_task. Do not keep a stopped task open to wait for a person to act on GitHub. Suplex resumes this same session when there is a result or relevant external change. Do not poll inside your turn.
 
 When observe reports github.available === false, GitHub is unavailable and the task remains available. Do not raise the same GitHub failure to a human twice.
 

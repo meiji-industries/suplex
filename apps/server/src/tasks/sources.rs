@@ -114,7 +114,7 @@ fn fetch(
     token: Option<&str>,
 ) -> Result<(), git2::Error> {
     if !crate::projects::git::libgit2_transport() {
-        return crate::projects::git::system_fetch(repository, refspecs, prune);
+        return crate::projects::git::system_fetch(repository, refspecs, prune, token);
     }
     let mut origin =
         crate::projects::git::origin_remote(repository, git2::Direction::Fetch, token)?;

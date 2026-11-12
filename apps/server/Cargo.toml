@@ -1,6 +1,6 @@
 [package]
 name = "suplex"
-version = "1.13.3"
+version = "1.13.6"
 edition = "2024"
 license.workspace = true
 rust-version = "1.93.1"
@@ -29,6 +29,7 @@ hmac = "0.12"
 subtle = "2.6"
 tokio = { workspace = true, features = ["fs", "io-util", "macros", "net", "process", "rt-multi-thread", "signal", "sync", "time"] }
 tokio-util = { version = "0.7", features = ["io"] }
+futures = "0.3"
 reqwest = { workspace = true }
 url = { workspace = true }
 uuid = { version = "1", features = ["v4", "serde"] }

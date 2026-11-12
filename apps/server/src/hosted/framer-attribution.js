@@ -1,6 +1,11 @@
 /*
- * Suplex website analytics for Framer Custom Code (end of <body>).
+ * Suplex website analytics for Framer Custom Code (end of the body), with a script tag that
+ * loads https://suplex.sh/consent.js before or after it (docs/posthog.md).
  * The project token is a public, write-only PostHog key. No personal API key belongs here.
+ *
+ * With granted consent and no privacy signal, links and forms to https://suplex.sh carry the
+ * stored campaign touch (click IDs and UTM values), the Conversion Linker `_gl`, and the
+ * PostHog `visitor` when they are opened, so the signup on suplex.sh keeps them.
  */
 (function suplexWebsiteAnalytics(window, document) {
   "use strict";
@@ -19,6 +24,9 @@
   var allowedUtm = ["utm_source", "utm_medium", "utm_campaign", "utm_content", "utm_term"];
   var allowedClickIds = ["gclid", "gbraid", "wbraid", "msclkid", "fbclid"];
   var maxValueLength = 120;
+  // Real click IDs are about 100 characters. A longer one is dropped, never cut.
+  var maxClickIdLength = 256;
+  var siteOrigin = "https://suplex.sh";
   var allowedCtas = ["pricing", "get", "product", "download", "hero-download", "start-free", "start-trial"];
   var allowedPlatforms = ["macos-arm64", "macos-x64", "linux-x64", "linux-arm64"];
   var posthog;
@@ -26,6 +34,11 @@
 
   function bounded(value) {
     return typeof value === "string" ? value.trim().slice(0, maxValueLength) : "";
+  }
+
+  function clickId(value) {
+    var id = typeof value === "string" ? value.trim() : "";
+    return id.length <= maxClickIdLength && /^[A-Za-z0-9._~-]+$/.test(id) ? id : "";
   }
 
   function safeHost(value) {
@@ -50,6 +63,8 @@
     return window.navigator.globalPrivacyControl === true || window.navigator.doNotTrack === "1" || window.doNotTrack === "1";
   }
 
+  function allowed() { return consent() === "granted" && !privacySignal(); }
+
   function urlWithoutSecrets(value, referrer) {
     try {
       var parsed = new URL(value, window.location.origin);
@@ -72,24 +87,36 @@
 
   function currentTouch() {
     var params = new URLSearchParams(window.location.search);
-    var touch = { referrer_domain: safeHost(document.referrer) };
+    var touch = {};
+    var referrer = safeHost(document.referrer);
+    if (referrer) touch.referrer_domain = referrer;
     allowedUtm.forEach(function (key) {
       var value = bounded(params.get(key));
       if (value) touch[key.slice(4)] = value;
     });
     allowedClickIds.forEach(function (key) {
-      var value = bounded(params.get(key));
-      if (value && /^[A-Za-z0-9._~-]+$/.test(value)) touch[key] = value;
+      var value = clickId(params.get(key));
+      if (value) touch[key] = value;
     });
     return touch;
   }
+
+  function linkerFrom(search) {
+    var value = new URLSearchParams(search).get("_gl");
+    return value && value.length <= 512 ? value : "";
+  }
+
+  // The landing page's campaign touch and `_gl`, held in memory only. Framer can change the
+  // URL before the visitor accepts the banner; consent stores this touch, not the later URL.
+  var landingTouch = currentTouch();
+  var landingLinker = linkerFrom(window.location.search);
 
   function attribution() {
     var saved = {};
     try { saved = JSON.parse(storageRead(config.attributionStorageKey) || "{}"); } catch (_) { saved = {}; }
     if (!saved || typeof saved !== "object") return {};
     function safeTouch(touch) {
-      if (!touch || typeof touch !== "object") return {};
+      if (!touch || typeof touch !== "object") return null;
       var safe = {};
       ["source", "medium", "campaign", "content", "term"].forEach(function (key) {
         var value = bounded(touch[key]);
@@ -98,8 +125,8 @@
       var domain = bounded(touch.referrer_domain).toLowerCase();
       if (domain && /^[a-z0-9.-]+$/.test(domain)) safe.referrer_domain = domain;
       allowedClickIds.forEach(function (key) {
-        var value = bounded(touch[key]);
-        if (value && /^[A-Za-z0-9._~-]+$/.test(value)) safe[key] = value;
+        var value = clickId(touch[key]);
+        if (value) safe[key] = value;
       });
       return Object.keys(safe).length ? safe : null;
     }
@@ -107,12 +134,11 @@
   }
 
   function updateAttribution() {
-    if (consent() !== "granted") return {};
+    if (!allowed()) return {};
     var previous = attribution();
-    var touch = currentTouch();
-    var hasCampaign = Object.keys(touch).some(function (key) { return key !== "referrer_domain" && touch[key]; });
+    var touch = landingTouch;
     var hasReferrer = touch.referrer_domain && touch.referrer_domain !== window.location.hostname.toLowerCase();
-    if (!hasCampaign && !hasReferrer) return previous;
+    if (!hasCampaign(touch) && !hasReferrer) return previous;
     var next = { first: previous.first || touch, last: touch };
     storageWrite(config.attributionStorageKey, JSON.stringify(next));
     return next;
@@ -195,20 +221,79 @@
     }
     posthog.capture(eventName, properties);
     signalConversion(eventName, properties);
-    if (link.isDownload || link.cta === "start-free" || link.cta === "start-trial") addVisitor(element);
   }
 
-  // Carries the consented visitor ID to suplex.sh, which keeps it in a first-party cookie so a
-  // later Suplex account login joins this visitor (docs/accounts.md).
-  function addVisitor(element) {
-    var visitor = typeof posthog.get_distinct_id === "function" ? posthog.get_distinct_id() : "";
-    if (typeof visitor !== "string" || !/^[A-Za-z0-9._:-]{8,64}$/.test(visitor)) return;
-    try {
-      var href = new URL(element.href || "", window.location.href);
-      if (href.origin !== "https://suplex.sh" || (href.pathname !== "/download" && href.pathname !== "/start")) return;
-      href.searchParams.set("visitor", visitor);
-      element.href = href.toString();
-    } catch (_) { /* leave the link unchanged */ }
+  function hasCampaign(touch) {
+    return Boolean(touch) && Object.keys(touch).some(function (key) { return key !== "referrer_domain"; });
+  }
+
+  // The touch that links carry: the last touch with a campaign value, else the first one.
+  // The landing touch is the fallback when storage is not available.
+  function linkTouch() {
+    var saved = attribution();
+    if (hasCampaign(saved.last)) return saved.last;
+    if (hasCampaign(saved.first)) return saved.first;
+    return hasCampaign(landingTouch) ? landingTouch : {};
+  }
+
+  // What a consented link to suplex.sh carries. suplex.sh keeps the click IDs and UTM values for
+  // the signup, and the visitor in a first-party cookie, so a later Suplex account login joins
+  // this visitor (docs/accounts.md).
+  function linkParams() {
+    var touch = linkTouch();
+    var params = [];
+    allowedClickIds.forEach(function (key) {
+      if (touch[key]) params.push([key, touch[key]]);
+    });
+    allowedUtm.forEach(function (key) {
+      if (touch[key.slice(4)]) params.push([key, touch[key.slice(4)]]);
+    });
+    var linker = linkerFrom(window.location.search) || landingLinker;
+    if (linker) params.push(["_gl", linker]);
+    var visitor = posthog && typeof posthog.get_distinct_id === "function" ? posthog.get_distinct_id() : "";
+    if (typeof visitor === "string" && /^[A-Za-z0-9._:-]{8,64}$/.test(visitor)) params.push(["visitor", visitor]);
+    return params;
+  }
+
+  // The parameters this file added to each element, so a withdrawn choice removes them.
+  var added = typeof WeakMap === "function" ? new WeakMap() : null;
+
+  // Adds the consented parameters to a link or form to suplex.sh. A parameter the link already
+  // has is kept. Without consent, the parameters this file added before are removed.
+  function decorate(element) {
+    if (!element || !element.getAttribute) return;
+    var attribute = element.tagName === "FORM" ? "action" : "href";
+    var raw = element.getAttribute(attribute);
+    if (!raw) return;
+    var target;
+    try { target = new URL(raw, window.location.href); } catch (_) { return; }
+    if (target.origin !== siteOrigin) return;
+    var before = target.toString();
+    var previous = (added && added.get(element)) || {};
+    Object.keys(previous).forEach(function (key) {
+      if (target.searchParams.get(key) === previous[key]) target.searchParams.delete(key);
+    });
+    var next = {};
+    if (allowed()) {
+      linkParams().forEach(function (pair) {
+        if (target.searchParams.has(pair[0])) return;
+        target.searchParams.set(pair[0], pair[1]);
+        next[pair[0]] = pair[1];
+      });
+    }
+    if (added) added.set(element, next);
+    if (target.toString() !== before) element.setAttribute(attribute, target.toString());
+  }
+
+  function decorateAll() {
+    if (!document.querySelectorAll) return;
+    Array.prototype.forEach.call(document.querySelectorAll("a[href],area[href],form[action]"), decorate);
+  }
+
+  function decorateEvent(event) {
+    var target = event.target;
+    if (!target || !target.closest) return;
+    decorate(event.type === "submit" ? target.closest("form") : target.closest("a[href],area[href]"));
   }
 
   function installSpaPageviews() {
@@ -275,80 +360,52 @@
     document.addEventListener("click", function (event) { captureAnnotatedClick(event.target); });
   }
 
+  // The banner, its settings button, the `consent` URL parameter, and the links to suplex.sh
+  // belong to the shared consent script (https://suplex.sh/consent.js). This file follows its
+  // choice, in either load order.
+  function sharedConsent() { return window.SuplexConsent; }
 
-  function removeConsentBanner() {
-    var banner = document.getElementById("suplex-analytics-consent");
-    if (banner) banner.remove();
+  function followConsent(choice) {
+    if (choice === "granted") {
+      if (privacySignal()) return;
+      updateAttribution();
+      if (!started) loadSdk();
+      else if (posthog) { posthog.opt_in_capturing(); capturePageview(); }
+      decorateAll();
+      return;
+    }
+    storageRemove(config.attributionStorageKey);
+    if (posthog) { posthog.opt_out_capturing(); }
+    decorateAll();
   }
 
-  function removeSettingsButton() {
-    var button = document.getElementById("suplex-analytics-settings");
-    if (button) button.remove();
-  }
-
-  function showSettingsButton() {
-    if (privacySignal() || document.getElementById("suplex-analytics-settings")) return;
-    var button = document.createElement("button");
-    button.id = "suplex-analytics-settings";
-    button.type = "button";
-    button.textContent = "Analytics settings";
-    button.setAttribute("aria-label", "Open analytics settings");
-    button.style.cssText = "position:fixed;z-index:2147483647;left:16px;bottom:16px;padding:6px 10px;border:1px solid #a3a3a3;background:#fff;color:#171717;font:13px/1.4 system-ui,sans-serif;cursor:pointer";
-    button.addEventListener("click", function () { window.SuplexAnalytics.clearConsent(); });
-    document.body.appendChild(button);
-  }
-
-  function showConsentBanner() {
-    if (consent() || document.getElementById("suplex-analytics-consent")) return;
-    var banner = document.createElement("div");
-    banner.id = "suplex-analytics-consent";
-    banner.setAttribute("role", "dialog");
-    banner.setAttribute("aria-label", "Website analytics consent");
-    banner.style.cssText = "position:fixed;z-index:2147483647;right:16px;bottom:16px;max-width:420px;padding:12px;border:1px solid #d4d4d4;background:#fff;color:#171717;font:14px/1.4 system-ui,sans-serif;display:flex;gap:12px;align-items:center";
-    var text = document.createElement("span");
-    text.textContent = "Suplex collects usage data to improve the product.";
-    var reject = document.createElement("button");
-    reject.type = "button";
-    reject.textContent = "Reject";
-    reject.style.cssText = "padding:6px 10px;border:1px solid #a3a3a3;background:#fff;color:#171717;cursor:pointer";
-    var allow = document.createElement("button");
-    allow.type = "button";
-    allow.textContent = "Accept";
-    allow.style.cssText = "padding:6px 10px;border:1px solid #171717;background:#171717;color:#fff;cursor:pointer";
-    reject.addEventListener("click", function () { window.SuplexAnalytics.denyConsent(); });
-    allow.addEventListener("click", function () { window.SuplexAnalytics.grantConsent(); });
-    banner.append(text, reject, allow);
-    document.body.appendChild(banner);
+  function choose(choice) {
+    var shared = sharedConsent();
+    if (shared) {
+      if (choice === "granted") shared.grant();
+      else if (choice === "denied") shared.deny();
+      else shared.clear();
+      return;
+    }
+    if (choice) storageWrite(config.consentStorageKey, choice);
+    else storageRemove(config.consentStorageKey);
+    followConsent(choice);
   }
 
   window.SuplexAnalytics = {
     grantConsent: function () {
       if (privacySignal()) return;
-      storageWrite(config.consentStorageKey, "granted");
-      updateAttribution();
-      removeConsentBanner();
-      showSettingsButton();
-      if (!started) { loadSdk(); return; }
-      if (posthog) { posthog.opt_in_capturing(); capturePageview(); }
+      choose("granted");
     },
-    denyConsent: function () {
-      storageWrite(config.consentStorageKey, "denied");
-      storageRemove(config.attributionStorageKey);
-      removeConsentBanner();
-      showSettingsButton();
-      if (posthog) { posthog.opt_out_capturing(); }
-    },
-    clearConsent: function () {
-      storageRemove(config.consentStorageKey);
-      storageRemove(config.attributionStorageKey);
-      if (posthog) { posthog.opt_out_capturing(); }
-      removeSettingsButton();
-      showConsentBanner();
-    },
+    denyConsent: function () { choose("denied"); },
+    clearConsent: function () { choose(null); },
   };
 
-  if (privacySignal()) return;
-  if (consent() === "granted") { showSettingsButton(); loadSdk(); }
-  else if (consent() === "denied") showSettingsButton();
-  else showConsentBanner();
+  if (sharedConsent()) sharedConsent().subscribe(followConsent);
+  else (window.SuplexConsentListeners = window.SuplexConsentListeners || []).push(followConsent);
+
+  ["click", "auxclick", "contextmenu", "submit"].forEach(function (type) {
+    document.addEventListener(type, decorateEvent, true);
+  });
+  if (allowed()) loadSdk();
 }(window, document));

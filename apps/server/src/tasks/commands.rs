@@ -386,13 +386,24 @@ pub(super) fn audit(
     task: &TaskRecord,
     now: DateTime<Utc>,
 ) -> DatabaseResult<()> {
-    audit_with_queue(database, actor_user_id, action, task, None, now)
+    audit_with_queue(database, Some(actor_user_id), action, task, None, now)
+}
+
+/// A command that Suplex sent itself, such as an automatic archive. The record
+/// has no user and no agent, and the task activity names Suplex.
+pub(super) fn system_audit(
+    database: &SuplexDatabase,
+    action: &str,
+    task: &TaskRecord,
+    now: DateTime<Utc>,
+) -> DatabaseResult<()> {
+    audit_with_queue(database, None, action, task, None, now)
 }
 
 /// `queue` is what held a task that the user started anyway.
 fn audit_with_queue(
     database: &SuplexDatabase,
-    actor_user_id: &str,
+    actor_user_id: Option<&str>,
     action: &str,
     task: &TaskRecord,
     queue: Option<&TaskQueue>,
@@ -413,7 +424,7 @@ fn audit_with_queue(
         database,
         &crate::identity::audit::AuditEvent {
             id: &format!("audit_{}", Uuid::new_v4().simple()),
-            actor_user_id: Some(actor_user_id),
+            actor_user_id,
             actor_agent_id: None,
             action,
             target_user_id: None,
@@ -617,7 +628,7 @@ pub fn force_start_user_task(
     })?;
     audit_with_queue(
         database,
-        actor_user_id,
+        Some(actor_user_id),
         "task_force_started",
         &task,
         Some(&queue),
@@ -883,6 +894,21 @@ pub fn cancel_user_task(
     })?;
     audit(database, actor_user_id, "task_cancelled", &cancelled, now)?;
     Ok(cancelled)
+}
+
+/// The Coordinator stops its own task after the user chose to stop. The bridge
+/// already checked that the caller is the current Coordinator of this task.
+/// The host scan finds the stop request; the task activity names Suplex.
+pub fn cancel_task_for_coordinator(
+    database: &mut SuplexDatabase,
+    task_id: &str,
+    now: DateTime<Utc>,
+) -> DatabaseResult<()> {
+    if !root_session_store::cancel_task(database, task_id, now)? {
+        return Err(TaskError::new("This task cannot be cancelled", 409).into());
+    }
+    let cancelled = repository::task_by_id(database, task_id)?.ok_or_else(TaskError::not_found)?;
+    system_audit(database, "task_cancelled", &cancelled, now)
 }
 
 /// Send a human note to an active Root, or resume the retained Root of a

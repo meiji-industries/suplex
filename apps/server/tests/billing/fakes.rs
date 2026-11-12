@@ -269,6 +269,9 @@ pub struct FakeSession {
     pub subscription_id: Option<String>,
     pub metadata: IndexMap<String, String>,
     pub line_items: Vec<(String, i64)>,
+    pub amount_total: i64,
+    pub currency: String,
+    pub success_url: String,
 }
 
 /// One seat update request as Stripe received it.
@@ -668,6 +671,8 @@ impl StripeState {
             "url": session.url,
             "customer": session.customer_id,
             "subscription": session.subscription_id,
+            "amount_total": session.amount_total,
+            "currency": session.currency,
             "metadata": session.metadata,
             "line_items": page(session.line_items.iter().map(|(price, quantity)| json!({"price": {"id": price}, "quantity": quantity})).collect()),
         })
@@ -711,6 +716,13 @@ impl StripeState {
             payment_status: "unpaid".into(),
             customer_id: field(form, "customer").unwrap_or_default().into(),
             subscription_id: None,
+            amount_total: crate::billing::wire::SEAT_UNIT_AMOUNT
+                * field(form, "line_items[0][quantity]")
+                    .unwrap_or("0")
+                    .parse::<i64>()
+                    .unwrap(),
+            currency: "usd".into(),
+            success_url: field(form, "success_url").unwrap_or_default().into(),
             metadata,
             line_items: vec![(
                 field(form, "line_items[0][price]")

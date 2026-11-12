@@ -171,7 +171,7 @@ pub fn require_company_edit(
     if company_access(database, user_id, company_id)? == CompanyAccess::Read {
         if crate::billing::team_lapsed(database)? {
             return Err(IdentityError::auth(
-                "Team ended. Work is read-only until an administrator selects Team again.",
+                "The Team plan ended. All work is read-only. Suplex keeps all work. An administrator must select the Team plan again.",
                 403,
                 "team_lapsed",
             )
@@ -433,6 +433,39 @@ pub fn set_company_status(
     })
 }
 
+crate::shared::wire_enum! {
+    /// How the onboarding wizard ended: a first task, or Skip for now.
+    pub enum OnboardingOutcome {
+        FirstTask = "first_task",
+        Skipped = "skipped",
+    }
+}
+
+/// Records once per company that an administrator finished onboarding. A
+/// repeat is a no-op, so the wizard can call it on every finish.
+pub fn complete_onboarding(
+    database: &mut SuplexDatabase,
+    actor_user_id: &str,
+    company_id: &str,
+    outcome: OnboardingOutcome,
+    now: DateTime<Utc>,
+) -> DatabaseResult<()> {
+    database.transaction(false, |database| {
+        require_admin(database, actor_user_id)?;
+        require_company_access(database, actor_user_id, company_id)?;
+        let recorded: bool = database.connection().query_row(
+            "SELECT EXISTS(SELECT 1 FROM suplex_audit_events WHERE company_id = ?1 AND action = 'onboarding_completed')",
+            [company_id],
+            |row| row.get(0),
+        )?;
+        if recorded {
+            return Ok(());
+        }
+        let metadata = serde_json::json!({"outcome": outcome}).to_string();
+        audit(database, actor_user_id, "onboarding_completed", None, company_id, &metadata, now)
+    })
+}
+
 pub fn add_membership(
     database: &mut SuplexDatabase,
     actor_user_id: &str,
@@ -631,6 +664,48 @@ mod tests {
         let _ = std::fs::remove_file(&filename);
         let _ = std::fs::remove_file(filename.with_extension("sqlite-wal"));
         let _ = std::fs::remove_file(filename.with_extension("sqlite-shm"));
+    }
+
+    #[test]
+    fn onboarding_completion_is_recorded_once_per_company_by_an_admin() {
+        let filename = std::env::temp_dir().join(format!(
+            "{}.sqlite",
+            random_hex_id("suplex_onboarding").unwrap()
+        ));
+        let mut database = SuplexDatabase::open(&filename, OpenMode::Migrate).unwrap();
+        let now = DateTime::parse_from_rfc3339("2026-09-24T12:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let admin = auth::development_sign_in(&mut database, now).unwrap().user;
+        let company = create_company(&mut database, &admin.id, "Onboarded", now).unwrap();
+        for outcome in [OnboardingOutcome::FirstTask, OnboardingOutcome::Skipped] {
+            complete_onboarding(&mut database, &admin.id, &company.id, outcome, now).unwrap();
+        }
+        let rows = database
+            .connection()
+            .prepare("SELECT metadata_json FROM suplex_audit_events WHERE action = 'onboarding_completed' AND company_id = ?1")
+            .unwrap()
+            .query_map([&company.id], |row| row.get::<_, String>(0))
+            .unwrap()
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .unwrap();
+        assert_eq!(rows, [r#"{"outcome":"first_task"}"#]);
+        database.connection().execute(
+            "INSERT INTO suplex_users (id, display_name, username, role, status, created_at, updated_at, identity_version) VALUES ('member_onboarding', 'Member', 'member_onboarding', 'member', 'active', ?1, ?1, 1)",
+            [now.to_rfc3339()],
+        ).unwrap();
+        assert!(
+            complete_onboarding(
+                &mut database,
+                "member_onboarding",
+                &company.id,
+                OnboardingOutcome::Skipped,
+                now
+            )
+            .is_err()
+        );
+        drop(database);
+        let _ = std::fs::remove_file(&filename);
     }
 
     #[test]

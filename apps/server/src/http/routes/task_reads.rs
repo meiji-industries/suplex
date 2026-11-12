@@ -36,7 +36,10 @@ use crate::{
         },
         validation::ValidPath,
     },
-    integrations::github::Access,
+    integrations::{
+        github::Access,
+        github_delivery::{Github, GithubResult},
+    },
     platform::database::SuplexDatabase,
     runtimes::{task_harness::ReaderSession, task_harness_registry},
     tasks::control::SessionRow,
@@ -69,6 +72,15 @@ async fn checks(
     ValidPath(TaskIdParams { task_id }): ValidPath<TaskIdParams>,
     headers: HeaderMap,
 ) -> Response {
+    checks_with_github(state, task_id, headers, None).await
+}
+
+async fn checks_with_github(
+    state: AppState,
+    task_id: String,
+    headers: HeaderMap,
+    github_override: Option<GithubResult<Github>>,
+) -> Response {
     let (user_id, cookies) = match authorize(&state, &headers) {
         Ok(value) => value,
         Err(response) => return *response,
@@ -92,29 +104,42 @@ async fn checks(
                 )
             }))
     });
-    let intent = intent.map_err(|error| error.to_string());
     let (number, repository, branch) = match intent {
         Ok(Some(intent)) => intent,
         Ok(None) => return respond(Ok(json!({"available":false,"runs":[]})), cookies),
-        Err(error) => return respond::<Value>(Err(error.into()), cookies),
+        Err(error) => return respond::<Value>(Err(error), cookies),
     };
     // Check observations use GitHub for every repository connection.
     let observed = async {
-        let github = crate::integrations::github_delivery::Github::load().await?;
+        let github = match github_override {
+            Some(github) => github?,
+            None => Github::load().await?,
+        };
         github
             .observe_pull_request(&repository, &branch, Some(number))
             .await
     };
-    let observation = match observed.await {
-        Ok(observation) => observation,
-        Err(error) => return respond::<Value>(Err(Box::new(error)), cookies),
+    let value = match observed.await {
+        Ok(observation) => {
+            let pull_request_state = match observation.state.as_deref() {
+                Some("open") if observation.is_draft == Some(false) => json!("ready"),
+                Some("open") => json!("draft"),
+                other => json!(other),
+            };
+            json!({"available": observation.exists, "runs": observation.checks.runs, "pullRequestState": pull_request_state})
+        }
+        // GitHub owns the checks. When it cannot report them, for example
+        // with an unusable credential, an unreachable API, a rate limit, or an
+        // unreadable pull request, the checks are unavailable, and the reason
+        // goes only to the host log.
+        Err(error) => {
+            crate::platform::system_events::emit(json!({
+                "type": "task_checks", "state": "unavailable", "level": 40,
+                "taskId": task_id, "reason": error.to_string(),
+            }));
+            json!({"available": false, "runs": []})
+        }
     };
-    let pull_request_state = match observation.state.as_deref() {
-        Some("open") if observation.is_draft == Some(false) => json!("ready"),
-        Some("open") => json!("draft"),
-        other => json!(other),
-    };
-    let value = json!({"available": observation.exists, "runs": observation.checks.runs, "pullRequestState": pull_request_state});
     let scope = state.with_database(|database| read_task(database, &user_id, &task_id));
     respond(scope.map(|_| value), cookies)
 }
@@ -237,12 +262,12 @@ fn turn_author(
 
 /// The task's audited commands, each with the name of who sent it. The caller
 /// already checked that the reader can read the task.
-fn task_actions(
+pub(crate) fn task_actions(
     database: &SuplexDatabase,
     task_id: &str,
 ) -> Result<Vec<TaskActivityAction>, Box<dyn Error + Send + Sync>> {
     let mut statement = database.connection().prepare(
-        "SELECT e.id, e.action, COALESCE(u.display_name, a.name), e.created_at, json_extract(e.metadata_json, '$.queue') FROM suplex_audit_events e LEFT JOIN suplex_users u ON u.id = e.actor_user_id LEFT JOIN suplex_agents a ON a.id = e.actor_agent_id WHERE json_extract(e.metadata_json, '$.taskId') = ?1 AND e.company_id = (SELECT company_id FROM suplex_tasks WHERE id = ?1) ORDER BY e.created_at, e.rowid",
+        "SELECT e.id, e.action, COALESCE(u.display_name, a.name, CASE WHEN e.actor_user_id IS NULL AND e.actor_agent_id IS NULL THEN 'Suplex' END), e.created_at, json_extract(e.metadata_json, '$.queue') FROM suplex_audit_events e LEFT JOIN suplex_users u ON u.id = e.actor_user_id LEFT JOIN suplex_agents a ON a.id = e.actor_agent_id WHERE json_extract(e.metadata_json, '$.taskId') = ?1 AND e.company_id = (SELECT company_id FROM suplex_tasks WHERE id = ?1) ORDER BY e.created_at, e.rowid",
     )?;
     let rows = statement.query_map([task_id], |row| {
         Ok((
@@ -594,7 +619,7 @@ async fn read_diff(
         Ok(intent) => intent,
         Err(error) => return respond::<Value>(Err(error), cookies),
     };
-    let (path, repository, mut base_branch, pull_request) = match intent {
+    let (path, repository, base_branch, pull_request) = match intent {
         DiffIntent::NoWorktree => {
             let value = match kind {
                 DiffKind::Patch => DiffResponse::Patch(TaskDiffResponse {
@@ -616,30 +641,74 @@ async fn read_diff(
             pull_request,
         } => (path, repository, base_branch, pull_request),
     };
+    let value = match observe_local_diff(
+        path,
+        repository,
+        base_branch,
+        pull_request,
+        access_override,
+        kind,
+    )
+    .await
+    {
+        Ok(value) => value,
+        // Git and GitHub own the diff. When they cannot report it, the summary
+        // is unavailable, and the reason goes only to the host log.
+        Err(DiffFailure::Unobservable(error)) if matches!(kind, DiffKind::Summary) => {
+            crate::platform::system_events::emit(json!({
+                "type": "task_diff", "state": "unavailable", "level": 40,
+                "taskId": task_id, "reason": error.to_string(),
+            }));
+            DiffResponse::Summary(TaskDiffSummaryResponse {
+                available: false,
+                files: 0,
+            })
+        }
+        Err(DiffFailure::Unobservable(error) | DiffFailure::Internal(error)) => {
+            return respond::<Value>(Err(error), cookies);
+        }
+    };
+    let scope = state.with_database(|database| read_task(database, &user_id, &task_id));
+    respond(scope.map(|_| value), cookies)
+}
+
+enum DiffFailure {
+    /// Git or GitHub could not report the diff: for example a missing branch
+    /// or worktree, an unusable credential, an unreachable remote, an unborn
+    /// HEAD, or unrelated history.
+    Unobservable(Box<dyn Error + Send + Sync>),
+    /// A server defect, such as a panicked blocking task.
+    Internal(Box<dyn Error + Send + Sync>),
+}
+
+async fn observe_local_diff(
+    path: PathBuf,
+    repository: String,
+    mut base_branch: String,
+    pull_request: Option<u64>,
+    access_override: Option<Access>,
+    kind: DiffKind,
+) -> Result<DiffResponse, DiffFailure> {
     if let Some(number) = pull_request {
         let pull = async {
             let github = crate::integrations::github_delivery::Github::load().await?;
             github.get_pull_request(&repository, number).await
         };
-        match pull.await {
-            Ok(pull) => base_branch = pull.base_branch,
-            Err(error) => return respond::<Value>(Err(Box::new(error)), cookies),
-        }
+        base_branch = pull
+            .await
+            .map_err(|error| DiffFailure::Unobservable(Box::new(error)))?
+            .base_branch;
     }
-    let access_result = match access_override {
-        Some(access) => Ok(access),
-        None => Access::load().await,
+    let access = match access_override {
+        Some(access) => access,
+        None => Access::load().await.map_err(DiffFailure::Unobservable)?,
     };
-    let access = match access_result {
-        Ok(access) => access,
-        Err(error) => return respond::<Value>(Err(error), cookies),
-    };
-    let published_sha = match access.published_branch_sha(&repository, &base_branch).await {
-        Ok(sha) => sha,
-        Err(error) => return respond::<Value>(Err(error), cookies),
-    };
+    let published_sha = access
+        .published_branch_sha(&repository, &base_branch)
+        .await
+        .map_err(DiffFailure::Unobservable)?;
     let token = access.token().map(str::to_owned);
-    let observed = tokio::task::spawn_blocking(move || {
+    tokio::task::spawn_blocking(move || {
         let result = match kind {
             DiffKind::Patch => worktree::local_diff_patch(&path, published_sha, token.as_deref())
                 .map(|patch| {
@@ -660,16 +729,10 @@ async fn read_diff(
                 )
             }
         };
-        result.map_err(|error| error.to_string())
+        result.map_err(|error| DiffFailure::Unobservable(error.to_string().into()))
     })
-    .await;
-    let value = match observed {
-        Ok(Ok(value)) => value,
-        Ok(Err(error)) => return respond::<Value>(Err(error.into()), cookies),
-        Err(error) => return respond::<Value>(Err(Box::new(error)), cookies),
-    };
-    let scope = state.with_database(|database| read_task(database, &user_id, &task_id));
-    respond(scope.map(|_| value), cookies)
+    .await
+    .map_err(|error| DiffFailure::Internal(Box::new(error)))?
 }
 
 #[cfg(test)]

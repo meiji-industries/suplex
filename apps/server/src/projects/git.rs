@@ -111,13 +111,28 @@ fn failure_line(stderr: &str) -> &str {
         .unwrap_or("Git command failed")
 }
 
-/// Run `git` with the machine's credentials. Prompts are off so a missing
-/// credential fails at once. Failure becomes a `git2::Error`. The Root MCP
+/// Git config that offers the GitHub token for `https://github.com` after
+/// the machine's own credential helpers. A fresh machine has none, so without
+/// this the first clone fails before onboarding finishes. The token travels in
+/// the environment, not the command line, and only answers `get`.
+const GITHUB_TOKEN_HELPER_CONFIG: &str = concat!(
+    "credential.https://github.com.helper=",
+    r#"!f() { if test "$1" = get; then printf 'username=x-access-token\npassword=%s\n' "$SUPLEX_GIT_TOKEN"; fi; }; f"#
+);
+
+/// Run `git` with the machine's credentials, then the GitHub token. Prompts
+/// are off so a missing credential fails at once. Failure becomes a `git2::Error`. The Root MCP
 /// server runs delivery inside the agent environment, where `git` on PATH is
 /// the Worker guard; the guard exports the real binary.
-fn run_git(args: &[&str]) -> Result<(), git2::Error> {
+fn run_git(args: &[&str], token: Option<&str>) -> Result<(), git2::Error> {
     let git = std::env::var_os("SUPLEX_GIT_REAL_BIN").unwrap_or_else(|| "git".into());
-    let output = Command::new(git)
+    let mut command = Command::new(git);
+    if let Some(token) = token {
+        command
+            .args(["-c", GITHUB_TOKEN_HELPER_CONFIG])
+            .env("SUPLEX_GIT_TOKEN", token);
+    }
+    let output = command
         .args(args)
         .env("GIT_TERMINAL_PROMPT", "0")
         .stdin(Stdio::null())
@@ -171,6 +186,7 @@ pub(crate) fn system_fetch(
     repository: &Repository,
     refspecs: &[&str],
     prune: bool,
+    token: Option<&str>,
 ) -> Result<(), git2::Error> {
     let directory = git_directory(repository);
     let mut args = vec![
@@ -185,18 +201,27 @@ pub(crate) fn system_fetch(
     }
     args.extend(["origin", "--"]);
     args.extend(refspecs);
-    run_git(&args)
+    run_git(&args, token)
 }
 
 /// Push to origin with the system `git`. Never forced.
-pub(crate) fn system_push(repository: &Repository, refspec: &str) -> Result<(), git2::Error> {
+pub(crate) fn system_push(
+    repository: &Repository,
+    refspec: &str,
+    token: Option<&str>,
+) -> Result<(), git2::Error> {
     let directory = git_directory(repository);
-    run_git(&["-C", &directory, "push", "origin", "--", refspec])
+    run_git(&["-C", &directory, "push", "origin", "--", refspec], token)
 }
 
 /// Clone with the system `git`, routing `https://github.com/` to the fixture
 /// base when `github.git` is set. The routing stays in the new repository.
-pub(crate) fn system_clone(github: &Github, url: &str, target: &Path) -> Result<(), git2::Error> {
+pub(crate) fn system_clone(
+    github: &Github,
+    url: &str,
+    target: &Path,
+    token: Option<&str>,
+) -> Result<(), git2::Error> {
     let target = target.to_string_lossy();
     let mut args = vec!["clone".to_owned()];
     if let Some(base) = &github.git {
@@ -204,7 +229,7 @@ pub(crate) fn system_clone(github: &Github, url: &str, target: &Path) -> Result<
         args.push(format!("url.{base}.insteadOf=https://github.com/"));
     }
     args.extend(["--".into(), url.to_owned(), target.into_owned()]);
-    run_git(&args.iter().map(String::as_str).collect::<Vec<_>>())
+    run_git(&args.iter().map(String::as_str).collect::<Vec<_>>(), token)
 }
 
 /// OAuth authenticates GitHub Git operations over HTTPS, including SSH origins.
@@ -325,7 +350,7 @@ fn fetch_origin_branch(
             .remote_callbacks(remote_callbacks(token));
         origin.fetch(&[refspec.as_str()], Some(&mut options), None)
     } else {
-        system_fetch(repository, &[refspec.as_str()], false)
+        system_fetch(repository, &[refspec.as_str()], false, token)
     };
     fetched.map_err(|error| {
         if error.code() == git2::ErrorCode::Auth {
@@ -1053,13 +1078,19 @@ mod tests {
         push_main(&seed, &bare);
 
         let target = root.join("clone");
-        system_clone(&Github::default(), &url, &target).unwrap();
+        system_clone(&Github::default(), &url, &target, None).unwrap();
         let clone = Repository::open(&target).unwrap();
         commit(&seed, "two");
         push_main(&seed, &bare);
         let second = seed.head().unwrap().target().unwrap();
         assert!(clone.find_commit(second).is_err());
-        system_fetch(&clone, &["refs/heads/main:refs/remotes/origin/main"], false).unwrap();
+        system_fetch(
+            &clone,
+            &["refs/heads/main:refs/remotes/origin/main"],
+            false,
+            None,
+        )
+        .unwrap();
         assert_eq!(
             clone.refname_to_id("refs/remotes/origin/main").unwrap(),
             second
@@ -1068,13 +1099,13 @@ mod tests {
         // A bare commit id, as the published base commit fetch uses.
         let third = commit(&seed, "three");
         push_main(&seed, &bare);
-        system_fetch(&clone, &[&third.to_string()], false).unwrap();
+        system_fetch(&clone, &[&third.to_string()], false, None).unwrap();
         assert!(clone.find_commit(third).is_ok());
 
         // A push lands.
         clone.set_head_detached(third).unwrap();
         let fourth = commit(&clone, "four");
-        system_push(&clone, &format!("{fourth}:refs/heads/topic")).unwrap();
+        system_push(&clone, &format!("{fourth}:refs/heads/topic"), None).unwrap();
         let published = Repository::open_bare(&bare).unwrap();
         assert_eq!(published.refname_to_id("refs/heads/topic").unwrap(), fourth);
 
@@ -1082,7 +1113,7 @@ mod tests {
         let other = init(&root.join("other"), false);
         commit(&other, "unrelated");
         other.remote("origin", &url).unwrap();
-        assert!(system_push(&other, "refs/heads/main:refs/heads/topic").is_err());
+        assert!(system_push(&other, "refs/heads/main:refs/heads/topic", None).is_err());
         assert_eq!(published.refname_to_id("refs/heads/topic").unwrap(), fourth);
 
         // A missing remote fails at once.
@@ -1097,11 +1128,49 @@ mod tests {
             system_fetch(
                 &missing,
                 &["refs/heads/main:refs/remotes/origin/main"],
-                false
+                false,
+                None
             )
             .is_err()
         );
         fs::remove_dir_all(root).unwrap();
+    }
+
+    /// A machine with no credential helper of its own still gets the GitHub
+    /// token for github.com, and nothing for other hosts.
+    #[test]
+    fn github_token_helper_answers_git_credential_fill() {
+        let fill = |host: &str| {
+            let output = Command::new("git")
+                .args([
+                    "-c",
+                    super::GITHUB_TOKEN_HELPER_CONFIG,
+                    "credential",
+                    "fill",
+                ])
+                .env("SUPLEX_GIT_TOKEN", "ghu_fixture")
+                .env("GIT_CONFIG_GLOBAL", "/dev/null")
+                .env("GIT_CONFIG_SYSTEM", "/dev/null")
+                .env("GIT_TERMINAL_PROMPT", "0")
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+                .and_then(|mut child| {
+                    use std::io::Write;
+                    write!(
+                        child.stdin.take().unwrap(),
+                        "protocol=https\nhost={host}\n\n"
+                    )?;
+                    child.wait_with_output()
+                })
+                .unwrap();
+            String::from_utf8_lossy(&output.stdout).into_owned()
+        };
+        let github = fill("github.com");
+        assert!(github.contains("username=x-access-token\n"), "{github}");
+        assert!(github.contains("password=ghu_fixture\n"), "{github}");
+        assert!(!fill("gitlab.com").contains("password="));
     }
 
     #[test]

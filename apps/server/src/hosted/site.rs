@@ -1,11 +1,12 @@
-//! suplex.sh: `/download`, `/install.sh`, `/install.ps1`, `/bootstrap.sh`, `/terms`, `/privacy`, `/support`, and a
-//! redirect to the website at getsuplex.ai, a Framer site, for every other
-//! path. The pages are compiled in; nothing is read from disk.
+//! suplex.sh: `/download`, `/install.sh`, `/install.ps1`, `/bootstrap.sh`, `/terms`, `/privacy`, `/support`,
+//! `/consent.js`, and a redirect to the website at getsuplex.ai, a Framer
+//! site, with the request query for every other path. The pages are
+//! compiled in; nothing is read from disk.
 
 use axum::{
     Router,
-    extract::{Query, Request, State},
-    http::{HeaderMap, StatusCode, header},
+    extract::{Query, RawQuery, Request, State},
+    http::{HeaderMap, StatusCode, Uri, header},
     middleware::Next,
     response::{Html, IntoResponse, Response},
     routing::get,
@@ -22,6 +23,9 @@ const BOOTSTRAP_SCRIPT: &str = include_str!("bootstrap.sh");
 const TERMS_PAGE: &str = include_str!("legal/terms.html");
 const PRIVACY_PAGE: &str = include_str!("legal/privacy.html");
 const SUPPORT_PAGE: &str = include_str!("legal/support.html");
+/// The analytics consent banner and its cross-site `consent` parameter, for
+/// suplex.sh and getsuplex.ai both (docs/posthog.md).
+const CONSENT_SCRIPT: &str = include_str!("consent.js");
 
 /// The release feed directory, its manifest, and its formats. The first
 /// format is the default download.
@@ -58,6 +62,7 @@ struct DownloadQuery {
 async fn download(
     State(accounts): State<Accounts>,
     Query(query): Query<DownloadQuery>,
+    uri: Uri,
     headers: HeaderMap,
 ) -> Response {
     let platform = query.platform.as_deref().unwrap_or("macos-arm64");
@@ -98,6 +103,12 @@ async fn download(
         return response;
     }
     remember_visitor(&accounts, &headers, query.visitor.as_deref(), &mut response);
+    crate::accounts::hosted::attribution::remember(
+        &accounts.hosted.config.origin,
+        &headers,
+        uri.query(),
+        &mut response,
+    );
     // Anonymous: a fresh id and no person profile (docs/telemetry.md).
     let source = headers
         .get(header::USER_AGENT)
@@ -146,7 +157,7 @@ pub fn remember_visitor(
         "{VISITOR_COOKIE}={visitor}; Max-Age=31536000; Path=/; HttpOnly; SameSite=Lax{secure}"
     );
     if let Ok(cookie) = cookie.parse() {
-        response.headers_mut().insert(header::SET_COOKIE, cookie);
+        response.headers_mut().append(header::SET_COOKIE, cookie);
     }
 }
 
@@ -161,8 +172,29 @@ fn script(text: &'static str) -> Response {
         .into_response()
 }
 
-async fn website() -> Response {
-    (StatusCode::FOUND, [(header::LOCATION, WEBSITE)]).into_response()
+/// Forwards the query unchanged, so ad click ids, `utm_*`, `visitor`, and
+/// `_gl` reach the website. Each pair keeps its order and encoding. A
+/// `consent` pair stays only when it is `denied`, or `granted` without
+/// `Sec-GPC: 1`, so the website shows the choice made here.
+async fn website(RawQuery(raw): RawQuery, headers: HeaderMap) -> Response {
+    let gpc = headers.get("sec-gpc").is_some_and(|value| value == "1");
+    let raw = raw.unwrap_or_default();
+    let query = raw
+        .split('&')
+        .filter(|pair| {
+            let Some((key, value)) = url::form_urlencoded::parse(pair.as_bytes()).next() else {
+                return false;
+            };
+            key != "consent" || value == "denied" || (value == "granted" && !gpc)
+        })
+        .collect::<Vec<_>>()
+        .join("&");
+    let location = if query.is_empty() {
+        WEBSITE.to_owned()
+    } else {
+        format!("{WEBSITE}?{query}")
+    };
+    (StatusCode::FOUND, [(header::LOCATION, location)]).into_response()
 }
 
 /// `www.` hosts redirect to `BILLING_PUBLIC_ORIGIN`, never to the request
@@ -199,6 +231,19 @@ pub fn router(accounts: Accounts) -> Router {
         .route("/terms", get(|| async { Html(TERMS_PAGE) }))
         .route("/privacy", get(|| async { Html(PRIVACY_PAGE) }))
         .route("/support", get(|| async { Html(SUPPORT_PAGE) }))
+        .route(
+            "/consent.js",
+            get(|| async {
+                (
+                    [
+                        (header::CONTENT_TYPE, "text/javascript; charset=utf-8"),
+                        (header::CACHE_CONTROL, "public, max-age=300"),
+                    ],
+                    CONSENT_SCRIPT,
+                )
+                    .into_response()
+            }),
+        )
         .fallback(website)
         .with_state(accounts)
 }

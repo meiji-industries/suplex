@@ -113,11 +113,7 @@ SUPLEX_PORT=4111 exec "${CARGO_TARGET_DIR:-target}/release/suplex" start --foreg
 
 [tasks."server:test"]
 description = "Run the Rust server tests with cargo nextest"
-run = '''
-cd apps/server
-unset RUSTUP_TOOLCHAIN
-cargo nextest run --all-targets
-'''
+run = "export PATH=\"$(dirname \"$(mise which node)\"):$PATH\" && pnpm run test:rust"
 
 [tasks."server:test:parity"]
 description = "Check that the Rust server serves every frozen route and keeps the contract parity"

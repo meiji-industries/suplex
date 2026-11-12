@@ -88,6 +88,20 @@ pub fn free_port(preferred: u16) -> Result<u16, String> {
         .ok_or_else(|| "No local port is available for Suplex.".to_owned())
 }
 
+/// A free port that no other test in this process received. It is below the
+/// kernel's ephemeral range, so a parallel test's `bind(0)` cannot take it
+/// between this reservation and its use.
+#[cfg(test)]
+pub(crate) fn test_port() -> u16 {
+    use std::sync::atomic::{AtomicU16, Ordering};
+    static NEXT: AtomicU16 = AtomicU16::new(0);
+    let base = 20_000 + (std::process::id() % 50) as u16 * 200;
+    std::iter::repeat_with(|| base + NEXT.fetch_add(1, Ordering::Relaxed) % 200)
+        .take(200)
+        .find(|&port| std::net::TcpListener::bind(("127.0.0.1", port)).is_ok())
+        .expect("a free test port")
+}
+
 pub fn read_installation_id(user_data: &Path) -> String {
     std::fs::read_to_string(user_data.join("installation-id"))
         .map(|id| id.trim().to_owned())
@@ -526,7 +540,7 @@ mod tests {
     async fn the_owned_host_runs_its_foreground_command_with_cwd_environment_and_drained_log() {
         let directory = user_data(None, None);
         let local = host(&directory, quick());
-        let preferred = free_port(0).unwrap();
+        let preferred = test_port();
         let started = local
             .start(preferred, &ResolvedNetworkAccess::Local)
             .await
@@ -573,8 +587,8 @@ mod tests {
 
     #[test]
     fn the_preferred_port_is_kept_when_free_and_given_up_when_taken() {
-        let taken = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
-        let port = taken.local_addr().unwrap().port();
+        let port = test_port();
+        let taken = std::net::TcpListener::bind(("127.0.0.1", port)).unwrap();
         assert_ne!(free_port(port).unwrap(), port);
         drop(taken);
         assert_eq!(free_port(port).unwrap(), port);
@@ -594,7 +608,7 @@ mod tests {
             },
         );
         let error = local
-            .start(free_port(0).unwrap(), &ResolvedNetworkAccess::Local)
+            .start(test_port(), &ResolvedNetworkAccess::Local)
             .await
             .unwrap_err();
         assert!(
@@ -620,7 +634,7 @@ mod tests {
     #[tokio::test]
     async fn a_child_that_loses_the_port_to_another_program_is_retried_on_a_free_port() {
         let directory = user_data(None, Some(serde_json::json!({ "takePortOnce": true })));
-        let preferred = free_port(0).unwrap();
+        let preferred = test_port();
         let local = host(&directory, quick());
         let started = local
             .start(preferred, &ResolvedNetworkAccess::Local)
@@ -642,7 +656,7 @@ mod tests {
     async fn a_host_that_exits_while_starting_reports_its_exit_code() {
         let directory = user_data(None, Some(serde_json::json!({ "exitCode": 3 })));
         let error = host(&directory, quick())
-            .start(free_port(0).unwrap(), &ResolvedNetworkAccess::Local)
+            .start(test_port(), &ResolvedNetworkAccess::Local)
             .await
             .unwrap_err();
         assert!(
@@ -654,7 +668,7 @@ mod tests {
     #[tokio::test]
     async fn a_tailscale_start_failure_records_the_port_for_route_cleanup() {
         let directory = user_data(None, Some(serde_json::json!({ "exitCode": 4 })));
-        let port = free_port(0).unwrap();
+        let port = test_port();
         let error = host(&directory, quick())
             .start(
                 port,
@@ -675,7 +689,7 @@ mod tests {
         let directory = user_data(None, Some(serde_json::json!({ "spawnChild": true })));
         let local = host(&directory, quick());
         let port = local
-            .start(free_port(0).unwrap(), &ResolvedNetworkAccess::Local)
+            .start(test_port(), &ResolvedNetworkAccess::Local)
             .await
             .unwrap()
             .port;
@@ -712,7 +726,7 @@ mod tests {
             },
         );
         let port = local
-            .start(free_port(0).unwrap(), &ResolvedNetworkAccess::Local)
+            .start(test_port(), &ResolvedNetworkAccess::Local)
             .await
             .unwrap()
             .port;

@@ -22,7 +22,8 @@ The site serves `/download`, `/install.sh`, `/install.ps1`, `/bootstrap.sh`, `/t
 `/privacy`, `/support`, and a 302 to `https://getsuplex.ai/` for every other
 path. The 302 keeps the request query unchanged, so ad click ids, `utm_*`,
 `visitor`, and `_gl` reach the website; it removes only a `consent` parameter
-that is not valid (docs/posthog.md). Its pages are compiled into the binary from `apps/server/src/hosted`:
+that is not valid (docs/posthog.md). Its pages are compiled into the binary
+from `apps/server/src/hosted`:
 the three scripts are `include_str!` of `install.sh`, `install.ps1`, and
 `bootstrap.sh` (`text/plain`, `max-age=300`), and the other pages come from
 `legal/`. `bootstrap.sh` installs `suplex-bootstrap` from

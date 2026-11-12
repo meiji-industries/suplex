@@ -1,7 +1,7 @@
 //! suplex.sh: `/download`, `/install.sh`, `/install.ps1`, `/bootstrap.sh`, `/terms`, `/privacy`, `/support`,
 //! `/consent.js`, and a redirect to the website at getsuplex.ai, a Framer
-//! site, with the request query for every other path. The pages are compiled in; nothing is read
-//! from disk.
+//! site, with the request query for every other path. The pages are
+//! compiled in; nothing is read from disk.
 
 use axum::{
     Router,

@@ -50,6 +50,17 @@ capability checks. It does not provide a universal target-based fence around
 all repository actions. Do not infer such a fence from a target's name or add
 one as a documentation-derived requirement.
 
+## Merge refusals
+
+`merge_pull_request` sends an exact-head merge to GitHub and reports the answer.
+When GitHub waits for required checks or adds the pull request to a merge queue,
+Suplex stores a delivery wait, because only GitHub can end it. When GitHub
+refuses the merge for another reason, the operation fails with
+`merge_not_eligible` and GitHub's message, and Suplex stores no wait. The
+Coordinator reads the reason and then repairs, retries, or asks a person. A wait
+on a refused pull request that is ready to merge cannot wake, because nothing on
+GitHub changes.
+
 ## CI retries
 
 Coordinator can call `suplex_root` with

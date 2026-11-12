@@ -149,6 +149,91 @@ mod tests {
         assert_eq!(hash_argument(&html), Value::Null);
     }
 
+    /// The Google click IDs of the event pushed for a checkout of an account
+    /// with `kept` attribution and a browser with the `cookie` attribution.
+    async fn pushed_click_ids(kept: Option<&str>, cookie: Option<&str>) -> Value {
+        let f = Fixture::new().await;
+        let (session, registration) = paid_checkout(&f, 1).await;
+        link_account(&f, &registration, kept);
+        let header = cookie.map(|raw| format!("suplex_attribution={raw}"));
+        let headers: Vec<(&str, &str)> = header.iter().map(|h| ("cookie", h.as_str())).collect();
+        let html = page(&f, &format!("/checkout/return?session_id={session}"), &headers).await;
+        let event = pushed(&html).unwrap();
+        assert_eq!(event["event"], json!("subscribe"));
+        let ids: serde_json::Map<String, Value> = ["gclid", "gbraid", "wbraid", "msclkid", "fbclid"]
+            .into_iter()
+            .filter_map(|key| event.get(key).map(|value| (key.to_owned(), value.clone())))
+            .collect();
+        Value::Object(ids)
+    }
+
+    #[tokio::test]
+    async fn the_event_carries_only_the_google_click_ids_that_were_captured() {
+        assert_eq!(
+            pushed_click_ids(Some("utm_source=ads&gbraid=gb-1"), None).await,
+            json!({"gbraid": "gb-1"})
+        );
+        assert_eq!(
+            pushed_click_ids(Some("wbraid=wb-1"), None).await,
+            json!({"wbraid": "wb-1"})
+        );
+        assert_eq!(
+            pushed_click_ids(
+                Some(&format!("gclid={GCLID}&gbraid=gb-1&wbraid=wb-1&msclkid=ms.1&fbclid=fb_1")),
+                None
+            )
+            .await,
+            json!({"gclid": GCLID, "gbraid": "gb-1", "wbraid": "wb-1"})
+        );
+        assert_eq!(
+            pushed_click_ids(Some("utm_source=ads&msclkid=ms.1&fbclid=fb_1"), None).await,
+            json!({})
+        );
+        // Without kept attribution, the cookie supplies them.
+        assert_eq!(
+            pushed_click_ids(None, Some("gbraid=gb-2&wbraid=wb-2")).await,
+            json!({"gbraid": "gb-2", "wbraid": "wb-2"})
+        );
+    }
+
+    #[tokio::test]
+    async fn click_ids_never_mix_the_account_and_the_cookie() {
+        // The account has a Google click ID: the cookie adds nothing.
+        assert_eq!(
+            pushed_click_ids(Some("gbraid=gb-kept"), Some(&format!("gclid={GCLID}&wbraid=wb-2"))).await,
+            json!({"gbraid": "gb-kept"})
+        );
+        // The account has none: every ID comes from the cookie.
+        assert_eq!(
+            pushed_click_ids(Some("utm_source=ads&fbclid=fb_1"), Some("wbraid=wb-2")).await,
+            json!({"wbraid": "wb-2"})
+        );
+    }
+
+    #[test]
+    fn google_click_ids_take_one_source_and_skip_empty_values() {
+        let kept = Attribution::decode("gclid=&gbraid=gb-1&msclkid=ms.1");
+        let cookie = Attribution::decode("gclid=c-1&wbraid=wb-1");
+        let owned = |pairs: &[(&'static str, &str)]| {
+            pairs
+                .iter()
+                .map(|(key, value)| (*key, (*value).to_owned()))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            google_click_ids(Some(&kept), Some(&cookie)),
+            owned(&[("gbraid", "gb-1")])
+        );
+        let campaign_only = Attribution::decode("utm_source=ads&gclid=&fbclid=fb_1");
+        assert_eq!(
+            google_click_ids(Some(&campaign_only), Some(&cookie)),
+            owned(&[("gclid", "c-1"), ("wbraid", "wb-1")])
+        );
+        assert_eq!(google_click_ids(None, Some(&cookie)), owned(&[("gclid", "c-1"), ("wbraid", "wb-1")]));
+        assert_eq!(google_click_ids(Some(&campaign_only), None), owned(&[]));
+        assert_eq!(google_click_ids(None, None), owned(&[]));
+    }
+
     #[tokio::test]
     async fn missing_invalid_unpaid_or_unreadable_sessions_render_the_static_page() {
         let f = Fixture::new().await;

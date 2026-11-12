@@ -23,6 +23,8 @@ const ZERO_DECIMAL: [&str; 16] = [
 /// Stripe amounts in these currencies are in thousandths.
 const THREE_DECIMAL: [&str; 5] = ["bhd", "jod", "kwd", "omr", "tnd"];
 const MAX_SESSION_ID: usize = 255;
+/// The Google Ads click IDs the `subscribe` event carries.
+const GOOGLE_CLICK_IDS: [&str; 3] = ["gclid", "gbraid", "wbraid"];
 
 /// A Checkout Session id: `cs_` and then letters, digits, or `_`.
 pub fn valid_session_id(id: &str) -> bool {
@@ -114,6 +116,30 @@ fn signup_identity(
     )))
 }
 
+/// The Google Ads click IDs for the event, from one source so that they
+/// never mix two clicks: the account's kept first touch when it has any of
+/// them, else this browser's cookie. Absent and empty values are left out.
+pub fn google_click_ids(
+    kept: Option<&Attribution>,
+    cookie: Option<&Attribution>,
+) -> Vec<(&'static str, String)> {
+    let ids = |attribution: &Attribution| -> Vec<(&'static str, String)> {
+        GOOGLE_CLICK_IDS
+            .into_iter()
+            .filter_map(|key| {
+                attribution
+                    .get(key)
+                    .filter(|value| !value.is_empty())
+                    .map(|value| (key, value.to_owned()))
+            })
+            .collect()
+    };
+    kept.map(ids)
+        .filter(|ids| !ids.is_empty())
+        .or_else(|| cookie.map(ids))
+        .unwrap_or_default()
+}
+
 /// Records the session once. `true` only for the first request.
 fn record(db: &Connection, session_id: &str, now: &str) -> rusqlite::Result<bool> {
     Ok(db.execute(
@@ -145,23 +171,18 @@ impl Hosted {
         let Ok(true) = self.immediate(|db| record(db, session_id, &now)) else {
             return String::new();
         };
-        // Best effort: without a Suplex account the event has no gclid or hash.
+        // Best effort: without a Suplex account the event has no hash, and
+        // its click IDs can come only from the cookie.
         let identity = session.customer_id.as_deref().and_then(|customer| {
             self.query(|db| signup_identity(db, customer))
                 .ok()
                 .flatten()
         });
         let (email, attribution) = identity.unzip();
-        // The account keeps the consented first touch; else this browser's cookie.
-        let gclid = attribution
-            .flatten()
-            .and_then(|kept| kept.get("gclid").map(str::to_owned))
-            .or_else(|| {
-                Attribution::for_signup(headers)
-                    .and_then(|cookie| cookie.get("gclid").map(str::to_owned))
-            });
-        if let Some(gclid) = gclid {
-            event.insert("gclid".into(), json!(gclid));
+        let kept = attribution.flatten();
+        let cookie = Attribution::for_signup(headers);
+        for (key, value) in google_click_ids(kept.as_ref(), cookie.as_ref()) {
+            event.insert(key.into(), json!(value));
         }
         page::conversion_script(
             &Value::Object(event),

@@ -710,39 +710,36 @@ async fn ready_and_merged_targets_complete_through_github_state() {
         .unwrap();
     assert_eq!(ready["isDraft"], false);
     assert_eq!(fake.lock().unwrap().pulls[0]["draft"], false);
+    // GitHub refuses a clean pull request with green checks and no merge queue.
+    // No GitHub state will change, so a wait would never wake: the refusal
+    // returns to the Coordinator with GitHub's message.
     fake.lock().unwrap().merge_refusal = true;
-    let waiting = operations
-        .execute(
-            root,
-            None,
-            &DeliveryRequest {
-                operation: DeliveryOperation::MergePullRequest,
-                expected_head: Some(&head),
-                review: Some(&review),
-                pull_request_title: None,
-                pull_request_body: None,
-            },
-        )
-        .await
-        .unwrap();
-    assert_eq!(waiting["kind"], "merge_requested");
+    let merge = DeliveryRequest {
+        operation: DeliveryOperation::MergePullRequest,
+        expected_head: Some(&head),
+        review: Some(&review),
+        pull_request_title: None,
+        pull_request_body: None,
+    };
+    let refused = operations.execute(root, None, &merge).await.unwrap_err();
     assert_eq!(
-        serde_json::json!(control(&fixture).workflow_state)["deliveryWait"]["reason"],
-        "merge_queue"
+        DeliveryError::code_of(refused.as_ref()),
+        Some("merge_not_eligible")
     );
-    // GitHub merges while Suplex waits; the wait observation adopts it without a Suplex receipt.
+    assert!(
+        refused
+            .to_string()
+            .contains("Pull Request is not mergeable"),
+        "{refused}"
+    );
+    assert!(serde_json::json!(control(&fixture).workflow_state)["deliveryWait"].is_null());
+    // A person merges on GitHub; the next merge request adopts it without a Suplex receipt.
     {
         let mut fake = fake.lock().unwrap();
         fake.pulls[0]["state"] = json!("closed");
         fake.pulls[0]["mergedAt"] = json!("2026-09-25T02:00:00Z");
     }
-    assert_eq!(
-        operations
-            .observe_delivery_wait(&fixture.task_id)
-            .await
-            .unwrap(),
-        "finished"
-    );
+    operations.execute(root, None, &merge).await.unwrap();
     let control = control(&fixture);
     assert_eq!(control.status, crate::tasks::control::TaskStatus::Delivered);
     assert_eq!(serde_json::json!(control)["pullRequest"]["state"], "merged");
@@ -2037,6 +2034,14 @@ async fn reviewed_pull() -> (WaitCase, String, ReviewRange) {
 }
 
 async fn request_merge(case: &WaitCase, head: &str, review: &ReviewRange) -> Value {
+    try_merge(case, head, review).await.unwrap()
+}
+
+async fn try_merge(
+    case: &WaitCase,
+    head: &str,
+    review: &ReviewRange,
+) -> crate::platform::database::DatabaseResult<Value> {
     case.operations
         .execute(
             &case.fixture.root,
@@ -2050,7 +2055,29 @@ async fn request_merge(case: &WaitCase, head: &str, review: &ReviewRange) -> Val
             },
         )
         .await
-        .unwrap()
+}
+
+/// A refused merge returns to the Coordinator with GitHub's evidence and stores no wait.
+fn assert_refused(
+    case: &WaitCase,
+    result: crate::platform::database::DatabaseResult<Value>,
+    why: &str,
+) {
+    let error = result.expect_err(why);
+    assert_eq!(
+        DeliveryError::code_of(error.as_ref()),
+        Some("merge_not_eligible"),
+        "{why}: {error}"
+    );
+    assert!(
+        error.to_string().contains("GitHub refused"),
+        "{why}: {error}"
+    );
+    assert!(
+        serde_json::json!(control(&case.fixture).workflow_state)["deliveryWait"].is_null(),
+        "{why}"
+    );
+    assert_eq!(case.merge_calls(), 1, "{why}");
 }
 
 #[tokio::test]
@@ -2111,16 +2138,13 @@ async fn a_required_review_with_no_named_reviewer_parks_without_claiming_a_notif
 }
 
 #[tokio::test]
-async fn a_blocked_pull_request_with_no_code_owner_request_keeps_its_merge_request() {
+async fn a_blocked_pull_request_with_no_code_owner_request_reports_the_refusal() {
     let (case, head, review) = reviewed_pull().await;
     case.set_pull(
         json!({"reviewDecision": null, "mergeable": "MERGEABLE", "mergeStateStatus": "BLOCKED"}),
     );
     case.fake.lock().unwrap().merge_refusal = true;
-    let requested = request_merge(&case, &head, &review).await;
-    assert_eq!(requested["kind"], "merge_requested", "{requested}");
-    assert_eq!(requested["wait"]["reason"], "merge_queue", "{requested}");
-    assert_eq!(case.merge_calls(), 1);
+    assert_refused(&case, try_merge(&case, &head, &review).await, "blocked");
     case.cleanup();
 }
 
@@ -2149,12 +2173,7 @@ async fn work_the_coordinator_can_repair_is_never_parked_on_a_review() {
         case.set_pull(code_owner_review_open());
         case.set_pull(fields);
         case.fake.lock().unwrap().merge_refusal = true;
-        let requested = request_merge(&case, &head, &review).await;
-        assert_eq!(
-            requested["wait"]["reason"], "merge_queue",
-            "{repair}: {requested}"
-        );
-        assert_eq!(case.merge_calls(), 1, "{repair}");
+        assert_refused(&case, try_merge(&case, &head, &review).await, repair);
         case.cleanup();
     }
 }

@@ -2538,10 +2538,10 @@ impl DeliveryOperations {
         Ok(wait)
     }
 
-    /// Request the merge. TypeScript `mergePullRequest` discards the
-    /// conditional result and observes the pull request afterwards;
-    /// `mergePullRequestDirect` (a trigger merge) reports it, and returns the
-    /// wait response when GitHub has not merged.
+    /// Request the merge and report GitHub's answer. A refusal returns to the
+    /// Coordinator with GitHub's evidence; only a pending check or a merge
+    /// queue stores a wait, because only GitHub can end those. A wait on a
+    /// refused ready pull request would never wake: nothing on GitHub changes.
     async fn request_merge(
         &self,
         control: &TaskControlRow,
@@ -2552,13 +2552,7 @@ impl DeliveryOperations {
         trigger: bool,
     ) -> DatabaseResult<Option<Value>> {
         let requested = observed.number.unwrap_or(0);
-        if !trigger {
-            github
-                .merge_conditionally(repository, requested, head, true)
-                .await?;
-            return Ok(None);
-        }
-        if observed.auto_merge_enabled == Some(true) {
+        if trigger && observed.auto_merge_enabled == Some(true) {
             return Err(self.trigger_blocked(
                 control,
                 "Auto-merge is enabled for this trigger pull request. Review delivery manually.",
@@ -2566,7 +2560,7 @@ impl DeliveryOperations {
             )?);
         }
         let (disposition, message) = match github
-            .merge_conditionally(repository, requested, head, false)
+            .merge_conditionally(repository, requested, head, !trigger)
             .await?
         {
             MergeResult::Merged => return Ok(None),

@@ -27,8 +27,10 @@ function StatusBadge({ status }: { status: "active" | "paused" | "archived" }): 
 
 const planLabels = { free: "Free", pro: "Pro", team: "Team" } as const;
 
-function PlanBadge({ plan }: { plan: keyof typeof planLabels | null | undefined }): ReactElement | null {
-  return plan && !inAppStoreShell() ? <Badge variant="secondary">{planLabels[plan]}</Badge> : null;
+// A lapsed Team reports the Free plan. The badge says that Team ended, not that the host selected Free.
+function PlanBadge({ plan, teamLapsed }: { plan: keyof typeof planLabels | null | undefined; teamLapsed?: boolean | undefined }): ReactElement | null {
+  if (!plan || inAppStoreShell()) return null;
+  return teamLapsed ? <Badge variant="destructive">Team ended</Badge> : <Badge variant="secondary">{planLabels[plan]}</Badge>;
 }
 
 function CreateCompanyDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }): ReactElement {
@@ -81,7 +83,7 @@ export function CompanySwitcher(): ReactElement {
         <DropdownMenuTrigger aria-label="Switch company" title="Switch company" render={<SidebarMenuButton className="data-[slot=sidebar-menu-button]:p-1.5! h-14" />}>
           {currentCompany ? <EntityAvatar kind="company" id={currentCompany.id} name={currentCompany.name} seed={currentCompany.name} size="sm" /> : <CircleGauge className="size-5!" />}
           <span className="min-w-0 flex-1 truncate text-sm font-semibold">{label}</span>
-          <PlanBadge plan={currentCompany?.plan} />
+          <PlanBadge plan={currentCompany?.plan} teamLapsed={currentCompany?.teamLapsed} />
         </DropdownMenuTrigger>
         <DropdownMenuContent className="w-64" align="start">
               <DropdownMenuGroup>
@@ -92,7 +94,7 @@ export function CompanySwitcher(): ReactElement {
                   }}>
                     <EntityAvatar kind="company" id={company.id} name={company.name} seed={company.name} size="sm" />
                     <span className="min-w-0 flex-1 truncate">{company.name}</span>
-                    <PlanBadge plan={company.plan} />
+                    <PlanBadge plan={company.plan} teamLapsed={company.teamLapsed} />
                     <StatusBadge status={company.status} />
                   </DropdownMenuItem></span>) : <div className="px-2 py-2 text-xs text-muted-foreground">{user?.role === "admin" ? "No companies yet" : "No company access"}</div>}
               </DropdownMenuGroup>

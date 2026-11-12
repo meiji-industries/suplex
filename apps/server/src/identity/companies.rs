@@ -171,7 +171,7 @@ pub fn require_company_edit(
     if company_access(database, user_id, company_id)? == CompanyAccess::Read {
         if crate::billing::team_lapsed(database)? {
             return Err(IdentityError::auth(
-                "Team ended. Work is read-only until an administrator selects Team again.",
+                "The Team plan ended. All work is read-only. Suplex keeps all work. An administrator must select the Team plan again.",
                 403,
                 "team_lapsed",
             )

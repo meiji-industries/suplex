@@ -150,8 +150,8 @@ test("Team buys a seat for each user, at least 3, and shows seats in use", async
 test("a lapsed Team says that work is read-only", async () => {
   api.readJson.mockImplementation(async () => ({ ...free, teamLapsed: true, trialAvailable: false }));
   const container = await mount();
-  expect(container.textContent).toContain("Team ended");
-  expect(container.textContent).toContain("Work is read-only until you select Team again.");
+  expect(container.textContent).toContain("Team plan ended");
+  expect(container.textContent).toContain("All work is read-only until you select the Team plan again.");
 });
 
 test("a member or a host without a Suplex account sees the plan without actions", async () => {

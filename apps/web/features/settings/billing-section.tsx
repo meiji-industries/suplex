@@ -49,7 +49,7 @@ function limitText(used: number, limit: number | null): string {
 }
 
 function planDetail(summary: BillingSummary): string {
-  if (summary.teamLapsed) return "Team ended. Work is read-only until you select Team again.";
+  if (summary.teamLapsed) return "The Team plan ended. All work is read-only until you select the Team plan again. Suplex keeps all work.";
   if (summary.plan === "team") {
     if (summary.cancelAtPeriodEnd && summary.accessUntil) return `Team ends on ${formatDate(summary.accessUntil)}.`;
     return summary.renewalAt ? `Renews on ${formatDate(summary.renewalAt)}.` : "Team is active.";
@@ -215,7 +215,7 @@ export function BillingSection(): ReactElement {
   const hasSubscription = summary.subscriptionStatus !== null && summary.subscriptionStatus !== "none";
   const showPortal = ready && (summary.plan !== "free" || hasSubscription);
   const { limits, usage } = summary;
-  const planLabel = trialing ? "Pro trial" : summary.teamLapsed ? "Team ended" : `${summary.plan[0]!.toUpperCase()}${summary.plan.slice(1)} plan`;
+  const planLabel = trialing ? "Pro trial" : summary.teamLapsed ? "Team plan ended" : `${summary.plan[0]!.toUpperCase()}${summary.plan.slice(1)} plan`;
 
   return (
     <>

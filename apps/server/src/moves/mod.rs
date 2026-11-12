@@ -82,6 +82,31 @@ fn agent_failure(
     .into()
 }
 
+/// The agent already reads its own Move grant from `/me`, so a missing grant
+/// says how to get it. Every agent entry point checks it before any lookup:
+/// an agent without the grant learns nothing about which Moves exist.
+fn agent_granted(
+    database: &SuplexDatabase,
+    principal: &Principal,
+) -> Result<(), Box<dyn Error + Send + Sync>> {
+    let granted: Option<bool> = database
+        .connection()
+        .query_row(
+            "SELECT moves_granted_at IS NOT NULL FROM suplex_external_agents WHERE id = ?1",
+            [&principal.agent_id],
+            |row| row.get(0),
+        )
+        .optional()?;
+    if granted == Some(false) {
+        return Err(agent_failure(
+            403,
+            "moves_grant_required",
+            "An administrator must turn on \"Manage and run Moves\" for this agent in its actions on the Agents page",
+        ));
+    }
+    Ok(())
+}
+
 /// Checks the persisted grant rather than trusting an MCP session snapshot.
 fn agent_scope(
     database: &SuplexDatabase,
@@ -89,6 +114,7 @@ fn agent_scope(
     company_id: &str,
     project_id: &str,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
+    agent_granted(database, principal)?;
     let permitted: bool = database.connection().query_row(
         "SELECT EXISTS(SELECT 1 FROM suplex_external_agents a JOIN suplex_external_agent_project_grants g ON g.agent_id = a.id AND g.company_id = a.company_id WHERE a.id = ?1 AND a.company_id = ?2 AND a.status = 'paired' AND a.revoked_at IS NULL AND a.moves_granted_at IS NOT NULL AND g.project_id = ?3)",
         params![principal.agent_id, company_id, project_id], |row| row.get(0),
@@ -105,6 +131,7 @@ fn agent_stored(
     principal: &Principal,
     move_id: &str,
 ) -> Result<StoredMove, Box<dyn Error + Send + Sync>> {
+    agent_granted(database, principal)?;
     let stored = database
         .connection()
         .query_row(
@@ -243,6 +270,7 @@ pub fn agent_run(
     principal: &Principal,
     run_id: &str,
 ) -> Result<MoveRunResponse, Box<dyn Error + Send + Sync>> {
+    agent_granted(database, principal)?;
     let run = database
         .connection()
         .query_row(&format!("{RUN_COLUMNS} WHERE r.id = ?1"), [run_id], run_row)

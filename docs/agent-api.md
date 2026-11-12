@@ -22,6 +22,13 @@ delete require the current `updatedAt`. Deleting a Move deletes its run records.
 Prompt Moves can require a person at their interactive terminal. The Agent API
 does not expose remote terminal interaction.
 
+An administrator turns on **Manage and run Moves** in the agent's actions on
+the Agents page. `GET /api/agent/me` reports `movesGrant`. Without the grant,
+every Move route returns `403` with the code `moves_grant_required`, for a
+Move that exists and for one that does not. The message names the setting, so
+the agent can tell a person what to change. With the grant, a missing Move and
+a Move outside the project grants return the concealed `404`.
+
 ## Turns and spend
 
 `GET /api/agent/tasks/:taskId/turns` answers what a task did and what its turns
@@ -53,8 +60,10 @@ Otherwise `usage.observation` is `observed`.
 of one session of a task. Take `sessionId` from a turn. It is off by default.
 An administrator turns on **Read task transcripts** in the agent's actions on
 the Agents page, and the agent also needs a grant to the task's project. Suplex
-reads both on each request. Without either, the route returns the concealed
-`404` that Move routes return without the Move grant.
+reads both on each request. Without the project grant, the route returns the
+concealed `404` of a missing task. Without the transcript grant, it returns
+`403` with the code `transcripts_grant_required` and a message that names the
+setting.
 
 `GET /api/agent/me` reports `capabilities.transcripts` and `transcriptsGrant`.
 `GET /api/agent/capabilities` reports `capabilities.read.transcripts`, and

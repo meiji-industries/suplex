@@ -1,6 +1,6 @@
 //! suplex.sh: `/download`, `/install.sh`, `/install.ps1`, `/bootstrap.sh`, `/terms`, `/privacy`, `/support`,
 //! `/consent.js`, and a redirect to the website at getsuplex.ai, a Framer
-//! site, for every other path. The pages are compiled in; nothing is read
+//! site, with the request query for every other path. The pages are compiled in; nothing is read
 //! from disk.
 
 use axum::{
@@ -172,18 +172,27 @@ fn script(text: &'static str) -> Response {
         .into_response()
 }
 
-/// Keeps a valid `consent` parameter, so the website shows the choice made
-/// here. `Sec-GPC: 1` never carries `granted`.
+/// Forwards the query unchanged, so ad click ids, `utm_*`, `visitor`, and
+/// `_gl` reach the website. Each pair keeps its order and encoding. A
+/// `consent` pair stays only when it is `denied`, or `granted` without
+/// `Sec-GPC: 1`, so the website shows the choice made here.
 async fn website(RawQuery(raw): RawQuery, headers: HeaderMap) -> Response {
     let gpc = headers.get("sec-gpc").is_some_and(|value| value == "1");
     let raw = raw.unwrap_or_default();
-    let consent = url::form_urlencoded::parse(raw.as_bytes())
-        .find(|(key, _)| key == "consent")
-        .map(|(_, value)| value)
-        .filter(|value| value == "denied" || (value == "granted" && !gpc));
-    let location = match consent {
-        Some(consent) => format!("{WEBSITE}?consent={consent}"),
-        None => WEBSITE.to_owned(),
+    let query = raw
+        .split('&')
+        .filter(|pair| {
+            let Some((key, value)) = url::form_urlencoded::parse(pair.as_bytes()).next() else {
+                return false;
+            };
+            key != "consent" || value == "denied" || (value == "granted" && !gpc)
+        })
+        .collect::<Vec<_>>()
+        .join("&");
+    let location = if query.is_empty() {
+        WEBSITE.to_owned()
+    } else {
+        format!("{WEBSITE}?{query}")
     };
     (StatusCode::FOUND, [(header::LOCATION, location)]).into_response()
 }

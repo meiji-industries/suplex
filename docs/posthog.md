@@ -157,8 +157,9 @@ styles into Framer.
   other site (`https://suplex.sh`, `https://getsuplex.ai`) is opened, the script
   sets its `consent` parameter to the stored choice. Same-site links that
   already have `consent` get the current choice, or lose the parameter when no
-  choice is stored. The suplex.sh redirect to getsuplex.ai keeps a valid
-  `consent` parameter.
+  choice is stored. The suplex.sh redirect to getsuplex.ai keeps the query
+  unchanged, but removes a `consent` parameter that is not `denied` or
+  `granted`, and `granted` under Global Privacy Control.
 - The banner shows only when no choice is stored and no valid `consent`
   parameter arrived.
 - Global Privacy Control or Do Not Track: the choice is always `denied`.

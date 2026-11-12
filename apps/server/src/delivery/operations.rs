@@ -481,7 +481,11 @@ impl Commit {
 #[derive(Clone, Copy, Default)]
 struct Adoption<'a> {
     publication: bool,
+    /// Report why a non-Standard open pull request did not complete.
     explicit: bool,
+    /// A Coordinator request: the Coordinator read any follow-up before it
+    /// asked, so a merged pull request it finds completes the task.
+    coordinator_request: bool,
     recheck: Option<&'a Recheck<'a>>,
     defer_completion: bool,
     is_draft: Option<bool>,
@@ -1536,11 +1540,13 @@ impl DeliveryOperations {
             None
         } else {
             // The Coordinator read any follow-up before it asked, so a merge
-            // it finds here completes the task.
+            // it finds here completes the task. An open pull request completes
+            // as a passive observation does, and the request still returns
+            // the observation when that completion is declined.
             self.observe_known_pull(
                 control,
                 Adoption {
-                    explicit: true,
+                    coordinator_request: true,
                     recheck: Some(recheck),
                     defer_completion: reviewed,
                     ..Adoption::default()
@@ -2030,7 +2036,9 @@ impl DeliveryOperations {
         // read yet: the description can ask for changes to a finished PR.
         let awaiting_coordinator = current.workflow_state.follow_up == Some(true)
             || !root_session_store::root_turn_completed(&self.open(OpenMode::ReadOnly)?, task_id)?;
-        if awaiting_coordinator && !options.explicit && options.validated_range.is_none() {
+        let coordinator_read = options.explicit
+            || (options.coordinator_request && pull.state == PullRequestState::Merged);
+        if awaiting_coordinator && !coordinator_read && options.validated_range.is_none() {
             return Ok(pull);
         }
         if standard {
@@ -2420,7 +2428,7 @@ impl DeliveryOperations {
                 control,
                 &pull,
                 Adoption {
-                    explicit: true,
+                    coordinator_request: true,
                     recheck: Some(recheck),
                     ..Adoption::default()
                 },

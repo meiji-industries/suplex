@@ -1455,11 +1455,17 @@ fn delivery_operations(fixture: &Fixture, api: &str) -> DeliveryOperations {
 
 /// A merge-target task with an open pull request at its worktree head.
 async fn open_pull() -> WaitCase {
-    let fixture = fixture("merged");
+    open_pull_for("merged").await
+}
+
+/// A task with this delivery target and an open, ready pull request at its
+/// worktree head.
+async fn open_pull_for(target: &str) -> WaitCase {
+    let fixture = fixture(target);
     let (api, fake) = fake_github(fixture.origin.clone()).await;
     let operations = delivery_operations(&fixture, &api);
     let head = control(&fixture).worktree.unwrap().head_sha;
-    fake.lock().unwrap().pulls.push(json!({"number":1,"state":"open","draft":false,"mergedAt":null,"head":"task-merged","headSha":head,"base":"main","baseSha":"b".repeat(40),"title":"Add line","body":BODY}));
+    fake.lock().unwrap().pulls.push(json!({"number":1,"state":"open","draft":false,"mergedAt":null,"head":format!("task-{target}"),"headSha":head,"base":"main","baseSha":"b".repeat(40),"title":"Add line","body":BODY}));
     operations
         .set_pull_request(
             &fixture.task_id,
@@ -1871,9 +1877,15 @@ async fn a_merge_coordinator_has_not_read_withdraws_the_question() {
     case.sweep().await;
     let prompt = case.assert_withdrawn();
     assert!(prompt.contains("\"state\":\"merged\""), "{prompt}");
+    let observed = control(&case.fixture);
     assert_eq!(
-        control(&case.fixture).pull_request.unwrap().state,
+        observed.pull_request.unwrap().state,
         crate::tasks::control::PullRequestState::Merged
+    );
+    assert_eq!(
+        observed.status,
+        crate::tasks::control::TaskStatus::Active,
+        "a passive observation does not complete a task that awaits the Coordinator"
     );
     case.cleanup();
 }
@@ -2282,6 +2294,40 @@ async fn a_coordinator_request_finishes_a_reopened_task_whose_pull_request_merge
         finished.status,
         crate::tasks::control::TaskStatus::Delivered
     );
+    assert_eq!(case.merge_calls(), 0);
+    case.cleanup();
+}
+
+/// A Coordinator observation of an open pull request at its target returns
+/// the observation when the workflow has no accepted delivery yet.
+#[tokio::test]
+async fn a_coordinator_observes_an_open_pull_request_without_an_accepted_delivery() {
+    let case = open_pull_for("pull_request_ready").await;
+    case.execute("UPDATE suplex_task_controls SET workflow = 'direct_build', workflow_state_json = json_set(workflow_state_json, '$.acceptedDelivery', json('null')) WHERE task_id = ?1");
+    for operation in [
+        DeliveryOperation::ObservePullRequest,
+        DeliveryOperation::ObserveChecks,
+    ] {
+        let observed = case
+            .operations
+            .execute(
+                &case.fixture.root,
+                None,
+                &DeliveryRequest {
+                    operation,
+                    expected_head: None,
+                    review: None,
+                    pull_request_title: None,
+                    pull_request_body: None,
+                },
+            )
+            .await
+            .unwrap_or_else(|error| panic!("{operation:?}: {error}"));
+        assert_eq!(observed["state"], "open", "{operation:?}: {observed}");
+        let current = control(&case.fixture);
+        assert_eq!(current.status, crate::tasks::control::TaskStatus::Active);
+        assert_eq!(current.workflow_state.completion, None);
+    }
     assert_eq!(case.merge_calls(), 0);
     case.cleanup();
 }

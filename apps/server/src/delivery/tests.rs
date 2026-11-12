@@ -37,6 +37,7 @@ struct Fake {
     origin: PathBuf,
     pulls: Vec<Value>,
     merge_refusal: bool,
+    merge_pending: bool,
     merge_calls: usize,
     rules_forbidden: bool,
     workflow_run: Value,
@@ -138,6 +139,10 @@ async fn merge_pull(
     fake.merge_calls += 1;
     if fake.merge_refusal {
         return (StatusCode::METHOD_NOT_ALLOWED, Json(json!({"message": "Pull Request is not mergeable", "documentation_url": "https://docs.github.com/rest", "status": "405"}))).into_response();
+    }
+    if fake.merge_pending {
+        // GitHub accepted the request and has not merged yet, as with a merge queue.
+        return Json(json!({"merged": false, "message": "Pull request queued"})).into_response();
     }
     let pull = &mut fake.pulls[number - 1];
     assert_eq!(
@@ -328,9 +333,83 @@ fn fixture(target: &str) -> Fixture {
         .unwrap()
         .push(&["refs/heads/main:refs/heads/main"], None)
         .unwrap();
-    let branch = format!("task-{target}");
+    let database_path = base.join("suplex.sqlite");
+    let mut database = SuplexDatabase::open(&database_path, OpenMode::Migrate).unwrap();
+    let time = Utc::now().to_rfc3339();
+    database.connection().execute("INSERT INTO suplex_companies (id,name,status,created_at) VALUES ('delivery_company','Delivery','active',?1)", [&time]).unwrap();
+    database.connection().execute("INSERT INTO suplex_projects (id,company_id,name,repository_path,worktree_root,repository_identity,base_branch,setup_command,verification_command,root_profile_id,worker_profile_id,created_at,updated_at) VALUES ('delivery_project','delivery_company','Project','/tmp/repo','/tmp/worktrees',NULL,'main','','','root_profile','worker_profile',?1,?1)", [&time]).unwrap();
+    let (task_id, root) = delivery_task(
+        &mut database,
+        &repository,
+        seed,
+        &work,
+        &format!("task-{target}"),
+        target,
+        &format!("delivery-{target}"),
+    );
+    Fixture {
+        base,
+        database_path,
+        task_id,
+        root,
+        origin,
+    }
+}
+
+/// A second active Standard task in the same database and repository as
+/// `first`, on branch `task-{name}`.
+fn sibling(first: &Fixture, name: &str) -> Fixture {
+    let work = first.base.join(format!("work-{name}"));
+    let url = format!("file://{}", first.origin.display());
+    let repository = Repository::clone(&url, &work).unwrap();
+    repository
+        .config()
+        .unwrap()
+        .set_str(
+            &format!("url.{url}.insteadOf"),
+            "https://github.com/owner/repo.git",
+        )
+        .unwrap();
+    repository
+        .remote_set_url("origin", "https://github.com/owner/repo.git")
+        .unwrap();
+    let seed = repository
+        .find_reference("refs/remotes/origin/main")
+        .unwrap()
+        .peel_to_commit()
+        .unwrap()
+        .id();
+    let mut database = SuplexDatabase::open(&first.database_path, OpenMode::Migrate).unwrap();
+    let (task_id, root) = delivery_task(
+        &mut database,
+        &repository,
+        seed,
+        &work,
+        &format!("task-{name}"),
+        "merged",
+        &format!("delivery-{name}"),
+    );
+    Fixture {
+        base: first.base.clone(),
+        database_path: first.database_path.clone(),
+        task_id,
+        root,
+        origin: first.origin.clone(),
+    }
+}
+
+/// Create an active task whose worktree `work` has one commit on `branch` over `seed`.
+fn delivery_task(
+    database: &mut SuplexDatabase,
+    repository: &Repository,
+    seed: git2::Oid,
+    work: &Path,
+    branch: &str,
+    target: &str,
+    key: &str,
+) -> (String, RootIdentity) {
     let seed_commit = repository.find_commit(seed).unwrap();
-    repository.branch(&branch, &seed_commit, false).unwrap();
+    repository.branch(branch, &seed_commit, false).unwrap();
     repository
         .set_head(&format!("refs/heads/{branch}"))
         .unwrap();
@@ -338,19 +417,14 @@ fn fixture(target: &str) -> Fixture {
         .checkout_head(Some(git2::build::CheckoutBuilder::new().force()))
         .unwrap();
     let head = commit(
-        &repository,
+        repository,
         "HEAD",
         "README.md",
         "# Seed\nVerified.\n",
         &[&seed_commit],
     );
-    let database_path = base.join("suplex.sqlite");
     let now = Utc::now();
-    let mut database = SuplexDatabase::open(&database_path, OpenMode::Migrate).unwrap();
-    let user = auth::development_sign_in(&mut database, now).unwrap().user;
-    let time = now.to_rfc3339();
-    database.connection().execute("INSERT INTO suplex_companies (id,name,status,created_at) VALUES ('delivery_company','Delivery','active',?1)", [&time]).unwrap();
-    database.connection().execute("INSERT INTO suplex_projects (id,company_id,name,repository_path,worktree_root,repository_identity,base_branch,setup_command,verification_command,root_profile_id,worker_profile_id,created_at,updated_at) VALUES ('delivery_project','delivery_company','Project','/tmp/repo','/tmp/worktrees',NULL,'main','','','root_profile','worker_profile',?1,?1)", [&time]).unwrap();
+    let user = auth::development_sign_in(database, now).unwrap().user;
     let profile = json!({"profileId":"root_profile","provider":"codex","model":"gpt-6-sol","reasoningLevel":"medium","serviceTier":"default"});
     let prepared = PreparedTask {
         id: repository::new_task_id(),
@@ -359,7 +433,7 @@ fn fixture(target: &str) -> Fixture {
         title: "Deliver".into(),
         description: "Deliver the change".into(),
         configuration: json!({"repository":"owner/repo","branch":branch,"baseBranch":"main","source":null}),
-        idempotency_key: format!("delivery-{target}"),
+        idempotency_key: key.into(),
         request_hash: "delivery-request".into(),
         creator: TaskCreator::User(user.id),
         delivery_target: target.into(),
@@ -373,7 +447,7 @@ fn fixture(target: &str) -> Fixture {
         depends_on: vec![],
         pull_request_dependencies: vec![], workflow: crate::coordination::workflows::Workflow::Standard,
     };
-    let task_id = repository::create(&mut database, &prepared, now)
+    let task_id = repository::create(database, &prepared, now)
         .unwrap()
         .task
         .id;
@@ -385,24 +459,29 @@ fn fixture(target: &str) -> Fixture {
         )
         .unwrap();
     let worktree = serde_json::from_value(json!({"path": work, "branch": branch, "baseSha": seed.to_string(), "headSha": head.to_string(), "dirty": false})).unwrap();
-    root_session_store::set_worktree(&mut database, &task_id, &worktree, now).unwrap();
-    let root = root_session_store::reserve_root(&mut database, &task_id, now).unwrap();
-    let turn = root_session_store::ensure_initial_prompt(&mut database, &root, "Deliver", now)
+    root_session_store::set_worktree(database, &task_id, &worktree, now).unwrap();
+    let root = root_session_store::reserve_root(database, &task_id, now).unwrap();
+    let turn = root_session_store::ensure_initial_prompt(database, &root, "Deliver", now)
         .unwrap()
         .unwrap();
-    root_session_store::complete_root_turn(&mut database, &turn.id, "done", None, now).unwrap();
+    root_session_store::complete_root_turn(database, &turn.id, "done", None, now).unwrap();
     let root = RootIdentity {
         task_id: task_id.clone(),
         session_id: root.id,
         generation: root.generation,
     };
-    Fixture {
-        base,
-        database_path,
-        task_id,
-        root,
-        origin,
-    }
+    (task_id, root)
+}
+
+/// Coordinator prompts inserted after the fixture's completed first turn.
+fn pending_prompts(fixture: &Fixture) -> Vec<String> {
+    let database = SuplexDatabase::open(&fixture.database_path, OpenMode::ReadOnly).unwrap();
+    let mut statement = database.connection().prepare("SELECT t.prompt_text FROM suplex_task_turns t JOIN suplex_task_sessions s ON s.id = t.session_id WHERE t.task_id = ?1 AND s.kind = 'root' AND t.status = 'pending_prompt' ORDER BY t.created_at, t.id").unwrap();
+    statement
+        .query_map([&fixture.task_id], |row| row.get(0))
+        .unwrap()
+        .collect::<rusqlite::Result<Vec<String>>>()
+        .unwrap()
 }
 
 fn control(fixture: &Fixture) -> crate::tasks::control::TaskControlRow {
@@ -1602,14 +1681,7 @@ impl WaitCase {
 
     /// Coordinator prompts inserted after the fixture's completed first turn.
     fn root_prompts(&self) -> Vec<String> {
-        let database =
-            SuplexDatabase::open(&self.fixture.database_path, OpenMode::ReadOnly).unwrap();
-        let mut statement = database.connection().prepare("SELECT t.prompt_text FROM suplex_task_turns t JOIN suplex_task_sessions s ON s.id = t.session_id WHERE t.task_id = ?1 AND s.kind = 'root' AND t.status = 'pending_prompt' ORDER BY t.created_at, t.id").unwrap();
-        statement
-            .query_map([&self.fixture.task_id], |row| row.get(0))
-            .unwrap()
-            .collect::<rusqlite::Result<Vec<String>>>()
-            .unwrap()
+        pending_prompts(&self.fixture)
     }
 
     fn answer(&self, question_id: &str) -> Result<(), String> {
@@ -2054,9 +2126,29 @@ async fn try_merge(
     head: &str,
     review: &ReviewRange,
 ) -> crate::platform::database::DatabaseResult<Value> {
-    case.operations
+    try_merge_as(&case.operations, &case.fixture, head, review).await
+}
+
+async fn merge_as(
+    operations: &DeliveryOperations,
+    fixture: &Fixture,
+    head: &str,
+    review: &ReviewRange,
+) -> Value {
+    try_merge_as(operations, fixture, head, review)
+        .await
+        .unwrap()
+}
+
+async fn try_merge_as(
+    operations: &DeliveryOperations,
+    fixture: &Fixture,
+    head: &str,
+    review: &ReviewRange,
+) -> crate::platform::database::DatabaseResult<Value> {
+    operations
         .execute(
-            &case.fixture.root,
+            &fixture.root,
             None,
             &DeliveryRequest {
                 operation: DeliveryOperation::MergePullRequest,
@@ -2518,4 +2610,317 @@ async fn the_coordinator_stops_its_task_and_no_idle_wake_follows() {
     // A Coordinator of a stopped task is not current; it cannot stop it again.
     assert!(crate::coordination::root_controller::stop_task(&mut database, &fixture.root).is_err());
     std::fs::remove_dir_all(&fixture.base).unwrap();
+}
+
+/// A second task in the same repository and base as `case`, with a reviewed,
+/// ready pull request of its own.
+async fn reviewed_sibling(case: &WaitCase, name: &str) -> (Fixture, String, ReviewRange) {
+    let sibling = sibling(&case.fixture, name);
+    let (head, review) = reviewed(&case.operations, &sibling.root).await;
+    for operation in [
+        DeliveryOperation::PushBranch,
+        DeliveryOperation::CreateOrAdoptPullRequest,
+    ] {
+        case.operations
+            .execute(
+                &sibling.root,
+                None,
+                &DeliveryRequest {
+                    operation,
+                    expected_head: Some(&head),
+                    review: Some(&review),
+                    pull_request_title: Some("Add line"),
+                    pull_request_body: Some(BODY),
+                },
+            )
+            .await
+            .unwrap();
+    }
+    let number = control(&sibling).pull_request.unwrap().number as usize;
+    case.fake.lock().unwrap().pulls[number - 1]["draft"] = json!(false);
+    (sibling, head, review)
+}
+
+/// Another commit lands on the published base.
+fn advance_main(origin: &Path) -> String {
+    let repository = Repository::open_bare(origin).unwrap();
+    let parent = repository
+        .find_reference("refs/heads/main")
+        .unwrap()
+        .peel_to_commit()
+        .unwrap();
+    let signature = Signature::now("Fixture", "fixture@example.invalid").unwrap();
+    repository
+        .commit(
+            Some("refs/heads/main"),
+            &signature,
+            &signature,
+            "Advance main",
+            &parent.tree().unwrap(),
+            &[&parent],
+        )
+        .unwrap()
+        .to_string()
+}
+
+fn merge_turn_holder(fixture: &Fixture, base_branch: &str) -> Option<String> {
+    SuplexDatabase::open(&fixture.database_path, OpenMode::ReadOnly)
+        .unwrap()
+        .connection()
+        .query_row(
+            "SELECT holder_task_id FROM suplex_merge_turns WHERE repository = 'owner/repo' AND base_branch = ?1",
+            [base_branch],
+            |row| row.get(0),
+        )
+        .ok()
+}
+
+/// The first task's merge is still completing on GitHub; the second waits for
+/// the merge turn without a merge call, a failure, or a human question.
+async fn contended_merge() -> (WaitCase, Fixture) {
+    let (case, head, review) = reviewed_pull().await;
+    case.fake.lock().unwrap().merge_pending = true;
+    let first = request_merge(&case, &head, &review).await;
+    assert_eq!(first["kind"], "waiting", "{first}");
+    assert_eq!(first["wait"]["reason"], "merge_queue", "{first}");
+    assert_eq!(case.merge_calls(), 1);
+    assert_eq!(
+        merge_turn_holder(&case.fixture, "main").as_deref(),
+        Some(case.fixture.task_id.as_str()),
+        "the holder keeps the turn while GitHub completes its merge"
+    );
+    let (second, head, review) = reviewed_sibling(&case, "second").await;
+    let parked = merge_as(&case.operations, &second, &head, &review).await;
+    assert_eq!(parked["kind"], "waiting", "{parked}");
+    assert_eq!(parked["wait"]["reason"], "merge_turn", "{parked}");
+    assert_eq!(parked["next"], super::operations::DELIVERY_WAIT_NEXT);
+    let problem = parked["problems"][0].as_str().unwrap();
+    assert!(
+        problem.contains("Another task holds the merge turn for owner/repo main")
+            && problem.contains("retries automatically"),
+        "{problem}"
+    );
+    assert_eq!(
+        case.merge_calls(),
+        1,
+        "the waiting task makes no merge call"
+    );
+    let waiting = control(&second);
+    assert_eq!(waiting.status, crate::tasks::control::TaskStatus::Active);
+    assert_eq!(waiting.human_question, None, "no person is asked");
+    assert_eq!(
+        serde_json::json!(waiting.workflow_state)["deliveryWait"]["reason"],
+        "merge_turn"
+    );
+    assert!(waiting.wake_at.is_some(), "the sweep wakes the waiter");
+    assert!(pending_prompts(&second).is_empty());
+    (case, second)
+}
+
+async fn observe(case: &WaitCase, fixture: &Fixture) -> &'static str {
+    case.operations
+        .observe_delivery_wait(&fixture.task_id)
+        .await
+        .unwrap()
+}
+
+/// GitHub merges the holder's pull request and the sweep sees it.
+async fn holder_merges(case: &WaitCase) {
+    case.set_pull(json!({"state": "closed", "mergedAt": "2026-09-25T02:00:00Z"}));
+    assert_eq!(case.observe_wait().await, "finished");
+    assert_eq!(
+        control(&case.fixture).status,
+        crate::tasks::control::TaskStatus::Delivered
+    );
+    assert_eq!(merge_turn_holder(&case.fixture, "main"), None, "released");
+}
+
+#[tokio::test]
+async fn a_second_merge_into_the_same_base_waits_for_the_turn_and_retries_unchanged() {
+    let (case, second) = contended_merge().await;
+    assert_eq!(observe(&case, &second).await, "unchanged");
+    assert_eq!(case.observe_wait().await, "unchanged", "the holder renews");
+    assert_eq!(observe(&case, &second).await, "unchanged");
+    assert!(pending_prompts(&second).is_empty());
+    holder_merges(&case).await;
+    assert_eq!(observe(&case, &second).await, "changed");
+    let prompts = pending_prompts(&second);
+    assert_eq!(prompts.len(), 1, "{prompts:?}");
+    assert!(
+        prompts[0].starts_with("The merge turn is free and main did not move.")
+            && prompts[0].contains("Request merge_pull_request again with your current review"),
+        "{}",
+        prompts[0]
+    );
+    let woken = control(&second);
+    assert_eq!(woken.status, crate::tasks::control::TaskStatus::Active);
+    assert_eq!(woken.workflow_state.delivery_wait, None);
+    assert_eq!(observe(&case, &second).await, "none", "consumed once");
+    case.cleanup();
+}
+
+#[tokio::test]
+async fn a_waiter_learns_that_the_base_moved_while_it_waited() {
+    let (case, second) = contended_merge().await;
+    let saved = control(&second).workflow_state.delivery_wait.unwrap();
+    let before = branch_sha(&case.fixture.origin, "main").unwrap();
+    assert!(saved.fingerprint.contains(&before), "{}", saved.fingerprint);
+    assert!(saved.fingerprint.contains(&case.fixture.task_id));
+    let after = advance_main(&case.fixture.origin);
+    holder_merges(&case).await;
+    assert_eq!(observe(&case, &second).await, "changed");
+    let prompts = pending_prompts(&second);
+    assert_eq!(prompts.len(), 1);
+    assert!(
+        prompts[0].starts_with(&format!(
+            "The merge turn is free and main advanced from {} to {}.",
+            &before[..12],
+            &after[..12]
+        )),
+        "{}",
+        prompts[0]
+    );
+    for step in [
+        "Fetch the published base, integrate",
+        "run the configured checks",
+        "request a fresh review if your workflow requires it",
+        "request merge_pull_request again",
+    ] {
+        assert!(prompts[0].contains(step), "{step}: {}", prompts[0]);
+    }
+    assert_eq!(
+        control(&second).status,
+        crate::tasks::control::TaskStatus::Active
+    );
+    case.cleanup();
+}
+
+#[tokio::test]
+async fn a_merge_turn_wait_is_never_escalated_to_a_person() {
+    let (case, second) = contended_merge().await;
+    // The holder stays live and keeps renewing; the waiter keeps waiting.
+    for _ in 0..3 {
+        case.sweep().await;
+        assert_eq!(observe(&case, &second).await, "unchanged");
+    }
+    let waiting = control(&second);
+    assert_eq!(waiting.status, crate::tasks::control::TaskStatus::Active);
+    assert_eq!(waiting.human_question, None);
+    assert!(pending_prompts(&second).is_empty());
+    case.cleanup();
+}
+
+#[tokio::test]
+async fn a_released_turn_wakes_the_waiter_when_the_holder_stops_waiting_on_github() {
+    let (case, second) = contended_merge().await;
+    // The holder's merge wait ends without a merge: its Coordinator gets the turn back.
+    case.set_pull(json!({"headSha": "d".repeat(40)}));
+    assert_eq!(case.observe_wait().await, "changed");
+    assert_eq!(merge_turn_holder(&case.fixture, "main"), None);
+    assert_eq!(observe(&case, &second).await, "changed");
+    assert!(pending_prompts(&second)[0].starts_with("The merge turn is free"));
+    case.cleanup();
+}
+
+#[tokio::test]
+async fn an_expired_turn_is_taken_over() {
+    let (case, head, review) = reviewed_pull().await;
+    let holder = sibling(&case.fixture, "holder");
+    let database = SuplexDatabase::open(&case.fixture.database_path, OpenMode::ReadWrite).unwrap();
+    let long_ago = Utc::now() - chrono::Duration::seconds(super::merge_turn::TURN_SECONDS + 1);
+    assert_eq!(
+        super::merge_turn::acquire(&database, "owner/repo", "main", &holder.task_id, long_ago)
+            .unwrap(),
+        None
+    );
+    drop(database);
+    let merged = request_merge(&case, &head, &review).await;
+    assert_eq!(merged["state"], "merged", "{merged}");
+    assert_eq!(case.merge_calls(), 1);
+    assert_eq!(merge_turn_holder(&case.fixture, "main"), None);
+    case.cleanup();
+}
+
+#[tokio::test]
+async fn a_turn_whose_holder_is_cancelled_or_archived_is_taken_over() {
+    for finished in ["cancelled", "archived"] {
+        let (case, head, review) = reviewed_pull().await;
+        let holder = sibling(&case.fixture, "holder");
+        let mut database =
+            SuplexDatabase::open(&case.fixture.database_path, OpenMode::ReadWrite).unwrap();
+        assert_eq!(
+            super::merge_turn::acquire(
+                &database,
+                "owner/repo",
+                "main",
+                &holder.task_id,
+                Utc::now()
+            )
+            .unwrap(),
+            None
+        );
+        if finished == "cancelled" {
+            assert!(
+                root_session_store::cancel_task(&mut database, &holder.task_id, Utc::now())
+                    .unwrap()
+            );
+        } else {
+            database
+                .connection()
+                .execute(
+                    "UPDATE suplex_tasks SET archived_at = ?1 WHERE id = ?2",
+                    rusqlite::params![Utc::now().to_rfc3339(), holder.task_id],
+                )
+                .unwrap();
+        }
+        drop(database);
+        let merged = request_merge(&case, &head, &review).await;
+        assert_eq!(merged["state"], "merged", "{finished}: {merged}");
+        assert_eq!(case.merge_calls(), 1, "{finished}");
+        case.cleanup();
+    }
+}
+
+#[tokio::test]
+async fn merge_turns_are_separate_for_each_repository_and_base_branch() {
+    use super::merge_turn::{acquire, holder};
+    let first = fixture("merged");
+    let second = sibling(&first, "second");
+    let database = SuplexDatabase::open(&first.database_path, OpenMode::ReadWrite).unwrap();
+    let now = Utc::now();
+    assert_eq!(
+        acquire(&database, "owner/repo", "main", &first.task_id, now).unwrap(),
+        None
+    );
+    assert_eq!(
+        acquire(&database, "owner/repo", "release", &second.task_id, now).unwrap(),
+        None,
+        "another base branch"
+    );
+    assert_eq!(
+        acquire(&database, "owner/other", "main", &second.task_id, now).unwrap(),
+        None,
+        "another repository"
+    );
+    assert_eq!(
+        acquire(&database, "Owner/Repo", "main", &second.task_id, now).unwrap(),
+        Some(first.task_id.clone()),
+        "the same repository and base"
+    );
+    assert_eq!(
+        acquire(&database, "owner/repo", "main", &first.task_id, now).unwrap(),
+        None,
+        "the holder takes its own turn again"
+    );
+    assert_eq!(
+        holder(&database, "owner/repo", "main", &first.task_id, now).unwrap(),
+        None
+    );
+    super::merge_turn::release(&database, &first.task_id).unwrap();
+    assert_eq!(
+        acquire(&database, "owner/repo", "main", &second.task_id, now).unwrap(),
+        None
+    );
+    drop(database);
+    std::fs::remove_dir_all(first.base).unwrap();
 }

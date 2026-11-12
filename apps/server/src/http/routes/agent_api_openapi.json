@@ -1645,6 +1645,7 @@
                                 "checks",
                                 "mergeability",
                                 "merge_queue",
+                                "merge_turn",
                                 "observation",
                                 "question",
                                 "review"
@@ -1756,6 +1757,7 @@
                                     "checks",
                                     "mergeability",
                                     "merge_queue",
+                                    "merge_turn",
                                     "observation",
                                     "question",
                                     "review"
@@ -2634,6 +2636,7 @@
                             "checks",
                             "mergeability",
                             "merge_queue",
+                            "merge_turn",
                             "observation",
                             "question",
                             "review"
@@ -2745,6 +2748,7 @@
                                 "checks",
                                 "mergeability",
                                 "merge_queue",
+                                "merge_turn",
                                 "observation",
                                 "question",
                                 "review"
@@ -4653,6 +4657,7 @@
                             "checks",
                             "mergeability",
                             "merge_queue",
+                            "merge_turn",
                             "observation",
                             "question",
                             "review"
@@ -4764,6 +4769,7 @@
                                 "checks",
                                 "mergeability",
                                 "merge_queue",
+                                "merge_turn",
                                 "observation",
                                 "question",
                                 "review"
@@ -5856,6 +5862,7 @@
                             "checks",
                             "mergeability",
                             "merge_queue",
+                            "merge_turn",
                             "observation",
                             "question",
                             "review"
@@ -5967,6 +5974,7 @@
                                 "checks",
                                 "mergeability",
                                 "merge_queue",
+                                "merge_turn",
                                 "observation",
                                 "question",
                                 "review"
@@ -7740,6 +7748,7 @@
                                 "checks",
                                 "mergeability",
                                 "merge_queue",
+                                "merge_turn",
                                 "observation",
                                 "question",
                                 "review"
@@ -7851,6 +7860,7 @@
                                     "checks",
                                     "mergeability",
                                     "merge_queue",
+                                    "merge_turn",
                                     "observation",
                                     "question",
                                     "review"
@@ -8877,6 +8887,7 @@
                             "checks",
                             "mergeability",
                             "merge_queue",
+                            "merge_turn",
                             "observation",
                             "question",
                             "review"
@@ -8988,6 +8999,7 @@
                                 "checks",
                                 "mergeability",
                                 "merge_queue",
+                                "merge_turn",
                                 "observation",
                                 "question",
                                 "review"

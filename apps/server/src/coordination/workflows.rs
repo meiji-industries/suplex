@@ -200,6 +200,7 @@ crate::shared::wire_enum! {
         Checks = "checks",
         Mergeability = "mergeability",
         MergeQueue = "merge_queue",
+        MergeTurn = "merge_turn",
         Observation = "observation",
         Question = "question",
         Review = "review",

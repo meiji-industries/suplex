@@ -203,16 +203,28 @@ mod tests {
             "text/plain; charset=utf-8"
         );
         assert!(windows.text().await.unwrap().contains("function Install-Suplex"));
-        assert_eq!(
-            location(&f, "/", &[]).await,
-            (302, "https://getsuplex.ai/".to_owned())
-        );
-        assert_eq!(
-            location(&f, "/pricing", &[]).await,
-            (302, "https://getsuplex.ai/".to_owned())
-        );
+        // Every other path goes to the website root with the query unchanged.
         // The website shows a consent choice made here. GPC never carries `granted`.
         for (path, headers, website) in [
+            ("/", &[][..], "https://getsuplex.ai/"),
+            ("/?", &[][..], "https://getsuplex.ai/"),
+            ("/pricing", &[][..], "https://getsuplex.ai/"),
+            ("/pricing?", &[][..], "https://getsuplex.ai/"),
+            (
+                "/?gclid=abc&utm_source=google&_gl=xyz",
+                &[][..],
+                "https://getsuplex.ai/?gclid=abc&utm_source=google&_gl=xyz",
+            ),
+            (
+                "/pricing?wbraid=w1&gbraid=g1&fbclid=f1&msclkid=m1&visitor=0190a1b2-c3d4-7e5f",
+                &[][..],
+                "https://getsuplex.ai/?wbraid=w1&gbraid=g1&fbclid=f1&msclkid=m1&visitor=0190a1b2-c3d4-7e5f",
+            ),
+            (
+                "/?utm_campaign=a%20b%26c&utm_term=x+y&utm_source=b&utm_source=a",
+                &[][..],
+                "https://getsuplex.ai/?utm_campaign=a%20b%26c&utm_term=x+y&utm_source=b&utm_source=a",
+            ),
             (
                 "/?consent=granted",
                 &[][..],
@@ -221,9 +233,24 @@ mod tests {
             (
                 "/pricing?_gl=1*abc&consent=denied",
                 &[][..],
-                "https://getsuplex.ai/?consent=denied",
+                "https://getsuplex.ai/?_gl=1*abc&consent=denied",
             ),
             ("/?consent=granted%22%3E", &[][..], "https://getsuplex.ai/"),
+            (
+                "/?gclid=abc&consent=granted%22%3E&utm_source=google",
+                &[][..],
+                "https://getsuplex.ai/?gclid=abc&utm_source=google",
+            ),
+            (
+                "/?consent=maybe&gclid=abc",
+                &[][..],
+                "https://getsuplex.ai/?gclid=abc",
+            ),
+            (
+                "/?gclid=abc&consent=granted",
+                &[("sec-gpc", "1")][..],
+                "https://getsuplex.ai/?gclid=abc",
+            ),
             (
                 "/?consent=granted",
                 &[("sec-gpc", "1")][..],

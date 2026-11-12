@@ -103,6 +103,41 @@ GitHub can reject the whole observation query when a classic token without
 each team reviewer reads as `a code owner`. A host with that token sends a second
 GraphQL request on each observation.
 
+
+## Merge turn
+
+Two tasks can ask to merge into the same base at the same time. Each merge is
+correct alone, but together they can land in an order neither task tested, for
+example two timestamped migrations. The merge turn makes these requests take
+turns. It is soft coordination, not a gate: it never refuses an operation and
+never asks a person.
+
+`merge_pull_request` takes the turn for the repository and base branch after
+the reviewed-head check and before the eligibility rechecks and the GitHub merge
+call. `suplex_merge_turns` (in `delivery/merge_turn.rs`) stores one holder for
+each repository and base branch. One SQL statement takes the turn when no one
+holds it, when this task holds it, when it expired, or when its holder is
+cancelled, delivered, archived, or deleted. When another live task holds an
+unexpired turn, the request makes no merge call. It stores a `merge_turn`
+delivery wait that records the base head GitHub reported and the holder, and it
+tells the Coordinator to end its turn.
+
+The holder keeps the turn while GitHub completes its merge (a `checks` or
+`merge_queue` wait). Each unchanged sweep of that wait renews the turn. Every
+other exit releases it: a merge, a refusal, an error, a review or observation
+wait, or the end of the holder's wait. A turn that is not renewed expires after
+ten minutes. A host restart, a stale row, or a missing row never blocks a merge.
+
+A `merge_turn` wait holds while another live task holds an unexpired turn. When
+the turn is free, Suplex wakes the Coordinator once and says whether the base
+moved since the wait started. If it moved, the Coordinator integrates the
+published base, runs the configured checks, gets a fresh review if its workflow
+requires one, and requests the merge again. If it did not move, the Coordinator
+requests the merge again with its current review. A merge on GitHub during the
+wait finishes the task as usual.
+
+The turn is per host, because each host has its own database. It does not read
+or block merges that people make on GitHub, and there is no setting for it.
 ## Observation failures
 
 A failed GitHub read does not erase local task intent or prove that a remote

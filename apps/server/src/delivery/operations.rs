@@ -21,7 +21,7 @@ use tokio::sync::OnceCell;
 
 use super::{
     inspection::{self, DeliveryDiff, ReviewRange},
-    issue_evidence,
+    issue_evidence, merge_turn,
 };
 use crate::{
     coordination::{
@@ -427,6 +427,15 @@ fn select_discovered_pull(
         .first()
         .map(|pull| (*pull).clone())
         .or_else(|| matches.first().cloned()))
+}
+
+/// What a `merge_turn` wait saw: the base it waits to merge into and its head then.
+#[derive(serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct MergeTurnFingerprint {
+    base_branch: String,
+    base_sha: Option<String>,
+    holder: String,
 }
 
 fn short(sha: &str) -> &str {
@@ -852,7 +861,20 @@ impl DeliveryOperations {
     }
 
     /// TypeScript `observeDeliveryWait`: one persisted wait is consumed at most once.
+    /// A task keeps its merge turn while its own merge wait is unchanged and
+    /// gives it up when that wait ends.
     pub async fn observe_delivery_wait(&self, task_id: &str) -> DatabaseResult<&'static str> {
+        let outcome = self.observe_delivery_wait_once(task_id).await?;
+        let database = self.open(OpenMode::ReadWrite)?;
+        match outcome {
+            "unchanged" => merge_turn::renew(&database, task_id, Utc::now())?,
+            "changed" | "finished" => merge_turn::release(&database, task_id)?,
+            _ => {}
+        }
+        Ok(outcome)
+    }
+
+    async fn observe_delivery_wait_once(&self, task_id: &str) -> DatabaseResult<&'static str> {
         let control = self.get(task_id)?;
         let Some(wait) = control
             .workflow_state
@@ -910,7 +932,12 @@ impl DeliveryOperations {
             self.clear_delivery_wait(task_id, &wait)?;
             return Ok("finished");
         }
-        let prompt = if wait.reason == DeliveryWaitReason::Observation {
+        let prompt = if wait.reason == DeliveryWaitReason::MergeTurn {
+            let Some(prompt) = self.merge_turn_prompt(&control, &wait).await? else {
+                return Ok("unchanged");
+            };
+            prompt
+        } else if wait.reason == DeliveryWaitReason::Observation {
             let (branch, sha) = self.resolve_delivery_base(&control).await?;
             if sha.is_none() {
                 return Ok("unchanged");
@@ -938,6 +965,50 @@ impl DeliveryOperations {
         } else {
             "none"
         })
+    }
+
+    /// The wake prompt once no other live task holds the merge turn the wait
+    /// names; `None` while one still does. The prompt says whether the base
+    /// moved since the wait was saved.
+    async fn merge_turn_prompt(
+        &self,
+        control: &TaskControlRow,
+        wait: &DeliveryWait,
+    ) -> DatabaseResult<Option<String>> {
+        let task_id = control.task_id.as_str();
+        let repository = control.delivery_intent.repository.as_str();
+        let saved = serde_json::from_str::<MergeTurnFingerprint>(&wait.fingerprint).ok();
+        let base_branch = saved.as_ref().map_or_else(
+            || control.delivery_intent.base_branch.clone(),
+            |saved| saved.base_branch.clone(),
+        );
+        if merge_turn::holder(
+            &self.open(OpenMode::ReadOnly)?,
+            repository,
+            &base_branch,
+            task_id,
+            Utc::now(),
+        )?
+        .is_some()
+        {
+            return Ok(None);
+        }
+        let current = self
+            .for_task(task_id)
+            .await?
+            .get_branch_head(repository, &base_branch)
+            .await?;
+        let before = saved.and_then(|saved| saved.base_sha);
+        Ok(Some(match (before, current) {
+            (Some(before), Some(current)) if before == current => format!(
+                "The merge turn is free and {base_branch} did not move. Request merge_pull_request again with your current review."
+            ),
+            (before, current) => format!(
+                "The merge turn is free and {base_branch} advanced from {} to {}. Fetch the published base, integrate, run the configured checks, request a fresh review if your workflow requires it, then request merge_pull_request again.",
+                before.as_deref().map_or("an unobserved head", short),
+                current.as_deref().map_or("an unobserved head", short),
+            ),
+        }))
     }
 
     /// The Coordinator prompt for a delivery state that changed during a wait.
@@ -2615,6 +2686,89 @@ impl DeliveryOperations {
         }
         let head = observed.head_sha.clone().unwrap_or_default();
         Self::require_reviewed_head(control, &head, expected_head)?;
+        // Soft coordination, never a refusal: another live task's merge into
+        // this base parks this request until that task finishes or lets go.
+        let (base_branch, base_sha) = match self.resolve_delivery_base(control).await {
+            Ok(base) => base,
+            Err(_) => (control.delivery_intent.base_branch.clone(), None),
+        };
+        if let Some(holder) = merge_turn::acquire(
+            &self.open(OpenMode::ReadWrite)?,
+            repository,
+            &base_branch,
+            task_id,
+            Utc::now(),
+        )? {
+            return self.wait_for_merge_turn(
+                task_id,
+                &head,
+                repository,
+                &base_branch,
+                base_sha,
+                holder,
+            );
+        }
+        let result = self
+            .merge_holding_turn(
+                recheck, control, &github, repository, &head, &observed, actual,
+            )
+            .await;
+        // The turn stays with a merge GitHub is still completing.
+        let waiting_on_github = result.as_ref().is_ok_and(|value| {
+            value["wait"]["reason"] == DeliveryWaitReason::Checks.as_str()
+                || value["wait"]["reason"] == DeliveryWaitReason::MergeQueue.as_str()
+        });
+        if !waiting_on_github {
+            merge_turn::release(&self.open(OpenMode::ReadWrite)?, task_id)?;
+        }
+        result
+    }
+
+    /// Park a merge request while another live task holds the merge turn.
+    fn wait_for_merge_turn(
+        &self,
+        task_id: &str,
+        head: &str,
+        repository: &str,
+        base_branch: &str,
+        base_sha: Option<String>,
+        holder: String,
+    ) -> DatabaseResult<Value> {
+        let fingerprint = MergeTurnFingerprint {
+            base_branch: base_branch.to_owned(),
+            base_sha,
+            holder,
+        };
+        let wait = DeliveryWait {
+            head_sha: head.to_owned(),
+            fingerprint: serde_json::to_string(&fingerprint)?,
+            since: now_millis_rfc3339(),
+            reason: DeliveryWaitReason::MergeTurn,
+        };
+        self.update_workflow_state(task_id, |state| state.delivery_wait = Some(wait.clone()))?;
+        self.schedule_wake(task_id, 30)?;
+        Ok(json!({
+            "kind": "waiting",
+            "problems": [format!("Another task holds the merge turn for {repository} {base_branch}. Suplex retries automatically.")],
+            "wait": wait,
+            "next": DELIVERY_WAIT_NEXT,
+        }))
+    }
+
+    /// The eligibility rechecks and merge request of a task that holds the merge turn.
+    #[allow(clippy::too_many_arguments)]
+    async fn merge_holding_turn(
+        &self,
+        recheck: &Recheck<'_>,
+        control: &TaskControlRow,
+        github: &ReleasePort<'_>,
+        repository: &str,
+        head: &str,
+        observed: &Observation,
+        actual: &ReviewRange,
+    ) -> DatabaseResult<Value> {
+        let task_id = control.task_id.as_str();
+        let head = head.to_owned();
         let trigger = self
             .inspect_trigger_policy(control, Some(&head), true)
             .await?;
@@ -2630,21 +2784,20 @@ impl DeliveryOperations {
             return Ok(wait);
         }
         self.recheck_before_merge(control, actual, recheck).await?;
-        if only_review_remains(&observed) {
-            let wait =
-                self.wait_for_merge(task_id, &head, &observed, DeliveryWaitReason::Review)?;
+        if only_review_remains(observed) {
+            let wait = self.wait_for_merge(task_id, &head, observed, DeliveryWaitReason::Review)?;
             return Ok(
-                json!({"kind": "waiting", "problems": [review_wait_problem(&observed)], "wait": wait, "next": DELIVERY_WAIT_NEXT}),
+                json!({"kind": "waiting", "problems": [review_wait_problem(observed)], "wait": wait, "next": DELIVERY_WAIT_NEXT}),
             );
         }
         let requested = observed.number.unwrap_or(0);
         if let Some(wait) = self
             .request_merge(
                 control,
-                &github,
+                github,
                 repository,
                 &head,
-                &observed,
+                observed,
                 trigger.is_some(),
             )
             .await?
@@ -2654,9 +2807,9 @@ impl DeliveryOperations {
         let last = github.get_pull_request(repository, requested).await?;
         if last.state != "merged" {
             let wait =
-                self.wait_for_merge(task_id, &head, &observed, DeliveryWaitReason::MergeQueue)?;
+                self.wait_for_merge(task_id, &head, observed, DeliveryWaitReason::MergeQueue)?;
             return Ok(
-                json!({"kind": "merge_requested", "pullRequest": pull_reference(&last)?, "checkSummary": check_summary(&observed), "wait": wait, "next": DELIVERY_WAIT_NEXT}),
+                json!({"kind": "merge_requested", "pullRequest": pull_reference(&last)?, "checkSummary": check_summary(observed), "wait": wait, "next": DELIVERY_WAIT_NEXT}),
             );
         }
         Self::require_task_pull_request(control, &last, repository, requested)?;
@@ -2672,7 +2825,7 @@ impl DeliveryOperations {
             )
             .await?,
         )?;
-        result["checkSummary"] = json!(check_summary(&observed));
+        result["checkSummary"] = json!(check_summary(observed));
         result["reviewedHead"] = json!(head);
         Ok(result)
     }

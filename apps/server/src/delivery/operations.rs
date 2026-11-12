@@ -1535,9 +1535,12 @@ impl DeliveryOperations {
         let known = if push {
             None
         } else {
+            // The Coordinator read any follow-up before it asked, so a merge
+            // it finds here completes the task.
             self.observe_known_pull(
                 control,
                 Adoption {
+                    explicit: true,
                     recheck: Some(recheck),
                     defer_completion: reviewed,
                     ..Adoption::default()
@@ -2409,11 +2412,15 @@ impl DeliveryOperations {
         recheck: &Recheck<'_>,
     ) -> DatabaseResult<Value> {
         let pull = github.get_pull_request(repository, number).await?;
+        // A Coordinator request found the pull request merged. The Coordinator
+        // read any follow-up before it asked, so this is not a passive
+        // observation: the merge completes the task.
         let adopted = self
             .adopt_known_pull(
                 control,
                 &pull,
                 Adoption {
+                    explicit: true,
                     recheck: Some(recheck),
                     ..Adoption::default()
                 },

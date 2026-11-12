@@ -2253,6 +2253,39 @@ async fn an_external_merge_during_a_review_wait_finishes_the_task() {
     case.cleanup();
 }
 
+/// A reopened task carries `followUp` and no accepted delivery. The
+/// Coordinator read the follow-up before it asked, so its request completes
+/// the task on a pull request that already merged.
+#[tokio::test]
+async fn a_coordinator_request_finishes_a_reopened_task_whose_pull_request_merged() {
+    let (case, _, _) = reviewed_pull().await;
+    case.execute("UPDATE suplex_task_controls SET workflow_state_json = json_set(workflow_state_json, '$.followUp', json('true'), '$.acceptedDelivery', json('null')) WHERE task_id = ?1");
+    case.set_pull(json!({"state": "closed", "mergedAt": "2026-09-25T02:00:00Z"}));
+    let observed = case
+        .operations
+        .execute(
+            &case.fixture.root,
+            None,
+            &DeliveryRequest {
+                operation: DeliveryOperation::ObservePullRequest,
+                expected_head: None,
+                review: None,
+                pull_request_title: None,
+                pull_request_body: None,
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(observed["state"], "merged", "{observed}");
+    let finished = control(&case.fixture);
+    assert_eq!(
+        finished.status,
+        crate::tasks::control::TaskStatus::Delivered
+    );
+    assert_eq!(case.merge_calls(), 0);
+    case.cleanup();
+}
+
 #[tokio::test]
 async fn cancelling_a_task_ends_its_review_wait() {
     use crate::coordination::workflows::DeliveryWaitReason::Review;

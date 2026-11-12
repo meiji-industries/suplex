@@ -87,7 +87,7 @@ pub fn profile_hash(profile_id: &str) -> String {
 }
 
 /// Error codes that an agent surface returns. Any other code is `other`.
-const ERROR_CODES: [&str; 44] = [
+const ERROR_CODES: [&str; 46] = [
     "advisor_profile_not_found",
     "advisor_role_not_in_workflow",
     "answer_grant_required",
@@ -106,6 +106,7 @@ const ERROR_CODES: [&str; 44] = [
     "invalid_token",
     "insufficient_scope",
     "method_not_allowed",
+    "moves_grant_required",
     "native_session_unavailable",
     "not_found",
     "option_not_offered",
@@ -127,6 +128,7 @@ const ERROR_CODES: [&str; 44] = [
     "task_not_waiting",
     "task_unavailable",
     "template_not_found",
+    "transcripts_grant_required",
     "unsupported_media_type",
     "validation_failed",
     "worker_profile_not_found",

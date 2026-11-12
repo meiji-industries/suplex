@@ -656,7 +656,7 @@
       "additionalProperties": false
     }
   },
-  {"name":"suplex_list_moves","description":"List saved Moves for a granted project.","inputSchema":{"type":"object","properties":{"projectId":{"type":"string","minLength":1}},"required":["projectId"],"additionalProperties":false}},
+  {"name":"suplex_list_moves","description":"List saved Moves for a granted project. Every Move tool needs the administrator Move grant: suplex_whoami reports it as movesGrant. Without it, a Move tool returns moves_grant_required and names the setting an administrator turns on.","inputSchema":{"type":"object","properties":{"projectId":{"type":"string","minLength":1}},"required":["projectId"],"additionalProperties":false}},
   {"name":"suplex_get_move","description":"Read one saved Move.","inputSchema":{"type":"object","properties":{"moveId":{"type":"string","minLength":1}},"required":["moveId"],"additionalProperties":false}},
   {"name":"suplex_create_move","description":"Create a saved Move idempotently.","inputSchema":{"type":"object","properties":{"projectId":{"type":"string"},"name":{"type":"string"},"prompt":{"type":"string"},"runner":{"type":"string"},"confirm":{"type":"boolean"},"idempotencyKey":{"type":"string"}},"required":["projectId","name","prompt","runner","confirm","idempotencyKey"],"additionalProperties":true}},
   {"name":"suplex_update_move","description":"Update a Move at its current revision.","inputSchema":{"type":"object","properties":{"moveId":{"type":"string"},"updatedAt":{"type":"string"}},"required":["moveId","updatedAt"],"additionalProperties":true}},

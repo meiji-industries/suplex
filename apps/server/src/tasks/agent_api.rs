@@ -226,8 +226,8 @@ pub(crate) fn authorize_read(
     require_readable(database, principal, task_id).map(|_| ())
 }
 
-/// Transcripts need read access and the live transcript grant. A missing grant
-/// answers like a missing task.
+/// Transcripts need read access and the live transcript grant. The agent can
+/// already read the task, so a missing grant says how to get it.
 pub(crate) fn authorize_transcript(
     database: &SuplexDatabase,
     principal: &Principal,
@@ -239,7 +239,15 @@ pub(crate) fn authorize_transcript(
         [&principal.agent_id],
         |row| row.get(0),
     )?;
-    if granted { Ok(()) } else { Err(not_found()) }
+    if granted {
+        Ok(())
+    } else {
+        Err(fail(
+            "An administrator must turn on \"Read task transcripts\" for this agent in its actions on the Agents page",
+            403,
+            "transcripts_grant_required",
+        ))
+    }
 }
 
 /// Commands, dependency writes, and delivery operations are open to any agent

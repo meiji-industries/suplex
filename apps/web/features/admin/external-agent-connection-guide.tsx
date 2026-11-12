@@ -7,6 +7,7 @@ import { readJsonUnchecked } from "../../lib/api.js";
 import { copyToClipboard } from "../../lib/clipboard.js";
 import { SettingRow, SettingsSection } from "../settings/settings-layout.js";
 import { DEFAULT_MCP_CLIENT_ID, MCP_CLIENT_GROUPS, MCP_CLIENTS, mcpClient } from "./mcp-clients.js";
+import { SUPLEX_SKILL_INSTALL_COMMAND } from "./suplex-skill.js";
 
 function CodeBlock({ children }: { children: string }): ReactElement {
   return (
@@ -38,7 +39,7 @@ export function ExternalAgentConnectionGuide(): ReactElement {
   const client = mcpClient(clientId);
   const clientSnippet = mcpUrl ? client.render(mcpUrl) : "";
   const httpsAddressHint = "Open Remote Access and save an HTTPS address.";
-  const skillCommand = "npx skills add meiji-industries/suplex-skills --skill suplex --global";
+  const skillCommand = SUPLEX_SKILL_INSTALL_COMMAND;
   const environment =`SUPLEX_BASE_URL=${baseUrl}\nSUPLEX_AGENT_CREDENTIAL=<returned credential>`;
   const stdioConfig = `[mcp_servers.suplex]\ncommand = "suplex"\nargs = ["mcp"]\nenv_vars = ["SUPLEX_BASE_URL", "SUPLEX_AGENT_CREDENTIAL"]`;
   const stdioJson = JSON.stringify({ mcpServers: { suplex: { command: "suplex", args: ["mcp"], env: { SUPLEX_BASE_URL: baseUrl, SUPLEX_AGENT_CREDENTIAL: "<returned credential>" } } } }, null, 2);
@@ -70,11 +71,11 @@ export function ExternalAgentConnectionGuide(): ReactElement {
           <CopyButton text={skillCommand} label="Copy the skill command" />
         </SettingRow>
       </SettingsSection>
-      <SettingsSection title="Advanced API and stdio setup" description="Create an external agent to use the HTTP API or the local stdio bridge. Exchange its pairing code once.">
+      <SettingsSection title="Advanced API and stdio setup" description="Create an external agent to use the HTTP API or the local stdio bridge. Exchange its pairing code once. The HTTP API and the skill client do not need the Suplex CLI.">
         <SettingRow label="Environment" description={<>Store the credential privately. Never paste it into chat, logs, shell history, or source control.<CodeBlock>{environment}</CodeBlock></>}>
           <CopyButton text={environment} label="Copy the environment" />
         </SettingRow>
-        <SettingRow label="Stdio bridge" description={<>Add this server to the Codex config.toml. The bridge reads both variables from the environment.<CodeBlock>{stdioConfig}</CodeBlock></>}>
+        <SettingRow label="Stdio bridge" description={<>This bridge is optional. It needs the Suplex app or a Suplex checkout on the client computer. Add this server to the Codex config.toml. The bridge reads both variables from the environment.<CodeBlock>{stdioConfig}</CodeBlock></>}>
           <CopyButton text={stdioConfig} label="Copy the stdio configuration" />
         </SettingRow>
         <SettingRow label="Stdio bridge for JSON clients" description={<>Add this server to a client that uses mcpServers JSON. Keep this file private because it holds the credential.<CodeBlock>{stdioJson}</CodeBlock></>}>

@@ -2,6 +2,14 @@
 
 Suplex serves a Streamable HTTP MCP endpoint at `/mcp`. OAuth 2.1 protects the endpoint. The client gets access only after an administrator approves a company and one or more projects.
 
+No client needs the `suplex` CLI. An external agent uses the first option that is available:
+
+1. Registered Suplex MCP tools.
+2. The hosted `/mcp` endpoint, when the host advertises it. Read `/.well-known/oauth-protected-resource/mcp`; its `resource` is the canonical `/mcp` address.
+3. `suplex_client.py` from [the Suplex skill](agent-skill.md) over the Agent API with a paired credential.
+
+Install the skill with `npx skills add meiji-industries/suplex-skills --skill suplex --global` and verify it with `python3 suplex_client.py --self-check && python3 smoke_test.py` from the installed folder. The local stdio bridge below is optional.
+
 ## Connect Claude Code
 
 Run these commands with the canonical Suplex origin:
@@ -58,6 +66,8 @@ MCP exposes lifecycle task commands only. It does not expose runtime delivery or
 
 ## Use the advanced stdio setup
 
+The stdio bridge is optional. Use it only when the client computer already has the Suplex app or a Suplex checkout. Check with `suplex --version`. Do not install the CLI for this purpose. The npm package named `suplex` is unrelated to Suplex. Pairing and the skill work without this bridge.
+
 Use stdio when the MCP client runs on the Suplex host or when you need the legacy pairing workflow. Create an external agent in Suplex, exchange its pairing code, and set these variables in the client process:
 
 ```text
@@ -82,6 +92,6 @@ Never pass the credential as a command-line argument. Register the local bridge 
 }
 ```
 
-From a source checkout, use `pnpm` as the command. Set the arguments to `["--dir", "/absolute/path/to/suplex", "run", "suplex", "mcp"]`.
+If you already work in a source checkout, use `pnpm` as the command. Set the arguments to `["--dir", "/absolute/path/to/suplex", "run", "suplex", "mcp"]`.
 
 The stdio bridge maps tools to `/api/agent/*`. The native task and agent routes enforce task rules, project grants, idempotency, and revisions for both transports.

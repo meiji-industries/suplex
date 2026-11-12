@@ -10,22 +10,32 @@ Suplex owns task intent and authorization. This skill only asks Suplex to do
 things; it never decides task rules locally, and it never reads Suplex's
 storage.
 
-Two transports, same API:
+Use the first transport that is available. All three speak the same API:
 
-- **Prefer the Suplex MCP tools** when the bridge is registered (`suplex mcp`,
-  or `pnpm --dir /absolute/path/to/suplex run suplex mcp` from a source checkout).
-  Check for tools named
-  `suplex_whoami`, `suplex_capabilities`, `suplex_list_workflows`,
-  `suplex_list_templates`, `suplex_list_tasks`, `suplex_get_task`,
-  `suplex_get_task_delivery`, `suplex_create_task`, `suplex_update_task`,
-  `suplex_set_task_dependencies`, `suplex_command_task`, `suplex_list_moves`,
-  `suplex_get_move`, `suplex_create_move`, `suplex_update_move`,
-  `suplex_delete_move`, `suplex_start_move`, `suplex_list_move_runs`,
-  `suplex_get_move_run`, `suplex_get_move_run_transcript`,
-  `suplex_stop_move_run`, `suplex_archive_move_run`, `suplex_list_task_turns`,
-  `suplex_get_task_session_history`.
-- **Otherwise use `suplex_client.py`** in this directory. It is standard
-  library only and speaks the same routes.
+1. **Registered Suplex MCP tools.** Check for tools named
+   `suplex_whoami`, `suplex_capabilities`, `suplex_list_workflows`,
+   `suplex_list_templates`, `suplex_list_tasks`, `suplex_get_task`,
+   `suplex_get_task_delivery`, `suplex_create_task`, `suplex_update_task`,
+   `suplex_set_task_dependencies`, `suplex_command_task`, `suplex_list_moves`,
+   `suplex_get_move`, `suplex_create_move`, `suplex_update_move`,
+   `suplex_delete_move`, `suplex_start_move`, `suplex_list_move_runs`,
+   `suplex_get_move_run`, `suplex_get_move_run_transcript`,
+   `suplex_stop_move_run`, `suplex_archive_move_run`, `suplex_list_task_turns`,
+   `suplex_get_task_session_history`.
+2. **The hosted Streamable HTTP MCP endpoint** with OAuth. Read
+   `{SUPLEX_BASE_URL}/.well-known/oauth-protected-resource/mcp`. When its
+   `resource` is `{SUPLEX_BASE_URL}/mcp`, the host advertises the endpoint.
+   Register it in your client, for example
+   `claude mcp add --transport http suplex {SUPLEX_BASE_URL}/mcp`. An
+   administrator approves the company and projects in the browser.
+3. **`suplex_client.py`** in this directory. It is standard library only,
+   uses the paired credential, and speaks the same routes.
+
+The `suplex` CLI is not required. Do not install it for this skill, and do not
+ask for a Suplex checkout. The npm package named `suplex` is unrelated; do not
+use it. The local stdio bridge `suplex mcp` is an option only when the Suplex
+app or a checkout is already present (check with `suplex --version`). It
+provides the same tools as option 1.
 
 ```python
 from suplex_client import SuplexClient, SuplexError, SuplexCredentialInvalid

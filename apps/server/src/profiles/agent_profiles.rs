@@ -581,15 +581,25 @@ pub(crate) fn allowed_profile(
     policy: Option<&ProjectProviderPolicy>,
     profile: &TaskProfile,
 ) -> bool {
+    policy_allows(policy, profile.provider, profile.provider_instance_id())
+}
+
+/// A project's provider policy allows an agent on this provider and login. A
+/// dedicated login must be listed; the system login needs its provider listed.
+pub(crate) fn policy_allows(
+    policy: Option<&ProjectProviderPolicy>,
+    provider: crate::tasks::control::HarnessKind,
+    provider_instance_id: Option<&str>,
+) -> bool {
     let Some(policy) = policy else {
         return true;
     };
-    match profile.provider_instance_id().filter(|id| !id.is_empty()) {
+    match provider_instance_id.filter(|id| !id.is_empty()) {
         Some(instance) => policy.allowed_instance_ids.iter().any(|id| id == instance),
         None => policy
             .allowed_providers
             .iter()
-            .any(|allowed| allowed == &profile.provider),
+            .any(|allowed| *allowed == provider),
     }
 }
 

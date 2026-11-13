@@ -1302,7 +1302,7 @@ fn edited_advisor_profiles(
 /// repository supports the edited delivery target.
 fn check_edit_policy(
     current: &repository::TaskEditSnapshot,
-    profiles: &[&TaskProfile],
+    profiles: &[(String, &TaskProfile)],
     delivery_target: &str,
 ) -> DatabaseResult<()> {
     let policy: Option<ProjectProviderPolicy> = current
@@ -1312,13 +1312,15 @@ fn check_edit_policy(
         .cloned()
         .map(serde_json::from_value)
         .transpose()?;
-    if profiles
+    if let Some((field, profile)) = profiles
         .iter()
-        .any(|profile| !allowed_profile(policy.as_ref(), profile))
+        .find(|(_, profile)| !allowed_profile(policy.as_ref(), profile))
     {
-        return Err(TaskError::new(
+        return Err(TaskError::field(
+            "profile_not_allowed",
             "Select agents with providers and logins allowed by this project",
-            422,
+            field,
+            &profile.profile_id,
         )
         .into());
     }
@@ -1429,10 +1431,15 @@ pub fn update_task_details(
             .get("deliveryTarget")
             .and_then(Value::as_str)
             .unwrap_or(&current.delivery_target);
-        let profiles = [&root_profile, &worker_profile]
-            .into_iter()
-            .chain(advisor_profiles.values())
-            .collect::<Vec<_>>();
+        let profiles = [
+            ("rootProfileId".to_owned(), &root_profile),
+            ("workerProfileId".to_owned(), &worker_profile),
+        ]
+        .into_iter()
+        .chain(advisor_profiles.iter().map(|(role, profile)| {
+            (format!("advisorProfileIds.{}", role.as_str()), profile)
+        }))
+        .collect::<Vec<_>>();
         check_edit_policy(&current, &profiles, delivery_target)?;
         let (stored_tests, stored_visual) = stored_choices(&current)?;
         let details = TaskDetailsWrite {

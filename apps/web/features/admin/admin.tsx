@@ -184,6 +184,7 @@ export function AdminView(): ReactElement {
     setAnswerGrant,
     setMovesGrant,
     setTranscriptsGrant,
+    setProjectAgentsGrant,
     copyPairingCode,
     copyExternalAgentSetupInstructions,
   } = createExternalAgentActions({
@@ -361,6 +362,7 @@ export function AdminView(): ReactElement {
               onSetAnswerGrant={setAnswerGrant}
               onSetMovesGrant={setMovesGrant}
               onSetTranscriptsGrant={setTranscriptsGrant}
+              onSetProjectAgentsGrant={setProjectAgentsGrant}
               onRevokeAgent={revokeExternalAgent}
               onClearPendingAction={() => setPendingAction("")}
             />

@@ -1,4 +1,5 @@
 pub mod agent_api;
+pub mod agent_profiles;
 pub mod agent_transcript;
 pub mod agent_turns;
 pub mod analytics;

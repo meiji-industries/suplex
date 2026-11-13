@@ -462,9 +462,9 @@ pub(crate) mod tests {
         let (_, capabilities) = agent
             .call(reqwest::Method::GET, "/api/agent/capabilities", None)
             .await;
-        assert_eq!(capabilities, super::capabilities(true, false, false, false));
+        assert_eq!(capabilities, super::capabilities(true, false, false, false, false));
         assert_eq!(
-            super::capabilities(false, false, false, false)["unavailableCommands"],
+            super::capabilities(false, false, false, false, false)["unavailableCommands"],
             json!([
                 "answer_human_question",
                 "deliver_task",
@@ -1852,7 +1852,7 @@ pub(crate) mod tests {
         let (_, capabilities) = agent
             .call(reqwest::Method::GET, "/api/agent/capabilities", None)
             .await;
-        assert_eq!(capabilities, super::capabilities(true, false, false, false));
+        assert_eq!(capabilities, super::capabilities(true, false, false, false, false));
         assert!(capabilities["unavailableCommands"]
             .as_array()
             .unwrap()
@@ -1905,7 +1905,7 @@ pub(crate) mod tests {
         let (_, capabilities) = agent
             .call(reqwest::Method::GET, "/api/agent/capabilities", None)
             .await;
-        assert_eq!(capabilities, super::capabilities(true, true, false, false));
+        assert_eq!(capabilities, super::capabilities(true, true, false, false, false));
         assert!(capabilities["autonomousCommands"]
             .as_array()
             .unwrap()
@@ -2115,7 +2115,7 @@ pub(crate) mod tests {
         );
         grant_answers(server, &oauth_agent, true).await;
         let capabilities = rpc("tools/call", tool("suplex_capabilities", json!({}))).await;
-        assert_eq!(capabilities["body"], super::capabilities(true, true, false, false));
+        assert_eq!(capabilities["body"], super::capabilities(true, true, false, false, false));
         // The grant adds answer_human_question to permittedCommands, so the revision moves.
         let read = rpc("tools/call", tool("suplex_get_task", json!({"taskId": task_id}))).await;
         let mut answer = answer;

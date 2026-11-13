@@ -52,6 +52,10 @@ pub fn router() -> Router<AppState> {
                 &format!("{prefix}/{{agent_id}}/transcripts-grant"),
                 put(set_transcripts_grant),
             )
+            .route(
+                &format!("{prefix}/{{agent_id}}/project-agents-grant"),
+                put(set_project_agents_grant),
+            )
             .route(&format!("{prefix}/{{agent_id}}/rotate"), post(rotate))
             .route(&format!("{prefix}/{{agent_id}}/revoke"), post(revoke));
     }
@@ -176,6 +180,24 @@ async fn set_transcripts_grant(
 ) -> Response {
     respond(&state, &headers, "PUT", |database, user| {
         let agent = external_agents::set_transcripts_grant(
+            database,
+            user,
+            &id,
+            request.granted,
+            Utc::now(),
+        )?;
+        Ok(Json(external_agents::AdminAgentResult { agent }).into_response())
+    })
+}
+
+async fn set_project_agents_grant(
+    State(state): State<AppState>,
+    ValidPath(AgentIdParams { agent_id: id }): AgentPath,
+    headers: HeaderMap,
+    Valid(request): Valid<AdminAnswerGrantBody>,
+) -> Response {
+    respond(&state, &headers, "PUT", |database, user| {
+        let agent = external_agents::set_project_agents_grant(
             database,
             user,
             &id,

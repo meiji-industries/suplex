@@ -115,6 +115,19 @@ pub fn project_arguments(fields: &Map<String, Value>) -> Result<String, InvalidA
     parsed::<agent_api::ProjectDiscoveryQuery>(fields).map(|query| query.project_id)
 }
 
+pub fn profile_list_arguments(
+    fields: &Map<String, Value>,
+) -> Result<agent_api::ProfileListQuery, InvalidArguments> {
+    parsed(fields)
+}
+
+pub fn project_agents_arguments(
+    fields: &Map<String, Value>,
+) -> Result<(String, agent_api::ProjectAgentsBody), InvalidArguments> {
+    parsed::<agent_api::ProjectTool<agent_api::ProjectAgentsBody>>(fields)
+        .map(|tool| (tool.project_id, tool.body))
+}
+
 pub fn create_arguments(
     fields: &Map<String, Value>,
 ) -> Result<agent_api::TaskCreateBody, InvalidArguments> {

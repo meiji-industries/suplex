@@ -22,6 +22,11 @@ export function setExternalAgentTranscriptsGrant(agentId: string, granted: boole
   return readJsonUnchecked<ExternalAgentResult>(`${agentPath(agentId)}/transcripts-grant`, { method: "PUT", body: JSON.stringify({ granted }) });
 }
 
+/** Let the agent change the default agents of its projects, or stop it. */
+export function setExternalAgentProjectAgentsGrant(agentId: string, granted: boolean): Promise<ExternalAgentResult> {
+  return readJsonUnchecked<ExternalAgentResult>(`${agentPath(agentId)}/project-agents-grant`, { method: "PUT", body: JSON.stringify({ granted }) });
+}
+
 /** Revocation answers 204 with no body. */
 export async function revokeExternalAgent(agentId: string): Promise<void> {
   await readJson(`${agentPath(agentId)}/revoke`, { method: "POST", body: "{}" });

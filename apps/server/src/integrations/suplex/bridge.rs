@@ -154,6 +154,34 @@ impl Bridge {
                 )
                 .await
             }
+            "suplex_list_profiles" => {
+                let parsed = super::profile_list_arguments(args).map_err(invalid)?;
+                let mut pairs = vec![("includeArchived", parsed.include_archived.to_string())];
+                if let Some(role) = parsed.role {
+                    pairs.push(("role", role.as_str().to_owned()));
+                }
+                if let Some(project_id) = parsed.project_id {
+                    pairs.push(("projectId", project_id));
+                }
+                self.request(
+                    Method::GET,
+                    &format!("/api/agent/profiles?{}", query(&pairs)),
+                    None,
+                    &[],
+                )
+                .await
+            }
+            "suplex_update_project_agents" => {
+                let (project_id, body) = super::project_agents_arguments(args).map_err(invalid)?;
+                let body = serde_json::to_value(body).map_err(|error| error.to_string())?;
+                self.request(
+                    Method::PATCH,
+                    &format!("/api/agent/projects/{}/agents", encode(&project_id)),
+                    Some(body),
+                    &[],
+                )
+                .await
+            }
             "suplex_list_tasks" => {
                 let parsed = super::list_arguments(args).map_err(invalid)?;
                 let mut fields = serde_json::to_value(&parsed)

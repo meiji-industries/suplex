@@ -1297,22 +1297,47 @@ fn patch_agent_configuration(
     stored: &StoredProject,
     patch: &ProjectPatch,
 ) -> DatabaseResult<()> {
-    let root = patch
-        .root_profile_id
-        .as_deref()
+    write_agent_configuration(
+        database,
+        stored,
+        AgentSelection {
+            root: patch.root_profile_id.as_deref(),
+            worker: patch.worker_profile_id.as_deref(),
+            alt: patch.alt_profile_id.as_deref(),
+        },
+        patch.provider_policy.as_ref(),
+    )
+}
+
+/// The default agents a Project > Agents write names. An omitted agent keeps its stored ID.
+#[derive(Clone, Copy, Default)]
+pub struct AgentSelection<'a> {
+    pub root: Option<&'a str>,
+    pub worker: Option<&'a str>,
+    pub alt: Option<&'a str>,
+}
+
+/// The Project > Agents rules: each agent is active and has its role, and the
+/// project's provider policy allows it.
+fn write_agent_configuration(
+    database: &SuplexDatabase,
+    stored: &StoredProject,
+    selection: AgentSelection<'_>,
+    policy_patch: Option<&Option<ProjectProviderPolicy>>,
+) -> DatabaseResult<()> {
+    let root = selection
+        .root
         .map_or(stored.root_profile_id.as_str(), auth::js_trim);
-    let worker = patch
-        .worker_profile_id
-        .as_deref()
+    let worker = selection
+        .worker
         .map_or(stored.worker_profile_id.as_str(), auth::js_trim);
-    let alt = patch
-        .alt_profile_id
-        .as_deref()
+    let alt = selection
+        .alt
         .map_or(stored.alt_profile_id.as_str(), auth::js_trim);
     require_profile(database, "root", alt, "altProfileId")?;
     require_profile(database, "root", root, "rootProfileId")?;
     require_profile(database, "worker", worker, "workerProfileId")?;
-    let provider_policy = match &patch.provider_policy {
+    let provider_policy = match policy_patch {
         Some(policy) => policy.clone(),
         None => parse_optional(
             stored.provider_policy_json.clone(),
@@ -1323,19 +1348,19 @@ fn patch_agent_configuration(
         validate_provider_policy(database, policy, root, worker, alt)?;
     }
     let connection = database.connection();
-    if patch.root_profile_id.is_some() || patch.alt_profile_id.is_some() {
+    if selection.root.is_some() || selection.alt.is_some() {
         connection.execute(
             "UPDATE suplex_projects SET root_profile_id = ?1, alt_profile_id = ?2 WHERE id = ?3",
             params![root, alt, stored.id],
         )?;
     }
-    if patch.worker_profile_id.is_some() {
+    if selection.worker.is_some() {
         connection.execute(
             "UPDATE suplex_projects SET worker_profile_id = ?1 WHERE id = ?2",
             params![worker, stored.id],
         )?;
     }
-    if patch.provider_policy.is_some() {
+    if policy_patch.is_some() {
         connection.execute(
             "UPDATE suplex_projects SET provider_policy_json = ?1 WHERE id = ?2",
             params![
@@ -1345,6 +1370,56 @@ fn patch_agent_configuration(
         )?;
     }
     Ok(())
+}
+
+/// A paired agent's Project > Agents write. The caller checks the agent's
+/// grants. `expected_updated_at` is the project's `updatedAt` the agent read;
+/// `None` means another write changed the project after that read.
+pub fn set_agents_from_agent(
+    database: &mut SuplexDatabase,
+    agent_id: &str,
+    company_id: &str,
+    project_id: &str,
+    selection: AgentSelection<'_>,
+    expected_updated_at: &str,
+    now: DateTime<Utc>,
+) -> DatabaseResult<Option<Project>> {
+    let stamp = rfc3339_millis(now);
+    let written = database.transaction(true, |database| {
+        let Some(stored) =
+            stored_row(database, project_id)?.filter(|row| row.company_id == company_id)
+        else {
+            return Err(failure("Not found", 404, vec![]));
+        };
+        if stored.updated_at != expected_updated_at {
+            return Ok(false);
+        }
+        write_agent_configuration(database, &stored, selection, None)?;
+        database.connection().execute(
+            "UPDATE suplex_projects SET updated_at = ?1 WHERE id = ?2",
+            params![stamp, project_id],
+        )?;
+        crate::identity::audit::record(
+            database,
+            &crate::identity::audit::AuditEvent {
+                id: &random_hex_id("audit")?,
+                actor_user_id: None,
+                actor_agent_id: Some(agent_id),
+                action: "project_updated",
+                target_user_id: None,
+                company_id: Some(company_id),
+                metadata_json: &crate::shared::js_json::stringify(
+                    &json!({"projectId": project_id}),
+                ),
+                created_at: &stamp,
+            },
+        )?;
+        Ok(true)
+    })?;
+    if !written {
+        return Ok(None);
+    }
+    get_in_company(database, company_id, project_id).map(Some)
 }
 
 fn repository_connection(body: &ProjectCreateBody) -> Option<&RepositoryConnection> {

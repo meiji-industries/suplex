@@ -1,6 +1,6 @@
 [package]
 name = "suplex-desktop"
-version = "1.13.9"
+version = "1.13.10"
 edition = "2021"
 license.workspace = true
 publish = false

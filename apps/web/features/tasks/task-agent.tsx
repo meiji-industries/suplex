@@ -1,11 +1,8 @@
 import { getTask, selectTaskAgent } from "./lib/task-api.js";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import type { Task } from "../../contracts/tasks.js";
 import type { TaskAgentSelectionRequest } from "../../contracts/agent-selection.js";
-import { ADVISOR_LABELS } from "./workflow-presentation.js";
 import { isProfileAllowed } from "../projects/lib/provider-policy.js";
-import type { ApiProfile } from "../../shell/view-shared.js";
-import { readJsonUnchecked } from "../../lib/api.js";
 import { EntityAvatar } from "../../components/app/entity-avatar.js";
 import { Alert, AlertDescription } from "../../components/ui/alert.js";
 import { Button } from "../../components/ui/button.js";
@@ -15,21 +12,21 @@ import { Label } from "../../components/ui/label.js";
 import { Textarea } from "../../components/ui/textarea.js";
 import { TaskRoleSelector } from "./task-role-selectors.js";
 import type { TaskActivity } from "./task-work.js";
+import { AgentSummary } from "../agents/agent-display.js";
+import { taskAgentLabel, taskRoleAgent, taskRoleSnapshot as roleProfile, useTaskProfiles, type TaskAgentRole } from "./lib/task-role-profile.js";
 
-export type TaskAgentRole = TaskAgentSelectionRequest["role"];
-export const taskAgentLabel = (role: TaskAgentRole): string => role === "root" ? "Coordinator" : role === "worker" ? "Worker" : ADVISOR_LABELS[role];
-const roleProfile = (task: Task, role: TaskAgentRole) => role === "root" ? task.rootProfile : role === "worker" ? task.workerProfile : task.advisorProfiles[role] ?? task.rootProfile;
 const roleSession = (activity: TaskActivity, role: TaskAgentRole) => activity.sessions.find(session => session.current && (role === "root" ? session.kind === "root" : session.kind === "worker" && session.advisorRole === (role === "worker" ? null : role)));
 
 export function TaskAgent({ task, role, onChange, onActivityChange }: {
   task: Task; role: TaskAgentRole; onChange: (task: Task) => void; onActivityChange: () => Promise<TaskActivity>;
 }) {
   const label = taskAgentLabel(role);
-  const profile = roleProfile(task, role);
+  const profilesQuery = useTaskProfiles();
+  const profiles = profilesQuery.data ?? [];
+  const agent = taskRoleAgent(task, role, profilesQuery.data);
   const eligible = !task.archivedAt && (task.status === "active" || task.status === "waiting_human");
   const [open, setOpen] = useState(false);
   const [intent, setIntent] = useState<{ task: Task; sessionId: string | null } | null>(null);
-  const [profiles, setProfiles] = useState<ApiProfile[]>([]);
   const [profileId, setProfileId] = useState("");
   const [direction, setDirection] = useState("");
   const [resume, setResume] = useState(false);
@@ -39,16 +36,12 @@ export function TaskAgent({ task, role, onChange, onActivityChange }: {
   const question = intent?.task.status === "waiting_human" ? intent.task.humanQuestion : null;
   const canResume = question?.kind === "question" && !question.requiresCommandCleanup;
   const noChange = selected === (intent ? roleProfile(intent.task, role).profileId : "") && !direction.trim() && !resume;
-  useEffect(() => {
-    if (!open) return;
-    let cancelled = false;
-    void readJsonUnchecked<{ profiles: ApiProfile[] }>("/api/profiles").then(result => { if (!cancelled) setProfiles(result.profiles); }).catch(cause => { if (!cancelled) setError(cause instanceof Error ? cause.message : "Agent profiles are not available."); });
-    return () => { cancelled = true; };
-  }, [open]);
   const allowed = profiles.filter(item => item.role === (role === "worker" ? "worker" : "root") && !item.archivedAt && isProfileAllowed(intent?.task.configuration.providerPolicy, item));
   const openDialog = async () => {
     if (busy) return;
     setBusy(true); setError(""); setIntent(null);
+    // The dialog lists the current profiles. A failed read keeps the error visible in the dialog.
+    void profilesQuery.refetch().then(result => { if (result.error) setError(result.error.message || "Agent profiles are not available."); });
     try {
       const [freshTask, freshActivity] = await Promise.all([getTask(task.id), onActivityChange()]);
       onChange(freshTask);
@@ -71,9 +64,10 @@ export function TaskAgent({ task, role, onChange, onActivityChange }: {
     } catch (cause) { setError(cause instanceof Error ? cause.message : `Suplex could not save the ${label}.`); }
     finally { setBusy(false); }
   };
+  const identity = <><EntityAvatar kind="agent" {...agent.avatar} size="xs" /><span className="min-w-0 text-left"><span className="block truncate" title={agent.name}>{agent.name}</span><span className="block truncate text-xs text-muted-foreground"><AgentSummary agent={agent.snapshot} /></span></span></>;
   return <div className="space-y-1.5"><dt className="text-muted-foreground text-sm dark:text-[#d1d1d1]">{label}</dt><dd>
-    {eligible ? <Button type="button" size="sm" variant="ghost" disabled={busy} onClick={() => void openDialog()} aria-label={`Select ${label}`}><EntityAvatar kind="agent" id={profile.profileId} name={label} size="xs" /><span className="min-w-0 text-left"><span className="block truncate" title={`${profile.model} · ${profile.provider}`}>{profile.model}</span><span className="block text-xs text-muted-foreground">{profile.provider} · {profile.reasoningLevel}</span></span></Button>
-      : <span className="flex items-center gap-2"><EntityAvatar kind="agent" id={profile.profileId} name={label} size="xs" /><span className="min-w-0"><span className="block truncate">{profile.model}</span><span className="block text-xs text-muted-foreground">{profile.provider} · {profile.reasoningLevel}</span></span></span>}
+    {eligible ? <Button type="button" size="sm" variant="ghost" disabled={busy} onClick={() => void openDialog()} aria-label={`Select ${label}`}>{identity}</Button>
+      : <span className="flex items-center gap-2">{identity}</span>}
   </dd><Dialog open={open} onOpenChange={value => { if (!busy) setOpen(value); }}><DialogContent><DialogHeader><DialogTitle>Select {label}</DialogTitle></DialogHeader>
     <form className="grid gap-3" onSubmit={event => { event.preventDefault(); void save(); }}>
       <p className="text-xs text-muted-foreground">Suplex uses this agent for remaining work. Suplex keeps completed work, history, and limits.</p>

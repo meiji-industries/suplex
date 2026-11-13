@@ -1,5 +1,5 @@
 import { EntityAvatar } from "../../components/app/entity-avatar.js";
-import { providerIcons } from "../../components/app/provider-icons.js";
+import { AgentSummary } from "../agents/agent-display.js";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -28,7 +28,7 @@ import {
 } from "../../components/ui/dropdown-menu.js";
 import { NewButton } from "../../components/ui/new-button.js";
 import { SettingsSectionHeader } from "../settings/settings-layout.js";
-import { Archive, ArchiveRestore, Copy, Ellipsis, Pencil, Star, Trash2, Zap } from "lucide-react";
+import { Archive, ArchiveRestore, Copy, Ellipsis, Pencil, Star, Trash2 } from "lucide-react";
 import type {
   Dispatch,
   ReactElement,
@@ -78,14 +78,6 @@ export function agentDescription(agent: ApiProfile): string {
   return hint ? `${role} ${hint}` : role;
 }
 
-const REASONING_LABELS: Record<string, string> = {
-  low: "Low",
-  medium: "Medium",
-  high: "High",
-  xhigh: "XHigh",
-  max: "Max",
-};
-
 export function AgentCard({
   agent,
   defaults,
@@ -124,9 +116,7 @@ export function AgentCard({
       <CardContent>
         <p>{agentDescription(agent)}</p>
         <p className="text-xs text-muted-foreground">
-          {providerIcons[agent.provider].label} · {agent.model}{" "}
-          {REASONING_LABELS[agent.reasoningLevel] ?? agent.reasoningLevel}
-          {agent.serviceTier === "priority" ? <> <span title="Priority"><Zap className="inline size-3.5 align-text-bottom" role="img" aria-label="Priority" /></span></> : ""}
+          <AgentSummary agent={agent} />
         </p>
         {agent.archivedAt ? <Badge variant="secondary">Archived</Badge> : null}
       </CardContent>

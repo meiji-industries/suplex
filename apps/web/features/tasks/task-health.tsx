@@ -1,12 +1,10 @@
 import { useEffect, useState, type ReactElement } from "react";
 import type { z } from "zod";
 import { Badge } from "../../components/ui/badge.js";
-import type { HarnessKind } from "../../contracts/harness-kind.js";
+import { providerLabel } from "../agents/agent-display.js";
 import type { TaskHealthSchema } from "../../contracts/task-responses.js";
 
 export type TaskHealth = z.infer<typeof TaskHealthSchema>;
-
-const providerLabels = { opencode: "OpenCode", "claude-code": "Claude Code", devin: "Devin", codex: "Codex", pi: "Pi", omp: "OMP" } satisfies Record<HarnessKind, string>;
 
 /** A task without a usual turn time gets this much time before it shows no progress. */
 export const NO_PROGRESS_FLOOR_MS = 10 * 60_000;
@@ -44,7 +42,7 @@ export function TaskHealthBadges({ health, className = "" }: { health: TaskHealt
   const stalled = noProgressFor(health, now);
   if (!notConnected.length && !health.retries && stalled === null) return null;
   return <span data-task-health className={`flex min-w-0 flex-wrap items-center gap-1 ${className}`}>
-    {notConnected.map((provider, index) => <Badge key={`${provider.provider}-${index}`} variant="destructive" data-task-health-provider={provider.provider} title={provider.summary}>{providerLabels[provider.provider]} is not connected</Badge>)}
+    {notConnected.map((provider, index) => <Badge key={`${provider.provider}-${index}`} variant="destructive" data-task-health-provider={provider.provider} title={provider.summary}>{providerLabel(provider.provider)} is not connected</Badge>)}
     {health.retries ? <Badge variant="secondary" data-task-health-retries={health.retries}>Retried {health.retries} {health.retries === 1 ? "time" : "times"}</Badge> : null}
     {stalled !== null && lastProgressAt ? <Badge variant="outline" data-task-health-stalled title={`Last progress ${new Date(lastProgressAt).toLocaleString()}`}>No progress for {duration(stalled)}</Badge> : null}
   </span>;

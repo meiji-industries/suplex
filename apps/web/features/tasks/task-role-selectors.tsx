@@ -4,6 +4,7 @@ import type { ApiProfile } from "../../shell/view-shared.js";
 import { Button } from "../../components/ui/button.js";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuLabel, DropdownMenuRadioGroup, DropdownMenuRadioItem, DropdownMenuTrigger } from "../../components/ui/dropdown-menu.js";
 import { EntityAvatar } from "../../components/app/entity-avatar.js";
+import { AgentSummary } from "../agents/agent-display.js";
 
 export function TaskRoleSelector({ role, label: providedLabel, profiles, assignment, defaultProfileId, defaultChoiceLabel, showDefaultChoice = true, compact = false, inline = false, busy, onChange }: {
   role: "root" | "worker";
@@ -35,7 +36,7 @@ export function TaskRoleSelector({ role, label: providedLabel, profiles, assignm
       {showDefaultChoice ? <DropdownMenuRadioItem value="" className={compact ? "text-xs" : undefined}>{defaultChoiceLabel ?? (providedLabel ? "Same as Coordinator" : "Project default")}</DropdownMenuRadioItem> : null}
       {available.map(profile => <DropdownMenuRadioItem className={compact ? "text-xs" : undefined} key={profile.id} value={profile.id}>
         <EntityAvatar kind="agent" id={profile.id} name={profile.name} seed={profile.avatarSeed} />
-        <span>{profile.name} · {profile.model} · {profile.reasoningLevel} · {profile.serviceTier}</span>
+        <span>{profile.name} · <AgentSummary agent={profile} /></span>
       </DropdownMenuRadioItem>)}
     </DropdownMenuRadioGroup></DropdownMenuContent>
   </DropdownMenu>;

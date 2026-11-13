@@ -110,11 +110,27 @@ pub fn record(
     database.transaction(false, |database| {
         let connection = database.connection();
         // An empty read keeps the saved rows: the native source no longer has them.
+        // Rows the read still has are updated in place, so an unchanged row
+        // does not change the company usage revision.
         if let Some(entry) = usage.first() {
-            connection.execute(
-                "DELETE FROM suplex_task_usage WHERE task_id = ?1 AND session_id = ?2",
-                params![task_id, entry.session_id],
-            )?;
+            let kept = usage
+                .iter()
+                .map(|entry| entry.message_id.as_str())
+                .collect::<std::collections::HashSet<_>>();
+            let saved = connection
+                .prepare(
+                    "SELECT message_id FROM suplex_task_usage WHERE task_id = ?1 AND session_id = ?2",
+                )?
+                .query_map(params![task_id, entry.session_id], |row| {
+                    row.get::<_, String>(0)
+                })?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            for message_id in saved.iter().filter(|id| !kept.contains(id.as_str())) {
+                connection.execute(
+                    "DELETE FROM suplex_task_usage WHERE task_id = ?1 AND session_id = ?2 AND message_id = ?3",
+                    params![task_id, entry.session_id, message_id],
+                )?;
+            }
         }
         for entry in usage {
             connection.execute(

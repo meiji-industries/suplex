@@ -563,8 +563,83 @@ pub(crate) fn company_analytics(
     Ok(json!({"generatedAt": rfc3339_millis(now), "tasks": tasks}))
 }
 
-/// The task-costs projection of `analytics`.
-pub fn task_costs(analytics: &Value) -> DatabaseResult<TaskCostsResponse> {
+/// One task's row of the task costs.
+fn task_cost(
+    id: String,
+    usage: &[TaskUsage],
+    sessions: u64,
+    observed_sessions: u64,
+    stale_sessions: u64,
+) -> TaskCost {
+    let metrics = usage_metrics(usage);
+    TaskCost {
+        id,
+        cost: metrics.cost,
+        unpriced: metrics.unpriced_messages > 0,
+        subsidized: metrics.subsidized,
+        partial: metrics.unpriced_messages > 0
+            || stale_sessions > 0
+            || observed_sessions < sessions
+            || usage.iter().any(|entry| entry.completed_at.is_none()),
+        total_tokens: metrics.total_tokens as u64,
+    }
+}
+
+/// `TaskService.taskCosts`: the cost of each task `analytics` lists.
+pub fn task_costs(
+    database: &SuplexDatabase,
+    user_id: &str,
+    company_id: &str,
+) -> DatabaseResult<TaskCostsResponse> {
+    require_visible(database, user_id, company_id)?;
+    company_task_costs(database, company_id)
+}
+
+/// `task_costs` for the sync feed. The caller authorizes. Reads the usage of
+/// one task at a time, so memory holds one task's records, not the company's.
+pub(crate) fn company_task_costs(
+    database: &SuplexDatabase,
+    company_id: &str,
+) -> DatabaseResult<TaskCostsResponse> {
+    let mut ids = task_ids(database, company_id, false)?;
+    ids.extend(task_ids(database, company_id, true)?);
+    let mut snapshots = database
+        .connection()
+        .prepare("SELECT snapshot FROM suplex_task_usage WHERE task_id = ?1")?;
+    let mut tasks = Vec::with_capacity(ids.len());
+    for id in ids {
+        let usage = snapshots
+            .query_map([&id], |row| row.get::<_, String>(0))?
+            .map(|snapshot| -> DatabaseResult<TaskUsage> { Ok(serde_json::from_str(&snapshot?)?) })
+            .collect::<DatabaseResult<Vec<_>>>()?;
+        let observations = session_observations(database, &id)?;
+        let sessions = native_session_ids(database, &id)?
+            .iter()
+            .chain(observations.iter().map(|session| &session.session_id))
+            .collect::<HashSet<_>>()
+            .len();
+        let observed = observations
+            .iter()
+            .filter(|session| session.observed_at.is_some())
+            .count();
+        let stale = observations
+            .iter()
+            .filter(|session| session.error_at.is_some())
+            .count();
+        tasks.push(task_cost(
+            id,
+            &usage,
+            sessions as u64,
+            observed as u64,
+            stale as u64,
+        ));
+    }
+    Ok(TaskCostsResponse { tasks })
+}
+
+/// The task-costs projection of `analytics`: what `company_task_costs` must return.
+#[cfg(test)]
+pub fn analytics_task_costs(analytics: &Value) -> DatabaseResult<TaskCostsResponse> {
     #[derive(Deserialize)]
     #[serde(rename_all = "camelCase")]
     struct CostSource {
@@ -581,18 +656,13 @@ pub fn task_costs(analytics: &Value) -> DatabaseResult<TaskCostsResponse> {
         .flatten()
         .map(|task| -> DatabaseResult<TaskCost> {
             let task: CostSource = serde_json::from_value(task.clone())?;
-            let metrics = usage_metrics(&task.usage);
-            Ok(TaskCost {
-                id: task.id,
-                cost: metrics.cost,
-                unpriced: metrics.unpriced_messages > 0,
-                subsidized: metrics.subsidized,
-                partial: metrics.unpriced_messages > 0
-                    || task.stale_sessions > 0
-                    || task.observed_sessions < task.sessions
-                    || task.usage.iter().any(|entry| entry.completed_at.is_none()),
-                total_tokens: metrics.total_tokens as u64,
-            })
+            Ok(task_cost(
+                task.id,
+                &task.usage,
+                task.sessions,
+                task.observed_sessions,
+                task.stale_sessions,
+            ))
         })
         .collect::<DatabaseResult<Vec<_>>>()?;
     Ok(TaskCostsResponse { tasks })
@@ -640,7 +710,7 @@ pub(crate) mod tests {
             source("subsidized", vec![TaskUsage { subsidized: true, ..entry("subsidized", 2.0) }], 1, 0),
         ]});
         assert_eq!(
-            serde_json::to_value(task_costs(&input).unwrap()).unwrap(),
+            serde_json::to_value(analytics_task_costs(&input).unwrap()).unwrap(),
             json!({"tasks": [
                 {"id":"empty","cost":null,"unpriced":false,"subsidized":false,"partial":true,"totalTokens":0},
                 {"id":"priced","cost":3.0,"unpriced":false,"subsidized":false,"partial":false,"totalTokens":15},

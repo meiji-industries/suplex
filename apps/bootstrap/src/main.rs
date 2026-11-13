@@ -1158,6 +1158,16 @@ mod tests {
         assert!(!lacks_workflow_scope("Logged in to github.com\n"));
     }
 
+    /// A unit stop or restart kills only the supervisor, so running agent turns survive it.
+    #[test]
+    fn the_suplex_unit_leaves_agent_turns_running_across_a_restart() {
+        let (_, unit) = FILES
+            .iter()
+            .find(|(name, _)| *name == "suplex.service")
+            .unwrap();
+        assert!(unit.lines().any(|line| line == "KillMode=process"));
+    }
+
     #[test]
     fn config_round_trips_quotes_and_dollars() {
         let dir =

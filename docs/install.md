@@ -51,6 +51,18 @@ Provision privileged steps once, without blanket sudo access for this user.
 For a systemd service, set `User=suplex`, `HOME=/home/suplex`, and a `PATH` that includes the user's tool manager shims.
 For example, include `/home/suplex/.local/share/mise/shims` and `/home/suplex/.local/bin` before `/usr/local/bin:/usr/bin:/bin`.
 Check `pnpm --version` with that service user's environment before task setup.
+Set `KillMode=process`. Agent turns run in their own process groups and continue when the service restarts; Suplex reads their results when it starts again. With the default `KillMode=control-group`, every restart stops all running agent turns.
+To add it to an existing unit, run as root:
+
+```sh
+mkdir -p /etc/systemd/system/suplex.service.d
+printf '[Service]\nKillMode=process\n' > /etc/systemd/system/suplex.service.d/kill-mode.conf
+systemctl daemon-reload
+```
+
+The next stop or restart uses it; the service does not need a restart now.
+A stop leaves running agent turns to finish. To stop one sooner, cancel its task in Suplex.
+Before you remove the service user, stop its remaining processes with `pkill -u suplex`.
 The Linux installer and the `suplex up`, `restart`, `down`, and `serve` commands refuse to run as root.
 
 To run Suplex on a host from a checkout instead:

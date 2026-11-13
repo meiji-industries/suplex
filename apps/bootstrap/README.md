@@ -100,7 +100,8 @@ Verified: direct `eth0` blocked, exit node off = nothing leaves, survives reboot
    `SUPLEX_TAILSCALE_EXPOSURE=serve`, `SUPLEX_TAILSCALE_ADDRESS=<node>.<tailnet>.ts.net`, repo and worktree roots.
    The supervisor runs `tailscale serve` itself; the tailnet needs HTTPS certificates enabled.
 5. `suplex.service`: `User=suplex`, `suplex up --foreground`, `WorkingDirectory=/home/suplex`, `PATH` with
-   `~/.local/bin` (claude, herdr, op) and the mise shims (node, pnpm, uv), `Restart=always`, `NoNewPrivileges`,
+   `~/.local/bin` (claude, herdr, op) and the mise shims (node, pnpm, uv), `Restart=always`, `KillMode=process` (a
+   restart stops only the supervisor, so running agent turns continue), `NoNewPrivileges`,
    `ProtectSystem=full`, `Requires=suplex-egress.service`, `Wants=herdr.service` (`herdr server` as `suplex`, its own unit). `tailscale set --operator=suplex` lets it run `tailscale serve`.
    `ExecStart` runs `/home/suplex/.local/bin/suplex` directly; `mise run bootstrap:install` updates it as root.
 6. Agents, installed as `suplex`: mise (node 24, pnpm, uv), `claude`, `herdr`. Sign in on the VM as `suplex`

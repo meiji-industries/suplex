@@ -563,6 +563,43 @@ pub(crate) fn company_analytics(
     Ok(json!({"generatedAt": rfc3339_millis(now), "tasks": tasks}))
 }
 
+/// `analytics` as JSON text, written one task at a time: memory holds the text
+/// and one task's analytics, not every task's analytics as a `Value`. A company
+/// with about 2,400 tasks made a 76 MB response and a 1.1 GB peak the other way.
+pub fn analytics_json(
+    database: &SuplexDatabase,
+    user_id: &str,
+    company_id: &str,
+    now: DateTime<Utc>,
+) -> DatabaseResult<String> {
+    require_visible(database, user_id, company_id)?;
+    let mut ids = task_ids(database, company_id, false)?;
+    ids.extend(task_ids(database, company_id, true)?);
+    let mut output = format!(
+        "{{\"generatedAt\":{},\"tasks\":[",
+        crate::shared::js_json::stringify(&Value::String(rfc3339_millis(now)))
+    );
+    let mut first = true;
+    for id in ids {
+        let Some(task) = task_response::get(database, &id)? else {
+            continue;
+        };
+        let task = task_analytics(
+            &serde_json::to_value(task)?,
+            &native_session_ids(database, &id)?,
+            read(database, &id)?,
+            now.timestamp_millis() as f64,
+        );
+        if !first {
+            output.push(',');
+        }
+        first = false;
+        output.push_str(&crate::shared::js_json::stringify(&task));
+    }
+    output.push_str("]}");
+    Ok(output)
+}
+
 /// One task's row of the task costs.
 fn task_cost(
     id: String,

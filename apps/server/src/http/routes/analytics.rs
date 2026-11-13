@@ -70,9 +70,21 @@ async fn company_analytics(
         Err(response) => return *response,
     };
     let result = state.with_database(|database| {
-        analytics::analytics(database, &user_id, &company_id, Utc::now())
+        analytics::analytics_json(database, &user_id, &company_id, Utc::now())
     });
-    respond(result, cookies)
+    let mut response = match result {
+        Ok(body) => (
+            [
+                (header::CONTENT_TYPE, "application/json; charset=utf-8"),
+                (header::CACHE_CONTROL, "private, no-store"),
+            ],
+            body,
+        )
+            .into_response(),
+        Err(error) => ApiError::response(error),
+    };
+    auth::append_cookies(&mut response, cookies);
+    response
 }
 
 async fn task_costs(

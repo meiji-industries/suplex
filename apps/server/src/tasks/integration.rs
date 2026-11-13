@@ -420,7 +420,7 @@ pub fn matches_agent_api_filter(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::tasks::control::{DeliveryTarget, PullRequestReference, PullRequestState};
     use serde_json::json;
@@ -434,6 +434,13 @@ mod tests {
         task.configuration.branch = "task".into();
         task.configuration.base_branch = "main".into();
         task
+    }
+
+    /// The action a delivered ready pull request task reports for `observation`.
+    pub(crate) fn delivered_ready_action(observation: &Observation) -> Option<ActionRequired> {
+        let task = task(TaskStatus::Delivered, DeliveryTarget::PullRequestReady);
+        let integration = derive_task_integration(&task, Some(observation), None, "now");
+        derive_action_required(&task, &integration, None)
     }
 
     #[test]

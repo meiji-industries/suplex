@@ -377,7 +377,7 @@ fn delivery_wait_unchanged(wait: &DeliveryWait, observed: &Observation) -> bool 
 /// not park the Coordinator. A token that can bypass branch protection can still
 /// merge. A review wait starts and ends on this same answer, so it cannot wake
 /// only to park again.
-fn only_review_remains(observed: &Observation) -> bool {
+pub(crate) fn only_review_remains(observed: &Observation) -> bool {
     observed.state.as_deref() == Some("open")
         && !observed.viewer_can_merge_as_admin
         && merge_block::observed_review_block(observed).is_some()
@@ -1006,6 +1006,7 @@ impl DeliveryOperations {
                 observed.number.unwrap_or_default(),
                 &observed.block_reasons,
                 abilities,
+                only_review_remains(observed),
             ));
         }
         prompt
@@ -2631,6 +2632,7 @@ impl DeliveryOperations {
                 requested,
                 &reasons,
                 merge_abilities(control, observed),
+                false,
             );
             return Err(delivery_failure(
                 "merge_not_eligible",
@@ -3562,6 +3564,102 @@ pub(crate) mod tests {
             )
             .contains("ask_human")
         );
+    }
+
+    /// GitHub recomputes after the base moves and reports `UNKNOWN`. A token
+    /// that cannot read classic protection must not turn that into a block.
+    #[tokio::test]
+    async fn a_recomputing_pull_request_with_unread_rules_escalates_nothing() {
+        let github = loopback_github(vec![(
+            "/graphql",
+            json!({"data":{"repository":{"pullRequest":{
+                "number":7,"url":"https://github.com/owner/repo/pull/7","state":"OPEN","isDraft":false,
+                "headRefOid":"a".repeat(40),"baseRefOid":"b".repeat(40),"baseRefName":"main",
+                "mergeable":"MERGEABLE","mergeStateStatus":"UNKNOWN","autoMergeRequest":null,
+                "reviewDecision":null,"author":null,"changedFiles":1,"additions":1,"deletions":0,
+                "commits":{"nodes":[]}}}}}),
+        )])
+        .await;
+        // Classic protection answers 404 "Not Found" and rulesets are not listed.
+        let observed = github
+            .observe_pull_request("owner/repo", "task", Some(7))
+            .await
+            .unwrap();
+        assert!(observed.exists);
+        assert!(
+            observed.block_reasons.is_empty(),
+            "{:?}",
+            observed.block_reasons
+        );
+        let wait = DeliveryWait {
+            head_sha: "a".repeat(40),
+            fingerprint: "{}".into(),
+            since: "now".into(),
+            reason: DeliveryWaitReason::MergeQueue,
+        };
+        let prompt = DeliveryOperations::changed_delivery_prompt(
+            &wait,
+            &observed,
+            MergeAbilities::default(),
+        );
+        assert!(!prompt.contains("ask_human"), "{prompt}");
+        assert!(!prompt.contains("GitHub blocks the merge"), "{prompt}");
+        // The task read names no block either.
+        let action = crate::tasks::integration::tests::delivered_ready_action(&observed).unwrap();
+        assert!(
+            !action.summary.contains("GitHub blocks the merge"),
+            "{}",
+            action.summary
+        );
+    }
+
+    #[test]
+    fn a_review_wait_prompt_names_the_review_and_asks_nobody() {
+        use crate::integrations::merge_block::MergeBlockReason;
+        let review = MergeBlockReason::RequiredReview {
+            branch: "main".into(),
+            needed: Some(1),
+            code_owner_review: false,
+            code_owners: vec![],
+            changes_requested: false,
+        };
+        let mut observed = Observation {
+            exists: true,
+            number: Some(7),
+            head_sha: Some("a".repeat(40)),
+            state: Some("open".into()),
+            is_draft: Some(false),
+            mergeable: Some("MERGEABLE".into()),
+            merge_state_status: Some("BLOCKED".into()),
+            review_decision: Some("REVIEW_REQUIRED".into()),
+            ..Observation::default()
+        };
+        assert!(only_review_remains(&observed));
+        let wait = DeliveryWait {
+            head_sha: "a".repeat(40),
+            fingerprint: "{}".into(),
+            since: "now".into(),
+            reason: DeliveryWaitReason::Checks,
+        };
+        for reasons in [
+            vec![review.clone()],
+            vec![
+                review.clone(),
+                MergeBlockReason::RulesUnreadable {
+                    branch: "main".into(),
+                },
+            ],
+        ] {
+            observed.block_reasons = reasons;
+            let prompt = DeliveryOperations::changed_delivery_prompt(
+                &wait,
+                &observed,
+                MergeAbilities::default(),
+            );
+            assert!(!prompt.contains("ask_human"), "{prompt}");
+            assert!(prompt.contains("Branch `main` requires an approving review."));
+            assert!(prompt.contains("Request merge_pull_request with your current review."));
+        }
     }
 
     #[test]

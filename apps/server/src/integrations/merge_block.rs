@@ -334,12 +334,6 @@ pub fn block_question(
                 "Start the deployment",
                 format!("You deploy the head commit to `{environment}` on GitHub. {retry}"),
             )),
-            MergeBlockReason::MergeQueueRequired { .. } => Some(option(
-                "Move the pull request to the merge queue",
-                format!(
-                    "You add pull request {number} to the merge queue on GitHub. GitHub merges it after the queue checks pass."
-                ),
-            )),
             MergeBlockReason::RulesUnreadable { .. } | MergeBlockReason::Unknown { .. } => {
                 Some(option(
                     "Check the branch rules",
@@ -348,7 +342,9 @@ pub fn block_question(
                     ),
                 ))
             }
+            // Suplex enters the merge queue itself when the merge is requested.
             MergeBlockReason::UnsignedCommits { .. }
+            | MergeBlockReason::MergeQueueRequired { .. }
             | MergeBlockReason::LinearHistory { .. }
             | MergeBlockReason::BranchLocked { .. } => None,
         };
@@ -401,19 +397,79 @@ pub fn block_question(
     }
 }
 
+impl MergeBlockReason {
+    /// A concrete rule that Suplex read, as opposed to an unread or unexplained one.
+    pub fn is_concrete(&self) -> bool {
+        !matches!(self, Self::RulesUnreadable { .. } | Self::Unknown { .. })
+    }
+}
+
+/// The reasons that need a person's decision. Suplex enters the merge queue
+/// itself, and it waits for a review when only a review remains
+/// (`review_wait`). An unread rule next to a concrete rule does not change
+/// that: the concrete rule already explains the block.
+pub fn reasons_for_a_person(
+    reasons: &[MergeBlockReason],
+    review_wait: bool,
+) -> Vec<MergeBlockReason> {
+    let concrete = reasons.iter().any(MergeBlockReason::is_concrete);
+    reasons
+        .iter()
+        .filter(|reason| match reason {
+            MergeBlockReason::MergeQueueRequired { .. } => false,
+            MergeBlockReason::RequiredReview { .. } => !review_wait,
+            MergeBlockReason::RulesUnreadable { .. } => !concrete,
+            MergeBlockReason::UnsignedCommits { .. }
+            | MergeBlockReason::MissingRequiredCheck { .. }
+            | MergeBlockReason::UnresolvedConversations { .. }
+            | MergeBlockReason::LinearHistory { .. }
+            | MergeBlockReason::DeploymentRequired { .. }
+            | MergeBlockReason::BranchLocked { .. }
+            | MergeBlockReason::Unknown { .. } => true,
+        })
+        .cloned()
+        .collect()
+}
+
 /// The instruction to the Coordinator for a blocked merge: the named cause,
 /// what a code change can repair, and the `ask_human` input for the rest.
+/// When Suplex can handle every reason (a review wait or the merge queue),
+/// the instruction is to request the merge, and nobody is asked.
 pub fn coordinator_instruction(
     number: u64,
     reasons: &[MergeBlockReason],
     abilities: MergeAbilities,
+    review_wait: bool,
 ) -> String {
-    let question = block_question(number, reasons, abilities);
+    let person = reasons_for_a_person(reasons, review_wait);
+    if person.is_empty() {
+        let mut handled = Vec::new();
+        if review_wait
+            && reasons
+                .iter()
+                .any(|reason| matches!(reason, MergeBlockReason::RequiredReview { .. }))
+        {
+            handled
+                .push("Suplex waits for the review and wakes you when the pull request changes.");
+        }
+        if reasons
+            .iter()
+            .any(|reason| matches!(reason, MergeBlockReason::MergeQueueRequired { .. }))
+        {
+            handled.push("Suplex adds the pull request to the merge queue.");
+        }
+        return format!(
+            "GitHub reports: {} Request merge_pull_request with your current review. {} Do not ask a person and do not change code for this.",
+            describe_all(reasons),
+            handled.join(" ")
+        );
+    }
+    let question = block_question(number, &person, abilities);
     let input = serde_json::to_string(&json!({
         "kind": "ask_human", "question": question.question, "options": question.options,
     }))
     .expect("question serializes");
-    let repair = if reasons
+    let repair = if person
         .iter()
         .all(|reason| !reason.repairable_by_code(abilities))
     {
@@ -808,10 +864,15 @@ pub fn diagnose(observed: &Observation, facts: &BlockFacts) -> Vec<MergeBlockRea
             branch: branch.clone(),
         });
     }
+    // GitHub reports `UNKNOWN` while it recomputes, for example after the base
+    // moves. That is not a block: report only rules that Suplex read and that
+    // the pull request does not satisfy, never an unread or unexplained rule.
+    if observed.merge_state_status.as_deref() == Some("UNKNOWN") {
+        return reasons;
+    }
     if incomplete {
         reasons.push(MergeBlockReason::RulesUnreadable { branch });
-    } else if reasons.is_empty() && observed.merge_state_status.as_deref() != Some("UNKNOWN") {
-        // An `UNKNOWN` state can be GitHub recomputing, not a block.
+    } else if reasons.is_empty() {
         reasons.push(MergeBlockReason::Unknown { branch });
     }
     reasons
@@ -1060,8 +1121,11 @@ impl Github {
         else {
             return BlockFacts::unreadable("");
         };
-        let classic = self.classic_protection(repository, branch).await;
-        let rules = match self.branch_rules(repository, branch).await {
+        let (classic, rules) = tokio::join!(
+            self.classic_protection(repository, branch),
+            self.branch_rules(repository, branch)
+        );
+        let rules = match rules {
             Ok(rules) => Fetched::Read(rules),
             Err(_) => Fetched::Unreadable,
         };
@@ -1570,7 +1634,7 @@ mod tests {
                 .contains("signed commits rule for branch `main`")
         );
         // No code change repairs it without a signing key.
-        let instruction = coordinator_instruction(12, &reasons, MergeAbilities::default());
+        let instruction = coordinator_instruction(12, &reasons, MergeAbilities::default(), false);
         assert!(instruction.contains("A code change cannot repair this block."));
         assert!(instruction.contains("\"kind\":\"ask_human\""));
         let instruction = coordinator_instruction(
@@ -1580,8 +1644,94 @@ mod tests {
                 can_sign: true,
                 can_merge_as_admin: false,
             },
+            false,
         );
         assert!(!instruction.contains("cannot repair"));
+    }
+
+    fn review(branch: &str) -> MergeBlockReason {
+        MergeBlockReason::RequiredReview {
+            branch: branch.into(),
+            needed: Some(1),
+            code_owner_review: false,
+            code_owners: vec![],
+            changes_requested: false,
+        }
+    }
+
+    #[test]
+    fn an_unknown_merge_state_reports_only_rules_the_pull_request_breaks() {
+        let mut recomputing = blocked();
+        recomputing.merge_state_status = Some("UNKNOWN".into());
+        // A token without admin permission cannot read classic protection.
+        let mut facts = facts();
+        facts.classic = Fetched::Unreadable;
+        assert!(diagnose(&recomputing, &facts).is_empty());
+        facts.rules = Fetched::Unreadable;
+        assert!(diagnose(&recomputing, &facts).is_empty());
+        // A rule Suplex read that the pull request breaks is still named.
+        facts.rules = rules(json!([{"type": "required_signatures"}]));
+        facts.commits = commits(&[(&sha("4444"), false)]);
+        assert_eq!(kinds(&diagnose(&recomputing, &facts)), ["unsigned_commits"]);
+        facts.commits = Fetched::Unreadable;
+        assert!(diagnose(&recomputing, &facts).is_empty());
+        // The same facts with BLOCKED name the unread rules.
+        assert_eq!(kinds(&diagnose(&blocked(), &facts)), ["rules_unreadable"]);
+    }
+
+    #[test]
+    fn a_review_wait_and_the_merge_queue_ask_nobody() {
+        let unreadable = MergeBlockReason::RulesUnreadable {
+            branch: MAIN.into(),
+        };
+        for reasons in [vec![review(MAIN)], vec![review(MAIN), unreadable.clone()]] {
+            let waiting = coordinator_instruction(12, &reasons, MergeAbilities::default(), true);
+            assert!(!waiting.contains("ask_human"), "{waiting}");
+            assert!(waiting.contains("Branch `main` requires an approving review."));
+            assert!(waiting.contains("Request merge_pull_request"));
+            assert!(waiting.contains("Suplex waits for the review"));
+            // Requested changes or an administrator token are not a review wait.
+            let asking = coordinator_instruction(12, &reasons, MergeAbilities::default(), false);
+            assert!(asking.contains("ask_human"));
+        }
+        // An unread rule alone with BLOCKED still needs a person.
+        assert!(
+            coordinator_instruction(
+                12,
+                std::slice::from_ref(&unreadable),
+                MergeAbilities::default(),
+                true
+            )
+            .contains("ask_human")
+        );
+        let queue = MergeBlockReason::MergeQueueRequired {
+            branch: MAIN.into(),
+        };
+        for reasons in [vec![queue.clone()], vec![queue.clone(), unreadable]] {
+            let instruction =
+                coordinator_instruction(12, &reasons, MergeAbilities::default(), false);
+            assert!(!instruction.contains("ask_human"), "{instruction}");
+            assert!(instruction.contains("Suplex adds the pull request to the merge queue."));
+            assert!(instruction.contains("Request merge_pull_request"));
+        }
+        // With another rule, the question asks about that rule and offers no manual queue entry.
+        let reasons = [
+            queue,
+            MergeBlockReason::BranchLocked {
+                branch: MAIN.into(),
+            },
+        ];
+        let instruction = coordinator_instruction(12, &reasons, MergeAbilities::default(), false);
+        assert!(instruction.contains("ask_human"));
+        let question = block_question(12, &reasons, MergeAbilities::default());
+        assert!(
+            question
+                .options
+                .iter()
+                .all(|option| !option.label.contains("merge queue")
+                    && !option.description.contains("merge queue on GitHub")),
+            "{question:?}"
+        );
     }
 
     #[test]
@@ -1851,7 +2001,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_refused_merge_names_the_rule_instead_of_the_merge_state() {
+    async fn a_refused_merge_keeps_the_merge_state_and_names_the_rule() {
         use crate::integrations::github_delivery::tests::counted_fake_api;
         let head = sha("aaaa");
         let (github, server, _) = counted_fake_api(
@@ -1888,7 +2038,45 @@ mod tests {
             ),
             "{message}"
         );
-        assert!(!message.contains("Merge state is"));
+        assert!(
+            message.contains("Merge state is BLOCKED. Branch `main`"),
+            "{message}"
+        );
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn a_refused_merge_without_a_named_rule_is_one_complete_message() {
+        use crate::integrations::github_delivery::tests::counted_fake_api;
+        let head = sha("aaaa");
+        let (github, server, _) = counted_fake_api(
+            vec![
+                ("/repos/owner/repo", 200, json!({"allow_squash_merge": true, "allow_merge_commit": false, "allow_rebase_merge": false})),
+                ("/repos/owner/repo/pulls/12/merge", 405, json!({"message": "Pull Request is not mergeable"})),
+                (PROTECTION_PATH, 403, json!({"message": "Must have admin rights to Repository."})),
+                (RULES_PATH, 200, json!([])),
+            ],
+            vec![
+                ("reviewRequests", observation("UNKNOWN", motivating_checks())),
+                ("isRequired", json!({"data": {"repository": {"pullRequest": {"commits": {"nodes": [{"commit": {"statusCheckRollup": {"contexts": {"nodes": []}}}}]}}}}})),
+                ("mergeStateStatus", json!({"data": {"repository": {"pullRequest": {"id": "PR_12", "headRefOid": head, "baseRefName": MAIN, "mergeable": "MERGEABLE", "mergeStateStatus": "UNKNOWN"}}}})),
+            ],
+        )
+        .await;
+        let MergeResult::Disposition {
+            message, reasons, ..
+        } = github
+            .merge_conditionally("owner/repo", 12, &head, false)
+            .await
+            .unwrap()
+        else {
+            panic!("the merge is refused");
+        };
+        assert!(reasons.is_empty());
+        assert_eq!(
+            message,
+            "GitHub refused the merge with no pending required checks or merge queue: Pull Request is not mergeable. Merge state is UNKNOWN."
+        );
         server.abort();
     }
 }

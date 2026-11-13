@@ -80,10 +80,9 @@ pub fn merge_blocker(
         Some("open")
             if !observed.viewer_can_merge_as_admin
                 && observed.block_reasons.iter().any(|reason| {
-                    !matches!(
-                        reason,
-                        MergeBlockReason::RulesUnreadable { .. } | MergeBlockReason::Unknown { .. }
-                    )
+                    // Suplex enters the merge queue itself when it merges.
+                    reason.is_concrete()
+                        && !matches!(reason, MergeBlockReason::MergeQueueRequired { .. })
                 }) =>
         {
             return Some(format!(
@@ -138,6 +137,7 @@ fn reconciliation_prompt(
             Some("DIRTY" | "BEHIND")
         );
     let reasons = &observed.block_reasons;
+    let review_wait = super::operations::only_review_remains(observed);
     if !code_problem
         && !reasons.is_empty()
         && reasons
@@ -151,6 +151,7 @@ fn reconciliation_prompt(
                 observed.number.unwrap_or_default(),
                 reasons,
                 abilities,
+                review_wait,
             ),
         ]
         .join("\n");
@@ -164,6 +165,7 @@ fn reconciliation_prompt(
             observed.number.unwrap_or_default(),
             reasons,
             abilities,
+            review_wait,
         ));
     }
     lines.extend([
@@ -993,6 +995,51 @@ mod tests {
         let prompt = reconciliation_prompt("main", &observed, MergeAbilities::default());
         assert!(prompt.contains("Integrate the current main head"));
         assert!(!prompt.contains("ask_human"));
+    }
+
+    #[test]
+    fn the_merge_queue_is_no_blocker_and_a_review_wait_asks_nobody() {
+        let head = "a".repeat(40);
+        let mut observed = open_pull();
+        observed.mergeable = Some("MERGEABLE".into());
+        observed.merge_state_status = Some("BLOCKED".into());
+        // Suplex enters the merge queue when it merges.
+        observed.block_reasons = vec![MergeBlockReason::MergeQueueRequired {
+            branch: "main".into(),
+        }];
+        assert_eq!(merge_blocker(Some(&observed), None, Some(&head)), None);
+        let prompt = reconciliation_prompt("main", &observed, MergeAbilities::default());
+        assert!(!prompt.contains("ask_human"), "{prompt}");
+        assert!(prompt.contains("Suplex adds the pull request to the merge queue."));
+        assert!(
+            !prompt.contains("Integrate the current main head"),
+            "{prompt}"
+        );
+        // Only a review remains, with or without an unread rule beside it.
+        observed.review_decision = Some("REVIEW_REQUIRED".into());
+        let review = MergeBlockReason::RequiredReview {
+            branch: "main".into(),
+            needed: Some(1),
+            code_owner_review: false,
+            code_owners: vec![],
+            changes_requested: false,
+        };
+        for reasons in [
+            vec![review.clone()],
+            vec![
+                review.clone(),
+                MergeBlockReason::RulesUnreadable {
+                    branch: "main".into(),
+                },
+            ],
+        ] {
+            observed.block_reasons = reasons;
+            let prompt = reconciliation_prompt("main", &observed, MergeAbilities::default());
+            assert!(!prompt.contains("ask_human"), "{prompt}");
+            assert!(prompt.contains("Branch `main` requires an approving review."));
+            assert!(prompt.contains("Request merge_pull_request"));
+            assert!(prompt.contains("Suplex waits for the review"));
+        }
     }
 
     #[test]

@@ -2006,10 +2006,17 @@ impl Github {
         };
         Ok(MergeResult::Disposition {
             disposition: MergeDisposition::Blocked,
-            message: format!(
-                "GitHub refused the merge with no pending required checks or merge queue: {refused}. {}",
-                merge_block::describe_all(&reasons)
-            ),
+            message: {
+                let mut message = format!(
+                    "GitHub refused the merge with no pending required checks or merge queue: {refused}. Merge state is {}.",
+                    merge_state.unwrap_or("UNKNOWN")
+                );
+                if !reasons.is_empty() {
+                    message.push(' ');
+                    message.push_str(&merge_block::describe_all(&reasons));
+                }
+                message
+            },
             reasons,
         })
     }

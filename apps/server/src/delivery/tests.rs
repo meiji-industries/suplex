@@ -2137,7 +2137,10 @@ async fn a_merge_refused_for_unsigned_commits_returns_the_question_and_options()
     ] {
         assert!(message.contains(expected), "{expected}: {message}");
     }
-    assert!(!message.contains("Merge state is"), "{message}");
+    assert!(
+        message.contains("Merge state is BLOCKED. Branch `main`"),
+        "{message}"
+    );
     assert!(
         !message.contains("Repair the commit signatures"),
         "the fixture worktree has no signing key: {message}"

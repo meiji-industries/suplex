@@ -2122,6 +2122,17 @@ async fn a_merge_refused_for_unsigned_commits_returns_the_question_and_options()
         ]);
     }
     case.set_pull(json!({"mergeStateStatus": "BLOCKED"}));
+    // The developer's global Git config can name a signing key. This worktree has none.
+    if let Some(path) = control(&case.fixture).worktree_path() {
+        git2::Repository::open(path)
+            .unwrap()
+            .config()
+            .unwrap()
+            .open_level(git2::ConfigLevel::Local)
+            .unwrap()
+            .set_str("user.signingkey", "")
+            .unwrap();
+    }
     let error = try_merge(&case, &head, &review).await.unwrap_err();
     assert_eq!(
         DeliveryError::code_of(error.as_ref()),

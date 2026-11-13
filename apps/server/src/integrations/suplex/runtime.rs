@@ -18,8 +18,7 @@ use crate::{
     moves,
     tasks::{
         agent_api::{self, Creation},
-        agent_profiles,
-        agent_transcript, agent_turns,
+        agent_profiles, agent_transcript, agent_turns,
     },
 };
 
@@ -74,9 +73,8 @@ impl SuplexMcpRuntime {
             }
             "suplex_list_profiles" => {
                 let query = super::profile_list_arguments(args)?;
-                let profiles = state.with_database(|database| {
-                    agent_profiles::list(database, principal, &query)
-                })?;
+                let profiles = state
+                    .with_database(|database| agent_profiles::list(database, principal, &query))?;
                 Ok((200, serde_json::to_value(profiles)?))
             }
             "suplex_update_project_agents" => {
@@ -427,6 +425,22 @@ mod tests {
             .as_str()
             .unwrap()
             .to_owned();
+        let profiles = rpc(
+            "tools/call",
+            json!({"name": "suplex_list_profiles", "arguments": {"role": "worker"}}),
+        )
+        .await;
+        assert_eq!(
+            profiles["result"]["structuredContent"]["status"], 200,
+            "{profiles}"
+        );
+        let token =
+            whoami["result"]["structuredContent"]["body"]["projects"][0]["updatedAt"].clone();
+        let denied = rpc("tools/call", json!({"name": "suplex_update_project_agents", "arguments": {"projectId": "project_api", "updatedAt": token, "idempotencyKey": "oauth-agents-1", "rootProfileId": "profile_native_root"}})).await;
+        assert_eq!(
+            denied["result"]["structuredContent"]["body"]["code"],
+            "project_agents_grant_required"
+        );
         // OAuth has its own paired principal.  Grant that principal, rather
         // than the bridge fixture, and prove the next tool call observes it.
         agent.server.state.with_database(|database| {

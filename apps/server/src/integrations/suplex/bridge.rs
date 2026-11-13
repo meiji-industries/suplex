@@ -708,6 +708,82 @@ mod tests {
         );
     }
 
+    /// Profile discovery and the project agents write travel through the bridge
+    /// as their HTTP routes do, with the project agents grant read live.
+    #[tokio::test]
+    async fn bridge_lists_profiles_and_changes_project_agents_with_the_live_grant() {
+        let agent = agent().await;
+        let bridge = Bridge::new(Settings {
+            base_url: agent.server.base.clone(),
+            credential: agent.credential.clone(),
+        });
+        let call = async |name: &str, args: Value| {
+            bridge
+                .result(name, &arguments(args))
+                .await
+                .structured_content
+                .unwrap()
+        };
+        let profiles = call(
+            "suplex_list_profiles",
+            json!({"role": "root", "includeArchived": false, "projectId": "project_api"}),
+        )
+        .await;
+        assert_eq!(profiles["status"], 200, "{profiles}");
+        let list = profiles["body"]["profiles"].as_array().unwrap();
+        assert!(list.iter().all(|profile| profile["role"] == "root"));
+        assert!(
+            list.iter()
+                .any(|profile| profile["id"] == "profile_native_root")
+        );
+        let invalid = bridge
+            .result(
+                "suplex_list_profiles",
+                &arguments(json!({"role": "advisor"})),
+            )
+            .await;
+        assert_eq!(invalid.is_error, Some(true));
+
+        let token =
+            call("suplex_whoami", json!({})).await["body"]["projects"][0]["updatedAt"].clone();
+        let write = json!({"projectId": "project_api", "updatedAt": token, "idempotencyKey": "bridge-agents-1", "workerProfileId": "profile_native_worker"});
+        let denied = call("suplex_update_project_agents", write.clone()).await;
+        assert_eq!(
+            (denied["status"].clone(), denied["body"]["code"].clone()),
+            (json!(404), json!("project_agents_grant_required"))
+        );
+        agent.server.state.with_database(|database| {
+            database
+                .connection()
+                .execute(
+                    "UPDATE suplex_external_agents SET project_agents_granted_at = ?1 WHERE id = ?2",
+                    rusqlite::params![chrono::Utc::now().to_rfc3339(), agent.agent_id],
+                )
+                .unwrap();
+        });
+        let written = call("suplex_update_project_agents", write.clone()).await;
+        assert_eq!(written["status"], 200, "{written}");
+        assert_eq!(written["body"]["workerProfileId"], "profile_native_worker");
+        assert_eq!(call("suplex_update_project_agents", write).await, written);
+        let refused = call(
+            "suplex_update_project_agents",
+            json!({"projectId": "project_api", "updatedAt": written["body"]["updatedAt"], "idempotencyKey": "bridge-agents-2", "rootProfileId": "profile_native_worker"}),
+        )
+        .await;
+        assert_eq!(
+            (
+                refused["status"].clone(),
+                refused["body"]["field"].clone(),
+                refused["body"]["value"].clone()
+            ),
+            (
+                json!(422),
+                json!("rootProfileId"),
+                json!("profile_native_worker")
+            )
+        );
+    }
+
     /// Move tools travel through the stdio bridge exactly as their HTTP Agent
     /// API routes do.  Keep this sequence small but complete: it catches a
     /// missing bridge case as well as lifecycle drift between the two paths.

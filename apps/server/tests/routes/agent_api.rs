@@ -2566,4 +2566,251 @@ pub(crate) mod tests {
             assert!(!text.contains(leak), "{leak} in {text}");
         }
     }
+
+    /// Test profiles: two active Coordinators, an active Worker, a Worker on a
+    /// provider outside the test policy, and an archived Coordinator.
+    fn seed_profiles(server: &Server) {
+        server.state.with_database(|database| {
+            for (id, name, role, provider, archived) in [
+                ("profile_test_planner", "Planner Coordinator", "root", "codex", false),
+                ("profile_test_builder", "Builder Worker", "worker", "codex", false),
+                ("profile_test_outside", "Outside Worker", "worker", "pi", false),
+                ("profile_test_retired", "Retired Coordinator", "root", "codex", true),
+            ] {
+                database.connection().execute(
+                    "INSERT INTO suplex_profiles (id,name,role,avatar_seed,provider,model,reasoning_level,service_tier,archived_at,created_at,updated_at) VALUES (?1,?2,?3,?1,?4,'test-model','medium','default',?5,?6,?6)",
+                    params![id, name, role, provider, archived.then(|| Utc::now().to_rfc3339()), Utc::now().to_rfc3339()],
+                ).unwrap();
+            }
+        });
+    }
+
+    /// A provider policy that allows every seeded profile and `codex`, but not `pi`.
+    fn policy_without_pi(server: &Server) -> Value {
+        let providers = server.state.with_database(|database| {
+            let mut statement = database.connection().prepare("SELECT DISTINCT provider FROM suplex_profiles WHERE id LIKE 'profile_native_%' OR provider = 'codex'").unwrap();
+            statement.query_map([], |row| row.get::<_, String>(0)).unwrap().collect::<Result<Vec<_>, _>>().unwrap()
+        });
+        assert!(!providers.contains(&"pi".to_owned()));
+        json!({"allowedProviders": providers, "allowedInstanceIds": []})
+    }
+
+    fn set_policy(server: &Server, project_id: &str, policy: &Value) {
+        server.state.with_database(|database| {
+            database.connection().execute(
+                "UPDATE suplex_projects SET provider_policy_json = ?1 WHERE id = ?2",
+                params![policy.to_string(), project_id],
+            ).unwrap();
+        });
+    }
+
+    fn set_project_agents_grant(agent: &Agent, granted: bool) {
+        agent.server.state.with_database(|database| {
+            database.connection().execute(
+                "UPDATE suplex_external_agents SET project_agents_granted_at = ?1 WHERE id = ?2",
+                params![granted.then(|| Utc::now().to_rfc3339()), agent.agent_id],
+            ).unwrap();
+        });
+    }
+
+    fn named<'a>(profiles: &'a Value, name: &str) -> Option<&'a Value> {
+        profiles["profiles"].as_array().unwrap().iter().find(|profile| profile["name"] == name)
+    }
+
+    #[tokio::test]
+    async fn profiles_list_follows_role_archive_and_project_policy_filters() {
+        let agent = agent().await;
+        seed_profiles(&agent.server);
+        set_policy(&agent.server, "project_api_2", &policy_without_pi(&agent.server));
+        let list = |query: &'static str| agent.call(reqwest::Method::GET, query, None);
+
+        let (status, all) = list("/api/agent/profiles").await;
+        assert_eq!(status, 200, "{all}");
+        let planner = named(&all, "Planner Coordinator").unwrap();
+        assert_eq!(
+            planner,
+            &json!({"id": "profile_test_planner", "name": "Planner Coordinator", "role": "root", "provider": "codex", "model": "test-model", "reasoningLevel": "medium", "archived": false, "isDefaultForRole": false, "defaultSlots": [], "projects": [{"projectId": "project_api", "allowed": true}]})
+        );
+        assert!(named(&all, "Retired Coordinator").is_none(), "archived profiles are hidden by default");
+        let native = all["profiles"].as_array().unwrap().iter().find(|profile| profile["id"] == "profile_native_root").unwrap();
+        assert_eq!((native["isDefaultForRole"].clone(), native["defaultSlots"].clone()), (json!(true), json!(["root"])));
+
+        // The stored default decides isDefaultForRole.
+        agent.server.state.with_database(|database| {
+            database.connection().execute("UPDATE suplex_profile_defaults SET profile_id = 'profile_test_builder' WHERE slot = 'worker'", []).unwrap();
+        });
+        let (_, workers) = list("/api/agent/profiles?role=worker").await;
+        assert!(workers["profiles"].as_array().unwrap().iter().all(|profile| profile["role"] == "worker"), "{workers}");
+        assert_eq!(named(&workers, "Builder Worker").unwrap()["isDefaultForRole"], true);
+        assert_eq!(workers["profiles"].as_array().unwrap().iter().find(|profile| profile["id"] == "profile_native_worker").unwrap()["isDefaultForRole"], false);
+
+        let (_, archived) = list("/api/agent/profiles?includeArchived=true").await;
+        let retired = named(&archived, "Retired Coordinator").unwrap();
+        assert_eq!((retired["archived"].clone(), retired["projects"].clone()), (json!(true), json!([{"projectId": "project_api", "allowed": false}])));
+
+        // An agent with both projects sees the policy of each.
+        let (both, _) = pair(&agent.server, "Both Bot", &["project_api", "project_api_2"]);
+        let (_, marked) = agent.call_as(&both, reqwest::Method::GET, "/api/agent/profiles?role=worker", None).await;
+        let outside = &named(&marked, "Outside Worker").unwrap()["projects"];
+        let allowed = |project: &str| outside.as_array().unwrap().iter().find(|entry| entry["projectId"] == project).unwrap()["allowed"].clone();
+        assert_eq!((allowed("project_api"), allowed("project_api_2")), (json!(true), json!(false)));
+        let (status, scoped) = agent.call_as(&both, reqwest::Method::GET, "/api/agent/profiles?projectId=project_api_2", None).await;
+        assert_eq!(status, 200, "{scoped}");
+        assert!(named(&scoped, "Outside Worker").is_none());
+        assert_eq!(named(&scoped, "Builder Worker").unwrap()["projects"], json!([{"projectId": "project_api_2", "allowed": true}]));
+
+        // A project outside the grant answers like a project that does not exist.
+        let (status, hidden) = list("/api/agent/profiles?projectId=project_api_2").await;
+        let (missing_status, missing) = list("/api/agent/profiles?projectId=project_missing").await;
+        assert_eq!((status, missing_status), (404, 404));
+        assert_eq!(hidden, missing);
+        let (status, invalid) = list("/api/agent/profiles?role=advisor").await;
+        assert_eq!((status, invalid["code"].as_str()), (400, Some("request_invalid")));
+    }
+
+    #[tokio::test]
+    async fn project_agents_write_needs_the_live_grant_and_the_web_validation() {
+        let agent = agent().await;
+        seed_profiles(&agent.server);
+        let (_, identity) = agent.call(reqwest::Method::GET, "/api/agent/me", None).await;
+        let project = &identity["projects"][0];
+        assert_eq!(
+            (project["id"].clone(), project["rootProfileId"].clone(), project["workerProfileId"].clone(), project["providerPolicy"].clone()),
+            (json!("project_api"), json!("profile_native_root"), json!("profile_native_worker"), Value::Null)
+        );
+        assert!(project["altProfileId"].is_string() && project["updatedAt"].is_string(), "{project}");
+        assert_eq!((identity["projectAgentsGrant"].clone(), identity["capabilities"]["projectAgents"].clone()), (json!(false), json!(false)));
+        let token = project["updatedAt"].as_str().unwrap().to_owned();
+        let write = async |project_id: &str, body: Value| {
+            let path = format!("/api/agent/projects/{project_id}/agents");
+            agent.call(reqwest::Method::PATCH, &path, Some(body)).await
+        };
+        let audits = || -> i64 {
+            agent.server.state.with_database(|database| database.connection().query_row("SELECT COUNT(*) FROM suplex_audit_events WHERE action = 'project_updated' AND actor_agent_id = ?1", [&agent.agent_id], |row| row.get(0)).unwrap())
+        };
+        let body = json!({"updatedAt": token, "idempotencyKey": "project-agents-001", "rootProfileId": "profile_test_planner", "workerProfileId": "profile_test_builder"});
+
+        // Without the grant every project answers the same 404.
+        let (status, denied) = write("project_api", body.clone()).await;
+        let (missing_status, missing) = write("project_missing", body.clone()).await;
+        assert_eq!((status, denied["code"].as_str()), (404, Some("project_agents_grant_required")), "{denied}");
+        assert_eq!((missing_status, &missing), (404, &denied));
+        assert!(denied["error"].as_str().unwrap().contains("Change project agents"));
+
+        set_project_agents_grant(&agent, true);
+        let (_, identity) = agent.call(reqwest::Method::GET, "/api/agent/me", None).await;
+        assert_eq!((identity["projectAgentsGrant"].clone(), identity["capabilities"]["projectAgents"].clone()), (json!(true), json!(true)));
+        let (_, capabilities) = agent.call(reqwest::Method::GET, "/api/agent/capabilities", None).await;
+        assert!(capabilities["autonomousCommands"].as_array().unwrap().contains(&json!("update_project_agents")));
+        // A project outside the agent's grants answers like a missing project.
+        let (status, hidden) = write("project_api_2", body.clone()).await;
+        let (missing_status, missing) = write("project_missing", body.clone()).await;
+        assert_eq!((status, missing_status, hidden["code"].as_str()), (404, 404, Some("not_found")));
+        assert_eq!(hidden, missing);
+
+        let refused = |key: &str, field: &str, id: &str| json!({"updatedAt": token, "idempotencyKey": key, field: id});
+        for (key, field, id, code) in [
+            ("refused-1", "rootProfileId", "profile_test_builder", "root_profile_not_found"),
+            ("refused-2", "workerProfileId", "profile_unknown", "worker_profile_not_found"),
+            ("refused-3", "altProfileId", "profile_test_retired", "alt_profile_not_found"),
+        ] {
+            let (status, failure) = write("project_api", refused(key, field, id)).await;
+            assert_eq!(
+                (status, failure["code"].as_str(), failure["field"].as_str(), failure["value"].as_str()),
+                (422, Some(code), Some(field), Some(id)),
+                "{failure}"
+            );
+            assert!(failure["reason"].is_string(), "{failure}");
+        }
+        set_policy(&agent.server, "project_api", &policy_without_pi(&agent.server));
+        let (_, identity) = agent.call(reqwest::Method::GET, "/api/agent/me", None).await;
+        let token = identity["projects"][0]["updatedAt"].as_str().unwrap().to_owned();
+        let (status, failure) = write("project_api", json!({"updatedAt": token, "idempotencyKey": "refused-4", "workerProfileId": "profile_test_outside"})).await;
+        assert_eq!(
+            (status, failure["code"].as_str(), failure["field"].as_str(), failure["value"].as_str()),
+            (422, Some("profile_not_allowed"), Some("workerProfileId"), Some("profile_test_outside")),
+            "{failure}"
+        );
+        let (status, stale) = write("project_api", json!({"updatedAt": "2020-01-01T00:00:00.000Z", "idempotencyKey": "stale-1", "rootProfileId": "profile_test_planner"})).await;
+        assert_eq!((status, stale["code"].as_str(), stale["updatedAt"].as_str()), (412, Some("revision_stale"), Some(token.as_str())), "{stale}");
+        let (status, empty) = write("project_api", json!({"updatedAt": token, "idempotencyKey": "empty-1"})).await;
+        assert_eq!((status, empty["code"].as_str()), (400, Some("request_invalid")));
+        assert_eq!(audits(), 0, "a refused write records nothing");
+
+        let body = json!({"updatedAt": token, "idempotencyKey": "project-agents-002", "rootProfileId": "profile_test_planner", "workerProfileId": "profile_test_builder"});
+        let (status, written) = write("project_api", body.clone()).await;
+        assert_eq!(status, 200, "{written}");
+        assert_eq!(
+            (written["projectId"].clone(), written["rootProfileId"].clone(), written["workerProfileId"].clone()),
+            (json!("project_api"), json!("profile_test_planner"), json!("profile_test_builder"))
+        );
+        assert_ne!(written["updatedAt"], json!(token));
+        assert_eq!(audits(), 1);
+        let (_, identity) = agent.call(reqwest::Method::GET, "/api/agent/me", None).await;
+        assert_eq!(identity["projects"][0]["updatedAt"], written["updatedAt"]);
+
+        // A replay returns the first result and writes nothing, even after the project moves on.
+        agent.server.state.with_database(|database| {
+            database.connection().execute("UPDATE suplex_projects SET updated_at = '2030-01-01T00:00:00.000Z' WHERE id = 'project_api'", []).unwrap();
+        });
+        assert_eq!(write("project_api", body.clone()).await, (200, written.clone()));
+        assert_eq!(audits(), 1);
+        let stored: String = agent.server.state.with_database(|database| database.connection().query_row("SELECT updated_at FROM suplex_projects WHERE id = 'project_api'", [], |row| row.get(0)).unwrap());
+        assert_eq!(stored, "2030-01-01T00:00:00.000Z");
+        let (status, conflict) = write("project_api", json!({"updatedAt": token, "idempotencyKey": "project-agents-002", "rootProfileId": "profile_native_root"})).await;
+        assert_eq!((status, conflict["code"].as_str()), (409, Some("idempotency_conflict")));
+
+        // Revocation applies to the next request, replays included.
+        set_project_agents_grant(&agent, false);
+        let (status, revoked) = write("project_api", body).await;
+        assert_eq!((status, revoked["code"].as_str()), (404, Some("project_agents_grant_required")));
+    }
+
+    /// An agent finds profiles by name, puts them on a backlog task, and reads the names back.
+    #[tokio::test]
+    async fn an_agent_changes_a_task_profiles_by_name() {
+        let agent = agent().await;
+        seed_profiles(&agent.server);
+        set_policy(&agent.server, "project_api", &policy_without_pi(&agent.server));
+        let task = agent.create("Profile change", "profile-change-001").await;
+        assert_eq!(task["rootProfile"], json!({"id": "profile_native_root", "name": task["rootProfile"]["name"]}));
+        assert!(task["rootProfile"]["name"].is_string() && task["workerProfile"]["name"].is_string(), "{task}");
+
+        let (_, roots) = agent.call(reqwest::Method::GET, "/api/agent/profiles?role=root&projectId=project_api", None).await;
+        let (_, workers) = agent.call(reqwest::Method::GET, "/api/agent/profiles?role=worker&projectId=project_api", None).await;
+        let root = named(&roots, "Planner Coordinator").unwrap()["id"].clone();
+        let worker = named(&workers, "Builder Worker").unwrap()["id"].clone();
+        assert!(named(&workers, "Outside Worker").is_none(), "the project policy hides it");
+
+        let path = format!("/api/agent/tasks/{}", task["id"].as_str().unwrap());
+        let update = |body: Value| agent.call(reqwest::Method::PATCH, &path, Some(body));
+        for (key, field, id, code) in [
+            ("task-refused-1", "rootProfileId", "profile_unknown", "root_profile_not_found"),
+            ("task-refused-2", "rootProfileId", "profile_test_builder", "root_profile_not_found"),
+            ("task-refused-3", "workerProfileId", "profile_test_planner", "worker_profile_not_found"),
+            ("task-refused-4", "rootProfileId", "profile_test_retired", "root_profile_not_found"),
+            ("task-refused-5", "workerProfileId", "profile_test_outside", "profile_not_allowed"),
+        ] {
+            let (status, failure) = update(json!({"revision": task["revision"], "idempotencyKey": key, field: id})).await;
+            assert_eq!(
+                (status, failure["code"].as_str(), failure["field"].as_str(), failure["value"].as_str()),
+                (422, Some(code), Some(field), Some(id)),
+                "{failure}"
+            );
+            assert!(failure["reason"].is_string(), "{failure}");
+        }
+        let (status, failure) = update(json!({"revision": task["revision"], "idempotencyKey": "task-refused-6", "advisorProfileIds": {"reviewer": "profile_test_builder"}, "workflowId": "workflow_native_independent_review"})).await;
+        assert_eq!((status, failure["field"].as_str(), failure["value"].as_str()), (422, Some("advisorProfileIds.reviewer"), Some("profile_test_builder")), "{failure}");
+
+        let (status, changed) = update(json!({"revision": task["revision"], "idempotencyKey": "task-profiles-001", "rootProfileId": root, "workerProfileId": worker})).await;
+        assert_eq!(status, 200, "{changed}");
+        let (_, read) = agent.call(reqwest::Method::GET, &path, None).await;
+        assert_eq!(
+            (read["rootProfile"].clone(), read["workerProfile"].clone()),
+            (json!({"id": "profile_test_planner", "name": "Planner Coordinator"}), json!({"id": "profile_test_builder", "name": "Builder Worker"}))
+        );
+        let (_, listed) = agent.call(reqwest::Method::GET, "/api/agent/tasks?view=full", None).await;
+        let row = listed["tasks"].as_array().unwrap().iter().find(|row| row["id"] == task["id"]).unwrap();
+        assert_eq!(row["workerProfile"]["name"], "Builder Worker");
+    }
 }

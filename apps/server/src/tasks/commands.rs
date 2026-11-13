@@ -1436,9 +1436,11 @@ pub fn update_task_details(
             ("workerProfileId".to_owned(), &worker_profile),
         ]
         .into_iter()
-        .chain(advisor_profiles.iter().map(|(role, profile)| {
-            (format!("advisorProfileIds.{}", role.as_str()), profile)
-        }))
+        .chain(
+            advisor_profiles
+                .iter()
+                .map(|(role, profile)| (format!("advisorProfileIds.{}", role.as_str()), profile)),
+        )
         .collect::<Vec<_>>();
         check_edit_policy(&current, &profiles, delivery_target)?;
         let (stored_tests, stored_visual) = stored_choices(&current)?;

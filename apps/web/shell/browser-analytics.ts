@@ -21,7 +21,7 @@ const staticSegments = new Set([
   "api-mcp", "approvals", "approve", "apps", "archive", "artifacts", "audit", "auth", "avatars", "backlog",
   "backups", "billing", "board", "cancel", "capabilities", "change", "check", "checkout", "checks",
   "client-lifecycle", "commands", "companies", "company_invite", "consent", "continue-delivery", "decision",
-  "defaults", "delivery", "deny", "dependencies", "device", "diff", "disarm", "disconnect", "duplicate",
+  "default", "defaults", "delivery", "deny", "dependencies", "device", "diff", "disarm", "disconnect", "duplicate",
   "email-updates", "environment", "exchange", "execution", "experiments", "external-agents", "factory-reset",
   "force-start", "github", "github-labels", "github-triggers", "health", "herdr", "hermes", "hermes-agents",
   "history", "images", "install", "invitations", "issue", "issue-code", "issues", "key", "licenses", "live",

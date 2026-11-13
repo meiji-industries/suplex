@@ -4,13 +4,16 @@ import type { ProviderInstanceSchema } from "../../contracts/providers.js";
 import type { z } from "zod";
 import { readJsonUnchecked } from "../../lib/api.js";
 import { Alert, AlertDescription } from "../../components/ui/alert.js";
-import { InternalAgentsSection } from "./internal-agents-section.js";
+import { InternalAgentsSection, DEFAULT_SLOT_LABELS } from "./internal-agents-section.js";
+import { setDefaultAgent, type DefaultSlot } from "./lib/agent-api.js";
+import type { ProfileDefaults } from "../../contracts/generated/ProfileDefaults.js";
+import { toast } from "sonner";
 import {
   InternalAgentDialog,
   type AgentProviderOption,
 } from "./internal-agent-editor-dialog.js";
 
-export function InternalAgentsManager({ agents, onSaved, renderCards }: { agents: readonly ApiProfile[]; onSaved: () => Promise<void>; renderCards?: (openNewAgent: () => void, openEditAgent: (agent: ApiProfile) => void) => ReactNode }): ReactElement {
+export function InternalAgentsManager({ agents, defaults = null, onSaved, renderCards }: { agents: readonly ApiProfile[]; defaults?: ProfileDefaults | null; onSaved: () => Promise<void>; renderCards?: (openNewAgent: () => void, openEditAgent: (agent: ApiProfile) => void) => ReactNode }): ReactElement {
   const [agentName, setAgentName] = useState("");
   const [agentRole, setAgentRole] = useState<"root" | "worker">("root");
   const [agentAvatarSeed, setAgentAvatarSeed] = useState("");
@@ -131,6 +134,16 @@ export function InternalAgentsManager({ agents, onSaved, renderCards }: { agents
       setError(reason instanceof Error ? reason.message : fallback);
     }
   };
+  const setDefault = async (agent: ApiProfile, slot: DefaultSlot): Promise<void> => {
+    try {
+      await setDefaultAgent(agent.id, slot);
+      setError("");
+      toast.success(`${agent.name} is now the default ${DEFAULT_SLOT_LABELS[slot]} for new projects.`);
+      await onSaved();
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Unable to set the default agent");
+    }
+  };
   const duplicateAgent = async (agent: ApiProfile): Promise<void> => {
     try {
       await readJsonUnchecked(
@@ -167,6 +180,8 @@ export function InternalAgentsManager({ agents, onSaved, renderCards }: { agents
     {renderCards ? renderCards(openNewAgent, openEditAgent) : <InternalAgentsSection
       agents={agents}
       sortedAgents={sortedAgents}
+      defaults={defaults}
+      onSetDefault={setDefault}
       archiveTarget={archiveTarget}
       onArchiveTargetChange={setArchiveTarget}
       onOpenNewAgent={openNewAgent}

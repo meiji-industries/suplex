@@ -16,19 +16,21 @@ use crate::{
         AppState,
         contracts::typed::{
             agent_api::query_object,
-            projects::{IncludeArchivedQuery, profile_response},
+            projects::{IncludeArchivedQuery, ProfileDefaultBody, profile_response},
         },
         validation::{Valid, valid},
     },
     profiles::{
         agent_profiles::{self, AgentProfile, ProfileInput, ProfilePatch},
         connection_cache::ProviderConnectionStatus,
+        defaults,
     },
 };
 
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/api/profiles", get(list))
+        .route("/api/profiles/defaults", get(list_defaults))
         .route("/api/admin/profiles", post(create))
         .route("/api/admin/profiles/defaults", post(choose_defaults))
         .route(
@@ -36,6 +38,7 @@ pub fn router() -> Router<AppState> {
             axum::routing::patch(update).delete(delete),
         )
         .route("/api/admin/profiles/{agent_id}/duplicate", post(duplicate))
+        .route("/api/admin/profiles/{agent_id}/default", post(set_default))
 }
 
 /// `AgentProfileSchema` output in its key order; a profile that fails it is a 500.
@@ -76,6 +79,37 @@ async fn list(
             Ok(profiles) => Json(json!({ "profiles": profiles })).into_response(),
             Err(error) => ApiError::response(error),
         },
+        Err(error) => ApiError::response(error),
+    };
+    with_cookies(response, cookies)
+}
+
+async fn list_defaults(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    let (user_id, cookies) = match authorize(&state, &headers, "GET", false) {
+        Ok(value) => value,
+        Err(error) => return *error,
+    };
+    let response = match state.with_database(|database| defaults::read(database, &user_id)) {
+        Ok(defaults) => Json(defaults).into_response(),
+        Err(error) => ApiError::response(error),
+    };
+    with_cookies(response, cookies)
+}
+
+async fn set_default(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(agent_id): Path<String>,
+    Valid(body): Valid<ProfileDefaultBody>,
+) -> Response {
+    let (user_id, cookies) = match authorize(&state, &headers, "POST", true) {
+        Ok(value) => value,
+        Err(error) => return *error,
+    };
+    let response = match state.with_database(|database| {
+        defaults::set(database, &user_id, &agent_id, body.slot, Utc::now())
+    }) {
+        Ok(defaults) => Json(defaults).into_response(),
         Err(error) => ApiError::response(error),
     };
     with_cookies(response, cookies)

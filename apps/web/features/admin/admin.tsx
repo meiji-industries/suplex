@@ -17,6 +17,8 @@ import type {
 import { UsersSection } from "./users-section.js";
 import { CompaniesSection } from "./companies-section.js";
 import { InternalAgentsManager } from "./internal-agents-manager.js";
+import { readProfileDefaults } from "./lib/agent-api.js";
+import type { ProfileDefaults } from "../../contracts/generated/ProfileDefaults.js";
 import { ExternalAgentsSection } from "./external-agents-section.js";
 import { ExternalAgentAvatarDialog } from "./external-agent-avatar-dialog.js";
 import { ExternalAgentNewAgentDialog } from "./external-agent-new-dialog.js";
@@ -31,6 +33,7 @@ export function AdminView(): ReactElement {
   const [users, setUsers] = useState<ApiUser[]>([]);
   const [invitations, setInvitations] = useState<CompanyInvitation[]>([]);
   const [agents, setAgents] = useState<ApiProfile[]>([]);
+  const [profileDefaults, setProfileDefaults] = useState<ProfileDefaults | null>(null);
   const [externalAgents, setExternalAgents] = useState<ApiExternalAgent[]>([]);
   const [companyProjects, setCompanyProjects] = useState<ApiProject[]>([]);
   const [inviteOpen, setInviteOpen] = useState(false);
@@ -95,6 +98,7 @@ export function AdminView(): ReactElement {
           agentList,
           externalAgentList,
           projectList,
+          defaults,
         ] = await Promise.all([
           needsUsers
             ? readJsonUnchecked<{ users: ApiUser[] }>("/api/admin/users", options)
@@ -120,11 +124,15 @@ export function AdminView(): ReactElement {
                 options,
               ).catch(() => ({ projects: [] }))
             : Promise.resolve({ projects: [] }),
+          isAgents
+            ? readProfileDefaults(signal).catch(() => null)
+            : Promise.resolve(null),
         ]);
         if (signal?.aborted) return;
         setUsers(userList.users);
         setInvitations(invitationList.invitations);
         setAgents(agentList.profiles);
+        setProfileDefaults(defaults);
         setExternalAgents(externalAgentList.agents);
         setCompanyProjects(projectList.projects);
         const projectIds = new Set(
@@ -340,7 +348,7 @@ export function AdminView(): ReactElement {
 
         {isAgents ? (
           <div>
-            <InternalAgentsManager agents={agents} onSaved={reload} />
+            <InternalAgentsManager agents={agents} defaults={profileDefaults} onSaved={reload} />
             <ExternalAgentsSection
               agents={externalAgents}
               projects={companyProjects}

@@ -871,6 +871,20 @@ impl Contract for ProfilePatchBody {
     }
 }
 
+/// `POST /api/admin/profiles/{agentId}/default`: the slot that the agent fills.
+#[derive(Clone, Debug, Deserialize)]
+pub struct ProfileDefaultBody {
+    pub slot: crate::profiles::defaults::DefaultSlot,
+}
+
+impl Contract for ProfileDefaultBody {
+    fn schema(input: Option<&Value>) -> ContractResult<Value> {
+        Fields::new(input)?
+            .req("slot", one_of(&["root", "alt", "worker"]))
+            .strict()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

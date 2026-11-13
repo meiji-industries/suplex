@@ -483,15 +483,15 @@ pub fn create_local(
     let alt_profile_id = if let Some(id) = explicit_alt {
         auth::js_trim(id).to_owned()
     } else {
-        crate::profiles::agent_profiles::read_profile(
+        let alt_default = crate::profiles::defaults::resolve(
             database,
-            "profile_native_independent",
-            "root",
-        )?
-        .filter(|profile| {
-            crate::profiles::agent_profiles::allowed_profile(provider_policy.as_ref(), profile)
-        })
-        .map_or_else(|| root_profile_id.to_owned(), |profile| profile.profile_id)
+            crate::profiles::defaults::DefaultSlot::Alt,
+        )?;
+        crate::profiles::agent_profiles::read_profile(database, &alt_default, "root")?
+            .filter(|profile| {
+                crate::profiles::agent_profiles::allowed_profile(provider_policy.as_ref(), profile)
+            })
+            .map_or_else(|| root_profile_id.to_owned(), |profile| profile.profile_id)
     };
     let company = companies::require_company_edit(database, actor_user_id, company_id)?;
     if company.status != CompanyStatus::Active {
@@ -1615,6 +1615,14 @@ async fn create_coordinate(
         return Err(Box::new(error));
     }
     let (setup, verification) = provisioning::infer_commands(&repository_path);
+    let (root_profile_id, worker_profile_id) =
+        state.with_database(|database| -> DatabaseResult<_> {
+            use crate::profiles::defaults::{DefaultSlot, resolve};
+            Ok((
+                resolve(database, DefaultSlot::Root)?,
+                resolve(database, DefaultSlot::Worker)?,
+            ))
+        })?;
     let fields = [
         coordinate.name,
         repository_path.to_string_lossy().into_owned(),
@@ -1623,8 +1631,8 @@ async fn create_coordinate(
         base_branch,
         setup,
         verification,
-        "profile_native_root".to_owned(),
-        "profile_native_worker".to_owned(),
+        root_profile_id,
+        worker_profile_id,
     ];
     finish_local_project(state, roots, user_id, company_id, body, &fields).await
 }
@@ -2110,6 +2118,118 @@ mod tests {
                 .unwrap()
                 .status(),
             404
+        );
+        drop(database);
+        let _ = std::fs::remove_file(&filename);
+        let _ = std::fs::remove_file(filename.with_extension("sqlite-wal"));
+        let _ = std::fs::remove_file(filename.with_extension("sqlite-shm"));
+    }
+
+    #[test]
+    fn new_projects_copy_the_stored_defaults_and_existing_projects_keep_theirs() {
+        use crate::profiles::agent_profiles::{self, ProfileInput};
+        use crate::profiles::defaults::{self, DefaultSlot};
+        let filename = std::env::temp_dir().join(format!(
+            "{}.sqlite",
+            random_hex_id("suplex_project_defaults").unwrap()
+        ));
+        let mut database = SuplexDatabase::open(&filename, OpenMode::Migrate).unwrap();
+        crate::billing::tests::grant_pro(&database);
+        let now = DateTime::parse_from_rfc3339("2026-09-24T12:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let admin = auth::development_sign_in(&mut database, now).unwrap().user;
+        let company =
+            companies::create_company(&mut database, &admin.id, "Project defaults", now).unwrap();
+        let mut agent = |name: &str, role: &str, provider: &str| {
+            let input = ProfileInput {
+                name: name.to_owned(),
+                role: role.to_owned(),
+                avatar_seed: "0123456789abcdef0123456789abcdef".to_owned(),
+                provider: provider.to_owned(),
+                model: "model".to_owned(),
+                reasoning_level: "medium".to_owned(),
+                service_tier: "default".to_owned(),
+                provider_instance_id: None,
+            };
+            agent_profiles::create(&mut database, &admin.id, &input, now)
+                .unwrap()
+                .id
+        };
+        let alt = agent("Spare Coordinator", "root", "claude-code");
+        let worker = agent("Spare Worker", "worker", "codex");
+        let prepared = |slug: &str| PreparedLocalProject {
+            name: format!("Project {slug}"),
+            repository_path: PathBuf::from(format!("/tmp/project-defaults-{slug}")),
+            worktree_root: PathBuf::from(format!("/tmp/project-defaults-{slug}-worktrees")),
+            repository: format!("owner/{slug}"),
+            base_branch: "main".to_owned(),
+            setup_command: String::new(),
+            verification_command: String::new(),
+        };
+        let unchanged = create_local_default(
+            &mut database,
+            &admin.id,
+            &company.id,
+            &prepared("seeded"),
+            "profile_native_root",
+            "profile_native_worker",
+            now,
+        )
+        .unwrap();
+        assert_eq!(unchanged.alt_profile_id, "profile_native_independent");
+
+        defaults::set(&mut database, &admin.id, &alt, DefaultSlot::Alt, now).unwrap();
+        defaults::set(&mut database, &admin.id, &worker, DefaultSlot::Worker, now).unwrap();
+        let worker_default = defaults::resolve(&database, DefaultSlot::Worker).unwrap();
+        let stored = create_local_default(
+            &mut database,
+            &admin.id,
+            &company.id,
+            &prepared("stored"),
+            "profile_native_root",
+            &worker_default,
+            now,
+        )
+        .unwrap();
+        assert_eq!(
+            (
+                stored.alt_profile_id.as_str(),
+                stored.worker_profile_id.as_str()
+            ),
+            (alt.as_str(), worker.as_str())
+        );
+        // A provider policy that does not allow the stored Alt Coordinator gives the project's Coordinator.
+        let restricted = local_configuration(
+            json!({"providerPolicy":{"allowedProviders":["codex"],"allowedInstanceIds":[]}}),
+        );
+        let fallback = create_local(
+            &mut database,
+            &admin.id,
+            &company.id,
+            &prepared("restricted"),
+            CreateLocalOptions {
+                root_profile_id: "profile_native_root",
+                worker_profile_id: &worker,
+                configuration: Some(&restricted),
+                now,
+            },
+        )
+        .unwrap();
+        assert_eq!(fallback.alt_profile_id, "profile_native_root");
+
+        let reread = get(&database, &admin.id, &unchanged.id).unwrap();
+        assert_eq!(
+            (
+                reread.root_profile_id.as_str(),
+                reread.alt_profile_id.as_str(),
+                reread.worker_profile_id.as_str()
+            ),
+            (
+                "profile_native_root",
+                "profile_native_independent",
+                "profile_native_worker"
+            )
         );
         drop(database);
         let _ = std::fs::remove_file(&filename);

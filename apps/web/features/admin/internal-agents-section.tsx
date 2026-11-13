@@ -28,7 +28,7 @@ import {
 } from "../../components/ui/dropdown-menu.js";
 import { NewButton } from "../../components/ui/new-button.js";
 import { SettingsSectionHeader } from "../settings/settings-layout.js";
-import { Archive, ArchiveRestore, Copy, Ellipsis, Pencil, Trash2, Zap } from "lucide-react";
+import { Archive, ArchiveRestore, Copy, Ellipsis, Pencil, Star, Trash2, Zap } from "lucide-react";
 import type {
   Dispatch,
   ReactElement,
@@ -36,6 +36,8 @@ import type {
   SetStateAction,
 } from "react";
 import type { ApiProfile } from "../../shell/view-shared.js";
+import type { ProfileDefaults } from "../../contracts/generated/ProfileDefaults.js";
+import type { DefaultSlot } from "./lib/agent-api.js";
 import { modelHint } from "./model-hints.js";
 
 const SEEDED_AGENT_DESCRIPTIONS: Record<string, string> = {
@@ -44,8 +46,26 @@ const SEEDED_AGENT_DESCRIPTIONS: Record<string, string> = {
   profile_native_worker: "Builds the changes for each task.",
 };
 
-export const isDefaultAgent = (agent: ApiProfile): boolean =>
-  agent.id in SEEDED_AGENT_DESCRIPTIONS;
+export const DEFAULT_SLOT_LABELS: Record<DefaultSlot, string> = {
+  root: "Coordinator",
+  alt: "Alt Coordinator",
+  worker: "Worker",
+};
+
+const DEFAULT_SLOTS = ["root", "alt", "worker"] as const satisfies readonly DefaultSlot[];
+
+/** The slots that the agent fills for new projects. */
+export function defaultSlots(agent: ApiProfile, defaults: ProfileDefaults | null | undefined): DefaultSlot[] {
+  return defaults ? DEFAULT_SLOTS.filter((slot) => defaults[slot] === agent.id) : [];
+}
+
+/** The slots that an admin can give to the agent: the slots of its role that it does not fill. */
+export function availableDefaultSlots(agent: ApiProfile, defaults: ProfileDefaults | null | undefined): DefaultSlot[] {
+  if (agent.archivedAt) return [];
+  const slots: readonly DefaultSlot[] = agent.role === "root" ? ["root", "alt"] : ["worker"];
+  const filled = defaultSlots(agent, defaults);
+  return slots.filter((slot) => !filled.includes(slot));
+}
 
 export function agentDescription(agent: ApiProfile): string {
   const seeded = SEEDED_AGENT_DESCRIPTIONS[agent.id];
@@ -68,9 +88,11 @@ const REASONING_LABELS: Record<string, string> = {
 
 export function AgentCard({
   agent,
+  defaults,
   actions,
 }: {
   agent: ApiProfile;
+  defaults?: ProfileDefaults | null;
   actions?: ReactNode;
 }): ReactElement {
   return (
@@ -90,7 +112,11 @@ export function AgentCard({
         <CardDescription>
           <span className="flex items-center gap-2">
             {agent.role === "root" ? "Coordinator" : "Worker"}
-            {isDefaultAgent(agent) ? <Badge variant="outline">Default</Badge> : null}
+            {defaultSlots(agent, defaults).map((slot) => (
+              <Badge key={slot} variant="outline">
+                Default {DEFAULT_SLOT_LABELS[slot]}
+              </Badge>
+            ))}
           </span>
         </CardDescription>
         {actions ? <CardAction>{actions}</CardAction> : null}
@@ -111,6 +137,8 @@ export function AgentCard({
 export function InternalAgentsSection({
   agents,
   sortedAgents,
+  defaults,
+  onSetDefault,
   archiveTarget,
   onArchiveTargetChange,
   onOpenNewAgent,
@@ -123,6 +151,8 @@ export function InternalAgentsSection({
 }: {
   agents: readonly ApiProfile[];
   sortedAgents: ApiProfile[];
+  defaults: ProfileDefaults | null;
+  onSetDefault: (agent: ApiProfile, slot: DefaultSlot) => Promise<void>;
   archiveTarget: ApiProfile | null;
   onArchiveTargetChange: Dispatch<SetStateAction<ApiProfile | null>>;
   onOpenNewAgent: () => void;
@@ -157,6 +187,7 @@ export function InternalAgentsSection({
             <AgentCard
               key={agent.id}
               agent={agent}
+              defaults={defaults}
               actions={
                 <span className="flex items-center gap-1">
                   <Button
@@ -188,6 +219,15 @@ export function InternalAgentsSection({
                         <Copy />
                         Duplicate
                       </DropdownMenuItem>
+                      {availableDefaultSlots(agent, defaults).map((slot) => (
+                        <DropdownMenuItem
+                          key={slot}
+                          onClick={() => void onSetDefault(agent, slot)}
+                        >
+                          <Star />
+                          Set as default {DEFAULT_SLOT_LABELS[slot]}
+                        </DropdownMenuItem>
+                      ))}
                       {agent.archivedAt ? (
                         <DropdownMenuItem
                           onClick={() =>

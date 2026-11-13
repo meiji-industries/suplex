@@ -99,4 +99,73 @@ mod tests {
         let _ = std::fs::remove_file(filename.with_extension("sqlite-wal"));
         let _ = std::fs::remove_file(filename.with_extension("sqlite-shm"));
     }
+
+    #[tokio::test]
+    async fn admins_set_role_defaults_and_members_read_them() {
+        let (state, filename) = super::super::auth::tests::state();
+        let now = Utc::now();
+        let admin = crate::http::routes::auth::tests::operator_account(&state, now);
+        let (member, worker) = state.with_database(|database| {
+            let input = ProfileInput {
+                name: "Spare Worker".to_owned(),
+                role: "worker".to_owned(),
+                avatar_seed: "0123456789abcdef0123456789abcdef".to_owned(),
+                provider: "codex".to_owned(),
+                model: "gpt-6-sol".to_owned(),
+                reasoning_level: "medium".to_owned(),
+                service_tier: "default".to_owned(),
+                provider_instance_id: None,
+            };
+            let worker = agent_profiles::create(database, "user_development", &input, now).unwrap().id;
+            database.connection().execute("INSERT INTO suplex_users (id, display_name, username, role, status, created_at, updated_at, identity_version) VALUES ('member', 'M', 'member', 'member', 'active', ?1, ?1, 1)", [now.to_rfc3339()]).unwrap();
+            database.connection().execute("INSERT INTO suplex_companies (id, name, status, created_at) VALUES ('company_defaults', 'Defaults', 'active', ?1)", [now.to_rfc3339()]).unwrap();
+            database.connection().execute("INSERT INTO suplex_memberships (company_id, user_id, created_at) VALUES ('company_defaults', 'member', ?1)", [now.to_rfc3339()]).unwrap();
+            let member = crate::http::routes::auth::tests::verified_session(database, "member", now).unwrap();
+            (member, worker)
+        });
+        crate::http::routes::auth::tests::require_remote_login(&state);
+        let app = crate::http::router(state.clone());
+        let call = crate::http::routes::avatars::tests::call;
+        let admin = format!("sid_v1={admin}");
+        let member = format!("sid_v1={member}");
+        let set_path = format!("/api/admin/profiles/{worker}/default");
+
+        let (status, _, body) = call(&app, "GET", "/api/profiles/defaults", Some(&member), None).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            serde_json::from_slice::<Value>(&body).unwrap(),
+            json!({"root":"profile_native_root","alt":"profile_native_independent","worker":"profile_native_worker"})
+        );
+        let (status, _, _) = call(&app, "POST", &set_path, Some(&member), Some(json!({"slot":"worker"}))).await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
+        let (status, _, _) = call(&app, "POST", &set_path, Some(&admin), Some(json!({"slot":"lead"}))).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        let (status, _, body) = call(&app, "POST", &set_path, Some(&admin), Some(json!({"slot":"root"}))).await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(
+            serde_json::from_slice::<Value>(&body).unwrap()["error"],
+            "Select a Coordinator agent for the default Coordinator"
+        );
+        let (status, _, _) = call(&app, "POST", "/api/admin/profiles/profile_missing/default", Some(&admin), Some(json!({"slot":"worker"}))).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        let (status, _, body) = call(&app, "POST", &set_path, Some(&admin), Some(json!({"slot":"worker"}))).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(serde_json::from_slice::<Value>(&body).unwrap()["worker"], worker.as_str());
+        let (_, _, body) = call(&app, "GET", "/api/profiles/defaults", Some(&member), None).await;
+        assert_eq!(
+            serde_json::from_slice::<Value>(&body).unwrap(),
+            json!({"root":"profile_native_root","alt":"profile_native_independent","worker":worker})
+        );
+        let (status, _, body) = call(&app, "DELETE", &format!("/api/admin/profiles/{worker}"), Some(&admin), None).await;
+        assert_eq!(status, StatusCode::CONFLICT);
+        assert_eq!(
+            serde_json::from_slice::<Value>(&body).unwrap()["error"],
+            "Select another default Worker before you delete this agent"
+        );
+        drop(app);
+        drop(state);
+        let _ = std::fs::remove_file(&filename);
+        let _ = std::fs::remove_file(filename.with_extension("sqlite-wal"));
+        let _ = std::fs::remove_file(filename.with_extension("sqlite-shm"));
+    }
 }

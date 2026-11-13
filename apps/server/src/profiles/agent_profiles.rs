@@ -71,7 +71,7 @@ pub struct ProfileFailure {
 }
 
 impl ProfileFailure {
-    fn new(message: impl Into<String>, status_code: u16) -> Box<Self> {
+    pub(super) fn new(message: impl Into<String>, status_code: u16) -> Box<Self> {
         Box::new(Self {
             message: message.into(),
             status_code,
@@ -116,7 +116,7 @@ fn profile_id() -> DatabaseResult<String> {
     ))
 }
 
-fn actor(database: &SuplexDatabase, user_id: &str, admin: bool) -> DatabaseResult<()> {
+pub(super) fn actor(database: &SuplexDatabase, user_id: &str, admin: bool) -> DatabaseResult<()> {
     let role: Option<UserRole> = database
         .connection()
         .query_row(
@@ -136,7 +136,7 @@ fn actor(database: &SuplexDatabase, user_id: &str, admin: bool) -> DatabaseResul
     Ok(())
 }
 
-fn get(database: &SuplexDatabase, id: &str) -> DatabaseResult<AgentProfile> {
+pub(super) fn get(database: &SuplexDatabase, id: &str) -> DatabaseResult<AgentProfile> {
     find(database, id)?
         .ok_or_else(|| ProfileFailure::new("Not found", 404) as Box<dyn Error + Send + Sync>)
 }
@@ -274,6 +274,11 @@ pub fn update(
             provider_instance_id: changes.provider_instance_id.unwrap_or_else(|| current.provider_instance_id.clone()),
         };
         assert_name(database, &input.name, id)?;
+        if changes.archived == Some(true) && current.archived_at.is_none() {
+            super::defaults::assert_not_default(database, id, "archive")?;
+        } else if input.role != current.role {
+            super::defaults::assert_not_default(database, id, "change the role of")?;
+        }
         if changes.archived == Some(true) || input.role != current.role {
             let used: bool = database.connection().query_row(
                 "SELECT EXISTS(SELECT 1 FROM suplex_projects WHERE root_profile_id = ?1 OR worker_profile_id = ?1 OR alt_profile_id = ?1)",
@@ -361,6 +366,7 @@ pub fn delete(
     actor(database, user_id, true)?;
     database.transaction(false, |database| {
         get(database, id)?;
+        super::defaults::assert_not_default(database, id, "delete")?;
         let references = [
             ("projects", "SELECT 1 FROM suplex_projects WHERE root_profile_id = ?1 OR worker_profile_id = ?1 OR alt_profile_id = ?1 LIMIT 1"),
             ("workflows", "SELECT 1 FROM suplex_workflows WHERE json_extract(configuration_json, '$.rootProfileId') = ?1 OR json_extract(configuration_json, '$.workerProfileId') = ?1 OR EXISTS (SELECT 1 FROM json_each(configuration_json, '$.advisorProfileIds') WHERE value = ?1) LIMIT 1"),

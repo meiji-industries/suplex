@@ -589,6 +589,30 @@ mod tests {
                 .unwrap()
                 .contains("already-assigned")
         );
+        // A project created from a repository copies the stored default agents.
+        let (default_root, default_worker) = state.with_database(|database| {
+            let mut agent = |name: &str, role: &str| {
+                let input = crate::profiles::agent_profiles::ProfileInput {
+                    name: name.to_owned(),
+                    role: role.to_owned(),
+                    avatar_seed: "0123456789abcdef0123456789abcdef".to_owned(),
+                    provider: "codex".to_owned(),
+                    model: "gpt-6-sol".to_owned(),
+                    reasoning_level: "medium".to_owned(),
+                    service_tier: "default".to_owned(),
+                    provider_instance_id: None,
+                };
+                let id = crate::profiles::agent_profiles::create(database, &admin.user.id, &input, now).unwrap().id;
+                let slot = if role == "root" {
+                    crate::profiles::defaults::DefaultSlot::Root
+                } else {
+                    crate::profiles::defaults::DefaultSlot::Worker
+                };
+                crate::profiles::defaults::set(database, &admin.user.id, &id, slot, now).unwrap();
+                id
+            };
+            (agent("Default Coordinator", "root"), agent("Default Worker", "worker"))
+        });
         let new_body = Bytes::from_static(br#"{"repositoryName":"owner/new"}"#);
         let created = create(
             State(state.clone()),
@@ -605,6 +629,10 @@ mod tests {
                 .contains(r#""repository":"owner/new""#)
         );
         assert!(root.join("repositories/owner/new/.git").is_dir());
+        let created_body: Value = serde_json::from_slice(&created_body).unwrap();
+        assert_eq!(created_body["rootProfileId"], default_root.as_str());
+        assert_eq!(created_body["workerProfileId"], default_worker.as_str());
+        assert_eq!(created_body["altProfileId"], "profile_native_independent");
         // Stay below the Free project limit so the request reaches duplicate detection.
         state.with_database(|database| {
             database

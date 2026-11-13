@@ -4,7 +4,8 @@ use std::{
     collections::HashMap,
     fs, io,
     path::{Path, PathBuf},
-    sync::{LazyLock, Mutex},
+    sync::{Arc, LazyLock, Mutex},
+    time::SystemTime,
 };
 
 use serde_json::Value;
@@ -100,16 +101,64 @@ fn search(session: &ReaderSession<'_>, directory: &Path) -> io::Result<Option<Pa
     Ok(None)
 }
 
-fn entries(session: &ReaderSession<'_>) -> io::Result<Vec<transcript::ClaudeMessageEntry>> {
+/// The entries of one transcript, with the size and time of the file they
+/// came from.
+struct Parsed {
+    path: PathBuf,
+    stamp: (u64, SystemTime),
+    entries: Arc<Vec<transcript::ClaudeMessageEntry>>,
+}
+
+/// The transcripts read last, oldest first. Their files hold at most
+/// `PARSED_BYTES` in total, so the entries of the sessions of open and running
+/// tasks stay and those of a pass over every stopped session do not.
+static PARSED: Mutex<Vec<Parsed>> = Mutex::new(Vec::new());
+const PARSED_BYTES: u64 = 32 * 1024 * 1024;
+
+/// Adds `next` as the newest transcript and drops the oldest ones over `limit`.
+fn keep(parsed: &mut Vec<Parsed>, next: Parsed, limit: u64) {
+    parsed.retain(|kept| kept.path != next.path);
+    parsed.push(next);
+    while parsed.iter().map(|kept| kept.stamp.0).sum::<u64>() > limit {
+        parsed.remove(0);
+    }
+}
+
+/// The collector and the sync observer read each session again and again.
+/// An unchanged transcript, by its size and modification time, is parsed once.
+fn entries(session: &ReaderSession<'_>) -> io::Result<Arc<Vec<transcript::ClaudeMessageEntry>>> {
     let path = transcript_path(session)?.ok_or_else(|| {
         io::Error::new(
             io::ErrorKind::NotFound,
             "Claude Code session transcript is not available",
         )
     })?;
-    Ok(transcript::message_entries(&transcript::parse_json_lines(
-        &fs::read_to_string(path)?,
-    )))
+    // The stamp is read before the text: a write between the two reads gives
+    // newer entries under an older stamp, which the next read replaces.
+    let metadata = fs::metadata(&path)?;
+    let stamp = (metadata.len(), metadata.modified()?);
+    let mut parsed = PARSED.lock().expect("parsed transcripts lock poisoned");
+    if let Some(position) = parsed
+        .iter()
+        .position(|kept| kept.path == path && kept.stamp == stamp)
+    {
+        let kept = parsed.remove(position);
+        let entries = kept.entries.clone();
+        parsed.push(kept);
+        return Ok(entries);
+    }
+    drop(parsed);
+    let entries = Arc::new(transcript::text_entries(&fs::read_to_string(&path)?));
+    keep(
+        &mut PARSED.lock().expect("parsed transcripts lock poisoned"),
+        Parsed {
+            path,
+            stamp,
+            entries: entries.clone(),
+        },
+        PARSED_BYTES,
+    );
+    Ok(entries)
 }
 
 impl NativeSessionReader for ClaudeCodeTaskRuntime {
@@ -138,11 +187,11 @@ impl NativeSessionReader for ClaudeCodeTaskRuntime {
     ) -> HarnessFuture<'a, io::Result<Vec<NativeReasoning>>> {
         Box::pin(async move {
             Ok(entries(session)?
-                .into_iter()
+                .iter()
                 .filter(|entry| entry.kind == "assistant" && !entry.is_sidechain)
                 .flat_map(|entry| {
-                    let blocks = transcript::blocks(&entry);
-                    let id = entry.uuid;
+                    let blocks = transcript::blocks(entry);
+                    let id = &entry.uuid;
                     blocks
                         .into_iter()
                         .enumerate()
@@ -187,10 +236,7 @@ impl NativeSessionReader for ClaudeCodeTaskRuntime {
                     .join(format!("turn-{turn_id}.jsonl")),
             ) {
                 Ok(log) => Ok(Some(
-                    transcript::execution(&transcript::message_entries(
-                        &transcript::parse_json_lines(&log),
-                    ))
-                    .0,
+                    transcript::execution(&transcript::text_entries(&log)).0,
                 )),
                 Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
                 Err(error) => Err(error),
@@ -365,6 +411,79 @@ mod tests {
             Some(other.join("projects/-repo/abc.jsonl"))
         );
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn an_unchanged_transcript_is_parsed_once_and_a_changed_one_again() {
+        let root =
+            std::env::temp_dir().join(format!("suplex-claude-parsed-{}", uuid::Uuid::new_v4()));
+        let home = root.join("home");
+        let path = home.join("projects/-repo/abc.jsonl");
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let tool = |id: &str| {
+            json!({"type":"assistant","uuid":id,"message":{"role":"assistant","content":[{"type":"tool_use","id":id,"name":"Bash","input":{}}]}}).to_string()
+        };
+        fs::write(&path, tool("first")).unwrap();
+        let database = root.join("suplex.sqlite");
+        let session = ReaderSession {
+            database_path: &database,
+            session_id: "session-claude",
+            native_session_id: "abc",
+            instance_home_directory: Some(&home),
+        };
+        let reader = ClaudeCodeTaskRuntime;
+        let ids =
+            |tools: Vec<NativeTool>| tools.into_iter().map(|tool| tool.id).collect::<Vec<_>>();
+        let first = entries(&session).unwrap();
+        assert!(Arc::ptr_eq(&first, &entries(&session).unwrap()));
+        assert_eq!(ids(reader.execution(&session).await.unwrap().0), ["first"]);
+        // Claude Code appends to the transcript.
+        fs::write(&path, format!("{}\n{}", tool("first"), tool("second"))).unwrap();
+        assert_eq!(
+            ids(reader.execution(&session).await.unwrap().0),
+            ["first", "second"]
+        );
+        // Another file of the same size replaces the transcript.
+        let stamp = fs::metadata(&path).unwrap().modified().unwrap();
+        let replaced = root.join("replaced.jsonl");
+        fs::write(&replaced, format!("{}\n{}", tool("third"), tool("fourth"))).unwrap();
+        fs::File::options()
+            .write(true)
+            .open(&replaced)
+            .unwrap()
+            .set_modified(stamp + std::time::Duration::from_secs(1))
+            .unwrap();
+        fs::rename(&replaced, &path).unwrap();
+        assert_eq!(
+            ids(reader.execution(&session).await.unwrap().0),
+            ["third", "fourth"]
+        );
+        fs::remove_file(&path).unwrap();
+        assert!(reader.execution(&session).await.is_err());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn the_oldest_parsed_transcripts_are_dropped_over_the_size_limit() {
+        let parsed = |name: &str, bytes: u64| Parsed {
+            path: PathBuf::from(name),
+            stamp: (bytes, SystemTime::UNIX_EPOCH),
+            entries: Arc::default(),
+        };
+        let mut kept = Vec::new();
+        let mut paths = |next: Parsed| {
+            keep(&mut kept, next, 10);
+            kept.iter()
+                .map(|kept| kept.path.to_string_lossy().into_owned())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(paths(parsed("a", 4)), ["a"]);
+        assert_eq!(paths(parsed("b", 4)), ["a", "b"]);
+        // The same transcript again replaces its entry.
+        assert_eq!(paths(parsed("a", 5)), ["b", "a"]);
+        assert_eq!(paths(parsed("c", 4)), ["a", "c"]);
+        // A transcript over the limit is not kept.
+        assert!(paths(parsed("d", 11)).is_empty());
     }
 
     #[tokio::test]

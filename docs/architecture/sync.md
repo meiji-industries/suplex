@@ -185,8 +185,12 @@ describes.
 ## Known ceilings
 
 - Each commit, from any company, makes the tail read again the whole active
-  task list, every move, and every project of each subscribed company, and hash
-  all of the company's stored usage. The ignored test `refresh_time_at_scale`
+  task list, every move, and every project of each subscribed company, and the
+  company's usage revision. Triggers on the usage, analytics session, task
+  session, and task tables count each change that the costs read in
+  `suplex_company_usage_revisions`, so the tail reads one row instead of every
+  stored usage snapshot. A migration that rebuilds one of those tables must
+  create its triggers again. The ignored test `refresh_time_at_scale`
   measures one refresh and one cost read at 500, 2,000, and 5,000 active tasks,
   each with a Coordinator session and 10 usage records. The comment on `tail`
   records 4 ms, 15 ms, and 39 ms per refresh in a release build.

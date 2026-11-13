@@ -670,7 +670,8 @@ fn read_costs(path: &Path, subscriptions: &Mutex<Subscriptions>, company_id: &st
 }
 
 /// The revision of every stored value the task costs of a company read.
-/// Triggers count each change, so the feed reads one row on each commit.
+/// Triggers count each change, so the feed reads one row on each commit. A
+/// migration that rebuilds a table those triggers watch must create them again.
 fn usage_state(database: &SuplexDatabase, company_id: &str) -> DatabaseResult<u64> {
     Ok(database
         .connection()

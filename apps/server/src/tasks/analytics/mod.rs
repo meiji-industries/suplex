@@ -134,7 +134,7 @@ pub fn record(
         }
         for entry in usage {
             connection.execute(
-                "INSERT INTO suplex_task_usage (task_id, session_id, message_id, snapshot, observed_at) VALUES (?1, ?2, ?3, ?4, ?5) ON CONFLICT(session_id, message_id) DO UPDATE SET snapshot = excluded.snapshot, observed_at = excluded.observed_at",
+                "INSERT INTO suplex_task_usage (task_id, session_id, message_id, snapshot, observed_at) VALUES (?1, ?2, ?3, ?4, ?5) ON CONFLICT(session_id, message_id) DO UPDATE SET snapshot = excluded.snapshot, observed_at = excluded.observed_at WHERE snapshot IS NOT excluded.snapshot",
                 params![task_id, entry.session_id, entry.message_id, js(entry), at],
             )?;
         }

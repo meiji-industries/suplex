@@ -185,29 +185,36 @@ pub async fn collect(
             let observations = session_observations(database, &task_id)?;
             let sessions = {
                 let mut statement = database.connection().prepare(
-                    "SELECT id, native_session_id, kind FROM suplex_task_sessions WHERE task_id = ?1 AND native_session_id IS NOT NULL ORDER BY created_at, id",
+                    "SELECT id, native_session_id, kind, updated_at FROM suplex_task_sessions WHERE task_id = ?1 AND native_session_id IS NOT NULL ORDER BY created_at, id",
                 )?;
                 statement
                     .query_map([&task_id], |row| {
-                        Ok(Session {
-                            id: row.get(0)?,
-                            native_session_id: row.get(1)?,
-                            kind: row.get(2)?,
-                        })
+                        Ok((
+                            Session {
+                                id: row.get(0)?,
+                                native_session_id: row.get(1)?,
+                                kind: row.get(2)?,
+                            },
+                            row.get::<_, String>(3)?,
+                        ))
                     })?
                     .collect::<rusqlite::Result<Vec<_>>>()?
             };
-            for session in sessions {
+            for (session, session_updated_at) in sessions {
                 let harness = task_harness_registry::session_harness(&session.native_session_id);
                 let previous = observations
                     .iter()
                     .find(|value| value.session_id == session.id);
                 let last_attempt = previous
                     .and_then(|value| value.error_at.as_deref().or(value.observed_at.as_deref()));
-                let changed = previous
-                    .and_then(|value| value.observed_at.as_deref())
-                    .is_some_and(|observed| updated_at.as_str() > observed);
-                let refresh_ms = if startup
+                // The session row changes when Suplex observes its native process stop,
+                // which can be after the task's last change: delivery and cancel stop
+                // the agent after they change the task.
+                let changed = last_attempt.is_some_and(|last| {
+                    updated_at.as_str() > last || session_updated_at.as_str() > last
+                });
+                // These runtimes rewrite usage after a session ends: read them once per start.
+                let startup_read = startup
                     && matches!(
                         HarnessKind::parse(harness),
                         Some(
@@ -216,22 +223,23 @@ pub async fn collect(
                                 | HarnessKind::Pi
                                 | HarnessKind::Omp
                         )
-                    ) {
-                    0
-                } else if previous.is_some_and(|value| value.error_at.is_some()) {
-                    300_000
-                } else if !changed
-                    && (archived || !matches!(status.as_str(), "active" | "waiting_human"))
-                {
-                    900_000
-                } else {
-                    0
+                    );
+                let stopped = archived || !matches!(status.as_str(), "active" | "waiting_human");
+                // A session of a stopped task is final: one read after the task's last
+                // change gives its usage, and a failed read stays failed until the task
+                // changes. A failed read of a running task is tried again after 5 minutes.
+                let due = match last_attempt {
+                    None => true,
+                    Some(_) if startup_read => true,
+                    Some(_) if stopped && !changed => false,
+                    Some(last) if previous.is_some_and(|value| value.error_at.is_some()) => {
+                        !DateTime::parse_from_rfc3339(last).is_ok_and(|last| {
+                            now.timestamp_millis() - last.timestamp_millis() < 300_000
+                        })
+                    }
+                    Some(_) => true,
                 };
-                if let Some(last) = last_attempt
-                    && DateTime::parse_from_rfc3339(last).is_ok_and(|last| {
-                        now.timestamp_millis() - last.timestamp_millis() < refresh_ms
-                    })
-                {
+                if !due {
                     continue;
                 }
                 let started = now_millis_rfc3339();
@@ -804,6 +812,84 @@ mod tests {
             cost,
             ..analytics::tests::entry("msg", cost)
         }
+    }
+
+    #[tokio::test]
+    async fn a_stopped_task_session_is_read_again_only_after_the_task_changes() {
+        use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering::Relaxed};
+        let (path, mut database) = task_database();
+        let later = |minutes| Utc::now() + chrono::Duration::minutes(minutes);
+        let (reads, missing) = (AtomicUsize::new(0), AtomicBool::new(true));
+        let cost = std::sync::atomic::AtomicU32::new(3);
+        let mut read = |_: &Session| -> Result<Vec<TaskUsage>, Box<dyn Error + Send + Sync>> {
+            reads.fetch_add(1, Relaxed);
+            if missing.load(Relaxed) {
+                return Err(std::io::Error::new(std::io::ErrorKind::NotFound, "gone").into());
+            }
+            Ok(vec![usage_with(f64::from(cost.load(Relaxed)))])
+        };
+        let mut report = |_: &str, error: Box<dyn Error + Send + Sync>| panic!("{error}");
+        // A missing transcript of a delivered task is tried once, and is not an error.
+        collect(&mut database, false, Utc::now(), &mut read, &mut report)
+            .await
+            .unwrap();
+        collect(&mut database, false, later(60), &mut read, &mut report)
+            .await
+            .unwrap();
+        assert_eq!(reads.load(Relaxed), 1);
+
+        // The task changes: its session is read again, then is final.
+        missing.store(false, Relaxed);
+        std::thread::sleep(Duration::from_millis(5));
+        let changed = now_millis_rfc3339();
+        std::thread::sleep(Duration::from_millis(5));
+        database
+            .connection()
+            .execute("UPDATE suplex_tasks SET updated_at = ?1", [&changed])
+            .unwrap();
+        collect(&mut database, false, Utc::now(), &mut read, &mut report)
+            .await
+            .unwrap();
+        collect(&mut database, false, later(60), &mut read, &mut report)
+            .await
+            .unwrap();
+        assert_eq!(reads.load(Relaxed), 2);
+        assert_eq!(analytics::read(&database, "t").unwrap().usage[0].cost, 3.0);
+
+        // The agent writes its last message after delivery; Suplex then observes
+        // the session stop. That one change reads the final usage.
+        cost.store(5, Relaxed);
+        std::thread::sleep(Duration::from_millis(5));
+        database
+            .connection()
+            .execute(
+                "UPDATE suplex_task_sessions SET updated_at = ?1",
+                [now_millis_rfc3339()],
+            )
+            .unwrap();
+        std::thread::sleep(Duration::from_millis(5));
+        for minutes in [0, 60] {
+            collect(&mut database, false, later(minutes), &mut read, &mut report)
+                .await
+                .unwrap();
+        }
+        assert_eq!(reads.load(Relaxed), 3);
+        assert_eq!(analytics::read(&database, "t").unwrap().usage[0].cost, 5.0);
+
+        // A failed read of a running task is tried again after 5 minutes.
+        missing.store(true, Relaxed);
+        database
+            .connection()
+            .execute("UPDATE suplex_task_controls SET status = 'active'", [])
+            .unwrap();
+        for minutes in [0, 1, 6] {
+            collect(&mut database, false, later(minutes), &mut read, &mut report)
+                .await
+                .unwrap();
+        }
+        assert_eq!(reads.load(Relaxed), 5);
+        drop(database);
+        fs::remove_file(path).unwrap();
     }
 
     #[tokio::test]

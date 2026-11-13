@@ -66,8 +66,12 @@ fn transcript_path(session: &ReaderSession<'_>) -> io::Result<Option<PathBuf>> {
 }
 
 fn entries(session: &ReaderSession<'_>) -> io::Result<Vec<transcript::ClaudeMessageEntry>> {
-    let path = transcript_path(session)?
-        .ok_or_else(|| io::Error::other("Claude Code session transcript is not available"))?;
+    let path = transcript_path(session)?.ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::NotFound,
+            "Claude Code session transcript is not available",
+        )
+    })?;
     Ok(transcript::message_entries(&transcript::parse_json_lines(
         &fs::read_to_string(path)?,
     )))

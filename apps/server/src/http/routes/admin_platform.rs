@@ -318,6 +318,7 @@ async fn update_environment(
                 auto_archive_after_days: patch
                     .auto_archive_after_days
                     .unwrap_or(previous.auto_archive_after_days),
+                update_channel: patch.update_channel.unwrap_or(previous.update_channel),
             },
         )?;
         record_audit(
@@ -341,6 +342,8 @@ async fn update_environment(
                 "telemetryEnabled": updated.telemetry_enabled.to_string(),
                 "previousAutoArchiveAfterDays": previous.auto_archive_after_days.to_string(),
                 "autoArchiveAfterDays": updated.auto_archive_after_days.to_string(),
+                "previousUpdateChannel": previous.update_channel.as_str(),
+                "updateChannel": updated.update_channel.as_str(),
             }),
         )?;
         Ok::<_, Box<dyn std::error::Error + Send + Sync>>(updated)

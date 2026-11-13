@@ -1,4 +1,6 @@
-use super::{archive_update, config::Installation, supervisor};
+use super::{
+    archive_update, config::Installation, environment_settings::UpdateChannel, supervisor,
+};
 use serde_json::{Value, json};
 use std::sync::{LazyLock, Mutex};
 use std::{
@@ -381,8 +383,10 @@ fn archive_snapshot(
     if check {
         let prior_apply_failure =
             (status["kind"] == "failed" && status["action"] == "apply").then_some(status.clone());
-        let latest = archive_update::service_url(installation)
-            .and_then(|service| archive_update::block_on(archive_update::latest(&service)));
+        let channel = UpdateChannel::configured(installation);
+        let latest = archive_update::service_url(installation).and_then(|service| {
+            archive_update::block_on(archive_update::latest(&service, channel))
+        });
         status = match latest {
             Ok(release) => {
                 available = release.map(|release| release.version);
@@ -407,14 +411,17 @@ fn archive_snapshot(
 /// Downloads the published archive, swaps this binary, and restarts the host.
 fn apply_archive(
     installation: &Installation,
+    channel: Option<UpdateChannel>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let channel = channel.unwrap_or_else(|| UpdateChannel::configured(installation));
     let root = std::env::current_dir()?;
     let rollback = installation.runtime.join("update-rollback-suplex");
     let target = crate::shared::fs::executable()?.canonicalize()?;
     let result = (|| -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         applying(installation, "fetch", "Suplex checks the update.")?;
         let service = archive_update::service_url(installation)?;
-        let Some(release) = archive_update::block_on(archive_update::latest(&service))? else {
+        let Some(release) = archive_update::block_on(archive_update::latest(&service, channel))?
+        else {
             write_state(installation, json!({"kind":"current"}))?;
             return Ok(());
         };
@@ -528,7 +535,10 @@ pub fn request_apply(
 }
 
 /// Applies the update this process can see. `Ok(false)` when another update holds the lock.
-pub fn apply() -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
+/// `channel` overrides the host's update channel, as `suplex update --channel` does.
+pub fn apply(
+    channel: Option<UpdateChannel>,
+) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
     let installation = Installation::load()?;
     fs::create_dir_all(&installation.runtime)?;
     let lock = fs::OpenOptions::new()
@@ -544,7 +554,7 @@ pub fn apply() -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
         }
     }
     if archive_update::managed() {
-        return apply_archive(&installation).map(|_| true);
+        return apply_archive(&installation, channel).map(|_| true);
     }
     let root = std::env::current_dir()?;
     let rollback = installation.runtime.join("update-rollback-suplex");

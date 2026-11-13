@@ -23,12 +23,12 @@ platform="${SUPLEX_DESKTOP_PLATFORM:?Set SUPLEX_DESKTOP_PLATFORM to linux or win
 arch="${SUPLEX_DESKTOP_ARCH:?Set SUPLEX_DESKTOP_ARCH to arm64 or x64}"
 version="$(node -p "require('./apps/desktop/package.json').version")"
 release_dir="apps/desktop/release/$platform-$arch"
-prefix="stable/$platform/$arch"
+prefix="${SUPLEX_RELEASE_CHANNEL:-stable}/$platform/$arch"
 # release.env holds the Apple silicon feed (.../stable/mac/arm64/); each platform publishes to its own folder beside it.
 base_url="$(printf %s "${SUPLEX_DESKTOP_UPDATE_URL%/}" | sed -E "s#/mac/arm64\$#/$platform/$arch#")"
 case "$base_url" in
   https://*/"$prefix") ;;
-  *) echo "SUPLEX_DESKTOP_UPDATE_URL must end in /stable/mac/arm64/" >&2; exit 1 ;;
+  *) echo "SUPLEX_DESKTOP_UPDATE_URL must end in /${SUPLEX_RELEASE_CHANNEL:-stable}/mac/arm64/" >&2; exit 1 ;;
 esac
 case "$platform" in
   linux) binaries=("Suplex-$version-linux-$arch.deb" "Suplex-$version-linux-$arch.rpm"); manifest=latest-linux-desktop.yml ;;

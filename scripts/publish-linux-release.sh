@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # Uploads dist/linux/<arch> (from scripts/build-linux.sh) to R2 beside the Mac releases (SUPLEX_LINUX_ARCH=arm64 or x64).
+# SUPLEX_RELEASE_CHANNEL=dev publishes to dev/linux/<arch> instead of stable/linux/<arch>.
 set -euo pipefail
 
 : "${CF_R2_ACCOUNT_ID:?Set CF_R2_ACCOUNT_ID}"
@@ -16,13 +17,13 @@ case "$phase" in
 esac
 arch="${SUPLEX_LINUX_ARCH:-arm64}"
 release_dir="dist/linux/$arch"
-prefix="stable/linux/$arch"
+prefix="${SUPLEX_RELEASE_CHANNEL:-stable}/linux/$arch"
 endpoint="https://${CF_R2_ACCOUNT_ID}.r2.cloudflarestorage.com"
-# release.env holds the Apple silicon feed (.../stable/mac/arm64/); Linux publishes to stable/linux/<arch> beside it.
+# release.env holds the Apple silicon feed (.../<channel>/mac/arm64/); Linux publishes to <channel>/linux/<arch> beside it.
 base_url="$(printf %s "${SUPLEX_DESKTOP_UPDATE_URL%/}" | sed -E "s#/mac/arm64\$#/linux/$arch#")"
 case "$base_url" in
   https://*/"$prefix") ;;
-  *) echo "SUPLEX_DESKTOP_UPDATE_URL must end in /stable/mac/arm64/" >&2; exit 1 ;;
+  *) echo "SUPLEX_DESKTOP_UPDATE_URL must end in /${SUPLEX_RELEASE_CHANNEL:-stable}/mac/arm64/" >&2; exit 1 ;;
 esac
 
 version="$(node -p "require('./package.json').version")"

@@ -32,7 +32,8 @@ Common Commands:
   up          Start Suplex in the background (alias: start)
   down        Stop Suplex (alias: stop)
   restart     Stop Suplex, then start it again
-  update      Install the newest Suplex.app and restart Suplex (alias: upgrade)
+  update      Install the newest Suplex and restart it (alias: upgrade);
+              --channel stable|dev overrides the update channel for one run
   logs        Show the server log
   doctor      Check the installation and database
   version     Show the Suplex version (alias: --version, -V)
@@ -162,11 +163,12 @@ fn recover(arguments: &[String]) -> CliResult {
     Ok(0)
 }
 
-/// Updates the Suplex.app bundle that holds this executable.
+/// Updates the Suplex.app bundle or the archive install that holds this executable.
 async fn update(arguments: &[String]) -> CliResult {
     let assume_yes = arguments.iter().any(|arg| arg == "--yes" || arg == "-y");
+    let channel = update_channel(arguments)?;
     if crate::platform::archive_update::managed() {
-        return crate::platform::archive_update::run(assume_yes).await;
+        return crate::platform::archive_update::run(assume_yes, channel).await;
     }
     let executable = crate::shared::fs::executable()?.canonicalize()?;
     let Some(app) = executable
@@ -175,7 +177,34 @@ async fn update(arguments: &[String]) -> CliResult {
     else {
         return Err("This Suplex runs from a source checkout. Update it with 'git pull', then run 'suplex restart'.".into());
     };
-    app_update::run(app, assume_yes).await
+    app_update::run(app, assume_yes, channel).await
+}
+
+/// `--channel stable|dev` or `--channel=dev`; without it the host's setting applies.
+fn update_channel(
+    arguments: &[String],
+) -> Result<
+    Option<crate::platform::environment_settings::UpdateChannel>,
+    Box<dyn std::error::Error + Send + Sync>,
+> {
+    let value = arguments.iter().enumerate().find_map(|(index, arg)| {
+        if arg == "--channel" {
+            Some(
+                arguments
+                    .get(index + 1)
+                    .map(String::as_str)
+                    .unwrap_or_default(),
+            )
+        } else {
+            arg.strip_prefix("--channel=")
+        }
+    });
+    value
+        .map(|value| {
+            crate::platform::environment_settings::UpdateChannel::parse(value)
+                .ok_or_else(|| "Usage: suplex update [--yes] [--channel stable|dev]".into())
+        })
+        .transpose()
 }
 
 fn desktop() -> CliResult {
@@ -963,6 +992,28 @@ fn backup(command: &str, arguments: &[String]) -> CliResult {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn update_reads_a_channel_override() {
+        use crate::platform::environment_settings::UpdateChannel;
+        let arguments = |items: &[&str]| {
+            items
+                .iter()
+                .map(|item| (*item).to_owned())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(update_channel(&arguments(&["--yes"])).unwrap(), None);
+        assert_eq!(
+            update_channel(&arguments(&["--channel", "dev"])).unwrap(),
+            Some(UpdateChannel::Dev)
+        );
+        assert_eq!(
+            update_channel(&arguments(&["--yes", "--channel=stable"])).unwrap(),
+            Some(UpdateChannel::Stable)
+        );
+        assert!(update_channel(&arguments(&["--channel", "beta"])).is_err());
+        assert!(update_channel(&arguments(&["--channel"])).is_err());
+    }
 
     #[tokio::test]
     async fn doctor_reports_schema_references_health_and_waiting_tasks() {

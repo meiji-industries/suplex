@@ -4,7 +4,10 @@ use crate::shared::time::now_millis_rfc3339;
 use rusqlite::{OptionalExtension, params};
 use serde_json::{Value, json};
 
-use super::database::{DatabaseResult, SuplexDatabase};
+use super::{
+    config::Installation,
+    database::{DatabaseResult, OpenMode, SuplexDatabase},
+};
 
 pub const DEFAULT_MIN_FREE_DISK_GB: f64 = 5.0;
 pub const MAX_MIN_FREE_DISK_GB: f64 = 1024.0;
@@ -12,6 +15,32 @@ pub const DEFAULT_TASK_BUDGET_USD: f64 = 15.0;
 pub const DEFAULT_TASK_MAX_TURNS: i64 = 40;
 /// Days after its last activity that a delivered task is archived automatically.
 pub const DEFAULT_AUTO_ARCHIVE_AFTER_DAYS: i64 = 30;
+
+crate::shared::wire_enum! {
+    /// The release feed that the host and `suplex update` read (docs/updates.md).
+    pub enum UpdateChannel {
+        Stable = "stable",
+        Dev = "dev",
+    }
+}
+
+impl UpdateChannel {
+    /// The feeds an update check reads. Development also reads the stable feed, so a
+    /// development build moves to the next stable release when that release is newer.
+    pub fn feeds(self) -> &'static [UpdateChannel] {
+        match self {
+            Self::Stable => &[Self::Stable],
+            Self::Dev => &[Self::Stable, Self::Dev],
+        }
+    }
+
+    /// The channel this installation's database names, or stable when it cannot be read.
+    pub fn configured(installation: &Installation) -> Self {
+        SuplexDatabase::open(&installation.database, OpenMode::ReadOnly)
+            .and_then(|database| read(&database))
+            .map_or(Self::Stable, |settings| settings.update_channel)
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct EnvironmentSettings {
@@ -30,6 +59,8 @@ pub struct EnvironmentSettings {
     /// Archive delivered tasks this many days after their last
     /// activity. 0 turns automatic archiving off.
     pub auto_archive_after_days: i64,
+    /// The release feed for host updates. Stable by default.
+    pub update_channel: UpdateChannel,
 }
 
 /// JSON number as JavaScript prints it: whole numbers without a fraction.
@@ -45,7 +76,7 @@ pub fn read(database: &SuplexDatabase) -> DatabaseResult<EnvironmentSettings> {
     Ok(database
         .connection()
         .query_row(
-            "SELECT min_free_disk_gb, default_budget_usd, default_max_turns, today_page_enabled, host_terminal_enabled, git2_enabled, telemetry_enabled, auto_archive_after_days FROM suplex_environment_settings WHERE id = 'host'",
+            "SELECT min_free_disk_gb, default_budget_usd, default_max_turns, today_page_enabled, host_terminal_enabled, git2_enabled, telemetry_enabled, auto_archive_after_days, update_channel FROM suplex_environment_settings WHERE id = 'host'",
             [],
             |row| {
                 Ok(EnvironmentSettings {
@@ -57,6 +88,7 @@ pub fn read(database: &SuplexDatabase) -> DatabaseResult<EnvironmentSettings> {
                     git2_enabled: row.get(5)?,
                     telemetry_enabled: row.get(6)?,
                     auto_archive_after_days: row.get(7)?,
+                    update_channel: row.get(8)?,
                 })
             },
         )
@@ -70,6 +102,7 @@ pub fn read(database: &SuplexDatabase) -> DatabaseResult<EnvironmentSettings> {
             git2_enabled: false,
             telemetry_enabled: true,
             auto_archive_after_days: DEFAULT_AUTO_ARCHIVE_AFTER_DAYS,
+            update_channel: UpdateChannel::Stable,
         }))
 }
 
@@ -100,7 +133,7 @@ pub fn update(
     }
     database.transaction(false, |database| {
         database.connection().execute(
-            "INSERT INTO suplex_environment_settings (id, min_free_disk_gb, default_budget_usd, default_max_turns, today_page_enabled, host_terminal_enabled, git2_enabled, telemetry_enabled, auto_archive_after_days, updated_at) VALUES ('host', ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9) ON CONFLICT(id) DO UPDATE SET min_free_disk_gb = excluded.min_free_disk_gb, default_budget_usd = excluded.default_budget_usd, default_max_turns = excluded.default_max_turns, today_page_enabled = excluded.today_page_enabled, host_terminal_enabled = excluded.host_terminal_enabled, git2_enabled = excluded.git2_enabled, telemetry_enabled = excluded.telemetry_enabled, auto_archive_after_days = excluded.auto_archive_after_days, updated_at = excluded.updated_at",
+            "INSERT INTO suplex_environment_settings (id, min_free_disk_gb, default_budget_usd, default_max_turns, today_page_enabled, host_terminal_enabled, git2_enabled, telemetry_enabled, auto_archive_after_days, update_channel, updated_at) VALUES ('host', ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10) ON CONFLICT(id) DO UPDATE SET min_free_disk_gb = excluded.min_free_disk_gb, default_budget_usd = excluded.default_budget_usd, default_max_turns = excluded.default_max_turns, today_page_enabled = excluded.today_page_enabled, host_terminal_enabled = excluded.host_terminal_enabled, git2_enabled = excluded.git2_enabled, telemetry_enabled = excluded.telemetry_enabled, auto_archive_after_days = excluded.auto_archive_after_days, update_channel = excluded.update_channel, updated_at = excluded.updated_at",
             params![
                 settings.min_free_disk_gb,
                 settings.default_budget_usd,
@@ -110,6 +143,7 @@ pub fn update(
                 settings.git2_enabled,
                 settings.telemetry_enabled,
                 settings.auto_archive_after_days,
+                settings.update_channel,
                 now_millis_rfc3339()
             ],
         )?;

@@ -18,7 +18,7 @@ fn main() {
     let command = std::env::args().skip(1).collect::<Vec<_>>();
     // The updater builds a runtime per network step; inside another runtime that panics.
     let result = if command == ["update-apply"] {
-        suplex::platform::update::apply().map(|_| ())
+        suplex::platform::update::apply(None).map(|_| ())
     } else {
         tokio::runtime::Runtime::new()
             .expect("Failed building the Runtime")

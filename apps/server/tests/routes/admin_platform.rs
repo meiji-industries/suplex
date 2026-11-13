@@ -114,7 +114,7 @@ mod tests {
         assert_eq!(headers[header::CACHE_CONTROL], "private, no-store");
         assert_eq!(
             json_body(&body),
-            json!({"minFreeDiskGb":5,"defaultBudgetUsd":15,"defaultMaxTurns":40,"todayPageEnabled":false,"hostTerminalEnabled":false,"git2Enabled":false,"telemetryEnabled":true,"autoArchiveAfterDays":30})
+            json!({"minFreeDiskGb":5,"defaultBudgetUsd":15,"defaultMaxTurns":40,"todayPageEnabled":false,"hostTerminalEnabled":false,"git2Enabled":false,"telemetryEnabled":true,"autoArchiveAfterDays":30,"updateChannel":"stable"})
         );
         let patch = |body: &str| {
             fixture.call(
@@ -126,7 +126,7 @@ mod tests {
         };
         assert_eq!(
             json_body(&patch(r#"{"minFreeDiskGb":7.5}"#).await.2),
-            json!({"minFreeDiskGb":7.5,"defaultBudgetUsd":15,"defaultMaxTurns":40,"todayPageEnabled":false,"hostTerminalEnabled":false,"git2Enabled":false,"telemetryEnabled":true,"autoArchiveAfterDays":30})
+            json!({"minFreeDiskGb":7.5,"defaultBudgetUsd":15,"defaultMaxTurns":40,"todayPageEnabled":false,"hostTerminalEnabled":false,"git2Enabled":false,"telemetryEnabled":true,"autoArchiveAfterDays":30,"updateChannel":"stable"})
         );
         assert_eq!(
             json_body(
@@ -134,7 +134,7 @@ mod tests {
                     .await
                     .2
             ),
-            json!({"minFreeDiskGb":7.5,"defaultBudgetUsd":20,"defaultMaxTurns":30,"todayPageEnabled":false,"hostTerminalEnabled":false,"git2Enabled":false,"telemetryEnabled":true,"autoArchiveAfterDays":30})
+            json!({"minFreeDiskGb":7.5,"defaultBudgetUsd":20,"defaultMaxTurns":30,"todayPageEnabled":false,"hostTerminalEnabled":false,"git2Enabled":false,"telemetryEnabled":true,"autoArchiveAfterDays":30,"updateChannel":"stable"})
         );
         assert_eq!(
             json_body(&patch(r#"{"todayPageEnabled":true}"#).await.2)["todayPageEnabled"],
@@ -155,7 +155,7 @@ mod tests {
                     .await
                     .2
             ),
-            json!({"minFreeDiskGb":7.5,"defaultBudgetUsd":20,"defaultMaxTurns":30,"todayPageEnabled":true,"hostTerminalEnabled":true,"git2Enabled":true,"telemetryEnabled":true,"autoArchiveAfterDays":30})
+            json!({"minFreeDiskGb":7.5,"defaultBudgetUsd":20,"defaultMaxTurns":30,"todayPageEnabled":true,"hostTerminalEnabled":true,"git2Enabled":true,"telemetryEnabled":true,"autoArchiveAfterDays":30,"updateChannel":"stable"})
         );
         assert_eq!(
             json_body(&patch(r#"{"autoArchiveAfterDays":0}"#).await.2)["autoArchiveAfterDays"],
@@ -165,12 +165,30 @@ mod tests {
             json_body(&patch(r#"{"autoArchiveAfterDays":45}"#).await.2)["autoArchiveAfterDays"],
             45
         );
+        // The update channel is stored with the host settings the update check reads.
+        assert_eq!(
+            json_body(&patch(r#"{"updateChannel":"dev"}"#).await.2)["updateChannel"],
+            "dev"
+        );
+        assert_eq!(
+            state
+                .with_database(|database| crate::platform::environment_settings::read(database))
+                .unwrap()
+                .update_channel,
+            crate::platform::environment_settings::UpdateChannel::Dev
+        );
+        assert_eq!(
+            json_body(&patch(r#"{"updateChannel":"stable"}"#).await.2)["updateChannel"],
+            "stable"
+        );
         // The transport is process-wide: put it back for parallel tests.
         assert_eq!(
             json_body(&patch(r#"{"git2Enabled":false}"#).await.2)["git2Enabled"],
             false
         );
         for invalid in [
+            r#"{"updateChannel":"beta"}"#,
+            r#"{"updateChannel":null}"#,
             r#"{"defaultBudgetUsd":-1}"#,
             r#"{}"#,
             r#"{"other":1}"#,

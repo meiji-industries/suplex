@@ -35,6 +35,32 @@ mod tests {
                 format!("{}/stable/linux/x64/suplex-1.2.3-x64.tar.gz", f.stub)
             )
         );
+        // The development channel reads its own folder, and a suffixed file name passes.
+        f.answer(
+            "GET /dev/linux/x64/latest-linux.yml",
+            200,
+            "version: 1.2.4-dev.202611131540\nfiles:\n  - url: suplex-1.2.4-dev.202611131540-linux-x64.tar.gz\n",
+        );
+        assert_eq!(
+            location(&f, "/download?platform=linux-x64&channel=dev", &[]).await,
+            (
+                302,
+                format!(
+                    "{}/dev/linux/x64/suplex-1.2.4-dev.202611131540-linux-x64.tar.gz",
+                    f.stub
+                )
+            )
+        );
+        assert_eq!(
+            location(&f, "/download?platform=linux-x64&channel=stable", &[]).await,
+            (
+                302,
+                format!("{}/stable/linux/x64/suplex-1.2.3-x64.tar.gz", f.stub)
+            )
+        );
+        let channel = f.get("/download?platform=linux-x64&channel=beta", &[]).await;
+        assert_eq!(channel.status(), 404);
+        assert_eq!(channel.text().await.unwrap(), "Unknown channel.");
         f.answer(
             "GET /stable/bootstrap/macos-arm64/latest.yml",
             200,

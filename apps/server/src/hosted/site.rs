@@ -15,6 +15,7 @@ use serde::Deserialize;
 use serde_json::json;
 
 use crate::accounts::hosted::{Accounts, VISITOR_COOKIE, valid_visitor};
+use crate::platform::environment_settings::UpdateChannel;
 
 const WEBSITE: &str = "https://getsuplex.ai/";
 const INSTALL_SCRIPT: &str = include_str!("install.sh");
@@ -53,6 +54,8 @@ struct DownloadQuery {
     platform: Option<String>,
     format: Option<String>,
     visitor: Option<String>,
+    /// `stable` (default) or `dev`: the release channel's feed folder.
+    channel: Option<String>,
 }
 
 /// Redirects to the file named in the live release manifest, so the link
@@ -73,7 +76,12 @@ async fn download(
     if !formats.contains(&format) {
         return (StatusCode::NOT_FOUND, "Unknown format.").into_response();
     }
-    let base = format!("{}/stable/{directory}/", accounts.endpoints.downloads);
+    let channel = match query.channel.as_deref().map(UpdateChannel::parse) {
+        None => UpdateChannel::Stable,
+        Some(Some(channel)) => channel,
+        Some(None) => return (StatusCode::NOT_FOUND, "Unknown channel.").into_response(),
+    };
+    let base = format!("{}/{channel}/{directory}/", accounts.endpoints.downloads);
     let text = match accounts.http.get(format!("{base}{manifest}")).send().await {
         Ok(response) if response.status().is_success() => response.text().await.ok(),
         _ => None,

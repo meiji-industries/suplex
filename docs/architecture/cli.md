@@ -84,6 +84,13 @@ this installation's server.
 
 ## Updates
 
+`suplex update` reads the host's update channel, Stable or Development. See
+[the development channel](../updates.md#update-channel-setting).
+`--channel stable` or `--channel dev` overrides the channel for one run. On the
+Development channel the command reads the stable and development feeds and
+installs the newest version. Versions compare by semantic version precedence,
+so `1.13.9-dev.202611131540` is newer than 1.13.8 and older than 1.13.9.
+
 `suplex update` resolves its own executable through symlinks. When the
 executable is inside an `.app` bundle, the command reads the feed URL from the
 bundle's `app-update.yml` and downloads `latest-mac.yml` from it. When the feed

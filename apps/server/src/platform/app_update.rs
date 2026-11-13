@@ -14,9 +14,10 @@ use std::{
 use base64::Engine;
 use sha2::{Digest, Sha512};
 
-use crate::platform::{config::Installation, supervisor};
+use crate::platform::{config::Installation, environment_settings::UpdateChannel, supervisor};
 
-type UpdateResult = Result<i32, Box<dyn std::error::Error + Send + Sync>>;
+type Error = Box<dyn std::error::Error + Send + Sync>;
+type UpdateResult = Result<i32, Error>;
 
 /// The top-level fields of the Mac feed's `latest-mac.yml` (the electron-builder format, still published beside the Tauri feed).
 #[derive(Debug, PartialEq)]
@@ -26,16 +27,20 @@ struct Release {
     sha512: String,
 }
 
-pub async fn run(app: &Path, assume_yes: bool) -> UpdateResult {
+/// `channel` overrides the host's update channel for this run.
+pub async fn run(app: &Path, assume_yes: bool, channel: Option<UpdateChannel>) -> UpdateResult {
     let current = env!("CARGO_PKG_VERSION");
-    let feed = feed_url(app)?;
-    let release = parse_feed(
-        &reqwest::get(format!("{feed}latest-mac.yml"))
-            .await?
-            .error_for_status()?
-            .text()
-            .await?,
-    )?;
+    let installation = Installation::load().ok();
+    let channel = channel
+        .or_else(|| installation.as_ref().map(UpdateChannel::configured))
+        .unwrap_or(UpdateChannel::Stable);
+    let installed_feed = feed_url(app)?;
+    let mut releases = Vec::new();
+    for &source in channel.feeds() {
+        let feed = channel_feed(&installed_feed, source);
+        releases.push(fetch_release(&feed).await.map(|release| (feed, release)));
+    }
+    let (feed, release) = newest(releases, |(_, release)| &release.version)?;
     if !newer(&release.version, current) {
         println!("Suplex {current} is current.");
         return Ok(0);
@@ -74,7 +79,6 @@ pub async fn run(app: &Path, assume_yes: bool) -> UpdateResult {
     verify_signature(app, &new_app)?;
 
     let app_running = app_running(app);
-    let installation = Installation::load().ok();
     let host_running = installation.as_ref().is_some_and(supervisor::host_running);
     if (app_running || host_running) && !confirm(&release.version, assume_yes)? {
         println!("Update cancelled.");
@@ -139,7 +143,58 @@ fn feed_url(app: &Path) -> Result<String, Box<dyn std::error::Error + Send + Syn
     Ok(format!("{}/", url.trim_end_matches('/')))
 }
 
-fn parse_feed(text: &str) -> Result<Release, Box<dyn std::error::Error + Send + Sync>> {
+async fn fetch_release(feed: &str) -> Result<Release, Error> {
+    parse_feed(
+        &reqwest::get(format!("{feed}latest-mac.yml"))
+            .await?
+            .error_for_status()?
+            .text()
+            .await?,
+    )
+}
+
+/// The same feed folder in another channel: `.../stable/mac/arm64/` and `.../dev/mac/arm64/`.
+/// A development build names the dev folder in its `app-update.yml`.
+pub(crate) fn channel_feed(feed: &str, channel: UpdateChannel) -> String {
+    for folder in ["/stable/", "/dev/"] {
+        if let Some(index) = feed.rfind(folder) {
+            return format!(
+                "{}/{channel}/{}",
+                &feed[..index],
+                &feed[index + folder.len()..]
+            );
+        }
+    }
+    feed.to_owned()
+}
+
+/// The newest release among a channel's feeds. A feed that fails is skipped while another
+/// answers, so a platform without a development release still follows stable.
+pub(crate) fn newest<R>(
+    releases: Vec<Result<R, Error>>,
+    version: impl Fn(&R) -> &str,
+) -> Result<R, Error> {
+    let mut best: Option<R> = None;
+    let mut failure = None;
+    for release in releases {
+        match release {
+            Ok(release) => {
+                if best
+                    .as_ref()
+                    .is_none_or(|best| newer(version(&release), version(best)))
+                {
+                    best = Some(release);
+                }
+            }
+            Err(error) => {
+                failure.get_or_insert(error);
+            }
+        }
+    }
+    best.ok_or_else(|| failure.unwrap_or_else(|| "No update feed answered.".into()))
+}
+
+fn parse_feed(text: &str) -> Result<Release, Error> {
     let field = |name: &str| {
         text.lines()
             .find_map(|line| line.strip_prefix(&format!("{name}: ")))
@@ -153,11 +208,17 @@ fn parse_feed(text: &str) -> Result<Release, Box<dyn std::error::Error + Send + 
     })
 }
 
+/// Semantic version precedence: a prerelease such as `1.13.9-dev.202611131540` is newer than
+/// 1.13.8 and older than 1.13.9, and `+<commit>` build metadata does not count. A version
+/// that does not parse is never newer.
 pub(crate) fn newer(candidate: &str, current: &str) -> bool {
-    let parse = |version: &str| -> Option<Vec<u64>> {
-        version.split('.').map(|part| part.parse().ok()).collect()
-    };
-    matches!((parse(candidate), parse(current)), (Some(a), Some(b)) if a > b)
+    match (
+        semver::Version::parse(candidate.trim()),
+        semver::Version::parse(current.trim()),
+    ) {
+        (Ok(candidate), Ok(current)) => candidate.cmp_precedence(&current).is_gt(),
+        _ => false,
+    }
 }
 
 /// The new bundle must pass Gatekeeper and come from the same team as the installed one.
@@ -298,10 +359,61 @@ mod tests {
     }
 
     #[test]
-    fn compares_versions_numerically() {
+    fn compares_versions_by_semantic_version_precedence() {
         assert!(newer("0.10.0", "0.9.9"));
         assert!(!newer("0.8.3", "0.8.3"));
         assert!(!newer("0.8.2", "0.8.3"));
-        assert!(!newer("1.0.0-beta", "0.8.3"));
+        let dev = "1.13.9-dev.202611131540";
+        // A development build sorts above the stable release before it and below the next one.
+        assert!(newer(dev, "1.13.8"));
+        assert!(!newer("1.13.8", dev));
+        assert!(newer("1.13.9", dev));
+        assert!(!newer(dev, "1.13.9"));
+        // Its timestamp orders development builds; the commit metadata does not count.
+        assert!(newer("1.13.9-dev.202611131541", dev));
+        assert!(!newer(dev, "1.13.9-dev.202611131541+60ff4ce2"));
+        assert!(!newer(dev, &format!("{dev}+60ff4ce2")));
+        assert!(!newer(&format!("{dev}+60ff4ce2"), dev));
+        // Numeric identifiers compare as numbers, alphanumeric ones as text and above numbers.
+        assert!(newer("1.0.0-dev.10", "1.0.0-dev.9"));
+        assert!(newer("1.0.0-dev.a", "1.0.0-dev.9"));
+        assert!(newer("1.0.0-beta", "1.0.0-alpha.1"));
+        assert!(!newer("not a version", "1.0.0"));
+        assert!(!newer("1.0.0", "not a version"));
+    }
+
+    #[test]
+    fn feeds_follow_the_channel() {
+        let stable = "https://downloads.example/stable/mac/arm64/";
+        let dev = "https://downloads.example/dev/mac/arm64/";
+        assert_eq!(channel_feed(stable, UpdateChannel::Dev), dev);
+        assert_eq!(channel_feed(dev, UpdateChannel::Stable), stable);
+        assert_eq!(channel_feed(stable, UpdateChannel::Stable), stable);
+        assert_eq!(UpdateChannel::Stable.feeds(), [UpdateChannel::Stable]);
+        assert_eq!(
+            UpdateChannel::Dev.feeds(),
+            [UpdateChannel::Stable, UpdateChannel::Dev]
+        );
+    }
+
+    #[test]
+    fn the_newest_release_across_feeds_wins_and_a_missing_feed_is_skipped() {
+        fn version<'a>(release: &'a &str) -> &'a str {
+            release
+        }
+        // A stable host on 1.13.8 and a development host both see the newest answer.
+        assert_eq!(
+            newest(vec![Ok("1.13.9"), Ok("1.13.9-dev.202611131540")], version).unwrap(),
+            "1.13.9"
+        );
+        assert_eq!(
+            newest(vec![Ok("1.13.8"), Ok("1.13.9-dev.202611131540")], version).unwrap(),
+            "1.13.9-dev.202611131540"
+        );
+        assert_eq!(
+            newest(vec![Ok("1.13.8"), Err("no dev feed".into())], version).unwrap(),
+            "1.13.8"
+        );
+        assert!(newest::<&str>(vec![Err("offline".into())], version).is_err());
     }
 }

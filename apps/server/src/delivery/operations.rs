@@ -38,9 +38,9 @@ use crate::{
             self, ActionsRunStatus, Github, GithubFailure, MergeDisposition, MergeResult,
             Observation, PullRequest,
         },
-        merge_block::{self, MergeAbilities},
         github_triggers_dispatches::{self, DeliveryPolicy},
         github_triggers_inspection::{self, PullRequestInspection},
+        merge_block::{self, MergeAbilities},
     },
     platform::database::{DatabaseResult, OpenMode, SuplexDatabase},
     tasks::{
@@ -3554,7 +3554,14 @@ pub(crate) mod tests {
         assert!(prompt.contains(r#""label":"Continue after a rule change""#));
         assert!(prompt.contains(r#""label":"Cancel the task""#));
         observed.block_reasons.clear();
-        assert!(!DeliveryOperations::changed_delivery_prompt(&wait, &observed, MergeAbilities::default()).contains("ask_human"));
+        assert!(
+            !DeliveryOperations::changed_delivery_prompt(
+                &wait,
+                &observed,
+                MergeAbilities::default()
+            )
+            .contains("ask_human")
+        );
     }
 
     #[test]

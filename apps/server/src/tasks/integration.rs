@@ -348,8 +348,9 @@ pub fn derive_action_required(
             human_approval_required: false,
             owner: ActionOwner::Upstream,
             reason_code: ActionReason::BlockedByDependency,
-            summary: "An upstream task is not integrated. Wait for the upstream pull request to merge."
-                .into(),
+            summary:
+                "An upstream task is not integrated. Wait for the upstream pull request to merge."
+                    .into(),
             suggested_commands: vec![],
             evidence_at: integration.observed_at.clone(),
         });
@@ -594,7 +595,10 @@ mod tests {
         let task = task(TaskStatus::Delivered, DeliveryTarget::PullRequestReady);
         let reason = MergeBlockReason::UnsignedCommits {
             branch: "main".into(),
-            shas: vec![format!("abc1234{}", "0".repeat(33)), format!("def5678{}", "0".repeat(33))],
+            shas: vec![
+                format!("abc1234{}", "0".repeat(33)),
+                format!("def5678{}", "0".repeat(33)),
+            ],
         };
         let mut observed = Observation {
             exists: true,
@@ -623,7 +627,10 @@ mod tests {
             json!({"total": 2, "pending": 0, "failing": 0, "successful": 2, "skipped": 1})
         );
         let action = derive_action_required(&task, &integration, None).unwrap();
-        assert_eq!((action.owner, action.reason_code), (ActionOwner::Human, ActionReason::WaitingHuman));
+        assert_eq!(
+            (action.owner, action.reason_code),
+            (ActionOwner::Human, ActionReason::WaitingHuman)
+        );
         assert_eq!(
             action.summary,
             "GitHub blocks the merge. Branch `main` requires signed commits and 2 commits are unsigned (abc1234, def5678)."
@@ -632,7 +639,9 @@ mod tests {
         observed.review_decision = Some("REVIEW_REQUIRED".into());
         let integration = derive_task_integration(&task, Some(&observed), None, "now");
         assert_eq!(
-            derive_action_required(&task, &integration, None).unwrap().reason_code,
+            derive_action_required(&task, &integration, None)
+                .unwrap()
+                .reason_code,
             ActionReason::PendingReview
         );
     }

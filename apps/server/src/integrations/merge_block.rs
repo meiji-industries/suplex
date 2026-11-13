@@ -82,7 +82,14 @@ impl MergeBlockReason {
         match self {
             Self::UnsignedCommits { .. } => abilities.can_sign,
             Self::MissingRequiredCheck { .. } => true,
-            _ => false,
+            Self::RequiredReview { .. }
+            | Self::UnresolvedConversations { .. }
+            | Self::MergeQueueRequired { .. }
+            | Self::LinearHistory { .. }
+            | Self::DeploymentRequired { .. }
+            | Self::BranchLocked { .. }
+            | Self::RulesUnreadable { .. }
+            | Self::Unknown { .. } => false,
         }
     }
 
@@ -156,7 +163,12 @@ fn plural(count: usize, one: &str, many: &str) -> String {
 
 fn list(items: &[String]) -> String {
     const SHOWN: usize = 5;
-    let mut text = items.iter().take(SHOWN).cloned().collect::<Vec<_>>().join(", ");
+    let mut text = items
+        .iter()
+        .take(SHOWN)
+        .cloned()
+        .collect::<Vec<_>>()
+        .join(", ");
     if items.len() > SHOWN {
         text.push_str(&format!(", and {} more", items.len() - SHOWN));
     }
@@ -168,7 +180,10 @@ pub fn describe(reason: &MergeBlockReason) -> String {
     let subject = branch_subject(reason.branch());
     match reason {
         MergeBlockReason::UnsignedCommits { shas, .. } => {
-            let shorts = shas.iter().map(|sha| short(sha).to_owned()).collect::<Vec<_>>();
+            let shorts = shas
+                .iter()
+                .map(|sha| short(sha).to_owned())
+                .collect::<Vec<_>>();
             let verb = if shas.len() == 1 { "is" } else { "are" };
             format!(
                 "{subject} requires signed commits and {} {verb} unsigned ({}).",
@@ -208,7 +223,11 @@ pub fn describe(reason: &MergeBlockReason) -> String {
             let verb = if *count == 1 { "is" } else { "are" };
             format!(
                 "{subject} requires resolved conversations, and {} {verb} open.",
-                plural(*count as usize, "review conversation", "review conversations")
+                plural(
+                    *count as usize,
+                    "review conversation",
+                    "review conversations"
+                )
             )
         }
         MergeBlockReason::MergeQueueRequired { .. } => {
@@ -217,9 +236,9 @@ pub fn describe(reason: &MergeBlockReason) -> String {
         MergeBlockReason::LinearHistory { .. } => format!(
             "{subject} requires linear history, and the repository allows only merge commits."
         ),
-        MergeBlockReason::DeploymentRequired { environment, .. } => format!(
-            "{subject} requires a successful deployment to `{environment}` before a merge."
-        ),
+        MergeBlockReason::DeploymentRequired { environment, .. } => {
+            format!("{subject} requires a successful deployment to `{environment}` before a merge.")
+        }
         MergeBlockReason::BranchLocked { .. } => {
             format!("{subject} is locked, so GitHub accepts no merge into it.")
         }
@@ -329,7 +348,9 @@ pub fn block_question(
                     ),
                 ))
             }
-            _ => None,
+            MergeBlockReason::UnsignedCommits { .. }
+            | MergeBlockReason::LinearHistory { .. }
+            | MergeBlockReason::BranchLocked { .. } => None,
         };
         if let Some(repair) = repair
             && !repairs
@@ -604,7 +625,9 @@ pub fn requirements(
         required.linear_history |= on(&classic.required_linear_history);
         required.locked |= on(&classic.lock_branch);
         if let Some(reviews) = &classic.required_pull_request_reviews {
-            required.approvals = required.approvals.max(reviews.required_approving_review_count);
+            required.approvals = required
+                .approvals
+                .max(reviews.required_approving_review_count);
             required.code_owner_review |= reviews.require_code_owner_reviews;
         }
         if let Some(checks) = &classic.required_status_checks {
@@ -641,7 +664,9 @@ pub fn requirements(
         }
     }
     required.contexts.retain(|context| !context.is_empty());
-    required.deployments.retain(|environment| !environment.is_empty());
+    required
+        .deployments
+        .retain(|environment| !environment.is_empty());
     required
 }
 
@@ -680,12 +705,9 @@ impl BlockFacts {
 /// Suplex then adds `rules_unreadable` and never guesses the rule.
 pub fn diagnose(observed: &Observation, facts: &BlockFacts) -> Vec<MergeBlockReason> {
     let branch = facts.branch.clone();
-    let required = requirements(
-        facts.classic.read(),
-        facts.rules.read().map(Vec::as_slice),
-    );
-    let mut incomplete = matches!(facts.classic, Fetched::Unreadable)
-        || matches!(facts.rules, Fetched::Unreadable);
+    let required = requirements(facts.classic.read(), facts.rules.read().map(Vec::as_slice));
+    let mut incomplete =
+        matches!(facts.classic, Fetched::Unreadable) || matches!(facts.rules, Fetched::Unreadable);
     let mut reasons = Vec::new();
     if required.signatures {
         match facts.commits.read() {
@@ -881,14 +903,20 @@ fn repo_path(repository: &str, tail: &[&str]) -> String {
 impl Github {
     async fn read_json<T: serde::de::DeserializeOwned>(&self, path: &str) -> Fetched<T> {
         match self.raw("GET", path, None).await {
-            Ok((200..=299, body)) => serde_json::from_str(&body).map_or(Fetched::Unreadable, Fetched::Read),
-            _ => Fetched::Unreadable,
+            Ok((200..=299, body)) => {
+                serde_json::from_str(&body).map_or(Fetched::Unreadable, Fetched::Read)
+            }
+            Ok(_) | Err(_) => Fetched::Unreadable,
         }
     }
 
     /// Classic branch protection. GitHub answers 404 "Branch not protected"
     /// for a branch without protection. Any other 404 or a 403 is unreadable.
-    async fn classic_protection(&self, repository: &str, branch: &str) -> Fetched<ClassicProtection> {
+    async fn classic_protection(
+        &self,
+        repository: &str,
+        branch: &str,
+    ) -> Fetched<ClassicProtection> {
         let path = repo_path(repository, &["branches", branch, "protection"]);
         match self.raw("GET", &path, None).await {
             Ok((200..=299, body)) => {
@@ -900,7 +928,7 @@ impl Github {
             {
                 Fetched::Read(ClassicProtection::default())
             }
-            _ => Fetched::Unreadable,
+            Ok(_) | Err(_) => Fetched::Unreadable,
         }
     }
 
@@ -944,7 +972,7 @@ impl Github {
                         return Fetched::Read(commits);
                     }
                 }
-                _ => return Fetched::Unreadable,
+                Fetched::Unreadable | Fetched::Skipped => return Fetched::Unreadable,
             }
         }
         Fetched::Read(commits)
@@ -993,11 +1021,14 @@ impl Github {
     ) -> Fetched<bool> {
         let path = query(
             &repo_path(repository, &["deployments"]),
-            &[("sha", head_sha), ("environment", environment), ("per_page", "1")],
+            &[
+                ("sha", head_sha),
+                ("environment", environment),
+                ("per_page", "1"),
+            ],
         );
-        let deployments = match self.read_json::<Vec<Deployment>>(&path).await {
-            Fetched::Read(deployments) => deployments,
-            _ => return Fetched::Unreadable,
+        let Fetched::Read(deployments) = self.read_json::<Vec<Deployment>>(&path).await else {
+            return Fetched::Unreadable;
         };
         let Some(deployment) = deployments.first() else {
             return Fetched::Read(false);
@@ -1015,14 +1046,17 @@ impl Github {
                     .first()
                     .is_some_and(|status| status.state == "success"),
             ),
-            _ => Fetched::Unreadable,
+            Fetched::Unreadable | Fetched::Skipped => Fetched::Unreadable,
         }
     }
 
     /// Read the facts each applicable rule tests. A failed read degrades to
     /// `Unreadable`; it never fails the observation.
     pub async fn block_facts(&self, repository: &str, observed: &Observation) -> BlockFacts {
-        let Some(branch) = observed.base_branch.as_deref().filter(|branch| !branch.is_empty())
+        let Some(branch) = observed
+            .base_branch
+            .as_deref()
+            .filter(|branch| !branch.is_empty())
         else {
             return BlockFacts::unreadable("");
         };
@@ -1046,17 +1080,23 @@ impl Github {
         let mut deployments = Vec::new();
         for environment in &required.deployments {
             let fetched = match observed.head_sha.as_deref() {
-                Some(head) => self.deployment_succeeded(repository, head, environment).await,
+                Some(head) => {
+                    self.deployment_succeeded(repository, head, environment)
+                        .await
+                }
                 None => Fetched::Unreadable,
             };
             deployments.push((environment.clone(), fetched));
         }
         let linear_merge_allowed = if required.linear_history {
-            match self.read_json::<MergeMethods>(&repo_path(repository, &[])).await {
+            match self
+                .read_json::<MergeMethods>(&repo_path(repository, &[]))
+                .await
+            {
                 Fetched::Read(methods) => {
                     Fetched::Read(methods.allow_squash_merge || methods.allow_rebase_merge)
                 }
-                _ => Fetched::Unreadable,
+                Fetched::Unreadable | Fetched::Skipped => Fetched::Unreadable,
             }
         } else {
             Fetched::Skipped
@@ -1154,7 +1194,12 @@ mod tests {
     fn kinds(reasons: &[MergeBlockReason]) -> Vec<String> {
         reasons
             .iter()
-            .map(|reason| serde_json::to_value(reason).unwrap()["kind"].as_str().unwrap().to_owned())
+            .map(|reason| {
+                serde_json::to_value(reason).unwrap()["kind"]
+                    .as_str()
+                    .unwrap()
+                    .to_owned()
+            })
             .collect()
     }
 
@@ -1191,7 +1236,9 @@ mod tests {
         let mut observed = blocked();
         observed.review_decision = Some("REVIEW_REQUIRED".into());
         let mut facts = facts();
-        facts.classic = classic(json!({"required_pull_request_reviews": {"required_approving_review_count": 2, "require_code_owner_reviews": false}}));
+        facts.classic = classic(
+            json!({"required_pull_request_reviews": {"required_approving_review_count": 2, "require_code_owner_reviews": false}}),
+        );
         let reasons = diagnose(&observed, &facts);
         assert_eq!(
             reasons,
@@ -1203,12 +1250,17 @@ mod tests {
                 changes_requested: false,
             }]
         );
-        assert_eq!(describe(&reasons[0]), "Branch `main` requires 2 approving reviews.");
+        assert_eq!(
+            describe(&reasons[0]),
+            "Branch `main` requires 2 approving reviews."
+        );
         // Code owner review with zero approvals: a null decision, an open request, BLOCKED.
         observed.review_decision = None;
         observed.code_owner_reviewers = vec!["octo".into()];
         facts.classic = Fetched::Read(ClassicProtection::default());
-        facts.rules = rules(json!([{"type": "pull_request", "parameters": {"required_approving_review_count": 0, "require_code_owner_review": true, "allowed_merge_methods": ["squash"]}}]));
+        facts.rules = rules(
+            json!([{"type": "pull_request", "parameters": {"required_approving_review_count": 0, "require_code_owner_review": true, "allowed_merge_methods": ["squash"]}}]),
+        );
         let reasons = diagnose(&observed, &facts);
         assert_eq!(
             reasons,
@@ -1270,16 +1322,31 @@ mod tests {
     #[test]
     fn missing_required_checks_name_each_context_without_a_result() {
         let mut observed = blocked();
-        observed.checks.runs.push(json!({"name": "docs", "status": "successful", "conclusion": "SKIPPED"}));
+        observed
+            .checks
+            .runs
+            .push(json!({"name": "docs", "status": "successful", "conclusion": "SKIPPED"}));
         let mut facts = facts();
-        facts.classic = classic(json!({"required_status_checks": {"contexts": ["unit", "build"], "checks": [{"context": "lint", "app_id": 1}]}}));
-        facts.rules = rules(json!([{"type": "required_status_checks", "parameters": {"required_status_checks": [{"context": "docs"}, {"context": "e2e", "integration_id": 2}], "strict_required_status_checks_policy": false}}]));
+        facts.classic = classic(
+            json!({"required_status_checks": {"contexts": ["unit", "build"], "checks": [{"context": "lint", "app_id": 1}]}}),
+        );
+        facts.rules = rules(
+            json!([{"type": "required_status_checks", "parameters": {"required_status_checks": [{"context": "docs"}, {"context": "e2e", "integration_id": 2}], "strict_required_status_checks_policy": false}}]),
+        );
         let reasons = diagnose(&observed, &facts);
         let contexts = reasons
             .iter()
             .map(|reason| match reason {
                 MergeBlockReason::MissingRequiredCheck { context, .. } => context.as_str(),
-                other => panic!("{other:?}"),
+                other @ (MergeBlockReason::UnsignedCommits { .. }
+                | MergeBlockReason::RequiredReview { .. }
+                | MergeBlockReason::UnresolvedConversations { .. }
+                | MergeBlockReason::MergeQueueRequired { .. }
+                | MergeBlockReason::LinearHistory { .. }
+                | MergeBlockReason::DeploymentRequired { .. }
+                | MergeBlockReason::BranchLocked { .. }
+                | MergeBlockReason::RulesUnreadable { .. }
+                | MergeBlockReason::Unknown { .. }) => panic!("{other:?}"),
             })
             .collect::<Vec<_>>();
         // A skipped required check reported a result; GitHub accepts it.
@@ -1293,30 +1360,50 @@ mod tests {
         facts.unresolved_threads = Fetched::Read(2);
         assert_eq!(
             diagnose(&blocked(), &facts),
-            [MergeBlockReason::UnresolvedConversations { branch: MAIN.into(), count: 2 }]
+            [MergeBlockReason::UnresolvedConversations {
+                branch: MAIN.into(),
+                count: 2
+            }]
         );
         facts.classic = Fetched::Read(ClassicProtection::default());
-        facts.rules = rules(json!([{"type": "pull_request", "parameters": {"required_review_thread_resolution": true}}]));
-        assert_eq!(kinds(&diagnose(&blocked(), &facts)), ["unresolved_conversations"]);
+        facts.rules = rules(
+            json!([{"type": "pull_request", "parameters": {"required_review_thread_resolution": true}}]),
+        );
+        assert_eq!(
+            kinds(&diagnose(&blocked(), &facts)),
+            ["unresolved_conversations"]
+        );
         facts.unresolved_threads = Fetched::Read(0);
         assert_eq!(kinds(&diagnose(&blocked(), &facts)), ["unknown"]);
 
         let mut facts = super::tests::facts();
-        facts.rules = rules(json!([{"type": "required_deployments", "parameters": {"required_deployment_environments": ["production"]}}]));
+        facts.rules = rules(
+            json!([{"type": "required_deployments", "parameters": {"required_deployment_environments": ["production"]}}]),
+        );
         facts.deployments = vec![("production".into(), Fetched::Read(false))];
         assert_eq!(
             diagnose(&blocked(), &facts),
-            [MergeBlockReason::DeploymentRequired { branch: MAIN.into(), environment: "production".into() }]
+            [MergeBlockReason::DeploymentRequired {
+                branch: MAIN.into(),
+                environment: "production".into()
+            }]
         );
         facts.deployments = vec![("production".into(), Fetched::Read(true))];
         assert_eq!(kinds(&diagnose(&blocked(), &facts)), ["unknown"]);
 
         let mut facts = super::tests::facts();
-        facts.rules = rules(json!([{"type": "merge_queue", "parameters": {"merge_method": "SQUASH"}}]));
-        assert_eq!(kinds(&diagnose(&blocked(), &facts)), ["merge_queue_required"]);
+        facts.rules =
+            rules(json!([{"type": "merge_queue", "parameters": {"merge_method": "SQUASH"}}]));
+        assert_eq!(
+            kinds(&diagnose(&blocked(), &facts)),
+            ["merge_queue_required"]
+        );
 
         for (classic_rules, ruleset) in [
-            (json!({"required_linear_history": {"enabled": true}}), json!([])),
+            (
+                json!({"required_linear_history": {"enabled": true}}),
+                json!([]),
+            ),
             (json!({}), json!([{"type": "required_linear_history"}])),
         ] {
             let mut facts = super::tests::facts();
@@ -1330,7 +1417,10 @@ mod tests {
 
         for (classic_rules, ruleset) in [
             (json!({"lock_branch": {"enabled": true}}), json!([])),
-            (json!({}), json!([{"type": "update", "parameters": {"update_allows_fetch_and_merge": false}}])),
+            (
+                json!({}),
+                json!([{"type": "update", "parameters": {"update_allows_fetch_and_merge": false}}]),
+            ),
         ] {
             let mut facts = super::tests::facts();
             facts.classic = classic(classic_rules);
@@ -1350,7 +1440,10 @@ mod tests {
         assert_eq!(kinds(&diagnose(&blocked(), &facts)), ["unknown"]);
         let mut recomputing = blocked();
         recomputing.merge_state_status = Some("UNKNOWN".into());
-        assert!(diagnose(&recomputing, &facts).is_empty(), "UNKNOWN can be a recomputation");
+        assert!(
+            diagnose(&recomputing, &facts).is_empty(),
+            "UNKNOWN can be a recomputation"
+        );
     }
 
     #[test]
@@ -1358,11 +1451,22 @@ mod tests {
         let mut facts = facts();
         facts.classic = Fetched::Unreadable;
         let reasons = diagnose(&blocked(), &facts);
-        assert_eq!(reasons, [MergeBlockReason::RulesUnreadable { branch: MAIN.into() }]);
-        assert!(describe(&reasons[0]).starts_with("Suplex could not read branch rules for branch `main`."));
+        assert_eq!(
+            reasons,
+            [MergeBlockReason::RulesUnreadable {
+                branch: MAIN.into()
+            }]
+        );
+        assert!(
+            describe(&reasons[0])
+                .starts_with("Suplex could not read branch rules for branch `main`.")
+        );
         // A concrete rule from the readable source stays, and the gap is named.
         facts.rules = rules(json!([{"type": "merge_queue"}]));
-        assert_eq!(kinds(&diagnose(&blocked(), &facts)), ["merge_queue_required", "rules_unreadable"]);
+        assert_eq!(
+            kinds(&diagnose(&blocked(), &facts)),
+            ["merge_queue_required", "rules_unreadable"]
+        );
         assert_eq!(
             kinds(&diagnose(&blocked(), &BlockFacts::unreadable(""))),
             ["rules_unreadable"]
@@ -1380,7 +1484,9 @@ mod tests {
             "required_status_checks": {"contexts": ["build"]},
             "required_conversation_resolution": {"enabled": true},
         }));
-        facts.rules = rules(json!([{"type": "merge_queue"}, {"type": "required_linear_history"}, {"type": "required_deployments", "parameters": {"required_deployment_environments": ["staging"]}}]));
+        facts.rules = rules(
+            json!([{"type": "merge_queue"}, {"type": "required_linear_history"}, {"type": "required_deployments", "parameters": {"required_deployment_environments": ["staging"]}}]),
+        );
         facts.commits = commits(&[(&sha("3333"), false)]);
         facts.unresolved_threads = Fetched::Read(1);
         facts.deployments = vec![("staging".into(), Fetched::Read(false))];
@@ -1400,13 +1506,24 @@ mod tests {
             ]
         );
         let question = block_question(12, &reasons, MergeAbilities::default());
-        assert!(question.question.starts_with("GitHub blocks pull request 12 for 8 reasons."));
+        assert!(
+            question
+                .question
+                .starts_with("GitHub blocks pull request 12 for 8 reasons.")
+        );
         for reason in &reasons {
             assert!(question.question.contains(&describe(reason)), "{reason:?}");
         }
         assert!(question.question.ends_with("How do you want to continue?"));
         assert!((2..=4).contains(&question.options.len()));
-        assert_eq!(question.options.iter().filter(|option| option.recommended).count(), 1);
+        assert_eq!(
+            question
+                .options
+                .iter()
+                .filter(|option| option.recommended)
+                .count(),
+            1
+        );
         assert_eq!(question.options.last().unwrap().label, "Cancel the task");
     }
 
@@ -1424,7 +1541,10 @@ mod tests {
                 .collect::<Vec<_>>()
         };
         assert_eq!(
-            labels(MergeAbilities { can_sign: true, can_merge_as_admin: true }),
+            labels(MergeAbilities {
+                can_sign: true,
+                can_merge_as_admin: true
+            }),
             [
                 ("Repair the commit signatures".to_owned(), true),
                 ("Continue with an administrator merge".to_owned(), false),
@@ -1444,7 +1564,11 @@ mod tests {
             question.question,
             "GitHub blocks pull request 12: branch `main` requires signed commits and 2 commits are unsigned (abc1234, def5678). How do you want to continue?"
         );
-        assert!(question.options[0].description.contains("signed commits rule for branch `main`"));
+        assert!(
+            question.options[0]
+                .description
+                .contains("signed commits rule for branch `main`")
+        );
         // No code change repairs it without a signing key.
         let instruction = coordinator_instruction(12, &reasons, MergeAbilities::default());
         assert!(instruction.contains("A code change cannot repair this block."));
@@ -1452,7 +1576,10 @@ mod tests {
         let instruction = coordinator_instruction(
             12,
             &reasons,
-            MergeAbilities { can_sign: true, can_merge_as_admin: false },
+            MergeAbilities {
+                can_sign: true,
+                can_merge_as_admin: false,
+            },
         );
         assert!(!instruction.contains("cannot repair"));
     }
@@ -1535,12 +1662,20 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(
-            (observed.checks.total, observed.checks.successful, observed.checks.failing, observed.checks.pending),
+            (
+                observed.checks.total,
+                observed.checks.successful,
+                observed.checks.failing,
+                observed.checks.pending
+            ),
             (4, 4, 0, 0)
         );
         assert_eq!(
             observed.block_reasons,
-            [MergeBlockReason::UnsignedCommits { branch: MAIN.into(), shas: vec![first, second] }]
+            [MergeBlockReason::UnsignedCommits {
+                branch: MAIN.into(),
+                shas: vec![first, second]
+            }]
         );
         let question = block_question(12, &observed.block_reasons, MergeAbilities::default());
         assert!(question.question.contains("signed commits"));
@@ -1556,7 +1691,12 @@ mod tests {
             serde_json::to_value(&observed).unwrap()["blockReasons"][0]["kind"],
             "unsigned_commits"
         );
-        assert_eq!(requests.lock().unwrap().len(), 4, "{:?}", requests.lock().unwrap());
+        assert_eq!(
+            requests.lock().unwrap().len(),
+            4,
+            "{:?}",
+            requests.lock().unwrap()
+        );
         server.abort();
     }
 
@@ -1571,9 +1711,18 @@ mod tests {
             vec![("reviewRequests", observation("BLOCKED", motivating_checks()))],
         )
         .await;
-        let observed = github.observe_pull_request("owner/repo", "task", Some(12)).await.unwrap();
+        let observed = github
+            .observe_pull_request("owner/repo", "task", Some(12))
+            .await
+            .unwrap();
         assert_eq!(kinds(&observed.block_reasons), ["unknown"]);
-        assert!(!requests.lock().unwrap().iter().any(|path| path.contains("/commits")));
+        assert!(
+            !requests
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|path| path.contains("/commits"))
+        );
         server.abort();
     }
 
@@ -1581,18 +1730,35 @@ mod tests {
     async fn unreadable_protection_and_failed_reads_degrade_without_failing_the_observation() {
         use crate::integrations::github_delivery::tests::counted_fake_api;
         for (status, body, rules_status) in [
-            (403, json!({"message": "Must have admin rights to Repository."}), 200),
+            (
+                403,
+                json!({"message": "Must have admin rights to Repository."}),
+                200,
+            ),
             (404, json!({"message": "Not Found"}), 200),
             (500, json!({"message": "Server Error"}), 500),
         ] {
             let (github, server, _) = counted_fake_api(
-                vec![(PROTECTION_PATH, status, body), (RULES_PATH, rules_status, json!([]))],
-                vec![("reviewRequests", observation("BLOCKED", motivating_checks()))],
+                vec![
+                    (PROTECTION_PATH, status, body),
+                    (RULES_PATH, rules_status, json!([])),
+                ],
+                vec![(
+                    "reviewRequests",
+                    observation("BLOCKED", motivating_checks()),
+                )],
             )
             .await;
-            let observed = github.observe_pull_request("owner/repo", "task", Some(12)).await.unwrap();
+            let observed = github
+                .observe_pull_request("owner/repo", "task", Some(12))
+                .await
+                .unwrap();
             assert!(observed.exists);
-            assert_eq!(kinds(&observed.block_reasons), ["rules_unreadable"], "{status}");
+            assert_eq!(
+                kinds(&observed.block_reasons),
+                ["rules_unreadable"],
+                "{status}"
+            );
             assert!(merge_block_text(&observed).contains("could not read branch rules"));
             server.abort();
         }
@@ -1614,13 +1780,27 @@ mod tests {
             ("BLOCKED", failing),
         ] {
             let (github, server, requests) = counted_fake_api(
-                vec![(PROTECTION_PATH, 200, json!({"required_signatures": {"enabled": true}})), (RULES_PATH, 200, json!([]))],
+                vec![
+                    (
+                        PROTECTION_PATH,
+                        200,
+                        json!({"required_signatures": {"enabled": true}}),
+                    ),
+                    (RULES_PATH, 200, json!([])),
+                ],
                 vec![("reviewRequests", observation(state, checks))],
             )
             .await;
-            let observed = github.observe_pull_request("owner/repo", "task", Some(12)).await.unwrap();
+            let observed = github
+                .observe_pull_request("owner/repo", "task", Some(12))
+                .await
+                .unwrap();
             assert!(observed.block_reasons.is_empty());
-            assert_eq!(requests.lock().unwrap().len(), 1, "{state}: only the observation");
+            assert_eq!(
+                requests.lock().unwrap().len(),
+                1,
+                "{state}: only the observation"
+            );
             server.abort();
         }
     }
@@ -1643,15 +1823,30 @@ mod tests {
             ],
         )
         .await;
-        let observed = github.observe_pull_request("owner/repo", "task", Some(12)).await.unwrap();
+        let observed = github
+            .observe_pull_request("owner/repo", "task", Some(12))
+            .await
+            .unwrap();
         assert_eq!(
             observed.block_reasons,
             [
-                MergeBlockReason::UnresolvedConversations { branch: MAIN.into(), count: 2 },
-                MergeBlockReason::DeploymentRequired { branch: MAIN.into(), environment: "production".into() },
+                MergeBlockReason::UnresolvedConversations {
+                    branch: MAIN.into(),
+                    count: 2
+                },
+                MergeBlockReason::DeploymentRequired {
+                    branch: MAIN.into(),
+                    environment: "production".into()
+                },
             ]
         );
-        assert!(!requests.lock().unwrap().iter().any(|path| path.contains("/commits")));
+        assert!(
+            !requests
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|path| path.contains("/commits"))
+        );
         server.abort();
     }
 
@@ -1674,14 +1869,25 @@ mod tests {
             ],
         )
         .await;
-        let MergeResult::Disposition { disposition, message, reasons } =
-            github.merge_conditionally("owner/repo", 12, &head, false).await.unwrap()
+        let MergeResult::Disposition {
+            disposition,
+            message,
+            reasons,
+        } = github
+            .merge_conditionally("owner/repo", 12, &head, false)
+            .await
+            .unwrap()
         else {
             panic!("the merge is refused");
         };
         assert_eq!(disposition, MergeDisposition::Blocked);
         assert_eq!(kinds(&reasons), ["unsigned_commits"]);
-        assert!(message.contains("Branch `main` requires signed commits and 1 commit is unsigned (abc1234)."), "{message}");
+        assert!(
+            message.contains(
+                "Branch `main` requires signed commits and 1 commit is unsigned (abc1234)."
+            ),
+            "{message}"
+        );
         assert!(!message.contains("Merge state is"));
         server.abort();
     }

@@ -909,8 +909,12 @@ mod tests {
         observed.viewer_can_merge_as_admin = false;
         // An unread or unexplained rule is no evidence of a block.
         for reason in [
-            MergeBlockReason::RulesUnreadable { branch: "main".into() },
-            MergeBlockReason::Unknown { branch: "main".into() },
+            MergeBlockReason::RulesUnreadable {
+                branch: "main".into(),
+            },
+            MergeBlockReason::Unknown {
+                branch: "main".into(),
+            },
         ] {
             observed.block_reasons = vec![reason];
             assert_eq!(merge_blocker(Some(&observed), None, Some(&head)), None);
@@ -928,7 +932,9 @@ mod tests {
             },
         ];
         let blocker = merge_blocker(Some(&observed), None, Some(&head)).unwrap();
-        assert!(blocker.starts_with("GitHub requires a review decision. Branch `main` requires signed commits"));
+        assert!(blocker.starts_with(
+            "GitHub requires a review decision. Branch `main` requires signed commits"
+        ));
         assert!(blocker.ends_with("Branch `main` requires an approving review."));
     }
 
@@ -941,15 +947,27 @@ mod tests {
         observed.block_reasons = vec![unsigned("main")];
         assert!(needs_reconciliation(Some(&observed)));
         let prompt = reconciliation_prompt("main", &observed, MergeAbilities::default());
-        assert!(prompt.contains("Branch `main` requires signed commits and 1 commit is unsigned (abc1234)."));
+        assert!(
+            prompt.contains(
+                "Branch `main` requires signed commits and 1 commit is unsigned (abc1234)."
+            )
+        );
         assert!(prompt.contains("A code change cannot repair this block."));
-        assert!(prompt.contains("\"question\":\"GitHub blocks pull request 7: branch `main` requires signed commits"));
-        assert!(!prompt.contains("Integrate the current main head"), "{prompt}");
+        assert!(prompt.contains(
+            "\"question\":\"GitHub blocks pull request 7: branch `main` requires signed commits"
+        ));
+        assert!(
+            !prompt.contains("Integrate the current main head"),
+            "{prompt}"
+        );
         // A Worker that can sign repairs it with a change to the task branch.
         let prompt = reconciliation_prompt(
             "main",
             &observed,
-            MergeAbilities { can_sign: true, can_merge_as_admin: false },
+            MergeAbilities {
+                can_sign: true,
+                can_merge_as_admin: false,
+            },
         );
         assert!(prompt.contains("Repair the commit signatures"));
         assert!(prompt.contains("Integrate the current main head"));

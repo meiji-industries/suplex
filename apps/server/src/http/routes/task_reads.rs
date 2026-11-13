@@ -126,7 +126,13 @@ async fn checks_with_github(
                 Some("open") => json!("draft"),
                 other => json!(other),
             };
-            json!({"available": observation.exists, "runs": observation.checks.runs, "pullRequestState": pull_request_state})
+            // One sentence for each branch rule that blocks the merge.
+            let merge_blocks = observation
+                .block_reasons
+                .iter()
+                .map(crate::integrations::merge_block::describe)
+                .collect::<Vec<_>>();
+            json!({"available": observation.exists, "runs": observation.checks.runs, "pullRequestState": pull_request_state, "mergeBlocks": merge_blocks})
         }
         // GitHub owns the checks. When it cannot report them, for example
         // with an unusable credential, an unreachable API, a rate limit, or an

@@ -1208,6 +1208,7 @@ pub struct AgentImplementation {
 async fn with_integration(
     projections: Vec<AgentTaskProjection>,
     stored: Targets,
+    mut github: Option<Result<Github, String>>,
 ) -> Vec<AgentTask> {
     let Targets { targets, pool } = stored;
     let observed_at = crate::shared::time::now_millis_rfc3339();
@@ -1219,7 +1220,6 @@ async fn with_integration(
                 .collect::<Vec<_>>()
         })
         .collect::<Vec<_>>();
-    let mut github = None;
     let mut integrations = std::collections::HashMap::new();
     for task in targets.iter().chain(upstreams.iter().flatten().copied()) {
         if integrations.contains_key(&task.id) {
@@ -1264,13 +1264,25 @@ async fn with_integration(
 
 /// `readAgentApiTask`: the stored projection plus observed integration health.
 pub async fn read(state: &AppState, principal: &Principal, task_id: &str) -> DatabaseResult<Value> {
+    read_with_github(state, principal, task_id, None).await
+}
+
+/// `read` with a GitHub client the caller supplies; `None` loads the host's client.
+pub(crate) async fn read_with_github(
+    state: &AppState,
+    principal: &Principal,
+    task_id: &str,
+    github: Option<Result<Github, String>>,
+) -> DatabaseResult<Value> {
     let (projection, stored) = state.with_database(|database| {
         let projection = typed_projection(database, principal, task_id)?;
         let stored = targets(database, principal, std::slice::from_ref(&projection))?;
         Ok::<_, Box<dyn Error + Send + Sync>>((projection, stored))
     })?;
     Ok(serde_json::to_value(
-        with_integration(vec![projection], stored).await.remove(0),
+        with_integration(vec![projection], stored, github)
+            .await
+            .remove(0),
     )?)
 }
 
@@ -1288,7 +1300,7 @@ pub async fn read_list(
         );
     }
     let stored = state.with_database(|database| targets(database, principal, &tasks))?;
-    let tasks = with_integration(tasks, stored).await;
+    let tasks = with_integration(tasks, stored, None).await;
     // Integration health comes from GitHub, not the query, so the filter narrows a page already drawn.
     let tasks = tasks
         .into_iter()
@@ -3770,5 +3782,70 @@ mod retirement_admission_tests {
         });
         assert_eq!(count, 0);
         drop(first);
+    }
+}
+
+#[cfg(test)]
+mod integration_read_tests {
+    use super::*;
+    use crate::http::routes::agent_api::tests::agent;
+    use crate::integrations::github_delivery::tests::counted_fake_api;
+
+    /// GitHub blocks the pull request for unsigned commits; the task read names the rule.
+    #[tokio::test]
+    async fn a_task_read_exposes_the_merge_block_reasons() {
+        let fixture = agent().await;
+        let task = fixture.create("Blocked merge", "blocked-merge-001").await;
+        let id = task["id"].as_str().unwrap().to_owned();
+        let head = "a".repeat(40);
+        let unsigned = format!("abc1234{}", "0".repeat(33));
+        fixture.server.state.with_database(|database| {
+            database.connection().execute(
+                "UPDATE suplex_task_controls SET pull_request_json = ?1 WHERE task_id = ?2",
+                rusqlite::params![json!({"repository": "acme/demo", "number": 7, "url": "https://github.com/acme/demo/pull/7", "headSha": head, "state": "open", "mergedAt": null}).to_string(), id],
+            ).unwrap();
+        });
+        let principal = fixture.server.state.with_database(|database| {
+            external_agents::authenticate(database, &fixture.credential, Utc::now()).unwrap()
+        });
+        let run = |name: &str, conclusion: &str| json!({"__typename": "CheckRun", "name": name, "status": "COMPLETED", "conclusion": conclusion});
+        let observation = json!({"data": {"repository": {"pullRequest": {
+            "number": 7, "url": "https://github.com/acme/demo/pull/7", "state": "OPEN", "isDraft": false,
+            "headRefOid": head, "baseRefOid": "b".repeat(40), "baseRefName": "main",
+            "mergeable": "MERGEABLE", "mergeStateStatus": "BLOCKED", "autoMergeRequest": null,
+            "reviewDecision": null, "viewerCanMergeAsAdmin": false, "reviewRequests": {"nodes": []},
+            "author": {"login": "octo"}, "changedFiles": 1, "additions": 1, "deletions": 0,
+            "commits": {"nodes": [{"commit": {"statusCheckRollup": {"contexts": {"nodes": [run("unit", "SUCCESS"), run("docs", "SKIPPED")]}}}}]},
+        }}}});
+        let (github, server, _) = counted_fake_api(
+            vec![
+                ("/repos/acme/demo/branches/main/protection", 200, json!({"required_signatures": {"enabled": true}})),
+                ("/repos/acme/demo/rules/branches/main", 200, json!([])),
+                ("/repos/acme/demo/pulls/7/commits?per_page=100&page=1", 200, json!([{"sha": unsigned, "commit": {"verification": {"verified": false, "reason": "unsigned"}}}])),
+            ],
+            vec![("reviewRequests", observation)],
+        )
+        .await;
+        let read = read_with_github(&fixture.server.state, &principal, &id, Some(Ok(github)))
+            .await
+            .unwrap();
+        let pull = &read["integration"]["pullRequest"];
+        assert_eq!(
+            pull["blockReasons"],
+            json!([{"kind": "unsigned_commits", "branch": "main", "shas": [unsigned]}])
+        );
+        assert_eq!(
+            pull["checks"],
+            json!({"total": 2, "pending": 0, "failing": 0, "successful": 2, "skipped": 1})
+        );
+        assert_eq!(read["actionRequired"]["owner"], "human");
+        assert!(
+            read["actionRequired"]["summary"]
+                .as_str()
+                .unwrap()
+                .contains("requires signed commits and 1 commit is unsigned (abc1234)"),
+            "{read}"
+        );
+        server.abort();
     }
 }

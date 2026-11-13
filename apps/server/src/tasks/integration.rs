@@ -8,7 +8,8 @@ use serde::Serialize;
 use ts_rs::TS;
 
 use crate::http::contracts::typed::tasks::TaskSource;
-use crate::integrations::github_delivery::{Observation, review_blocks_merge};
+use crate::integrations::github_delivery::Observation;
+use crate::integrations::merge_block::{self, MergeBlockReason};
 use crate::tasks::control::TaskStatus;
 use crate::tasks::response::TaskResponse;
 
@@ -80,6 +81,8 @@ pub struct IntegrationPullRequest {
     pub review_decision: Option<String>,
     pub code_owner_reviewers: Vec<String>,
     pub checks: CheckCounts,
+    /// Each branch rule that blocks the merge, when GitHub blocks it for no check.
+    pub block_reasons: Vec<MergeBlockReason>,
 }
 
 #[derive(Clone, Debug, Default, Serialize, TS)]
@@ -87,7 +90,10 @@ pub struct CheckCounts {
     pub total: u64,
     pub pending: u64,
     pub failing: u64,
+    /// Passed, neutral, and skipped checks. GitHub accepts each of them.
     pub successful: u64,
+    /// The skipped checks, which `successful` also counts.
+    pub skipped: u64,
 }
 
 /// Suplex does not observe deployed runtimes, so it never claims that a change is live.
@@ -106,7 +112,7 @@ pub struct ActionRequired {
     pub human_approval_required: bool,
     pub owner: ActionOwner,
     pub reason_code: ActionReason,
-    pub summary: &'static str,
+    pub summary: String,
     pub suggested_commands: Vec<String>,
     pub evidence_at: String,
 }
@@ -167,6 +173,12 @@ pub fn derive_task_integration(
         pending: observation.checks.pending,
         failing: observation.checks.failing,
         successful: observation.checks.successful,
+        skipped: observation
+            .checks
+            .runs
+            .iter()
+            .filter(|run| run["conclusion"] == "SKIPPED")
+            .count() as u64,
     });
     TaskIntegration {
         integrated,
@@ -185,6 +197,7 @@ pub fn derive_task_integration(
             code_owner_reviewers: observation
                 .map_or_else(Vec::new, |o| o.code_owner_reviewers.clone()),
             checks,
+            block_reasons: observation.map_or_else(Vec::new, |o| o.block_reasons.clone()),
         },
         observed_at: observed_at.to_owned(),
         observation: if failure_code.is_none() {
@@ -246,7 +259,7 @@ pub fn derive_action_required(
             human_approval_required,
             owner,
             reason_code,
-            summary,
+            summary: String::from(summary),
             suggested_commands,
             evidence_at: integration.observed_at.clone(),
         })
@@ -335,7 +348,9 @@ pub fn derive_action_required(
             human_approval_required: false,
             owner: ActionOwner::Upstream,
             reason_code: ActionReason::BlockedByDependency,
-            summary: "An upstream task is not integrated. Wait for the upstream pull request to merge.",
+            summary:
+                "An upstream task is not integrated. Wait for the upstream pull request to merge."
+                    .into(),
             suggested_commands: vec![],
             evidence_at: integration.observed_at.clone(),
         });
@@ -343,11 +358,15 @@ pub fn derive_action_required(
     if state == State::Absent {
         return None;
     }
-    if review_blocks_merge(
+    if merge_block::review_block(
+        &pull.block_reasons,
+        &pull.target_branch,
         pull.review_decision.as_deref(),
         pull.merge_state_status.as_deref(),
         &pull.code_owner_reviewers,
-    ) {
+    )
+    .is_some()
+    {
         return action(
             Human,
             ActionReason::PendingReview,
@@ -364,6 +383,20 @@ pub fn derive_action_required(
             vec![format!("gh pr checks {reference}")],
             false,
         );
+    }
+    if !pull.block_reasons.is_empty() {
+        return Some(ActionRequired {
+            upstream: None,
+            human_approval_required: true,
+            owner: Human,
+            reason_code: ActionReason::WaitingHuman,
+            summary: format!(
+                "GitHub blocks the merge. {}",
+                merge_block::describe_all(&pull.block_reasons)
+            ),
+            suggested_commands: vec![format!("gh pr view {reference}")],
+            evidence_at: integration.observed_at.clone(),
+        });
     }
     action(
         Human,
@@ -387,7 +420,7 @@ pub fn matches_agent_api_filter(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::tasks::control::{DeliveryTarget, PullRequestReference, PullRequestState};
     use serde_json::json;
@@ -401,6 +434,13 @@ mod tests {
         task.configuration.branch = "task".into();
         task.configuration.base_branch = "main".into();
         task
+    }
+
+    /// The action a delivered ready pull request task reports for `observation`.
+    pub(crate) fn delivered_ready_action(observation: &Observation) -> Option<ActionRequired> {
+        let task = task(TaskStatus::Delivered, DeliveryTarget::PullRequestReady);
+        let integration = derive_task_integration(&task, Some(observation), None, "now");
+        derive_action_required(&task, &integration, None)
     }
 
     #[test]
@@ -424,7 +464,7 @@ mod tests {
                 "integrated": true,
                 "pullRequest": {"state": "absent", "number": null, "url": null, "targetBranch": "main",
                     "headSha": null, "baseSha": null, "mergeable": null, "mergeStateStatus": null,
-                    "reviewDecision": null, "codeOwnerReviewers": [], "checks": {"total": 0, "pending": 0, "failing": 0, "successful": 0}},
+                    "reviewDecision": null, "codeOwnerReviewers": [], "checks": {"total": 0, "pending": 0, "failing": 0, "successful": 0, "skipped": 0}, "blockReasons": []},
                 "observedAt": "2026-09-25T00:00:00.000Z",
                 "observation": "observed",
                 "observationReason": null,
@@ -553,6 +593,63 @@ mod tests {
                 .reason_code,
             ActionReason::WaitingHuman,
             "no code owner request keeps today's reading"
+        );
+    }
+
+    #[test]
+    fn a_diagnosed_block_is_exposed_and_named_in_the_action() {
+        use crate::integrations::merge_block::MergeBlockReason;
+        let task = task(TaskStatus::Delivered, DeliveryTarget::PullRequestReady);
+        let reason = MergeBlockReason::UnsignedCommits {
+            branch: "main".into(),
+            shas: vec![
+                format!("abc1234{}", "0".repeat(33)),
+                format!("def5678{}", "0".repeat(33)),
+            ],
+        };
+        let mut observed = Observation {
+            exists: true,
+            number: Some(7),
+            state: Some("open".into()),
+            is_draft: Some(false),
+            mergeable: Some("MERGEABLE".into()),
+            merge_state_status: Some("BLOCKED".into()),
+            block_reasons: vec![reason.clone()],
+            ..Observation::default()
+        };
+        observed.checks.total = 2;
+        observed.checks.successful = 2;
+        observed.checks.runs = vec![
+            json!({"name": "unit", "status": "successful", "conclusion": "SUCCESS"}),
+            json!({"name": "docs", "status": "successful", "conclusion": "SKIPPED"}),
+        ];
+        let integration = derive_task_integration(&task, Some(&observed), None, "now");
+        let value = serde_json::to_value(&integration).unwrap();
+        assert_eq!(
+            value["pullRequest"]["blockReasons"],
+            json!([{"kind": "unsigned_commits", "branch": "main", "shas": [format!("abc1234{}", "0".repeat(33)), format!("def5678{}", "0".repeat(33))]}])
+        );
+        assert_eq!(
+            value["pullRequest"]["checks"],
+            json!({"total": 2, "pending": 0, "failing": 0, "successful": 2, "skipped": 1})
+        );
+        let action = derive_action_required(&task, &integration, None).unwrap();
+        assert_eq!(
+            (action.owner, action.reason_code),
+            (ActionOwner::Human, ActionReason::WaitingHuman)
+        );
+        assert_eq!(
+            action.summary,
+            "GitHub blocks the merge. Branch `main` requires signed commits and 2 commits are unsigned (abc1234, def5678)."
+        );
+        // A review block keeps its pending review action.
+        observed.review_decision = Some("REVIEW_REQUIRED".into());
+        let integration = derive_task_integration(&task, Some(&observed), None, "now");
+        assert_eq!(
+            derive_action_required(&task, &integration, None)
+                .unwrap()
+                .reason_code,
+            ActionReason::PendingReview
         );
     }
 

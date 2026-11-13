@@ -391,6 +391,9 @@ client.update_project_agents(project_id, project["updatedAt"], workerProfileId=w
   and does not commit anything. `review` needs a person to review the pull
   request on GitHub. It is not for you to fix. Tell the person you work for if
   they ask; `integration.pullRequest.codeOwnerReviewers` names the reviewers.
+  `integration.pullRequest.blockReasons` names each GitHub branch rule that
+  blocks the merge, such as `unsigned_commits` with the commit SHAs. Tell the
+  person you work for which rule blocks the merge; do not guess another cause.
 - **`actionRequired`**: the authoritative read of who must act next. `owner`
   is `agent`, `human`, `suplex`, or `upstream`. Act only when `owner` is
   `agent`, and even then stop and ask first if `humanApprovalRequired` is

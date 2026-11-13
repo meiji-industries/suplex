@@ -5,7 +5,8 @@ import type { Task } from "../../contracts/tasks.js";
 import { supportsDeliveryTarget } from "./lib/delivery-target-capabilities.js";
 import { Badge } from "../../components/ui/badge.js";
 import { Button } from "../../components/ui/button.js";
-import { checkRunLabel, checkRunName, checkRunStatus, useTaskChecks, type CheckRun, type CheckRunStatus } from "./lib/task-checks.js";
+import { Alert, AlertDescription, AlertTitle } from "../../components/ui/alert.js";
+import { checkRunLabel, checkRunName, checkRunStatus, checkRunSummary, useTaskChecks, type CheckRun, type CheckRunStatus } from "./lib/task-checks.js";
 
 const runIcons = { passed: CheckCircle2, failed: XCircle, pending: LoaderCircle, skipped: CircleMinus, neutral: CircleMinus } satisfies Record<CheckRunStatus, typeof CheckCircle2>;
 const runColors = { passed: "text-emerald-500", failed: "text-rose-500", pending: "text-amber-500", skipped: "text-muted-foreground", neutral: "text-muted-foreground" } satisfies Record<CheckRunStatus, string>;
@@ -31,6 +32,7 @@ export function TaskPullRequestCard({ task, onChange }: { task: Task; onChange: 
   const observed = checks?.available ? checks.pullRequestState : null;
   const state = merged ? "Merged" : observed === "closed" ? "Closed" : observed === "draft" || !observed && task.deliveryTarget === "pull_request_draft" ? "Draft" : "Open";
   const runs = checks?.available ? checks.runs : [];
+  const mergeBlocks = checks?.available && !merged ? checks.mergeBlocks ?? [] : [];
   const hasRunningCheck = runs.some((run) => checkRunStatus(run) === "pending" && Number.isFinite(Date.parse(run.startedAt ?? "")));
   useEffect(() => {
     if (!hasRunningCheck) return;
@@ -67,6 +69,13 @@ export function TaskPullRequestCard({ task, onChange }: { task: Task; onChange: 
     {showActions && (continuing || error) ? <div className="flex flex-wrap items-center gap-2 border-t px-3 py-2">
       {continuing ? <span className="text-xs text-muted-foreground">Coordinator prepares this pull request for review.</span> : null}
       {error ? <span role="alert" className="text-xs text-destructive">{error}</span> : null}
+    </div> : null}
+    {runs.length || mergeBlocks.length ? <div className="grid gap-2 border-t px-3 py-2">
+      {runs.length ? <p className="text-xs text-muted-foreground" aria-label="Checks summary">{checkRunSummary(runs)}</p> : null}
+      {mergeBlocks.length ? <Alert role="status" aria-label="Merge blocks">
+        <AlertTitle>GitHub blocks the merge</AlertTitle>
+        <AlertDescription><ul className="grid gap-1">{mergeBlocks.map(block => <li key={block}>{block}</li>)}</ul></AlertDescription>
+      </Alert> : null}
     </div> : null}
     {runs.length ? <ul aria-label="Pull request checks" className="border-t">{runs.map((run, index) => <CheckRunRow key={`${run.name}:${index}`} run={run} now={now} />)}</ul> : null}
   </div>;

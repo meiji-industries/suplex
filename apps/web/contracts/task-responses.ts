@@ -51,6 +51,8 @@ export const TaskChecksResponseSchema = z.object({
   available: z.boolean(),
   pullRequestState: z.enum(["draft", "ready", "closed", "merged"]).nullable().optional(),
   runs: z.array(z.object({ name: z.string(), status: z.enum(["pending", "failing", "successful"]), url: z.string().nullable(), conclusion: z.string().optional(), workflow: z.string().nullable().optional(), startedAt: z.string().datetime().nullable().optional(), completedAt: z.string().datetime().nullable().optional() })),
+  /** One sentence for each GitHub branch rule that blocks the merge. */
+  mergeBlocks: z.array(z.string()).optional(),
 });
 
 export const WorktreeAppSchema = z.enum(["finder", "cursor", "vscode", "devin", "xcode", "ghostty", "iterm", "terminal", "antigravity", "conductor"]);

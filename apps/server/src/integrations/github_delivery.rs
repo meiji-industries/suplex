@@ -20,6 +20,7 @@ use serde_json::{Value, json};
 use super::{
     github::Access,
     github_rate_limit::{RateLimits, Resource},
+    merge_block::{self, MergeBlockReason},
     provider_http::{lenient, optional_metadata, present_string},
 };
 use crate::{
@@ -147,26 +148,6 @@ pub struct Checks {
     pub runs: Vec<Value>,
 }
 
-/// GitHub requires a review before it merges this pull request. A repository can
-/// require code owner review with zero required approvals: GitHub then reports a
-/// null decision and holds the merge state at `BLOCKED`, or at `UNKNOWN` while it
-/// recomputes. A null decision by itself says nothing about whether a review is
-/// necessary. After one owner approves, other requests can stay open, but the
-/// merge state leaves `BLOCKED`.
-pub fn review_blocks_merge(
-    review_decision: Option<&str>,
-    merge_state: Option<&str>,
-    code_owner_reviewers: &[String],
-) -> bool {
-    match review_decision {
-        Some("REVIEW_REQUIRED" | "CHANGES_REQUESTED") => true,
-        None => {
-            !code_owner_reviewers.is_empty() && matches!(merge_state, Some("BLOCKED" | "UNKNOWN"))
-        }
-        Some(_) => false,
-    }
-}
-
 /// TypeScript `GithubPullRequestObservation`.
 #[derive(Clone, Debug, Default, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -191,6 +172,13 @@ pub struct Observation {
     pub viewer_can_merge_as_admin: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
+    /// The base branch name. Suplex reads its branch rules for a diagnosis.
+    #[serde(skip)]
+    pub base_branch: Option<String>,
+    /// Each branch rule that blocks the merge of an open pull request that
+    /// GitHub reports as blocked with no failing and no pending check.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub block_reasons: Vec<MergeBlockReason>,
 }
 
 /// The pull request author in the `gh pr view` shape.
@@ -285,6 +273,8 @@ pub enum MergeResult {
     Disposition {
         disposition: MergeDisposition,
         message: String,
+        /// The diagnosed branch rules of a refusal that no check explains.
+        reasons: Vec<MergeBlockReason>,
     },
 }
 
@@ -443,6 +433,8 @@ struct PullRequestObservation {
     is_draft: bool,
     head_ref_oid: String,
     base_ref_oid: String,
+    #[serde(default, deserialize_with = "optional_metadata")]
+    base_ref_name: Option<String>,
     #[serde(deserialize_with = "Deserialize::deserialize")]
     mergeable: Option<String>,
     merge_state_status: Option<String>,
@@ -708,6 +700,8 @@ impl PullRequestObservation {
             code_owner_reviewers: self.code_owner_reviewers,
             viewer_can_merge_as_admin: self.viewer_can_merge_as_admin,
             title: self.title,
+            base_branch: self.base_ref_name,
+            block_reasons: Vec::new(),
         })
     }
 }
@@ -937,11 +931,6 @@ impl RequiredContext {
 }
 
 #[derive(Deserialize)]
-struct BranchRule {
-    r#type: String,
-}
-
-#[derive(Deserialize)]
 struct BranchHead {
     commit: BranchCommit,
 }
@@ -975,7 +964,7 @@ struct Diagnostic {
 const PULL_LIST_FIELDS: &str = "number url isDraft state headRefName headRefOid baseRefName baseRefOid title body author { login } updatedAt isCrossRepository";
 
 /// The `gh pr view` observation fields, with the latest commit's check rollup.
-const OBSERVATION_QUERY: &str = "query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){number url state isDraft headRefOid baseRefOid mergeable mergeStateStatus autoMergeRequest{enabledAt} reviewDecision viewerCanMergeAsAdmin reviewRequests(first:20){nodes{asCodeOwner requestedReviewer{__typename ...on User{login} ...on Team{slug}}}} author{login avatarUrl} changedFiles additions deletions title commits(last:1){nodes{commit{statusCheckRollup{contexts(first:100){nodes{__typename ...on StatusContext{context state targetUrl startedAt:createdAt} ...on CheckRun{name status conclusion startedAt completedAt detailsUrl checkSuite{workflowRun{workflow{name}}}}}}}}}}}}}";
+const OBSERVATION_QUERY: &str = "query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){number url state isDraft headRefOid baseRefOid baseRefName mergeable mergeStateStatus autoMergeRequest{enabledAt} reviewDecision viewerCanMergeAsAdmin reviewRequests(first:20){nodes{asCodeOwner requestedReviewer{__typename ...on User{login} ...on Team{slug}}}} author{login avatarUrl} changedFiles additions deletions title commits(last:1){nodes{commit{statusCheckRollup{contexts(first:100){nodes{__typename ...on StatusContext{context state targetUrl startedAt:createdAt} ...on CheckRun{name status conclusion startedAt completedAt detailsUrl checkSuite{workflowRun{workflow{name}}}}}}}}}}}}}";
 
 struct Reply {
     status: u16,
@@ -1744,11 +1733,14 @@ impl Github {
             }
             Err(error) => return Err(error),
         };
-        let response = value;
-        match response.pull() {
-            Some(pull) => pull.normalize(),
-            None => Ok(Observation::absent()),
+        let Some(pull) = value.pull() else {
+            return Ok(Observation::absent());
+        };
+        let mut observation = pull.normalize()?;
+        if merge_block::needs_diagnosis(&observation) {
+            observation.block_reasons = self.diagnose_merge_block(repository, &observation).await;
         }
+        Ok(observation)
     }
 
     pub async fn mark_ready_for_review(&self, repository: &str, number: u64) -> GithubResult<()> {
@@ -1904,6 +1896,7 @@ impl Github {
         let blocked = |message: String| MergeResult::Disposition {
             disposition: MergeDisposition::Blocked,
             message,
+            reasons: Vec::new(),
         };
         let context = self
             .retry_transient(|| self.merge_context(&repository, number))
@@ -1946,6 +1939,7 @@ impl Github {
                     "GitHub is waiting for required checks: {}. {refused}",
                     pending.join(", ")
                 ),
+                reasons: Vec::new(),
             });
         }
         let mergeable = context.mergeable.as_deref();
@@ -1961,35 +1955,12 @@ impl Github {
             return Ok(MergeResult::Disposition {
                 disposition: MergeDisposition::Waiting,
                 message: format!("GitHub is still computing mergeability. {refused}"),
+                reasons: Vec::new(),
             });
         }
         let base = context.base_ref_name;
-        let rules_path = repo_route(&repository, &["rules", "branches", &base]);
-        // GitHub Free answers rulesets on a private repository with 403 ("Upgrade to
-        // GitHub Pro"). That is not a token problem: the repository has no rules.
         let rules = self
-            .retry_transient(|| async {
-                match self
-                    .api(
-                        "GET",
-                        &rules_path,
-                        None,
-                        "branch rules",
-                        StatusHandling {
-                            accepted: &[403],
-                            ..StatusHandling::default()
-                        },
-                    )
-                    .await?
-                {
-                    Api::Json(body) => decode_response::<Vec<BranchRule>>(
-                        &body,
-                        "GitHub branch rules are malformed",
-                    ),
-                    Api::Accepted { .. } => Ok(Vec::new()),
-                    Api::NotFound => unreachable!("not found is a failure"),
-                }
-            })
+            .retry_transient(|| self.branch_rules(&repository, &base))
             .await?;
         if rules.iter().any(|rule| rule.r#type == "merge_queue") {
             if !allow_queue {
@@ -2019,12 +1990,35 @@ impl Github {
                 message: format!(
                     "GitHub added pull request {number} at {head_sha} to the merge queue."
                 ),
+                reasons: Vec::new(),
             });
         }
-        Ok(blocked(format!(
-            "GitHub refused the merge with no pending required checks or merge queue: {refused}. Merge state is {}.",
-            merge_state.unwrap_or("UNKNOWN")
-        )))
+        // No check explains the refusal: name the branch rules that do.
+        let reasons = match self
+            .observe_pull_request(&repository, &context.head_ref_oid, Some(number))
+            .await
+        {
+            Ok(observed) if !observed.block_reasons.is_empty() => observed.block_reasons,
+            Ok(observed) if observed.exists => {
+                self.diagnose_merge_block(&repository, &observed).await
+            }
+            _ => vec![MergeBlockReason::RulesUnreadable { branch: base }],
+        };
+        Ok(MergeResult::Disposition {
+            disposition: MergeDisposition::Blocked,
+            message: {
+                let mut message = format!(
+                    "GitHub refused the merge with no pending required checks or merge queue: {refused}. Merge state is {}.",
+                    merge_state.unwrap_or("UNKNOWN")
+                );
+                if !reasons.is_empty() {
+                    message.push(' ');
+                    message.push_str(&merge_block::describe_all(&reasons));
+                }
+                message
+            },
+            reasons,
+        })
     }
 
     /// TypeScript `readPullRequestStates`: batched GraphQL reads of 50 references.
@@ -2370,7 +2364,7 @@ fn push_failure(message: &str) -> GithubFailure {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     #[test]
@@ -2905,6 +2899,21 @@ mod tests {
         rest: Vec<(&'static str, u16, Value)>,
         graph: Vec<(&'static str, Value)>,
     ) -> (Github, tokio::task::JoinHandle<()>) {
+        let (github, server, _) = counted_fake_api(rest, graph).await;
+        (github, server)
+    }
+
+    /// `fake_api` that also records each REST path and GraphQL query it answered.
+    pub(crate) async fn counted_fake_api(
+        rest: Vec<(&'static str, u16, Value)>,
+        graph: Vec<(&'static str, Value)>,
+    ) -> (
+        Github,
+        tokio::task::JoinHandle<()>,
+        std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+    ) {
+        let requests = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+        let (graph_log, rest_log) = (requests.clone(), requests.clone());
         use axum::{
             Json, Router,
             http::{StatusCode, Uri},
@@ -2918,8 +2927,10 @@ mod tests {
                 "/graphql",
                 post(move |Json(body): Json<Value>| {
                     let graph = graph.clone();
+                    let log = graph_log.clone();
                     async move {
                         let query = body["query"].as_str().unwrap_or_default().to_owned();
+                        log.lock().unwrap().push(query.clone());
                         let reply = graph
                             .iter()
                             .find(|(marker, _)| query.contains(marker))
@@ -2931,8 +2942,10 @@ mod tests {
             )
             .fallback(move |uri: Uri| {
                 let rest = rest.clone();
+                let log = rest_log.clone();
                 async move {
                     let key = uri.path_and_query().map_or("", |value| value.as_str());
+                    log.lock().unwrap().push(key.to_owned());
                     match rest.iter().find(|(path, _, _)| *path == key) {
                         Some((_, status, body)) => {
                             (StatusCode::from_u16(*status).unwrap(), Json(body.clone()))
@@ -2949,7 +2962,7 @@ mod tests {
         let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
         let mut github = Github::new(Access::for_api(&base, None).unwrap());
         github.retry_pauses.clear();
-        (github, server)
+        (github, server, requests)
     }
 
     #[tokio::test]
@@ -3060,6 +3073,7 @@ mod tests {
             MergeResult::Disposition {
                 disposition: MergeDisposition::Blocked,
                 message: "GitHub refused the merge because required checks failed: unit (FAILURE, https://github.com/owner/repo/actions/runs/1), deploy (ERROR). Required status check \"unit\" is failing.".into(),
+                reasons: vec![],
             }
         );
         server.abort();
@@ -3085,7 +3099,7 @@ mod tests {
             .await
             .unwrap();
         assert!(
-            matches!(direct, MergeResult::Disposition { disposition: MergeDisposition::Blocked, message } if message.contains("direct trigger merges cannot enter the queue"))
+            matches!(direct, MergeResult::Disposition { disposition: MergeDisposition::Blocked, message, .. } if message.contains("direct trigger merges cannot enter the queue"))
         );
         assert_eq!(
             github
@@ -3095,6 +3109,7 @@ mod tests {
             MergeResult::Disposition {
                 disposition: MergeDisposition::Queued,
                 message: format!("GitHub added pull request 7 at {head} to the merge queue."),
+                reasons: vec![],
             }
         );
         server.abort();

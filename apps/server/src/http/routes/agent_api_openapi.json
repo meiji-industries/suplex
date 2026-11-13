@@ -2717,15 +2717,54 @@
                                       "type": "integer",
                                       "minimum": 0,
                                       "maximum": 9007199254740991
+                                    },
+                                    "skipped": {
+                                      "type": "integer",
+                                      "minimum": 0,
+                                      "maximum": 9007199254740991
                                     }
                                   },
                                   "required": [
                                     "total",
                                     "pending",
                                     "failing",
-                                    "successful"
+                                    "successful",
+                                    "skipped"
                                   ],
                                   "additionalProperties": false
+                                },
+                                "blockReasons": {
+                                  "type": "array",
+                                  "description": "Each branch rule that blocks the merge, when GitHub reports the open pull request as blocked with no failing and no pending check.",
+                                  "items": {
+                                    "type": "object",
+                                    "description": "One branch rule that blocks the merge. kind is unsigned_commits (shas), required_review (needed, codeOwnerReview, codeOwners, changesRequested), missing_required_check (context), unresolved_conversations (count), merge_queue_required, linear_history, deployment_required (environment), branch_locked, rules_unreadable, or unknown. branch is the base branch.",
+                                    "properties": {
+                                      "kind": {
+                                        "type": "string",
+                                        "enum": [
+                                          "unsigned_commits",
+                                          "required_review",
+                                          "missing_required_check",
+                                          "unresolved_conversations",
+                                          "merge_queue_required",
+                                          "linear_history",
+                                          "deployment_required",
+                                          "branch_locked",
+                                          "rules_unreadable",
+                                          "unknown"
+                                        ]
+                                      },
+                                      "branch": {
+                                        "type": "string"
+                                      }
+                                    },
+                                    "required": [
+                                      "kind",
+                                      "branch"
+                                    ],
+                                    "additionalProperties": true
+                                  }
                                 }
                               },
                               "required": [
@@ -2739,7 +2778,8 @@
                                 "mergeStateStatus",
                                 "reviewDecision",
                                 "codeOwnerReviewers",
-                                "checks"
+                                "checks",
+                                "blockReasons"
                               ],
                               "additionalProperties": false
                             },

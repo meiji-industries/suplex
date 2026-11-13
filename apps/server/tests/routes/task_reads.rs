@@ -1047,6 +1047,34 @@ mod tests {
         assert_eq!(observed["runs"].as_array().unwrap().len(), 1);
         assert_eq!(observed["runs"][0]["name"], "unit");
         assert_eq!(observed["runs"][0]["status"], "successful");
+        assert_eq!(observed["mergeBlocks"], json!([]));
+
+        // GitHub blocks the merge for a branch rule: the view names it.
+        let (blocked, blocked_api, _) =
+            crate::integrations::github_delivery::tests::counted_fake_api(
+                vec![
+                    ("/repos/acme/demo/branches/main/protection", 200, json!({"required_signatures": {"enabled": true}})),
+                    ("/repos/acme/demo/rules/branches/main", 200, json!([])),
+                    ("/repos/acme/demo/pulls/7/commits?per_page=100&page=1", 200, json!([{"sha": format!("abc1234{}", "0".repeat(33)), "commit": {"verification": {"verified": false, "reason": "unsigned"}}}])),
+                ],
+                vec![("reviewRequests", json!({"data":{"repository":{"pullRequest":{
+                    "number": 7, "url": "https://github.com/acme/demo/pull/7", "state": "OPEN", "isDraft": false,
+                    "headRefOid": "a".repeat(40), "baseRefOid": "b".repeat(40), "baseRefName": "main",
+                    "mergeable": "MERGEABLE", "mergeStateStatus": "BLOCKED",
+                    "autoMergeRequest": null, "reviewDecision": null, "author": {"login": "octo"},
+                    "changedFiles": 1, "additions": 1, "deletions": 0,
+                    "commits": {"nodes": [{"commit": {"statusCheckRollup": {"contexts": {"nodes": [
+                        {"name": "unit", "status": "COMPLETED", "conclusion": "SUCCESS", "completedAt": "2026-09-02T00:00:00Z"}
+                    ]}}}}]}
+                }}}}))],
+            )
+            .await;
+        let (_, observed) = body(read(Some(Ok(blocked))).await).await;
+        assert_eq!(
+            observed["mergeBlocks"],
+            json!(["Branch `main` requires signed commits and 1 commit is unsigned (abc1234)."])
+        );
+        blocked_api.abort();
 
         // The GitHub credential cannot be loaded.
         let response = read(Some(Err(failure(

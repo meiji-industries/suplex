@@ -13,6 +13,21 @@ export function checkRunStatus(run: CheckRun): CheckRunStatus {
   return run.status === "successful" ? "passed" : run.status === "failing" ? "failed" : "pending";
 }
 
+export type CheckRunCounts = Record<CheckRunStatus, number>;
+
+export function checkRunCounts(runs: readonly CheckRun[]): CheckRunCounts {
+  const counts: CheckRunCounts = { passed: 0, failed: 0, pending: 0, skipped: 0, neutral: 0 };
+  for (const run of runs) counts[checkRunStatus(run)] += 1;
+  return counts;
+}
+
+/** A skipped check passes on GitHub, but the summary names it separately. */
+export function checkRunSummary(runs: readonly CheckRun[]): string {
+  const counts = checkRunCounts(runs);
+  const order: CheckRunStatus[] = ["passed", "skipped", "neutral", "failed", "pending"];
+  return order.filter(status => counts[status] > 0).map(status => `${counts[status]} ${status}`).join(", ");
+}
+
 export function checkRunName(run: CheckRun): string {
   if (!run.workflow || run.name.includes(" / ")) return run.name;
   return `${run.workflow} / ${run.name}`;

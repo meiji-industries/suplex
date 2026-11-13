@@ -21,7 +21,8 @@ vi.mock("../features/tasks/workflow-illustration.js", () => ({
 vi.mock("../features/tasks/task-data.js", () => ({ useTaskAgents: () => ({ data: undefined }) }));
 
 const raw: unknown = JSON.parse(readFileSync(`${import.meta.dirname}/../../../tests/fixtures/task-response.json`, "utf8"));
-const fixture = TaskSchema.parse(raw);
+// The server fixture matches the generated response type; the schema checks it.
+const fixture = (TaskSchema.parse(raw), raw as Task);
 const seed = (character: string) => character.repeat(32);
 const profile = (id: string, name: string, role: "root" | "worker", extra: Partial<ProfileResponse> = {}) =>
   ({ id, name, role, provider: "claude-code", model: "opus", reasoningLevel: "high", serviceTier: "default", avatarSeed: seed(id === fixture.rootProfile.profileId ? "a" : "b"), archivedAt: null, ...extra }) as ProfileResponse;
@@ -66,7 +67,7 @@ test("the summary reads like the Settings agent card", () => {
   expect(agentSummary({ ...agent, serviceTier: "default" }, { priority: true })).toBe("Claude Code · Opus High");
 });
 
-const activeTask: Task = { ...fixture, status: "active", rootProfile: { ...fixture.rootProfile, provider: "claude-code", model: "opus", reasoningLevel: "high" } };
+const activeTask: Task = { ...fixture, status: "active", rootProfile: { profileId: fixture.rootProfile.profileId, provider: "claude-code", model: "opus", reasoningLevel: "high", serviceTier: "default" } };
 
 test("the sidebar shows the profile name and human runtime labels", async () => {
   await render(<TaskAgent task={activeTask} role="root" onChange={vi.fn()} onActivityChange={vi.fn()} />, [profile(fixture.rootProfile.profileId, "Ada", "root")]);
@@ -93,7 +94,7 @@ test("the sidebar shows the role and runtime labels when profiles are not availa
 
 test("the workflow diagram and the sidebar show the same agent name and avatar", async () => {
   const profiles = [profile(fixture.rootProfile.profileId, "Ada", "root"), profile(fixture.workerProfile.profileId, "Grace", "worker", { archivedAt: "2026-10-01T00:00:00.000Z" })];
-  const activity = { sessions: [], turns: [], setup: { state: "none" as const, exitStatus: null }, shellPaneId: null };
+  const activity = { sessions: [], turns: [], setup: { state: "none" as const, exitStatus: null }, shellPaneId: null, actions: [] };
   await render(<>
     <WorkflowPlan task={activeTask} activity={activity} />
     <TaskAgent task={activeTask} role="root" onChange={vi.fn()} onActivityChange={vi.fn()} />

@@ -169,7 +169,15 @@ the task's pull request when the request was served, with `observation` set to
 `unavailable` and `integrated` left `false` when GitHub could not answer. Suplex
 never observes deployed runtimes, so `integration.deployed.included` is always
 `null`. `integration.pullRequest.codeOwnerReviewers` names the users and teams
-with an open code owner review request. `actionRequired` describes the observed owner and reason when work is
+with an open code owner review request. `integration.pullRequest.blockReasons`
+names each branch rule that blocks the merge when GitHub reports the open pull
+request as blocked with no failing and no pending check. Each reason has a
+`kind` (`unsigned_commits`, `required_review`, `missing_required_check`,
+`unresolved_conversations`, `merge_queue_required`, `linear_history`,
+`deployment_required`, `branch_locked`, `rules_unreadable`, or `unknown`) and the
+base `branch`. `rules_unreadable` means Suplex could not read every branch rule;
+Suplex does not guess the rule. `integration.pullRequest.checks.skipped` counts
+skipped checks, which `successful` also counts. `actionRequired` describes the observed owner and reason when work is
 outstanding. It does not grant command authority. `permittedCommands` is the
 authority signal. Human, Suplex, and upstream owners remain descriptive. Command replies omit these three
 fields because a command reports stored task state and reads no provider.

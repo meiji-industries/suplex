@@ -589,6 +589,55 @@ mod tests {
     }
 
     #[test]
+    fn a_diagnosed_block_is_exposed_and_named_in_the_action() {
+        use crate::integrations::merge_block::MergeBlockReason;
+        let task = task(TaskStatus::Delivered, DeliveryTarget::PullRequestReady);
+        let reason = MergeBlockReason::UnsignedCommits {
+            branch: "main".into(),
+            shas: vec![format!("abc1234{}", "0".repeat(33)), format!("def5678{}", "0".repeat(33))],
+        };
+        let mut observed = Observation {
+            exists: true,
+            number: Some(7),
+            state: Some("open".into()),
+            is_draft: Some(false),
+            mergeable: Some("MERGEABLE".into()),
+            merge_state_status: Some("BLOCKED".into()),
+            block_reasons: vec![reason.clone()],
+            ..Observation::default()
+        };
+        observed.checks.total = 2;
+        observed.checks.successful = 2;
+        observed.checks.runs = vec![
+            json!({"name": "unit", "status": "successful", "conclusion": "SUCCESS"}),
+            json!({"name": "docs", "status": "successful", "conclusion": "SKIPPED"}),
+        ];
+        let integration = derive_task_integration(&task, Some(&observed), None, "now");
+        let value = serde_json::to_value(&integration).unwrap();
+        assert_eq!(
+            value["pullRequest"]["blockReasons"],
+            json!([{"kind": "unsigned_commits", "branch": "main", "shas": [format!("abc1234{}", "0".repeat(33)), format!("def5678{}", "0".repeat(33))]}])
+        );
+        assert_eq!(
+            value["pullRequest"]["checks"],
+            json!({"total": 2, "pending": 0, "failing": 0, "successful": 2, "skipped": 1})
+        );
+        let action = derive_action_required(&task, &integration, None).unwrap();
+        assert_eq!((action.owner, action.reason_code), (ActionOwner::Human, ActionReason::WaitingHuman));
+        assert_eq!(
+            action.summary,
+            "GitHub blocks the merge. Branch `main` requires signed commits and 2 commits are unsigned (abc1234, def5678)."
+        );
+        // A review block keeps its pending review action.
+        observed.review_decision = Some("REVIEW_REQUIRED".into());
+        let integration = derive_task_integration(&task, Some(&observed), None, "now");
+        assert_eq!(
+            derive_action_required(&task, &integration, None).unwrap().reason_code,
+            ActionReason::PendingReview
+        );
+    }
+
+    #[test]
     fn upstream_follows_branch_source_and_base_branch() {
         let mut upstream = task(TaskStatus::Active, DeliveryTarget::Merged);
         upstream.id = "up".into();

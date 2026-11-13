@@ -884,6 +884,99 @@ mod tests {
         assert_eq!(merge_blocker(Some(&observed), None, Some(&head)), None);
     }
 
+    fn unsigned(branch: &str) -> MergeBlockReason {
+        MergeBlockReason::UnsignedCommits {
+            branch: branch.into(),
+            shas: vec![format!("abc1234{}", "0".repeat(33))],
+        }
+    }
+
+    #[test]
+    fn merge_blocker_names_a_diagnosed_rule_unless_an_administrator_merges() {
+        let head = "a".repeat(40);
+        let mut observed = open_pull();
+        observed.review_decision = None;
+        observed.merge_state_status = Some("BLOCKED".into());
+        observed.block_reasons = vec![unsigned("main")];
+        assert_eq!(
+            merge_blocker(Some(&observed), None, Some(&head)).as_deref(),
+            Some(
+                "GitHub blocks the merge. Branch `main` requires signed commits and 1 commit is unsigned (abc1234)."
+            )
+        );
+        observed.viewer_can_merge_as_admin = true;
+        assert_eq!(merge_blocker(Some(&observed), None, Some(&head)), None);
+        observed.viewer_can_merge_as_admin = false;
+        // An unread or unexplained rule is no evidence of a block.
+        for reason in [
+            MergeBlockReason::RulesUnreadable { branch: "main".into() },
+            MergeBlockReason::Unknown { branch: "main".into() },
+        ] {
+            observed.block_reasons = vec![reason];
+            assert_eq!(merge_blocker(Some(&observed), None, Some(&head)), None);
+        }
+        // A review block names every diagnosed rule.
+        observed.review_decision = Some("REVIEW_REQUIRED".into());
+        observed.block_reasons = vec![
+            unsigned("main"),
+            MergeBlockReason::RequiredReview {
+                branch: "main".into(),
+                needed: Some(1),
+                code_owner_review: false,
+                code_owners: vec![],
+                changes_requested: false,
+            },
+        ];
+        let blocker = merge_blocker(Some(&observed), None, Some(&head)).unwrap();
+        assert!(blocker.starts_with("GitHub requires a review decision. Branch `main` requires signed commits"));
+        assert!(blocker.ends_with("Branch `main` requires an approving review."));
+    }
+
+    #[test]
+    fn reconciliation_asks_a_person_when_no_code_change_repairs_the_block() {
+        let mut observed = open_pull();
+        observed.review_decision = None;
+        observed.mergeable = Some("MERGEABLE".into());
+        observed.merge_state_status = Some("BLOCKED".into());
+        observed.block_reasons = vec![unsigned("main")];
+        assert!(needs_reconciliation(Some(&observed)));
+        let prompt = reconciliation_prompt("main", &observed, MergeAbilities::default());
+        assert!(prompt.contains("Branch `main` requires signed commits and 1 commit is unsigned (abc1234)."));
+        assert!(prompt.contains("A code change cannot repair this block."));
+        assert!(prompt.contains("\"question\":\"GitHub blocks pull request 7: branch `main` requires signed commits"));
+        assert!(!prompt.contains("Integrate the current main head"), "{prompt}");
+        // A Worker that can sign repairs it with a change to the task branch.
+        let prompt = reconciliation_prompt(
+            "main",
+            &observed,
+            MergeAbilities { can_sign: true, can_merge_as_admin: false },
+        );
+        assert!(prompt.contains("Repair the commit signatures"));
+        assert!(prompt.contains("Integrate the current main head"));
+        // A conflict, a stale branch, and a failed check keep the code repair.
+        for (mergeable, state, failing) in [
+            ("CONFLICTING", "DIRTY", 0),
+            ("MERGEABLE", "BEHIND", 0),
+            ("MERGEABLE", "BLOCKED", 1),
+        ] {
+            let mut observed = observed.clone();
+            observed.mergeable = Some(mergeable.into());
+            observed.merge_state_status = Some(state.into());
+            observed.checks.failing = failing;
+            assert!(needs_reconciliation(Some(&observed)));
+            let prompt = reconciliation_prompt("main", &observed, MergeAbilities::default());
+            assert!(
+                prompt.contains("Integrate the current main head, resolve every conflict, and repair every failing check."),
+                "{state}"
+            );
+        }
+        // Without a diagnosis the prompt is as before.
+        observed.block_reasons.clear();
+        let prompt = reconciliation_prompt("main", &observed, MergeAbilities::default());
+        assert!(prompt.contains("Integrate the current main head"));
+        assert!(!prompt.contains("ask_human"));
+    }
+
     #[test]
     fn train_order_puts_dependencies_first() {
         let ordered = topological_order(vec![

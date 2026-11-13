@@ -2357,7 +2357,7 @@ fn push_failure(message: &str) -> GithubFailure {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     #[test]
@@ -2892,6 +2892,21 @@ mod tests {
         rest: Vec<(&'static str, u16, Value)>,
         graph: Vec<(&'static str, Value)>,
     ) -> (Github, tokio::task::JoinHandle<()>) {
+        let (github, server, _) = counted_fake_api(rest, graph).await;
+        (github, server)
+    }
+
+    /// `fake_api` that also records each REST path and GraphQL query it answered.
+    pub(crate) async fn counted_fake_api(
+        rest: Vec<(&'static str, u16, Value)>,
+        graph: Vec<(&'static str, Value)>,
+    ) -> (
+        Github,
+        tokio::task::JoinHandle<()>,
+        std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+    ) {
+        let requests = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+        let (graph_log, rest_log) = (requests.clone(), requests.clone());
         use axum::{
             Json, Router,
             http::{StatusCode, Uri},
@@ -2905,8 +2920,10 @@ mod tests {
                 "/graphql",
                 post(move |Json(body): Json<Value>| {
                     let graph = graph.clone();
+                    let log = graph_log.clone();
                     async move {
                         let query = body["query"].as_str().unwrap_or_default().to_owned();
+                        log.lock().unwrap().push(query.clone());
                         let reply = graph
                             .iter()
                             .find(|(marker, _)| query.contains(marker))
@@ -2918,8 +2935,10 @@ mod tests {
             )
             .fallback(move |uri: Uri| {
                 let rest = rest.clone();
+                let log = rest_log.clone();
                 async move {
                     let key = uri.path_and_query().map_or("", |value| value.as_str());
+                    log.lock().unwrap().push(key.to_owned());
                     match rest.iter().find(|(path, _, _)| *path == key) {
                         Some((_, status, body)) => {
                             (StatusCode::from_u16(*status).unwrap(), Json(body.clone()))
@@ -2936,7 +2955,7 @@ mod tests {
         let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
         let mut github = Github::new(Access::for_api(&base, None).unwrap());
         github.retry_pauses.clear();
-        (github, server)
+        (github, server, requests)
     }
 
     #[tokio::test]

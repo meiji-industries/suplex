@@ -38,6 +38,10 @@ struct Fake {
     pulls: Vec<Value>,
     merge_refusal: bool,
     merge_calls: usize,
+    /// Classic branch protection of `main`; `None` is an unprotected branch.
+    protection: Option<Value>,
+    /// The commits of pull request 1 with their verification.
+    pull_commits: Value,
     rules_forbidden: bool,
     workflow_run: Value,
     rerun_calls: usize,
@@ -78,6 +82,16 @@ fn branch_sha(origin: &Path, branch: &str) -> Option<String> {
 }
 
 async fn branch(State(fake): State<Shared>, UrlPath(branch): UrlPath<String>) -> Response {
+    if branch.ends_with("/protection") {
+        return match fake.lock().unwrap().protection.clone() {
+            Some(protection) => Json(protection).into_response(),
+            None => (
+                StatusCode::NOT_FOUND,
+                Json(json!({"message": "Branch not protected"})),
+            )
+                .into_response(),
+        };
+    }
     let origin = fake.lock().unwrap().origin.clone();
     match branch_sha(&origin, &branch) {
         Some(sha) => Json(json!({"commit": {"sha": sha}})).into_response(),
@@ -259,6 +273,7 @@ async fn fake_github(origin: PathBuf) -> (String, Shared) {
         .route("/repos/owner/repo/pulls", post(create_pull))
         .route("/repos/owner/repo/pulls/{number}", get(get_pull).patch(patch_pull))
         .route("/repos/owner/repo/pulls/{number}/merge", put(merge_pull))
+        .route("/repos/owner/repo/pulls/{number}/commits", get(|State(fake): State<Shared>| async move { Json(fake.lock().unwrap().pull_commits.clone()) }))
         .route("/repos/owner/repo/actions/runs/42", get(workflow_run))
         .route("/repos/owner/repo/actions/runs/42/rerun-failed-jobs", post(rerun_failed_jobs))
         .route("/graphql", post(graphql))
@@ -2090,6 +2105,45 @@ fn assert_refused(
         "{why}"
     );
     assert_eq!(case.merge_calls(), 1, "{why}");
+}
+
+/// GitHub refuses the merge for a branch rule that no check explains. The
+/// Coordinator receives the named rule and the question to ask.
+#[tokio::test]
+async fn a_merge_refused_for_unsigned_commits_returns_the_question_and_options() {
+    let (case, head, review) = reviewed_pull().await;
+    {
+        let mut fake = case.fake.lock().unwrap();
+        fake.merge_refusal = true;
+        fake.protection = Some(json!({"required_signatures": {"enabled": true}}));
+        fake.pull_commits = json!([
+            {"sha": format!("abc1234{}", "0".repeat(33)), "commit": {"verification": {"verified": false, "reason": "unsigned"}}},
+            {"sha": format!("def5678{}", "0".repeat(33)), "commit": {"verification": {"verified": false, "reason": "unsigned"}}},
+        ]);
+    }
+    case.set_pull(json!({"mergeStateStatus": "BLOCKED"}));
+    let error = try_merge(&case, &head, &review).await.unwrap_err();
+    assert_eq!(
+        DeliveryError::code_of(error.as_ref()),
+        Some("merge_not_eligible")
+    );
+    let message = error.to_string();
+    for expected in [
+        "Branch `main` requires signed commits and 2 commits are unsigned (abc1234, def5678).",
+        "A code change cannot repair this block.",
+        r#""question":"GitHub blocks pull request 1: branch `main` requires signed commits and 2 commits are unsigned (abc1234, def5678). How do you want to continue?""#,
+        r#""label":"Continue after a rule change""#,
+        r#""label":"Cancel the task""#,
+    ] {
+        assert!(message.contains(expected), "{expected}: {message}");
+    }
+    assert!(!message.contains("Merge state is"), "{message}");
+    assert!(
+        !message.contains("Repair the commit signatures"),
+        "the fixture worktree has no signing key: {message}"
+    );
+    assert_eq!(case.merge_calls(), 1);
+    case.cleanup();
 }
 
 #[tokio::test]

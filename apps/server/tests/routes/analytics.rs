@@ -116,6 +116,14 @@ mod tests {
             )
             .unwrap();
             assert_eq!(costs, serde_json::to_value(projected).unwrap());
+            // The response text is written one task at a time and equals the
+            // whole analytics value.
+            assert_eq!(
+                analytics::analytics_json(database, "user_development", "c", now).unwrap(),
+                crate::shared::js_json::stringify(
+                    &analytics::company_analytics(database, "c", now).unwrap()
+                )
+            );
             assert_eq!(
                 costs,
                 json!({"tasks":[

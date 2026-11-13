@@ -163,7 +163,7 @@ test("a successful agent save closes the dialog even if refreshing its activity 
   const task = await getTask(fixture.id);
   const onChange = vi.fn();
   const onActivityChange = vi.fn().mockResolvedValueOnce(activity()).mockRejectedValueOnce(new Error("Display refresh failed"));
-  await act(async () => root.render(<TaskAgent task={task} role="root" onChange={onChange} onActivityChange={onActivityChange} />));
+  await act(async () => root.render(<QueryClientProvider client={client}><TaskAgent task={task} role="root" onChange={onChange} onActivityChange={onActivityChange} /></QueryClientProvider>));
   await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="Select Coordinator"]')?.click());
   const field = document.querySelector<HTMLTextAreaElement>(`#agent-direction-root-${task.id}`);
   if (!field) throw new Error("Agent direction was not rendered");

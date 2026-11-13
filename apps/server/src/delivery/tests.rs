@@ -837,7 +837,7 @@ async fn refused_merge_reports_github_evidence_and_merge_input_is_checked() {
         .await
         .unwrap();
     assert!(
-        matches!(refused, MergeResult::Disposition { disposition: MergeDisposition::Blocked, ref message } if message.contains("no pending required checks"))
+        matches!(refused, MergeResult::Disposition { disposition: MergeDisposition::Blocked, ref message, .. } if message.contains("no pending required checks"))
     );
     fake.lock().unwrap().rules_forbidden = true;
     let free_plan = github
@@ -845,7 +845,7 @@ async fn refused_merge_reports_github_evidence_and_merge_input_is_checked() {
         .await
         .unwrap();
     assert!(
-        matches!(free_plan, MergeResult::Disposition { disposition: MergeDisposition::Blocked, ref message } if message.contains("no pending required checks"))
+        matches!(free_plan, MergeResult::Disposition { disposition: MergeDisposition::Blocked, ref message, .. } if message.contains("no pending required checks"))
     );
     fake.lock().unwrap().rules_forbidden = false;
     let changed = github
@@ -853,7 +853,7 @@ async fn refused_merge_reports_github_evidence_and_merge_input_is_checked() {
         .await
         .unwrap();
     assert!(
-        matches!(changed, MergeResult::Disposition { disposition: MergeDisposition::Blocked, ref message } if message.contains("head changed"))
+        matches!(changed, MergeResult::Disposition { disposition: MergeDisposition::Blocked, ref message, .. } if message.contains("head changed"))
     );
     assert_eq!(
         github

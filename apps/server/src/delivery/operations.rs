@@ -36,8 +36,9 @@ use crate::{
         bitbucket::ReleasePort,
         github_delivery::{
             self, ActionsRunStatus, Github, GithubFailure, MergeDisposition, MergeResult,
-            Observation, PullRequest, review_blocks_merge,
+            Observation, PullRequest,
         },
+        merge_block::{self, MergeAbilities},
         github_triggers_dispatches::{self, DeliveryPolicy},
         github_triggers_inspection::{self, PullRequestInspection},
     },
@@ -379,11 +380,7 @@ fn delivery_wait_unchanged(wait: &DeliveryWait, observed: &Observation) -> bool 
 fn only_review_remains(observed: &Observation) -> bool {
     observed.state.as_deref() == Some("open")
         && !observed.viewer_can_merge_as_admin
-        && review_blocks_merge(
-            observed.review_decision.as_deref(),
-            observed.merge_state_status.as_deref(),
-            &observed.code_owner_reviewers,
-        )
+        && merge_block::observed_review_block(observed).is_some()
         && observed.review_decision.as_deref() != Some("CHANGES_REQUESTED")
         && observed.is_draft != Some(true)
         && observed.checks.failing == 0
@@ -394,15 +391,26 @@ fn only_review_remains(observed: &Observation) -> bool {
 fn review_wait_problem(observed: &Observation) -> String {
     let next =
         "Suplex wakes you when the pull request changes. End this turn and do not ask a person.";
-    if observed.code_owner_reviewers.is_empty() {
-        return format!(
-            "GitHub requires an approving review before it merges this pull request. {next}"
-        );
-    }
+    // The diagnosis names every rule; the review reason alone comes from the observation.
+    let reasons = if observed.block_reasons.is_empty() {
+        merge_block::observed_review_block(observed)
+            .into_iter()
+            .collect()
+    } else {
+        observed.block_reasons.clone()
+    };
     format!(
-        "GitHub reports this pull request as blocked, with open code owner review requests for {}. {next}",
-        observed.code_owner_reviewers.join(", ")
+        "GitHub requires a review before it merges this pull request. {} {next}",
+        merge_block::describe_all(&reasons)
     )
+}
+
+/// What the task worktree and the GitHub token can do about a merge block.
+fn merge_abilities(control: &TaskControlRow, observed: &Observation) -> MergeAbilities {
+    MergeAbilities {
+        can_sign: merge_block::worktree_can_sign(control.worktree_path()),
+        can_merge_as_admin: observed.viewer_can_merge_as_admin,
+    }
 }
 
 fn select_discovered_pull(
@@ -966,7 +974,7 @@ impl DeliveryOperations {
             if question {
                 return self.withdraw_question(task_id, &wait, &observed);
             }
-            Self::changed_delivery_prompt(&wait, &observed)
+            Self::changed_delivery_prompt(&wait, &observed, merge_abilities(&control, &observed))
         };
         Ok(if self.resume_delivery_wait(task_id, &wait, &prompt)? {
             "changed"
@@ -976,21 +984,44 @@ impl DeliveryOperations {
     }
 
     /// The Coordinator prompt for a delivery state that changed during a wait.
-    fn changed_delivery_prompt(wait: &DeliveryWait, observed: &Observation) -> String {
+    fn changed_delivery_prompt(
+        wait: &DeliveryWait,
+        observed: &Observation,
+        abilities: MergeAbilities,
+    ) -> String {
         let summary = Self::observation_summary(observed);
-        format!(
+        let mut prompt = format!(
             "Delivery state changed while Suplex waited ({}). Current observation: {summary}. If checks failed, obtain their evidence and continue the workflow; if the pull request is eligible, request merge_pull_request with your current review; otherwise observe_checks again.",
             wait.reason
-        )
+        );
+        if !observed.block_reasons.is_empty() {
+            prompt.push(' ');
+            prompt.push_str(&merge_block::coordinator_instruction(
+                observed.number.unwrap_or_default(),
+                &observed.block_reasons,
+                abilities,
+            ));
+        }
+        prompt
     }
 
     fn observation_summary(observed: &Observation) -> String {
-        crate::shared::js_json::stringify(&json!({
+        let mut summary = json!({
             "exists": observed.exists, "state": observed.state, "headSha": observed.head_sha,
             "isDraft": observed.is_draft, "mergeable": observed.mergeable,
             "mergeStateStatus": observed.merge_state_status, "reviewDecision": observed.review_decision,
             "checks": observed.checks,
-        }))
+        });
+        if !observed.block_reasons.is_empty() {
+            summary["blockReasons"] = json!(
+                observed
+                    .block_reasons
+                    .iter()
+                    .map(merge_block::describe)
+                    .collect::<Vec<_>>()
+            );
+        }
+        crate::shared::js_json::stringify(&summary)
     }
 
     /// TypeScript `checksObservation`: null without a pull request or when GitHub cannot answer.
@@ -2574,19 +2605,31 @@ impl DeliveryOperations {
                 "merge_not_eligible",
             )?);
         }
-        let (disposition, message) = match github
+        let (disposition, message, reasons) = match github
             .merge_conditionally(repository, requested, head, !trigger)
             .await?
         {
             MergeResult::Merged => return Ok(None),
-            MergeResult::NotMerged => (None, "GitHub has not completed the merge".into()),
+            MergeResult::NotMerged => (None, "GitHub has not completed the merge".into(), vec![]),
             MergeResult::Disposition {
                 disposition,
                 message,
-            } => (Some(disposition), message),
+                reasons,
+            } => (Some(disposition), message, reasons),
         };
         if disposition == Some(MergeDisposition::Blocked) {
-            return Err(delivery_failure("merge_not_eligible", message));
+            if reasons.is_empty() {
+                return Err(delivery_failure("merge_not_eligible", message));
+            }
+            let instruction = merge_block::coordinator_instruction(
+                requested,
+                &reasons,
+                merge_abilities(control, observed),
+            );
+            return Err(delivery_failure(
+                "merge_not_eligible",
+                format!("{message} {instruction}"),
+            ));
         }
         let reason = if disposition == Some(MergeDisposition::Waiting) {
             DeliveryWaitReason::Checks

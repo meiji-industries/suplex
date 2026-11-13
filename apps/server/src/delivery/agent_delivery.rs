@@ -3,7 +3,7 @@
 //! before it decides and records an audit event. The agent API routes (W8)
 //! resolve the principal and call these functions.
 
-use crate::integrations::github_delivery::review_blocks_merge;
+use crate::integrations::merge_block::{self, MergeAbilities, MergeBlockReason};
 use crate::shared::hash::sha256_hex;
 use crate::shared::time::{now_millis_rfc3339, rfc3339_millis};
 use crate::tasks::TaskError;
@@ -64,14 +64,32 @@ pub fn merge_blocker(
         Some("open") if observed.merge_state_status.as_deref() == Some("BEHIND") => {
             "The pull request is behind the base branch."
         }
+        Some("open") if merge_block::observed_review_block(observed).is_some() => {
+            if observed.block_reasons.is_empty() {
+                "GitHub requires a review decision."
+            } else {
+                return Some(format!(
+                    "GitHub requires a review decision. {}",
+                    merge_block::describe_all(&observed.block_reasons)
+                ));
+            }
+        }
+        // GitHub just reported a rule that refuses the merge. A token that can
+        // merge as an administrator bypasses the rules, and an unread or
+        // unexplained rule is no evidence, so neither blocks here.
         Some("open")
-            if review_blocks_merge(
-                observed.review_decision.as_deref(),
-                observed.merge_state_status.as_deref(),
-                &observed.code_owner_reviewers,
-            ) =>
+            if !observed.viewer_can_merge_as_admin
+                && observed.block_reasons.iter().any(|reason| {
+                    !matches!(
+                        reason,
+                        MergeBlockReason::RulesUnreadable { .. } | MergeBlockReason::Unknown { .. }
+                    )
+                }) =>
         {
-            "GitHub requires a review decision."
+            return Some(format!(
+                "GitHub blocks the merge. {}",
+                merge_block::describe_all(&observed.block_reasons)
+            ));
         }
         Some("open") => return None,
         _ => "The pull request is not open.",
@@ -98,22 +116,62 @@ fn receipt_hash(receipt: &str) -> String {
     sha256_hex(receipt.as_bytes())
 }
 
-fn reconciliation_prompt(base_branch: &str, observed: &Observation) -> String {
-    [
+fn reconciliation_prompt(
+    base_branch: &str,
+    observed: &Observation,
+    abilities: MergeAbilities,
+) -> String {
+    let state = format!(
+        "GitHub reports pull request #{} at head {} with mergeable {}, merge state {}, and {} failing checks.",
+        observed.number.map_or("null".into(), |n| n.to_string()),
+        observed.head_sha.as_deref().unwrap_or("unknown"),
+        observed.mergeable.as_deref().unwrap_or("unknown"),
+        observed.merge_state_status.as_deref().unwrap_or("unknown"),
+        observed.checks.failing
+    );
+    // A conflict, a stale branch, or a failed check is code work. A branch
+    // rule that no code change satisfies is a decision for a person.
+    let code_problem = observed.checks.failing > 0
+        || observed.mergeable.as_deref() == Some("CONFLICTING")
+        || matches!(
+            observed.merge_state_status.as_deref(),
+            Some("DIRTY" | "BEHIND")
+        );
+    let reasons = &observed.block_reasons;
+    if !code_problem
+        && !reasons.is_empty()
+        && reasons
+            .iter()
+            .all(|reason| !reason.repairable_by_code(abilities))
+    {
+        return [
+            "Suplex received a delivery repair request for this task.".to_owned(),
+            state,
+            merge_block::coordinator_instruction(
+                observed.number.unwrap_or_default(),
+                reasons,
+                abilities,
+            ),
+        ]
+        .join("\n");
+    }
+    let mut lines = vec![
         "Suplex received a delivery repair request for this task.".to_owned(),
-        format!(
-            "GitHub reports pull request #{} at head {} with mergeable {}, merge state {}, and {} failing checks.",
-            observed.number.map_or("null".into(), |n| n.to_string()),
-            observed.head_sha.as_deref().unwrap_or("unknown"),
-            observed.mergeable.as_deref().unwrap_or("unknown"),
-            observed.merge_state_status.as_deref().unwrap_or("unknown"),
-            observed.checks.failing
-        ),
+        state,
+    ];
+    if !reasons.is_empty() {
+        lines.push(merge_block::coordinator_instruction(
+            observed.number.unwrap_or_default(),
+            reasons,
+            abilities,
+        ));
+    }
+    lines.extend([
         format!("Observe GitHub and Git yourself. Integrate the current {base_branch} head, resolve every conflict, and repair every failing check."),
         format!("The upstream work is already merged into {base_branch}. Integrate it. Do not rewrite it and do not reimplement it."),
         "Preserve the reviewed intent of both sides. Review the new range and continue the delivery workflow.".to_owned(),
-    ]
-    .join("\n")
+    ]);
+    lines.join("\n")
 }
 
 fn resume_prompt(base_branch: &str) -> String {
@@ -382,7 +440,14 @@ impl AgentDelivery {
         let attempt = format!("dpr_{}", uuid::Uuid::new_v4().simple());
         self.wake_root(
             task_id,
-            &reconciliation_prompt(&control.delivery_intent.base_branch, &observed),
+            &reconciliation_prompt(
+                &control.delivery_intent.base_branch,
+                &observed,
+                MergeAbilities {
+                    can_sign: merge_block::worktree_can_sign(control.worktree_path()),
+                    can_merge_as_admin: observed.viewer_can_merge_as_admin,
+                },
+            ),
         )?;
         self.insert_provenance(
             Some(&attempt),

@@ -10,5 +10,6 @@ pub mod herdr;
 pub mod herdr_bridge;
 pub mod herdr_readiness;
 pub mod issue_tracker;
+pub mod merge_block;
 pub mod provider_http;
 pub mod suplex;

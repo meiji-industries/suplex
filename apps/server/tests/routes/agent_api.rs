@@ -447,9 +447,12 @@ pub(crate) mod tests {
             identity["agent"],
             json!({"id": agent.agent_id, "name": "AgentApi Bot", "profileId": "profile-bot"})
         );
+        let alt = identity["projects"][0]["altProfileId"].clone();
+        let updated_at = identity["projects"][0]["updatedAt"].clone();
+        assert!(alt.is_string() && updated_at.is_string(), "{identity}");
         assert_eq!(
             identity["projects"],
-            json!([{"id": "project_api", "name": "API Project", "deliveryDefaults": {"deliveryTargets": ["local_worktree"], "runProjectTests": true, "visualEvidence": "off"}, "agentTaskPolicy": {"deliveryTargets": ["local_worktree"], "runProjectTests": true, "visualEvidence": "off"}}])
+            json!([{"id": "project_api", "name": "API Project", "deliveryDefaults": {"deliveryTargets": ["local_worktree"], "runProjectTests": true, "visualEvidence": "off"}, "agentTaskPolicy": {"deliveryTargets": ["local_worktree"], "runProjectTests": true, "visualEvidence": "off"}, "rootProfileId": "profile_native_root", "workerProfileId": "profile_native_worker", "altProfileId": alt, "providerPolicy": null, "updatedAt": updated_at}])
         );
         assert_eq!(
             identity["capabilities"]["taskCommands"]
@@ -1511,7 +1514,7 @@ pub(crate) mod tests {
         let refused = rpc(4, "tools/call", json!({"name": "suplex_update_task", "arguments": {"taskId": id, "revision": reread["revision"], "idempotencyKey": "oauth-update-2", "workerProfileId": "profile_missing"}})).await;
         assert_eq!(
             refused["result"]["structuredContent"],
-            json!({"status": 422, "body": {"error": "The selected agent profile does not exist", "code": "worker_profile_not_found"}})
+            json!({"status": 422, "body": {"error": "The selected agent profile does not exist", "code": "worker_profile_not_found", "field": "workerProfileId", "value": "profile_missing", "reason": "The selected agent profile does not exist"}})
         );
 
         let openapi: Value = serde_json::from_str(include_str!("../../src/http/routes/agent_api_openapi.json")).unwrap();
@@ -2772,6 +2775,12 @@ pub(crate) mod tests {
         let agent = agent().await;
         seed_profiles(&agent.server);
         set_policy(&agent.server, "project_api", &policy_without_pi(&agent.server));
+        let (status, preview) = agent.call(reqwest::Method::POST, "/api/agent/tasks", Some(json!({"projectId": "project_api", "title": "Profile preview", "idempotencyKey": "profile-preview-001", "dryRun": true, "workerProfileId": "profile_test_builder"}))).await;
+        assert_eq!(
+            (status, preview["workerProfile"].clone()),
+            (200, json!({"id": "profile_test_builder", "name": "Builder Worker"})),
+            "{preview}"
+        );
         let task = agent.create("Profile change", "profile-change-001").await;
         assert_eq!(task["rootProfile"], json!({"id": "profile_native_root", "name": task["rootProfile"]["name"]}));
         assert!(task["rootProfile"]["name"].is_string() && task["workerProfile"]["name"].is_string(), "{task}");

@@ -192,12 +192,25 @@
                               "enum": [
                                 true
                               ]
+                            },
+                            "profiles": {
+                              "type": "boolean",
+                              "enum": [
+                                true
+                              ]
+                            },
+                            "moves": {
+                              "type": "boolean"
+                            },
+                            "transcripts": {
+                              "type": "boolean"
                             }
                           },
                           "required": [
                             "task",
                             "workflows",
-                            "templates"
+                            "templates",
+                            "profiles"
                           ],
                           "additionalProperties": false
                         },
@@ -252,6 +265,10 @@
                         "humanDecisions": {
                           "type": "boolean",
                           "description": "True when an administrator lets this agent answer Coordinator questions."
+                        },
+                        "projectAgents": {
+                          "type": "boolean",
+                          "description": "True when an administrator lets this agent change the default agents of its projects."
                         }
                       },
                       "required": [
@@ -260,7 +277,8 @@
                         "taskControl",
                         "delivery",
                         "merge",
-                        "humanDecisions"
+                        "humanDecisions",
+                        "projectAgents"
                       ],
                       "additionalProperties": false
                     },
@@ -272,6 +290,7 @@
                           "create_backlog_task",
                           "create_queued_task",
                           "update_task",
+                          "list_profiles",
                           "start_task",
                           "move_to_front",
                           "force_start",
@@ -288,7 +307,20 @@
                           "decide_delivery_wait",
                           "read_merge_train",
                           "request_merge_approval",
-                          "merge_pull_request"
+                          "merge_pull_request",
+                          "list_moves",
+                          "get_move",
+                          "create_move",
+                          "update_move",
+                          "delete_move",
+                          "start_move",
+                          "list_move_runs",
+                          "get_move_run",
+                          "get_move_run_transcript",
+                          "stop_move_run",
+                          "archive_move_run",
+                          "get_task_session_history",
+                          "update_project_agents"
                         ]
                       },
                       "description": "autonomousCommands lists every command available through the runtime API. unavailableCommands lists commands this deployment does not accept. taskCommands from suplex_whoami is the lifecycle subset exposed by suplex_command_task."
@@ -984,6 +1016,739 @@
     "/api/agent/move-runs/{runId}/archive": {
       "parameters": [{"name":"runId","in":"path","required":true,"schema":{"type":"string"}}],
       "post": { "operationId": "archiveAgentMoveRun", "summary": "Archive a Move run", "security": [{"AgentApiBearer": []}], "responses": {"204":{"description":"Archived"},"403":{"description":"moves_grant_required: an administrator must turn on Manage and run Moves for this agent"},"404":{"description":"Not found"}} }
+    },
+    "/api/agent/profiles": {
+      "get": {
+        "operationId": "listAgentApiProfiles",
+        "summary": "List agent profiles",
+        "description": "Lists agent profiles and marks which granted projects allow each one. Every paired agent can use it; it needs no administrator grant. With projectId, the list keeps only the profiles that granted project allows; a project outside the grants returns the same 404 as a missing project. Use it to find a profile ID by name before PATCH /api/agent/tasks/{taskId} or PATCH /api/agent/projects/{projectId}/agents.",
+        "security": [
+          {
+            "AgentApiBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "role",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "root",
+                "worker"
+              ]
+            }
+          },
+          {
+            "name": "includeArchived",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "true",
+                "false"
+              ],
+              "default": "false"
+            }
+          },
+          {
+            "name": "projectId",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "profiles": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "name": {
+                            "type": "string"
+                          },
+                          "role": {
+                            "type": "string",
+                            "enum": [
+                              "root",
+                              "worker"
+                            ],
+                            "description": "root is a Coordinator profile; worker is a Worker profile."
+                          },
+                          "provider": {
+                            "type": "string",
+                            "enum": [
+                              "opencode",
+                              "claude-code",
+                              "devin",
+                              "codex",
+                              "pi",
+                              "omp"
+                            ]
+                          },
+                          "model": {
+                            "type": "string"
+                          },
+                          "reasoningLevel": {
+                            "type": "string"
+                          },
+                          "archived": {
+                            "type": "boolean"
+                          },
+                          "isDefaultForRole": {
+                            "type": "boolean",
+                            "description": "True for the stored default that new projects receive for this role: the Coordinator slot for root, the Worker slot for worker."
+                          },
+                          "defaultSlots": {
+                            "type": "array",
+                            "items": {
+                              "type": "string",
+                              "enum": [
+                                "root",
+                                "alt",
+                                "worker"
+                              ]
+                            },
+                            "description": "Every default slot this profile fills; alt is the Alt Coordinator."
+                          },
+                          "projects": {
+                            "type": "array",
+                            "description": "Each granted project and whether its provider policy allows this profile. An archived profile is not allowed.",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "projectId": {
+                                  "type": "string"
+                                },
+                                "allowed": {
+                                  "type": "boolean"
+                                }
+                              },
+                              "required": [
+                                "projectId",
+                                "allowed"
+                              ],
+                              "additionalProperties": false
+                            }
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "name",
+                          "role",
+                          "provider",
+                          "model",
+                          "reasoningLevel",
+                          "archived",
+                          "isDefaultForRole",
+                          "defaultSlots",
+                          "projects"
+                        ],
+                        "additionalProperties": false
+                      }
+                    }
+                  },
+                  "required": [
+                    "profiles"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Safe error response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "code": {
+                      "type": "string",
+                      "enum": [
+                        "request_invalid"
+                      ]
+                    },
+                    "field": {
+                      "type": "string"
+                    },
+                    "value": {
+                      "type": "string"
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "updatedAt": {
+                      "type": "string"
+                    },
+                    "findings": {
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      }
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "code"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Safe error response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "code": {
+                      "type": "string",
+                      "enum": [
+                        "credential_invalid"
+                      ]
+                    },
+                    "field": {
+                      "type": "string"
+                    },
+                    "value": {
+                      "type": "string"
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "updatedAt": {
+                      "type": "string"
+                    },
+                    "findings": {
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      }
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "code"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The project is missing or outside the agent's grants",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "code": {
+                      "type": "string",
+                      "enum": [
+                        "not_found",
+                        "resource_not_found"
+                      ]
+                    },
+                    "field": {
+                      "type": "string"
+                    },
+                    "value": {
+                      "type": "string"
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "updatedAt": {
+                      "type": "string"
+                    },
+                    "findings": {
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      }
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "code"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/agent/projects/{projectId}/agents": {
+      "patch": {
+        "operationId": "updateAgentApiProjectAgents",
+        "summary": "Change a project's default agents",
+        "description": "Changes the project's default Coordinator (rootProfileId), Worker (workerProfileId), or Alt Coordinator (altProfileId). New tasks use these defaults; existing tasks keep their agents. Needs the administrator grant Change project agents, read on each request; GET /api/agent/me reports it as projectAgentsGrant. Without the grant, every project returns 404 project_agents_grant_required. A project outside the agent's grants returns the concealed 404. Each profile must exist, be active, have the role of its field, and be allowed by the project's provider policy, as in the Project > Agents form. updatedAt is the project's updatedAt from GET /api/agent/me or the last write; a different value returns 412 revision_stale with the current updatedAt. A repeated idempotencyKey with the same body returns the first result and writes nothing; a different body returns 409 idempotency_conflict.",
+        "security": [
+          {
+            "AgentApiBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "projectId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "updatedAt": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 64
+                  },
+                  "idempotencyKey": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128
+                  },
+                  "rootProfileId": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 256
+                  },
+                  "workerProfileId": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 256
+                  },
+                  "altProfileId": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 256
+                  }
+                },
+                "required": [
+                  "updatedAt",
+                  "idempotencyKey"
+                ],
+                "minProperties": 3,
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The project's default agents",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "projectId": {
+                      "type": "string"
+                    },
+                    "rootProfileId": {
+                      "type": "string"
+                    },
+                    "workerProfileId": {
+                      "type": "string"
+                    },
+                    "altProfileId": {
+                      "type": "string"
+                    },
+                    "providerPolicy": {
+                      "nullable": true,
+                      "type": "object",
+                      "properties": {
+                        "allowedProviders": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        "allowedInstanceIds": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        }
+                      },
+                      "required": [
+                        "allowedProviders",
+                        "allowedInstanceIds"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "updatedAt": {
+                      "type": "string",
+                      "description": "The concurrency token of the next write."
+                    }
+                  },
+                  "required": [
+                    "projectId",
+                    "rootProfileId",
+                    "workerProfileId",
+                    "altProfileId",
+                    "providerPolicy",
+                    "updatedAt"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Safe error response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "code": {
+                      "type": "string",
+                      "enum": [
+                        "request_invalid"
+                      ]
+                    },
+                    "field": {
+                      "type": "string"
+                    },
+                    "value": {
+                      "type": "string"
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "updatedAt": {
+                      "type": "string"
+                    },
+                    "findings": {
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      }
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "code"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Safe error response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "code": {
+                      "type": "string",
+                      "enum": [
+                        "credential_invalid"
+                      ]
+                    },
+                    "field": {
+                      "type": "string"
+                    },
+                    "value": {
+                      "type": "string"
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "updatedAt": {
+                      "type": "string"
+                    },
+                    "findings": {
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      }
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "code"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "project_agents_grant_required: an administrator must turn on Change project agents for this agent. not_found: the project is missing or outside the agent's grants.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "code": {
+                      "type": "string",
+                      "enum": [
+                        "project_agents_grant_required",
+                        "not_found"
+                      ]
+                    },
+                    "field": {
+                      "type": "string"
+                    },
+                    "value": {
+                      "type": "string"
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "updatedAt": {
+                      "type": "string"
+                    },
+                    "findings": {
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      }
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "code"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The idempotency key belongs to a different request, or the company is not active",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "code": {
+                      "type": "string",
+                      "enum": [
+                        "idempotency_conflict",
+                        "task_unavailable"
+                      ]
+                    },
+                    "field": {
+                      "type": "string"
+                    },
+                    "value": {
+                      "type": "string"
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "updatedAt": {
+                      "type": "string"
+                    },
+                    "findings": {
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      }
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "code"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "updatedAt is stale; the body has the current updatedAt",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "code": {
+                      "type": "string",
+                      "enum": [
+                        "revision_stale"
+                      ]
+                    },
+                    "field": {
+                      "type": "string"
+                    },
+                    "value": {
+                      "type": "string"
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "updatedAt": {
+                      "type": "string"
+                    },
+                    "findings": {
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      }
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "code"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A rejected profile, with field, value, and reason",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "code": {
+                      "type": "string",
+                      "enum": [
+                        "root_profile_not_found",
+                        "worker_profile_not_found",
+                        "alt_profile_not_found",
+                        "profile_not_allowed"
+                      ]
+                    },
+                    "field": {
+                      "type": "string"
+                    },
+                    "value": {
+                      "type": "string"
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "updatedAt": {
+                      "type": "string"
+                    },
+                    "findings": {
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      }
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "code"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Safe error response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "code": {
+                      "type": "string",
+                      "enum": [
+                        "internal_error"
+                      ]
+                    },
+                    "field": {
+                      "type": "string"
+                    },
+                    "value": {
+                      "type": "string"
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "updatedAt": {
+                      "type": "string"
+                    },
+                    "findings": {
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      }
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "code"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        }
+      }
     },
     "/api/agent/tasks": {
       "post": {
@@ -1685,6 +2450,42 @@
                           "nullable": true,
                           "type": "string"
                         },
+                        "rootProfile": {
+                          "type": "object",
+                          "description": "The agent profile the task runs with. name is null when that profile no longer exists.",
+                          "properties": {
+                            "id": {
+                              "type": "string"
+                            },
+                            "name": {
+                              "nullable": true,
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "id",
+                            "name"
+                          ],
+                          "additionalProperties": false
+                        },
+                        "workerProfile": {
+                          "type": "object",
+                          "description": "The agent profile the task runs with. name is null when that profile no longer exists.",
+                          "properties": {
+                            "id": {
+                              "type": "string"
+                            },
+                            "name": {
+                              "nullable": true,
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "id",
+                            "name"
+                          ],
+                          "additionalProperties": false
+                        },
                         "deliveryTarget": {
                           "type": "string",
                           "enum": [
@@ -2081,6 +2882,8 @@
                         "workflowStage",
                         "workflow",
                         "templateId",
+                        "rootProfile",
+                        "workerProfile",
                         "deliveryTarget",
                         "runProjectTests",
                         "visualEvidence",
@@ -2152,6 +2955,42 @@
                               "nullable": true,
                               "type": "string"
                             },
+                            "rootProfile": {
+                              "type": "object",
+                              "description": "The agent profile the task runs with. name is null when that profile no longer exists.",
+                              "properties": {
+                                "id": {
+                                  "type": "string"
+                                },
+                                "name": {
+                                  "nullable": true,
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "id",
+                                "name"
+                              ],
+                              "additionalProperties": false
+                            },
+                            "workerProfile": {
+                              "type": "object",
+                              "description": "The agent profile the task runs with. name is null when that profile no longer exists.",
+                              "properties": {
+                                "id": {
+                                  "type": "string"
+                                },
+                                "name": {
+                                  "nullable": true,
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "id",
+                                "name"
+                              ],
+                              "additionalProperties": false
+                            },
                             "deliveryTarget": {
                               "type": "string",
                               "enum": [
@@ -2193,6 +3032,8 @@
                             "title",
                             "workflow",
                             "templateId",
+                            "rootProfile",
+                            "workerProfile",
                             "deliveryTarget",
                             "branch",
                             "dependsOn",
@@ -2674,6 +3515,42 @@
                       "nullable": true,
                       "type": "string"
                     },
+                    "rootProfile": {
+                      "type": "object",
+                      "description": "The agent profile the task runs with. name is null when that profile no longer exists.",
+                      "properties": {
+                        "id": {
+                          "type": "string"
+                        },
+                        "name": {
+                          "nullable": true,
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "name"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "workerProfile": {
+                      "type": "object",
+                      "description": "The agent profile the task runs with. name is null when that profile no longer exists.",
+                      "properties": {
+                        "id": {
+                          "type": "string"
+                        },
+                        "name": {
+                          "nullable": true,
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "name"
+                      ],
+                      "additionalProperties": false
+                    },
                     "deliveryTarget": {
                       "type": "string",
                       "enum": [
@@ -3070,6 +3947,8 @@
                     "workflowStage",
                     "workflow",
                     "templateId",
+                    "rootProfile",
+                    "workerProfile",
                     "deliveryTarget",
                     "runProjectTests",
                     "visualEvidence",
@@ -4693,6 +5572,42 @@
                       "nullable": true,
                       "type": "string"
                     },
+                    "rootProfile": {
+                      "type": "object",
+                      "description": "The agent profile the task runs with. name is null when that profile no longer exists.",
+                      "properties": {
+                        "id": {
+                          "type": "string"
+                        },
+                        "name": {
+                          "nullable": true,
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "name"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "workerProfile": {
+                      "type": "object",
+                      "description": "The agent profile the task runs with. name is null when that profile no longer exists.",
+                      "properties": {
+                        "id": {
+                          "type": "string"
+                        },
+                        "name": {
+                          "nullable": true,
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "name"
+                      ],
+                      "additionalProperties": false
+                    },
                     "deliveryTarget": {
                       "type": "string",
                       "enum": [
@@ -5089,6 +6004,8 @@
                     "workflowStage",
                     "workflow",
                     "templateId",
+                    "rootProfile",
+                    "workerProfile",
                     "deliveryTarget",
                     "runProjectTests",
                     "visualEvidence",
@@ -5396,7 +6313,7 @@
       "patch": {
         "operationId": "updateAgentApiTask",
         "summary": "Change the details of a backlog or queued task",
-        "description": "Changes the details of a backlog or queued task: title, description, workflow, Coordinator, Worker, Advisor profiles, delivery target, project tests, and screenshots. Every update requires the current task revision and an idempotency key, and names at least one field. An omitted field keeps its stored value. workflowId names a workflow from GET /api/agent/workflows; Suplex applies its engine. advisorProfileIds is the complete Advisor selection: an empty object clears named Advisors, so each role follows its default. Each named role must belong to the task's resulting workflow, and each profile must be an existing Coordinator profile. A queued task stays queued with the same prerequisites. To hold a queued task while it changes, send disarm_task, update the task, then send start_task to queue it again. An active or delivered task accepts only deliveryTarget, moved forward: Suplex sets the new target and the Coordinator continues toward it, reopening a delivered task. A waiting_human, cancelled, or archived task is refused with illegal_command. A rejected profile or workflow reports field, value, and reason, and the task keeps its revision. The response is the updated task with its new revision.",
+        "description": "Changes the details of a backlog or queued task: title, description, workflow, Coordinator, Worker, Advisor profiles, delivery target, project tests, and screenshots. Every update requires the current task revision and an idempotency key, and names at least one field. An omitted field keeps its stored value. workflowId names a workflow from GET /api/agent/workflows; Suplex applies its engine. advisorProfileIds is the complete Advisor selection: an empty object clears named Advisors, so each role follows its default. Each named role must belong to the task's resulting workflow, and each profile must be an existing Coordinator profile. A queued task stays queued with the same prerequisites. To hold a queued task while it changes, send disarm_task, update the task, then send start_task to queue it again. An active or delivered task accepts only deliveryTarget, moved forward: Suplex sets the new target and the Coordinator continues toward it, reopening a delivered task. A waiting_human, cancelled, or archived task is refused with illegal_command. A rejected profile or workflow reports field, value, and reason, and the task keeps its revision. An unknown, archived, or wrong-role profile is root_profile_not_found, worker_profile_not_found, or advisor_profile_not_found; a profile that the project provider policy does not allow is profile_not_allowed. Find profile IDs by name with GET /api/agent/profiles. The response is the updated task with its new revision.",
         "security": [
           {
             "AgentApiBearer": []
@@ -5896,6 +6813,42 @@
                       "nullable": true,
                       "type": "string"
                     },
+                    "rootProfile": {
+                      "type": "object",
+                      "description": "The agent profile the task runs with. name is null when that profile no longer exists.",
+                      "properties": {
+                        "id": {
+                          "type": "string"
+                        },
+                        "name": {
+                          "nullable": true,
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "name"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "workerProfile": {
+                      "type": "object",
+                      "description": "The agent profile the task runs with. name is null when that profile no longer exists.",
+                      "properties": {
+                        "id": {
+                          "type": "string"
+                        },
+                        "name": {
+                          "nullable": true,
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "name"
+                      ],
+                      "additionalProperties": false
+                    },
                     "deliveryTarget": {
                       "type": "string",
                       "enum": [
@@ -6046,6 +6999,8 @@
                     "workflowStage",
                     "workflow",
                     "templateId",
+                    "rootProfile",
+                    "workerProfile",
                     "deliveryTarget",
                     "runProjectTests",
                     "visualEvidence",
@@ -6893,6 +7848,60 @@
                       "required": [
                         "error",
                         "code"
+                      ],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "error": {
+                          "type": "string"
+                        },
+                        "code": {
+                          "type": "string",
+                          "enum": [
+                            "profile_not_allowed"
+                          ]
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "type": "string"
+                        },
+                        "reason": {
+                          "type": "string"
+                        },
+                        "findings": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "code": {
+                                "type": "string"
+                              },
+                              "field": {
+                                "type": "string"
+                              },
+                              "message": {
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "code",
+                              "field",
+                              "message"
+                            ],
+                            "additionalProperties": false
+                          }
+                        }
+                      },
+                      "required": [
+                        "error",
+                        "code",
+                        "field",
+                        "value",
+                        "reason"
                       ],
                       "additionalProperties": false
                     }
@@ -7780,6 +8789,42 @@
                           "nullable": true,
                           "type": "string"
                         },
+                        "rootProfile": {
+                          "type": "object",
+                          "description": "The agent profile the task runs with. name is null when that profile no longer exists.",
+                          "properties": {
+                            "id": {
+                              "type": "string"
+                            },
+                            "name": {
+                              "nullable": true,
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "id",
+                            "name"
+                          ],
+                          "additionalProperties": false
+                        },
+                        "workerProfile": {
+                          "type": "object",
+                          "description": "The agent profile the task runs with. name is null when that profile no longer exists.",
+                          "properties": {
+                            "id": {
+                              "type": "string"
+                            },
+                            "name": {
+                              "nullable": true,
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "id",
+                            "name"
+                          ],
+                          "additionalProperties": false
+                        },
                         "deliveryTarget": {
                           "type": "string",
                           "enum": [
@@ -7931,6 +8976,8 @@
                         "workflowStage",
                         "workflow",
                         "templateId",
+                        "rootProfile",
+                        "workerProfile",
                         "deliveryTarget",
                         "runProjectTests",
                         "visualEvidence",
@@ -8917,6 +9964,42 @@
                       "nullable": true,
                       "type": "string"
                     },
+                    "rootProfile": {
+                      "type": "object",
+                      "description": "The agent profile the task runs with. name is null when that profile no longer exists.",
+                      "properties": {
+                        "id": {
+                          "type": "string"
+                        },
+                        "name": {
+                          "nullable": true,
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "name"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "workerProfile": {
+                      "type": "object",
+                      "description": "The agent profile the task runs with. name is null when that profile no longer exists.",
+                      "properties": {
+                        "id": {
+                          "type": "string"
+                        },
+                        "name": {
+                          "nullable": true,
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "name"
+                      ],
+                      "additionalProperties": false
+                    },
                     "deliveryTarget": {
                       "type": "string",
                       "enum": [
@@ -9068,6 +10151,8 @@
                     "workflowStage",
                     "workflow",
                     "templateId",
+                    "rootProfile",
+                    "workerProfile",
                     "deliveryTarget",
                     "runProjectTests",
                     "visualEvidence",

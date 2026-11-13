@@ -2217,17 +2217,25 @@ fn recheck_policy(
 }
 
 /// The dry-run response: what the admission would create and start.
-fn dry_run_preview(task: &response::TaskResponse, project: &Project, selection: &Value) -> Value {
-    merged(
+fn dry_run_preview(
+    database: &SuplexDatabase,
+    task: &response::TaskResponse,
+    project: &Project,
+    selection: &Value,
+) -> DatabaseResult<Value> {
+    Ok(merged(
         json!({
             "dryRun": true, "projectId": task.project_id, "project": {"id": project.id, "name": project.name},
             "title": task.title,
             "workflow": {"id": selection["workflowId"], "engine": task.workflow, "name": selection["workflowName"]},
-            "templateId": selection["templateId"], "deliveryTarget": task.delivery_target,
+            "templateId": selection["templateId"],
+            "rootProfile": task_profile(database, &task.root_profile.profile_id)?,
+            "workerProfile": task_profile(database, &task.worker_profile.profile_id)?,
+            "deliveryTarget": task.delivery_target,
             "branch": task.configuration.branch, "dependsOn": task.depends_on,
         }),
         would_start(task.status, &task.queue),
-    )
+    ))
 }
 
 /// Insert the task, with its images unless this is a dry run, and save a
@@ -2310,7 +2318,7 @@ fn write(
         )?;
         let task = task(database, &result.task.id)?;
         if dry_run {
-            let preview = dry_run_preview(&task, &project, &pending.resolved.selection);
+            let preview = dry_run_preview(database, &task, &project, &pending.resolved.selection)?;
             return Err(Box::new(DryRunRollback(preview)));
         }
         Ok(Creation::Task {

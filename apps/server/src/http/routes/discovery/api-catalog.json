@@ -86,6 +86,18 @@
       "description": "List task templates for a granted project and whether task creation permits each one."
     },
     {
+      "path": "/api/agent/profiles",
+      "method": "GET",
+      "authentication": "agent credential",
+      "description": "List agent profiles with role, provider, model, archive state, isDefaultForRole, and which granted projects allow each one. Filter by role, includeArchived, and projectId. Every paired agent can use it."
+    },
+    {
+      "path": "/api/agent/projects/{projectId}/agents",
+      "method": "PATCH",
+      "authentication": "agent credential",
+      "description": "Change a granted project's default Coordinator, Worker, or Alt Coordinator with its updatedAt and an idempotency key. It needs the administrator's project agents grant; without it every project answers 404 with project_agents_grant_required. Rejected profiles report root_profile_not_found, worker_profile_not_found, alt_profile_not_found, or profile_not_allowed with field, value, and reason."
+    },
+    {
       "path": "/api/agent/tasks",
       "method": "GET",
       "authentication": "agent credential",
@@ -110,7 +122,7 @@
       "path": "/api/agent/tasks/{taskId}",
       "method": "PATCH",
       "authentication": "agent credential",
-      "description": "Change the details of a backlog or queued task, including its workflow and Advisor profiles, with the current revision and an idempotency key. A queued task stays queued. To hold a queued task while it changes, send disarm_task, update it, then send start_task. An active or delivered task accepts only a later deliveryTarget, and the Coordinator continues toward it. Other task states are refused with illegal_command. Rejected fields report root_profile_not_found, worker_profile_not_found, advisor_profile_not_found, advisor_role_not_in_workflow, or workflow_not_found with field, value, and reason."
+      "description": "Change the details of a backlog or queued task, including its workflow and Advisor profiles, with the current revision and an idempotency key. A queued task stays queued. To hold a queued task while it changes, send disarm_task, update it, then send start_task. An active or delivered task accepts only a later deliveryTarget, and the Coordinator continues toward it. Other task states are refused with illegal_command. Rejected fields report root_profile_not_found, worker_profile_not_found, advisor_profile_not_found, advisor_role_not_in_workflow, workflow_not_found, or profile_not_allowed with field, value, and reason."
     },
     {
       "path": "/api/agent/tasks/{taskId}/dependencies",
@@ -126,7 +138,7 @@
     }
   ],
   "administration": {
-    "description": "OAuth connections, pairing codes, credential rotation, revocation, project grants, and permission to answer questions appear on the Agents page. An administrator controls them."
+    "description": "OAuth connections, pairing codes, credential rotation, revocation, project grants, and permission to answer questions, run Moves, read transcripts, and change project agents appear on the Agents page. An administrator controls them."
   },
   "notes": [
     "Suplex conceals tasks that the caller cannot read. Denied and missing tasks both answer 404 with resource_not_found.",

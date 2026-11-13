@@ -33,15 +33,17 @@ Both the HTTP and stdio transports expose the same tools:
 
 | Tool | Purpose |
 | --- | --- |
-| `suplex_whoami` | Read the agent identity, projects, and project delivery defaults (`deliveryDefaults`; `agentTaskPolicy` is a deprecated alias). |
+| `suplex_whoami` | Read the agent identity, projects, project delivery defaults (`deliveryDefaults`; `agentTaskPolicy` is a deprecated alias), and each project's default agents (`rootProfileId`, `workerProfileId`, `altProfileId`, `providerPolicy`, `updatedAt`). |
 | `suplex_capabilities` | Read autonomous and unavailable commands. |
 | `suplex_list_workflows` | List workflows for a granted project. |
 | `suplex_list_templates` | List templates for a granted project. |
+| `suplex_list_profiles` | List agent profiles with role, provider, model, archive state, `isDefaultForRole`, and which granted projects allow each profile. Filter by `role`, `includeArchived`, and `projectId`. Every paired agent can use it. |
 | `suplex_list_tasks` | List tasks in currently granted projects. It defaults to the compact `summary` view. Use `view: "full"` for the complete projection. It accepts `pullRequestNumber`, `sourceBranch`, and case-insensitive `titleContains` filters. |
 | `suplex_get_task` | Read a task in a granted project or report that a known revision is unchanged. |
 | `suplex_get_task_delivery` | Read the delivery and blocker projection. |
 | `suplex_create_task` | Create a backlog or queued task with an idempotency key. |
 | `suplex_update_task` | Change the details and Advisor profiles of a backlog or queued task with the current revision. |
+| `suplex_update_project_agents` | Change the default Coordinator, Worker, or Alt Coordinator of a granted project with its `updatedAt` and an idempotency key. It needs the administrator's project agents grant. |
 | `suplex_set_task_dependencies` | Replace the prerequisites of a task. A prerequisite task with a pull request delivery target is complete when its pull request merges. |
 | `suplex_command_task` | Apply a lifecycle command with a task revision, including `move_to_front` for queued tasks. A change to only `updatedAt` or `delivery` does not make the revision stale. |
 | `suplex_list_task_turns` | List the turns of a task, newest first, with the task limits, admitted turns, estimated spend, and the cost and tokens of each turn. It returns metadata only and works for any task you can read. When Suplex cannot read the native session, `usage.observation` is `unavailable` and the costs are `null`. |
@@ -58,6 +60,10 @@ Suplex re-reads the agent, administrator authority, company access, and project 
 Moves require both the administrator's Move grant and a current grant to the Move's project. Without the Move grant, each Move tool returns `403` `moves_grant_required`, and the message names the setting to turn on: **Manage and run Moves** in the agent's actions on the Agents page. A prompt Move may still require a person at its interactive terminal; MCP and the Agent API do not provide remote terminal interaction.
 
 `suplex_update_task` changes a backlog or queued task directly. A queued task stays queued with the same prerequisites. To hold a queued task while it changes, send `disarm_task` with `suplex_command_task`, update the task, then send `start_task` to queue it again. An empty `advisorProfileIds` object returns each Advisor role to its default. An active or delivered task accepts only a later `deliveryTarget`: the Coordinator continues toward the new target, and a delivered task reopens. Other task states return `illegal_command`.
+
+To change a task's agents, call `suplex_list_profiles` with `role` and `projectId`, find each profile by `name`, then call `suplex_update_task` with the task's `revision` and the `rootProfileId` or `workerProfileId`. Task reads report `rootProfile` and `workerProfile` as `{ id, name }`. An unknown, archived, wrong-role, or disallowed profile returns `422` with `field`, `value`, and `reason`.
+
+`suplex_update_project_agents` needs the administrator grant **Change project agents** in the agent's actions on the Agents page; `suplex_whoami` reports it as `projectAgentsGrant`. Without it, every project returns `404` `project_agents_grant_required`. A project outside the agent's grants returns the concealed `404`. The Project > Agents form rules apply, a stale `updatedAt` returns `412` `revision_stale`, and a repeated `idempotencyKey` returns the first result. See [the runtime API guide](agent-api.md#changing-a-projects-default-agents).
 
 Task reads and lifecycle commands cover tasks in the agent's granted projects, including tasks created by GitHub label triggers.
 `force_start` starts a queued task now, without waiting for its prerequisites or a project slot. `move_to_front` puts a queued task ahead of other queued tasks without bypassing prerequisites or concurrency limits. Each later promotion takes the front position.

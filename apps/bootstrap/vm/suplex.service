@@ -12,6 +12,11 @@ Environment=PATH=/home/suplex/.local/bin:/home/suplex/.local/share/mise/shims:/u
 ExecStart=/home/suplex/.local/bin/suplex up --foreground
 Restart=always
 RestartSec=5
+# Agent turns run in their own process groups and outlive a restart; Suplex observes them on start.
+# The supervisor stops `suplex serve` on SIGTERM.
+KillMode=process
+# An agent command killed by the kernel OOM killer fails only its turn; the default stops the whole unit.
+OOMPolicy=continue
 NoNewPrivileges=yes
 ProtectSystem=full
 

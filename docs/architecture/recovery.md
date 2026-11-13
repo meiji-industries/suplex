@@ -10,6 +10,14 @@ safe. An admitted turn that stopped before a final answer leads to a new
 continuation from current task and repository state, not a replay of its message.
 A lost OpenCode server can restart while retaining its native session.
 
+A headless turn runs in its own process group and outlives a host restart.
+Its launch record, output log, and exit file are on disk, so the restarted
+host observes it as running, then reads its result, without a second launch.
+A service manager must stop only the supervisor: the systemd unit sets
+`KillMode=process`, because the default kills every process in the unit's
+cgroup. It also sets `OOMPolicy=continue`, so an agent command that the kernel
+OOM killer kills fails only its turn and does not stop the unit. See [the install guide](../install.md).
+
 Process cleanup is separate from prompt admission. Recovery inspects a saved
 launch owner's current process identity before stopping a retired session.
 [Worktree cleanup](../../apps/server/src/tasks/archive/processes.rs) discovers likely

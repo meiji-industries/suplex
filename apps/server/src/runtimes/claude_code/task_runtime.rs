@@ -1005,6 +1005,116 @@ mod tests {
         assert!(recovered.execution_uncertain);
     }
 
+    /// A host restart leaves the turn running under a process this host did not
+    /// start. Its durable record and log alone carry the turn to its result.
+    #[tokio::test]
+    async fn a_turn_left_running_by_a_previous_host_completes_without_a_second_launch() {
+        use crate::runtimes::process::inspect_process;
+        let f = fixture("complete");
+        let scope = worker(&f);
+        let directory = scope.runtime_directory().unwrap();
+        fs::create_dir_all(&directory).unwrap();
+        // The launcher exits at once, so the turn process is not a child of this one.
+        // The turn process leads its group before it reports its pid and closes the
+        // pipe that `output` waits on, and it never execs, so it is inspected in its
+        // final form. `sh -c 'set -m'` cannot do this: dash turns job control off
+        // without a terminal.
+        let launched = std::process::Command::new("perl")
+            .args([
+                "-e",
+                r#"exit if fork; setpgrp(0, 0); print "$$\n"; close STDOUT; close STDERR; sleep 30"#,
+            ])
+            .output()
+            .unwrap();
+        let pid: u32 = String::from_utf8(launched.stdout)
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        let found = inspect_process(pid).expect("the orphaned turn process is running");
+        assert_eq!(found.process_group, pid, "{found:?}");
+        let record = headless::HeadlessTurnRecord {
+            generation: "previous-host".into(),
+            turn_id: "msg_turn".into(),
+            session_id: SESSION.into(),
+            pid,
+            process_identity: headless::RecordedProcessIdentity {
+                command: found.command,
+                executable: found.executable,
+                argv: found.argv,
+                process_group: found.process_group,
+                start_time: found.start_time,
+                owner_uid: found.owner_uid.unwrap(),
+            },
+            dispatch_arguments: Vec::new(),
+        };
+        fs::write(
+            directory.join("turn.json"),
+            serde_json::to_vec(&record).unwrap(),
+        )
+        .unwrap();
+        let log = headless::turn_file(&directory, "msg_turn", "jsonl");
+        fs::write(
+            &log,
+            format!(
+                "{}\n",
+                json!({"type":"system","subtype":"init","session_id":SESSION,"cwd":f.worktree,"model":"m","tools":[]})
+            ),
+        )
+        .unwrap();
+        let observe = || async {
+            ClaudeCodeTaskRuntime
+                .observe(
+                    SessionRef {
+                        directory: &directory,
+                        native_session_id: SESSION,
+                    },
+                    "msg_turn",
+                    DispatchState::Ambiguous,
+                    Some("previous-host"),
+                )
+                .await
+                .unwrap()
+        };
+        let running = observe().await;
+        assert_eq!(
+            (
+                running.state,
+                running.process_running,
+                running.admission_observed
+            ),
+            (PromptState::Running, true, true)
+        );
+        assert!(
+            dispatch(&scope)
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("replay is blocked")
+        );
+        assert!(!f.root.join("args.txt").exists(), "no second launch");
+        let mut appended = fs::OpenOptions::new().append(true).open(&log).unwrap();
+        std::io::Write::write_all(
+            &mut appended,
+            format!(
+                "{}\n",
+                json!({"type":"result","subtype":"success","is_error":false,"result":"Done.","session_id":SESSION,"uuid":"r1"})
+            )
+            .as_bytes(),
+        )
+        .unwrap();
+        headless::stop_owned(&record).unwrap();
+        let completed = observe().await;
+        assert_eq!(completed.state, PromptState::Completed);
+        assert_eq!(
+            ClaudeCodeTaskRuntime
+                .result_text(&directory, "msg_turn")
+                .await
+                .unwrap(),
+            "Done."
+        );
+    }
+
     #[tokio::test]
     async fn a_turn_whose_process_exits_without_a_result_is_interrupted_and_a_startup_failure_surfaces_stderr()
      {

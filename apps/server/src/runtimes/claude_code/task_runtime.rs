@@ -1016,12 +1016,13 @@ mod tests {
         fs::create_dir_all(&directory).unwrap();
         // The launcher exits at once, so the turn process is not a child of this one.
         // The turn process leads its group before it reports its pid and closes the
-        // pipe that `output` waits on. `sh -c 'set -m'` cannot do this: dash turns
-        // job control off without a terminal.
+        // pipe that `output` waits on, and it never execs, so it is inspected in its
+        // final form. `sh -c 'set -m'` cannot do this: dash turns job control off
+        // without a terminal.
         let launched = std::process::Command::new("perl")
             .args([
                 "-e",
-                r#"exit if fork; setpgrp(0, 0); print "$$\n"; open STDOUT, ">", "/dev/null"; open STDERR, ">", "/dev/null"; exec "sleep", "30""#,
+                r#"exit if fork; setpgrp(0, 0); print "$$\n"; close STDOUT; close STDERR; sleep 30"#,
             ])
             .output()
             .unwrap();
@@ -1030,8 +1031,8 @@ mod tests {
             .trim()
             .parse()
             .unwrap();
-        let found = inspect_process(pid).filter(|found| found.process_group == pid);
-        let found = found.expect("the orphaned turn process leads its own group");
+        let found = inspect_process(pid).expect("the orphaned turn process is running");
+        assert_eq!(found.process_group, pid, "{found:?}");
         let record = headless::HeadlessTurnRecord {
             generation: "previous-host".into(),
             turn_id: "msg_turn".into(),

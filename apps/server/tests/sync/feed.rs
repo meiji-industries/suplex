@@ -597,6 +597,37 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn the_usage_revision_counts_each_change_the_costs_read() {
+        let (directory, _, mut database, task_id) = fixture();
+        let at = |seconds: u32| format!("2026-01-01T00:00:{seconds:02}.000Z");
+        let mut last = usage_state(&database, "company_media").unwrap();
+        let mut changed = |database: &SuplexDatabase| {
+            let next = usage_state(database, "company_media").unwrap();
+            let moved = next != last;
+            last = next;
+            moved
+        };
+        analytics::record(&mut database, &task_id, "root", &[entry("one", 3.0)], &at(1)).unwrap();
+        assert!(changed(&database));
+        analytics::record(&mut database, &task_id, "root", &[entry("one", 3.0)], &at(2)).unwrap();
+        assert!(!changed(&database));
+        analytics::record(&mut database, &task_id, "root", &[entry("one", 4.0)], &at(3)).unwrap();
+        assert!(changed(&database));
+        analytics::record(&mut database, &task_id, "root", &[entry("two", 1.0)], &at(4)).unwrap();
+        assert!(changed(&database));
+        analytics::failed(&database, &task_id, "root", &at(5)).unwrap();
+        assert!(changed(&database));
+        analytics::failed(&database, &task_id, "root", &at(6)).unwrap();
+        assert!(!changed(&database));
+        database
+            .connection()
+            .execute("UPDATE suplex_tasks SET title = 'Renamed' WHERE id = ?1", [&task_id])
+            .unwrap();
+        assert!(!changed(&database));
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
     fn a_pending_costs_read_does_not_delay_a_task_push() {
         let (directory, path, database, task_id) = fixture();
         let feed = CompanyFeed::new(path.clone(), Arc::default());

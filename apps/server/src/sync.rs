@@ -8,15 +8,15 @@
 //! authority.
 
 use std::{
-    collections::{HashMap, HashSet, hash_map::DefaultHasher},
+    collections::{HashMap, HashSet},
     error::Error,
-    hash::{Hash, Hasher},
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
     time::Duration,
 };
 
 use chrono::Utc;
+use rusqlite::OptionalExtension;
 use serde::Serialize;
 use tokio::{
     runtime::Handle,
@@ -669,24 +669,19 @@ fn read_costs(path: &Path, subscriptions: &Mutex<Subscriptions>, company_id: &st
     }
 }
 
-/// Every stored value the task costs of a company read, hashed. The feed only
-/// compares it with the previous one.
-// Reads every usage snapshot of the company on each commit. Add a
-// usage revision column when a company holds more usage than one read per
-// commit can carry.
+/// The revision of every stored value the task costs of a company read.
+/// Triggers count each change, so the feed reads one row on each commit. A
+/// migration that rebuilds a table those triggers watch must create them again.
 fn usage_state(database: &SuplexDatabase, company_id: &str) -> DatabaseResult<u64> {
-    let mut statement = database.connection().prepare(
-        "SELECT t.id FROM suplex_tasks t WHERE t.company_id = ?1
-         UNION ALL SELECT u.snapshot FROM suplex_task_usage u JOIN suplex_tasks t ON t.id = u.task_id WHERE t.company_id = ?1
-         UNION ALL SELECT s.session_id || (s.observed_at IS NULL) || (s.error_at IS NULL) FROM suplex_task_analytics_sessions s JOIN suplex_tasks t ON t.id = s.task_id WHERE t.company_id = ?1
-         UNION ALL SELECT s.id FROM suplex_task_sessions s JOIN suplex_tasks t ON t.id = s.task_id WHERE t.company_id = ?1 AND s.native_session_id IS NOT NULL",
-    )?;
-    let mut rows = statement.query([company_id])?;
-    let mut hasher = DefaultHasher::new();
-    while let Some(row) = rows.next()? {
-        row.get_ref(0)?.as_bytes_or_null()?.hash(&mut hasher);
-    }
-    Ok(hasher.finish())
+    Ok(database
+        .connection()
+        .query_row(
+            "SELECT revision FROM suplex_company_usage_revisions WHERE company_id = ?1",
+            [company_id],
+            |row| row.get::<_, i64>(0),
+        )
+        .optional()?
+        .map_or(0, |revision| revision as u64))
 }
 
 /// The tasks of `next` that `previous` lacks or holds with other values, and

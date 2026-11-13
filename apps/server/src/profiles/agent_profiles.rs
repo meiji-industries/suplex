@@ -596,10 +596,7 @@ pub(crate) fn policy_allows(
     };
     match provider_instance_id.filter(|id| !id.is_empty()) {
         Some(instance) => policy.allowed_instance_ids.iter().any(|id| id == instance),
-        None => policy
-            .allowed_providers
-            .iter()
-            .any(|allowed| *allowed == provider),
+        None => policy.allowed_providers.contains(&provider),
     }
 }
 

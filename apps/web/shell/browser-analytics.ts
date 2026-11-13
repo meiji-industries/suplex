@@ -28,7 +28,7 @@ const staticSegments = new Set([
   "local-endpoints", "log", "login", "logout", "mcp", "me", "members", "merge", "merge-train", "models",
   "move-recommendations", "move-runs", "move-to-front", "moves", "moves-grant", "note", "notice", "oauth",
   "onboarding", "open", "openapi.json", "pair", "pairing", "pairing-code", "pane", "poll", "portal",
-  "profile", "profiles", "projects", "provenance", "provider-instances", "provider-login", "providers",
+  "profile", "profiles", "project-agents-grant", "projects", "provenance", "provider-instances", "provider-login", "providers",
   "quick-shell", "recent-repositories", "refresh", "rename", "repair", "replace-coordinator",
   "replace-worker", "repositories", "repository-defaults", "repository-owners", "repository-status",
   "restart", "restore", "revoke", "role", "rotate", "runs", "save-as-template", "select-agent", "sessions",

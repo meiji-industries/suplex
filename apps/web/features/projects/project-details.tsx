@@ -26,6 +26,7 @@ import { taskDeliveryTargetOptions } from "../tasks/task-delivery-target.js";
 import { DeliveryTargetSchema, VisualEvidenceSchema } from "../../contracts/tasks.js";
 import { SettingRow, SettingsContent, SettingsSection } from "../settings/settings-layout.js";
 import { LoadingState } from "../../components/app/loading-state.js";
+import { providerLabel } from "../agents/agent-display.js";
 import {
   agentsDraft,
   agentsDraftFindings,
@@ -304,7 +305,7 @@ export function ProjectDetails({ projectId }: { projectId: string }): ReactEleme
   if (loading || companyLoading) return <ProjectDetailsLayout projectId={projectId} companyId={companyId} title="Project details" active={section} onSectionChange={selectSection}><LoadingState /></ProjectDetailsLayout>;
   if (loadError || !project || !general || !agentSettings || !execution || !delivery || !connections) return <ProjectDetailsLayout projectId={projectId} companyId={companyId} title="Project details" active={section} onSectionChange={selectSection}><SettingsContent><Alert variant="destructive"><AlertDescription>{loadError || "Project not found"}</AlertDescription></Alert></SettingsContent></ProjectDetailsLayout>;
 
-  const credentialLabel = (agent: ApiProfile): string => agent.providerInstanceId ? providerInstances.find((instance) => instance.id === agent.providerInstanceId)?.label ?? "Dedicated login" : `${agent.provider} system login`;
+  const credentialLabel = (agent: ApiProfile): string => agent.providerInstanceId ? providerInstances.find((instance) => instance.id === agent.providerInstanceId)?.label ?? "Dedicated login" : `${providerLabel(agent.provider)} system login`;
   const generalDirty = Object.keys(generalProjectPatch(general.saved, general.draft)).length > 0;
   const agentsDirty = Object.keys(agentsProjectPatch(agentSettings.saved, agentSettings.draft)).length > 0;
   const agentFindings = agentsDraftFindings(agentSettings.draft, agents);
@@ -360,8 +361,8 @@ export function ProjectDetails({ projectId }: { projectId: string }): ReactEleme
           {providerInstanceError ? <SettingRow label="Named provider logins" description={providerInstanceError}><Button type="button" variant="outline" size="sm" onClick={() => void loadProviderInstances(loadToken.current)}>Retry</Button></SettingRow> : null}
           {!providerInstancesLoading && !providerInstanceError && providerInstances.length === 0 ? <SettingRow label="Named provider logins" description="No named provider logins are configured."><span className="text-xs text-muted-foreground">None</span></SettingRow> : null}
           {!providerInstancesLoading && !providerInstanceError ? providerInstances.map((instance) => agentSettings.draft.providerPolicy
-            ? <SettingRow key={instance.id} label={instance.label} description={`${instance.provider} dedicated login`} htmlFor={`project-login-${instance.id}`}><Checkbox id={`project-login-${instance.id}`} disabled={agentSettings.status.kind === "saving"} checked={agentSettings.draft.providerPolicy.allowedInstanceIds.includes(instance.id)} onCheckedChange={(checked) => { const policy = agentSettings.draft.providerPolicy; if (policy) updateAgents("providerPolicy", { ...policy, allowedInstanceIds: checked ? [...policy.allowedInstanceIds, instance.id] : policy.allowedInstanceIds.filter((value) => value !== instance.id) }); }} /></SettingRow>
-            : <SettingRow key={instance.id} label={instance.label} description={`${instance.provider}. Restrictions are off.`}><span className="text-xs text-muted-foreground">Allowed</span></SettingRow>) : null}
+            ? <SettingRow key={instance.id} label={instance.label} description={`${providerLabel(instance.provider)} dedicated login`} htmlFor={`project-login-${instance.id}`}><Checkbox id={`project-login-${instance.id}`} disabled={agentSettings.status.kind === "saving"} checked={agentSettings.draft.providerPolicy.allowedInstanceIds.includes(instance.id)} onCheckedChange={(checked) => { const policy = agentSettings.draft.providerPolicy; if (policy) updateAgents("providerPolicy", { ...policy, allowedInstanceIds: checked ? [...policy.allowedInstanceIds, instance.id] : policy.allowedInstanceIds.filter((value) => value !== instance.id) }); }} /></SettingRow>
+            : <SettingRow key={instance.id} label={instance.label} description={`${providerLabel(instance.provider)}. Restrictions are off.`}><span className="text-xs text-muted-foreground">Allowed</span></SettingRow>) : null}
         </SettingsSection>
         <SectionActions status={agentSettings.status} dirty={agentsDirty} invalid={agentFindings.length > 0} onDiscard={() => setAgentSettings(draftState(agentSettings.saved))} />
       </form> : null}

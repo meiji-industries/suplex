@@ -33,7 +33,6 @@ const legacyUncheckedReads = [
   "apps/web/features/tasks/lib/duplicate-task-prefill.ts",
   "apps/web/features/tasks/lib/task-checks.ts",
   "apps/web/features/tasks/new-task-dialog.tsx",
-  "apps/web/features/tasks/task-agent.tsx",
   "apps/web/features/tasks/task-chat/session-history.tsx",
   "apps/web/features/tasks/task-data.tsx",
   "apps/web/features/tasks/task-source-picker.tsx",

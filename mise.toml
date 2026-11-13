@@ -426,6 +426,11 @@ description = "Bump, sign, commit, tag, push, and publish the next patch release
 usage = 'arg "[targets]" var=#true help="mac, linux-cli, linux-desktop, windows, each optionally -arm64 or -x64. Default: every target"'
 run = 'SUPLEX_RELEASE_TARGETS="${usage_targets:-}" RELEASE_BUMP=patch mise run _release:run'
 
+[tasks."release:dev"]
+description = "Build and publish a development release of origin/main for the given targets, or every target, to the dev/ feeds; commits nothing and pushes only a v<version> tag"
+usage = 'arg "[targets]" var=#true help="mac, linux-cli, linux-desktop, windows, each optionally -arm64 or -x64. Default: every target"'
+run = 'SUPLEX_RELEASE_TARGETS="${usage_targets:-}" mise run _release:dev'
+
 [tasks."release:patch:mac"]
 description = "Release the next patch for Mac arm64 and x64 only"
 run = "mise run release:patch mac"
@@ -551,4 +556,35 @@ if [[ "$(git rev-parse -q --verify "refs/tags/v$version^{commit}")" != "$(git re
   git tag "v$version"
 fi
 git push --atomic origin HEAD "refs/tags/v$version"
+'''
+
+[tasks."_release:dev"]
+hide = true
+description = "Run the development release pipeline for SUPLEX_RELEASE_TARGETS, or every target; SUPLEX_RELEASE_DRY_RUN=1 prints the version, tag, and feeds and stops"
+run = '''
+#!/usr/bin/env bash
+set -euo pipefail
+targets="$(bash scripts/release-target.sh expand $SUPLEX_RELEASE_TARGETS)"
+version_files=(package.json apps/desktop/package.json apps/mobile/package.json apps/server/Cargo.toml apps/desktop/src-tauri/Cargo.toml Cargo.lock)
+[[ -z "$(git status --porcelain)" ]] || { echo "Commit or remove working-tree changes before a development release." >&2; exit 1; }
+git fetch --quiet origin main
+git merge-base --is-ancestor HEAD origin/main || { echo "HEAD is not on origin/main. Push or merge it first." >&2; exit 1; }
+# Docker and matching version files, before the stamp below changes them.
+[[ -n "${SUPLEX_RELEASE_DRY_RUN:-}" ]] || mise run _release:check
+# The stamped version never reaches a commit; every exit puts the version files back.
+trap 'git checkout --quiet -- "${version_files[@]}"' EXIT
+native="$(node scripts/release-version.mjs dev)"
+version="${native%%+*}"
+echo "Development release $native for targets: $targets"
+echo "Tag: v$version; feeds: dev/<platform>/<arch>/"
+[[ -z "${SUPLEX_RELEASE_DRY_RUN:-}" ]] || exit 0
+mise run _1password:setup
+export SUPLEX_RELEASE_CHANNEL=dev
+for target in $targets; do bash scripts/release-target.sh build "$target"; done
+# A lightweight tag on the built commit; a tag that already exists stops the publication.
+git tag "v$version" HEAD
+git push origin "refs/tags/v$version"
+for phase in files manifest; do
+  for target in $targets; do bash scripts/release-target.sh "$phase" "$target"; done
+done
 '''

@@ -14,6 +14,9 @@ done
 # The embedded updater key must be the production key: installed apps accept updates signed by that key only.
 [ -f updater-production.pub ] || { echo "apps/desktop/updater-production.pub is missing. Commit the production updater public key before a signed release." >&2; exit 1; }
 [ "$SUPLEX_DESKTOP_UPDATER_PUBKEY" = "$(tr -d '[:space:]' < updater-production.pub)" ] || { echo "SUPLEX_DESKTOP_UPDATER_PUBKEY is not the production updater key in apps/desktop/updater-production.pub." >&2; exit 1; }
+# signing.env names the stable feed; a development release (SUPLEX_RELEASE_CHANNEL=dev) updates from the dev/ folder beside it.
+SUPLEX_DESKTOP_UPDATE_URL="$(printf %s "$SUPLEX_DESKTOP_UPDATE_URL" | sed "s#/stable/#/${SUPLEX_RELEASE_CHANNEL:-stable}/#")"
+export SUPLEX_DESKTOP_UPDATE_URL
 export APPLE_PASSWORD="$APPLE_APP_SPECIFIC_PASSWORD"
 export APPLE_SIGNING_IDENTITY="${APPLE_SIGNING_IDENTITY:-Developer ID Application}"
 version="$(node -p "require('./package.json').version")"

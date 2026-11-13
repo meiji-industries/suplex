@@ -4,6 +4,7 @@
 #   release-target.sh expand [target...]   print the full target list (every target when empty)
 #   release-target.sh build|files|manifest <target>
 # Targets: mac, linux-cli, linux-desktop, windows, each optionally -arm64 or -x64.
+# SUPLEX_RELEASE_CHANNEL=dev builds and publishes against the dev/ feed folders instead of stable/.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 all="mac-arm64 mac-x64 linux-cli-arm64 linux-cli-x64 linux-desktop-arm64 linux-desktop-x64 windows-arm64 windows-x64"
@@ -40,8 +41,15 @@ onepassword_setup_service_account
 export SUPLEX_DESKTOP_REUSE=1
 # The build phase runs the publisher as a dry run, which checks every publish phase.
 [[ "$phase" == build ]] || export SUPLEX_PUBLISH_PHASE="$phase"
-signed() { op run --env-file apps/desktop/signing.env -- "$@"; }
-published() { op run --env-file apps/desktop/release.env -- "$@"; }
+export SUPLEX_RELEASE_CHANNEL="${SUPLEX_RELEASE_CHANNEL:-stable}"
+case "$SUPLEX_RELEASE_CHANNEL" in stable|dev) ;; *) echo "SUPLEX_RELEASE_CHANNEL must be stable or dev" >&2; exit 1 ;; esac
+# The env files name the stable Apple silicon feed; another channel uses its own folder beside it,
+# so the apps it builds update from that folder and the publishers write only there.
+channel_env() {
+  op run --env-file "$1" -- bash -c 'export SUPLEX_DESKTOP_UPDATE_URL="$(printf %s "${SUPLEX_DESKTOP_UPDATE_URL:-}" | sed "s#/stable/#/$SUPLEX_RELEASE_CHANNEL/#")"; exec "$@"' _ "${@:2}"
+}
+signed() { channel_env apps/desktop/signing.env "$@"; }
+published() { channel_env apps/desktop/release.env "$@"; }
 case "$phase:$platform" in
   build:mac) SUPLEX_DESKTOP_ARCH=$arch pnpm run desktop:dist:signed ;;
   build:linux-cli) SUPLEX_LINUX_ARCH=$arch signed sh scripts/build-linux.sh ;;

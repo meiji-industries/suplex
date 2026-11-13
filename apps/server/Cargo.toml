@@ -11,6 +11,7 @@ tower-http = { version = "0.6", features = ["compression-gzip", "compression-br"
 mime = "0.3"
 base64 = { workspace = true }
 chrono = "0.4"
+semver = "1"
 garde = { version = "0.22", features = ["derive", "regex"] }
 getrandom = "0.4"
 git2 = { version = "0.21", default-features = false, features = ["https", "ssh", "vendored-libgit2", "vendored-openssl"] }

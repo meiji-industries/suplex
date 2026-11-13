@@ -13,7 +13,9 @@ use std::{
 
 use sha2::{Digest, Sha256};
 
-use super::{app_update, config::Installation, supervisor, update};
+use super::{
+    app_update, config::Installation, environment_settings::UpdateChannel, supervisor, update,
+};
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
@@ -69,11 +71,29 @@ fn parse_manifest(text: &str) -> Result<(String, String, String)> {
     Ok((field("version")?, file, field("sha256")?))
 }
 
-/// The newest published release for this platform, or `None` when this binary is current.
-/// The download redirect names the release directory, whose manifest is the source of truth.
-pub async fn latest(service: &url::Url) -> Result<Option<Release>> {
+/// The newest release this channel's feeds publish for this platform, or `None` when this
+/// binary is current.
+pub async fn latest(service: &url::Url, channel: UpdateChannel) -> Result<Option<Release>> {
     let client = client(Duration::from_secs(30))?;
-    let download = service.join(&format!("download?platform={}&format=tar.gz", platform()?))?;
+    let mut releases = Vec::new();
+    for &source in channel.feeds() {
+        releases.push(published(&client, service, source).await);
+    }
+    let release = app_update::newest(releases, |release: &Release| &release.version)?;
+    Ok(app_update::newer(&release.version, env!("CARGO_PKG_VERSION")).then_some(release))
+}
+
+/// One channel's release. The download redirect names the release directory, whose manifest
+/// is the source of truth.
+async fn published(
+    client: &reqwest::Client,
+    service: &url::Url,
+    channel: UpdateChannel,
+) -> Result<Release> {
+    let download = service.join(&format!(
+        "download?platform={}&format=tar.gz&channel={channel}",
+        platform()?
+    ))?;
     let response = client
         .get(download.clone())
         .header("dnt", "1")
@@ -93,13 +113,11 @@ pub async fn latest(service: &url::Url) -> Result<Option<Release>> {
         .text()
         .await?;
     let (version, file, sha256) = parse_manifest(&text)?;
-    Ok(
-        app_update::newer(&version, env!("CARGO_PKG_VERSION")).then(|| Release {
-            version,
-            url: directory.join(&file).map(String::from).unwrap_or_default(),
-            sha256,
-        }),
-    )
+    Ok(Release {
+        version,
+        url: directory.join(&file)?.into(),
+        sha256,
+    })
 }
 
 /// The archive bytes, after their checksum matched the feed.
@@ -188,10 +206,12 @@ pub fn service_url(installation: &Installation) -> Result<url::Url> {
 }
 
 /// `suplex update` on an archive-installed host: the feed check and the question, then the
-/// same download, check, and in-place restart as the Update button.
-pub async fn run(assume_yes: bool) -> Result<i32> {
+/// same download, check, and in-place restart as the Update button. `channel` overrides the
+/// host's update channel for this run.
+pub async fn run(assume_yes: bool, channel: Option<UpdateChannel>) -> Result<i32> {
     let installation = Installation::load()?;
-    let Some(release) = latest(&service_url(&installation)?).await? else {
+    let channel = channel.unwrap_or_else(|| UpdateChannel::configured(&installation));
+    let Some(release) = latest(&service_url(&installation)?, channel).await? else {
         println!("Suplex {} is current.", env!("CARGO_PKG_VERSION"));
         return Ok(0);
     };
@@ -201,7 +221,7 @@ pub async fn run(assume_yes: bool) -> Result<i32> {
         return Ok(1);
     }
     println!("Downloading Suplex {}...", release.version);
-    if !tokio::task::spawn_blocking(update::apply).await?? {
+    if !tokio::task::spawn_blocking(move || update::apply(Some(channel))).await?? {
         return Err("Another Suplex update is in progress.".into());
     }
     if running {
@@ -218,7 +238,7 @@ pub async fn run(assume_yes: bool) -> Result<i32> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use axum::{Router, http::StatusCode, response::IntoResponse, routing::get};
+    use axum::{Router, extract::RawQuery, http::StatusCode, response::IntoResponse, routing::get};
 
     const MANIFEST: &str = "version: 1.10.0\nfiles:\n  - url: suplex-1.10.0-linux-x64.tar.gz\n    sha256: 95ae29073130f1285fe43cec46b4367c3be372a331f05485f5382de8d5148988\n";
 
@@ -239,33 +259,64 @@ mod tests {
         assert!(parse_manifest("files: []\n").is_err());
     }
 
-    /// A feed served the way suplex.sh serves it: a redirect to the archive, and
-    /// the manifest beside it.
-    async fn feed(version: &'static str, archive: &'static [u8]) -> url::Url {
+    /// Feeds served the way suplex.sh serves them: a redirect to the archive of the asked
+    /// channel, and the manifest beside it. A channel without a version has no release.
+    async fn feed(
+        stable: &'static str,
+        dev: Option<&'static str>,
+        archive: &'static [u8],
+    ) -> url::Url {
         let digest = format!("{:x}", Sha256::digest(archive));
-        let manifest = format!(
-            "version: {version}\nfiles:\n  - url: suplex-{version}-linux-x64.tar.gz\n    sha256: {digest}\n"
-        );
+        let manifest = move |version: &str| {
+            format!(
+                "version: {version}\nfiles:\n  - url: suplex-{version}-linux-x64.tar.gz\n    sha256: {digest}\n"
+            )
+        };
+        let (stable_manifest, dev_manifest) = (manifest(stable), dev.map(manifest));
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let base = format!("http://{}", listener.local_addr().unwrap());
-        let location = format!("{base}/stable/linux/x64/suplex-{version}-linux-x64.tar.gz");
+        let service = url::Url::parse(&base).unwrap();
         let app = Router::new()
             .route(
                 "/download",
-                get(move || async move {
-                    (StatusCode::FOUND, [("location", location)]).into_response()
+                get(move |RawQuery(query): RawQuery| async move {
+                    let query = query.unwrap_or_default();
+                    let (channel, version) = if query.contains("channel=dev") {
+                        ("dev", dev)
+                    } else {
+                        ("stable", Some(stable))
+                    };
+                    match version {
+                        Some(version) => (
+                            StatusCode::FOUND,
+                            [(
+                                "location",
+                                format!(
+                                    "{base}/{channel}/linux/x64/suplex-{version}-linux-x64.tar.gz"
+                                ),
+                            )],
+                        )
+                            .into_response(),
+                        None => {
+                            (StatusCode::BAD_GATEWAY, "No release is published.").into_response()
+                        }
+                    }
                 }),
             )
             .route(
                 "/stable/linux/x64/latest-linux.yml",
-                get(move || async move { manifest }),
+                get(move || async move { stable_manifest }),
             )
             .route(
-                "/stable/linux/x64/{file}",
+                "/dev/linux/x64/latest-linux.yml",
+                get(move || async move { dev_manifest.unwrap_or_default() }),
+            )
+            .route(
+                "/{channel}/linux/x64/{file}",
                 get(move || async move { archive }),
             );
         tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-        url::Url::parse(&base).unwrap()
+        service
     }
 
     #[tokio::test]
@@ -274,8 +325,11 @@ mod tests {
             return;
         }
         let archive: &'static [u8] = b"not really a tarball";
-        let service = feed("999.0.0", archive).await;
-        let release = latest(&service).await.unwrap().expect("a newer release");
+        let service = feed("999.0.0", None, archive).await;
+        let release = latest(&service, UpdateChannel::Stable)
+            .await
+            .unwrap()
+            .expect("a newer release");
         assert_eq!(release.version, "999.0.0");
         assert!(
             release
@@ -296,7 +350,39 @@ mod tests {
                 .to_string()
                 .contains("checksum")
         );
-        assert_eq!(latest(&feed("0.0.1", archive).await).await.unwrap(), None);
+        assert_eq!(
+            latest(&feed("0.0.1", None, archive).await, UpdateChannel::Stable)
+                .await
+                .unwrap(),
+            None
+        );
+    }
+
+    #[tokio::test]
+    async fn the_channel_picks_the_feeds_and_the_newest_release_wins() {
+        if platform().is_err() {
+            return;
+        }
+        let archive: &'static [u8] = b"not really a tarball";
+        let service = feed("999.0.0", Some("999.0.1-dev.202611131540"), archive).await;
+        // Stable never reads the development feed.
+        let stable = latest(&service, UpdateChannel::Stable)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(stable.version, "999.0.0");
+        let dev = latest(&service, UpdateChannel::Dev).await.unwrap().unwrap();
+        assert_eq!(dev.version, "999.0.1-dev.202611131540");
+        assert!(dev.url.contains("/dev/linux/x64/"), "{}", dev.url);
+        // A development host moves to a stable release that is newer than its build.
+        let service = feed("999.0.1", Some("999.0.1-dev.202611131540"), archive).await;
+        let next = latest(&service, UpdateChannel::Dev).await.unwrap().unwrap();
+        assert_eq!(next.version, "999.0.1");
+        assert!(next.url.contains("/stable/linux/x64/"), "{}", next.url);
+        // A platform without a development release follows stable.
+        let service = feed("999.0.0", None, archive).await;
+        let only_stable = latest(&service, UpdateChannel::Dev).await.unwrap().unwrap();
+        assert_eq!(only_stable.version, "999.0.0");
     }
 
     /// `cargo test -p suplex --lib -- --ignored live_feed` proves the published feed parses.
@@ -306,9 +392,12 @@ mod tests {
         if platform().is_err() {
             return;
         }
-        let release = latest(&url::Url::parse("https://suplex.sh").unwrap())
-            .await
-            .unwrap();
+        let release = latest(
+            &url::Url::parse("https://suplex.sh").unwrap(),
+            UpdateChannel::Stable,
+        )
+        .await
+        .unwrap();
         eprintln!(
             "live feed: {release:?} (running {})",
             env!("CARGO_PKG_VERSION")

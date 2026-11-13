@@ -19,7 +19,7 @@ fi
 
 arch="${SUPLEX_DESKTOP_ARCH:-arm64}"
 release_dir="apps/desktop/release/$arch"
-prefix="stable/mac/$arch"
+prefix="${SUPLEX_RELEASE_CHANNEL:-stable}/mac/$arch"
 # release.env holds the Apple silicon feed; each architecture publishes to its own folder beside it.
 base_url="$(printf %s "${SUPLEX_DESKTOP_UPDATE_URL%/}" | sed -E "s#/mac/arm64\$#/mac/$arch#")"
 

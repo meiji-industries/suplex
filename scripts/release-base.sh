@@ -7,7 +7,8 @@ top="$(git rev-parse --show-toplevel)"
 # No node: dist-linux.sh runs this inside the Linux build container.
 version="$(sed -n 's/^  "version": "\(.*\)",$/\1/p' "$top/package.json")"
 base="$(git rev-parse HEAD)"
-if [ "$(git rev-parse -q --verify "refs/tags/v$version^{commit}" || true)" = "$base" ]; then
+# A development release commits nothing, so its tag names the built commit itself.
+if [ "${version#*-dev.}" = "$version" ] && [ "$(git rev-parse -q --verify "refs/tags/v$version^{commit}" || true)" = "$base" ]; then
   base="$(git rev-parse HEAD^)"
 fi
 dirty="$(git -C "$top" status --porcelain -- . ':!package.json' ':!apps/desktop/package.json' ':!apps/mobile/package.json' ':!apps/server/Cargo.toml' ':!apps/desktop/src-tauri/Cargo.toml' ':!Cargo.lock')"

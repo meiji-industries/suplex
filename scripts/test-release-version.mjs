@@ -85,7 +85,20 @@ try {
   git("tag", "v1.0.1");
   git("push", "--atomic", "origin", "HEAD", "refs/tags/v1.0.1");
   assert.equal(git("ls-remote", "origin", "refs/heads/main").split("\t")[0], git("rev-parse", "HEAD"));
-  console.log("Release version and atomic push checks passed");
+
+  // A development build is the next patch with a UTC minute and the commit; earlier development tags do not count.
+  git("tag", "v1.0.2-dev.202601010000");
+  const dev = run("dev");
+  assert.equal(dev.status, 0, dev.stderr);
+  const sha = git("rev-parse", "--short=8", "HEAD");
+  assert.match(dev.stdout.trim(), new RegExp(`^1\\.0\\.2-dev\\.\\d{12}\\+${sha}$`));
+  const plain = dev.stdout.trim().split("+")[0];
+  const [rootPackage, desktopPackage, mobilePackage, serverCrate, desktopCrate, cargoLock] = contents();
+  for (const text of [rootPackage, desktopPackage, mobilePackage, desktopCrate]) assert.ok(text.includes(`"${plain}"`) || text.includes(crate("suplex-desktop", plain)), text);
+  assert.equal(serverCrate, crate("suplex", dev.stdout.trim()));
+  assert.equal(cargoLock, `[[package]]\n${crate("suplex", dev.stdout.trim())}\n[[package]]\n${crate("suplex-desktop", plain)}`);
+  git("checkout", "--", ".");
+  console.log("Release version, development version, and atomic push checks passed");
 } finally {
   rmSync(scratch, { recursive: true, force: true });
 }

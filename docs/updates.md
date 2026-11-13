@@ -100,8 +100,64 @@ that the tag is unused before committing, then pushes the branch and tag
 atomically. A concurrent tag collision stops the push and publication; it never
 replaces an existing tag. The manifests are published last.
 
-Run `node scripts/test-release-version.mjs` to check version selection and tag
-collisions with temporary Git repositories.
+Run `node scripts/test-release-version.mjs` to check version selection,
+development versions, and tag collisions with temporary Git repositories.
+
+### Development channel
+
+A development release is a named interim build of a commit that is already on
+`origin/main`. It never changes the stable feeds and never commits to `main`.
+
+`mise run release:dev [targets]` takes the same targets as `release:patch`, for
+example `mise run release:dev linux-cli-x64`. It:
+
+1. Stops unless the checkout is clean and `HEAD` is on `origin/main`.
+2. Stamps the version into the version files with
+   `node scripts/release-version.mjs dev`, and puts the files back on every exit.
+3. Builds each target with `scripts/release-target.sh`, the same as a stable release.
+4. Pushes the lightweight tag `v<version>` without build metadata, for example
+   `v1.13.9-dev.202611131540`, on the built commit. An existing tag stops the release.
+5. Publishes every file, then every manifest, under `dev/` instead of `stable/`.
+
+`SUPLEX_RELEASE_DRY_RUN=1` prints the version, the tag, and the targets, and
+stops before any build. `SUPLEX_RELEASE_CHANNEL=dev` is the parameter that
+`release-target.sh` and the publishers read. It also changes the feed URL from
+the 1Password env files from `.../stable/...` to `.../dev/...`, so a desktop
+app from a development release updates from the `dev/` folder.
+
+The version is `<next patch>-dev.<UTC YYYYMMDDHHMM>+<short commit>`, for example
+`1.13.9-dev.202611131540+60ff4ce2` after stable 1.13.8. The next patch comes
+from the same stable tags as `release:patch`; development tags never move it.
+Semantic version precedence puts the build above 1.13.8 and below 1.13.9, and a
+later timestamp above an earlier one. Only the `suplex` crate, and so
+`suplex --version`, carries the `+<commit>` build metadata. File names, feed
+manifests, the tag, and the desktop bundles use `1.13.9-dev.202611131540`,
+because a `+` in an object URL is not safe on S3-compatible storage.
+
+| Feed | Folder |
+| --- | --- |
+| Linux CLI | `dev/linux/<arch>/latest-linux.yml` |
+| Mac | `dev/mac/<arch>/latest-mac.yml` and `latest-tauri.json` |
+| Linux desktop | `dev/linux/<arch>/latest-linux-desktop.yml` and `latest-tauri.json` |
+| Windows | `dev/windows/<arch>/latest-windows.yml` and `latest-tauri.json` |
+
+`suplex.sh/download` takes `channel=dev` and redirects into the `dev/` folder;
+without it, or with `channel=stable`, it uses `stable/`.
+
+### Update channel setting
+
+**Settings > Host health > Suplex host update > Update channel** selects
+**Stable** (default) or **Development**. Administrators change it; it is stored
+as `update_channel` in `suplex_environment_settings` and served by
+`/api/admin/environment`. The host's update check and `suplex update` read it.
+`suplex update --channel stable|dev` overrides it for one run.
+
+Stable reads only the stable feed. Development reads both feeds and offers the
+newest version, so a development build moves to the next stable release when
+that release is newer. A change back to Stable does not downgrade: the host keeps
+its build until a stable version is newer. A platform with no development
+release follows stable. The desktop app's in-app updater reads the feed in its
+own `app-update.yml`, not this setting.
 
 `mise run mobile:release` ships the iOS and Android shells in `apps/mobile/` at the
 latest `v*` tag. It checks out the tag in a reusable worktree under
@@ -194,9 +250,10 @@ terminals; the Linux desktop app below bundles the same host.
 The combined release publisher uploads immutable Mac and Linux artifacts before
 updating their download manifests. A Linux host installed from the archive, which
 is neither the desktop app nor a source checkout, updates from that manifest.
-The update check asks `suplex.sh/download` for its platform without following
-the redirect, reads `latest-linux.yml` from the directory the redirect names, and
-compares the version with the running binary. `suplex update` and the host's
+The update check asks `suplex.sh/download` for its platform and update channel
+without following the redirect, reads `latest-linux.yml` from the directory the
+redirect names, and compares the version with the running binary by semantic
+version precedence. `suplex update` and the host's
 "Restart Suplex" action download the archive, verify its sha256, write the new
 binary beside the running one, keep the previous binary as a rollback under the
 runtime directory, rename it into place, then stop and start the host. A host

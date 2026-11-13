@@ -7,9 +7,11 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use super::{
-    Contract, ContractResult, Fields, MAX, flag, formatted, int, number, one_of, rule, text,
+    Contract, ContractResult, Fields, MAX, choice, flag, formatted, int, number, one_of, rule, text,
 };
-use crate::platform::environment_settings::{self, EnvironmentSettings, MAX_MIN_FREE_DISK_GB};
+use crate::platform::environment_settings::{
+    self, EnvironmentSettings, MAX_MIN_FREE_DISK_GB, UpdateChannel,
+};
 
 pub const CLIENT_STATES: &[&str] = &[
     "startup",
@@ -178,6 +180,7 @@ pub struct EnvironmentSettingsResponse {
     /// archived. 0 turns automatic archiving off.
     #[ts(type = "number")]
     pub auto_archive_after_days: i64,
+    pub update_channel: UpdateChannel,
 }
 
 /// A whole number prints without a fraction, as JavaScript prints it.
@@ -196,6 +199,7 @@ impl From<EnvironmentSettings> for EnvironmentSettingsResponse {
             git2_enabled: settings.git2_enabled,
             telemetry_enabled: settings.telemetry_enabled,
             auto_archive_after_days: settings.auto_archive_after_days,
+            update_channel: settings.update_channel,
         }
     }
 }
@@ -212,6 +216,7 @@ pub struct EnvironmentPatch {
     pub git2_enabled: Option<bool>,
     pub telemetry_enabled: Option<bool>,
     pub auto_archive_after_days: Option<i64>,
+    pub update_channel: Option<UpdateChannel>,
 }
 
 impl Contract for EnvironmentPatch {
@@ -224,7 +229,8 @@ impl Contract for EnvironmentPatch {
             .opt("hostTerminalEnabled", flag)
             .opt("git2Enabled", flag)
             .opt("telemetryEnabled", flag)
-            .opt("autoArchiveAfterDays", int(0.0, f64::MAX));
+            .opt("autoArchiveAfterDays", int(0.0, f64::MAX))
+            .opt("updateChannel", choice::<UpdateChannel>);
         if fields.refinable()
             && [
                 "minFreeDiskGb",
@@ -235,6 +241,7 @@ impl Contract for EnvironmentPatch {
                 "git2Enabled",
                 "telemetryEnabled",
                 "autoArchiveAfterDays",
+                "updateChannel",
             ]
             .iter()
             .all(|name| fields.raw(name).is_none())

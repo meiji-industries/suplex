@@ -11,9 +11,9 @@ import { TaskDataProvider } from "../features/tasks/task-data.js";
 
 import type { Task } from "../contracts/tasks.js";
 
-const api = vi.hoisted(() => ({ company: { id: "company-1", status: "active", plan: "pro" }, user: { id: "user-1", role: "admin" }, readJsonUnchecked: vi.fn(), withCompany: (path: string) => path }));
+const api = vi.hoisted(() => ({ companyLoading: false, company: { id: "company-1", status: "active", plan: "pro" }, user: { id: "user-1", role: "admin" }, readJsonUnchecked: vi.fn(), withCompany: (path: string) => path }));
 vi.mock("../lib/api.js", async importOriginal => ({ ...(await importOriginal<Record<string, unknown>>()), ...api }));
-vi.mock("../shell/company-context.js", () => ({ useCompanyContext: () => ({ user: api.user, currentCompany: api.company }), useOptionalCompanyContext: () => ({ avatars: {} }) }));
+vi.mock("../shell/company-context.js", () => ({ useCompanyContext: () => ({ user: api.user, ...(api.companyLoading ? { loading: true } : { currentCompany: api.company, loading: false }) }), useOptionalCompanyContext: () => ({ avatars: {} }) }));
 vi.mock("../shell/application-frame.js", () => ({ ApplicationFrame: ({ children }: { children: ReactNode }) => children }));
 vi.mock("../shell/global-new-task-dialog.js", () => ({ requestNewTask: vi.fn(), useHasProjects: () => true }));
 vi.mock("../features/analytics/lib/analytics.js", async importOriginal => ({ ...(await importOriginal<Record<string, unknown>>()), useTaskCosts: () => new Map() }));
@@ -88,6 +88,18 @@ test.each(["visible", "hidden"] as const)("a %s initial load fetches once, hidde
     await act(async () => vi.advanceTimersByTimeAsync(3000));
     expect(projectReads()).toBe(2);
   } finally { await act(async () => root.unmount()); container.remove(); }
+});
+
+test("the task list shows loading, not the empty state, until the company read ends", async () => {
+  api.companyLoading = true;
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  try {
+    await act(async () => { root.render(<ServerStateProvider><TaskDataProvider><TasksView mode="list" /></TaskDataProvider></ServerStateProvider>); });
+    expect(container.textContent).not.toContain("New task");
+    expect(container.querySelector('[aria-busy="true"]')).not.toBeNull();
+  } finally { api.companyLoading = false; await act(async () => root.unmount()); container.remove(); }
 });
 
 test("the board keeps queued and backlog tasks in separate columns and filters", async () => {

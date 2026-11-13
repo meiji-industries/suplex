@@ -567,7 +567,7 @@ pub(crate) mod tests {
             let analytics =
                 analytics::analytics(database, "user_development", "company_media", Utc::now())
                     .unwrap();
-            serde_json::to_value(analytics::task_costs(&analytics).unwrap().tasks).unwrap()
+            serde_json::to_value(analytics::analytics_task_costs(&analytics).unwrap().tasks).unwrap()
         };
         let first = wait_lists(&receiver, |lists| lists.costs.is_some());
         assert_eq!(value(&first.costs), costs(&database));
@@ -659,7 +659,7 @@ pub(crate) mod tests {
             analytics::analytics(&database, "user_development", "company_media", Utc::now()).unwrap();
         assert_eq!(
             value(&priced.costs),
-            serde_json::to_value(analytics::task_costs(&analytics).unwrap().tasks).unwrap()
+            serde_json::to_value(analytics::analytics_task_costs(&analytics).unwrap().tasks).unwrap()
         );
         assert_eq!(priced.usage, Some(usage));
         assert!(Arc::ptr_eq(&priced.tasks, &renamed.tasks));
@@ -750,16 +750,19 @@ pub(crate) mod tests {
                 usage_state(&database, "company_media").unwrap();
             });
             let costs = time(&mut || {
+                analytics::company_task_costs(&database, "company_media").unwrap();
+            });
+            let projected = time(&mut || {
                 let value =
                     analytics::company_analytics(&database, "company_media", Utc::now()).unwrap();
-                analytics::task_costs(&value).unwrap();
+                analytics::analytics_task_costs(&value).unwrap();
             });
             // The tail's work for any commit. The costs read runs on its own thread.
             let refresh = time(&mut || {
                 publish(&database, &path, &terminals, &subscriptions, "company_media").unwrap();
             });
             println!(
-                "{count} tasks: refresh {refresh:?} (list_active {list:?}, usage probe {probe:?}); costs read on its own thread {costs:?}"
+                "{count} tasks: refresh {refresh:?} (list_active {list:?}, usage probe {probe:?}); costs read on its own thread {costs:?} (from the whole analytics {projected:?})"
             );
             drop(database);
             fs::remove_dir_all(directory).unwrap();

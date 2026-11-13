@@ -84,10 +84,8 @@ async fn task_costs(
         Ok(value) => value,
         Err(response) => return *response,
     };
-    let result = state.with_database(|database| {
-        let analytics = analytics::analytics(database, &user_id, &company_id, Utc::now())?;
-        analytics::task_costs(&analytics)
-    });
+    let result =
+        state.with_database(|database| analytics::task_costs(database, &user_id, &company_id));
     respond(result, cookies)
 }
 

@@ -15,7 +15,6 @@ use std::{
     time::Duration,
 };
 
-use chrono::Utc;
 use rusqlite::OptionalExtension;
 use serde::Serialize;
 use tokio::{
@@ -618,9 +617,10 @@ fn publish(
 
 /// Reads a company's costs until they come from the newest stored usage the
 /// tail saw.
-// Reads every task of the company again: 0.08 s at 500 tasks, 0.33 s
-// at 2,000, 0.8 s at 5,000 (release build). Read only the tasks whose usage
-// changed when costs must arrive sooner.
+// Reads the usage of every task of the company again, one task at a time:
+// 11 ms at 500 tasks, 35 ms at 2,000, 76 ms at 5,000 (optimized build, 10 usage
+// records for each task). Read only the tasks whose usage changed when costs
+// must arrive sooner.
 fn read_costs(path: &Path, subscriptions: &Mutex<Subscriptions>, company_id: &str) {
     let database = SuplexDatabase::open(path, OpenMode::ReadOnly).ok();
     loop {
@@ -633,11 +633,9 @@ fn read_costs(path: &Path, subscriptions: &Mutex<Subscriptions>, company_id: &st
             return;
         };
         // A failed read keeps the previous costs.
-        let costs = database.as_ref().and_then(|database| {
-            analytics::company_analytics(database, company_id, Utc::now())
-                .and_then(|value| analytics::task_costs(&value))
-                .ok()
-        });
+        let costs = database
+            .as_ref()
+            .and_then(|database| analytics::company_task_costs(database, company_id).ok());
         let mut subscriptions = subscriptions.lock().expect("company feed lock poisoned");
         if let Some(sender) = subscriptions.companies.get(company_id) {
             sender.send_if_modified(|current| {

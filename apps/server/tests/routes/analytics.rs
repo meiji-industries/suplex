@@ -87,6 +87,44 @@ mod tests {
         assert_eq!(body["tasks"].as_array().unwrap().len(), 2);
         assert_eq!(body["tasks"][0]["activity"].as_array().unwrap().len(), 1);
 
+        // The costs read one task at a time. They equal the projection of the
+        // analytics for stale, unobserved, running, and unpriced usage too.
+        state.with_database(|database| {
+            database.connection().execute("INSERT INTO suplex_task_sessions (id,task_id,kind,generation,is_current,lifecycle,native_session_id,created_at,updated_at) VALUES ('s2','archived_task','root',1,1,'live','codex-b',?1,?1)", [&time]).unwrap();
+            database.connection().execute("INSERT INTO suplex_task_sessions (id,task_id,kind,generation,is_current,lifecycle,native_session_id,created_at,updated_at) VALUES ('s3','active_task','worker',1,1,'live','codex-c',?1,?1)", [&time]).unwrap();
+            let entry = crate::tasks::analytics::tests::entry;
+            let usage = [
+                crate::tasks::analytics::TaskUsage {
+                    session_id: "codex-c".into(),
+                    completed_at: None,
+                    ..entry("msg_running", 1.0)
+                },
+                crate::tasks::analytics::TaskUsage {
+                    session_id: "codex-c".into(),
+                    subsidized: true,
+                    ..entry("msg_unpriced", 0.0)
+                },
+            ];
+            record(database, "active_task", "s3", &usage, &time).unwrap();
+            crate::tasks::analytics::failed(database, "active_task", "s", &time).unwrap();
+            let costs = serde_json::to_value(
+                analytics::company_task_costs(database, "c").unwrap(),
+            )
+            .unwrap();
+            let projected = analytics::analytics_task_costs(
+                &analytics::company_analytics(database, "c", now).unwrap(),
+            )
+            .unwrap();
+            assert_eq!(costs, serde_json::to_value(projected).unwrap());
+            assert_eq!(
+                costs,
+                json!({"tasks":[
+                    {"id":"active_task","cost":4.0,"unpriced":true,"subsidized":false,"partial":true,"totalTokens":45},
+                    {"id":"archived_task","cost":null,"unpriced":false,"subsidized":false,"partial":true,"totalTokens":0},
+                ]})
+            );
+        });
+
         let member = format!("sid_v1={member}");
         for path in ["analytics", "task-costs", "timeline"] {
             let uri = format!("/api/companies/c/{path}");

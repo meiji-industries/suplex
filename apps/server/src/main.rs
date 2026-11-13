@@ -15,6 +15,14 @@ fn main() {
     suplex::telemetry::exceptions::install();
     // PATH changes before the runtime starts its worker threads.
     suplex::platform::user_path::extend();
+    // glibc gives each thread that allocates its own arena, up to 8 per core, and
+    // keeps freed pages in each one. On a production host the server held about
+    // 750 MB in 31 arenas and grew about 200 MB an hour. Fewer arenas share free
+    // pages; the heartbeat returns the free ones to the system.
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    unsafe {
+        libc::mallopt(libc::M_ARENA_MAX, 4);
+    }
     let command = std::env::args().skip(1).collect::<Vec<_>>();
     // The updater builds a runtime per network step; inside another runtime that panics.
     let result = if command == ["update-apply"] {
@@ -213,6 +221,10 @@ async fn serve() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 server_event("clock_gap", elapsed.clone());
             }
             server_event("heartbeat", elapsed);
+            #[cfg(all(target_os = "linux", target_env = "gnu"))]
+            unsafe {
+                libc::malloc_trim(0);
+            }
             (last_wall, last_monotonic) = (wall, monotonic);
         }
     });

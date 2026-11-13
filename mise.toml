@@ -483,7 +483,10 @@ set -euo pipefail
 targets="$(bash scripts/release-target.sh expand $SUPLEX_RELEASE_TARGETS)"
 echo "Release targets: $targets"
 [[ -z "${SUPLEX_RELEASE_DRY_RUN:-}" ]] || exit 0
-mise run _release:check && mise run _1password:setup && mise run _release:bump
+# Separate lines: set -e ignores a failure in the left side of &&, so a chain would build without a bump.
+mise run _release:check
+mise run _1password:setup
+mise run _release:bump
 for target in $targets; do bash scripts/release-target.sh build "$target"; done
 mise run _release:commit
 # Every file is uploaded before any feed changes, so a failed upload leaves the previous release live on all platforms.

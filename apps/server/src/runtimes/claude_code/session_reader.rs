@@ -4,6 +4,7 @@ use std::{
     collections::HashMap,
     fs, io,
     path::{Path, PathBuf},
+    sync::{LazyLock, Mutex},
 };
 
 use serde_json::Value;
@@ -43,15 +44,49 @@ fn provider_instance_directories(database_path: &Path) -> io::Result<Vec<PathBuf
     Ok(directories)
 }
 
+/// Where `transcript_path` found each session's transcript, by the first
+/// config directory, the database, and the native session id. A hint only:
+/// the path is used while its file opens, and a missing file is searched for
+/// again. One short entry for each session that has a transcript.
+type Found = HashMap<(PathBuf, PathBuf, String), PathBuf>;
+static FOUND: LazyLock<Mutex<Found>> = LazyLock::new(Mutex::default);
+
 /// The session transcript in its profile instance, the default config
 /// directory, or, without a profile instance, any local provider instance.
+// The search opens a file in every project directory of each config
+// directory, so a found transcript is searched for only once.
 fn transcript_path(session: &ReaderSession<'_>) -> io::Result<Option<PathBuf>> {
     let environment = std::env::vars().collect::<HashMap<_, _>>();
     let directory = session.instance_home_directory.map_or_else(
         || transcript::config_directory(&environment),
         Path::to_path_buf,
     );
-    if let Some(path) = transcript::find_transcript(session.native_session_id, &directory)? {
+    let key = (
+        directory,
+        session.database_path.to_owned(),
+        session.native_session_id.to_owned(),
+    );
+    let found = FOUND
+        .lock()
+        .expect("transcript paths lock poisoned")
+        .get(&key)
+        .cloned();
+    if let Some(path) = found
+        && fs::File::open(&path).is_ok()
+    {
+        return Ok(Some(path));
+    }
+    let path = search(session, &key.0)?;
+    let mut found = FOUND.lock().expect("transcript paths lock poisoned");
+    match &path {
+        Some(path) => found.insert(key, path.clone()),
+        None => found.remove(&key),
+    };
+    Ok(path)
+}
+
+fn search(session: &ReaderSession<'_>, directory: &Path) -> io::Result<Option<PathBuf>> {
+    if let Some(path) = transcript::find_transcript(session.native_session_id, directory)? {
         return Ok(Some(path));
     }
     if session.instance_home_directory.is_some() {
@@ -284,6 +319,51 @@ mod tests {
                 .contains("transcript is not available")
         );
         assert!(reader.history(&dedicated).await.unwrap().is_empty());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_found_transcript_is_not_searched_for_again_until_its_file_is_gone() {
+        let root =
+            std::env::temp_dir().join(format!("suplex-claude-found-{}", uuid::Uuid::new_v4()));
+        let home = root.join("home");
+        let database = root.join("suplex.sqlite");
+        let session = ReaderSession {
+            database_path: &database,
+            session_id: "session-claude",
+            native_session_id: "abc",
+            instance_home_directory: Some(&home),
+        };
+        // A session without a transcript is searched for on each read.
+        assert_eq!(transcript_path(&session).unwrap(), None);
+        let first = home.join("projects/-repo-b/abc.jsonl");
+        fs::create_dir_all(first.parent().unwrap()).unwrap();
+        fs::write(&first, "").unwrap();
+        assert_eq!(transcript_path(&session).unwrap(), Some(first.clone()));
+        // No search: a new directory that sorts first does not change the answer.
+        let second = home.join("projects/-repo-a/abc.jsonl");
+        fs::create_dir_all(second.parent().unwrap()).unwrap();
+        fs::write(&second, "").unwrap();
+        assert_eq!(transcript_path(&session).unwrap(), Some(first.clone()));
+        // The found file is gone: search again.
+        fs::remove_file(&first).unwrap();
+        assert_eq!(transcript_path(&session).unwrap(), Some(second.clone()));
+        fs::remove_file(&second).unwrap();
+        assert_eq!(transcript_path(&session).unwrap(), None);
+        // The same session id in another instance home is another transcript.
+        let other = root.join("other");
+        fs::create_dir_all(other.join("projects/-repo")).unwrap();
+        fs::write(other.join("projects/-repo/abc.jsonl"), "").unwrap();
+        fs::write(&first, "").unwrap();
+        assert_eq!(transcript_path(&session).unwrap(), Some(first));
+        assert_eq!(
+            transcript_path(&ReaderSession {
+                instance_home_directory: Some(&other),
+                ..session
+            })
+            .unwrap(),
+            Some(other.join("projects/-repo/abc.jsonl"))
+        );
         fs::remove_dir_all(root).unwrap();
     }
 

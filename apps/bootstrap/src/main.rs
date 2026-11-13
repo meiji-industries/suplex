@@ -1158,14 +1158,17 @@ mod tests {
         assert!(!lacks_workflow_scope("Logged in to github.com\n"));
     }
 
-    /// A unit stop or restart kills only the supervisor, so running agent turns survive it.
+    /// A unit stop or restart kills only the supervisor, and an OOM kill of one agent
+    /// command does not stop the unit, so running agent turns survive both.
     #[test]
     fn the_suplex_unit_leaves_agent_turns_running_across_a_restart() {
         let (_, unit) = FILES
             .iter()
             .find(|(name, _)| *name == "suplex.service")
             .unwrap();
-        assert!(unit.lines().any(|line| line == "KillMode=process"));
+        for setting in ["KillMode=process", "OOMPolicy=continue"] {
+            assert!(unit.lines().any(|line| line == setting), "{setting}");
+        }
     }
 
     #[test]

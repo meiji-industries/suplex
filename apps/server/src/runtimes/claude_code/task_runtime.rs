@@ -1014,11 +1014,14 @@ mod tests {
         let scope = worker(&f);
         let directory = scope.runtime_directory().unwrap();
         fs::create_dir_all(&directory).unwrap();
-        // The shell exits at once, so the turn process is not a child of this one.
-        let launched = std::process::Command::new("/bin/sh")
+        // The launcher exits at once, so the turn process is not a child of this one.
+        // The turn process leads its group before it reports its pid and closes the
+        // pipe that `output` waits on. `sh -c 'set -m'` cannot do this: dash turns
+        // job control off without a terminal.
+        let launched = std::process::Command::new("perl")
             .args([
-                "-c",
-                "set -m; sleep 30 </dev/null >/dev/null 2>&1 & echo $!",
+                "-e",
+                r#"exit if fork; setpgrp(0, 0); print "$$\n"; open STDOUT, ">", "/dev/null"; open STDERR, ">", "/dev/null"; exec "sleep", "30""#,
             ])
             .output()
             .unwrap();

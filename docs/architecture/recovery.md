@@ -15,7 +15,8 @@ Its launch record, output log, and exit file are on disk, so the restarted
 host observes it as running, then reads its result, without a second launch.
 A service manager must stop only the supervisor: the systemd unit sets
 `KillMode=process`, because the default kills every process in the unit's
-cgroup. See [the install guide](../install.md).
+cgroup. It also sets `OOMPolicy=continue`, so an agent command that the kernel
+OOM killer kills fails only its turn and does not stop the unit. See [the install guide](../install.md).
 
 Process cleanup is separate from prompt admission. Recovery inspects a saved
 launch owner's current process identity before stopping a retired session.

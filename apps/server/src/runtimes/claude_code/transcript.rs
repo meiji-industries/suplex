@@ -180,6 +180,16 @@ pub fn parse_json_lines(text: &str) -> Vec<Value> {
         .collect()
 }
 
+/// `message_entries` of `parse_json_lines`. Each parsed line is dropped when
+/// its entry is read, so memory never holds every line of a transcript.
+pub fn text_entries(text: &str) -> Vec<ClaudeMessageEntry> {
+    text.split('\n')
+        .filter(|line| !line.trim().is_empty())
+        .filter_map(|line| message_entry(&serde_json::from_str(line).ok()?))
+        .filter(|entry| !entry.is_sidechain)
+        .collect()
+}
+
 pub fn message_entries(values: &[Value]) -> Vec<ClaudeMessageEntry> {
     values
         .iter()
@@ -723,6 +733,14 @@ mod tests {
         let expected = (9.0 + (82.0 + 74.0) * 5.0 + 5.0 * 0.1 + 6053.0 * 1.25) / 1_000_000.0;
         assert!((usage[0].cost_usd - expected).abs() < 1e-12);
         assert_eq!(usage_records(&entries, None)[0].cost_usd, 0.0);
+    }
+
+    #[test]
+    fn text_entries_are_the_message_entries_of_the_parsed_lines() {
+        let text = format!("\n{}\n \nnot json\n[1]\n", transcript());
+        let entries = text_entries(&text);
+        assert_eq!(entries, message_entries(&parse_json_lines(&text)));
+        assert_eq!(entries.len(), 7);
     }
 
     #[test]

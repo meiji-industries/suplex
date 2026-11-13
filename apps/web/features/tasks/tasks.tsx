@@ -59,7 +59,7 @@ const taskViews = [["active", "Active"], ["backlog", "Backlog"], ["queued", "Que
 const listColumns = "lg:grid-cols-[minmax(12rem,1fr)_9rem_8.5rem_3.5rem_4.5rem_6rem]";
 
 export function TasksView({ mode = "list" }: { mode?: "list" | "board" }): ReactElement {
-  const { currentCompany, user } = useCompanyContext();
+  const { currentCompany, user, loading: companyLoading } = useCompanyContext();
   const companyId = currentCompany?.id;
   const hasProjects = useHasProjects(companyId);
   const selectedId = /^\/(?:tasks|board)\/([^/]+)$/.exec(window.location.pathname)?.[1]; const [initialFilters] = useState(readTaskListFilters);
@@ -75,7 +75,8 @@ export function TasksView({ mode = "list" }: { mode?: "list" | "board" }): React
   const projectList = useProjects(companyId);
   const projects = projectList.data ?? noProjects;
   const detailsLoaded = !companyId || (!selectedId || !taskQuery.isPending) && (!archived || !archivedList.isPending);
-  const loaded = detailsLoaded && Boolean(!companyId || !projectList.isPending) && Boolean(selectedId || archived || !companyId || !taskList.isPending);
+  // Until the first company read ends, no company is not the same as no tasks: show loading, not the empty state.
+  const loaded = !(companyLoading && !companyId) && detailsLoaded && Boolean(!companyId || !projectList.isPending) && Boolean(selectedId || archived || !companyId || !taskList.isPending);
   const readFailure = [error, selectedId && taskQuery.error, archived ? archivedList.error : taskList.error, projectList.error].find(error => error && !(error instanceof ApiConnectionError));
   const readError = readFailure instanceof Error ? readFailure.message : readFailure;
   // A successful read clears an earlier error.

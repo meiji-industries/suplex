@@ -43,7 +43,7 @@ test("the pull request card names each merge block next to the checks summary", 
   expect(container.querySelector("[aria-label='Checks summary']")?.textContent).toBe("3 passed, 1 skipped");
   const blocks = container.querySelector("[aria-label='Merge blocks']");
   expect(blocks?.textContent).toContain("GitHub blocks the merge");
-  expect([...blocks?.querySelectorAll("li") ?? []].map(item => item.textContent)).toEqual([block]);
+  expect(Array.from(blocks?.querySelectorAll("li") ?? [], item => item.textContent)).toEqual([block]);
   expect(container.querySelector("[aria-label='Pull request checks']")?.textContent).toContain("Skipped");
 });
 

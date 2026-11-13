@@ -4,6 +4,7 @@ import type { AgentDelivery } from "./AgentDelivery.js";
 import type { AgentProject } from "./AgentProject.js";
 import type { AgentQuestion } from "./AgentQuestion.js";
 import type { AgentTaskBlocker } from "./AgentTaskBlocker.js";
+import type { AgentTaskProfile } from "./AgentTaskProfile.js";
 import type { AgentWorkflow } from "./AgentWorkflow.js";
 import type { DeliveryTarget } from "./DeliveryTarget.js";
 import type { TaskQueue } from "./TaskQueue.js";
@@ -14,4 +15,4 @@ import type { VisualEvidence } from "./VisualEvidence.js";
 /**
  * `agentApiProjection`: a task as a paired agent reads it.
  */
-export type AgentTaskProjection = { id: string, issueKey: string | null, projectId: string, project: AgentProject, title: string, source: TaskSource | null, status: TaskStatus, queuePriority: number, queue: TaskQueue, dependsOn: Array<string>, blockedBy: Array<AgentBlocker>, archived: boolean, revision?: string, permittedCommands: Array<string>, humanQuestion: string | null, question: AgentQuestion | null, blocker: AgentTaskBlocker | null, workflowStage: string, workflow: AgentWorkflow, templateId: string | null, deliveryTarget: DeliveryTarget, runProjectTests: boolean, visualEvidence: VisualEvidence, delivery: AgentDelivery | null, createdAt: string, updatedAt: string, };
+export type AgentTaskProjection = { id: string, issueKey: string | null, projectId: string, project: AgentProject, title: string, source: TaskSource | null, status: TaskStatus, queuePriority: number, queue: TaskQueue, dependsOn: Array<string>, blockedBy: Array<AgentBlocker>, archived: boolean, revision?: string, permittedCommands: Array<string>, humanQuestion: string | null, question: AgentQuestion | null, blocker: AgentTaskBlocker | null, workflowStage: string, workflow: AgentWorkflow, templateId: string | null, rootProfile: AgentTaskProfile, workerProfile: AgentTaskProfile, deliveryTarget: DeliveryTarget, runProjectTests: boolean, visualEvidence: VisualEvidence, delivery: AgentDelivery | null, createdAt: string, updatedAt: string, };

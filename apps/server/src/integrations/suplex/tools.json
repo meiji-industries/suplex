@@ -1,7 +1,7 @@
 [
   {
     "name": "suplex_whoami",
-    "description": "Read this paired agent's identity, capabilities, and granted projects with their project delivery defaults in deliveryDefaults. agentTaskPolicy is a deprecated alias of deliveryDefaults with the same shape. taskCommands lists exactly the lifecycle commands accepted by suplex_command_task. autonomousCommands also includes task creation and, when enabled, runtime delivery commands. MCP exposes task lifecycle commands only. It does not expose runtime delivery or merge commands. A paired agent can answer a task's Coordinator question with answer_human_question only after an administrator lets it answer on their behalf. Task limit decisions and command cleanup confirmations stay with a person. Suplex can perform delivery for a task's configured target, including a merge after review, without an agent command.",
+    "description": "Read this paired agent's identity, capabilities, and granted projects with their project delivery defaults in deliveryDefaults and their default agents in rootProfileId, workerProfileId, and altProfileId, with providerPolicy and updatedAt. projectAgentsGrant reports whether suplex_update_project_agents is available. agentTaskPolicy is a deprecated alias of deliveryDefaults with the same shape. taskCommands lists exactly the lifecycle commands accepted by suplex_command_task. autonomousCommands also includes task creation and, when enabled, runtime delivery commands. MCP exposes task lifecycle commands only. It does not expose runtime delivery or merge commands. A paired agent can answer a task's Coordinator question with answer_human_question only after an administrator lets it answer on their behalf. Task limit decisions and command cleanup confirmations stay with a person. Suplex can perform delivery for a task's configured target, including a merge after review, without an agent command.",
     "inputSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "type": "object",
@@ -54,6 +54,33 @@
       "required": [
         "projectId"
       ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "suplex_list_profiles",
+    "description": "List agent profiles with their id, name, role (root is a Coordinator, worker is a Worker), provider, model, reasoningLevel, and archived state. isDefaultForRole marks the profile that new projects receive for its role, and defaultSlots names each default slot it fills. projects lists each granted project and whether that project's provider policy allows the profile. Filter by role, and set includeArchived to include archived profiles. With projectId, the list keeps only the profiles that granted project allows. Use it to find a profile ID by name before you change a task with suplex_update_task or a project with suplex_update_project_agents. Every paired agent can use it.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "role": {
+          "type": "string",
+          "enum": [
+            "root",
+            "worker"
+          ]
+        },
+        "includeArchived": {
+          "type": "boolean",
+          "default": false
+        },
+        "projectId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        }
+      },
       "additionalProperties": false
     }
   },
@@ -527,6 +554,53 @@
       "required": [
         "taskId",
         "revision",
+        "idempotencyKey"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "suplex_update_project_agents",
+    "description": "Change the default Coordinator (rootProfileId), Worker (workerProfileId), or Alt Coordinator (altProfileId) of a granted project. New tasks use these defaults; existing tasks keep their agents. It needs the administrator's project agents grant: suplex_whoami reports it as projectAgentsGrant. Without that grant, or for a project that is not granted, it returns the same 404. Name at least one profile. Send the project's updatedAt from suplex_whoami or the last write; a stale updatedAt is refused with revision_stale. Each profile must be active, have the role of its field, and be allowed by the project's provider policy; a refusal reports field, value, and reason. The same idempotencyKey and arguments return the first result without a second write. Returns the project's agents and new updatedAt.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "projectId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "updatedAt": {
+          "description": "The project's updatedAt from suplex_whoami or the last write.",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "idempotencyKey": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "rootProfileId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "workerProfileId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "altProfileId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        }
+      },
+      "required": [
+        "projectId",
+        "updatedAt",
         "idempotencyKey"
       ],
       "additionalProperties": false

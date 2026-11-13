@@ -62,11 +62,11 @@ use super::{
 use crate::identity::companies::CompanyStatus;
 use crate::tasks::control::SessionKind;
 
-fn fail(message: &str, status: u16, code: &'static str) -> Box<dyn Error + Send + Sync> {
+pub(super) fn fail(message: &str, status: u16, code: &'static str) -> Box<dyn Error + Send + Sync> {
     fail_with(message, status, code, Value::Null)
 }
 
-fn fail_with(
+pub(super) fn fail_with(
     message: &str,
     status: u16,
     code: &'static str,
@@ -81,7 +81,7 @@ fn fail_with(
     .into()
 }
 
-fn not_found() -> Box<dyn Error + Send + Sync> {
+pub(super) fn not_found() -> Box<dyn Error + Send + Sync> {
     fail("Not found", 404, "resource_not_found")
 }
 
@@ -150,7 +150,7 @@ fn task_row(database: &SuplexDatabase, task_id: &str) -> DatabaseResult<Option<R
 }
 
 /// The rejection a caller names when an unavailable project is a request field.
-struct ScopeFailure<'a> {
+pub(super) struct ScopeFailure<'a> {
     code: &'static str,
     field: &'a str,
     value: &'a str,
@@ -166,7 +166,7 @@ fn project_scope_failure(project_id: &str) -> ScopeFailure<'_> {
     }
 }
 
-fn require_scope(
+pub(super) fn require_scope(
     database: &SuplexDatabase,
     principal: &Principal,
     company_id: &str,
@@ -450,6 +450,28 @@ pub struct AgentProject {
     name: String,
 }
 
+/// The agent profile a task runs with. `name` is `null` when that profile no longer exists.
+#[derive(serde::Serialize, ts_rs::TS)]
+pub struct AgentTaskProfile {
+    id: String,
+    name: Option<String>,
+}
+
+fn task_profile(database: &SuplexDatabase, profile_id: &str) -> DatabaseResult<AgentTaskProfile> {
+    let name = database
+        .connection()
+        .query_row(
+            "SELECT name FROM suplex_profiles WHERE id = ?1",
+            [profile_id],
+            |row| row.get(0),
+        )
+        .optional()?;
+    Ok(AgentTaskProfile {
+        id: profile_id.to_owned(),
+        name,
+    })
+}
+
 /// What holds the task back from progress on its own.
 #[derive(serde::Serialize, ts_rs::TS)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -525,6 +547,8 @@ pub struct AgentTaskProjection {
     workflow_stage: &'static str,
     workflow: AgentWorkflow,
     template_id: Option<String>,
+    root_profile: AgentTaskProfile,
+    worker_profile: AgentTaskProfile,
     delivery_target: DeliveryTarget,
     run_project_tests: bool,
     visual_evidence: VisualEvidence,
@@ -644,6 +668,8 @@ fn projection_of(
             name: workflow_name.map(str::to_owned),
         },
         template_id: template_id.map(str::to_owned),
+        root_profile: task_profile(database, &task.root_profile.profile_id)?,
+        worker_profile: task_profile(database, &task.worker_profile.profile_id)?,
         delivery_target: task.delivery_target,
         run_project_tests: task.configuration.run_project_tests,
         visual_evidence: task.configuration.visual_evidence,
@@ -701,12 +727,20 @@ pub fn identity(database: &SuplexDatabase, principal: &Principal) -> DatabaseRes
         .collect::<rusqlite::Result<Vec<_>>>()?;
     let mut projects_json = Vec::new();
     for (id, name) in rows {
-        let defaults =
-            projects::get_in_company(database, &principal.company_id, &id)?.delivery_defaults;
+        let project = projects::get_in_company(database, &principal.company_id, &id)?;
+        let defaults = project.delivery_defaults;
         // A project has exactly one default delivery target; the list keeps room for more.
         let delivery_defaults = json!({"deliveryTargets": [defaults.delivery_target], "runProjectTests": defaults.run_project_tests, "visualEvidence": defaults.visual_evidence});
         // `agentTaskPolicy` is the deprecated name of `deliveryDefaults`.
-        projects_json.push(json!({"id": id, "name": name, "deliveryDefaults": delivery_defaults, "agentTaskPolicy": delivery_defaults}));
+        let mut entry = json!({"id": id, "name": name, "deliveryDefaults": delivery_defaults, "agentTaskPolicy": delivery_defaults});
+        // The default agents; `updatedAt` is the token of the project agents write.
+        if let (Some(entry), Value::Object(agents)) = (
+            entry.as_object_mut(),
+            serde_json::to_value(super::agent_profiles::AgentProjectAgents::from(&project))?,
+        ) {
+            entry.extend(agents.into_iter().filter(|(key, _)| key != "projectId"));
+        }
+        projects_json.push(entry);
     }
     let name: String = database.connection().query_row(
         "SELECT name FROM suplex_agents WHERE id = ?1",
@@ -715,10 +749,11 @@ pub fn identity(database: &SuplexDatabase, principal: &Principal) -> DatabaseRes
     )?;
     Ok(json!({
         "agent": {"id": principal.agent_id, "name": name, "profileId": principal.profile_id},
-        "capabilities": {"taskDiscovery": true, "taskRead": true, "taskCreate": true, "humanAnswers": principal.answer_grant.is_some(), "moves": principal.moves_grant, "transcripts": principal.transcripts_grant, "taskCommands": task_commands(principal.answer_grant.is_some())},
+        "capabilities": {"taskDiscovery": true, "taskRead": true, "taskCreate": true, "humanAnswers": principal.answer_grant.is_some(), "moves": principal.moves_grant, "transcripts": principal.transcripts_grant, "projectAgents": principal.project_agents_grant, "taskCommands": task_commands(principal.answer_grant.is_some())},
         "answerGrant": principal.answer_grant.as_ref().map(|grant| json!({"userId": grant.user_id, "userName": grant.user_name})),
         "movesGrant": principal.moves_grant,
         "transcriptsGrant": principal.transcripts_grant,
+        "projectAgentsGrant": principal.project_agents_grant,
         "projects": projects_json,
     }))
 }
@@ -2182,17 +2217,25 @@ fn recheck_policy(
 }
 
 /// The dry-run response: what the admission would create and start.
-fn dry_run_preview(task: &response::TaskResponse, project: &Project, selection: &Value) -> Value {
-    merged(
+fn dry_run_preview(
+    database: &SuplexDatabase,
+    task: &response::TaskResponse,
+    project: &Project,
+    selection: &Value,
+) -> DatabaseResult<Value> {
+    Ok(merged(
         json!({
             "dryRun": true, "projectId": task.project_id, "project": {"id": project.id, "name": project.name},
             "title": task.title,
             "workflow": {"id": selection["workflowId"], "engine": task.workflow, "name": selection["workflowName"]},
-            "templateId": selection["templateId"], "deliveryTarget": task.delivery_target,
+            "templateId": selection["templateId"],
+            "rootProfile": task_profile(database, &task.root_profile.profile_id)?,
+            "workerProfile": task_profile(database, &task.worker_profile.profile_id)?,
+            "deliveryTarget": task.delivery_target,
             "branch": task.configuration.branch, "dependsOn": task.depends_on,
         }),
         would_start(task.status, &task.queue),
-    )
+    ))
 }
 
 /// Insert the task, with its images unless this is a dry run, and save a
@@ -2275,7 +2318,7 @@ fn write(
         )?;
         let task = task(database, &result.task.id)?;
         if dry_run {
-            let preview = dry_run_preview(&task, &project, &pending.resolved.selection);
+            let preview = dry_run_preview(database, &task, &project, &pending.resolved.selection)?;
             return Err(Box::new(DryRunRollback(preview)));
         }
         Ok(Creation::Task {

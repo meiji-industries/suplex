@@ -18,7 +18,7 @@ use crate::{
     moves,
     tasks::{
         agent_api::{self, Creation},
-        agent_transcript, agent_turns,
+        agent_profiles, agent_transcript, agent_turns,
     },
 };
 
@@ -54,6 +54,7 @@ impl SuplexMcpRuntime {
                     principal.answer_grant.is_some(),
                     principal.moves_grant,
                     principal.transcripts_grant,
+                    principal.project_agents_grant,
                 ),
             )),
             "suplex_list_workflows" => {
@@ -69,6 +70,19 @@ impl SuplexMcpRuntime {
                     agent_api::templates(database, principal, &project_id)
                 })?;
                 Ok((200, json!({"templates": templates})))
+            }
+            "suplex_list_profiles" => {
+                let query = super::profile_list_arguments(args)?;
+                let profiles = state
+                    .with_database(|database| agent_profiles::list(database, principal, &query))?;
+                Ok((200, serde_json::to_value(profiles)?))
+            }
+            "suplex_update_project_agents" => {
+                let (project_id, body) = super::project_agents_arguments(args)?;
+                let project = state.with_database(|database| {
+                    agent_profiles::update_project_agents(database, principal, &project_id, &body)
+                })?;
+                Ok((200, project))
             }
             "suplex_list_tasks" => {
                 let query = super::list_arguments(args)?;
@@ -271,9 +285,21 @@ impl SuplexMcpRuntime {
 pub fn failure(error: &(dyn std::error::Error + 'static)) -> (u16, Value) {
     let domain =
         |status: u16, message: &str, code: &str| (status, json!({"error": message, "code": code}));
-    if let Some(TaskError::Failure { status, code, .. } | TaskError::Agent { status, code, .. }) =
-        error.downcast_ref()
+    // A refused field keeps its `field`, `value`, and `reason`, as over HTTP.
+    if let Some(TaskError::Agent {
+        status,
+        code,
+        details,
+        ..
+    }) = error.downcast_ref()
     {
+        let (status, mut body) = domain(*status, &error.to_string(), code);
+        if let Some(body) = body.as_object_mut() {
+            body.extend(details.clone());
+        }
+        return (status, body);
+    }
+    if let Some(TaskError::Failure { status, code, .. }) = error.downcast_ref() {
         return domain(*status, &error.to_string(), code);
     }
     if let Some(IdentityError::ExternalAgent {
@@ -399,6 +425,22 @@ mod tests {
             .as_str()
             .unwrap()
             .to_owned();
+        let profiles = rpc(
+            "tools/call",
+            json!({"name": "suplex_list_profiles", "arguments": {"role": "worker"}}),
+        )
+        .await;
+        assert_eq!(
+            profiles["result"]["structuredContent"]["status"], 200,
+            "{profiles}"
+        );
+        let token =
+            whoami["result"]["structuredContent"]["body"]["projects"][0]["updatedAt"].clone();
+        let denied = rpc("tools/call", json!({"name": "suplex_update_project_agents", "arguments": {"projectId": "project_api", "updatedAt": token, "idempotencyKey": "oauth-agents-1", "rootProfileId": "profile_native_root"}})).await;
+        assert_eq!(
+            denied["result"]["structuredContent"]["body"]["code"],
+            "project_agents_grant_required"
+        );
         // OAuth has its own paired principal.  Grant that principal, rather
         // than the bridge fixture, and prove the next tool call observes it.
         agent.server.state.with_database(|database| {
@@ -552,7 +594,7 @@ mod tests {
         .await;
         assert_eq!(
             capabilities["result"]["structuredContent"]["body"],
-            crate::http::routes::agent_api::capabilities(true, false, true, false)
+            crate::http::routes::agent_api::capabilities(true, false, true, false, false)
         );
     }
 }

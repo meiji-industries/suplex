@@ -87,9 +87,10 @@ pub fn profile_hash(profile_id: &str) -> String {
 }
 
 /// Error codes that an agent surface returns. Any other code is `other`.
-const ERROR_CODES: [&str; 46] = [
+const ERROR_CODES: [&str; 49] = [
     "advisor_profile_not_found",
     "advisor_role_not_in_workflow",
+    "alt_profile_not_found",
     "answer_grant_required",
     "billing_unavailable",
     "command_in_progress",
@@ -113,6 +114,8 @@ const ERROR_CODES: [&str; 46] = [
     "pairing_invalid",
     "payload_too_large",
     "plan_limit_reached",
+    "profile_not_allowed",
+    "project_agents_grant_required",
     "project_not_found",
     "question_stale",
     "request_invalid",

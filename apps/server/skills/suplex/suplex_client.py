@@ -150,6 +150,30 @@ class SuplexClient:
     def list_templates(self, project_id: str) -> dict:
         return self.call("GET", f"/api/agent/templates?{urllib.parse.urlencode({'projectId': project_id})}")
 
+    def list_profiles(self, role: str | None = None, include_archived: bool = False, project_id: str | None = None) -> dict:
+        """Agent profiles with role, provider, model, isDefaultForRole, and which granted projects allow each one.
+        role is root (Coordinator) or worker. With project_id, only the profiles that project allows."""
+        query = {"includeArchived": "true" if include_archived else "false"}
+        if role is not None:
+            query["role"] = role
+        if project_id is not None:
+            query["projectId"] = project_id
+        return self.call("GET", f"/api/agent/profiles?{urllib.parse.urlencode(query)}")
+
+    def find_profile(self, name: str, role: str, project_id: str | None = None) -> dict:
+        """The one active profile with this exact name and role. Raises SuplexError when none or several match."""
+        matches = [profile for profile in self.list_profiles(role=role, project_id=project_id)["profiles"] if profile["name"] == name]
+        if len(matches) != 1:
+            raise SuplexError(f"{len(matches)} {role} profiles are named {name!r}")
+        return matches[0]
+
+    def update_project_agents(self, project_id: str, updated_at: str, key: str | None = None, **profiles) -> dict:
+        """Change a project's default rootProfileId, workerProfileId, or altProfileId. Needs the administrator's
+        project agents grant. updated_at is the project's updatedAt from whoami() or the last write."""
+        payload = {"updatedAt": updated_at, **profiles}
+        payload["idempotencyKey"] = key or idempotency_key(f"project-agents:{project_id}", payload)
+        return self.call("PATCH", f"/api/agent/projects/{urllib.parse.quote(project_id, safe='')}/agents", payload)
+
     def list_tasks(self, **query) -> dict:
         search = urllib.parse.urlencode({key: value for key, value in query.items() if value is not None})
         return self.call("GET", f"/api/agent/tasks?{search}" if search else "/api/agent/tasks")
@@ -280,10 +304,14 @@ def _self_check() -> None:
     client.list_task_turns("t 1", limit=5, cursor="c")
     client.list_task_turns("t2")
     client.get_task_session_history("t 1", "s/1", before="m")
+    client.list_profiles(role="worker", project_id="p 1")
+    client.update_project_agents("p/1", "2026-01-01T00:00:00.000Z", key="k", rootProfileId="r")
     assert seen == [
         ("GET", "/api/agent/tasks/t%201/turns?limit=5&cursor=c"),
         ("GET", "/api/agent/tasks/t2/turns"),
         ("GET", "/api/agent/tasks/t%201/sessions/s%2F1/history?before=m"),
+        ("GET", "/api/agent/profiles?includeArchived=false&role=worker&projectId=p+1"),
+        ("PATCH", "/api/agent/projects/p%2F1/agents"),
     ], seen
     print("suplex_client self-check passed")
 

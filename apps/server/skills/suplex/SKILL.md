@@ -14,8 +14,9 @@ Use the first transport that is available. All three speak the same API:
 
 1. **Registered Suplex MCP tools.** Check for tools named
    `suplex_whoami`, `suplex_capabilities`, `suplex_list_workflows`,
-   `suplex_list_templates`, `suplex_list_tasks`, `suplex_get_task`,
-   `suplex_get_task_delivery`, `suplex_create_task`, `suplex_update_task`,
+   `suplex_list_templates`, `suplex_list_profiles`, `suplex_list_tasks`,
+   `suplex_get_task`, `suplex_get_task_delivery`, `suplex_create_task`,
+   `suplex_update_task`, `suplex_update_project_agents`,
    `suplex_set_task_dependencies`, `suplex_command_task`, `suplex_list_moves`,
    `suplex_get_move`, `suplex_create_move`, `suplex_update_move`,
    `suplex_delete_move`, `suplex_start_move`, `suplex_list_move_runs`,
@@ -139,7 +140,9 @@ you need the exact request shapes.
 `projects` this agent was granted, each with its project delivery defaults in
 `deliveryDefaults` (`deliveryTargets`, `runProjectTests`, `visualEvidence`). A
 task takes these values when it names no other values. `agentTaskPolicy` is a
-deprecated alias with the same shape; read `deliveryDefaults`. Suplex's persisted grants are authoritative:
+deprecated alias with the same shape; read `deliveryDefaults`. Each project also
+reports its default agents (`rootProfileId`, `workerProfileId`, `altProfileId`),
+its `providerPolicy`, and `updatedAt`. Suplex's persisted grants are authoritative:
 
 - One granted project: use it.
 - Several: ask the person you work for which one. Do not guess.
@@ -329,6 +332,53 @@ task = client.update_task(task_id, task["revision"], advisorProfileIds={"rater":
 Any other change to an active, delivered, or cancelled task returns
 `409 illegal_command`. A rejected profile or workflow
 returns `422` with `field`, `value`, and `reason`, and keeps the revision.
+An unknown, archived, or wrong-role profile is `*_profile_not_found`; a
+profile that the project's provider policy does not allow is
+`profile_not_allowed`.
+
+## Agent profiles
+
+`suplex_list_profiles` (`GET /api/agent/profiles`) lists agent profiles. Every
+paired agent can use it. Each profile has `id`, `name`, `role` (`root` is a
+Coordinator, `worker` is a Worker), `provider`, `model`, `reasoningLevel`,
+`archived`, `isDefaultForRole` (the stored default for new projects),
+`defaultSlots`, and `projects` with `allowed` for each granted project. Filter
+by `role`, `includeArchived`, and `projectId`; with `projectId` the list keeps
+only the profiles that project allows. Task reads report `rootProfile` and
+`workerProfile` as `{ id, name }`.
+
+### Change a task's profiles
+
+Find each profile by its exact name in the task's project, then update the task
+with its current revision. Do not guess an ID from a name.
+
+```python
+root = client.find_profile("Planner Coordinator", role="root", project_id=project_id)
+worker = client.find_profile("Builder Worker", role="worker", project_id=project_id)
+task = client.get_task(task_id)
+task = client.update_task(task_id, task["revision"], rootProfileId=root["id"], workerProfileId=worker["id"])
+assert task["rootProfile"]["name"] == "Planner Coordinator"
+```
+
+The task must be in the backlog or the queue. When no profile or several
+profiles have the name, ask the person you work for.
+
+### Change a project's default agents
+
+`suplex_update_project_agents` (`PATCH /api/agent/projects/{projectId}/agents`)
+changes the default Coordinator, Worker, or Alt Coordinator that new tasks in a
+project use. Existing tasks keep their agents. It needs the administrator grant
+**Change project agents**; `suplex_whoami` reports it as `projectAgentsGrant`.
+Without it, Suplex returns `404 project_agents_grant_required` for every
+project: tell the person you work for which setting to turn on. Send the
+project's `updatedAt` from `suplex_whoami`. A stale value returns
+`412 revision_stale`; read `suplex_whoami` again and retry once. A rejected
+profile returns `422` with `field`, `value`, and `reason`.
+
+```python
+project = next(p for p in client.whoami()["projects"] if p["id"] == project_id)
+client.update_project_agents(project_id, project["updatedAt"], workerProfileId=worker["id"])
+```
 
 ## Reading approval, blocked, waiting_human, and stale answers
 

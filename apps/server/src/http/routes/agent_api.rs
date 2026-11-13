@@ -12,7 +12,7 @@ use axum::{
     extract::{DefaultBodyLimit, Path, RawQuery, State, rejection::BytesRejection},
     http::{HeaderMap, StatusCode, header},
     response::{IntoResponse, Response},
-    routing::{delete, get, post, put},
+    routing::{delete, get, patch, post, put},
 };
 use chrono::Utc;
 use serde_json::{Value, json};
@@ -26,7 +26,9 @@ use crate::{
     identity::external_agents::{self, Principal},
     moves,
     shared::js_json,
-    tasks::{agent_api, agent_transcript, agent_turns, images::MAX_TASK_REQUEST_BYTES},
+    tasks::{
+        agent_api, agent_profiles, agent_transcript, agent_turns, images::MAX_TASK_REQUEST_BYTES,
+    },
 };
 
 use super::auth;
@@ -71,8 +73,14 @@ pub fn capabilities(
     answers: bool,
     moves_grant: bool,
     transcripts_grant: bool,
+    project_agents_grant: bool,
 ) -> Value {
-    let mut autonomous = vec!["create_backlog_task", "create_queued_task", "update_task"];
+    let mut autonomous = vec![
+        "create_backlog_task",
+        "create_queued_task",
+        "update_task",
+        "list_profiles",
+    ];
     autonomous.extend(agent_api::task_commands(answers));
     if agent_delivery {
         autonomous.extend(DELIVERY_COMMANDS);
@@ -95,6 +103,9 @@ pub fn capabilities(
     if transcripts_grant {
         autonomous.push("get_task_session_history");
     }
+    if project_agents_grant {
+        autonomous.push("update_project_agents");
+    }
     let mut unavailable = Vec::new();
     if !answers {
         unavailable.push(contracts::ANSWER_HUMAN_QUESTION);
@@ -111,7 +122,8 @@ pub fn capabilities(
     json!({
         "apiVersion": "v1",
         "capabilities": {
-            "read": {"task": true, "workflows": true, "templates": true, "moves": moves_grant, "transcripts": transcripts_grant},
+            "read": {"task": true, "workflows": true, "templates": true, "moves": moves_grant, "transcripts": transcripts_grant, "profiles": true},
+            "projectAgents": project_agents_grant,
             "create": {"backlogTask": true, "queuedTask": true, "deliveryTargets": ["local_worktree", "remote_branch", "pull_request_draft", "pull_request_ready", "merged"]},
             "taskControl": true, "delivery": agent_delivery, "merge": agent_delivery, "humanDecisions": answers,
         },
@@ -131,6 +143,11 @@ pub fn router() -> Router<AppState> {
             .route(&format!("{prefix}/capabilities"), get(capabilities_route))
             .route(&format!("{prefix}/workflows"), get(workflows))
             .route(&format!("{prefix}/templates"), get(templates))
+            .route(&format!("{prefix}/profiles"), get(profiles))
+            .route(
+                &format!("{prefix}/projects/{{project_id}}/agents"),
+                patch(update_project_agents),
+            )
             .route(
                 &format!("{prefix}/moves"),
                 get(list_moves).post(create_move),
@@ -607,6 +624,7 @@ async fn capabilities_route(State(state): State<AppState>, headers: HeaderMap) -
             principal.answer_grant.is_some(),
             principal.moves_grant,
             principal.transcripts_grant,
+            principal.project_agents_grant,
         ),
     )
 }
@@ -644,6 +662,57 @@ async fn templates(
         .with_database(|database| agent_api::templates(database, &principal, &query.project_id));
     respond(
         result.map(|templates| json!({"templates": templates})),
+        StatusCode::OK,
+        true,
+    )
+}
+
+async fn profiles(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    RawQuery(query): RawQuery,
+) -> Response {
+    let principal = attempt!(bearer(&state, &headers, true));
+    let query = attempt!(validated(
+        contracts::ProfileListQuery::parse(Some(&contracts::query_object(query.as_deref()))),
+        true
+    ));
+    respond(
+        state.with_database(|database| {
+            Ok(serde_json::to_value(agent_profiles::list(
+                database, &principal, &query,
+            )?)?)
+        }),
+        StatusCode::OK,
+        true,
+    )
+}
+
+async fn update_project_agents(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(project_id): Path<String>,
+    body: Result<Bytes, BytesRejection>,
+) -> Response {
+    let body = attempt!(parsed_body(&headers, body, true));
+    let principal = attempt!(bearer(&state, &headers, true));
+    let params = attempt!(validated(
+        contracts::ProjectDiscoveryQuery::parse(Some(&json!({"projectId": project_id}))),
+        true
+    ));
+    let request = attempt!(validated(
+        contracts::ProjectAgentsBody::parse(body.as_ref()),
+        true
+    ));
+    respond(
+        state.with_database(|database| {
+            agent_profiles::update_project_agents(
+                database,
+                &principal,
+                &params.project_id,
+                &request,
+            )
+        }),
         StatusCode::OK,
         true,
     )

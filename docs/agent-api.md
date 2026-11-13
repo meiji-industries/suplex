@@ -105,8 +105,12 @@ and receipts or losing replay protection during this rename.
 ## Discovery
 
 `GET /api/agent/me` returns the authenticated agent identity, actual supported
-capabilities, and `{ id, name, deliveryDefaults, agentTaskPolicy }` metadata for
-currently granted projects. `deliveryDefaults` reports the project delivery
+capabilities, and `{ id, name, deliveryDefaults, agentTaskPolicy, rootProfileId,
+workerProfileId, altProfileId, providerPolicy, updatedAt }` metadata for
+currently granted projects. The profile IDs are the project's default
+Coordinator, Worker, and Alt Coordinator. `providerPolicy` is `null` or the
+providers and logins the project allows. `updatedAt` is the concurrency token
+of [the project agents write](#changing-a-projects-default-agents). `deliveryDefaults` reports the project delivery
 defaults: `deliveryTargets` (the default delivery target), `runProjectTests`, and
 `visualEvidence`. A task that does not name one of these values takes the
 project default. People edit the defaults in the project settings, so read them
@@ -285,9 +289,79 @@ A stale revision returns `412 revision_stale`. A repeated `idempotencyKey`
 with the same body returns the stored result; a different body returns
 `409 idempotency_conflict`. A rejected field returns `422` with `field`,
 `value`, and `reason`: `root_profile_not_found`, `worker_profile_not_found`,
-`advisor_profile_not_found`, `advisor_role_not_in_workflow`, or
-`workflow_not_found`. A rejected update keeps the task and its revision, and
-writes no audit event.
+`advisor_profile_not_found`, `advisor_role_not_in_workflow`,
+`workflow_not_found`, or `profile_not_allowed`. An unknown, archived, or
+wrong-role profile is `*_profile_not_found`. A profile that the project's
+provider policy does not allow is `profile_not_allowed`, with the field that
+names it. A rejected update keeps the task and its revision, and writes no
+audit event.
+
+Task reads include `rootProfile` and `workerProfile`, each `{ id, name }`.
+`name` is `null` when that profile no longer exists.
+
+### Change a task's profiles
+
+1. `GET /api/agent/profiles?role=root&projectId=project_a` and
+   `GET /api/agent/profiles?role=worker&projectId=project_a` list the profiles
+   that the project allows. Find each profile by `name` and keep its `id`.
+2. `GET /api/agent/tasks/:taskId` reads the task's `revision`.
+3. `PATCH /api/agent/tasks/:taskId` with `{ "revision": "...",
+   "idempotencyKey": "...", "rootProfileId": "...", "workerProfileId": "..." }`.
+4. The response and later reads report the new `rootProfile` and
+   `workerProfile` names.
+
+## Agent profiles
+
+`GET /api/agent/profiles` lists agent profiles. Every paired agent can use it;
+it needs no administrator grant. Each profile has `id`, `name`, `role` (`root`
+for a Coordinator or `worker`), `provider`, `model`, `reasoningLevel`,
+`archived`, `isDefaultForRole`, `defaultSlots`, and `projects`.
+
+- `isDefaultForRole` is `true` for the profile that new projects receive for
+  its role: the stored default Coordinator for a `root` profile and the stored
+  default Worker for a `worker` profile. An administrator sets these defaults
+  in Admin > Agents. `defaultSlots` lists each default slot the profile fills:
+  `root`, `alt` (Alt Coordinator), and `worker`.
+- `projects` lists each project the agent has a grant to, with `allowed`:
+  whether the project's provider policy allows the profile. An archived
+  profile is not allowed in any project.
+
+Query parameters: `role` (`root` or `worker`), `includeArchived` (`true` or
+`false`, default `false`), and `projectId`. With `projectId`, the list keeps
+only the profiles that project allows. A project outside the agent's grants
+returns the same `404` as a missing project.
+
+## Changing a project's default agents
+
+`PATCH /api/agent/projects/:projectId/agents` changes the project's default
+Coordinator, Worker, or Alt Coordinator. New tasks use these defaults; existing
+tasks keep their agents. It needs the administrator grant **Change project
+agents** in the agent's actions on the Agents page. Suplex reads the grant from
+the database on each request. `GET /api/agent/me` reports
+`capabilities.projectAgents` and `projectAgentsGrant`, and
+`GET /api/agent/capabilities` lists `update_project_agents` in
+`autonomousCommands` when the grant is on. The audit event
+`external_agent_project_agents_grant_updated` records each grant change.
+
+The body takes `updatedAt` (the project's `updatedAt` from `/me` or the last
+write), an `idempotencyKey`, and at least one of `rootProfileId`,
+`workerProfileId`, and `altProfileId`. An omitted profile keeps its stored ID.
+The response is `{ projectId, rootProfileId, workerProfileId, altProfileId,
+providerPolicy, updatedAt }` with the new `updatedAt`.
+
+- Without the grant, every project returns `404` with the code
+  `project_agents_grant_required`. A project outside the agent's grants returns
+  the concealed `404` with `not_found`.
+- The Project > Agents form rules apply. Each profile must exist, be active,
+  have the role of its field, and be allowed by the project's provider policy.
+  A refusal returns `422` with `field`, `value`, and `reason`, and the code
+  `root_profile_not_found`, `worker_profile_not_found`,
+  `alt_profile_not_found`, or `profile_not_allowed`.
+- A different `updatedAt` returns `412 revision_stale` with the current
+  `updatedAt`. Read the project again before you retry.
+- A repeated `idempotencyKey` with the same body returns the first result and
+  writes nothing. A different body returns `409 idempotency_conflict`.
+- A write records the audit event `project_updated` with the agent as actor.
 
 ## Creating a task
 

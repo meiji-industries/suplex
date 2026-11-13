@@ -154,6 +154,34 @@ impl Bridge {
                 )
                 .await
             }
+            "suplex_list_profiles" => {
+                let parsed = super::profile_list_arguments(args).map_err(invalid)?;
+                let mut pairs = vec![("includeArchived", parsed.include_archived.to_string())];
+                if let Some(role) = parsed.role {
+                    pairs.push(("role", role.as_str().to_owned()));
+                }
+                if let Some(project_id) = parsed.project_id {
+                    pairs.push(("projectId", project_id));
+                }
+                self.request(
+                    Method::GET,
+                    &format!("/api/agent/profiles?{}", query(&pairs)),
+                    None,
+                    &[],
+                )
+                .await
+            }
+            "suplex_update_project_agents" => {
+                let (project_id, body) = super::project_agents_arguments(args).map_err(invalid)?;
+                let body = serde_json::to_value(body).map_err(|error| error.to_string())?;
+                self.request(
+                    Method::PATCH,
+                    &format!("/api/agent/projects/{}/agents", encode(&project_id)),
+                    Some(body),
+                    &[],
+                )
+                .await
+            }
             "suplex_list_tasks" => {
                 let parsed = super::list_arguments(args).map_err(invalid)?;
                 let mut fields = serde_json::to_value(&parsed)
@@ -677,6 +705,82 @@ mod tests {
         assert_eq!(
             bridge.redact(&format!("token {credential} leaked")),
             "token [redacted credential] leaked"
+        );
+    }
+
+    /// Profile discovery and the project agents write travel through the bridge
+    /// as their HTTP routes do, with the project agents grant read live.
+    #[tokio::test]
+    async fn bridge_lists_profiles_and_changes_project_agents_with_the_live_grant() {
+        let agent = agent().await;
+        let bridge = Bridge::new(Settings {
+            base_url: agent.server.base.clone(),
+            credential: agent.credential.clone(),
+        });
+        let call = async |name: &str, args: Value| {
+            bridge
+                .result(name, &arguments(args))
+                .await
+                .structured_content
+                .unwrap()
+        };
+        let profiles = call(
+            "suplex_list_profiles",
+            json!({"role": "root", "includeArchived": false, "projectId": "project_api"}),
+        )
+        .await;
+        assert_eq!(profiles["status"], 200, "{profiles}");
+        let list = profiles["body"]["profiles"].as_array().unwrap();
+        assert!(list.iter().all(|profile| profile["role"] == "root"));
+        assert!(
+            list.iter()
+                .any(|profile| profile["id"] == "profile_native_root")
+        );
+        let invalid = bridge
+            .result(
+                "suplex_list_profiles",
+                &arguments(json!({"role": "advisor"})),
+            )
+            .await;
+        assert_eq!(invalid.is_error, Some(true));
+
+        let token =
+            call("suplex_whoami", json!({})).await["body"]["projects"][0]["updatedAt"].clone();
+        let write = json!({"projectId": "project_api", "updatedAt": token, "idempotencyKey": "bridge-agents-1", "workerProfileId": "profile_native_worker"});
+        let denied = call("suplex_update_project_agents", write.clone()).await;
+        assert_eq!(
+            (denied["status"].clone(), denied["body"]["code"].clone()),
+            (json!(404), json!("project_agents_grant_required"))
+        );
+        agent.server.state.with_database(|database| {
+            database
+                .connection()
+                .execute(
+                    "UPDATE suplex_external_agents SET project_agents_granted_at = ?1 WHERE id = ?2",
+                    rusqlite::params![chrono::Utc::now().to_rfc3339(), agent.agent_id],
+                )
+                .unwrap();
+        });
+        let written = call("suplex_update_project_agents", write.clone()).await;
+        assert_eq!(written["status"], 200, "{written}");
+        assert_eq!(written["body"]["workerProfileId"], "profile_native_worker");
+        assert_eq!(call("suplex_update_project_agents", write).await, written);
+        let refused = call(
+            "suplex_update_project_agents",
+            json!({"projectId": "project_api", "updatedAt": written["body"]["updatedAt"], "idempotencyKey": "bridge-agents-2", "rootProfileId": "profile_native_worker"}),
+        )
+        .await;
+        assert_eq!(
+            (
+                refused["status"].clone(),
+                refused["body"]["field"].clone(),
+                refused["body"]["value"].clone()
+            ),
+            (
+                json!(422),
+                json!("rootProfileId"),
+                json!("profile_native_worker")
+            )
         );
     }
 

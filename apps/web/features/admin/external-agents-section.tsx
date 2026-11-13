@@ -47,6 +47,7 @@ export function ExternalAgentsSection({
   onSetAnswerGrant,
   onSetMovesGrant,
   onSetTranscriptsGrant,
+  onSetProjectAgentsGrant,
   onRevokeAgent,
   onClearPendingAction,
 }: {
@@ -61,6 +62,7 @@ export function ExternalAgentsSection({
   onSetAnswerGrant: (agent: ApiExternalAgent, granted: boolean) => Promise<void>;
   onSetMovesGrant: (agent: ApiExternalAgent, granted: boolean) => Promise<void>;
   onSetTranscriptsGrant: (agent: ApiExternalAgent, granted: boolean) => Promise<void>;
+  onSetProjectAgentsGrant: (agent: ApiExternalAgent, granted: boolean) => Promise<void>;
   onRevokeAgent: (agent: ApiExternalAgent) => Promise<void>;
   onClearPendingAction: () => void;
 }): ReactElement {
@@ -84,6 +86,7 @@ export function ExternalAgentsSection({
             const action = `externalAgent:revoke:${agent.id}`;
             const movesGrantedAt = agent.movesGrantedAt;
             const transcriptsGrantedAt = agent.transcriptsGrantedAt;
+            const projectAgentsGrantedAt = agent.projectAgentsGrantedAt;
             return (
               <SettingsTableRow
                 aria-label={`External agent ${agent.name}`}
@@ -208,6 +211,12 @@ export function ExternalAgentsSection({
                           onCheckedChange={(checked) => void onSetTranscriptsGrant(agent, checked)}
                         >
                           Read task transcripts
+                        </DropdownMenuCheckboxItem>
+                        <DropdownMenuCheckboxItem
+                          checked={projectAgentsGrantedAt !== null && projectAgentsGrantedAt !== undefined}
+                          onCheckedChange={(checked) => void onSetProjectAgentsGrant(agent, checked)}
+                        >
+                          Change project agents
                         </DropdownMenuCheckboxItem>
                         <DropdownMenuItem
                           variant="destructive"

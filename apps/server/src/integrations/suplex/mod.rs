@@ -115,6 +115,19 @@ pub fn project_arguments(fields: &Map<String, Value>) -> Result<String, InvalidA
     parsed::<agent_api::ProjectDiscoveryQuery>(fields).map(|query| query.project_id)
 }
 
+pub fn profile_list_arguments(
+    fields: &Map<String, Value>,
+) -> Result<agent_api::ProfileListQuery, InvalidArguments> {
+    parsed(fields)
+}
+
+pub fn project_agents_arguments(
+    fields: &Map<String, Value>,
+) -> Result<(String, agent_api::ProjectAgentsBody), InvalidArguments> {
+    parsed::<agent_api::ProjectTool<agent_api::ProjectAgentsBody>>(fields)
+        .map(|tool| (tool.project_id, tool.body))
+}
+
 pub fn create_arguments(
     fields: &Map<String, Value>,
 ) -> Result<agent_api::TaskCreateBody, InvalidArguments> {
@@ -191,11 +204,13 @@ mod tests {
                 "suplex_capabilities",
                 "suplex_list_workflows",
                 "suplex_list_templates",
+                "suplex_list_profiles",
                 "suplex_list_tasks",
                 "suplex_get_task",
                 "suplex_get_task_delivery",
                 "suplex_create_task",
                 "suplex_update_task",
+                "suplex_update_project_agents",
                 "suplex_set_task_dependencies",
                 "suplex_command_task",
                 "suplex_list_moves",

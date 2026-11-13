@@ -2,7 +2,7 @@ import { readJsonUnchecked } from "../../lib/api.js";
 import { copyToClipboard } from "../../lib/clipboard.js";
 import type { ApiExternalAgent } from "../../shell/view-shared.js";
 import { externalAgentSetupInstructions } from "./external-agent-setup-instructions.js";
-import { replaceExternalAgentProjects, revokeExternalAgent as revokeAgent, setExternalAgentAnswerGrant, setExternalAgentMovesGrant, setExternalAgentTranscriptsGrant } from "./external-agent-api.js";
+import { replaceExternalAgentProjects, revokeExternalAgent as revokeAgent, setExternalAgentAnswerGrant, setExternalAgentMovesGrant, setExternalAgentProjectAgentsGrant, setExternalAgentTranscriptsGrant } from "./external-agent-api.js";
 import type { Dispatch, SetStateAction } from "react";
 
 type PairingCode = {
@@ -189,6 +189,14 @@ export function createExternalAgentActions({
       setError("Unable to update transcript permission");
     }
   };
+  const setProjectAgentsGrant = async (agent: ApiExternalAgent, granted: boolean): Promise<void> => {
+    try {
+      await setExternalAgentProjectAgentsGrant(agent.id, granted);
+      await reload();
+    } catch {
+      setError("Unable to update project agents permission");
+    }
+  };
   const copyPairingCode = async (): Promise<void> => {
     if (!pairingCodeData?.code) return;
     if (await copyToClipboard(pairingCodeData.code, "Copied the pairing code to clipboard")) {
@@ -221,6 +229,7 @@ export function createExternalAgentActions({
     setAnswerGrant,
     setMovesGrant,
     setTranscriptsGrant,
+    setProjectAgentsGrant,
     copyPairingCode,
     copyExternalAgentSetupInstructions,
   };

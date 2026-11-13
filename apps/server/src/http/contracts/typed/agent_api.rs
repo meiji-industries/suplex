@@ -1,6 +1,6 @@
 //! Agent API request contracts.
 
-use crate::tasks::control::{DeliveryTarget, TaskStatus};
+use crate::tasks::control::{DeliveryTarget, SessionKind, TaskStatus};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
@@ -244,6 +244,41 @@ pub struct TaskListQuery {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub view: Option<String>,
 }
+/// `GET /api/agent/profiles` and `suplex_list_profiles`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProfileListQuery {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub role: Option<SessionKind>,
+    pub include_archived: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub project_id: Option<String>,
+}
+
+/// `PATCH /api/agent/projects/{projectId}/agents`: the default agents to
+/// change. `updatedAt` is the project's `updatedAt` from `/me` or the last write.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectAgentsBody {
+    pub updated_at: String,
+    pub idempotency_key: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub root_profile_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub worker_profile_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub alt_profile_id: Option<String>,
+}
+
+/// A tool call's `projectId` with the arguments of the matching HTTP body.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectTool<T> {
+    pub project_id: String,
+    #[serde(flatten)]
+    pub body: T,
+}
+
 /// A tool call's `taskId` with the arguments of the matching HTTP body.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -540,6 +575,59 @@ fn task_dependencies_fields(fields: Fields) -> ContractResult<Value> {
         .or("blockedByPullRequests", json!([]), pull_requests())
         .opt("dryRun", dry_run)
         .strict()
+}
+
+/// A query string sends `"true"` or `"false"`; a tool call can send a boolean.
+fn query_flag(input: Option<&Value>) -> ContractResult<Value> {
+    match input {
+        Some(Value::Bool(value)) => Ok(json!(value)),
+        Some(Value::String(value)) if value == "true" => Ok(json!(true)),
+        Some(Value::String(value)) if value == "false" => Ok(json!(false)),
+        _ => fail("invalid_value"),
+    }
+}
+
+impl Contract for ProfileListQuery {
+    fn schema(input: Option<&Value>) -> ContractResult<Value> {
+        Fields::new(input)?
+            .opt("role", choice::<SessionKind>)
+            .or("includeArchived", json!(false), query_flag)
+            .opt("projectId", text(1, 128))
+            .strict()
+    }
+}
+
+const PROJECT_AGENT_FIELDS: [&str; 3] = ["rootProfileId", "workerProfileId", "altProfileId"];
+
+/// A project agents write names at least one agent.
+fn project_agents_fields(fields: Fields) -> ContractResult<Value> {
+    let mut fields = fields
+        .req("updatedAt", text(1, 64))
+        .req("idempotencyKey", trimmed(1, 128))
+        .opt("rootProfileId", trimmed(1, 256))
+        .opt("workerProfileId", trimmed(1, 256))
+        .opt("altProfileId", trimmed(1, 256));
+    fields.strict_keys();
+    if fields.refinable()
+        && PROJECT_AGENT_FIELDS
+            .iter()
+            .all(|name| fields.raw(name).is_none())
+    {
+        fields.fail("custom", ".");
+    }
+    fields.finish()
+}
+
+impl Contract for ProjectAgentsBody {
+    fn schema(input: Option<&Value>) -> ContractResult<Value> {
+        project_agents_fields(Fields::new(input)?)
+    }
+}
+
+impl Contract for ProjectTool<ProjectAgentsBody> {
+    fn schema(input: Option<&Value>) -> ContractResult<Value> {
+        project_agents_fields(Fields::new(input)?.req("projectId", text(1, 128)))
+    }
 }
 
 impl Contract for TaskDependenciesBody {

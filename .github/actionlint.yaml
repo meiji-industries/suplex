@@ -2,3 +2,4 @@ self-hosted-runner:
   # Blacksmith runner labels.
   labels:
     - blacksmith-*
+    - suplex-vm

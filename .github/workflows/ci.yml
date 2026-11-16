@@ -10,10 +10,11 @@ on:
   workflow_dispatch:
     inputs:
       runner:
-        description: Blacksmith runner for timing comparisons
+        description: Runner for timing comparisons
         type: choice
-        default: blacksmith-8vcpu-ubuntu-2404
+        default: suplex-vm
         options:
+          - suplex-vm
           - blacksmith-4vcpu-ubuntu-2404
           - blacksmith-8vcpu-ubuntu-2404
           - blacksmith-16vcpu-ubuntu-2404
@@ -40,35 +41,24 @@ jobs:
     env:
       TARGET_CACHE_MAX_KIB: 12582912
       TARGET_CACHE_MAX_SIZE: 12GB
-    runs-on: ${{ inputs.runner || 'blacksmith-8vcpu-ubuntu-2404' }}
+    # Self-hosted on the suplex VM: target/ and ~/.cargo persist between runs because checkout skips `git clean`.
+    runs-on: ${{ inputs.runner || 'suplex-vm' }}
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v5
+        with:
+          clean: false
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: actionlint@1.7.12
       - name: Validate GitHub Actions workflows
-        uses: docker://rhysd/actionlint:1.7.12
+        run: actionlint
       - name: Install native lifecycle test dependencies
         run: command -v lsof || { sudo apt-get update && sudo apt-get install --yes --no-install-recommends lsof; }
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: 1.93.1
           components: rustfmt, clippy
-      # Sticky disks keep the whole target directory, including the suplex
-      # crate, and persist even when a step fails. A failed mount builds cold.
-      - name: Mount Cargo registry
-        continue-on-error: true
-        uses: useblacksmith/stickydisk@v1
-        with:
-          key: ${{ github.repository }}-cargo-registry-${{ runner.arch }}
-          path: ~/.cargo/registry
-          commit: on-change
-      - name: Mount Rust target directory
-        id: rust-target
-        continue-on-error: true
-        uses: useblacksmith/stickydisk@v1
-        with:
-          key: ${{ github.repository }}-rust-job-target-${{ hashFiles('rust-toolchain.toml') }}-${{ runner.arch }}
-          path: ${{ github.workspace }}/target
-          commit: on-change
       - name: Install cargo-nextest
         uses: taiki-e/install-action@v2
         with:
@@ -77,8 +67,6 @@ jobs:
       - uses: actions/setup-node@v6
         with:
           node-version-file: .node-version
-          cache: pnpm
-          cache-dependency-path: pnpm-lock.yaml
       - run: pnpm install --frozen-lockfile
       - run: pnpm exec tsx scripts/rust-route-coverage.ts
       - run: pnpm --filter suplex-web build
@@ -90,7 +78,7 @@ jobs:
       - name: Generated TypeScript contracts are committed
         run: git diff --exit-code -- apps/web/contracts/generated
       - name: Enforce persistent target size limit
-        if: ${{ always() && steps.rust-target.outcome == 'success' }}
+        if: ${{ always() }}
         run: |
           target_size_kib="$(du -sk target | cut -f1)"
           echo "Persistent target size: ${target_size_kib} KiB"
@@ -101,7 +89,8 @@ jobs:
 
   test:
     name: Test suite
-    runs-on: ${{ inputs.runner || 'blacksmith-8vcpu-ubuntu-2404' }}
+    # Stays on Blacksmith: its journeys start Suplex servers, which should not share a user with the live host on suplex-vm.
+    runs-on: ${{ inputs.runner != 'suplex-vm' && inputs.runner || 'blacksmith-8vcpu-ubuntu-2404' }}
     timeout-minutes: 20
     env:
       CI: "true"
@@ -214,26 +203,48 @@ jobs:
     name: Desktop shell (Linux)
     # Clippy and tests for the shell on Linux. Packaging runs in Docker in the release (mise run desktop:dist:linux),
     # and Windows checks run in Docker (mise run desktop:check:windows).
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    # Self-hosted; WebKitGTK and tray build dependencies are preinstalled on suplex-vm.
+    runs-on: suplex-vm
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v5
-      - name: Install WebKitGTK and tray build dependencies
-        run: sudo apt-get update && sudo apt-get install --yes --no-install-recommends libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev libssl-dev
+        with:
+          clean: false
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: 1.93.1
           components: clippy
-      - name: Cache Cargo registry and dependencies
-        uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: . -> target
-          cache-on-failure: true
       - run: cargo clippy --manifest-path apps/desktop/src-tauri/Cargo.toml --all-targets -- -D warnings
       - run: cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --all-targets
 
+  # macOS minutes cost 5x Linux, and few PRs touch the shell. PRs run the macOS job only when the shell,
+  # the lockfiles, the toolchain, or this workflow change; main and manual runs always do.
+  desktop-changes:
+    name: Desktop changes
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: read
+    outputs:
+      desktop: ${{ steps.diff.outputs.desktop }}
+    steps:
+      - id: diff
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          if gh pr diff "$PR" --repo "$GITHUB_REPOSITORY" --name-only |
+            grep -qE '^(apps/desktop/|Cargo\.lock$|pnpm-lock\.yaml$|rust-toolchain\.toml$|\.github/workflows/ci\.yml$)'; then
+            echo desktop=true >> "$GITHUB_OUTPUT"
+          else
+            echo desktop=false >> "$GITHUB_OUTPUT"
+          fi
+
   desktop:
     name: Desktop shell (macOS)
+    needs: desktop-changes
+    # Fails open: if the diff check fails or is skipped (push, dispatch), the macOS job runs.
+    if: ${{ !cancelled() && (needs.desktop-changes.result != 'success' || needs.desktop-changes.outputs.desktop == 'true') }}
     # The Tauri shell, its WKWebView smoke tests, and its packaging run only on macOS. A Linux job is not evidence for them.
     runs-on: blacksmith-6vcpu-macos-latest
     # A cold cache builds the host and shell in release twice (arm64, then x64), about 20 minutes each on this runner.

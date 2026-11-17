@@ -69,8 +69,6 @@ For product demo videos, brand-kit renders, and launch posts, read
 For visible sub-agent pane delegation and its verification rules, read
 `docs/agents/subagents-in-herdr-panes.md`.
 For the local Herdr workflow and helper scripts, read `docs/herdr.md`.
-For CI workflows, runner labels, or the self-hosted `suplex-vm` runner, read
-`docs/ci-runner.md`.
 
 ## Product UI
 

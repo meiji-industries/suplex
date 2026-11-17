@@ -23,7 +23,7 @@ macOS minutes cost five times as much as Linux minutes. A web or server change t
 | Admin access | `ssh root@suplex` over Tailscale. The public IP does not answer SSH, because all egress goes through the home TrueNAS exit node. |
 | Runner user | `suplex`, the same user as the Suplex host and its agents (`ssh suplex@suplex`). It has no sudo and is not in the `docker` group. |
 | Install | `~/actions-runner` (runner 2.338.2), user unit `~/.config/systemd/user/gh-runner.service` (linger is on) |
-| Toolchains | `~/.ci/cargo` and `~/.ci/rustup`, set as `CARGO_HOME` and `RUSTUP_HOME` in `~/actions-runner/.env`. They are separate from the agents' toolchains. `~/actions-runner/.path` sets the job `PATH`. |
+| Toolchains | `~/.ci/cargo` and `~/.ci/rustup`, set as `CARGO_HOME` and `RUSTUP_HOME` in `~/actions-runner/.env`. They are separate from the agents' toolchains. `run.sh` reads neither `.env` nor `.path`, so the unit loads `.env` with `EnvironmentFile=` and sets `PATH` with `~/.ci/cargo/bin` first. It uses `KillMode=control-group`, so a restart cannot leave an old listener behind. |
 
 The host also runs the Suplex host service and its agent tasks. CI shares the machine with them, so the unit caps CI:
 

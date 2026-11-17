@@ -232,8 +232,32 @@ jobs:
       - run: cargo clippy --manifest-path apps/desktop/src-tauri/Cargo.toml --all-targets -- -D warnings
       - run: cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --all-targets
 
+  desktop-changes:
+    name: Desktop changes
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: read
+    outputs:
+      desktop: ${{ steps.diff.outputs.desktop }}
+    steps:
+      - id: diff
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          if gh pr diff "$PR" --repo "$GITHUB_REPOSITORY" --name-only |
+            grep -qE '^(apps/desktop/|Cargo\.lock$|pnpm-lock\.yaml$|rust-toolchain\.toml$|\.github/workflows/ci\.yml$)'; then
+            echo desktop=true >> "$GITHUB_OUTPUT"
+          else
+            echo desktop=false >> "$GITHUB_OUTPUT"
+          fi
+
   desktop:
     name: Desktop shell (macOS)
+    needs: desktop-changes
+    # Fails open: if the diff check fails or is skipped (push, dispatch), the macOS job runs.
+    if: ${{ !cancelled() && (needs.desktop-changes.result != 'success' || needs.desktop-changes.outputs.desktop == 'true') }}
     # The Tauri shell, its WKWebView smoke tests, and its packaging run only on macOS. A Linux job is not evidence for them.
     runs-on: blacksmith-6vcpu-macos-latest
     # A cold cache builds the host and shell in release twice (arm64, then x64), about 20 minutes each on this runner.

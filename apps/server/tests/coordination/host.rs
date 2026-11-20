@@ -1815,7 +1815,7 @@ mod host_tests {
                     [&task_id],
                 )
                 .unwrap();
-            let worker = root_session_store::current_worker(&database, &task_id)
+            let worker = root_session_store::current_delegate(&database, &task_id, "delegate")
                 .unwrap()
                 .unwrap();
             root_session_store::pending_turns(&database, &worker.id)
@@ -1890,7 +1890,7 @@ mod host_tests {
                     let database =
                         SuplexDatabase::open(&database_path, OpenMode::ReadOnly).unwrap();
                     let session = if worker {
-                        root_session_store::current_worker(&database, &task_id)
+                        root_session_store::current_delegate(&database, &task_id, "delegate")
                             .unwrap()
                             .unwrap()
                     } else {
@@ -2039,7 +2039,7 @@ mod host_tests {
                 Utc::now(),
             )
             .unwrap();
-            let worker = root_session_store::current_worker(&database, &task_id)
+            let worker = root_session_store::current_delegate(&database, &task_id, "delegate")
                 .unwrap()
                 .unwrap();
             root_session_store::pending_turns(&database, &worker.id)
@@ -2320,7 +2320,7 @@ mod host_tests {
             Utc::now(),
         )
         .unwrap();
-        let worker = root_session_store::current_worker(&database, &task_id)
+        let worker = root_session_store::current_delegate(&database, &task_id, "delegate")
             .unwrap()
             .unwrap();
         let worker_turn = root_session_store::pending_turns(&database, &worker.id)

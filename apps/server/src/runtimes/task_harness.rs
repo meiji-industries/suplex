@@ -518,7 +518,7 @@ mod tests {
             "test -z \"$SUPLEX_ROOT_TOKEN\" && test \"$SUPLEX_ADVISOR_TOKEN\" = current-token"
                 .to_owned(),
         ];
-        headless::dispatch(
+        headless::dispatch_with_exclusions(
             DispatchInput {
                 directory: &directory,
                 worktree: Path::new("/tmp"),
@@ -529,6 +529,7 @@ mod tests {
                 prompt: "probe",
                 environment: &environment,
             },
+            &[],
             |_| Ok(true),
         )
         .unwrap();

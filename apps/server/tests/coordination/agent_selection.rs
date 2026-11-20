@@ -145,7 +145,7 @@ mod agent_selection_tests {
             None,
         );
         select_delegate(&mut f.database, &f.task_id, &selected, "user_development", f.now).unwrap();
-        let next = current_worker(&f.database, &f.task_id).unwrap().unwrap();
+        let next = current_delegate(&f.database, &f.task_id, "delegate").unwrap().unwrap();
         assert_ne!(next.id, old.id);
         assert_eq!(next.profile.as_ref().unwrap().provider, crate::tasks::control::HarnessKind::Opencode);
         assert!(turns(&f, &next.id).join("\n").contains("Build the change"));
@@ -156,7 +156,7 @@ mod agent_selection_tests {
         );
         select_delegate(&mut f.database, &f.task_id, &selected, "user_development", f.now).unwrap();
         assert_eq!(
-            current_worker(&f.database, &f.task_id).unwrap().unwrap().id,
+            current_delegate(&f.database, &f.task_id, "delegate").unwrap().unwrap().id,
             next.id
         );
         let current: i64 = f
@@ -245,7 +245,7 @@ mod agent_selection_tests {
         );
         select_delegate(&mut f.database, &f.task_id, &selected, "user_development", f.now).unwrap();
         assert_eq!(
-            current_worker(&f.database, &f.task_id).unwrap().unwrap().id,
+            current_delegate(&f.database, &f.task_id, "delegate").unwrap().unwrap().id,
             old.id
         );
         assert_eq!(turns(&f, &old.id).len(), 1);

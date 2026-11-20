@@ -95,17 +95,6 @@ pub fn turn_file(directory: &Path, turn_id: &str, suffix: &str) -> PathBuf {
     directory.join(format!("turn-{turn_id}.{suffix}"))
 }
 
-#[cfg(test)]
-pub fn dispatch<F>(
-    input: DispatchInput<'_>,
-    claim: F,
-) -> Result<HeadlessTurnRecord, Box<dyn Error + Send + Sync>>
-where
-    F: FnOnce(&str) -> Result<bool, Box<dyn Error + Send + Sync>>,
-{
-    dispatch_with_exclusions(input, &[], claim)
-}
-
 pub fn dispatch_with_exclusions<F>(
     input: DispatchInput<'_>,
     excluded_environment_keys: &[String],
@@ -630,9 +619,9 @@ mod tests {
             prompt: "build the task\n",
             environment: &environment,
         };
-        assert!(dispatch(input(), |_| Ok(false)).is_err());
+        assert!(dispatch_with_exclusions(input(), &[], |_| Ok(false)).is_err());
         assert!(!turn_file(&directory, "message-1", "prompt").exists());
-        let record = dispatch(input(), |_| Ok(true)).unwrap();
+        let record = dispatch_with_exclusions(input(), &[], |_| Ok(true)).unwrap();
         assert_eq!(record.process_identity.process_group, record.pid);
         assert_eq!(record.owned_identity().pid, record.pid);
         assert_eq!(
@@ -678,7 +667,7 @@ mod tests {
         ));
         let args = vec!["-c".to_owned(), "sleep 10".to_owned()];
         let environment = HashMap::new();
-        let record = dispatch(
+        let record = dispatch_with_exclusions(
             DispatchInput {
                 directory: &directory,
                 worktree: Path::new("/tmp"),
@@ -689,6 +678,7 @@ mod tests {
                 prompt: "stop this process\n",
                 environment: &environment,
             },
+            &[],
             |_| Ok(true),
         )
         .unwrap();
@@ -718,7 +708,7 @@ mod tests {
         ));
         let args = vec!["-c".to_owned(), "sleep 10".to_owned()];
         let environment = HashMap::new();
-        let mut record = dispatch(
+        let mut record = dispatch_with_exclusions(
             DispatchInput {
                 directory: &directory,
                 worktree: Path::new("/tmp"),
@@ -729,6 +719,7 @@ mod tests {
                 prompt: "keep running\n",
                 environment: &environment,
             },
+            &[],
             |_| Ok(true),
         )
         .unwrap();
@@ -755,7 +746,7 @@ mod tests {
             "test -n \"$SUPLEX_SESSION_PROCESS_OWNER\"; echo marker=$?; sleep 10".to_owned(),
         ];
         let environment = HashMap::new();
-        let record = dispatch(
+        let record = dispatch_with_exclusions(
             DispatchInput {
                 directory: &directory,
                 worktree: Path::new("/tmp"),
@@ -766,6 +757,7 @@ mod tests {
                 prompt: "stop after record loss\n",
                 environment: &environment,
             },
+            &[],
             |_| Ok(true),
         )
         .unwrap();

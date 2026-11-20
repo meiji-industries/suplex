@@ -1781,7 +1781,7 @@ mod tests {
             Utc::now(),
         )
         .unwrap();
-        let session = root_session_store::current_worker(&database, &root.task_id)
+        let session = root_session_store::current_delegate(&database, &root.task_id, "delegate")
             .unwrap()
             .unwrap();
         let turn = root_session_store::pending_turns(&database, &session.id)

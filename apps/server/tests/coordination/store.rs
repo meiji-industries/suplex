@@ -142,7 +142,7 @@ mod tests {
         drop(database);
         let mut database = SuplexDatabase::open(&filename, OpenMode::ReadWrite).unwrap();
         assert_eq!(
-            current_worker(&database, &task.id).unwrap().unwrap().id,
+            current_delegate(&database, &task.id, "delegate").unwrap().unwrap().id,
             next_id
         );
         assert!(!worker_replacement_ready(&database, next_id).unwrap());
@@ -364,7 +364,7 @@ mod tests {
             .unwrap();
         assert_eq!(second_hash, sha256_hex(second_prompt.as_bytes()));
         assert_eq!(
-            current_worker(&database, &task.id).unwrap().unwrap().id,
+            current_delegate(&database, &task.id, "delegate").unwrap().unwrap().id,
             second.id.as_str()
         );
         database.connection().execute(
@@ -1259,7 +1259,7 @@ mod tests {
             prompt: "Begin",
             environment: &environment,
         };
-        let native = headless::dispatch(dispatch_input(), |generation| {
+        let native = headless::dispatch_with_exclusions(dispatch_input(), &[], |generation| {
             claim_prompt(
                 &mut database,
                 &turn,
@@ -1273,7 +1273,7 @@ mod tests {
         })
         .unwrap();
         assert!(
-            headless::dispatch(dispatch_input(), |generation| {
+            headless::dispatch_with_exclusions(dispatch_input(), &[], |generation| {
                 claim_prompt(
                     &mut database,
                     &turn,

@@ -437,26 +437,6 @@ fn audit_with_queue(
 }
 
 /// The project was read before live Git capture; compare its material fields again at the write.
-#[cfg(test)]
-pub fn create_user_task(
-    database: &mut SuplexDatabase,
-    actor_user_id: &str,
-    expected_project: &Project,
-    prepared: &PreparedTask,
-    now: DateTime<Utc>,
-    wake: impl FnOnce(String) + Send + 'static,
-) -> DatabaseResult<TaskWrite> {
-    create_user_task_inner(
-        database,
-        actor_user_id,
-        expected_project,
-        prepared,
-        None,
-        now,
-        wake,
-    )
-}
-
 pub fn create_user_task_with_images(
     database: &mut SuplexDatabase,
     actor_user_id: &str,
@@ -2714,7 +2694,7 @@ mod tests {
             .task;
         assert_eq!(second.status, TaskStatus::Queued);
         let body = |depends_on: Vec<String>, pull_requests: Value| {
-            tasks::parse_task_dependencies(Some(
+            <tasks::TaskDependenciesBody as crate::http::contracts::typed::Contract>::parse(Some(
                 &json!({"dependsOn": depends_on, "blockedByPullRequests": pull_requests}),
             ))
             .unwrap()
@@ -2884,7 +2864,11 @@ mod tests {
         assert_eq!(task.status, TaskStatus::Active);
         let wakes = Arc::new(AtomicUsize::new(0));
         let select = |database: &mut SuplexDatabase, body: Value| {
-            let request = tasks::parse_task_agent_selection(Some(&body)).unwrap();
+            let request =
+                <tasks::TaskAgentSelectionBody as crate::http::contracts::typed::Contract>::parse(
+                    Some(&body),
+                )
+                .unwrap();
             let count = Arc::clone(&wakes);
             select_user_task_agent(database, &user, &task.id, &request, now, move |_| {
                 count.fetch_add(1, Ordering::SeqCst);

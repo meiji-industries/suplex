@@ -215,8 +215,12 @@ async fn serve() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         None => state,
     };
     #[cfg(debug_assertions)]
-    let state = match std::env::var_os("SUPLEX_ASSETS_DIR") {
-        Some(directory) => state.with_dev_assets_dir(directory.into()),
+    let state = match resolve_dev_assets_dir(
+        std::env::var_os("SUPLEX_ASSETS_DIR").map(std::path::PathBuf::from),
+        embedded::FRONTEND.is_empty(),
+        std::env::current_exe().ok().as_deref(),
+    ) {
+        Some(directory) => state.with_dev_assets_dir(directory),
         None => state,
     };
     server_event("listening", json!({}));
@@ -276,4 +280,63 @@ async fn serve() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     server_event("stopped", json!({}));
     result?;
     Ok(())
+}
+
+/// Resolves the on-disk frontend bundle directory for debug builds.
+/// Prefers an explicit `SUPLEX_ASSETS_DIR`; when unset and no frontend assets are embedded
+/// (for example after `restart` of an already-running debug supervisor), walks up from the
+/// running binary (`target/debug/suplex` -> `<repo>/apps/web/dist`).
+#[cfg(debug_assertions)]
+fn resolve_dev_assets_dir(
+    configured: Option<std::path::PathBuf>,
+    embedded_empty: bool,
+    executable: Option<&std::path::Path>,
+) -> Option<std::path::PathBuf> {
+    if configured.is_some() {
+        return configured;
+    }
+    if !embedded_empty {
+        return None;
+    }
+    executable?
+        .ancestors()
+        .skip(1)
+        .take(5)
+        .map(|ancestor| ancestor.join("apps/web/dist"))
+        .find(|directory| directory.join("suplex-ui.js").is_file())
+}
+
+#[cfg(all(test, debug_assertions))]
+#[allow(clippy::unwrap_used, reason = "unit test fixtures")]
+mod dev_assets_tests {
+    use std::path::PathBuf;
+
+    use super::resolve_dev_assets_dir;
+
+    #[test]
+    fn resolve_dev_assets_dir_prefers_explicit_env_and_falls_back_to_checkout_dist() {
+        let root = std::env::temp_dir().join(format!("suplex-dev-assets-{}", uuid::Uuid::new_v4()));
+        let dist = root.join("apps/web/dist");
+        let binary = root.join("target/debug/suplex");
+        std::fs::create_dir_all(&dist).unwrap();
+        std::fs::create_dir_all(binary.parent().unwrap()).unwrap();
+        std::fs::write(dist.join("suplex-ui.js"), b"export {};").unwrap();
+
+        let explicit = PathBuf::from("/custom/assets");
+        assert_eq!(
+            resolve_dev_assets_dir(Some(explicit.clone()), true, Some(&binary)),
+            Some(explicit)
+        );
+        assert_eq!(resolve_dev_assets_dir(None, false, Some(&binary)), None);
+        assert_eq!(
+            resolve_dev_assets_dir(None, true, Some(&binary)),
+            Some(dist)
+        );
+
+        let isolated = root.join("isolated/suplex");
+        std::fs::remove_file(root.join("apps/web/dist/suplex-ui.js")).unwrap();
+        assert_eq!(resolve_dev_assets_dir(None, true, Some(&isolated)), None);
+
+        let _ = std::fs::remove_dir_all(root);
+    }
 }

@@ -73,14 +73,10 @@ jobs:
         uses: taiki-e/install-action@v2
         with:
           tool: cargo-nextest@0.9.146
-      - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v6
         with:
           node-version-file: .node-version
-          cache: pnpm
-          cache-dependency-path: pnpm-lock.yaml
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm exec tsx scripts/rust-route-coverage.ts
+      - run: node scripts/rust-route-coverage.ts
       # Name packages explicitly: --workspace would unify features with the Tauri crates and build them here.
       - run: cargo fmt -p suplex -p suplex-exception -p suplex-bootstrap --check
       - run: cargo clippy -p suplex -p suplex-exception -p suplex-bootstrap --all-targets -- -D warnings
@@ -172,10 +168,13 @@ jobs:
 
       - name: Lint, typecheck and build the native test server
         run: |
-          pnpm lint
-          pnpm typecheck
-          pnpm --filter suplex-web build
-          cargo build --manifest-path apps/server/Cargo.toml --bin suplex
+          cargo build --manifest-path apps/server/Cargo.toml --bin suplex &
+          cargo_pid=$!
+          web_status=0
+          { pnpm lint && pnpm typecheck && pnpm --filter suplex-web build; } || web_status=$?
+          cargo_status=0
+          wait "$cargo_pid" || cargo_status=$?
+          exit $(( web_status != 0 ? web_status : cargo_status ))
 
       - name: Cross-app tests
         run: pnpm exec vitest run --project unit --maxWorkers "$TEST_WORKERS" --reporter=default --reporter=junit --outputFile=test-results/unit-integration.xml

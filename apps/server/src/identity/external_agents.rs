@@ -786,17 +786,7 @@ pub fn rotate(
     )
 }
 
-#[cfg(test)]
-pub fn exchange(
-    database: &mut SuplexDatabase,
-    pairing_code: &str,
-    profile_id: Option<&str>,
-    now: DateTime<Utc>,
-) -> DatabaseResult<Exchanged> {
-    exchange_from_client(database, pairing_code, profile_id, None, now)
-}
-
-/// `exchange`, recording the `suplex-mcp` client version in the audit row when the client sent one.
+/// Exchanges a pairing code for an agent credential, recording `client_version` in the audit row when sent.
 pub fn exchange_from_client(
     database: &mut SuplexDatabase,
     pairing_code: &str,
@@ -1181,6 +1171,15 @@ pub(crate) mod tests {
             Utc::now(),
         )
         .unwrap()
+    }
+
+    fn exchange(
+        database: &mut SuplexDatabase,
+        pairing_code: &str,
+        profile_id: Option<&str>,
+        now: DateTime<Utc>,
+    ) -> DatabaseResult<Exchanged> {
+        exchange_from_client(database, pairing_code, profile_id, None, now)
     }
 
     fn failure(error: Box<dyn Error + Send + Sync>) -> IdentityError {

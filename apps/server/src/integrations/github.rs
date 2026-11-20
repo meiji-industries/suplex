@@ -482,6 +482,7 @@ pub fn disable_keychain_interaction() -> AccessResult<()> {
 }
 
 #[cfg(not(target_os = "macos"))]
+#[allow(clippy::unnecessary_wraps, reason = "returns an error on macOS")]
 pub fn disable_keychain_interaction() -> AccessResult<()> {
     Ok(())
 }

@@ -22,9 +22,19 @@ debug = "line-tables-only"
 # Keep local edit/rebuild cycles incremental; the wrapper caches eligible dependencies.
 incremental = true
 
+# Third-party crates do not need DWARF debug info in dev/test builds: workspace
+# crates still keep line tables for panic/backtrace locations, while skipping
+# dependency debug info shrinks .rlib/.o artifacts, binary __LINKEDIT, and link
+# times across worktrees and CI caches.
+[profile.dev.package."*"]
+debug = 0
+
 # Unoptimized SQLite made each test's migrated database cost about one second.
+# Package-specific overrides inherit from [profile.dev], not package."*", so
+# repeat debug = 0 explicitly.
 [profile.dev.package.libsqlite3-sys]
 opt-level = 3
+debug = 0
 
 # Xcode 27 hides swift-rs's runtime exports, so the iOS link fails (Brendonovich/swift-rs#81).
 # Pinned to the fix in Brendonovich/swift-rs#82; drop this once a swift-rs release includes it.

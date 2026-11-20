@@ -20,19 +20,19 @@ Conductor's Run command uses `http://127.0.0.1:<port>` with its assigned port.
 Other development launches keep the default Tailscale access mode.
 
 The repository root is one Cargo workspace for the crates in `apps/`. Mise keeps Rust build artifacts
-in each checkout's root `target/` and uses
-`sccache` when it is on `PATH` to reuse compiled dependencies across worktrees.
-Install it with `cargo install sccache --locked`; without it, builds use rustc
+in each checkout's root `target/` and routes `RUSTC_WRAPPER` and `CMAKE_{C,CXX}_COMPILER_LAUNCHER`
+through `scripts/sccache.sh` (file stem `sccache`, so `cc-rs` also auto-caches native C/C++ crates
+such as SQLite, libgit2, and OpenSSL) when `sccache` is on `PATH`.
+Install it with `cargo install sccache --locked`; without it, builds invoke the underlying compiler
 directly. Cargo downloads remain in the normal shared `CARGO_HOME` cache.
 Leave `CARGO_TARGET_DIR` unset for cross-worktree cache hits: sccache hashes
-that variable, so a different absolute path in every checkout causes misses.
-The compiler cache uses sccache's machine-wide configuration and defaults to
-a 10 GiB limit. Run `sccache --show-stats` to inspect hits and storage.
-Development and test builds keep backtrace line numbers but omit full debugger
-data. Rustc keeps incremental artifacts in each checkout for faster rebuilds
-after edits. The wrapper sends incremental compilations directly to rustc and
-uses sccache for eligible dependencies. The first build warms these caches;
-new worktrees still link their own binaries.
+that variable, so `scripts/sccache.sh` also strips it before invoking sccache.
+Mise defaults `SCCACHE_CACHE_SIZE` to `20G`. Run `sccache --show-stats` to inspect hits and storage.
+Development and test builds keep backtrace line numbers for workspace crates and omit DWARF debug
+data for third-party dependencies (`[profile.dev.package."*"] debug = 0`). Rustc keeps incremental
+artifacts in each checkout for faster rebuilds after edits. The wrapper sends incremental
+compilations directly to rustc and uses sccache for eligible dependencies. Run `mise run clean:target`
+to prune `target/*/incremental/` caches before capping `target/` with `cargo-sweep` across worktrees.
 Check the wrapper with `mise run test:sccache-wrapper`.
 
 The Vite development stack sets `SUPLEX_DEV_EMBED_FRONTEND=0` so changes to

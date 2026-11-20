@@ -652,4 +652,40 @@ mod tests {
         let _ = std::fs::remove_file(filename.with_extension("sqlite-wal"));
         let _ = std::fs::remove_file(filename.with_extension("sqlite-shm"));
     }
+
+    #[test]
+    fn recovery_invitation_replaces_prior_token_and_preserves_metadata() {
+        let filename =
+            std::env::temp_dir().join(format!("suplex-invite-{}.sqlite", uuid::Uuid::new_v4()));
+        let mut database = SuplexDatabase::open(&filename, OpenMode::Migrate).unwrap();
+        let now = Utc::now();
+        let first = issue_recovery_invitation(&mut database, "{}", now).unwrap();
+        let second = issue_recovery_invitation(&mut database, "{}", now).unwrap();
+        assert_ne!(first, second);
+        let replaced: Option<String> = database
+            .connection()
+            .query_row(
+                "SELECT replaced_at FROM suplex_invitations WHERE token_hash = ?1",
+                [sha256_hex(&first)],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(replaced.is_some());
+        let metadata = r#"{"initiationMethod":"local-cli","installationId":"installation-id"}"#;
+        let recovery = issue_recovery_invitation(&mut database, metadata, now).unwrap();
+        assert!(recovery.starts_with("invite_v1_recovery_"));
+        let stored: (String, String) = database
+            .connection()
+            .query_row(
+                "SELECT token_hash, metadata_json FROM suplex_invitations WHERE kind = 'recovery' AND replaced_at IS NULL",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(stored, (sha256_hex(&recovery), metadata.to_owned()));
+        drop(database);
+        let _ = std::fs::remove_file(&filename);
+        let _ = std::fs::remove_file(filename.with_extension("sqlite-wal"));
+        let _ = std::fs::remove_file(filename.with_extension("sqlite-shm"));
+    }
 }

@@ -1,6 +1,8 @@
 //! Read-only observation of an OpenCode session for history, execution, usage, and Archive.
 
-use std::{io, path::PathBuf, time::Duration};
+#[cfg(test)]
+use std::io;
+use std::{path::PathBuf, time::Duration};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
@@ -478,6 +480,7 @@ impl OpenCodeSessionReader {
     }
 
     /// Refuses while the agent is active; returns the stop action for Archive.
+    #[cfg(test)]
     pub async fn archive(
         &self,
         session: &ReaderSession<'_>,

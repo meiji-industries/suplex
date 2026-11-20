@@ -152,11 +152,6 @@ impl AppState {
         self
     }
 
-    pub fn with_project_github(mut self, github: Github) -> Self {
-        self.project_github = github;
-        self
-    }
-
     pub fn with_artifact_root(mut self, root: PathBuf) -> Self {
         self.artifact_root = Some(root);
         self
@@ -208,7 +203,7 @@ impl AppState {
         ))
     }
 
-    pub fn with_database<T>(&self, operation: impl FnOnce(&mut SuplexDatabase) -> T) -> T {
+    fn run_with_database(&self, operation: &mut dyn FnMut(&mut SuplexDatabase)) {
         let mut database = self.database.lock().expect("Suplex database lock poisoned");
         database.defer_callbacks();
         let result = catch_unwind(AssertUnwindSafe(|| operation(&mut database)));
@@ -217,10 +212,19 @@ impl AppState {
         for callback in callbacks {
             let _ = catch_unwind(AssertUnwindSafe(callback));
         }
-        match result {
-            Ok(value) => value,
-            Err(payload) => resume_unwind(payload),
+        if let Err(payload) = result {
+            resume_unwind(payload);
         }
+    }
+
+    pub fn with_database<T>(&self, operation: impl FnOnce(&mut SuplexDatabase) -> T) -> T {
+        let mut operation = Some(operation);
+        let mut output = None;
+        self.run_with_database(&mut |database| {
+            let operation = operation.take().expect("database operation runs once");
+            output = Some(operation(database));
+        });
+        output.expect("database operation produced a result")
     }
 
     pub fn shutdown_history(&self) {
@@ -418,6 +422,14 @@ async fn not_found(
 }
 
 mod ui;
+
+#[cfg(test)]
+impl AppState {
+    pub fn with_project_github(mut self, github: Github) -> Self {
+        self.project_github = github;
+        self
+    }
+}
 
 #[cfg(test)]
 mod tests {

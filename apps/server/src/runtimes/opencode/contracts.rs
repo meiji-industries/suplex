@@ -142,12 +142,14 @@ pub struct MessagePath {
 }
 
 #[derive(Clone, Debug, Deserialize)]
+#[allow(dead_code, reason = "deserialized from OpenCode wire protocol")]
 pub struct CacheTokens {
     pub read: f64,
     pub write: f64,
 }
 
 #[derive(Clone, Debug, Deserialize)]
+#[allow(dead_code, reason = "deserialized from OpenCode wire protocol")]
 pub struct Tokens {
     pub input: f64,
     pub output: f64,
@@ -175,6 +177,7 @@ pub struct AssistantMessage {
     pub summary: Option<bool>,
     pub path: MessagePath,
     pub cost: f64,
+    #[allow(dead_code, reason = "deserialized from OpenCode wire protocol")]
     pub tokens: Tokens,
     #[serde(default, deserialize_with = "some")]
     pub variant: Option<String>,
@@ -354,6 +357,7 @@ impl Part {
         }
     }
 
+    #[cfg(test)]
     pub fn kind(&self) -> &str {
         match self {
             Self::Text(_) => "text",
@@ -425,6 +429,7 @@ pub struct Session {
     #[serde(rename = "projectID")]
     pub project_id: String,
     pub directory: String,
+    #[allow(dead_code, reason = "deserialized from OpenCode wire protocol")]
     pub title: String,
     pub version: String,
     pub time: SessionTime,
@@ -432,6 +437,7 @@ pub struct Session {
     pub model: Option<SessionModel>,
     #[serde(default, deserialize_with = "some")]
     pub agent: Option<String>,
+    #[allow(dead_code, reason = "deserialized from OpenCode wire protocol")]
     #[serde(default, deserialize_with = "some")]
     pub permission: Option<Vec<Value>>,
 }

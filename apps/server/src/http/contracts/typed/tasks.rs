@@ -628,10 +628,12 @@ pub fn parse_task_create(input: Option<&Value>) -> ContractResult<TaskCreateBody
     TaskCreateBody::parse(input)
 }
 
+#[cfg(test)]
 pub fn parse_task_dependencies(input: Option<&Value>) -> ContractResult<TaskDependenciesBody> {
     TaskDependenciesBody::parse(input)
 }
 
+#[cfg(test)]
 pub fn parse_task_agent_selection(input: Option<&Value>) -> ContractResult<TaskAgentSelectionBody> {
     TaskAgentSelectionBody::parse(input)
 }
@@ -727,6 +729,10 @@ impl Contract for WorktreeOpenBody {
 /// A task pane: the task and the Coordinator, Worker, or shell pane.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[allow(
+    dead_code,
+    reason = "validated during deserialization in contract parity tests"
+)]
 pub struct TaskPaneParams {
     pub task_id: String,
     pub role: TaskPaneRole,

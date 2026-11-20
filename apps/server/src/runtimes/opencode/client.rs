@@ -179,6 +179,7 @@ impl OpenCodeClient {
             .await
     }
 
+    #[cfg(test)]
     pub async fn get_config(
         &self,
         directory: Option<&str>,

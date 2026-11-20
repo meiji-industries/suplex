@@ -670,7 +670,7 @@ pub(crate) mod tests {
 
     /// One feed refresh for a company of 500, 2,000, and 5,000 active tasks,
     /// each with a Coordinator session and 10 usage records. Run with
-    /// `cargo test --lib -- --ignored --nocapture refresh_time_at_scale`.
+    /// `cargo test --bin suplex -- --ignored --nocapture refresh_time_at_scale`.
     #[test]
     #[ignore = "measurement"]
     fn refresh_time_at_scale() {

@@ -363,55 +363,31 @@ fn rejects_non_tailnet_binding_before_opening_data() {
 }
 
 #[test]
-fn recovery_invitation_replaces_prior_token_and_preserves_metadata() {
-    use suplex::{
-        identity::auth::issue_recovery_invitation,
-        platform::database::{OpenMode, SuplexDatabase},
-        shared::hash::sha256_hex,
-    };
-    let filename =
-        std::env::temp_dir().join(format!("suplex-invite-{}.sqlite", uuid::Uuid::new_v4()));
-    let mut database = SuplexDatabase::open(&filename, OpenMode::Migrate).unwrap();
-    let now = chrono::Utc::now();
-    let first = issue_recovery_invitation(&mut database, "{}", now).unwrap();
-    let second = issue_recovery_invitation(&mut database, "{}", now).unwrap();
-    assert_ne!(first, second);
-    let replaced: Option<String> = database
-        .connection()
-        .query_row(
-            "SELECT replaced_at FROM suplex_invitations WHERE token_hash = ?1",
-            [sha256_hex(&first)],
-            |row| row.get(0),
-        )
-        .unwrap();
-    assert!(replaced.is_some());
-    let metadata = r#"{"initiationMethod":"local-cli","installationId":"installation-id"}"#;
-    let recovery = issue_recovery_invitation(&mut database, metadata, now).unwrap();
-    assert!(recovery.starts_with("invite_v1_recovery_"));
-    let stored: (String, String) = database
-        .connection()
-        .query_row(
-            "SELECT token_hash, metadata_json FROM suplex_invitations WHERE kind = 'recovery' AND replaced_at IS NULL",
-            [],
-            |row| Ok((row.get(0)?, row.get(1)?)),
-        )
-        .unwrap();
-    assert_eq!(stored, (sha256_hex(&recovery), metadata.to_owned()));
-    drop(database);
-    let _ = fs::remove_file(filename);
-}
-
-#[test]
 fn advisor_stdio_refuses_missing_or_incorrect_credentials_before_initialization() {
-    use suplex::coordination::advisor_bridge::{AdvisorRole, write_binding};
     let root = std::env::temp_dir().join(format!("suplex-advisor-auth-{}", uuid::Uuid::new_v4()));
-    let binding = write_binding(&root, AdvisorRole::Rater, env!("CARGO_BIN_EXE_suplex")).unwrap();
+    fs::create_dir_all(&root).unwrap();
+    let binding_path = root.join("advisor.binding.json");
+    let binding = serde_json::json!({
+        "version": 1,
+        "token": uuid::Uuid::new_v4().to_string(),
+        "role": "rater",
+        "server": {
+            "command": env!("CARGO_BIN_EXE_suplex"),
+            "args": ["mcp", "advisor"],
+        },
+    });
+    fs::write(&binding_path, serde_json::to_vec(&binding).unwrap()).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&binding_path, fs::Permissions::from_mode(0o600)).unwrap();
+    }
     for token in [None, Some("00000000-0000-4000-8000-000000000000")] {
         let mut command = Command::new(env!("CARGO_BIN_EXE_suplex"));
         command
             .args(["mcp", "advisor"])
             .env_clear()
-            .env("SUPLEX_ADVISOR_BINDING", &binding.binding_path)
+            .env("SUPLEX_ADVISOR_BINDING", &binding_path)
             .env("SUPLEX_ADVISOR_RESULT", root.join("result.json"));
         if let Some(token) = token {
             command.env("SUPLEX_ADVISOR_TOKEN", token);

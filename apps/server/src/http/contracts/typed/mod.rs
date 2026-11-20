@@ -30,6 +30,10 @@ pub mod workflows;
 pub enum ContractFailure {
     Issues(Vec<Value>),
     Unhandled,
+    #[allow(
+        dead_code,
+        reason = "inspected in contract parity tests and Debug output"
+    )]
     Internal(String),
 }
 
@@ -771,4 +775,10 @@ mod tests {
             ]
         );
     }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, reason = "integration test helpers")]
+mod contract_parity {
+    include!("../../../../tests/http/contract_parity.rs");
 }

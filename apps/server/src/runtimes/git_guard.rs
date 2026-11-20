@@ -40,11 +40,13 @@ exit 125
 "#;
 
 pub struct GitCommandGuard {
+    #[allow(dead_code, reason = "used by guarded-tests example and unit tests")]
     pub directory: PathBuf,
     pub environment: HashMap<String, String>,
 }
 
 impl GitCommandGuard {
+    #[allow(dead_code, reason = "used by unit tests")]
     pub fn cleanup(&self) -> io::Result<()> {
         match fs::remove_dir_all(&self.directory) {
             Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),

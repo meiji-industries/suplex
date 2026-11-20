@@ -8,7 +8,7 @@ task and agent API revisions hash those bytes. Substituting ordinary
 `serde_json::to_string` can change a digest without changing the apparent JSON
 value: JavaScript puts array-index object keys before other keys and formats
 numbers after binary64 conversion, including exponent and negative-zero cases.
-The [hash-byte fixtures](../../apps/server/tests/hash_bytes.rs) compare the bytes and
+The [hash-byte fixtures](../../apps/server/tests/shared/hash_bytes.rs) compare the bytes and
 hex or base64url digests against recorded JavaScript output.
 
 This is a limited compatibility boundary. The current serializer receives an

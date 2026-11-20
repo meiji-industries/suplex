@@ -93,6 +93,7 @@ fn read_intent(directory: &Path, turn_id: &str) -> io::Result<Option<PromptInten
 }
 
 /// TypeScript `openCodeDisplayAttached`: whether a pane's foreground argv is this server's attach.
+#[cfg(test)]
 pub fn display_attached(reference: &ServerReference, session_id: &str, args: &[String]) -> bool {
     let after = |flag: &str| {
         args.iter()

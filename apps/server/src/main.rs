@@ -1,20 +1,39 @@
-use serde_json::json;
-use suplex::tasks::control::HarnessKind;
-use suplex::{
-    http::{self, AppState, session::SessionConfig},
-    platform::{
-        config::Installation,
-        database::{OpenMode, SuplexDatabase},
-        development, embedded, system_event_transport, system_events,
-    },
+mod accounts;
+mod billing;
+mod cli;
+mod coordination;
+mod delivery;
+mod hosted;
+mod http;
+mod identity;
+mod integrations;
+mod moves;
+mod platform;
+mod profiles;
+mod projects;
+mod runtimes;
+mod shared;
+mod sync;
+mod tasks;
+mod telemetry;
+mod terminals;
+mod web_push;
+
+use crate::http::{AppState, session::SessionConfig};
+use crate::platform::{
+    config::Installation,
+    database::{OpenMode, SuplexDatabase},
+    development, embedded, system_event_transport, system_events,
 };
+use crate::tasks::control::HarnessKind;
+use serde_json::json;
 use tokio::net::TcpListener;
 
 fn main() {
     // Every command reports its panics, before anything that could panic.
-    suplex::telemetry::exceptions::install();
+    crate::telemetry::exceptions::install();
     // PATH changes before the runtime starts its worker threads.
-    suplex::platform::user_path::extend();
+    crate::platform::user_path::extend();
     // glibc gives each thread that allocates its own arena, up to 8 per core, and
     // keeps freed pages in each one. On a production host the server held about
     // 750 MB in 31 arenas and grew about 200 MB an hour. Fewer arenas share free
@@ -26,7 +45,7 @@ fn main() {
     let command = std::env::args().skip(1).collect::<Vec<_>>();
     // The updater builds a runtime per network step; inside another runtime that panics.
     let result = if command == ["update-apply"] {
-        suplex::platform::update::apply(None).map(|_| ())
+        crate::platform::update::apply(None).map(|_| ())
     } else {
         tokio::runtime::Runtime::new()
             .expect("Failed building the Runtime")
@@ -40,70 +59,70 @@ fn main() {
 
 async fn run(command: Vec<String>) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     if command == ["github-store-credential"] {
-        suplex::integrations::github::use_installation(&Installation::load()?.database);
-        if let Err(error) = suplex::integrations::github::store_device_credential_from_stdin() {
+        crate::integrations::github::use_installation(&Installation::load()?.database);
+        if let Err(error) = crate::integrations::github::store_device_credential_from_stdin() {
             eprintln!("GitHub credential storage failed: {error}");
             std::process::exit(1);
         }
         return Ok(());
     }
     if command == ["mcp", "advisor"] {
-        return suplex::coordination::advisor_bridge::serve_from_environment().await;
+        return crate::coordination::advisor_bridge::serve_from_environment().await;
     }
     if let [subcommand, directory] = command.as_slice()
-        && subcommand == suplex::runtimes::codex::display::SUBCOMMAND
+        && subcommand == crate::runtimes::codex::display::SUBCOMMAND
     {
-        return suplex::runtimes::codex::display::serve(directory).await;
+        return crate::runtimes::codex::display::serve(directory).await;
     }
     if let [subcommand, directory] = command.as_slice()
-        && let Some(cli) = suplex::runtimes::pi::display::for_subcommand(subcommand)
+        && let Some(cli) = crate::runtimes::pi::display::for_subcommand(subcommand)
     {
-        return suplex::runtimes::pi::display::serve(cli, directory).await;
+        return crate::runtimes::pi::display::serve(cli, directory).await;
     }
     if command == ["mcp", "root"] {
         // The Root bridge forwards its events to the server's system log.
-        if let Ok(binding) = suplex::coordination::root_bridge::authenticated_binding() {
+        if let Ok(binding) = crate::coordination::root_bridge::authenticated_binding() {
             system_events::install_producer(&binding.database_path);
-            suplex::integrations::github::use_installation(&binding.database_path);
+            crate::integrations::github::use_installation(&binding.database_path);
         }
-        return suplex::coordination::root_stdio::serve_from_environment().await;
+        return crate::coordination::root_stdio::serve_from_environment().await;
     }
     if command == ["mcp"] {
-        return suplex::integrations::suplex::bridge::serve_from_environment().await;
+        return crate::integrations::suplex::bridge::serve_from_environment().await;
     }
     if command.starts_with(&["display".to_owned(), "devin".to_owned()]) {
-        return suplex::runtimes::devin::display::main(&command[2..]);
+        return crate::runtimes::devin::display::main(&command[2..]);
     }
     if let [display, provider, directory] = command.as_slice()
         && display == "display"
         && provider == HarnessKind::ClaudeCode.as_str()
     {
-        return Ok(suplex::runtimes::claude_code::display::run_claude_display(
+        return Ok(crate::runtimes::claude_code::display::run_claude_display(
             std::path::Path::new(directory),
         )?);
     }
     if command.first().map(String::as_str) == Some("billing") {
-        std::process::exit(suplex::billing::hosted::server::main(&command[1..]).await);
+        std::process::exit(crate::billing::hosted::server::main(&command[1..]).await);
     }
     if command.first().map(String::as_str) == Some("hosted") {
-        std::process::exit(suplex::hosted::main(&command[1..]).await);
+        std::process::exit(crate::hosted::main(&command[1..]).await);
     }
     if matches!(
         command.first().map(String::as_str),
         Some("serve" | "start" | "up" | "restart" | "stop" | "down")
     ) {
-        suplex::platform::supervisor::require_non_root_host()?;
+        crate::platform::supervisor::require_non_root_host()?;
     }
     match command.first().map(String::as_str) {
         None => {
-            print!("{}", suplex::cli::HELP);
+            print!("{}", crate::cli::HELP);
             Ok(())
         }
         Some("serve") => serve().await,
         Some("start" | "up") if command.iter().any(|arg| arg == "--foreground") => {
-            suplex::platform::supervisor::run_foreground().await
+            crate::platform::supervisor::run_foreground().await
         }
-        Some(name) => match suplex::cli::run(name, &command[1..]).await {
+        Some(name) => match crate::cli::run(name, &command[1..]).await {
             Ok(code) => std::process::exit(code),
             Err(error) => {
                 eprintln!("Suplex command failed: {error}");
@@ -124,13 +143,13 @@ fn server_event(state: &str, extra: serde_json::Value) {
 }
 
 async fn serve() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    std::sync::LazyLock::force(&suplex::platform::health::STARTED_EXECUTABLE);
+    std::sync::LazyLock::force(&crate::platform::health::STARTED_EXECUTABLE);
     let installation = Installation::load()?;
-    suplex::telemetry::exceptions::configure(&installation);
-    suplex::integrations::github::use_installation(&installation.database);
+    crate::telemetry::exceptions::configure(&installation);
+    crate::integrations::github::use_installation(&installation.database);
     system_events::install(installation.logs.clone());
     let mut database = SuplexDatabase::open(&installation.database, OpenMode::Migrate)?;
-    suplex::identity::auth::normalize_legacy_users(&database)?;
+    crate::identity::auth::normalize_legacy_users(&database)?;
     // Every access mode needs the Operator and a first company: loopback and tailnet requests
     // sign in as the Operator (ADR 0009), and onboarding renames that company rather than
     // creating one. Idempotent, so restarts are no-ops.
@@ -144,17 +163,17 @@ async fn serve() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     server_event("starting", json!({}));
     let listener =
         TcpListener::bind((installation.bind_address.as_str(), installation.port)).await?;
-    suplex::platform::supervisor::configure_foreground(&installation)?;
-    let host_terminals = std::sync::Arc::<suplex::terminals::host::HostTerminals>::default();
-    suplex::projects::git::set_libgit2_transport(
-        suplex::platform::environment_settings::read(&database)?.git2_enabled,
+    crate::platform::supervisor::configure_foreground(&installation)?;
+    let host_terminals = std::sync::Arc::<crate::terminals::host::HostTerminals>::default();
+    crate::projects::git::set_libgit2_transport(
+        crate::platform::environment_settings::read(&database)?.git2_enabled,
     );
-    let telemetry = suplex::telemetry::spawn(
+    let telemetry = crate::telemetry::spawn(
         installation.database.clone(),
-        suplex::telemetry::exceptions::spool_directory(&installation.root),
+        crate::telemetry::exceptions::spool_directory(&installation.root),
         &installation.installation_id,
     );
-    let task_host = suplex::tasks::host::spawn_task_host(
+    let task_host = crate::tasks::host::spawn_task_host(
         installation.database.clone(),
         installation.artifacts.clone(),
         host_terminals.clone(),
@@ -184,12 +203,12 @@ async fn serve() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     .with_task_host(task_host.clone())
     .with_host_terminals(host_terminals.clone());
     let state = match installation.billing_service_url.clone() {
-        Some(url) => state.with_billing(suplex::billing::BillingClient::new(url)),
+        Some(url) => state.with_billing(crate::billing::BillingClient::new(url)),
         None => state,
     };
-    suplex::billing::spawn_refresh(state.clone());
+    crate::billing::spawn_refresh(state.clone());
     let state = match installation.account_service_url.clone() {
-        Some(url) => state.with_accounts(suplex::accounts::AccountClient::new(
+        Some(url) => state.with_accounts(crate::accounts::AccountClient::new(
             url,
             installation.installation_id.clone(),
         )),
@@ -234,11 +253,16 @@ async fn serve() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         .with_graceful_shutdown(async move {
             #[cfg(unix)]
             let reason = {
-                let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()).expect("SIGTERM handler");
+                let mut terminate =
+                    tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+                        .expect("SIGTERM handler");
                 tokio::select! { _ = tokio::signal::ctrl_c() => "SIGINT", _ = terminate.recv() => "SIGTERM" }
             };
             #[cfg(not(unix))]
-            let reason = { let _ = tokio::signal::ctrl_c().await; "SIGINT" };
+            let reason = {
+                let _ = tokio::signal::ctrl_c().await;
+                "SIGINT"
+            };
             server_event("shutdown_requested", json!({"reason": reason}));
             shutdown_state.shutdown_history();
         })

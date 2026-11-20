@@ -352,6 +352,7 @@ impl Herdr {
         }
     }
 
+    #[cfg(test)]
     pub fn with_runner(binary: impl Into<String>, runner: Runner) -> Self {
         Self {
             binary: binary.into(),
@@ -631,6 +632,10 @@ pub mod fake {
 
     use super::*;
 
+    #[allow(
+        clippy::unnecessary_wraps,
+        reason = "matches the Herdr runner callback signature"
+    )]
     pub fn ok(value: Value) -> io::Result<RunOutput> {
         Ok(RunOutput {
             status: Some(0),
@@ -643,6 +648,10 @@ pub mod fake {
         ok(serde_json::json!({"id": "request", "result": result}))
     }
 
+    #[allow(
+        clippy::unnecessary_wraps,
+        reason = "matches the Herdr runner callback signature"
+    )]
     pub fn failed(stderr: Value) -> io::Result<RunOutput> {
         Ok(RunOutput {
             status: Some(1),

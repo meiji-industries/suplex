@@ -68,6 +68,7 @@ pub struct RepositoryIdentityCollision {
 }
 
 #[derive(Debug)]
+#[allow(dead_code, reason = "retains collision details for Debug and tests")]
 pub struct DatabaseMigrationFailure(pub Vec<RepositoryIdentityCollision>);
 
 impl fmt::Display for DatabaseMigrationFailure {
@@ -116,6 +117,7 @@ impl SuplexDatabase {
         Ok(database)
     }
 
+    #[cfg(test)]
     pub fn mode(&self) -> OpenMode {
         self.mode
     }
@@ -123,11 +125,11 @@ impl SuplexDatabase {
         &self.connection
     }
 
-    pub fn transaction<T>(
+    fn run_transaction(
         &mut self,
         immediate: bool,
-        operation: impl FnOnce(&mut Self) -> DatabaseResult<T>,
-    ) -> DatabaseResult<T> {
+        operation: &mut dyn FnMut(&mut Self) -> DatabaseResult<()>,
+    ) -> DatabaseResult<()> {
         let depth = self.callbacks.len();
         let savepoint = format!("suplex_nested_{depth}");
         let begin = if depth == 0 {
@@ -152,7 +154,7 @@ impl SuplexDatabase {
             format!("RELEASE SAVEPOINT {savepoint}")
         };
         match result {
-            Ok(Ok(value)) => match self.connection.execute_batch(&finish) {
+            Ok(Ok(())) => match self.connection.execute_batch(&finish) {
                 Ok(()) => {
                     let callbacks = self.callbacks.pop().expect("transaction callbacks");
                     if let Some(parent) = self.callbacks.last_mut() {
@@ -164,7 +166,7 @@ impl SuplexDatabase {
                             let _ = catch_unwind(AssertUnwindSafe(callback));
                         }
                     }
-                    Ok(value)
+                    Ok(())
                 }
                 Err(error) => {
                     self.rollback(depth, &savepoint);
@@ -185,6 +187,21 @@ impl SuplexDatabase {
         }
     }
 
+    pub fn transaction<T>(
+        &mut self,
+        immediate: bool,
+        operation: impl FnOnce(&mut Self) -> DatabaseResult<T>,
+    ) -> DatabaseResult<T> {
+        let mut operation = Some(operation);
+        let mut output = None;
+        self.run_transaction(immediate, &mut |database| {
+            let operation = operation.take().expect("transaction operation runs once");
+            output = Some(operation(database)?);
+            Ok(())
+        })?;
+        Ok(output.expect("transaction operation produced a result"))
+    }
+
     fn rollback(&self, depth: usize, savepoint: &str) {
         let sql = if depth == 0 {
             "ROLLBACK".to_owned()
@@ -194,14 +211,18 @@ impl SuplexDatabase {
         let _ = self.connection.execute_batch(&sql);
     }
 
-    pub fn after_commit(&mut self, callback: impl FnOnce() + Send + 'static) {
+    fn push_after_commit(&mut self, callback: Box<dyn FnOnce() + Send>) {
         if let Some(pending) = self.callbacks.last_mut() {
-            pending.push(Box::new(callback));
+            pending.push(callback);
         } else if let Some(deferred) = self.deferred_callbacks.as_mut() {
-            deferred.push(Box::new(callback));
+            deferred.push(callback);
         } else {
             let _ = catch_unwind(AssertUnwindSafe(callback));
         }
+    }
+
+    pub fn after_commit(&mut self, callback: impl FnOnce() + Send + 'static) {
+        self.push_after_commit(Box::new(callback));
     }
 
     pub(crate) fn defer_callbacks(&mut self) {

@@ -8,9 +8,11 @@ use std::{
 
 use serde_json::Value;
 
+#[cfg(test)]
+use super::task_runtime::session_busy;
 use super::{
     advisor_evidence,
-    task_runtime::{session_busy, turn_running},
+    task_runtime::turn_running,
     transcript::{self, DevinTurn},
 };
 use crate::runtimes::{
@@ -156,6 +158,7 @@ pub fn turn_evidence(
 }
 
 /// Returns `("busy" | "idle", updatedAt)`; a session without `turn.json` has no status.
+#[cfg(test)]
 pub fn status(runtime_directory: &Path) -> io::Result<(&'static str, i64)> {
     let updated_at = modified_at(&fs::metadata(runtime_directory.join("turn.json"))?);
     let status = if session_busy(runtime_directory)? {
@@ -184,6 +187,7 @@ pub fn timeline(
 }
 
 /// Archive refuses while the native process is active; stopping is a no-op afterwards.
+#[cfg(test)]
 pub fn archive(runtime_directory: &Path) -> io::Result<()> {
     if session_busy(runtime_directory)? {
         return Err(io::Error::other(

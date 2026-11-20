@@ -122,7 +122,8 @@ set -e
 pnpm exec tsx scripts/rust-route-coverage.ts
 cd apps/server
 unset RUSTUP_TOOLCHAIN
-cargo test --test contract_parity --test hash_bytes
+cargo test --bin suplex contract_parity::
+cargo test --bin suplex persisted_hash_bytes_match_json_stringify
 '''
 
 [tasks."server:test:journey"]

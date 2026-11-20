@@ -1,16 +1,22 @@
 use crate::shared::fs::read_optional;
+#[cfg(test)]
+use std::os::unix::fs::DirBuilderExt;
 use std::{
     collections::HashMap,
     error::Error,
     fs,
     io::{self},
-    os::unix::fs::{DirBuilderExt, PermissionsExt},
+    os::unix::fs::PermissionsExt,
     path::{Path, PathBuf},
 };
 
 use serde_json::{Value, json};
 
-use super::{advisor_evidence, mcp_config, transcript};
+#[cfg(test)]
+use super::advisor_evidence;
+use super::{mcp_config, transcript};
+#[cfg(test)]
+use crate::runtimes::native::NativeTool;
 use crate::{
     coordination::{
         advisor_bridge::{self, AdvisorRole},
@@ -23,9 +29,7 @@ use crate::{
     profiles::agent_profiles::home_directory,
     runtimes::{
         headless::{self, DispatchInput, HeadlessTurnRecord},
-        native::{
-            self as session_reader, DispatchState, NativeTool, PromptObservation, PromptState,
-        },
+        native::{self as session_reader, DispatchState, PromptObservation, PromptState},
         process::{IdentityMatch, compare_identity, inspect_process},
         task_harness::{self, ExecutableSpec, GH_EXECUTABLE, resolve_executable},
     },
@@ -258,6 +262,7 @@ fn prepare(
     Ok(bridge)
 }
 
+#[cfg(test)]
 pub fn ensure_session(
     scope: &DevinScope<'_>,
     native_session_id: Option<&str>,
@@ -471,6 +476,7 @@ pub fn result_text(runtime_directory: &Path, turn_id: &str) -> io::Result<String
     Ok(stderr[start..].to_owned())
 }
 
+#[cfg(test)]
 pub fn turn_evidence(
     runtime_directory: &Path,
     turn_id: &str,

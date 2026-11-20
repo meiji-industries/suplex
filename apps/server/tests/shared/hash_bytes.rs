@@ -2,7 +2,8 @@ use base64::Engine;
 use serde::Deserialize;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
-use suplex::shared::js_json;
+
+use super::stringify;
 
 #[derive(Deserialize)]
 struct Fixture {
@@ -29,7 +30,7 @@ fn persisted_hash_bytes_match_json_stringify() {
     for path in paths {
         let fixture: Fixture = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
         let value: Value = serde_json::from_str(&fixture.input_json).unwrap();
-        let actual = js_json::stringify(&value);
+        let actual = stringify(&value);
         assert_eq!(actual, fixture.bytes, "{}", path.display());
         if path
             .file_stem()

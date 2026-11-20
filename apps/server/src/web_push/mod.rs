@@ -18,6 +18,7 @@ use crate::{
     shared::PublicFailure,
 };
 
+#[cfg(test)]
 pub use keys::VapidKey;
 pub use store::{Subscription, delete_subscription, save_subscription, vapid_key};
 

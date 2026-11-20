@@ -95,6 +95,7 @@ pub fn turn_file(directory: &Path, turn_id: &str, suffix: &str) -> PathBuf {
     directory.join(format!("turn-{turn_id}.{suffix}"))
 }
 
+#[cfg(test)]
 pub fn dispatch<F>(
     input: DispatchInput<'_>,
     claim: F,

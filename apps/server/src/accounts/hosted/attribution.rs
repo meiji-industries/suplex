@@ -21,13 +21,6 @@ use axum::{
 use serde_json::{Map, Value, json};
 
 pub const ATTRIBUTION_COOKIE: &str = "suplex_attribution";
-pub const UTM: [&str; 5] = [
-    "utm_source",
-    "utm_medium",
-    "utm_campaign",
-    "utm_content",
-    "utm_term",
-];
 pub const REFERRING_DOMAIN: &str = "referring_domain";
 /// Google Ads (`gclid`, `gbraid`, `wbraid`), Microsoft Ads, and Meta click IDs.
 pub const CLICK_IDS: [&str; 5] = ["gclid", "gbraid", "wbraid", "msclkid", "fbclid"];

@@ -537,6 +537,7 @@ impl DeliveryOperations {
         }
     }
 
+    #[cfg(test)]
     pub fn with_github(database_path: &Path, artifact_root: &Path, github: Github) -> Self {
         let operations = Self::new(database_path, artifact_root);
         let _ = operations.github.set(github);

@@ -23,6 +23,10 @@ pub struct Installation {
     pub access_mode: String,
     pub tailscale_exposure: String,
     pub installation_id: String,
+    #[allow(
+        dead_code,
+        reason = "loaded from environment and asserted in config tests"
+    )]
     pub development_auto_login: bool,
     pub billing_service_url: Option<url::Url>,
     pub account_service_url: Option<url::Url>,

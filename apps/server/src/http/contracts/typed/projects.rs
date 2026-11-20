@@ -749,6 +749,10 @@ impl Contract for IncludeArchivedQuery {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProviderParams {
+    #[allow(
+        dead_code,
+        reason = "validated during deserialization in contract parity tests"
+    )]
     pub provider_id: String,
 }
 

@@ -416,30 +416,6 @@ pub fn list_provider_instances(
         .collect::<rusqlite::Result<Vec<_>>>()?)
 }
 
-#[cfg(test)]
-pub fn create_local_default(
-    database: &mut SuplexDatabase,
-    actor_user_id: &str,
-    company_id: &str,
-    prepared: &PreparedLocalProject,
-    root_profile_id: &str,
-    worker_profile_id: &str,
-    now: DateTime<Utc>,
-) -> DatabaseResult<Project> {
-    create_local(
-        database,
-        actor_user_id,
-        company_id,
-        prepared,
-        CreateLocalOptions {
-            root_profile_id,
-            worker_profile_id,
-            configuration: None,
-            now,
-        },
-    )
-}
-
 pub struct CreateLocalOptions<'a> {
     pub root_profile_id: &'a str,
     pub worker_profile_id: &'a str,
@@ -1884,6 +1860,29 @@ mod tests {
     use crate::platform::database::OpenMode;
 
     use super::*;
+
+    fn create_local_default(
+        database: &mut SuplexDatabase,
+        actor_user_id: &str,
+        company_id: &str,
+        prepared: &PreparedLocalProject,
+        root_profile_id: &str,
+        worker_profile_id: &str,
+        now: DateTime<Utc>,
+    ) -> DatabaseResult<Project> {
+        create_local(
+            database,
+            actor_user_id,
+            company_id,
+            prepared,
+            CreateLocalOptions {
+                root_profile_id,
+                worker_profile_id,
+                configuration: None,
+                now,
+            },
+        )
+    }
 
     #[test]
     fn repository_settings_reject_full_replacement_without_a_cached_observation() {

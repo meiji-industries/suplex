@@ -529,19 +529,7 @@ pub fn native_session_ids(database: &SuplexDatabase, task_id: &str) -> DatabaseR
         .collect::<rusqlite::Result<Vec<_>>>()?)
 }
 
-/// `TaskService.analytics`: active tasks, then archived tasks.
-#[cfg(test)]
-pub fn analytics(
-    database: &SuplexDatabase,
-    user_id: &str,
-    company_id: &str,
-    now: DateTime<Utc>,
-) -> DatabaseResult<Value> {
-    require_visible(database, user_id, company_id)?;
-    company_analytics(database, company_id, now)
-}
-
-/// `analytics` for the sync feed. The caller authorizes.
+/// Reference `Value` builder used by analytics tests to compare against streaming `analytics_json`.
 #[cfg(test)]
 pub(crate) fn company_analytics(
     database: &SuplexDatabase,

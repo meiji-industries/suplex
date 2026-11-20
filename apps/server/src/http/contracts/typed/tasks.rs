@@ -628,16 +628,6 @@ pub fn parse_task_create(input: Option<&Value>) -> ContractResult<TaskCreateBody
     TaskCreateBody::parse(input)
 }
 
-#[cfg(test)]
-pub fn parse_task_dependencies(input: Option<&Value>) -> ContractResult<TaskDependenciesBody> {
-    TaskDependenciesBody::parse(input)
-}
-
-#[cfg(test)]
-pub fn parse_task_agent_selection(input: Option<&Value>) -> ContractResult<TaskAgentSelectionBody> {
-    TaskAgentSelectionBody::parse(input)
-}
-
 impl Contract for TaskIdParams {
     fn schema(input: Option<&Value>) -> ContractResult<Value> {
         params(input, &["taskId"], (1, 256))

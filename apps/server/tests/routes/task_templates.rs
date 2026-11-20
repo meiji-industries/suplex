@@ -184,11 +184,15 @@ mod tests {
                 copied_from_task_id: None,
                 depends_on: vec![], pull_request_dependencies: vec![], workflow: crate::coordination::workflows::Workflow::Standard,
             };
-            crate::tasks::commands::create_user_task(
+            crate::tasks::commands::create_user_task_with_images(
                 database,
                 &admin.user.id,
                 &project,
                 &prepared,
+                crate::tasks::commands::ImageFiles {
+                    root: std::path::Path::new(""),
+                    images: &[],
+                },
                 now,
                 |_| {},
             )

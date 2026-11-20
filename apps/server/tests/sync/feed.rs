@@ -564,9 +564,11 @@ pub(crate) mod tests {
         let feed = CompanyFeed::new(path, Arc::default());
         let receiver = feed.subscribe("company_media");
         let costs = |database: &SuplexDatabase| {
-            let analytics =
-                analytics::analytics(database, "user_development", "company_media", Utc::now())
-                    .unwrap();
+            let analytics: serde_json::Value = serde_json::from_str(
+                &analytics::analytics_json(database, "user_development", "company_media", Utc::now())
+                    .unwrap(),
+            )
+            .unwrap();
             serde_json::to_value(analytics::analytics_task_costs(&analytics).unwrap().tasks).unwrap()
         };
         let first = wait_lists(&receiver, |lists| lists.costs.is_some());
@@ -655,8 +657,11 @@ pub(crate) mod tests {
         assert_eq!(feed.subscriptions.lock().unwrap().costing["company_media"], usage);
         read_costs(&path, &feed.subscriptions, "company_media");
         let priced = receiver.borrow().clone().unwrap();
-        let analytics =
-            analytics::analytics(&database, "user_development", "company_media", Utc::now()).unwrap();
+        let analytics: serde_json::Value = serde_json::from_str(
+            &analytics::analytics_json(&database, "user_development", "company_media", Utc::now())
+                .unwrap(),
+        )
+        .unwrap();
         assert_eq!(
             value(&priced.costs),
             serde_json::to_value(analytics::analytics_task_costs(&analytics).unwrap().tasks).unwrap()

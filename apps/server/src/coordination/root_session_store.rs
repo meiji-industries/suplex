@@ -41,14 +41,6 @@ pub fn current_root(
     ).optional()?)
 }
 
-#[cfg(test)]
-pub fn current_worker(
-    database: &SuplexDatabase,
-    task_id: &str,
-) -> DatabaseResult<Option<SessionRow>> {
-    current_delegate(database, task_id, "delegate")
-}
-
 /// The current delegate in one slot: `delegate`, `planner_a`, or `planner_b`.
 pub fn current_delegate(
     database: &SuplexDatabase,

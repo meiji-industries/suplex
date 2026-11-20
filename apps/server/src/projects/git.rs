@@ -1548,14 +1548,17 @@ mod tests {
             now,
         )
         .unwrap();
-        let created = crate::projects::service::create_local_default(
+        let created = crate::projects::service::create_local(
             &mut database,
             &admin.id,
             &company.id,
             &prepared,
-            "profile_native_root",
-            "profile_native_worker",
-            now,
+            crate::projects::service::CreateLocalOptions {
+                root_profile_id: "profile_native_root",
+                worker_profile_id: "profile_native_worker",
+                configuration: None,
+                now,
+            },
         )
         .unwrap();
         assert_eq!(created.repository.as_deref(), Some("acme/repo"));

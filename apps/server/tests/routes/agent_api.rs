@@ -130,10 +130,11 @@ pub(crate) mod tests {
                 Utc::now(),
             )
             .unwrap();
-            let paired = external_agents::exchange(
+            let paired = external_agents::exchange_from_client(
                 database,
                 &issued.pairing_code,
                 Some("profile-bot"),
+                None,
                 Utc::now(),
             )
             .unwrap();

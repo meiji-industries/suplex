@@ -867,7 +867,7 @@ mod tests {
             assert_eq!(control.1, "replacement-limit");
             assert_eq!(control.2, replacement_pause);
             let worker =
-                crate::coordination::root_session_store::current_worker(database, &immediate_id)
+                crate::coordination::root_session_store::current_delegate(database, &immediate_id, "delegate")
                     .unwrap()
                     .unwrap();
             assert_ne!(worker.id, old_worker_id);
@@ -980,7 +980,7 @@ mod tests {
                     .any(|turn| turn.prompt_text.contains(&long_handoff))
             );
             assert_eq!(
-                crate::coordination::root_session_store::current_worker(database, &immediate_id)
+                crate::coordination::root_session_store::current_delegate(database, &immediate_id, "delegate")
                     .unwrap()
                     .unwrap()
                     .id,

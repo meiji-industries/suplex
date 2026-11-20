@@ -408,7 +408,7 @@ mod tests {
             std::env::temp_dir().join(format!("suplex-codex-live-{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(&directory).unwrap();
         let environment = HashMap::new();
-        let record = headless::dispatch(
+        let record = headless::dispatch_with_exclusions(
             headless::DispatchInput {
                 directory: &directory,
                 worktree: &directory,
@@ -419,6 +419,7 @@ mod tests {
                 prompt: "Implement the change",
                 environment: &environment,
             },
+            &[],
             |_| Ok(true),
         )
         .unwrap();

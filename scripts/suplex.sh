@@ -2,7 +2,10 @@
 set -eu
 cd "$(dirname "$0")/.."
 case "${1:-}" in
-  start|up|restart|serve) pnpm --filter suplex-web build ;;
+  start|up|restart|serve)
+    pnpm --filter suplex-web build
+    export SUPLEX_ASSETS_DIR="${SUPLEX_ASSETS_DIR:-$PWD/apps/web/dist}"
+    ;;
 esac
 unset RUSTUP_TOOLCHAIN
 cargo build --quiet -p suplex --bin suplex

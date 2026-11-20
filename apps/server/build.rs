@@ -57,8 +57,11 @@ fn main() {
     let manifest = PathBuf::from(env::var("CARGO_MANIFEST_DIR").expect("Cargo manifest directory"));
     let migrations = embedded_files(&manifest.join("migrations"), Some("sql"));
     println!("cargo:rerun-if-env-changed=SUPLEX_DEV_EMBED_FRONTEND");
+    // Release builds always embed the frontend bundle. Debug builds skip embedding by default
+    // so dev, lint, and test commands share one build and serve apps/web/dist from disk or Vite;
+    // set SUPLEX_DEV_EMBED_FRONTEND=1 to embed in debug builds.
     let embed_frontend = env::var("PROFILE").as_deref() == Ok("release")
-        || env::var("SUPLEX_DEV_EMBED_FRONTEND").as_deref() != Ok("0");
+        || env::var("SUPLEX_DEV_EMBED_FRONTEND").as_deref() == Ok("1");
     let frontend = if embed_frontend {
         embedded_files(&manifest.join("../web/dist"), None)
     } else {
@@ -75,11 +78,11 @@ fn main() {
     let output = format!(
         "pub static MIGRATIONS: &[EmbeddedFile] = &[{migrations}];\npub static FRONTEND: &[EmbeddedFile] = &[{frontend}];\n"
     );
-    fs::write(
-        PathBuf::from(env::var("OUT_DIR").expect("Cargo output directory")).join("embedded.rs"),
-        output,
-    )
-    .expect("write bundle index");
+    let embedded_path =
+        PathBuf::from(env::var("OUT_DIR").expect("Cargo output directory")).join("embedded.rs");
+    if fs::read_to_string(&embedded_path).ok().as_deref() != Some(output.as_str()) {
+        fs::write(&embedded_path, output).expect("write bundle index");
+    }
 
     let revision = git(&manifest, &["rev-parse", "HEAD"]).unwrap_or_else(|| "unknown".to_owned());
     println!("cargo:rustc-env=SUPLEX_REVISION={revision}");

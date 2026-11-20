@@ -416,6 +416,7 @@ pub fn list_provider_instances(
         .collect::<rusqlite::Result<Vec<_>>>()?)
 }
 
+#[cfg(test)]
 pub fn create_local_default(
     database: &mut SuplexDatabase,
     actor_user_id: &str,

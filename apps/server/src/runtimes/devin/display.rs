@@ -15,7 +15,9 @@ use crate::coordination::bridge_auth::{
 const WAITING_LABEL: &str = "Waiting for Devin output...\n";
 
 pub struct DisplayCommand {
+    #[allow(dead_code, reason = "asserted in display command tests")]
     pub executable: String,
+    #[allow(dead_code, reason = "asserted in display command tests")]
     pub args: Vec<String>,
     pub command: String,
 }
@@ -63,6 +65,7 @@ pub fn display_command(runtime_directory: &Path) -> io::Result<DisplayCommand> {
     })
 }
 
+#[cfg(test)]
 pub fn display_attached(runtime_directory: &Path, argv: &[String]) -> bool {
     let Ok(expected) = display_command(runtime_directory) else {
         return false;

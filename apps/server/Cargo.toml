@@ -19,7 +19,7 @@ libc = { workspace = true }
 nix = { version = "0.31.3", features = ["signal", "process"] }
 pty-process = { version = "0.5.3", features = ["async"] }
 regex = "1"
-rmcp = { version = "=3.4.1", default-features = false, features = ["server", "macros", "transport-io", "transport-streamable-http-server"] }
+rmcp = { version = "=3.4.1", default-features = false, features = ["server", "transport-io", "transport-streamable-http-server"] }
 rusqlite = { version = "0.40.2", default-features = false, features = ["backup", "bundled"] }
 serde = { workspace = true }
 ryu-js = "1.0.3"

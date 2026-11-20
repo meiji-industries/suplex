@@ -530,6 +530,7 @@ pub fn native_session_ids(database: &SuplexDatabase, task_id: &str) -> DatabaseR
 }
 
 /// `TaskService.analytics`: active tasks, then archived tasks.
+#[cfg(test)]
 pub fn analytics(
     database: &SuplexDatabase,
     user_id: &str,
@@ -541,6 +542,7 @@ pub fn analytics(
 }
 
 /// `analytics` for the sync feed. The caller authorizes.
+#[cfg(test)]
 pub(crate) fn company_analytics(
     database: &SuplexDatabase,
     company_id: &str,

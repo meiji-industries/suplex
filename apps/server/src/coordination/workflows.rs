@@ -115,7 +115,9 @@ pub fn role_label(kind: &str, advisor_role: Option<&str>) -> &'static str {
     advisor_role.map_or("Worker", advisor_label)
 }
 
-pub use crate::delivery::inspection::{ReviewRange, range_differences, same_range};
+#[cfg(test)]
+pub use crate::delivery::inspection::range_differences;
+pub use crate::delivery::inspection::{ReviewRange, same_range};
 
 impl ReviewRange {
     pub fn from_value(value: &Value) -> Option<Self> {

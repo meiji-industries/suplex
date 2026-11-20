@@ -71,3 +71,9 @@ pub fn stringify(value: &Value) -> String {
     }
     output
 }
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, reason = "integration test helpers")]
+mod hash_bytes {
+    include!("../../tests/shared/hash_bytes.rs");
+}

@@ -495,11 +495,13 @@ pub async fn ensure_server(input: EnsureInput<'_>) -> Result<ServerReference, Bo
     }
 }
 
+#[cfg(test)]
 fn shell_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\\''"))
 }
 
 /// The pane command reads the server password from a private file, not from its argv.
+#[cfg(test)]
 pub fn attach_command(
     reference: &ServerReference,
     runtime_directory: &Path,

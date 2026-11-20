@@ -1,11 +1,13 @@
 //! Prompt intent, native admission evidence, and replay fencing for OpenCode.
 
+#[cfg(test)]
 use crate::shared::hash::sha256_hex;
+#[cfg(test)]
+use std::sync::Mutex;
 use std::{
     error::Error,
     fmt,
     path::Path,
-    sync::Mutex,
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -57,7 +59,9 @@ pub fn open_code_model(model_id: &str) -> Result<NativeModel, String> {
     }
 }
 
+#[cfg(test)]
 const BASE62: &[u8] = b"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+#[cfg(test)]
 static MESSAGE_CLOCK: Mutex<(u64, u64)> = Mutex::new((0, 0));
 
 pub(crate) fn now_ms() -> u64 {
@@ -67,6 +71,7 @@ pub(crate) fn now_ms() -> u64 {
 }
 
 /// OpenCode's ascending native message identity: 48 bits of time and counter, then 14 base62 characters.
+#[cfg(test)]
 pub fn create_message_id(timestamp: u64) -> String {
     let counter = {
         let mut clock = MESSAGE_CLOCK
@@ -88,6 +93,7 @@ pub fn create_message_id(timestamp: u64) -> String {
     format!("msg_{:012x}{suffix}", value & 0xffff_ffff_ffff)
 }
 
+#[cfg(test)]
 pub fn create_prompt_intent(
     session_id: &str,
     directory: &str,
@@ -254,6 +260,7 @@ pub struct PromptObservation {
 pub struct ReplayBlocked(pub &'static str);
 
 impl ReplayBlocked {
+    #[cfg(test)]
     pub fn code(&self) -> &'static str {
         "replay_blocked"
     }
@@ -714,6 +721,7 @@ pub async fn reconcile<P: PromptPort>(port: &P, intent: &PromptIntent) -> Prompt
 }
 
 /// Posts the prompt only after native absence is proven and the durable claim is acquired.
+#[cfg(test)]
 pub async fn replay<P: PromptPort, C>(
     port: &P,
     intent: &PromptIntent,

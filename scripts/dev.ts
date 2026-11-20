@@ -20,8 +20,6 @@ const environment: NodeJS.ProcessEnv = {
   // Billing follows the account service, so the linked account can start its trial and see its plan.
   SUPLEX_BILLING_SERVICE_URL: process.env.SUPLEX_BILLING_SERVICE_URL ?? process.env.SUPLEX_ACCOUNT_SERVICE_URL ?? "https://suplex.sh",
   SUPLEX_DEVELOPMENT_AUTO_LOGIN: "1",
-  // Vite serves the frontend in this development stack.
-  SUPLEX_DEV_EMBED_FRONTEND: "0",
   SUPLEX_FRONTEND_DEV_URL: `http://127.0.0.1:${port + 1}`,
 };
 delete environment.RUSTUP_TOOLCHAIN;

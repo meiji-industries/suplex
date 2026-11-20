@@ -385,7 +385,7 @@ mod tests {
         assert_eq!(only_stable.version, "999.0.0");
     }
 
-    /// `cargo test -p suplex --lib -- --ignored live_feed` proves the published feed parses.
+    /// `cargo test -p suplex --bin suplex -- --ignored live_feed` proves the published feed parses.
     #[tokio::test]
     #[ignore = "reads suplex.sh"]
     async fn the_live_feed_parses() {

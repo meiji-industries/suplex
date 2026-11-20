@@ -437,6 +437,7 @@ fn audit_with_queue(
 }
 
 /// The project was read before live Git capture; compare its material fields again at the write.
+#[cfg(test)]
 pub fn create_user_task(
     database: &mut SuplexDatabase,
     actor_user_id: &str,

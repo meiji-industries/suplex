@@ -10,6 +10,7 @@ use crate::{
 
 pub struct AdvisorEvidence {
     pub tools: Vec<NativeTool>,
+    #[allow(dead_code, reason = "asserted in advisor evidence tests")]
     pub limitation: &'static str,
 }
 

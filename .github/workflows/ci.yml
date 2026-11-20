@@ -81,7 +81,6 @@ jobs:
           cache-dependency-path: pnpm-lock.yaml
       - run: pnpm install --frozen-lockfile
       - run: pnpm exec tsx scripts/rust-route-coverage.ts
-      - run: pnpm --filter suplex-web build
       # Name packages explicitly: --workspace would unify features with the Tauri crates and build them here.
       - run: cargo fmt -p suplex -p suplex-exception -p suplex-bootstrap --check
       - run: cargo clippy -p suplex -p suplex-exception -p suplex-bootstrap --all-targets -- -D warnings

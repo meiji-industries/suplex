@@ -426,6 +426,7 @@ impl BitbucketClient {
 
     // The release port (`createBitbucketReleasePort`).
 
+    #[cfg(test)]
     pub async fn check_authentication(&self) -> ProviderResult<()> {
         self.get("/2.0/user").await.map(|_| ())
     }

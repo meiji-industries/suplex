@@ -35,10 +35,11 @@ uses sccache for eligible dependencies. The first build warms these caches;
 new worktrees still link their own binaries.
 Check the wrapper with `mise run test:sccache-wrapper`.
 
-The Vite development stack sets `SUPLEX_DEV_EMBED_FRONTEND=0` so changes to
-`apps/web/dist` do not trigger Rust rebuilds. Other builds embed the frontend by
-default, and release builds always embed it. Migrations remain embedded in
-every build.
+Debug builds skip embedding `apps/web/dist` by default so `mise run dev`,
+`mise run lint`, and test commands share one build and changes to `apps/web/dist`
+do not trigger Rust rebuilds. Set `SUPLEX_DEV_EMBED_FRONTEND=1` to embed the
+frontend in a debug build; release builds always embed it. Migrations remain
+embedded in every build.
 
 Loopback and tailnet requests receive the Operator administrator session.
 An empty development database receives a company, native profiles, and a project
@@ -73,10 +74,9 @@ pnpm run test:rust
 ```
 
 `test:rust` requires [cargo-nextest](https://nexte.st). Install it with
-`cargo install cargo-nextest --locked`. The test scripts build the server with
-`SUPLEX_DEV_EMBED_FRONTEND=0`, the same value the development stack uses, so
-tests and `mise run dev` share one build. The fixtures read the frontend from
-`apps/web/dist`.
+`cargo install cargo-nextest --locked`. Debug builds skip embedding the frontend
+by default, so tests, lint, and `mise run dev` share one build. The fixtures
+read the frontend from `apps/web/dist`.
 
 Use the narrower projects when you need them:
 

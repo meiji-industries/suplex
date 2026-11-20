@@ -19,6 +19,10 @@ macro_rules! wire_enum {
             Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord,
             serde::Serialize, serde::Deserialize, ts_rs::TS,
         )]
+        #[allow(
+            clippy::enum_variant_names,
+            reason = "wire enum variants match protocol names"
+        )]
         pub enum $name {
             $(#[serde(rename = $text)] $variant),+
         }

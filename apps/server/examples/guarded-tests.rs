@@ -4,9 +4,11 @@ use std::{
     path::PathBuf,
     process::{Command, ExitCode},
 };
-use suplex::runtimes::git_guard::{
-    GitCommandGuard, create_git_command_guard, resolve_guard_binaries,
-};
+#[path = "../src/runtimes/git_guard.rs"]
+#[allow(dead_code, reason = "only guard setup helpers are needed here")]
+mod git_guard;
+
+use git_guard::{GitCommandGuard, create_git_command_guard, resolve_guard_binaries};
 
 fn check(guard: &GitCommandGuard) -> io::Result<()> {
     for (arguments, expected) in [(vec!["--version"], 0), (vec!["worktree", "list"], 125)] {

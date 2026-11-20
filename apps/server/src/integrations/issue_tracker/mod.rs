@@ -201,6 +201,7 @@ impl IssueTracker {
         }
     }
 
+    #[cfg(test)]
     pub fn with_github(connection: &Value, github: Option<Github>) -> Self {
         match Connection::deserialize(connection)
             .unwrap_or_default()

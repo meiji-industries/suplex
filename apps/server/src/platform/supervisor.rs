@@ -32,6 +32,10 @@ struct Registry {
     ready: bool,
 }
 
+#[cfg_attr(
+    not(target_os = "linux"),
+    allow(clippy::unnecessary_wraps, reason = "returns an error on Linux")
+)]
 pub fn require_non_root_host() -> io::Result<()> {
     #[cfg(target_os = "linux")]
     refuse_root(

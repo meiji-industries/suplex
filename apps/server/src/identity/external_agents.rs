@@ -786,6 +786,7 @@ pub fn rotate(
     )
 }
 
+#[cfg(test)]
 pub fn exchange(
     database: &mut SuplexDatabase,
     pairing_code: &str,

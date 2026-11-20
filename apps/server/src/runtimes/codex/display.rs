@@ -79,6 +79,7 @@ pub(crate) fn command_for(
     })
 }
 
+#[cfg(test)]
 pub fn display_attached(runtime_directory: &Path, argv: &[String]) -> bool {
     attached_for(SUBCOMMAND, runtime_directory, argv)
 }
@@ -314,6 +315,7 @@ fn scan(
 
 /// Follows the runtime directory until `stopped` returns true or the
 /// directory is removed.
+#[cfg(test)]
 pub fn run_display(
     runtime_directory: &Path,
     output: &mut impl Write,

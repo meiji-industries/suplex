@@ -41,6 +41,7 @@ pub fn current_root(
     ).optional()?)
 }
 
+#[cfg(test)]
 pub fn current_worker(
     database: &SuplexDatabase,
     task_id: &str,
@@ -2480,9 +2481,11 @@ pub fn reopen_delivered(
 
 pub(crate) use super::persistence::new_turn_id;
 
+#[cfg(test)]
+pub use super::persistence::task_control;
 pub use super::persistence::{
     NewTurn, RootObservationRows, TaskArtifact, cancel_open_turns, insert_pending_turn,
-    root_observation_rows, set_turn_author, task_artifact, task_control,
+    root_observation_rows, set_turn_author, task_artifact,
 };
 use super::persistence::{session, turn};
 pub use super::replacement::{replace_coordinator, replace_worker, worker_replacement_ready};

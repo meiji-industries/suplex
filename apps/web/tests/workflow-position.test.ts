@@ -59,6 +59,7 @@ test("the shared Coordinator stations follow the last delegate", () => {
 test("delivery waits and completion come from the task record", () => {
   expect(workflowPosition(task({ workflowState: { ...base.workflowState, deliveryWait: { headSha: "b", fingerprint: "f", since: "now", reason: "merge_queue" } } }), activity(), undefined)).toEqual({ targets: ["merge"], state: "waiting" });
   expect(workflowPosition(task({ workflowState: { ...base.workflowState, deliveryWait: { headSha: "b", fingerprint: "f", since: "now", reason: "review" } } }), activity(), undefined)).toEqual({ targets: ["merge"], state: "waiting" });
+  expect(workflowPosition(task({ workflowState: { ...base.workflowState, deliveryWait: { headSha: "b", fingerprint: "f", since: "now", reason: "merge_turn" } } }), activity(), undefined)).toEqual({ targets: ["merge"], state: "waiting" });
   expect(workflowPosition(task({ status: "delivered", workflow: "standard" }), activity(), undefined)).toEqual({ targets: ["delivery"], state: "done" });
   expect(workflowPosition(task({ status: "waiting_human" }), activity(turn("root"), turn("rater")), [agent("root", "waiting_human")])).toEqual({ targets: ["coordinator"], state: "waiting" });
   expect(workflowPosition(task({ status: "waiting_human", workflowState: { ...base.workflowState, deliveryWait: { headSha: "b", fingerprint: "f", since: "now", reason: "question" } } }), activity(turn("root"), turn("rater")), [agent("root", "waiting_human")])).toEqual({ targets: ["coordinator"], state: "waiting" });

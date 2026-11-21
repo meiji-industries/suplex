@@ -61,6 +61,16 @@ test("a code owner review wait parses from the server and shows its own label", 
   expect(element<HTMLElement>(container, "[data-workflow-status]").textContent).toBe("Review pending");
 });
 
+test("a merge turn wait parses from the server and shows its own label", async () => {
+  const deliveryWait = DeliveryWaitSchema.parse({ headSha: "b".repeat(40), fingerprint: "{}", since: recordedAt, reason: "merge_turn" });
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  roots.push(root);
+  await act(async () => { root.render(<WorkflowStatus task={{ ...task, workflow: "standard", workflowState: { ...task.workflowState, deliveryWait } }} />); });
+  expect(element<HTMLElement>(container, "[data-workflow-status]").textContent).toBe("Waiting for the merge turn");
+});
+
 test("a reviewer row keeps compact facts visible while findings, verification, and Markdown expand", async () => {
   const report = "## Repair plan\n\nKeep the **answer** in the task action.";
   const container = await mount([review], { sessions: [], turns: [{ ...turn, id: review.turnId, sessionId: review.sessionId, status: "completed", completedAt: recordedAt, result: JSON.stringify({ text: report }) }], setup: { state: "none", exitStatus: null }, actions: [], shellPaneId: null });

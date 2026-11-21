@@ -18,7 +18,11 @@ activate_aggressive = true
 [env]
 # Keep Cargo's default per-checkout target (the workspace root's target/); absolute CARGO_TARGET_DIR values
 # enter sccache's Rust cache key and prevent dependency reuse across worktrees.
-RUSTC_WRAPPER = "{{config_root}}/scripts/sccache-wrapper.sh"
+# Pointing at scripts/sccache.sh (stem "sccache") also lets cc-rs and CMake share native C/C++ builds.
+RUSTC_WRAPPER = "{{config_root}}/scripts/sccache.sh"
+CMAKE_C_COMPILER_LAUNCHER = "{{config_root}}/scripts/sccache.sh"
+CMAKE_CXX_COMPILER_LAUNCHER = "{{config_root}}/scripts/sccache.sh"
+SCCACHE_CACHE_SIZE = "20G"
 NODE_ENV = "development"
 SUPLEX_TAILSCALE_ADDRESS = "{{ exec(command='sh scripts/resolve-magicdns.sh') | trim }}"
 SUPLEX_TAILSCALE_EXPOSURE = "serve"
@@ -41,22 +45,8 @@ description = "Run native Suplex with Rust rebuilds and Vite HMR"
 run = "pnpm run dev:watch"
 
 [tasks."clean:target"]
-description = "Cap target/ in every suplex worktree by evicting the oldest build files (MAXSIZE=10GB by default)"
-run = '''
-#!/usr/bin/env bash
-set -euo pipefail
-# Cargo never deletes old build files, so each worktree's target/ grows without bound.
-# A clean debug build is about 7 GB; the cap keeps it plus one round of churn.
-before=$(df -k "$HOME" | awk 'NR==2{print $4}')
-git worktree list --porcelain | sed -n 's/^worktree //p' | while read -r dir; do
-  [ -d "$dir/target" ] || continue
-  echo "$dir: $(du -sh "$dir/target" | cut -f1)"
-  (cd "$dir" && cargo sweep --maxsize "${MAXSIZE:-10GB}" >/dev/null)
-done
-after=$(df -k "$HOME" | awk 'NR==2{print $4}')
-awk -v b="$before" -v a="$after" 'BEGIN{printf "Reclaimed %.1f GB. %.0f GB free.\n", (a-b)/1048576, a/1048576}'
-echo "A worktree you are done with: rm -rf <worktree>/target reclaims all of it."
-'''
+description = "Prune incremental caches and cap target/ in every suplex worktree (MAXSIZE=6GB by default)"
+run = "bash scripts/clean-target.sh"
 
 [tasks."dev:status"]
 description = "Show the process that listens on this checkout's development port"

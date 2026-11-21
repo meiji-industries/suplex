@@ -28,7 +28,13 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
-  CARGO_PROFILE_DEV_DEBUG: line-tables-only
+  # Incremental caches grow across branch/feature churn, are ignored by
+  # cargo-sweep, and bloat sticky disks and rust-cache archives without helping
+  # single-shot CI builds.
+  CARGO_INCREMENTAL: 0
+  # Skip DWARF generation in CI dev/test builds (panic file:line still works via
+  # compile-time macros).
+  CARGO_PROFILE_DEV_DEBUG: 0
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}-${{ inputs.runner }}-${{ inputs.workers }}
@@ -38,8 +44,8 @@ jobs:
   rust:
     name: Rust fmt, clippy, and tests
     env:
-      TARGET_CACHE_MAX_KIB: 12582912
-      TARGET_CACHE_MAX_SIZE: 12GB
+      TARGET_CACHE_MAX_KIB: 8388608
+      TARGET_CACHE_MAX_SIZE: 8GB
     runs-on: ${{ inputs.runner || 'blacksmith-8vcpu-ubuntu-2404' }}
     timeout-minutes: 20
     steps:
@@ -84,13 +90,23 @@ jobs:
       - run: cargo nextest run -p suplex -p suplex-exception -p suplex-bootstrap --all-targets --profile ci
       - name: Generated TypeScript contracts are committed
         run: git diff --exit-code -- apps/web/contracts/generated
+      - name: Build-cache and cleanup script checks
+        run: |
+          sh scripts/test-sccache-wrapper.sh
+          bash scripts/test-clean-target.sh
       - name: Enforce persistent target size limit
         if: ${{ always() && steps.rust-target.outcome == 'success' }}
         run: |
+          # cargo-sweep never cleans target/*/incremental; wipe any leftover
+          # incremental caches first so sweep doesn't evict warm debug/deps.
+          rm -rf target/*/incremental target/*/*/incremental
+          du -sh target/* target/debug/* 2>/dev/null | sort -hr | head -15 || true
           target_size_kib="$(du -sk target | cut -f1)"
           echo "Persistent target size: ${target_size_kib} KiB"
           if (( target_size_kib > TARGET_CACHE_MAX_KIB )); then
-            cargo install cargo-sweep --version 0.8.0 --locked
+            if ! command -v cargo-sweep >/dev/null 2>&1; then
+              cargo install cargo-sweep --version 0.8.0 --locked
+            fi
             cargo sweep --maxsize "${TARGET_CACHE_MAX_SIZE}" .
           fi
 
@@ -102,8 +118,8 @@ jobs:
       CI: "true"
       TEST_WORKERS: ${{ inputs.workers || '8' }}
       SUPLEX_BIN: ${{ github.workspace }}/target/debug/suplex
-      TARGET_CACHE_MAX_KIB: 12582912
-      TARGET_CACHE_MAX_SIZE: 12GB
+      TARGET_CACHE_MAX_KIB: 8388608
+      TARGET_CACHE_MAX_SIZE: 8GB
     steps:
       - uses: actions/checkout@v5
 
@@ -201,10 +217,16 @@ jobs:
       - name: Enforce persistent target size limit
         if: ${{ always() && steps.rust-target.outcome == 'success' }}
         run: |
+          # cargo-sweep never cleans target/*/incremental; wipe any leftover
+          # incremental caches first so sweep doesn't evict warm debug/deps.
+          rm -rf target/*/incremental target/*/*/incremental
+          du -sh target/* target/debug/* 2>/dev/null | sort -hr | head -15 || true
           target_size_kib="$(du -sk target | cut -f1)"
           echo "Persistent target size: ${target_size_kib} KiB"
           if (( target_size_kib > TARGET_CACHE_MAX_KIB )); then
-            cargo install cargo-sweep --version 0.8.0 --locked
+            if ! command -v cargo-sweep >/dev/null 2>&1; then
+              cargo install cargo-sweep --version 0.8.0 --locked
+            fi
             cargo sweep --maxsize "${TARGET_CACHE_MAX_SIZE}" .
           fi
 

@@ -75,6 +75,14 @@ test("OMP lists in Your stack as its own agent tool", () => {
   expect(PROVIDER_INSTALLATIONS.omp.command).toBe("curl -fsSL https://omp.sh/install | sh");
 });
 
+test("Antigravity lists in Your stack with the models of its account", () => {
+  const antigravity = provider("antigravity", "connected", [{ id: "default", label: "Default (Antigravity)" }, { id: "gemini-a", label: "Gemini A" }]);
+  expect(connectedProviders([provider("omp", "not-connected"), antigravity]).map(item => item.id)).toEqual(["antigravity"]);
+  expect(stepComplete(state({ providers: [antigravity], profiles: [profile("root", "antigravity"), profile("worker", "antigravity")] }), "stack")).toBe(true);
+  expect(providerIcons.antigravity.label).toBe("Antigravity");
+  expect(PROVIDER_INSTALLATIONS.antigravity.command).toBe("curl -fsSL https://antigravity.google/cli/install.sh | bash");
+});
+
 test("a connected local endpoint counts for Your stack and runs the agents that select its model", () => {
   const local = endpoint();
   expect(connectedProviders([provider("codex", "not-connected"), local]).map(item => item.id)).toEqual(["local-0a1b2c3d4e5f"]);

@@ -1,0 +1,25 @@
+{
+  "contract": "projects.ProfileBodySchema",
+  "case": "antigravity_model",
+  "input": {
+    "provider": "antigravity",
+    "model": "gemini-3.8-flash",
+    "reasoningLevel": "xhigh",
+    "serviceTier": "default",
+    "name": "Antigravity Worker",
+    "role": "worker",
+    "avatarSeed": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "provider": "antigravity",
+      "model": "gemini-3.8-flash",
+      "reasoningLevel": "xhigh",
+      "serviceTier": "default",
+      "name": "Antigravity Worker",
+      "role": "worker",
+      "avatarSeed": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    }
+  }
+}

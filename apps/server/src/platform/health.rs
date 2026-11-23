@@ -566,7 +566,15 @@ pub fn provider_context(
             }
             continue;
         };
-        if ["opencode", "claude-code", "codex", "pi", "omp"].contains(&profile.provider.as_str())
+        if [
+            "opencode",
+            "claude-code",
+            "codex",
+            "pi",
+            "omp",
+            "antigravity",
+        ]
+        .contains(&profile.provider.as_str())
             && !providers.contains(&profile.provider)
         {
             providers.push(profile.provider.clone());

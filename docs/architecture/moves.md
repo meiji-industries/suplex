@@ -91,7 +91,8 @@ route.
   list. Devin runs `--print` with `--permission-mode auto`, which rejects
   every tool that is not read-only. Pi and OMP run `-p` with `--tools` set to
   their read-only tools. OMP still offers `write`, but it reaches only its
-  `xd://` devices.
+  `xd://` devices. Antigravity runs `-p` with `--mode plan`, which plans
+  without changing files.
 - **Local endpoints.** A prompt move or a recommendation registers the
   [local endpoint](../../apps/server/src/profiles/local_endpoints.rs) of an
   OpenCode, Pi, or OMP model as a task run does

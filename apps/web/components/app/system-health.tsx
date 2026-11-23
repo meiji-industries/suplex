@@ -1,5 +1,5 @@
 import { copyToClipboard } from "../../lib/clipboard.js";
-import { Activity, Binary, Bot, Check, CheckCircle2, ChevronRight, CircleAlert, Copy, Database, GitBranch, HardDrive, LayoutGrid, Network, Package, Pi, RefreshCw, ShieldCheck, SquarePi, SquareTerminal, Terminal, XCircle, type LucideIcon } from "lucide-react";
+import { Activity, Binary, Bot, Check, CheckCircle2, ChevronRight, CircleAlert, Copy, Database, GitBranch, HardDrive, LayoutGrid, Network, Orbit, Package, Pi, RefreshCw, ShieldCheck, SquarePi, SquareTerminal, Terminal, XCircle, type LucideIcon } from "lucide-react";
 import { createContext, useContext, useEffect, useId, useState, type ReactElement, type ReactNode } from "react";
 
 import type { HealthCheck, HealthSnapshot } from "../../contracts/health.js";
@@ -55,6 +55,7 @@ const icons: Record<HealthCheckId, LucideIcon> = {
   "provider:codex": SquareTerminal,
   "provider:pi": Pi,
   "provider:omp": SquarePi,
+  "provider:antigravity": Orbit,
 };
 
 export function HealthCheckIcon({ check }: { check: HealthCheck }): ReactElement {
@@ -80,6 +81,7 @@ export function healthCheckPurpose(id: HealthCheckId): string {
     case "provider:codex": return "Run tasks with Codex CLI";
     case "provider:pi": return "Run tasks with Pi";
     case "provider:omp": return "Run tasks with OMP";
+    case "provider:antigravity": return "Run tasks with Antigravity";
   }
 }
 
@@ -194,7 +196,7 @@ export function healthyCheckLabel(check: HealthCheck): string {
     case "gh-cli": return "Signed in";
     case "tailscale": return text("hostname") ?? "Healthy";
     case "backup": return verifiedAt && verifiedAt !== "never" ? relativeTime(verifiedAt) : "Healthy";
-    case "provider:opencode": case "provider:claude-code": case "provider:codex": case "provider:pi": case "provider:omp": return text("account") ?? "Signed in";
+    case "provider:opencode": case "provider:claude-code": case "provider:codex": case "provider:pi": case "provider:omp": case "provider:antigravity": return text("account") ?? "Signed in";
   }
 }
 

@@ -62,6 +62,8 @@ pub fn provider_login_command(
     let login = match (HarnessKind::parse(provider), pi_login) {
         (_, Some(login)) => login,
         (Some(HarnessKind::Codex), _) => " login",
+        // `agy acp --login` asks for a pasted code, so it works without a browser on the host.
+        (Some(HarnessKind::Antigravity), _) => " acp --login",
         _ => " auth login",
     };
     scoped_command(provider, home_directory, format!("{binary}{login}"))
@@ -310,7 +312,15 @@ pub(crate) mod tests {
 
     #[test]
     fn the_install_command_comes_from_readiness_and_a_host_terminal_keeps_its_result() {
-        for provider in ["opencode", "claude-code", "devin", "codex", "pi", "omp"] {
+        for provider in [
+            "opencode",
+            "claude-code",
+            "devin",
+            "codex",
+            "pi",
+            "omp",
+            "antigravity",
+        ] {
             let (remedy, _) = install_remedy(provider);
             assert!(!remedy.is_empty(), "{provider}");
             assert_eq!(install_command(provider, false), remedy);
@@ -360,6 +370,14 @@ pub(crate) mod tests {
             "'/opt/omp/omp' login"
         );
         assert_eq!(provider_login_command("omp", None, missing()), "omp login");
+        assert_eq!(
+            provider_login_command("antigravity", None, resolved("/opt/agy/agy")),
+            "'/opt/agy/agy' acp --login"
+        );
+        assert_eq!(
+            provider_login_command("antigravity", None, missing()),
+            "agy acp --login"
+        );
     }
 
     #[test]

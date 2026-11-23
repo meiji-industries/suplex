@@ -18,7 +18,15 @@ pub use crate::profiles::agent_profiles::{
 };
 pub use crate::profiles::local_endpoints::LocalEndpointInput as LocalEndpointCreateBody;
 
-pub(crate) const HARNESSES: &[&str] = &["opencode", "claude-code", "devin", "codex", "pi", "omp"];
+pub(crate) const HARNESSES: &[&str] = &[
+    "opencode",
+    "claude-code",
+    "devin",
+    "codex",
+    "pi",
+    "omp",
+    "antigravity",
+];
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]

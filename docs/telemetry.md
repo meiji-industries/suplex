@@ -105,8 +105,8 @@ creating agent) and `profile_id` when that external agent has a client profile
 ID. It also contains the built-in `workflow`, `delivery_target`,
 `coordinator_provider`, `worker_provider`, and `advisor_count`. Unavailable
 values are omitted. Provider profile counts are `profiles_opencode`,
-`profiles_claude_code`, `profiles_devin`, `profiles_codex`, `profiles_pi`, and
-`profiles_omp`.
+`profiles_claude_code`, `profiles_devin`, `profiles_codex`, `profiles_pi`,
+`profiles_omp`, and `profiles_antigravity`.
 
 A client profile ID is text that an agent client chooses, so `profile_id` is
 never that text. It is the first 16 hexadecimal characters of a SHA-256 hash of

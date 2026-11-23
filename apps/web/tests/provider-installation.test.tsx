@@ -15,6 +15,7 @@ test("every provider has its own official installation command and guide", () =>
     devin: { command: "curl -fsSL https://cli.devin.ai/install.sh | bash", guideUrl: "https://docs.devin.ai/cli/index", os: "macOS, Linux, or WSL" },
     pi: { command: "curl -fsSL https://pi.dev/install.sh | sh", guideUrl: "https://pi.dev/docs/latest/quickstart", os: "macOS, Linux, or WSL" },
     omp: { command: "curl -fsSL https://omp.sh/install | sh", guideUrl: "https://github.com/can1357/oh-my-pi#install", os: "macOS, Linux, or WSL" },
+    antigravity: { command: "curl -fsSL https://antigravity.google/cli/install.sh | bash", guideUrl: "https://antigravity.google/docs/getting-started", os: "macOS or Linux", prerequisite: "Suplex needs Antigravity 1.5 or later." },
   });
 });
 

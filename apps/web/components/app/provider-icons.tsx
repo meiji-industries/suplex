@@ -7,6 +7,7 @@ export const providerIcons = {
   devin: { label: "Devin", src: new URL("./provider-icons/devin.svg", import.meta.url).href },
   pi: { label: "Pi", src: new URL("./provider-icons/pi.svg", import.meta.url).href },
   omp: { label: "OMP", src: new URL("./provider-icons/omp.svg", import.meta.url).href },
+  antigravity: { label: "Antigravity", src: new URL("./provider-icons/antigravity.svg", import.meta.url).href },
 } satisfies Record<HarnessKind, { label: string; src: string }>;
 
 const colorIcons = {

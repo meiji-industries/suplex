@@ -18,6 +18,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use crate::profiles::local_endpoints::{self, LocalEndpoint};
+use crate::runtimes::antigravity::{cli as antigravity_cli, probe as antigravity_probe};
 use crate::runtimes::pi::cli::{self as pi_cli, PiCli};
 use crate::runtimes::task_harness::{ExecutableSpec, resolve_executable};
 
@@ -90,6 +91,14 @@ const PI_MODELS: &[(&str, &str)] = &[
     ("google/gemini-3.5-flash", "gemini-3.5-flash (google)"),
 ];
 
+/// Antigravity lists the models of the signed-in account; these cover a host
+/// where Suplex has not probed it. `default` keeps the account's model.
+const ANTIGRAVITY_MODELS: &[(&str, &str)] = &[
+    ("default", "Default (Antigravity)"),
+    ("gemini-3.8-flash", "Gemini 3.8 Flash"),
+    ("gemini-3.1-pro-preview", "Gemini 3.1 Pro Preview"),
+];
+
 fn models(list: &[(&str, &str)]) -> Vec<Value> {
     list.iter()
         .map(|(id, label)| json!({"id": id, "label": label}))
@@ -151,6 +160,22 @@ pub fn pi_models(cli: &PiCli, listing: Option<&str>) -> Vec<Value> {
     } else {
         listed
     }
+}
+
+/// The account models from the latest Antigravity probe, after the account's
+/// default; the static list before a probe.
+pub fn antigravity_models(probed: &[(String, String)]) -> Vec<Value> {
+    if probed.is_empty() {
+        return models(ANTIGRAVITY_MODELS);
+    }
+    models(&ANTIGRAVITY_MODELS[..1])
+        .into_iter()
+        .chain(
+            probed
+                .iter()
+                .map(|(id, label)| json!({"id": id, "label": label})),
+        )
+        .collect()
 }
 
 async fn read_pi_models(cli: &PiCli, environment: &HashMap<String, String>) -> Vec<Value> {
@@ -321,6 +346,11 @@ async fn read_tools(directory: String, probe: bool) -> ToolListing {
         (&CODEX, "codex", read_codex_models(&codex_home)),
         (&pi_cli::PI.executable, pi_cli::PI.provider, pi_models),
         (&pi_cli::OMP.executable, pi_cli::OMP.provider, omp_models),
+        (
+            &antigravity_cli::EXECUTABLE,
+            antigravity_cli::PROVIDER,
+            Vec::new(),
+        ),
     ];
     let connections = if probe {
         join_all(
@@ -334,6 +364,8 @@ async fn read_tools(directory: String, probe: bool) -> ToolListing {
             rows.len()
         ]
     };
+    // The sign-in probe above lists the Antigravity account's models.
+    let antigravity = antigravity_models(&antigravity_probe::cached_models());
     let tools = rows
         .into_iter()
         .zip(connections)
@@ -341,7 +373,11 @@ async fn read_tools(directory: String, probe: bool) -> ToolListing {
             id,
             label: spec.label,
             installed: resolve_executable(spec, None, &environment, home.as_deref()).is_ok(),
-            models,
+            models: if id == antigravity_cli::PROVIDER {
+                antigravity.clone()
+            } else {
+                models
+            },
             connection,
         })
         .collect();
@@ -408,6 +444,18 @@ mod tests {
     }
 
     #[test]
+    fn antigravity_models_come_from_its_probe_and_fall_back_to_the_static_list() {
+        assert_eq!(antigravity_models(&[]), models(ANTIGRAVITY_MODELS));
+        assert_eq!(
+            antigravity_models(&[("gemini-a".into(), "Gemini A".into())]),
+            vec![
+                json!({"id":"default","label":"Default (Antigravity)"}),
+                json!({"id":"gemini-a","label":"Gemini A"}),
+            ]
+        );
+    }
+
+    #[test]
     fn pi_models_come_from_its_listing_and_fall_back_to_the_static_list() {
         let listed = pi_models(
             &pi_cli::PI,
@@ -469,7 +517,7 @@ mod tests {
             (status, headers["cache-control"].to_str().unwrap()),
             (StatusCode::OK, "private, no-store")
         );
-        assert_eq!(json_body(&body)["providers"].as_array().unwrap().len(), 6);
+        assert_eq!(json_body(&body)["providers"].as_array().unwrap().len(), 7);
         for (method, path) in [
             ("PUT", "/api/admin/providers/openrouter/credential"),
             ("DELETE", "/api/admin/providers/openrouter/credential"),
@@ -490,7 +538,7 @@ mod tests {
             let (status, _, body) = call(&app, "GET", path, Some(&member), None).await;
             assert_eq!(
                 (status, json_body(&body)["models"][0]["provider"].clone()),
-                (StatusCode::OK, json!("claude-code"))
+                (StatusCode::OK, json!("antigravity"))
             );
             assert_eq!(
                 call(&app, "GET", path, None, None).await.0,
@@ -534,6 +582,7 @@ mod tests {
         assert_eq!(
             labels,
             [
+                "Antigravity",
                 "Claude Code",
                 "Codex CLI",
                 "Devin CLI",
@@ -542,12 +591,19 @@ mod tests {
                 "Pi"
             ]
         );
-        assert_eq!(providers["providers"][0]["modelCount"], 9);
-        assert_eq!(providers["providers"][0]["connection"]["status"], "unknown");
+        assert_eq!(providers["providers"][1]["modelCount"], 9);
+        assert_eq!(providers["providers"][1]["connection"]["status"], "unknown");
+        assert_eq!(providers["providers"][0]["models"][0]["id"], "default");
         let listed = list_models(&providers);
+        let fable = listed["models"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|model| model["id"] == "fable")
+            .unwrap();
         assert_eq!(
-            listed["models"][0],
-            json!({"id":"fable","provider":"claude-code","providerLabel":"Claude Code","providerStatus":providers["providers"][0]["status"],"displayName":"Fable (latest)"})
+            fable,
+            &json!({"id":"fable","provider":"claude-code","providerLabel":"Claude Code","providerStatus":providers["providers"][1]["status"],"displayName":"Fable (latest)"})
         );
     }
 }

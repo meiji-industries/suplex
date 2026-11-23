@@ -160,6 +160,7 @@ fn provider_label(provider: HarnessKind) -> &'static str {
         HarnessKind::Codex => "Codex",
         HarnessKind::Pi => "Pi",
         HarnessKind::Omp => "OMP",
+        HarnessKind::Antigravity => "Antigravity",
     }
 }
 

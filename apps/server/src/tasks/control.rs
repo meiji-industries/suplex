@@ -105,6 +105,7 @@ wire_enum! {
         Codex = "codex",
         Pi = "pi",
         Omp = "omp",
+        Antigravity = "antigravity",
     }
 }
 
@@ -441,6 +442,7 @@ mod tests {
             HarnessKind::Codex,
             HarnessKind::Pi,
             HarnessKind::Omp,
+            HarnessKind::Antigravity,
         ]
         .into_iter()
         .map(HarnessKind::as_str)

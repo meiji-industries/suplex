@@ -166,6 +166,15 @@ fn command(profile: &TaskProfile, endpoint: Option<&Endpoint>) -> String {
             args.push(PROMPT);
             (None, args)
         }
+        // Plan mode does not change files or run commands.
+        HarnessKind::Antigravity => (
+            None,
+            super::shell::antigravity_args(
+                &profile.model,
+                effort,
+                &["--mode", "plan", "-p", PROMPT],
+            ),
+        ),
     };
     agent::line(profile, endpoint, environment.as_slice(), &args)
 }

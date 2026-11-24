@@ -91,6 +91,7 @@ async fn health_with_github(
             &user,
             query.project_id.as_deref(),
             query.profile_ids.as_deref(),
+            crate::runtimes::antigravity::cli::enabled(),
         )
     }) {
         Ok(providers) => providers,

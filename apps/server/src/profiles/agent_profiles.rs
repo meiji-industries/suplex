@@ -188,6 +188,21 @@ fn assert_instance(database: &SuplexDatabase, input: &ProfileInput) -> DatabaseR
     }
 }
 
+/// A new or changed provider must be available on this host: Antigravity
+/// needs its flag. An agent that already uses Antigravity keeps it, so its
+/// other fields can change, and it can be archived, while the flag is off.
+fn assert_provider_enabled(
+    provider: &str,
+    current: Option<&str>,
+    antigravity_enabled: bool,
+) -> DatabaseResult<()> {
+    if current == Some(provider) {
+        return Ok(());
+    }
+    crate::runtimes::antigravity::cli::require_enabled(provider, antigravity_enabled)
+        .map_err(|message| ProfileFailure::new(message, 422) as Box<dyn Error + Send + Sync>)
+}
+
 fn audit(
     database: &SuplexDatabase,
     actor_id: &str,
@@ -238,6 +253,11 @@ pub fn create(
     now: DateTime<Utc>,
 ) -> DatabaseResult<AgentProfile> {
     actor(database, user_id, true)?;
+    assert_provider_enabled(
+        &input.provider,
+        None,
+        crate::runtimes::antigravity::cli::enabled(),
+    )?;
     let id = profile_id()?;
     let now_iso = rfc3339_millis(now);
     database.transaction(false, |database| {
@@ -274,6 +294,11 @@ pub fn update(
             provider_instance_id: changes.provider_instance_id.unwrap_or_else(|| current.provider_instance_id.clone()),
         };
         assert_name(database, &input.name, id)?;
+        assert_provider_enabled(
+            &input.provider,
+            Some(&current.provider),
+            crate::runtimes::antigravity::cli::enabled(),
+        )?;
         if changes.archived == Some(true) && current.archived_at.is_none() {
             super::defaults::assert_not_default(database, id, "archive")?;
         } else if input.role != current.role {
@@ -627,6 +652,130 @@ mod tests {
 
     use super::*;
     use crate::{identity::auth, platform::database::OpenMode};
+
+    #[test]
+    fn a_new_antigravity_agent_needs_the_flag_and_a_saved_one_keeps_it() {
+        let status = |result: DatabaseResult<()>| {
+            result.map_err(|error| {
+                let failure = error.downcast_ref::<ProfileFailure>().unwrap();
+                (failure.status_code, failure.message.clone())
+            })
+        };
+        let off = Err((
+            422,
+            crate::runtimes::antigravity::cli::OFF_MESSAGE.to_owned(),
+        ));
+        assert_eq!(
+            status(assert_provider_enabled("antigravity", None, false)),
+            off
+        );
+        assert_eq!(
+            status(assert_provider_enabled("antigravity", Some("codex"), false)),
+            off
+        );
+        assert_eq!(
+            status(assert_provider_enabled(
+                "antigravity",
+                Some("antigravity"),
+                false
+            )),
+            Ok(())
+        );
+        assert_eq!(
+            status(assert_provider_enabled("codex", Some("antigravity"), false)),
+            Ok(())
+        );
+        for current in [None, Some("codex")] {
+            assert_eq!(
+                status(assert_provider_enabled("antigravity", current, true)),
+                Ok(())
+            );
+        }
+    }
+
+    #[test]
+    fn a_saved_antigravity_agent_stays_editable_while_the_flag_is_off() {
+        let path = std::env::temp_dir().join(format!(
+            "suplex-profiles-antigravity-{}.sqlite",
+            uuid::Uuid::new_v4()
+        ));
+        let mut database = SuplexDatabase::open(&path, OpenMode::Migrate).unwrap();
+        let now = Utc::now();
+        let admin = auth::development_sign_in(&mut database, now)
+            .unwrap()
+            .user
+            .id;
+        database.connection().execute(
+            "INSERT INTO suplex_profiles (id, name, role, avatar_seed, provider, model, reasoning_level, service_tier, created_at, updated_at) VALUES ('profile_agy', 'Agy', 'worker', '0123456789abcdef0123456789abcdef', 'antigravity', 'default', 'high', 'default', ?1, ?1)",
+            [now.to_rfc3339()],
+        ).unwrap();
+        let renamed = update(
+            &mut database,
+            &admin,
+            "profile_agy",
+            ProfilePatch {
+                name: Some("Agy 2".into()),
+                provider: Some("antigravity".into()),
+                ..ProfilePatch::default()
+            },
+            now,
+        )
+        .unwrap();
+        assert_eq!(
+            (renamed.name.as_str(), renamed.provider.as_str()),
+            ("Agy 2", "antigravity")
+        );
+        let moved = update(
+            &mut database,
+            &admin,
+            "profile_agy",
+            ProfilePatch {
+                provider: Some("codex".into()),
+                model: Some("gpt-6-sol".into()),
+                ..ProfilePatch::default()
+            },
+            now,
+        )
+        .unwrap();
+        assert_eq!(moved.provider, "codex");
+        // The test process does not set the flag, so the routes keep it off.
+        if !crate::runtimes::antigravity::cli::enabled() {
+            let back = update(
+                &mut database,
+                &admin,
+                "profile_agy",
+                ProfilePatch {
+                    provider: Some("antigravity".into()),
+                    ..ProfilePatch::default()
+                },
+                now,
+            )
+            .unwrap_err();
+            assert_eq!(
+                back.to_string(),
+                crate::runtimes::antigravity::cli::OFF_MESSAGE
+            );
+            let input = ProfileInput {
+                name: "New Agy".into(),
+                role: "worker".into(),
+                avatar_seed: "0123456789abcdef0123456789abcdef".into(),
+                provider: "antigravity".into(),
+                model: "default".into(),
+                reasoning_level: "high".into(),
+                service_tier: "default".into(),
+                provider_instance_id: None,
+            };
+            let created = create(&mut database, &admin, &input, now).unwrap_err();
+            assert_eq!(
+                created.to_string(),
+                crate::runtimes::antigravity::cli::OFF_MESSAGE
+            );
+        }
+        drop(database);
+        for suffix in ["", "-wal", "-shm"] {
+            let _ = std::fs::remove_file(format!("{}{suffix}", path.display()));
+        }
+    }
 
     #[test]
     fn provider_policy_selects_system_and_dedicated_logins_independently() {

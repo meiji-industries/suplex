@@ -519,6 +519,47 @@ fn settled(directory: &Path, turn_id: &str) -> PromptState {
     PromptState::Running
 }
 
+/// Without `SUPLEX_ANTIGRAVITY=1` in the host environment, a turn on an
+/// Antigravity agent fails with the flag in its message. It claims no prompt,
+/// writes no record, and starts no process.
+#[tokio::test]
+async fn a_turn_does_not_start_while_the_flag_is_off() {
+    let fixture = fixture("flag-off", "");
+    let database = fixture.base.join("suplex.sqlite");
+    let mut environment = fixture.environment.clone();
+    for value in [None, Some("0"), Some("true")] {
+        match value {
+            Some(value) => environment.insert(super::cli::FLAG.to_owned(), value.to_owned()),
+            None => environment.remove(super::cli::FLAG),
+        };
+        let mut launch = scope(
+            &fixture,
+            &database,
+            "session_worker",
+            TaskRole::Worker(WorkerPurpose::Implementation),
+            WorkflowLaunch::default(),
+        );
+        launch.inherited_environment = &environment;
+        let mut claimed = false;
+        let error = ANTIGRAVITY_TASK_RUNTIME
+            .dispatch(&launch, "msg_1", "RUN_TOOL", &mut |_| {
+                claimed = true;
+                Ok(true)
+            })
+            .await
+            .unwrap_err();
+        assert_eq!(error.to_string(), super::cli::OFF_MESSAGE);
+        assert!(!claimed);
+        assert!(fixture.launches().is_empty());
+        let directory = launch.runtime_directory().unwrap();
+        assert!(
+            fs::read_dir(&directory).map_or(true, |mut entries| entries.next().is_none()),
+            "{value:?}"
+        );
+    }
+    fs::remove_dir_all(&fixture.base).unwrap();
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn dispatch_resumes_after_lost_local_records_and_stop_ends_a_running_turn() {
     let fixture = fixture("dispatch", "");

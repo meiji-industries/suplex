@@ -159,10 +159,40 @@ pub(crate) fn selected_profile(
     default_id: &str,
     role: &str,
 ) -> DatabaseResult<TaskProfile> {
+    selected_profile_with(
+        database,
+        project,
+        selected,
+        default_id,
+        role,
+        crate::runtimes::antigravity::cli::enabled(),
+    )
+}
+
+/// [`selected_profile`] with the Antigravity flag. A task or move cannot use
+/// an Antigravity agent while the flag is off.
+fn selected_profile_with(
+    database: &SuplexDatabase,
+    project: &Project,
+    selected: Option<&str>,
+    default_id: &str,
+    role: &str,
+    antigravity_enabled: bool,
+) -> DatabaseResult<TaskProfile> {
+    use crate::runtimes::antigravity::cli::require_enabled;
     let id = selected.unwrap_or(default_id);
     let profile = read_profile(database, id, role)?
         .ok_or_else(|| TaskError::new("The selected agent profile does not exist", 422))?;
-    if allowed_profile(project.provider_policy.as_ref(), &profile) {
+    let usable = |profile: &TaskProfile| {
+        require_enabled(profile.provider.as_str(), antigravity_enabled).is_ok()
+            && allowed_profile(project.provider_policy.as_ref(), profile)
+    };
+    // A selected or default Antigravity agent is an error, not a reason to
+    // use another agent.
+    if let Err(message) = require_enabled(profile.provider.as_str(), antigravity_enabled) {
+        return Err(TaskError::new(message, 422).into());
+    }
+    if usable(&profile) {
         return Ok(profile);
     }
     if selected.is_some() {
@@ -180,7 +210,7 @@ pub(crate) fn selected_profile(
         .collect::<rusqlite::Result<Vec<_>>>()?;
     for id in ids {
         if let Some(candidate) = read_profile(database, &id, role)?
-            && allowed_profile(project.provider_policy.as_ref(), &candidate)
+            && usable(&candidate)
         {
             return Ok(candidate);
         }
@@ -1527,6 +1557,40 @@ mod tests {
             pull_request_dependencies: vec![], workflow: crate::coordination::workflows::Workflow::Standard,
         };
         (filename, database, user.id, prepared)
+    }
+
+    #[test]
+    fn tasks_and_moves_use_an_antigravity_agent_only_while_the_flag_is_on() {
+        let (filename, database, user_id, _) = command_fixture();
+        let now = rfc3339_millis(Utc::now());
+        database.connection().execute(
+            "INSERT INTO suplex_profiles (id, name, role, avatar_seed, provider, model, reasoning_level, service_tier, created_at, updated_at) VALUES ('profile_agy', 'Agy', 'worker', '0123456789abcdef0123456789abcdef', 'antigravity', 'default', 'high', 'default', ?1, ?1)",
+            [&now],
+        ).unwrap();
+        let project = service::get(&database, &user_id, "command_project").unwrap();
+        let select = |selected: Option<&str>, default_id: &str, enabled: bool| {
+            selected_profile_with(&database, &project, selected, default_id, "worker", enabled)
+                .map(|profile| profile.provider.as_str().to_owned())
+                .map_err(|error| error.to_string())
+        };
+        let off = Err(crate::runtimes::antigravity::cli::OFF_MESSAGE.to_owned());
+        // Selected or the project default, it fails and does not use another agent.
+        assert_eq!(
+            select(Some("profile_agy"), "profile_native_worker", false),
+            off
+        );
+        assert_eq!(select(None, "profile_agy", false), off);
+        assert_eq!(
+            select(Some("profile_agy"), "profile_native_worker", true),
+            Ok("antigravity".to_owned())
+        );
+        assert_eq!(
+            select(None, "profile_agy", true),
+            Ok("antigravity".to_owned())
+        );
+        assert!(select(None, "profile_native_worker", false).is_ok());
+        drop(database);
+        let _ = std::fs::remove_file(filename);
     }
 
     #[test]

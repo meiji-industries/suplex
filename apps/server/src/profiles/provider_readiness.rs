@@ -413,6 +413,26 @@ pub fn evaluate(
     }
 }
 
+/// Antigravity readiness. While the flag is off, Suplex does not start `agy`.
+async fn check_antigravity(enabled: bool) -> Value {
+    if !enabled {
+        return antigravity_off();
+    }
+    let (executable, probe) = crate::runtimes::antigravity::probe::observe().await;
+    evaluate_antigravity(&executable, probe.as_ref())
+}
+
+/// Antigravity readiness while its flag is off.
+fn antigravity_off() -> Value {
+    provider_check(
+        antigravity_cli::PROVIDER,
+        "unhealthy",
+        format!("{}.", antigravity_cli::OFF_MESSAGE),
+        None,
+        json!({"state":"off"}),
+    )
+}
+
 /// Antigravity readiness from its ACP probe: installed, version 1.5 or
 /// later, and signed in. The models the probe lists are not exposed here.
 pub fn evaluate_antigravity(executable: &io::Result<PathBuf>, probe: Option<&Probe>) -> Value {
@@ -489,8 +509,7 @@ pub async fn check(
     include_account: bool,
 ) -> Value {
     if kind == antigravity_cli::PROVIDER {
-        let (executable, probe) = crate::runtimes::antigravity::probe::observe().await;
-        return evaluate_antigravity(&executable, probe.as_ref());
+        return check_antigravity(antigravity_cli::enabled()).await;
     }
     let executable = resolve_executable(kind);
     let result = match &executable {
@@ -832,6 +851,14 @@ mod tests {
         );
         assert_eq!(evaluate_antigravity(&agy, None)["status"], "warning");
         assert_eq!(binary_name("antigravity"), "agy");
+    }
+
+    #[tokio::test]
+    async fn antigravity_is_not_probed_while_its_flag_is_off() {
+        assert_eq!(
+            check_antigravity(false).await,
+            json!({"id":"provider:antigravity","label":"Antigravity","provider":"antigravity","status":"unhealthy","summary":"Antigravity is off on this Suplex host. To turn it on, set SUPLEX_ANTIGRAVITY=1 and restart Suplex.","details":{"state":"off"}})
+        );
     }
 
     #[test]

@@ -11,6 +11,13 @@ Date: 2026-11-23
 
 Accepted
 
+Note, 2026-11-24: Antigravity is experimental and off by default. The Suplex
+host enables it only when its process has `SUPLEX_ANTIGRAVITY=1`. While it is
+off, Suplex does not list, probe, sign in to, or start Antigravity, and a turn
+on an existing Antigravity agent fails with a message that names the variable.
+Sessions still route to the Antigravity reader, so their history stays
+readable. The decision below applies when the flag is on.
+
 ## Context
 
 Google Antigravity ships a CLI, `agy`. `agy acp` is Google's official Agent

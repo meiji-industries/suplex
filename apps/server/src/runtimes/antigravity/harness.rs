@@ -125,7 +125,13 @@ impl TaskHarness for AntigravityTaskRuntime {
         prompt: &'a str,
         claim: DispatchClaim<'a>,
     ) -> HarnessFuture<'a, Result<PromptObservation, Box<dyn Error + Send + Sync>>> {
-        Box::pin(async move { task_runtime::dispatch(scope, turn_id, prompt, None, claim) })
+        Box::pin(async move {
+            // Before any record or process: a turn on an Antigravity agent
+            // fails while the flag is off. It never moves to another provider.
+            let environment = |name: &str| scope.inherited_environment.get(name).cloned();
+            cli::require_enabled(cli::PROVIDER, cli::enabled_in(&environment))?;
+            task_runtime::dispatch(scope, turn_id, prompt, None, claim)
+        })
     }
 
     fn recover_dispatch<'a>(

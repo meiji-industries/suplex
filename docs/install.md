@@ -126,7 +126,8 @@ See [billing setup and recovery](billing.md) for Suplex Free and Pro operations.
 
 A provider is one of the seven agent tools Suplex runs: OpenCode, Claude Code,
 Devin CLI, Codex CLI, Pi, OMP, and Antigravity. Each owns its own sign-in. Sign in as the OS user that
-runs Suplex; a Codex login does not establish OpenCode access.
+runs Suplex; a Codex login does not establish OpenCode access. Antigravity is
+experimental and off by default; see [Antigravity](#antigravity).
 
 OpenCode, Pi, and OMP reach several model vendors, so their models carry the
 vendor in the id, such as `openai/gpt-5.6-sol`. The other four name their
@@ -139,6 +140,23 @@ Install OMP with `curl -fsSL https://omp.sh/install | sh`. OMP lists the models
 that its credentials and `~/.omp/agent/models.yml` make available, and Suplex
 reads that list with `omp models --json`. Sign in to OMP with `omp login`, or set
 a provider API key in the environment.
+
+### Antigravity
+
+Antigravity is experimental. It is off unless the Suplex host process has the
+environment variable `SUPLEX_ANTIGRAVITY=1`. Only the value `1` turns it on.
+Set it where Suplex starts, for example `SUPLEX_ANTIGRAVITY=1 suplex up`, or
+add `Environment=SUPLEX_ANTIGRAVITY=1` to the service unit, then restart
+Suplex. `suplex-bootstrap` offers Antigravity only when it runs with the same
+variable, and when you select it, it sets the variable for the VM service.
+
+While Antigravity is off, Suplex does not list it in Settings, onboarding, or
+the model lists, and does not start `agy` to check it. System health has no
+Antigravity check. Suplex refuses a new Antigravity agent, an Antigravity
+sign-in or install pane, and a task or move on an Antigravity agent. A turn on
+an agent saved while it was on fails with a message that names the variable;
+Suplex does not use another provider for it. The history of earlier
+Antigravity sessions stays readable.
 
 Install Antigravity with
 `curl -fsSL https://antigravity.google/cli/install.sh | bash`, which writes
@@ -154,7 +172,8 @@ Antigravity thinking levels Low, Medium, High, Extra (XHigh), and Max.
 Antigravity cannot rewind a conversation, and Suplex does not support a
 dedicated Antigravity login. See [ADR 16](adr/0016-antigravity-acp-provider.md).
 
-`/admin/providers` shows all seven rows without making a paid model request.
+`/admin/providers` shows one row for each provider, seven when Antigravity is
+on, without making a paid model request.
 **Configured** means the executable is present, not that inference was tested.
 
 ### Local or custom endpoints

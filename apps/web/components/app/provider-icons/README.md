@@ -6,3 +6,4 @@ The adjacent `LICENSE` file contains the upstream MIT license.
 
 `pi.svg` is a plain π glyph drawn for Suplex, because Lobe Icons has no Pi icon.
 `omp.svg` is the same glyph in a square outline, drawn for Suplex for OMP.
+`antigravity.svg` is the Lobe Icons `antigravity` mono icon.

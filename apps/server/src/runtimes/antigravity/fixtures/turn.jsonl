@@ -1,0 +1,19 @@
+{"type":"initialized","at":1795000000000,"agentInfo":{"name":"antigravity","title":"Antigravity ACP Server","version":"1.5.12"},"agentCapabilities":{"loadSession":true,"sessionCapabilities":{"resume":{}}}}
+{"type":"session","at":1795000000100,"sessionId":"native-session-1","resumed":false,"configOptions":[{"id":"model","name":"Model","type":"select","currentValue":"gemini-a","options":[{"value":"gemini-a","name":"Gemini A"}]}]}
+{"type":"config","at":1795000000200,"model":"gemini-a","thinking":"high"}
+{"type":"update","at":1795000000300,"update":{"sessionUpdate":"agent_thought_chunk","content":{"type":"text","text":"Plan the "}}}
+{"type":"update","at":1795000000310,"update":{"sessionUpdate":"agent_thought_chunk","content":{"type":"text","text":"test run."}}}
+{"type":"thought","at":1795000000320,"text":"Plan the test run."}
+{"type":"update","at":1795000000400,"update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"I will run "}}}
+{"type":"update","at":1795000000410,"update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"the tests."}}}
+{"type":"message","at":1795000000420,"text":"I will run the tests."}
+{"type":"update","at":1795000000500,"update":{"sessionUpdate":"tool_call","toolCallId":"call_1","title":"Run pnpm test","kind":"execute","status":"pending","rawInput":{"CommandLine":"pnpm test","Cwd":"/work"}}}
+{"type":"permission","at":1795000000510,"toolCallId":"call_1","kind":"execute","title":"Run pnpm test","outcome":"allow_once"}
+{"type":"update","at":1795000000600,"update":{"sessionUpdate":"tool_call_update","toolCallId":"call_1","status":"in_progress"}}
+{"type":"update","at":1795000000700,"update":{"sessionUpdate":"tool_call_update","toolCallId":"call_1","status":"completed","content":[{"type":"content","content":{"type":"text","text":"2 passed"}}]}}
+{"type":"update","at":1795000000800,"update":{"sessionUpdate":"tool_call","toolCallId":"call_2","title":"Run mcp_suplex_root_observe","kind":"other","status":"pending","rawInput":{"ServerName":"suplex_root","ToolName":"observe","Arguments":{"taskId":"task_1"}}}}
+{"type":"update","at":1795000000900,"update":{"sessionUpdate":"tool_call_update","toolCallId":"call_2","status":"completed","rawOutput":{"content":[{"type":"text","text":"observed"}],"isError":false}}}
+{"type":"update","at":1795000001000,"update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"All tests pass."}}}
+{"type":"message","at":1795000001010,"text":"All tests pass."}
+{"type":"prompt_result","at":1795000001100,"stopReason":"end_turn","usage":{"inputTokens":120,"outputTokens":30,"thoughtTokens":10,"cachedReadTokens":40,"totalTokens":200}}
+{"type":"settled","at":1795000001200,"unsettled":[]}

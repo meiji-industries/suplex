@@ -40,6 +40,8 @@ pub fn command(
         // Devin takes no reasoning effort flag.
         HarnessKind::Devin => vec!["--model", model, "--", &prompt],
         HarnessKind::Pi | HarnessKind::Omp => vec!["--model", model, "--thinking", effort, &prompt],
+        // `-i` runs the first prompt, then the session continues.
+        HarnessKind::Antigravity => antigravity_args(model, effort, &["-i", &prompt]),
     };
     let removed = endpoint
         .into_iter()
@@ -55,6 +57,17 @@ pub fn command(
         "{}; exec {shell}\"$SHELL\" -l",
         agent::line(profile, endpoint, &[], &args)
     )
+}
+
+/// `--model` and `--effort` before `rest`. A default model keeps the account's.
+pub fn antigravity_args<'a>(model: &'a str, effort: &'a str, rest: &[&'a str]) -> Vec<&'a str> {
+    let mut args = Vec::new();
+    if !crate::runtimes::antigravity::turn::keeps_current_model(model) {
+        args.extend(["--model", model]);
+    }
+    args.extend(["--effort", effort]);
+    args.extend(rest);
+    args
 }
 
 /// The script as written, then a login shell after it exits.
@@ -135,6 +148,10 @@ mod tests {
             ("devin", "'--model' 'opus' '--' 'You run"),
             ("pi", "'--model' 'opus' '--thinking' 'high' 'You run"),
             ("omp", "'--model' 'opus' '--thinking' 'high' 'You run"),
+            (
+                "antigravity",
+                "'--model' 'opus' '--effort' 'high' '-i' 'You run",
+            ),
         ] {
             assert!(
                 command(&profile(provider), None, "main", "x").contains(arguments),

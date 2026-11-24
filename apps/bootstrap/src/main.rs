@@ -116,6 +116,13 @@ const AGENT_TOOLS: &[(&str, &str, &str, &str)] = &[
         "~/.opencode/bin/opencode auth list 2>&1 | grep -qE '[1-9][0-9]* credentials?'",
         "~/.opencode/bin/opencode auth login",
     ),
+    (
+        "antigravity",
+        "Antigravity",
+        // The probe opens an ACP session and exits 0 only when it is signed in.
+        "suplex antigravity-probe >/dev/null 2>&1",
+        "~/.local/bin/agy acp --login",
+    ),
 ];
 
 const SECRET_KEYS: &[&str] = &[

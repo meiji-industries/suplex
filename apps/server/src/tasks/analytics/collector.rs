@@ -222,6 +222,7 @@ pub async fn collect(
                                 | HarnessKind::Devin
                                 | HarnessKind::Pi
                                 | HarnessKind::Omp
+                                | HarnessKind::Antigravity
                         )
                     );
                 let stopped = archived || !matches!(status.as_str(), "active" | "waiting_human");

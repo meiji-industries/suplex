@@ -12,6 +12,7 @@ use std::{
 use serde_json::{Map, Value, json};
 
 use crate::profiles::agent_profiles::{executable, home_directory};
+use crate::runtimes::antigravity::{cli as antigravity_cli, probe::Probe};
 use crate::runtimes::pi::{cli as pi_cli, models as pi_models};
 use crate::tasks::control::HarnessKind;
 
@@ -48,6 +49,12 @@ fn spec(
             "codex",
             "SUPLEX_CODEX_COMMAND",
             &[".local/bin/codex", ".codex/bin/codex"],
+        ),
+        "antigravity" => (
+            antigravity_cli::EXECUTABLE.label,
+            antigravity_cli::EXECUTABLE.binary,
+            antigravity_cli::EXECUTABLE.env_var,
+            antigravity_cli::EXECUTABLE.home_paths,
         ),
         _ => {
             let cli = pi_cli::for_provider(kind)?;
@@ -270,7 +277,7 @@ fn classify(kind: &str, result: &ProbeResult) -> Classified {
     }
 }
 
-fn provider_check(
+pub(crate) fn provider_check(
     kind: &str,
     status: &str,
     summary: String,
@@ -305,6 +312,7 @@ pub fn install_remedy(kind: &str) -> (&'static str, &'static str) {
             "command",
         ),
         "codex" => ("npm install -g @openai/codex", "command"),
+        "antigravity" => (antigravity_cli::INSTALL_COMMAND, "command"),
         _ => (
             pi_cli::for_provider(kind).map_or("", |cli| cli.install_command),
             "command",
@@ -316,6 +324,7 @@ fn login_remedy(kind: &str) -> &'static str {
     match kind {
         "opencode" => "opencode auth login",
         "claude-code" => "claude auth login",
+        "antigravity" => antigravity_cli::LOGIN_COMMAND,
         _ => pi_cli::for_provider(kind).map_or("codex login", |cli| cli.login_command),
     }
 }
@@ -404,6 +413,73 @@ pub fn evaluate(
     }
 }
 
+/// Antigravity readiness from its ACP probe: installed, version 1.5 or
+/// later, and signed in. The models the probe lists are not exposed here.
+pub fn evaluate_antigravity(executable: &io::Result<PathBuf>, probe: Option<&Probe>) -> Value {
+    let kind = antigravity_cli::PROVIDER;
+    let label = label(kind);
+    let Ok(executable) = executable else {
+        return provider_check(
+            kind,
+            "unhealthy",
+            format!("{label} is not installed"),
+            Some(install_remedy(kind)),
+            json!({"state":"absent"}),
+        );
+    };
+    let command = executable
+        .file_name()
+        .map_or_else(String::new, |name| name.to_string_lossy().into_owned());
+    let Some(probe) = probe else {
+        return provider_check(
+            kind,
+            "warning",
+            format!("Suplex could not check the {label} sign-in"),
+            None,
+            json!({"command": command, "state": "unknown"}),
+        );
+    };
+    let mut details = json!({"command": command, "state": probe.state});
+    if let Some(version) = &probe.version {
+        details["version"] = json!(version);
+        if antigravity_cli::parse_version(version)
+            .is_some_and(|parsed| !antigravity_cli::supported_version(parsed))
+        {
+            details["state"] = json!("outdated");
+            return provider_check(
+                kind,
+                "unhealthy",
+                format!("{label} {version} is older than 1.5. Update {label}."),
+                Some(install_remedy(kind)),
+                details,
+            );
+        }
+    }
+    match probe.state {
+        "signed-in" => provider_check(
+            kind,
+            "healthy",
+            format!("{label} is signed in. Model access is not tested."),
+            None,
+            details,
+        ),
+        "signed-out" => provider_check(
+            kind,
+            "unhealthy",
+            format!("{label} is not signed in"),
+            Some((login_remedy(kind), "command")),
+            details,
+        ),
+        _ => provider_check(
+            kind,
+            "warning",
+            format!("Suplex could not check the {label} sign-in"),
+            None,
+            details,
+        ),
+    }
+}
+
 /// Readiness for one registered task runtime. `environment` replaces the
 /// process environment; a Claude Code `CLAUDE_CONFIG_DIR` in it isolates the
 /// probe to that local instance.
@@ -412,6 +488,10 @@ pub async fn check(
     environment: Option<HashMap<String, String>>,
     include_account: bool,
 ) -> Value {
+    if kind == antigravity_cli::PROVIDER {
+        let (executable, probe) = crate::runtimes::antigravity::probe::observe().await;
+        return evaluate_antigravity(&executable, probe.as_ref());
+    }
     let executable = resolve_executable(kind);
     let result = match &executable {
         Ok(path) => {
@@ -712,6 +792,46 @@ mod tests {
         assert_eq!(auth_args("omp"), ["models", "--json"]);
         assert_eq!(binary_name("omp"), "omp");
         assert_eq!(auth_args("codex"), ["login", "status"]);
+    }
+
+    #[test]
+    fn antigravity_reports_install_version_and_sign_in_from_its_probe() {
+        let probe = |state: &'static str, version: &str| Probe {
+            version: Some(version.to_owned()),
+            state,
+            models: vec![("gemini-a".into(), "Gemini A".into())],
+            thinking_levels: Vec::new(),
+            detail: None,
+        };
+        let absent = evaluate_antigravity(&absent(), None);
+        assert_eq!(absent["status"], "unhealthy");
+        assert_eq!(
+            absent["remedy"],
+            "curl -fsSL https://antigravity.google/cli/install.sh | bash"
+        );
+        let agy = present("/private/bin/agy");
+        assert_eq!(
+            evaluate_antigravity(&agy, Some(&probe("signed-in", "1.5.12"))),
+            json!({"id":"provider:antigravity","label":"Antigravity","provider":"antigravity","status":"healthy","summary":"Antigravity is signed in. Model access is not tested.","details":{"command":"agy","state":"signed-in","version":"1.5.12"}})
+        );
+        let signed_out = evaluate_antigravity(&agy, Some(&probe("signed-out", "1.5.12")));
+        assert_eq!(
+            (signed_out["status"].as_str(), signed_out["remedy"].as_str()),
+            (Some("unhealthy"), Some("agy acp --login"))
+        );
+        let old = evaluate_antigravity(&agy, Some(&probe("signed-in", "1.4.9")));
+        assert_eq!(old["status"], "unhealthy");
+        assert_eq!(
+            old["summary"],
+            "Antigravity 1.4.9 is older than 1.5. Update Antigravity."
+        );
+        assert_eq!(old["details"]["state"], "outdated");
+        assert_eq!(
+            evaluate_antigravity(&agy, Some(&probe("unknown", "1.5.0")))["status"],
+            "warning"
+        );
+        assert_eq!(evaluate_antigravity(&agy, None)["status"], "warning");
+        assert_eq!(binary_name("antigravity"), "agy");
     }
 
     #[test]

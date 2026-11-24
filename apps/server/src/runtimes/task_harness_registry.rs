@@ -5,6 +5,7 @@ use std::path::Path;
 
 use super::pi::cli;
 use super::{
+    antigravity::{cli as antigravity_cli, harness::ANTIGRAVITY_TASK_RUNTIME},
     claude_code::task_runtime::ClaudeCodeTaskRuntime,
     codex::harness::CodexTaskRuntime,
     opencode::task_runtime::OpenCodeTaskRuntime,
@@ -22,6 +23,7 @@ pub fn harness(kind: &str) -> Option<&'static dyn TaskHarness> {
         "opencode" => Some(&OpenCodeTaskRuntime),
         "pi" => Some(&PI_TASK_RUNTIME),
         "omp" => Some(&OMP_TASK_RUNTIME),
+        "antigravity" => Some(&ANTIGRAVITY_TASK_RUNTIME),
         _ => None,
     }
 }
@@ -30,12 +32,12 @@ pub fn harness(kind: &str) -> Option<&'static dyn TaskHarness> {
 /// migration ran on OpenCode.
 pub fn profile_harness(provider: &str) -> &str {
     match provider {
-        "opencode" | "claude-code" | "devin" | "codex" | "pi" | "omp" => provider,
+        "opencode" | "claude-code" | "devin" | "codex" | "pi" | "omp" | "antigravity" => provider,
         _ => "opencode",
     }
 }
 
-/// Suplex reserves Devin, Codex, Pi, and omp identities with a prefix, because
+/// Suplex reserves Devin, Codex, Pi, omp, and Antigravity identities with a prefix, because
 /// a Codex thread id is itself a UUID. OpenCode uses "ses…" and Claude Code uses UUIDs.
 pub fn session_harness(native_session_id: &str) -> &'static str {
     let hyphenated_uuid = native_session_id.len() == 36
@@ -54,6 +56,8 @@ pub fn session_harness(native_session_id: &str) -> &'static str {
         "pi"
     } else if native_session_id.starts_with(cli::OMP.session_prefix) {
         "omp"
+    } else if native_session_id.starts_with(antigravity_cli::SESSION_PREFIX) {
+        "antigravity"
     } else if hyphenated_uuid {
         "claude-code"
     } else {
@@ -80,6 +84,9 @@ pub fn display_command(provider: HarnessKind, runtime_directory: &Path) -> Optio
             .ok()
             .map(|display| display.command),
         HarnessKind::Omp => super::pi::display::display_command(&cli::OMP, runtime_directory)
+            .ok()
+            .map(|display| display.command),
+        HarnessKind::Antigravity => super::antigravity::display::display_command(runtime_directory)
             .ok()
             .map(|display| display.command),
         HarnessKind::Opencode => None,
@@ -151,6 +158,24 @@ mod tests {
         ));
         assert!(!std::ptr::addr_eq(pi, omp));
         assert!(for_session(Some(&omp_session)).is_some());
+        assert_eq!(profile_harness("antigravity"), "antigravity");
+        let antigravity = for_profile("antigravity").unwrap();
+        let antigravity_session = antigravity.new_session_id();
+        assert!(antigravity_session.starts_with("antigravity-"));
+        assert_eq!(session_harness(&antigravity_session), "antigravity");
+        assert!(std::ptr::addr_eq(
+            native_session_reader(&antigravity_session).unwrap(),
+            antigravity
+        ));
+        assert!(std::ptr::addr_eq(
+            for_session(Some(&antigravity_session)).unwrap(),
+            antigravity
+        ));
+        // An Antigravity profile or session never falls back to OpenCode.
+        assert!(!std::ptr::addr_eq(
+            antigravity,
+            for_profile("opencode").unwrap()
+        ));
         let codex = for_profile("codex").unwrap();
         assert!(codex.new_session_id().starts_with("codex-"));
         assert!(for_session(Some("codex-1")).is_some());
@@ -170,6 +195,7 @@ mod tests {
             HarnessKind::Devin,
             HarnessKind::Pi,
             HarnessKind::Omp,
+            HarnessKind::Antigravity,
         ] {
             assert!(
                 display_command(provider, directory)

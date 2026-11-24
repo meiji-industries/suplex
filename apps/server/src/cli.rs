@@ -647,9 +647,16 @@ pub async fn run_doctor(
         "references",
         format!("{references} invalid references"),
     ));
-    let providers = ["opencode", "claude-code", "codex", "pi", "omp"]
-        .map(str::to_owned)
-        .to_vec();
+    let providers = [
+        "opencode",
+        "claude-code",
+        "codex",
+        "pi",
+        "omp",
+        "antigravity",
+    ]
+    .map(str::to_owned)
+    .to_vec();
     let snapshot = health::snapshot(state, providers, None).await;
     let herdr_required = !state.with_database(|database| crate::terminals::host_enabled(database));
     for check in snapshot["checks"].as_array().into_iter().flatten() {

@@ -79,6 +79,19 @@ async fn run(command: Vec<String>) -> Result<(), Box<dyn std::error::Error + Sen
     {
         return crate::runtimes::pi::display::serve(cli, directory).await;
     }
+    if let [subcommand, directory] = command.as_slice()
+        && subcommand == crate::runtimes::antigravity::cli::DISPLAY_SUBCOMMAND
+    {
+        return crate::runtimes::antigravity::display::serve(directory).await;
+    }
+    if command.first().map(String::as_str)
+        == Some(crate::runtimes::antigravity::cli::TURN_SUBCOMMAND)
+    {
+        return crate::runtimes::antigravity::turn::main(&command[1..]);
+    }
+    if command == [crate::runtimes::antigravity::cli::PROBE_SUBCOMMAND] {
+        return crate::runtimes::antigravity::probe::main().await;
+    }
     if command == ["mcp", "root"] {
         // The Root bridge forwards its events to the server's system log.
         if let Ok(binding) = crate::coordination::root_bridge::authenticated_binding() {

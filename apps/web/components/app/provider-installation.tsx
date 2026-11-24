@@ -44,6 +44,12 @@ export const PROVIDER_INSTALLATIONS: Record<HarnessKind, ProviderInstallation> =
     guideUrl: "https://github.com/can1357/oh-my-pi#install",
     os: "macOS, Linux, or WSL",
   },
+  antigravity: {
+    command: "curl -fsSL https://antigravity.google/cli/install.sh | bash",
+    guideUrl: "https://antigravity.google/docs/getting-started",
+    os: "macOS or Linux",
+    prerequisite: "Suplex needs Antigravity 1.5 or later.",
+  },
 };
 
 export function ProviderInstallationInstructions({ provider, checkLabel }: { provider: HarnessKind; checkLabel: "Check again" | "Refresh" }): ReactElement {

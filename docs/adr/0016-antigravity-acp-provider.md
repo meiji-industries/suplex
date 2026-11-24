@@ -66,7 +66,8 @@ writes a turn log to standard output:
    `default` keeps the account's model. A model that the account does not list
    fails the turn before the prompt.
 5. `session/prompt`, then a wait for commands that the agent keeps running
-   after its prompt ends. Daemon commands are not awaited.
+   after its prompt ends, and for the reply it sends when they end (up to 30
+   minutes). Daemon commands are not awaited.
 
 The session id is `antigravity-<uuid>`. The registry routes this prefix to the
 runtime, and an `antigravity` profile never falls back to OpenCode.
@@ -105,6 +106,8 @@ recommendations run `agy --mode plan -p` with the model and effort.
 ## Consequences
 
 - Antigravity cannot rewind its conversation; Suplex never asks it to.
+- The role policy applies to the requests Antigravity sends. An action that the
+  user's own Antigravity permission rules already allow runs without a request.
 - Session history is what the agent reported to Suplex. Turns that another
   client ran in the same native session do not appear.
 - A dedicated provider instance home is not supported, as for Pi, OMP, and

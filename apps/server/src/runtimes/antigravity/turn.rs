@@ -27,6 +27,9 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
 const SIGN_IN_TIMEOUT: Duration = Duration::from_secs(60);
 /// How long the client waits for a command that outlives its prompt.
 const SETTLE_TIMEOUT: Duration = Duration::from_secs(30 * 60);
+/// After such a command ends, the agent reports it; this much silence ends the wait.
+const REPLY_QUIET: Duration = Duration::from_secs(3);
+const REPLY_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -283,6 +286,8 @@ struct TurnClient<'a, W: Write> {
     run: Option<(&'static str, String)>,
     /// Updates of a `session/load` replay are history, not this turn.
     replaying: bool,
+    /// When the agent last sent an update.
+    last_update: Instant,
 }
 
 impl<W: Write> TurnClient<'_, W> {
@@ -315,7 +320,7 @@ impl<W: Write> TurnClient<'_, W> {
         self.tools
             .unsettled()
             .into_iter()
-            .any(|call| call.kind == "execute" && !call.daemon())
+            .any(|call| call.kind == "execute" && call.status == "in_progress" && !call.daemon())
     }
 }
 
@@ -329,6 +334,7 @@ impl<W: Write> Client for TurnClient<'_, W> {
         {
             return;
         }
+        self.last_update = Instant::now();
         let update = &params["update"];
         let chunk = match update["sessionUpdate"].as_str() {
             Some("agent_message_chunk") => Some("message"),
@@ -433,6 +439,7 @@ pub fn run<W: Write>(
         tools: Tools::default(),
         run: None,
         replaying: false,
+        last_update: Instant::now(),
     };
     match drive(args, prompt, cwd, environment, &mut client) {
         Ok(Outcome::Completed) => 0,
@@ -572,16 +579,16 @@ fn drive<W: Write>(
                 client.emit(json!({"type":"session","sessionId":resume,"resumed":true,"configOptions":result["configOptions"]}));
                 session = Some((resume.clone(), result["configOptions"].clone()));
             }
-            Err(error) if error.sign_in_required() => return Err(error),
-            Err(error @ (AcpError::Closed | AcpError::Io(_))) => return Err(error),
-            // The native session is gone. A new one lets work continue; the
-            // log records what it replaced.
-            Err(error) => {
+            // The agent answered that it cannot open the session: it is gone.
+            // A new one lets work continue; the log records what it replaced.
+            Err(error @ AcpError::Rpc { .. }) if !error.sign_in_required() => {
                 client.emit(
                     json!({"type":"resume_failed","sessionId":resume,"message":error.to_string()}),
                 );
                 client.session_id = None;
             }
+            // No answer is not proof that the session is gone.
+            Err(error) => return Err(error),
         }
     }
     let (session_id, mut options) = match session {
@@ -679,9 +686,15 @@ fn drive<W: Write>(
     }));
     // Antigravity can go on running a command after the prompt ends, and
     // reports it when the command finishes.
+    let awaited = client.awaited();
     let _ = agent.drain(Instant::now() + SETTLE_TIMEOUT, client, |client| {
         !client.awaited()
     });
+    if awaited {
+        let _ = agent.drain(Instant::now() + REPLY_TIMEOUT, client, |client| {
+            client.last_update.elapsed() >= REPLY_QUIET
+        });
+    }
     client.finish_run();
     let unsettled = client.unsettled();
     client.emit(json!({"type": "settled", "unsettled": unsettled}));

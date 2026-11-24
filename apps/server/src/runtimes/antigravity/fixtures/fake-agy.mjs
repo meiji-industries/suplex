@@ -82,6 +82,17 @@ async function handle(message) {
       const sid = params.sessionId;
       update(sid, { sessionUpdate: "agent_thought_chunk", content: { type: "text", text: "Thinking." } });
       update(sid, { sessionUpdate: "agent_message_chunk", content: { type: "text", text: `Turn ${session.turns} on ${session.model}/${session.thinking}.` } });
+      if (text.includes("LATE")) {
+        // The command outlives the prompt; the agent reports when it ends.
+        update(sid, { sessionUpdate: "tool_call", toolCallId: "late_1", title: "Run build", kind: "execute", status: "in_progress", rawInput: { CommandLine: "make build" } });
+        update(sid, { sessionUpdate: "tool_call", toolCallId: "daemon_1", title: "Run server", kind: "execute", status: "in_progress", rawInput: { CommandLine: "serve", IsDaemon: true } });
+        reply({ stopReason: "end_turn" });
+        setTimeout(() => {
+          update(sid, { sessionUpdate: "tool_call_update", toolCallId: "late_1", status: "completed" });
+          update(sid, { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "The build finished." } });
+        }, 300);
+        return;
+      }
       if (text.includes("SLOW")) {
         update(sid, { sessionUpdate: "tool_call", toolCallId: "slow_1", title: "Run sleep", kind: "execute", status: "in_progress", rawInput: { CommandLine: "sleep 600" } });
         return;

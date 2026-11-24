@@ -388,6 +388,23 @@ fn not_signed_in_unknown_models_and_old_runtimes_report_what_to_do() {
 }
 
 #[test]
+fn the_turn_waits_for_a_command_that_outlives_its_prompt_but_not_for_a_daemon() {
+    let fixture = fixture("late", "");
+    let (code, events) = fixture.run(&fixture.args(Role::Worker, "", "medium", None), "LATE");
+    assert_eq!(code, 0, "{events:?}");
+    assert_eq!(
+        transcript::result_text(&events),
+        "The build finished.",
+        "{events:#?}"
+    );
+    assert_eq!(
+        of_type(&events, "settled")[0]["unsettled"],
+        json!(["daemon_1"])
+    );
+    fs::remove_dir_all(&fixture.base).unwrap();
+}
+
+#[test]
 fn a_lost_native_session_continues_in_a_new_one() {
     let fixture = fixture("lost", "");
     let (code, events) = fixture.run(

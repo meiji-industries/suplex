@@ -33,7 +33,14 @@ const ALLOWED: &[(&str, &[&str])] = &[
     // ACP tool call status and kind, and the Antigravity default model.
     (
         "runtimes/antigravity/",
-        &["completed", "error", "failed", "default", "read"],
+        &[
+            "completed",
+            "error",
+            "failed",
+            "in_progress",
+            "default",
+            "read",
+        ],
     ),
     // Herdr pane state and client name.
     ("integrations/herdr_readiness.rs", &["running", "unknown"]),

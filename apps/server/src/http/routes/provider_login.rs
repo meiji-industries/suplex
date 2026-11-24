@@ -208,6 +208,9 @@ async fn provider_login(
         Ok(value) => value,
         Err(response) => return *response,
     };
+    if let Err(response) = provider_enabled(&provider_id) {
+        return with_cookies(*response, cookies);
+    }
     let response = start(
         state,
         format!("provider:{provider_id}"),
@@ -217,6 +220,15 @@ async fn provider_login(
     )
     .await;
     with_cookies(response, cookies)
+}
+
+/// Suplex does not sign in to or install Antigravity while its flag is off.
+fn provider_enabled(provider_id: &str) -> Result<(), Box<Response>> {
+    crate::runtimes::antigravity::cli::require_enabled(
+        provider_id,
+        crate::runtimes::antigravity::cli::enabled(),
+    )
+    .map_err(|message| Box::new(auth::error(StatusCode::UNPROCESSABLE_ENTITY, message)))
 }
 
 async fn provider_install(
@@ -231,6 +243,9 @@ async fn provider_install(
         Ok(value) => value,
         Err(response) => return *response,
     };
+    if let Err(response) = provider_enabled(&provider_id) {
+        return with_cookies(*response, cookies);
+    }
     let response = open_pane(
         state,
         format!("install:{provider_id}"),

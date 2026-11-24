@@ -138,7 +138,7 @@ _Avoid_: Integrator turn, mirrored release.
 **Agent profile**
 A named provider, model, reasoning level, and service tier selection. The
 provider is the agent tool that runs the turn: `opencode`, `claude-code`,
-`devin`, `codex`, `pi`, `omp`, or `antigravity`. An OpenCode, Pi, or OMP model names its vendor, as in
+`devin`, `codex`, `pi`, `omp`, or `antigravity` (experimental, off unless `SUPLEX_ANTIGRAVITY=1`). An OpenCode, Pi, or OMP model names its vendor, as in
 `openai/gpt-5.6-sol`; Suplex splits an OpenCode model only when it calls OpenCode. Projects
 choose Coordinator and Worker defaults. Tasks capture the chosen settings.
 _Avoid_: Vendor as provider, separate Suplex model catalog.

@@ -196,11 +196,21 @@ async fn read_pi_models(cli: &PiCli, environment: &HashMap<String, String>) -> V
 /// `readProviders`. OpenCode's own vendors fold into its row as vendor-qualified
 /// model ids; neither observation sends a model request. `probe` checks each sign-in.
 /// Each local endpoint follows the tool rows as its own row; `probe` asks it for its models.
+/// Antigravity has a row only when its flag is on.
 pub async fn read_providers(directory: &str, probe: bool, endpoints: &[LocalEndpoint]) -> Value {
+    read_providers_with(directory, probe, endpoints, antigravity_cli::enabled()).await
+}
+
+async fn read_providers_with(
+    directory: &str,
+    probe: bool,
+    endpoints: &[LocalEndpoint],
+    antigravity: bool,
+) -> Value {
     let listing = single_flight(
         &TOOL_LISTINGS,
-        (directory.to_owned(), probe),
-        read_tools(directory.to_owned(), probe),
+        (directory.to_owned(), probe, antigravity),
+        read_tools(directory.to_owned(), probe, antigravity),
     )
     .await;
     let installed = listing
@@ -280,7 +290,7 @@ type InFlight<K, T> = Mutex<HashMap<K, Shared<BoxFuture<'static, T>>>>;
 /// page asks for the providers and the default agents at the same time, and a
 /// sign-in pane polls every few seconds: each would start its own OpenCode
 /// server and probe every CLI again.
-static TOOL_LISTINGS: LazyLock<InFlight<(String, bool), ToolListing>> =
+static TOOL_LISTINGS: LazyLock<InFlight<(String, bool, bool), ToolListing>> =
     LazyLock::new(Default::default);
 
 /// Runs `run` for `key`, unless a run for `key` is in flight: then it awaits that
@@ -309,8 +319,9 @@ async fn single_flight<K: Clone + Eq + Hash, T: Clone>(
 
 /// Every CLI observation at once: the OpenCode vendor listing, the Pi and OMP
 /// model listings, then one sign-in probe per tool. Each has its own timeout, so
-/// the listing takes the slowest one, not their sum.
-async fn read_tools(directory: String, probe: bool) -> ToolListing {
+/// the listing takes the slowest one, not their sum. Without `antigravity`, the
+/// listing has no Antigravity row, so it does not probe `agy`.
+async fn read_tools(directory: String, probe: bool, antigravity: bool) -> ToolListing {
     let environment = std::env::vars().collect::<HashMap<_, _>>();
     let (native, pi_models, omp_models) = tokio::join!(
         crate::runtimes::opencode::providers::read_providers(Path::new(&directory), None),
@@ -339,7 +350,7 @@ async fn read_tools(directory: String, probe: bool) -> ToolListing {
         .map(std::path::PathBuf::from)
         .or_else(|| home.as_ref().map(|home| home.join(".codex")))
         .unwrap_or_default();
-    let rows = [
+    let rows = vec![
         (&OPENCODE, "opencode", open_code_models),
         (&CLAUDE, "claude-code", models(CLAUDE_CODE_MODELS)),
         (&DEVIN, "devin", models(DEVIN_MODELS)),
@@ -351,7 +362,10 @@ async fn read_tools(directory: String, probe: bool) -> ToolListing {
             antigravity_cli::PROVIDER,
             Vec::new(),
         ),
-    ];
+    ]
+    .into_iter()
+    .filter(|(_, id, _)| antigravity || *id != antigravity_cli::PROVIDER)
+    .collect::<Vec<_>>();
     let connections = if probe {
         join_all(
             rows.iter()
@@ -517,7 +531,12 @@ mod tests {
             (status, headers["cache-control"].to_str().unwrap()),
             (StatusCode::OK, "private, no-store")
         );
-        assert_eq!(json_body(&body)["providers"].as_array().unwrap().len(), 7);
+        // The routes read the flag of this process; tests do not change it.
+        let antigravity = antigravity_cli::enabled();
+        assert_eq!(
+            json_body(&body)["providers"].as_array().unwrap().len(),
+            6 + usize::from(antigravity)
+        );
         for (method, path) in [
             ("PUT", "/api/admin/providers/openrouter/credential"),
             ("DELETE", "/api/admin/providers/openrouter/credential"),
@@ -538,7 +557,14 @@ mod tests {
             let (status, _, body) = call(&app, "GET", path, Some(&member), None).await;
             assert_eq!(
                 (status, json_body(&body)["models"][0]["provider"].clone()),
-                (StatusCode::OK, json!("antigravity"))
+                (
+                    StatusCode::OK,
+                    json!(if antigravity {
+                        "antigravity"
+                    } else {
+                        "claude-code"
+                    })
+                )
             );
             assert_eq!(
                 call(&app, "GET", path, None, None).await.0,
@@ -572,7 +598,7 @@ mod tests {
 
     #[tokio::test]
     async fn providers_list_one_sorted_row_per_tool_and_models_flatten_them() {
-        let providers = read_providers("/work", false, &[]).await;
+        let providers = read_providers_with("/work", false, &[], true).await;
         let labels = providers["providers"]
             .as_array()
             .unwrap()
@@ -604,6 +630,23 @@ mod tests {
         assert_eq!(
             fable,
             &json!({"id":"fable","provider":"claude-code","providerLabel":"Claude Code","providerStatus":providers["providers"][1]["status"],"displayName":"Fable (latest)"})
+        );
+    }
+
+    #[tokio::test]
+    async fn providers_and_models_omit_antigravity_while_its_flag_is_off() {
+        // A probing listing checks the sign-in of each row, so without the
+        // row it starts no `agy` probe.
+        let providers = read_providers_with("/work", false, &[], false).await;
+        let rows = providers["providers"].as_array().unwrap();
+        assert_eq!(rows.len(), 6);
+        assert!(rows.iter().all(|row| row["harness"] != "antigravity"));
+        assert!(
+            list_models(&providers)["models"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|model| model["provider"] != "antigravity")
         );
     }
 }

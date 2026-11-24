@@ -21,6 +21,35 @@ use crate::runtimes::task_harness::ExecutableSpec;
 /// The profile provider and harness kind.
 pub const PROVIDER: &str = "antigravity";
 
+/// Antigravity is experimental. It is off unless the Suplex host process has
+/// `SUPLEX_ANTIGRAVITY=1`. When it is off, Suplex does not list, probe, sign
+/// in to, or start Antigravity. It still reads the history of sessions that
+/// Antigravity ran before.
+pub const FLAG: &str = "SUPLEX_ANTIGRAVITY";
+
+/// The reason an action that needs Antigravity cannot continue when it is off.
+pub const OFF_MESSAGE: &str = "Antigravity is off on this Suplex host. To turn it on, set SUPLEX_ANTIGRAVITY=1 and restart Suplex";
+
+/// The one interpretation of [`FLAG`]: only the value `1` turns Antigravity
+/// on. An absent or different value keeps it off.
+pub fn enabled_in(environment: &dyn Fn(&str) -> Option<String>) -> bool {
+    environment(FLAG).as_deref() == Some("1")
+}
+
+/// [`enabled_in`] for the environment of this process.
+pub fn enabled() -> bool {
+    enabled_in(&|name| std::env::var(name).ok())
+}
+
+/// Refuses Antigravity when it is off; every other provider passes.
+pub fn require_enabled(provider: &str, enabled: bool) -> Result<(), &'static str> {
+    if provider == PROVIDER && !enabled {
+        Err(OFF_MESSAGE)
+    } else {
+        Ok(())
+    }
+}
+
 /// The official installer writes `~/.local/bin/agy`.
 pub const EXECUTABLE: ExecutableSpec = ExecutableSpec {
     label: "Antigravity",
@@ -118,6 +147,28 @@ pub fn older_version_message(version: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_the_value_one_turns_antigravity_on() {
+        let with = |value: Option<&'static str>| {
+            move |name: &str| (name == FLAG).then_some(value).flatten().map(str::to_owned)
+        };
+        assert!(enabled_in(&with(Some("1"))));
+        for off in [
+            None,
+            Some(""),
+            Some("0"),
+            Some("true"),
+            Some("yes"),
+            Some(" 1"),
+        ] {
+            assert!(!enabled_in(&with(off)), "{off:?}");
+        }
+        assert_eq!(require_enabled(PROVIDER, false), Err(OFF_MESSAGE));
+        assert!(OFF_MESSAGE.contains("SUPLEX_ANTIGRAVITY=1"));
+        assert_eq!(require_enabled(PROVIDER, true), Ok(()));
+        assert_eq!(require_enabled("opencode", false), Ok(()));
+    }
 
     #[test]
     fn versions_parse_from_free_text_and_compare_with_the_floor() {

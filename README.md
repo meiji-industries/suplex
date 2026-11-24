@@ -133,7 +133,9 @@ irm https://suplex.sh/install.ps1 | iex
 ```
 
 Each agent tool owns its own sign-in. Sign in to OpenCode, Claude Code, Devin CLI,
-Codex CLI, Pi, OMP, or Antigravity as the OS user that runs Suplex. The [install guide](docs/install.md)
+Codex CLI, Pi, OMP, or Antigravity as the OS user that runs Suplex. Antigravity is
+experimental and off by default; set `SUPLEX_ANTIGRAVITY=1` for the Suplex host to turn it on.
+The [install guide](docs/install.md)
 covers providers, network access, the desktop app, lifecycle commands, and telemetry.
 
 ## Set up an installation
@@ -299,7 +301,7 @@ project grants, and verify an agent integration after an upgrade. See the
 
 | Integration | What Suplex does | Limits |
 | --- | --- | --- |
-| OpenCode, Claude Code, Devin CLI, Codex CLI, Pi, OMP, Antigravity | Runs each as a native runtime for Coordinator, Worker, and Advisors. | Each tool owns its sign-in. Login detection does not prove model access. Antigravity needs `agy` 1.5 or later and cannot rewind a conversation. Other tools need a runtime integration. |
+| OpenCode, Claude Code, Devin CLI, Codex CLI, Pi, OMP, Antigravity | Runs each as a native runtime for Coordinator, Worker, and Advisors. | Each tool owns its sign-in. Login detection does not prove model access. Antigravity is experimental and off unless `SUPLEX_ANTIGRAVITY=1`; it needs `agy` 1.5 or later and cannot rewind a conversation. Other tools need a runtime integration. |
 | Git | Repository and task worktree operations. | Git transport authentication is separate from repository API credentials. |
 | GitHub | Repository onboarding, issues, pull requests, check observation, delivery, and pull request label triggers. | Repository permissions, required checks, reviews, and merge policy still apply. |
 | Bitbucket Cloud | Repository and pull request API access. Delivery to a local worktree, remote branch, or draft pull request. | Ready and merged targets are not available. |

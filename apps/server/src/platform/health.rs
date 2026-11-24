@@ -520,11 +520,22 @@ pub async fn snapshot(
     })
 }
 
+/// The providers that have a readiness check. Antigravity has one only when
+/// its flag is on.
+pub fn checked_providers(antigravity_enabled: bool) -> Vec<&'static str> {
+    let mut providers = vec!["opencode", "claude-code", "codex", "pi", "omp"];
+    if antigravity_enabled {
+        providers.push(crate::runtimes::antigravity::cli::PROVIDER);
+    }
+    providers
+}
+
 pub fn provider_context(
     database: &SuplexDatabase,
     user: &AuthUser,
     project_id: Option<&str>,
     profile_ids: Option<&str>,
+    antigravity_enabled: bool,
 ) -> Result<Vec<String>, PublicFailure> {
     if project_id.is_none() && profile_ids.is_none() {
         return Ok(Vec::new());
@@ -566,15 +577,7 @@ pub fn provider_context(
             }
             continue;
         };
-        if [
-            "opencode",
-            "claude-code",
-            "codex",
-            "pi",
-            "omp",
-            "antigravity",
-        ]
-        .contains(&profile.provider.as_str())
+        if checked_providers(antigravity_enabled).contains(&profile.provider.as_str())
             && !providers.contains(&profile.provider)
         {
             providers.push(profile.provider.clone());
@@ -586,6 +589,45 @@ pub fn provider_context(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn system_health_checks_antigravity_only_while_its_flag_is_on() {
+        let path = std::env::temp_dir().join(format!(
+            "suplex-health-providers-{}.sqlite",
+            uuid::Uuid::new_v4()
+        ));
+        let mut database =
+            SuplexDatabase::open(&path, crate::platform::database::OpenMode::Migrate).unwrap();
+        let now = Utc::now().to_rfc3339();
+        let user = crate::identity::auth::development_sign_in(&mut database, Utc::now())
+            .unwrap()
+            .user;
+        // An agent saved while the flag was on stays after it is turned off.
+        for (id, provider) in [("profile_codex", "codex"), ("profile_agy", "antigravity")] {
+            database.connection().execute(
+                "INSERT INTO suplex_profiles (id, name, role, avatar_seed, provider, model, reasoning_level, service_tier, created_at, updated_at) VALUES (?1, ?1, 'worker', '0123456789abcdef0123456789abcdef', ?2, 'default', 'high', 'default', ?3, ?3)",
+                rusqlite::params![id, provider, now],
+            ).unwrap();
+        }
+        let context = |enabled| {
+            provider_context(
+                &database,
+                &user,
+                None,
+                Some("profile_codex,profile_agy"),
+                enabled,
+            )
+            .unwrap()
+        };
+        assert_eq!(context(false), ["codex"]);
+        assert_eq!(context(true), ["codex", "antigravity"]);
+        assert!(!checked_providers(false).contains(&"antigravity"));
+        assert_eq!(checked_providers(true).last(), Some(&"antigravity"));
+        drop(database);
+        for suffix in ["", "-wal", "-shm"] {
+            let _ = std::fs::remove_file(format!("{}{suffix}", path.display()));
+        }
+    }
 
     #[tokio::test]
     async fn github_health_uses_live_access_without_a_suplex_credential() {

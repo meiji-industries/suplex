@@ -1,6 +1,6 @@
 # Phase 2, over the tailnet as the admin user. Idempotent; rerun any time.
 # Env: ACCESS (tailscale|cloudflare|local|all), EXPOSURE (serve|funnel), DOMAIN + CF_TUNNEL_TOKEN (cloudflare), EXIT_NODE (empty = no egress enforcement), SUPLEX_PORT,
-# GIT_NAME, GIT_EMAIL, AGENT_TOOLS (claude-code codex devin opencode antigravity, or none), RESTORE (y = restore
+# GIT_NAME, GIT_EMAIL, AGENT_TOOLS (claude-code codex devin opencode antigravity, or none; antigravity also sets SUPLEX_ANTIGRAVITY=1 for the service), RESTORE (y = restore
 # /tmp/suplex-bootstrap/backup.tar.gz). The units and firewall were written to /tmp/suplex-bootstrap by the caller.
 # Root does provisioning only. Suplex and every agent run as the `suplex` user (Claude Code refuses
 # --dangerously-skip-permissions as root).
@@ -164,6 +164,11 @@ install -d /etc/systemd/system/suplex.service.d
 # Suplex binds the same port Serve exposes; below 1024 that needs the bind capability (fine with NoNewPrivileges).
 if [ "$PORT" -lt 1024 ]; then printf '[Service]\nAmbientCapabilities=CAP_NET_BIND_SERVICE\n' > /etc/systemd/system/suplex.service.d/port.conf
 else rm -f /etc/systemd/system/suplex.service.d/port.conf; fi
+# Antigravity is experimental: Suplex offers and starts it only with SUPLEX_ANTIGRAVITY=1.
+case " $AGENT_TOOLS " in
+  *" antigravity "*) printf '[Service]\nEnvironment=SUPLEX_ANTIGRAVITY=1\n' > /etc/systemd/system/suplex.service.d/antigravity.conf ;;
+  *) rm -f /etc/systemd/system/suplex.service.d/antigravity.conf ;;
+esac
 # Serve routes from an earlier port or mode would linger; the supervisor re-adds the current one on start.
 command -v tailscale >/dev/null && tailscale serve reset >/dev/null 2>&1 || true
 systemctl daemon-reload

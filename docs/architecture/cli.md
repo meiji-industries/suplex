@@ -37,7 +37,8 @@ start a server. The server starts only through an explicit command:
 Help omits internal commands: `mcp root`, `mcp advisor`, `display …`,
 `codex-display`, `pi-display`, `omp-display`, `antigravity-display`, `antigravity-turn`,
 `antigravity-probe`, `update-apply`, and `github-store-credential`. Agent runtimes,
-the supervisor, and the updater start them.
+the supervisor, and the updater start them. `suplex doctor` checks Antigravity
+only when `SUPLEX_ANTIGRAVITY=1`.
 
 ## Finding the installation
 

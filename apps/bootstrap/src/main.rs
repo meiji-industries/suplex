@@ -125,6 +125,31 @@ const AGENT_TOOLS: &[(&str, &str, &str, &str)] = &[
     ),
 ];
 
+/// Antigravity is experimental. The wizard offers it only when it runs with
+/// `SUPLEX_ANTIGRAVITY=1`, the flag that the Suplex host reads. When you
+/// select it, converge.sh sets the flag for the host service.
+fn antigravity_enabled() -> bool {
+    std::env::var("SUPLEX_ANTIGRAVITY").as_deref() == Ok("1")
+}
+
+/// The agent tools that the wizard offers.
+fn agent_tools(
+    antigravity: bool,
+) -> impl Iterator<Item = &'static (&'static str, &'static str, &'static str, &'static str)> {
+    AGENT_TOOLS
+        .iter()
+        .filter(move |(id, ..)| antigravity || *id != "antigravity")
+}
+
+/// The saved tool ids that the wizard still offers.
+fn offered_tools(saved: &str, antigravity: bool) -> Vec<String> {
+    saved
+        .split_whitespace()
+        .filter(|tool| *tool == "none" || agent_tools(antigravity).any(|(id, ..)| id == tool))
+        .map(str::to_string)
+        .collect()
+}
+
 const SECRET_KEYS: &[&str] = &[
     "TS_AUTHKEY",
     "HCLOUD_TOKEN",
@@ -642,9 +667,10 @@ fn converge(cfg: &mut Config) -> Result<()> {
         .default_input(cfg.get("COMPANY_NAME"))
         .interact()?;
     cfg.set("COMPANY_NAME", company);
-    let saved = cfg.get("AGENT_TOOLS");
+    let antigravity = antigravity_enabled();
+    let saved = offered_tools(cfg.get("AGENT_TOOLS"), antigravity);
     let mut pick = multiselect("Which agent tools do you want to set up?");
-    for (id, label, _, _) in AGENT_TOOLS {
+    for (id, label, _, _) in agent_tools(antigravity) {
         pick = pick.item(id.to_string(), label, "");
     }
     let tools = pick
@@ -652,7 +678,7 @@ fn converge(cfg: &mut Config) -> Result<()> {
         .initial_values(if saved.is_empty() {
             vec!["claude-code".to_string()]
         } else {
-            saved.split_whitespace().map(str::to_string).collect()
+            saved
         })
         .interact()?;
     let tools = if tools.iter().any(|tool| tool == "none") {
@@ -838,8 +864,7 @@ fn converge(cfg: &mut Config) -> Result<()> {
 
     // --- Sign-ins only a human can do ------------------------------------------------------------
     let chosen = cfg.get("AGENT_TOOLS").to_string();
-    for (_, label, check, login) in AGENT_TOOLS
-        .iter()
+    for (_, label, check, login) in agent_tools(antigravity_enabled())
         .filter(|(id, ..)| chosen.split_whitespace().any(|tool| tool == *id))
     {
         if host.ok(&as_suplex(check)) {
@@ -1176,6 +1201,28 @@ mod tests {
         for setting in ["KillMode=process", "OOMPolicy=continue"] {
             assert!(unit.lines().any(|line| line == setting), "{setting}");
         }
+    }
+
+    #[test]
+    fn antigravity_is_offered_only_with_its_flag() {
+        let ids = |antigravity| {
+            agent_tools(antigravity)
+                .map(|(id, ..)| *id)
+                .collect::<Vec<_>>()
+        };
+        assert!(!ids(false).contains(&"antigravity"));
+        assert_eq!(ids(true).len(), AGENT_TOOLS.len());
+        assert_eq!(
+            offered_tools("claude-code antigravity", false),
+            ["claude-code"]
+        );
+        assert_eq!(
+            offered_tools("claude-code antigravity", true),
+            ["claude-code", "antigravity"]
+        );
+        assert_eq!(offered_tools("none", false), ["none"]);
+        // The host service gets the flag only when Antigravity is selected.
+        assert!(CONVERGE_SH.contains("Environment=SUPLEX_ANTIGRAVITY=1"));
     }
 
     #[test]

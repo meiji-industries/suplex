@@ -5,14 +5,46 @@ that works with Suplex tasks. It contains:
 
 | File | Purpose |
 | --- | --- |
-| `SKILL.md` | Agent-facing guardrails, pairing, capability discovery, project selection, duplicate avoidance, idempotent creation, polling, and lifecycle commands. |
-| `suplex_client.py` | A standard-library client over the canonical `/api/agent/*` routes, plus a server-free self-check. |
+| `SKILL.md` | Agent-facing guardrails, pairing, capability discovery, project selection, duplicate avoidance, idempotent creation, polling, lifecycle commands, and answers to Coordinator questions. |
+| `suplex_client.py` | A standard-library client over the canonical `/api/agent/*` routes. It has a command line for shell agents, a Python API, and a server-free self-check. |
 | `smoke_test.py` | A live pairing and idempotency check. |
 
 The template holds no Suplex rules of its own. It calls the same routes as the
 MCP tools described in [the MCP guide](agent-mcp.md). Pairing and daily use
 never need the `suplex` CLI. See [Tool access](#tool-access) for the order the
 skill uses.
+
+## Shell interface: the client command line, not the `suplex` CLI
+
+An agent that works through a shell uses the command line of
+`suplex_client.py`. The Python API of the same file is the fallback. The
+`suplex` binary is not the agent interface.
+
+The `suplex` binary manages a Suplex installation: `up`, `down`, `update`,
+`doctor`, `backup`, and similar commands. Its only agent command is
+`suplex mcp`, the local stdio MCP bridge. It stays that way:
+
+- It needs the Suplex app or a checkout on the agent's machine. A remote shell
+  agent usually has neither, and it must not install Suplex to reach the API.
+- Task commands in it would be a third surface to keep aligned with the Agent
+  API, after the MCP tools and the skill client.
+- `suplex mcp` stays available for an agent host that already has the app and
+  prefers a local stdio MCP server.
+
+The client command line is the standard shell interface:
+
+- It is one standard-library file for Python 3.10 or later. The skill install
+  already delivers it, and `.github/workflows/sync-skills.yml` publishes it.
+- Each command calls one Agent API route and prints JSON on stdout. On failure
+  it prints one JSON line with `error`, `status`, and `code` on stderr and
+  exits non-zero. The agent does not write Python for each call.
+- It reads the credential and the base URL only from the environment. Long or
+  private text, such as a description, note, or answer, can come from a file
+  or standard input instead of the command line.
+- It derives idempotency keys like the Python API, so a retried write is safe.
+
+The Python API stays for agents that already run Python, for scripts that
+combine several calls, and for a call that the command line does not have.
 
 ## Install
 
@@ -52,8 +84,8 @@ implemented by the skill or bridge.
 ### Grok Bot
 
 Grok Bot runs shell commands on a persistent Linux machine. It has no
-`$HERMES_HOME` and no local MCP configuration file. Use the Python client
-through the shell.
+`$HERMES_HOME` and no local MCP configuration file. Use the client command
+line through the shell.
 
 1. Exchange the pairing code. Use `curl` and read the JSON body from a heredoc.
    This keeps the code off the command line and out of shell history.
@@ -99,6 +131,17 @@ through the shell.
    (. ~/.config/suplex/agent.env && python3 suplex_client.py --self-check && python3 smoke_test.py)
    ```
 
+5. Call Suplex with the command line. Source the environment file in the same
+   subshell for each call:
+
+   ```bash
+   (. ~/.config/suplex/agent.env && python3 suplex_client.py tasks list --project "$PROJECT_ID" --status waiting_human)
+   (. ~/.config/suplex/agent.env && python3 suplex_client.py tasks answer "$TASK_ID" --revision "$REVISION" --question "$QUESTION_ID" --answer-file - < answer.md)
+   ```
+
+   `python3 suplex_client.py --help` lists the commands. `SKILL.md` describes
+   when to answer a question and when to ask the person.
+
 Grok Bot can also register a remote HTTP MCP connector. Thus the Streamable
 HTTP `/mcp` endpoint with OAuth in [the MCP guide](agent-mcp.md) is an option.
 This path is not verified for Grok Bot.
@@ -112,8 +155,9 @@ later and the standard library only. They do not need the `suplex` CLI.
 python3 suplex_client.py --self-check && python3 smoke_test.py
 ```
 
-The self-check verifies redaction, stable idempotency keys, and safe missing
-configuration errors without contacting a server. The smoke test reads the
+The self-check verifies redaction, stable idempotency keys, safe missing
+configuration errors, the question answer request, and the mapping from each
+command-line command to its route, without contacting a server. The smoke test reads the
 agent identity, creates one backlog acknowledgment task twice with the same
 idempotency key, and verifies that Suplex returns the same task ID. It never
 starts the task.
@@ -128,13 +172,18 @@ The skill uses the first transport that is available:
    `<origin>/mcp`, register that endpoint, for example
    `claude mcp add --transport http suplex <origin>/mcp`. An administrator
    approves the company and projects. See [the MCP guide](agent-mcp.md).
-3. `suplex_client.py` over the Agent API with the paired credential.
+3. `suplex_client.py` over the Agent API with the paired credential. A shell
+   agent uses its command line, for example
+   `python3 suplex_client.py tasks get <taskId>`. The Python API is the
+   fallback.
 
 The `suplex` CLI is not required. Do not install it to pair or use the skill,
 and do not get a Suplex checkout for it. The npm package named `suplex` is
 unrelated to Suplex. The local stdio bridge `suplex mcp` is optional. Use it
 only when the Suplex app or a checkout is already present; check with
-`suplex --version`.
+`suplex --version`. See
+[Shell interface](#shell-interface-the-client-command-line-not-the-suplex-cli)
+for the reasons.
 
 ## Contract maintenance
 

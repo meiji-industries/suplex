@@ -6,7 +6,7 @@ No client needs the `suplex` CLI. An external agent uses the first option that i
 
 1. Registered Suplex MCP tools.
 2. The hosted `/mcp` endpoint, when the host advertises it. Read `/.well-known/oauth-protected-resource/mcp`; its `resource` is the canonical `/mcp` address.
-3. `suplex_client.py` from [the Suplex skill](agent-skill.md) over the Agent API with a paired credential.
+3. `suplex_client.py` from [the Suplex skill](agent-skill.md) over the Agent API with a paired credential. A shell agent uses its command line; its Python API is the fallback.
 
 Install the skill with `npx skills add meiji-industries/suplex-skills --skill suplex --global` and verify it with `python3 suplex_client.py --self-check && python3 smoke_test.py` from the installed folder. The local stdio bridge below is optional.
 

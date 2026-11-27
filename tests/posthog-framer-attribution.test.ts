@@ -248,7 +248,7 @@ function href(window: HappyWindow, selector: string) {
 function open(window: HappyWindow, selector: string, type: "click" | "auxclick" | "contextmenu" | "submit" = "click") {
   const element = window.document.querySelector(selector)!;
   // The test stops navigation after every other listener ran.
-  window.EventTarget.prototype.addEventListener.call(window, type, (event: Event) => event.preventDefault(), { once: true });
+  window.EventTarget.prototype.addEventListener.call(window, type, (event: { preventDefault(): void }) => event.preventDefault(), { once: true });
   const event = type === "submit"
     ? new window.Event("submit", { bubbles: true, cancelable: true })
     : new window.MouseEvent(type, { bubbles: true, cancelable: true, button: type === "auxclick" ? 1 : type === "contextmenu" ? 2 : 0 });

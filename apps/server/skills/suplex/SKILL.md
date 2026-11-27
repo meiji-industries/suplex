@@ -157,6 +157,10 @@ Call `suplex_list_workflows(projectId)` and `suplex_list_templates(projectId)`
 before you set `workflowId` or `templateId`. Each result has `id`, `name`,
 `description`, and `permittedForAgentTaskCreation` (always `true`: any listed
 record can be used). A workflow is shared by projects. A template belongs to the project in the request.
+Each workflow also has `defaultProfiles`: the `rootProfile`, `workerProfile`,
+and `advisorProfiles` (keyed by role) that a task in this project uses with
+that workflow when you name none. A role that no allowed profile can fill is
+`null`.
 
 ## Before you create: list first
 
@@ -200,6 +204,14 @@ Omitting both a workflow and a template selects Standard. Omitted
 or workflow, then the project; the created task reports the applied values back. Omit `description` to keep a template's
 description; sending it, even as `""`, overrides it. Never send local paths,
 URLs, credentials, or file references.
+
+With a workflow, a profile you do not name comes from the project's Agents
+defaults first, then from the workflow record, each only when the project's
+provider policy allows it. A named profile that the policy does not allow, or
+a role that no allowed profile can fill, returns `422 profile_not_allowed` with
+`field` (`rootProfileId`, `workerProfileId`, or `advisorProfileIds.<role>`),
+`value` (the profile ID), and `reason`. A dry run reports the resolved
+`rootProfile`, `workerProfile`, and `advisorProfiles`.
 
 An unknown or archived workflow returns `422 workflow_not_found`. A template
 that is not in the project returns `422 template_not_found`.

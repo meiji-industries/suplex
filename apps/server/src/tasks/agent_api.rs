@@ -771,8 +771,9 @@ pub fn workflows(
         false,
         None,
     )?;
+    let project = projects::get_in_company(database, &principal.company_id, project_id)?;
     let mut statement = database.connection().prepare(
-        "SELECT id, name, description FROM suplex_workflows WHERE archived_at IS NULL ORDER BY name COLLATE NOCASE, id",
+        "SELECT id, name, description, engine, configuration_json FROM suplex_workflows WHERE archived_at IS NULL ORDER BY name COLLATE NOCASE, id",
     )?;
     let rows = statement
         .query_map([], |row| {
@@ -780,15 +781,20 @@ pub fn workflows(
                 row.get::<_, String>(0)?,
                 row.get::<_, String>(1)?,
                 row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, String>(4)?,
             ))
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
-    Ok(rows
-        .into_iter()
-        .map(|(id, name, description)| {
-            json!({"id": id, "name": name, "description": description, "permittedForAgentTaskCreation": true})
+    rows.into_iter()
+        .map(|(id, name, description, engine, configuration)| {
+            let defaults = default_profiles(database, &project, &engine, &configuration)?;
+            Ok(json!({
+                "id": id, "name": name, "description": description,
+                "permittedForAgentTaskCreation": true, "defaultProfiles": defaults,
+            }))
         })
-        .collect())
+        .collect()
 }
 
 pub fn templates(
@@ -1728,14 +1734,52 @@ fn workflow_record(
         .optional()?)
 }
 
-/// Apply the named workflow, or Standard when none is named: its engine, and
-/// its Advisor profiles, agent profiles, and screenshots where the caller left
-/// them out. Returns the selection record.
+/// The agent profiles a workflow record names. They apply only after the
+/// project's Agents defaults, and only when the project's provider policy
+/// allows them.
+#[derive(Default)]
+struct WorkflowPins {
+    root: Option<String>,
+    worker: Option<String>,
+    advisors: Map<String, Value>,
+}
+
+impl WorkflowPins {
+    fn of(configuration: &Value) -> Self {
+        let selected = |name: &str| {
+            configuration
+                .get(name)
+                .and_then(Value::as_str)
+                .filter(|id| !id.is_empty())
+                .map(str::to_owned)
+        };
+        Self {
+            root: selected("rootProfileId"),
+            worker: selected("workerProfileId"),
+            advisors: configuration
+                .get("advisorProfileIds")
+                .and_then(Value::as_object)
+                .cloned()
+                .unwrap_or_default(),
+        }
+    }
+
+    fn advisor(&self, role: &str) -> Option<&str> {
+        self.advisors
+            .get(role)
+            .and_then(Value::as_str)
+            .filter(|id| !id.is_empty())
+    }
+}
+
+/// Apply the named workflow, or Standard when none is named: its engine and
+/// screenshots where the caller left them out. Returns the selection record
+/// and the profiles the record names.
 fn apply_workflow(
     database: &SuplexDatabase,
     raw: &TaskCreateBody,
     request: &mut task_contracts::TaskCreateBody,
-) -> DatabaseResult<Value> {
+) -> DatabaseResult<(Value, WorkflowPins)> {
     let workflow_id = raw
         .workflow_id
         .clone()
@@ -1771,31 +1815,266 @@ fn apply_workflow(
     {
         request.delivery_target = crate::tasks::control::DeliveryTarget::Merged;
     }
-    if !has_advisors(raw)? {
-        let advisors = configuration
-            .get("advisorProfileIds")
-            .cloned()
-            .unwrap_or_else(|| json!({}));
-        validate_advisors(&advisors)?;
-        request.advisor_profile_ids = serde_json::from_value(advisors)?;
-    }
-    let selected_profile = |name: &str| {
-        configuration
-            .get(name)
-            .and_then(Value::as_str)
-            .filter(|id| !id.is_empty())
-            .map(str::to_owned)
-    };
-    request.root_profile_id = request
-        .root_profile_id
-        .take()
-        .or_else(|| selected_profile("rootProfileId"));
-    request.worker_profile_id = request
-        .worker_profile_id
-        .take()
-        .or_else(|| selected_profile("workerProfileId"));
     let name = crate::identity::auth::js_trim(&name).to_owned();
-    Ok(json!({"workflowId": workflow_id, "workflowName": name, "templateId": null}))
+    Ok((
+        json!({"workflowId": workflow_id, "workflowName": name, "templateId": null}),
+        WorkflowPins::of(&configuration),
+    ))
+}
+
+fn profile_not_allowed(field: &str, profile_id: &str) -> Box<dyn Error + Send + Sync> {
+    TaskError::field(
+        "profile_not_allowed",
+        "Select agents with providers and logins allowed by this project",
+        field,
+        profile_id,
+    )
+    .into()
+}
+
+/// No candidate for a defaulted role is allowed by the project's provider
+/// policy. `value` is the last candidate that the policy rejected.
+fn no_allowed_profile(field: &str, rejected: Option<&str>) -> Box<dyn Error + Send + Sync> {
+    let reason = "No agent profile for this role is allowed by this project. Name an allowed profile or change the project's Agents defaults.";
+    fail_with(
+        "Select agents with providers and logins allowed by this project",
+        422,
+        "profile_not_allowed",
+        json!({"field": field, "value": rejected, "reason": reason}),
+    )
+}
+
+/// A profile the caller names must exist with the role it fills, and the
+/// project's provider policy must allow it.
+fn named_profile(
+    database: &SuplexDatabase,
+    project: &Project,
+    profile_id: &str,
+    role: &str,
+    field: &str,
+) -> DatabaseResult<TaskProfile> {
+    let profile = crate::profiles::agent_profiles::read_profile(database, profile_id, role)?
+        .ok_or_else(|| profile_not_available(profile_id, role, field))?;
+    if !crate::profiles::agent_profiles::allowed_profile(project.provider_policy.as_ref(), &profile)
+    {
+        return Err(profile_not_allowed(field, profile_id));
+    }
+    Ok(profile)
+}
+
+/// The first candidate that exists with this role and that the project's
+/// provider policy allows. With `any_of_role`, the first allowed active
+/// profile of the role follows the candidates.
+fn first_allowed<'a>(
+    database: &SuplexDatabase,
+    project: &Project,
+    role: &str,
+    field: &str,
+    candidates: impl IntoIterator<Item = &'a str>,
+    any_of_role: bool,
+) -> DatabaseResult<TaskProfile> {
+    let allowed = |profile: &TaskProfile| {
+        crate::profiles::agent_profiles::allowed_profile(project.provider_policy.as_ref(), profile)
+    };
+    let mut tried = Vec::new();
+    let mut rejected = None;
+    for id in candidates {
+        if id.is_empty() || tried.contains(&id) {
+            continue;
+        }
+        tried.push(id);
+        match crate::profiles::agent_profiles::read_profile(database, id, role)? {
+            Some(profile) if allowed(&profile) => return Ok(profile),
+            _ => rejected = Some(id),
+        }
+    }
+    if any_of_role {
+        let mut statement = database.connection().prepare(
+            "SELECT id FROM suplex_profiles WHERE role = ?1 AND archived_at IS NULL ORDER BY created_at, id",
+        )?;
+        let ids = statement
+            .query_map([role], |row| row.get::<_, String>(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        for id in ids {
+            if let Some(profile) =
+                crate::profiles::agent_profiles::read_profile(database, &id, role)?
+                && allowed(&profile)
+            {
+                return Ok(profile);
+            }
+        }
+    }
+    Err(no_allowed_profile(field, rejected))
+}
+
+/// The Coordinator of a workflow task: the caller's choice, the project
+/// default, the workflow record's profile, then the first allowed Coordinator.
+fn workflow_root(
+    database: &SuplexDatabase,
+    project: &Project,
+    named: Option<&str>,
+    pins: &WorkflowPins,
+) -> DatabaseResult<TaskProfile> {
+    const FIELD: &str = "rootProfileId";
+    if let Some(id) = named {
+        return named_profile(database, project, id, "root", FIELD);
+    }
+    let candidates = [Some(project.root_profile_id.as_str()), pins.root.as_deref()];
+    first_allowed(
+        database,
+        project,
+        "root",
+        FIELD,
+        candidates.into_iter().flatten(),
+        true,
+    )
+}
+
+/// The Worker of a workflow task, in the same order as [`workflow_root`].
+fn workflow_worker(
+    database: &SuplexDatabase,
+    project: &Project,
+    named: Option<&str>,
+    pins: &WorkflowPins,
+) -> DatabaseResult<TaskProfile> {
+    const FIELD: &str = "workerProfileId";
+    if let Some(id) = named {
+        return named_profile(database, project, id, "worker", FIELD);
+    }
+    let candidates = [
+        Some(project.worker_profile_id.as_str()),
+        pins.worker.as_deref(),
+    ];
+    first_allowed(
+        database,
+        project,
+        "worker",
+        FIELD,
+        candidates.into_iter().flatten(),
+        true,
+    )
+}
+
+/// One Advisor of a workflow task: the caller's choice, the role's default
+/// (the task's Coordinator or the project's alternate Coordinator), the
+/// project's other default Coordinator, then the workflow record's profile.
+fn workflow_advisor(
+    database: &SuplexDatabase,
+    project: &Project,
+    role: AdvisorRole,
+    named: Option<&str>,
+    root_id: &str,
+    pins: &WorkflowPins,
+) -> DatabaseResult<TaskProfile> {
+    let field = format!("advisorProfileIds.{}", role.as_str());
+    if let Some(id) = named {
+        return named_profile(database, project, id, "root", &field);
+    }
+    let alternate = project.alt_profile_id.as_str();
+    let default =
+        crate::coordination::workflows::advisor_default_profile_id(role, root_id, alternate);
+    let other = if default == alternate {
+        project.root_profile_id.as_str()
+    } else {
+        alternate
+    };
+    let candidates = [Some(default), Some(other), pins.advisor(role.as_str())];
+    first_allowed(
+        database,
+        project,
+        "root",
+        &field,
+        candidates.into_iter().flatten(),
+        false,
+    )
+}
+
+/// The profiles a workflow task runs with.
+struct RoleProfiles {
+    root: TaskProfile,
+    worker: TaskProfile,
+    advisors: Vec<(AdvisorRole, TaskProfile)>,
+}
+
+/// Resolve every role of a workflow task under the project's provider policy.
+fn workflow_profiles(
+    database: &SuplexDatabase,
+    project: &Project,
+    raw: &TaskCreateBody,
+    workflow: Workflow,
+    pins: &WorkflowPins,
+) -> DatabaseResult<RoleProfiles> {
+    let root = workflow_root(database, project, raw.root_profile_id.as_deref(), pins)?;
+    let worker = workflow_worker(database, project, raw.worker_profile_id.as_deref(), pins)?;
+    let named = serde_json::to_value(&raw.advisor_profile_ids)?;
+    let advisors = crate::coordination::workflows::advisor_roles(workflow.as_str())
+        .map(|role| {
+            let profile = workflow_advisor(
+                database,
+                project,
+                role,
+                named[role.as_str()].as_str(),
+                &root.profile_id,
+                pins,
+            )?;
+            Ok((role, profile))
+        })
+        .collect::<DatabaseResult<Vec<_>>>()?;
+    Ok(RoleProfiles {
+        root,
+        worker,
+        advisors,
+    })
+}
+
+/// A role that cannot resolve is `None`; other failures stay errors.
+fn unless_refused<T>(result: DatabaseResult<T>) -> DatabaseResult<Option<T>> {
+    match result {
+        Ok(value) => Ok(Some(value)),
+        Err(error) if matches!(error.downcast_ref(), Some(TaskError::Agent { .. })) => Ok(None),
+        Err(error) => Err(error),
+    }
+}
+
+/// The profiles a task that names none would use with this workflow record.
+/// A role that no allowed profile can fill is `null`.
+fn default_profiles(
+    database: &SuplexDatabase,
+    project: &Project,
+    engine: &str,
+    configuration: &str,
+) -> DatabaseResult<Value> {
+    let pins = serde_json::from_str::<Value>(configuration)
+        .map(|configuration| WorkflowPins::of(&configuration))
+        .unwrap_or_default();
+    let shown = |profile: Option<TaskProfile>| -> DatabaseResult<Value> {
+        profile.map_or(Ok(Value::Null), |profile| {
+            Ok(serde_json::to_value(task_profile(
+                database,
+                &profile.profile_id,
+            )?)?)
+        })
+    };
+    let root = unless_refused(workflow_root(database, project, None, &pins))?;
+    let worker = unless_refused(workflow_worker(database, project, None, &pins))?;
+    let root_id = root
+        .as_ref()
+        .map_or(project.root_profile_id.as_str(), |root| {
+            root.profile_id.as_str()
+        })
+        .to_owned();
+    let mut advisors = Map::new();
+    for role in crate::coordination::workflows::advisor_roles(engine) {
+        let profile = unless_refused(workflow_advisor(
+            database, project, role, None, &root_id, &pins,
+        ))?;
+        advisors.insert(role.as_str().to_owned(), shown(profile)?);
+    }
+    Ok(json!({
+        "rootProfile": shown(root)?,
+        "workerProfile": shown(worker)?,
+        "advisorProfiles": advisors,
+    }))
 }
 
 /// The caller named at least one Advisor profile.
@@ -1828,39 +2107,43 @@ fn validate_resolved(request: &mut task_contracts::TaskCreateBody) -> DatabaseRe
     Ok(())
 }
 
-/// Each profile the caller named must exist.
-fn check_requested_profiles(database: &SuplexDatabase, raw: &TaskCreateBody) -> DatabaseResult<()> {
+/// Each profile the caller named must exist with the role it fills, and the
+/// project's provider policy must allow it. An unnamed role follows its
+/// project, workflow, or template default.
+fn check_requested_profiles(
+    database: &SuplexDatabase,
+    project: &Project,
+    raw: &TaskCreateBody,
+    workflow: Workflow,
+) -> DatabaseResult<()> {
     if let Some(id) = &raw.root_profile_id {
-        crate::profiles::agent_profiles::read_profile(database, id, "root")?
-            .ok_or_else(|| profile_not_available(id, "root", "rootProfileId"))?;
+        named_profile(database, project, id, "root", "rootProfileId")?;
     }
     if let Some(id) = &raw.worker_profile_id {
-        crate::profiles::agent_profiles::read_profile(database, id, "worker")?
-            .ok_or_else(|| profile_not_available(id, "worker", "workerProfileId"))?;
+        named_profile(database, project, id, "worker", "workerProfileId")?;
     }
-    Ok(())
-}
-
-/// An Advisor profile the caller names must exist. An unnamed role follows its
-/// workflow or project default.
-fn check_advisor_profiles(
-    database: &SuplexDatabase,
-    raw: &TaskCreateBody,
-    request: &task_contracts::TaskCreateBody,
-) -> DatabaseResult<()> {
-    let raw_advisors = serde_json::to_value(&raw.advisor_profile_ids)?;
-    for role in crate::coordination::workflows::advisor_roles(request.workflow.as_str()) {
+    let named = serde_json::to_value(&raw.advisor_profile_ids)?;
+    for role in crate::coordination::workflows::advisor_roles(workflow.as_str()) {
         let role = role.as_str();
-        if let Some(profile_id) = raw_advisors[role].as_str() {
-            let field = format!("advisorProfileIds.{role}");
-            crate::profiles::agent_profiles::read_profile(database, profile_id, "root")?
-                .ok_or_else(|| profile_not_available(profile_id, "root", &field))?;
+        if let Some(profile_id) = named[role].as_str() {
+            named_profile(
+                database,
+                project,
+                profile_id,
+                "root",
+                &format!("advisorProfileIds.{role}"),
+            )?;
         }
     }
     Ok(())
 }
 
 /// `resolveAgentApiRequest`: the workflow or template the project permits, applied under its policy.
+///
+/// A workflow task takes each profile the caller names, then the project's
+/// Agents defaults, then the workflow record's profiles, each only when the
+/// project's provider policy allows it. The request then names every resolved
+/// profile, so admission and the stored task use the same agents.
 fn resolve(
     database: &SuplexDatabase,
     company_id: &str,
@@ -1868,29 +2151,46 @@ fn resolve(
 ) -> DatabaseResult<Resolved> {
     let project = projects::get_in_company(database, company_id, &raw.project_id)?;
     let mut request = base_request(raw, &project);
-    let selection = match &raw.template_id {
-        Some(template_id) => apply_template(database, &project, raw, template_id, &mut request)?,
-        None => apply_workflow(database, raw, &mut request)?,
+    let (selection, pins) = match &raw.template_id {
+        Some(template_id) => (
+            apply_template(database, &project, raw, template_id, &mut request)?,
+            None,
+        ),
+        None => {
+            let (selection, pins) = apply_workflow(database, raw, &mut request)?;
+            (selection, Some(pins))
+        }
     };
     validate_resolved(&mut request)?;
-    check_requested_profiles(database, raw)?;
-    let root = project_profile(
-        database,
-        request.root_profile_id.as_deref(),
-        &project.root_profile_id,
-        "root",
-        &project,
-    )?;
-    let worker = project_profile(
-        database,
-        request.worker_profile_id.as_deref(),
-        &project.worker_profile_id,
-        "worker",
-        &project,
-    )?;
-    check_advisor_profiles(database, raw, &request)?;
-    request.root_profile_id = Some(root.profile_id);
-    request.worker_profile_id = Some(worker.profile_id);
+    check_requested_profiles(database, &project, raw, request.workflow)?;
+    if let Some(pins) = pins {
+        let profiles = workflow_profiles(database, &project, raw, request.workflow, &pins)?;
+        request.root_profile_id = Some(profiles.root.profile_id);
+        request.worker_profile_id = Some(profiles.worker.profile_id);
+        let advisors = profiles
+            .advisors
+            .into_iter()
+            .map(|(role, profile)| (role.as_str().to_owned(), Value::String(profile.profile_id)))
+            .collect::<Map<_, _>>();
+        request.advisor_profile_ids = serde_json::from_value(Value::Object(advisors))?;
+    } else {
+        let root = project_profile(
+            database,
+            request.root_profile_id.as_deref(),
+            &project.root_profile_id,
+            "root",
+            &project,
+        )?;
+        let worker = project_profile(
+            database,
+            request.worker_profile_id.as_deref(),
+            &project.worker_profile_id,
+            "worker",
+            &project,
+        )?;
+        request.root_profile_id = Some(root.profile_id);
+        request.worker_profile_id = Some(worker.profile_id);
+    }
     let signature =
         crate::shared::js_json::stringify(&json!({"request": request, "selection": selection}));
     Ok(Resolved {
@@ -2207,8 +2507,12 @@ fn recheck_policy(
             .unwrap_or_default(),
         "worker",
     )?;
+    for advisor in prepared.advisor_profiles.values_mut() {
+        *advisor = profile(database, &advisor.profile_id, "root")?;
+    }
     if [&prepared.root_profile, &prepared.worker_profile]
-        .iter()
+        .into_iter()
+        .chain(prepared.advisor_profiles.values())
         .any(|profile| {
             !crate::profiles::agent_profiles::allowed_profile(
                 project.provider_policy.as_ref(),
@@ -2235,6 +2539,13 @@ fn dry_run_preview(
     project: &Project,
     selection: &Value,
 ) -> DatabaseResult<Value> {
+    let mut advisors = Map::new();
+    for (role, profile) in &task.advisor_profiles {
+        advisors.insert(
+            role.as_str().to_owned(),
+            serde_json::to_value(task_profile(database, &profile.profile_id)?)?,
+        );
+    }
     Ok(merged(
         json!({
             "dryRun": true, "projectId": task.project_id, "project": {"id": project.id, "name": project.name},
@@ -2243,6 +2554,7 @@ fn dry_run_preview(
             "templateId": selection["templateId"],
             "rootProfile": task_profile(database, &task.root_profile.profile_id)?,
             "workerProfile": task_profile(database, &task.worker_profile.profile_id)?,
+            "advisorProfiles": advisors,
             "deliveryTarget": task.delivery_target,
             "branch": task.configuration.branch, "dependsOn": task.depends_on,
         }),
@@ -3544,6 +3856,345 @@ mod retirement_admission_tests {
         });
         assert!(resolved_tests(r#"{"runProjectTests":true}"#));
         assert!(!resolved_tests("{}"));
+    }
+
+    /// A fixture whose project defaults run on `codex` and whose Pull request
+    /// repair record names `pi` profiles.
+    async fn pinned_repair_fixture() -> (
+        crate::http::routes::external_agent_administration::tests::Server,
+        Principal,
+    ) {
+        let (state, path) = crate::http::routes::auth::tests::state();
+        let server =
+            crate::http::routes::external_agent_administration::tests::server(Some((state, path)))
+                .await;
+        server.state.with_database(|database| {
+            let now = Utc::now().to_rfc3339();
+            for (id, role, provider) in [
+                ("profile_default_root", "root", "codex"),
+                ("profile_default_alt", "root", "codex"),
+                ("profile_default_worker", "worker", "codex"),
+                ("profile_pin_root", "root", "pi"),
+                ("profile_pin_rater", "root", "pi"),
+                ("profile_pin_worker", "worker", "pi"),
+            ] {
+                database.connection().execute(
+                    "INSERT INTO suplex_profiles (id,name,role,avatar_seed,provider,model,reasoning_level,service_tier,created_at,updated_at) VALUES (?1,?1,?2,?1,?3,'test-model','medium','default',?4,?4)",
+                    params![id, role, provider, now],
+                ).unwrap();
+            }
+            database.connection().execute(
+                "UPDATE suplex_projects SET root_profile_id = 'profile_default_root', worker_profile_id = 'profile_default_worker', alt_profile_id = 'profile_default_alt', repository_identity = 'acme/demo', delivery_target = 'local_worktree' WHERE id = 'project_api'",
+                [],
+            ).unwrap();
+            database.connection().execute(
+                "UPDATE suplex_workflows SET configuration_json = ?1 WHERE id = 'workflow_native_refine_pull_request'",
+                [json!({"rootProfileId": "profile_pin_root", "workerProfileId": "profile_pin_worker", "advisorProfileIds": {"rater": "profile_pin_rater"}}).to_string()],
+            ).unwrap();
+        });
+        let (credential, _) =
+            crate::http::routes::agent_api::tests::pair(&server, "Repair Bot", &["project_api"]);
+        let principal = server.state.with_database(|database| {
+            external_agents::authenticate(database, &credential, Utc::now()).unwrap()
+        });
+        (server, principal)
+    }
+
+    fn set_providers(state: &AppState, providers: Option<&[&str]>) {
+        let policy = providers.map(|providers| {
+            json!({"allowedProviders": providers, "allowedInstanceIds": []}).to_string()
+        });
+        state.with_database(|database| {
+            database
+                .connection()
+                .execute(
+                    "UPDATE suplex_projects SET provider_policy_json = ?1 WHERE id = 'project_api'",
+                    [policy],
+                )
+                .unwrap();
+        });
+    }
+
+    fn repair_request(key: &str, extra: Value) -> TaskCreateBody {
+        let mut body = json!({
+            "projectId": "project_api", "title": "Repair", "idempotencyKey": key,
+            "images": [], "advisorProfileIds": {},
+            "workflowId": "workflow_native_refine_pull_request",
+            "source": {"kind": "pull_request", "number": 7}
+        });
+        body.as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        serde_json::from_value(body).unwrap()
+    }
+
+    /// The resolved Coordinator, Worker, and Rater of a request.
+    fn resolved_profiles(
+        state: &AppState,
+        principal: &Principal,
+        raw: &TaskCreateBody,
+    ) -> DatabaseResult<(String, String, Option<String>)> {
+        state.with_database(|database| {
+            let request = resolve(database, &principal.company_id, raw)?.request;
+            Ok((
+                request.root_profile_id.unwrap(),
+                request.worker_profile_id.unwrap(),
+                request.advisor_profile_ids.rater,
+            ))
+        })
+    }
+
+    fn admitted(state: &AppState, principal: &Principal, raw: &TaskCreateBody) -> Creation {
+        let snapshot = pending(state, principal, raw);
+        let base = "b".repeat(40);
+        let source = sources::captured_pull_request_for_test(7, &"a".repeat(40), &base);
+        state
+            .with_database(|database| {
+                write(
+                    database,
+                    principal,
+                    raw,
+                    &snapshot,
+                    (source, base),
+                    None,
+                    state.artifact_root.as_deref(),
+                )
+            })
+            .unwrap()
+    }
+
+    fn refusal(error: &(dyn Error + Send + Sync + 'static)) -> (u16, &'static str, Value) {
+        match error.downcast_ref::<TaskError>() {
+            Some(TaskError::Agent {
+                status,
+                code,
+                details,
+                ..
+            }) => (
+                *status,
+                code,
+                json!({"field": details["field"], "value": details["value"], "reason": details["reason"].is_string()}),
+            ),
+            _ => panic!("expected an agent refusal: {error}"),
+        }
+    }
+
+    /// A workflow record's profiles that the project's provider policy blocks
+    /// give way to the project's Agents defaults, and the dry run and the
+    /// created task report the same agents.
+    #[tokio::test]
+    async fn a_defaulted_repair_uses_project_defaults_over_blocked_workflow_profiles() {
+        let (server, principal) = pinned_repair_fixture().await;
+        let state = &server.state;
+        set_providers(state, Some(&["codex"]));
+        let defaults = (
+            "profile_default_root".to_owned(),
+            "profile_default_worker".to_owned(),
+            Some("profile_default_alt".to_owned()),
+        );
+        assert_eq!(
+            resolved_profiles(
+                state,
+                &principal,
+                &repair_request("repair-default-1", json!({}))
+            )
+            .unwrap(),
+            defaults
+        );
+
+        let Creation::DryRun(preview) = admitted(
+            state,
+            &principal,
+            &repair_request("repair-dry-1", json!({"dryRun": true})),
+        ) else {
+            panic!("the dry run must return a preview");
+        };
+        assert_eq!(
+            (
+                &preview["rootProfile"]["id"],
+                &preview["workerProfile"]["id"],
+                &preview["advisorProfiles"]
+            ),
+            (
+                &json!("profile_default_root"),
+                &json!("profile_default_worker"),
+                &json!({"rater": {"id": "profile_default_alt", "name": "profile_default_alt"}})
+            ),
+            "{preview}"
+        );
+
+        let Creation::Task { id, .. } = admitted(
+            state,
+            &principal,
+            &repair_request("repair-create-1", json!({})),
+        ) else {
+            panic!("the repair task must be created");
+        };
+        let task = state.with_database(|database| task(database, &id).unwrap());
+        assert_eq!(
+            (
+                task.root_profile.profile_id.as_str(),
+                task.worker_profile.profile_id.as_str(),
+                task.advisor_profiles[&AdvisorRole::Rater]
+                    .profile_id
+                    .as_str()
+            ),
+            (
+                "profile_default_root",
+                "profile_default_worker",
+                "profile_default_alt"
+            )
+        );
+
+        // Without the alternate Coordinator, the Rater is the default Coordinator.
+        state.with_database(|database| {
+            database
+                .connection()
+                .execute(
+                    "UPDATE suplex_profiles SET provider = 'pi' WHERE id = 'profile_default_alt'",
+                    [],
+                )
+                .unwrap();
+        });
+        assert_eq!(
+            resolved_profiles(
+                state,
+                &principal,
+                &repair_request("repair-default-2", json!({}))
+            )
+            .unwrap()
+            .2
+            .as_deref(),
+            Some("profile_default_root")
+        );
+    }
+
+    /// Without a restrictive policy the project's defaults still come first;
+    /// a workflow record's profile fills a role only when the project default
+    /// is not allowed and the record's profile is.
+    #[tokio::test]
+    async fn workflow_profiles_follow_project_defaults_and_fill_only_disallowed_roles() {
+        let (server, principal) = pinned_repair_fixture().await;
+        let state = &server.state;
+        let raw = repair_request("repair-permissive-1", json!({}));
+        set_providers(state, None);
+        assert_eq!(
+            resolved_profiles(state, &principal, &raw).unwrap(),
+            (
+                "profile_default_root".to_owned(),
+                "profile_default_worker".to_owned(),
+                Some("profile_default_alt".to_owned())
+            )
+        );
+
+        // Only `pi` is allowed: the project defaults are not, the record's profiles are.
+        set_providers(state, Some(&["pi"]));
+        assert_eq!(
+            resolved_profiles(state, &principal, &raw).unwrap(),
+            (
+                "profile_pin_root".to_owned(),
+                "profile_pin_worker".to_owned(),
+                Some("profile_pin_rater".to_owned())
+            )
+        );
+        let listed =
+            state.with_database(|database| workflows(database, &principal, "project_api").unwrap());
+        let repair = listed
+            .iter()
+            .find(|workflow| workflow["id"] == "workflow_native_refine_pull_request")
+            .unwrap();
+        assert_eq!(
+            repair["defaultProfiles"],
+            json!({
+                "rootProfile": {"id": "profile_pin_root", "name": "profile_pin_root"},
+                "workerProfile": {"id": "profile_pin_worker", "name": "profile_pin_worker"},
+                "advisorProfiles": {"rater": {"id": "profile_pin_rater", "name": "profile_pin_rater"}},
+            })
+        );
+    }
+
+    /// A named profile the policy blocks, and a defaulted role that no allowed
+    /// profile can fill, name the field and the profile.
+    #[tokio::test]
+    async fn blocked_profiles_are_refused_with_their_field() {
+        let (server, principal) = pinned_repair_fixture().await;
+        let state = &server.state;
+        set_providers(state, Some(&["codex"]));
+        for (field, extra, value) in [
+            (
+                "rootProfileId",
+                json!({"rootProfileId": "profile_pin_root"}),
+                "profile_pin_root",
+            ),
+            (
+                "workerProfileId",
+                json!({"workerProfileId": "profile_pin_worker"}),
+                "profile_pin_worker",
+            ),
+            (
+                "advisorProfileIds.rater",
+                json!({"advisorProfileIds": {"rater": "profile_pin_rater"}}),
+                "profile_pin_rater",
+            ),
+        ] {
+            let error =
+                resolved_profiles(state, &principal, &repair_request("repair-named", extra))
+                    .unwrap_err();
+            assert_eq!(
+                refusal(&*error),
+                (
+                    422,
+                    "profile_not_allowed",
+                    json!({"field": field, "value": value, "reason": true})
+                )
+            );
+        }
+        let error = resolved_profiles(
+            state,
+            &principal,
+            &repair_request(
+                "repair-missing",
+                json!({"advisorProfileIds": {"rater": "profile_missing"}}),
+            ),
+        )
+        .unwrap_err();
+        assert_eq!(refusal(&*error).1, "advisor_profile_not_found");
+
+        // An allowed Coordinator exists, but no Coordinator the Rater could use is allowed.
+        set_providers(state, Some(&["omp"]));
+        state.with_database(|database| {
+            database
+                .connection()
+                .execute(
+                    "INSERT INTO suplex_profiles (id,name,role,avatar_seed,provider,model,reasoning_level,service_tier,created_at,updated_at) SELECT 'profile_other_' || role, 'profile_other_' || role, role, 'x', 'omp', 'test-model', 'medium', 'default', created_at, updated_at FROM suplex_profiles WHERE id IN ('profile_default_root', 'profile_default_worker')",
+                    [],
+                )
+                .unwrap();
+        });
+        let error = resolved_profiles(state, &principal, &repair_request("repair-none", json!({})))
+            .unwrap_err();
+        assert_eq!(
+            refusal(&*error),
+            (
+                422,
+                "profile_not_allowed",
+                json!({"field": "advisorProfileIds.rater", "value": "profile_pin_rater", "reason": true})
+            )
+        );
+        let listed =
+            state.with_database(|database| workflows(database, &principal, "project_api").unwrap());
+        let repair = listed
+            .iter()
+            .find(|workflow| workflow["id"] == "workflow_native_refine_pull_request")
+            .unwrap();
+        assert_eq!(
+            (
+                &repair["defaultProfiles"]["rootProfile"]["id"],
+                &repair["defaultProfiles"]["advisorProfiles"]["rater"]
+            ),
+            (&json!("profile_other_root"), &Value::Null),
+            "an unresolved role does not fail the listing"
+        );
     }
 
     #[tokio::test]

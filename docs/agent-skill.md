@@ -29,7 +29,7 @@ The `suplex` binary manages a Suplex installation: `up`, `down`, `update`,
 - Task commands in it would be a third surface to keep aligned with the Agent
   API, after the MCP tools and the skill client.
 - `suplex mcp` stays available for an agent host that already has the app and
-  prefers MCP over stdio.
+  prefers a local stdio MCP server.
 
 The client command line is the standard shell interface:
 

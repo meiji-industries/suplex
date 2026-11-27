@@ -218,16 +218,21 @@ snippet when Framer has the current release version; a link-level
 
 With granted consent and no Do Not Track or Global Privacy Control signal, the
 script decorates every link and form whose target origin is
-`https://suplex.sh`, not only the classified CTAs. It adds the parameters in the
-capture phase of `click`, `auxclick`, `contextmenu`, and `submit`, as the
-consent script adds `consent`. It adds:
+`https://suplex.sh`, not only the classified CTAs. It adds the parameters when
+the script loads with a stored granted choice, when the visitor accepts, when
+PostHog loads, on the window `load` event, and in the capture phase of `click`,
+`auxclick`, `contextmenu`, and `submit`. It registers the event listeners on
+`window` with the native `addEventListener`, so they run before Framer's
+`document` listeners navigate. A returning visitor with a stored granted choice
+does not have to accept again. It adds:
 
 - The click IDs `gclid`, `gbraid`, `wbraid`, `msclkid`, and `fbclid`, and the
   UTM values `utm_source`, `utm_medium`, `utm_campaign`, `utm_term`, and
   `utm_content`, from one stored touch: the last touch when it has a campaign
   value, else the first touch. A referrer-only last touch falls back to the
   first touch.
-- `_gl`, from the current page URL, or else from the landing URL.
+- `_gl`, from the page URL when links are decorated, or else from the landing
+  URL. The script reads it before a click, never in the click handler.
 - `visitor`, the visitor's PostHog distinct ID, when it matches
   `^[A-Za-z0-9._:-]{8,64}$`.
 

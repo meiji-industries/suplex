@@ -45,7 +45,7 @@ Read /api/agent/openapi.json after pairing. That document is authoritative; this
 
 - MCP: connect a Streamable HTTP client to `/mcp` and complete OAuth browser approval.
 - MCP stdio: the optional local bridge `suplex mcp`, only when the Suplex app or a checkout is already present. Pairing does not need the CLI.
-- HTTP: send `Authorization: Bearer <credential>` to the runtime routes. The skill's `suplex_client.py` does this with the standard library only.
+- HTTP: send `Authorization: Bearer <credential>` to the runtime routes. The skill's `suplex_client.py` does this with the standard library only. A shell agent runs its command line, for example `python3 suplex_client.py tasks get <taskId>`, which prints JSON. Its Python API is the fallback.
 
 ## Administration
 

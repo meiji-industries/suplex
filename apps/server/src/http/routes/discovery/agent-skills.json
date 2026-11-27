@@ -3,7 +3,7 @@
   "skills": [
     {
       "name": "suplex",
-      "summary": "Work with Suplex tasks as a paired agent: discover capabilities, projects, workflows, templates, and agent profiles; create backlog tasks idempotently; update backlog and queued tasks; set their prerequisites; poll them; read the turns of a task and what they cost; send lifecycle commands; and, with an administrator's Move grant, manage and run saved Moves, or, with a transcript grant, read task transcripts, or, with a project agents grant, change the default agents of a project.",
+      "summary": "Work with Suplex tasks as a paired agent: discover capabilities, projects, workflows, templates, and agent profiles; create backlog tasks idempotently; update backlog and queued tasks; set their prerequisites; poll them; read the turns of a task and what they cost; send lifecycle commands; with an answer grant, answer a Coordinator question; and, with an administrator's Move grant, manage and run saved Moves, or, with a transcript grant, read task transcripts, or, with a project agents grant, change the default agents of a project.",
       "source": "skills/suplex",
       "instructions": "skills/suplex/SKILL.md",
       "install": "docs/agent-skill.md",
@@ -84,7 +84,7 @@
           "transport": "http-bearer",
           "preferred": false,
           "client": "skills/suplex/suplex_client.py",
-          "description": "A standard-library Python client over the same routes. Use it when no MCP bridge is registered.",
+          "description": "A standard-library Python client over the same routes. Use it when no MCP bridge is registered. A shell agent runs its command line, python3 suplex_client.py <command>, which prints JSON. Its Python API is the fallback.",
           "documentation": "docs/agent-api.md"
         }
       ],

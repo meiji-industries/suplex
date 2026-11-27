@@ -60,7 +60,7 @@ python3 suplex_client.py tasks answer "$TASK_ID" --revision "$REVISION" --questi
 
 | Command | Route |
 | --- | --- |
-| `whoami`, `capabilities` | identity and capabilities |
+| `whoami` (or `me`), `projects`, `capabilities` | identity, granted projects, and capabilities |
 | `workflows --project`, `templates --project` | workflows and templates of a project |
 | `profiles [--role] [--project] [--include-archived]` | agent profiles |
 | `project-agents PROJECT --updated-at` | default agents of a project |

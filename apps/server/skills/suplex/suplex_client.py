@@ -406,7 +406,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--self-check", action="store_true", help="test this file without a server")
     commands = parser.add_subparsers(dest="command", metavar="COMMAND", parser_class=_Parser)
 
-    commands.add_parser("whoami", help="agent identity, granted projects, and grants")
+    commands.add_parser("whoami", aliases=["me"], help="agent identity, granted projects, and grants")
+    commands.add_parser("projects", help="granted projects with their defaults (the projects of whoami)")
     commands.add_parser("capabilities", help="commands and records this agent can use")
     for name in ("workflows", "templates"):
         sub = commands.add_parser(name, help=f"list {name} for a project")
@@ -517,8 +518,10 @@ def dispatch(client: SuplexClient, args: argparse.Namespace, stdin=None):
     """Call the one SuplexClient method that the parsed arguments name."""
     stdin = sys.stdin if stdin is None else stdin
     command, action = args.command, getattr(args, "action", None)
-    if command == "whoami":
+    if command in ("whoami", "me"):
         return client.whoami()
+    if command == "projects":
+        return client.whoami().get("projects", [])
     if command == "capabilities":
         return client.capabilities()
     if command == "workflows":
@@ -702,6 +705,7 @@ def _self_check() -> None:
 
     cases = [
         (["whoami"], "GET", "/api/agent/me", None),
+        (["me"], "GET", "/api/agent/me", None),
         (["capabilities"], "GET", "/api/agent/capabilities", None),
         (["workflows", "--project", "p1"], "GET", "/api/agent/workflows?projectId=p1", None),
         (["templates", "--project", "p1"], "GET", "/api/agent/templates?projectId=p1", None),
@@ -744,6 +748,11 @@ def _self_check() -> None:
         assert status == 0 and err == "", (argv, status, err)
         assert seen == [(method, path, body)], (argv, seen)
         assert json.loads(out) == ({"ok": True} if argv[1:2] in (["delete"], ["stop"], ["archive"]) else {}), (argv, out)
+
+    client.call = lambda method, path, *rest, **kw: seen.append((method, path)) or {"agent": {}, "projects": [{"id": "p1"}]}
+    status, out, err = run(["projects"])
+    assert status == 0 and json.loads(out) == [{"id": "p1"}] and seen == [("GET", "/api/agent/me")], (status, out, seen)
+    client.call = record
 
     for argv in (
         ["tasks", "answer", "t1", "--revision", "r1", "--question", "q1"],

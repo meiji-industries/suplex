@@ -5,7 +5,7 @@
  *
  * With granted consent and no privacy signal, links and forms to https://suplex.sh carry the
  * stored campaign touch (click IDs and UTM values), the Conversion Linker `_gl`, and the
- * PostHog `visitor` when they are opened, so the signup on suplex.sh keeps them.
+ * PostHog `visitor` on load and when they are opened, so the signup on suplex.sh keeps them.
  */
 (function suplexWebsiteAnalytics(window, document) {
   "use strict";
@@ -110,6 +110,13 @@
   // URL before the visitor accepts the banner; consent stores this touch, not the later URL.
   var landingTouch = currentTouch();
   var landingLinker = linkerFrom(window.location.search);
+  // The `_gl` that links carry, read before any click: at load, and again each time links are
+  // decorated, so a click handler never has to read the URL while Framer navigates.
+  var linker = landingLinker;
+
+  function refreshLinker() {
+    linker = linkerFrom(window.location.search) || landingLinker;
+  }
 
   function attribution() {
     var saved = {};
@@ -248,7 +255,6 @@
     allowedUtm.forEach(function (key) {
       if (touch[key.slice(4)]) params.push([key, touch[key.slice(4)]]);
     });
-    var linker = linkerFrom(window.location.search) || landingLinker;
     if (linker) params.push(["_gl", linker]);
     var visitor = posthog && typeof posthog.get_distinct_id === "function" ? posthog.get_distinct_id() : "";
     if (typeof visitor === "string" && /^[A-Za-z0-9._:-]{8,64}$/.test(visitor)) params.push(["visitor", visitor]);
@@ -286,6 +292,7 @@
   }
 
   function decorateAll() {
+    refreshLinker();
     if (!document.querySelectorAll) return;
     Array.prototype.forEach.call(document.querySelectorAll("a[href],area[href],form[action]"), decorate);
   }
@@ -351,6 +358,8 @@
           client.opt_in_capturing();
           updateAttribution();
           capturePageview();
+          // The client knows `visitor` only now.
+          decorateAll();
         } else {
           client.opt_out_capturing();
         }
@@ -404,8 +413,21 @@
   if (sharedConsent()) sharedConsent().subscribe(followConsent);
   else (window.SuplexConsentListeners = window.SuplexConsentListeners || []).push(followConsent);
 
+  // Framer replaces document.addEventListener and runs those listeners after it navigates.
+  // The native method on window, in the capture phase, runs before any document listener.
+  var nativeListen = window.EventTarget && window.EventTarget.prototype && window.EventTarget.prototype.addEventListener;
+  function listen(target, type, listener, capture) {
+    if (typeof nativeListen === "function") nativeListen.call(target, type, listener, capture);
+    else target.addEventListener(type, listener, capture);
+  }
+
   ["click", "auxclick", "contextmenu", "submit"].forEach(function (type) {
-    document.addEventListener(type, decorateEvent, true);
+    listen(window, type, decorateEvent, true);
   });
-  if (allowed()) loadSdk();
+
+  // A stored choice is not replayed by the consent script, so a returning visitor starts here.
+  if (allowed()) followConsent("granted");
+
+  // Framer renders more links after this script runs. A complete page was decorated above.
+  if (document.readyState !== "complete") listen(window, "load", decorateAll, false);
 }(window, document));

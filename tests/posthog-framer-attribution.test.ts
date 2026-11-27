@@ -216,16 +216,25 @@ type Site = {
   stored?: string;
   gpc?: boolean;
   dnt?: boolean;
+  // The attribution a visit before this one stored.
+  touch?: unknown;
+  // consent.js loads after this file instead of before it.
+  consentLast?: boolean;
+  // Framer replaces document.addEventListener and drops what it receives.
+  framerPatch?: boolean;
 };
 
-function landing({ url = LANDING, stored, gpc, dnt }: Site = {}) {
+function landing({ url = LANDING, stored, gpc, dnt, touch, consentLast, framerPatch }: Site = {}) {
   const window = new HappyWindow({ url });
   window.document.write(`<!doctype html><title>Suplex</title><script></script>${LINKS}`);
   if (stored) window.localStorage.setItem("suplex.analytics.consent.v1", stored);
+  if (touch) window.localStorage.setItem("suplex.analytics.attribution.v1", JSON.stringify(touch));
   if (gpc) Object.defineProperty(window.navigator, "globalPrivacyControl", { configurable: true, value: true });
   if (dnt) Object.defineProperty(window.navigator, "doNotTrack", { configurable: true, value: "1" });
-  window.eval(consentSource);
+  if (framerPatch) window.document.addEventListener = () => undefined;
+  if (!consentLast) window.eval(consentSource);
   window.eval(source);
+  if (consentLast) window.eval(consentSource);
   // Framer moves to another page without a reload before the visitor chooses.
   window.history.replaceState({}, "", "/pricing");
   return window;
@@ -238,8 +247,8 @@ function href(window: HappyWindow, selector: string) {
 
 function open(window: HappyWindow, selector: string, type: "click" | "auxclick" | "contextmenu" | "submit" = "click") {
   const element = window.document.querySelector(selector)!;
-  // The test stops navigation after every capture listener ran.
-  window.document.addEventListener(type, event => event.preventDefault(), { once: true });
+  // The test stops navigation after every other listener ran.
+  window.EventTarget.prototype.addEventListener.call(window, type, (event: { preventDefault(): void }) => event.preventDefault(), { once: true });
   const event = type === "submit"
     ? new window.Event("submit", { bubbles: true, cancelable: true })
     : new window.MouseEvent(type, { bubbles: true, cancelable: true, button: type === "auxclick" ? 1 : type === "contextmenu" ? 2 : 0 });
@@ -366,4 +375,104 @@ test("a click ID that is too long or unsafe is dropped, not cut", () => {
 
 test("neither website script can end an inline script element", () => {
   for (const text of [source, consentSource]) expect(text).not.toMatch(/<\/script/i);
+});
+
+// A visit before this one stored this touch. The page URL of this visit has no campaign.
+const RETURNING_TOUCH = {
+  first: { source: "google", medium: "cpc", campaign: "spring", gclid: "Cj0K-test_1" },
+  last: { source: "google", medium: "cpc", campaign: "spring", term: "agents", content: "hero", gclid: "Cj0K-test_1" },
+};
+const RETURNING = { url: "https://getsuplex.ai/pricing", stored: "granted", touch: RETURNING_TOUCH };
+const RETURNING_PARAMS: Record<string, string> = {
+  gclid: "Cj0K-test_1",
+  utm_source: "google",
+  utm_medium: "cpc",
+  utm_campaign: "spring",
+  utm_term: "agents",
+  utm_content: "hero",
+};
+
+function addLink(window: HappyWindow, id: string) {
+  const link = window.document.createElement("a");
+  link.id = id;
+  link.setAttribute("href", "https://suplex.sh/start?plan=pro");
+  window.document.body.appendChild(link);
+}
+
+for (const consentLast of [false, true]) {
+  const order = consentLast ? "consent.js last" : "consent.js first";
+
+  test(`a returning consented visitor's links carry the stored touch without a click (${order})`, () => {
+    const window = landing({ ...RETURNING, consentLast });
+    const win = window as unknown as AnalyticsWindow;
+    for (const selector of ["#start", "#privacy", "#form"]) {
+      const decorated = href(window, selector);
+      for (const [key, value] of Object.entries(RETURNING_PARAMS)) expect(decorated.searchParams.get(key), `${selector} ${key}`).toBe(value);
+      expect(decorated.searchParams.get("consent")).toBe("granted");
+    }
+    expect(href(window, "#other").toString()).toBe("https://example.com/start");
+    expect(JSON.parse(window.localStorage.getItem("suplex.analytics.attribution.v1")!)).toEqual(RETURNING_TOUCH);
+
+    // The SDK loads once, and only its loaded callback captures the pageview.
+    expect(win.posthog._i).toHaveLength(1);
+    expect(Array.from(window.document.scripts).map(script => script.src).filter(Boolean)).toEqual(["https://meta.suplex.sh/static/array.js"]);
+    const options = win.posthog._i[0]![1];
+    const capture = vi.fn();
+    (options.loaded as (client: unknown) => void)({ capture, get_distinct_id: () => "0190a1b2-c3d4-7e5f", opt_in_capturing: vi.fn(), opt_out_capturing: vi.fn() });
+    expect(capture.mock.calls.filter(([event]) => event === "$pageview")).toHaveLength(1);
+    // The loaded client adds `visitor` to the links without a click.
+    expect(href(window, "#start").searchParams.get("visitor")).toBe("0190a1b2-c3d4-7e5f");
+    expect(href(window, "#start").searchParams.getAll("gclid")).toEqual(["Cj0K-test_1"]);
+    window.close();
+  });
+
+  test(`a link that Framer renders later is decorated on window load (${order})`, () => {
+    const window = landing({ ...RETURNING, consentLast });
+    addLink(window, "late");
+    expect(href(window, "#late").searchParams.has("gclid")).toBe(false);
+    window.dispatchEvent(new window.Event("load"));
+    const late = href(window, "#late");
+    for (const [key, value] of Object.entries(RETURNING_PARAMS)) expect(late.searchParams.get(key), key).toBe(value);
+    expect(late.searchParams.get("plan")).toBe("pro");
+    window.close();
+  });
+
+  test(`a returning visitor with a privacy signal or a stored denial gets nothing (${order})`, () => {
+    for (const site of [{ gpc: true }, { dnt: true }, { stored: "denied" }]) {
+      const name = JSON.stringify(site);
+      const window = landing({ ...RETURNING, ...site, consentLast });
+      addLink(window, "late");
+      window.dispatchEvent(new window.Event("load"));
+      expect((window as unknown as AnalyticsWindow).posthog, name).toBeUndefined();
+      for (const selector of ["#start", "#form", "#late"]) {
+        for (const key of CARRIED) expect(href(window, selector).searchParams.has(key), `${name} ${selector} ${key}`).toBe(false);
+        for (const key of CARRIED) expect(open(window, selector, selector === "#form" ? "submit" : "click").searchParams.has(key), `${name} ${selector} ${key}`).toBe(false);
+      }
+      window.close();
+    }
+  });
+}
+
+test("a click decorates the link when Framer replaced document.addEventListener", () => {
+  const window = landing({ ...RETURNING, framerPatch: true });
+  // A link that neither load decoration saw.
+  addLink(window, "late");
+  expect(href(window, "#late").searchParams.has("gclid")).toBe(false);
+  const late = open(window, "#late");
+  for (const [key, value] of Object.entries(RETURNING_PARAMS)) expect(late.searchParams.get(key), key).toBe(value);
+  window.close();
+});
+
+test("the landing _gl is read before the click and stays bounded", () => {
+  const window = landing({ url: `https://getsuplex.ai/?gclid=abc&_gl=1*abc`, stored: "granted" });
+  // Framer drops the query before the visitor clicks.
+  expect(href(window, "#start").searchParams.get("_gl")).toBe("1*abc");
+  addLink(window, "late");
+  expect(open(window, "#late").searchParams.get("_gl")).toBe("1*abc");
+  window.close();
+
+  const long = landing({ url: `https://getsuplex.ai/?gclid=abc&_gl=${"a".repeat(513)}`, stored: "granted" });
+  expect(href(long, "#start").searchParams.get("gclid")).toBe("abc");
+  expect(open(long, "#start").searchParams.has("_gl")).toBe(false);
+  long.close();
 });

@@ -466,9 +466,9 @@ pub(crate) mod tests {
         let (_, capabilities) = agent
             .call(reqwest::Method::GET, "/api/agent/capabilities", None)
             .await;
-        assert_eq!(capabilities, super::capabilities(true, false, false, false, false));
+        assert_eq!(capabilities, super::capabilities(true, false, false, false, false, false));
         assert_eq!(
-            super::capabilities(false, false, false, false, false)["unavailableCommands"],
+            super::capabilities(false, false, false, false, false, false)["unavailableCommands"],
             json!([
                 "answer_human_question",
                 "deliver_task",
@@ -1856,7 +1856,7 @@ pub(crate) mod tests {
         let (_, capabilities) = agent
             .call(reqwest::Method::GET, "/api/agent/capabilities", None)
             .await;
-        assert_eq!(capabilities, super::capabilities(true, false, false, false, false));
+        assert_eq!(capabilities, super::capabilities(true, false, false, false, false, false));
         assert!(capabilities["unavailableCommands"]
             .as_array()
             .unwrap()
@@ -1909,7 +1909,7 @@ pub(crate) mod tests {
         let (_, capabilities) = agent
             .call(reqwest::Method::GET, "/api/agent/capabilities", None)
             .await;
-        assert_eq!(capabilities, super::capabilities(true, true, false, false, false));
+        assert_eq!(capabilities, super::capabilities(true, true, false, false, false, false));
         assert!(capabilities["autonomousCommands"]
             .as_array()
             .unwrap()
@@ -2119,7 +2119,7 @@ pub(crate) mod tests {
         );
         grant_answers(server, &oauth_agent, true).await;
         let capabilities = rpc("tools/call", tool("suplex_capabilities", json!({}))).await;
-        assert_eq!(capabilities["body"], super::capabilities(true, true, false, false, false));
+        assert_eq!(capabilities["body"], super::capabilities(true, true, false, false, false, false));
         // The grant adds answer_human_question to permittedCommands, so the revision moves.
         let read = rpc("tools/call", tool("suplex_get_task", json!({"taskId": task_id}))).await;
         let mut answer = answer;
@@ -2409,6 +2409,81 @@ pub(crate) mod tests {
         let revoked = runtime.call("suplex_get_task_session_history", &arguments(history)).await.unwrap_err();
         let (status, body) = crate::integrations::suplex::runtime::failure(revoked.as_ref());
         assert_eq!((status, body["code"].as_str()), (403, Some("transcripts_grant_required")));
+    }
+
+    fn set_system_health_grant(agent: &Agent, granted: bool) {
+        agent.server.state.with_database(|database| {
+            database.connection().execute(
+                "UPDATE suplex_external_agents SET system_health_granted_at = ?1 WHERE id = ?2",
+                params![granted.then(|| Utc::now().to_rfc3339()), agent.agent_id],
+            ).unwrap();
+        });
+    }
+
+    /// The host health snapshot reaches a paired agent only with the live
+    /// administrator grant, and `GET /api/health` still needs a signed-in user.
+    #[tokio::test]
+    async fn the_system_health_route_needs_the_live_grant_and_returns_the_snapshot() {
+        use crate::integrations::suplex::{bridge, runtime::SuplexMcpRuntime};
+
+        let agent = agent().await;
+        std::fs::create_dir_all(agent.root.join("worktrees")).unwrap();
+        std::fs::create_dir_all(agent.root.join("artifacts")).unwrap();
+        let bearer = format!("Bearer {}", agent.credential);
+        for path in ["/api/agent/health", "/api/hermes/health"] {
+            assert_eq!(agent.server.request(reqwest::Method::GET, path, &[], None).await.status(), 401, "{path}");
+            let (status, denied) = agent.call(reqwest::Method::GET, path, None).await;
+            assert_eq!((status, denied["code"].as_str()), (403, Some("system_health_grant_required")), "{denied}");
+            assert!(denied["error"].as_str().unwrap().contains("Read system health"), "{denied}");
+        }
+        let health = agent.server.request(reqwest::Method::GET, "/api/health", &[("authorization", bearer.as_str())], None).await;
+        assert_eq!(health.status(), 401, "the user health route does not accept an agent credential");
+        let (_, identity) = agent.call(reqwest::Method::GET, "/api/agent/me", None).await;
+        assert_eq!((identity["capabilities"]["systemHealth"].clone(), identity["systemHealthGrant"].clone()), (json!(false), json!(false)));
+        let (_, capabilities) = agent.call(reqwest::Method::GET, "/api/agent/capabilities", None).await;
+        assert_eq!(capabilities["capabilities"]["read"]["systemHealth"], false);
+        assert!(!capabilities["autonomousCommands"].as_array().unwrap().contains(&json!("get_system_health")));
+
+        set_system_health_grant(&agent, true);
+        let (_, identity) = agent.call(reqwest::Method::GET, "/api/agent/me", None).await;
+        assert_eq!((identity["capabilities"]["systemHealth"].clone(), identity["systemHealthGrant"].clone()), (json!(true), json!(true)));
+        let (_, capabilities) = agent.call(reqwest::Method::GET, "/api/agent/capabilities", None).await;
+        assert_eq!(capabilities["capabilities"]["read"]["systemHealth"], true);
+        assert!(capabilities["autonomousCommands"].as_array().unwrap().contains(&json!("get_system_health")));
+        for path in ["/api/agent/health", "/api/hermes/health"] {
+            let response = agent.server.request(reqwest::Method::GET, path, &[("authorization", bearer.as_str())], None).await;
+            assert_eq!(response.status(), 200, "{path}");
+            assert_eq!(response.headers()[reqwest::header::CACHE_CONTROL], "private, no-store");
+            let snapshot: Value = response.json().await.unwrap();
+            assert!(snapshot["generatedAt"].is_string(), "{snapshot}");
+            assert!(snapshot["reachableAddress"].is_string(), "{snapshot}");
+            assert!(snapshot["ready"].is_boolean(), "{snapshot}");
+            let disk = snapshot["checks"].as_array().unwrap().iter().find(|check| check["id"] == "disk-space").unwrap();
+            for field in ["freeBytes", "worktreeFreeBytes", "worktreeTotalBytes", "artifactFreeBytes", "artifactTotalBytes"] {
+                assert!(disk["details"][field].as_u64().is_some(), "{field}: {disk}");
+            }
+        }
+
+        // The stdio bridge and the in-process OAuth runtime return the same snapshot and refusal.
+        let bridge = bridge::Bridge::new(bridge::Settings { base_url: agent.server.base.clone(), credential: agent.credential.clone() });
+        let none = serde_json::Map::new();
+        let (status, bridged) = bridge.call("suplex_get_system_health", &none).await.unwrap();
+        assert_eq!(status, 200, "{bridged}");
+        assert!(bridged["checks"].as_array().unwrap().iter().any(|check| check["id"] == "disk-space"));
+        let principal = agent.server.state.with_database(|database| external_agents::authenticate(database, &agent.credential, Utc::now()).unwrap());
+        let runtime = SuplexMcpRuntime { state: agent.server.state.clone(), principal, agent_delivery: false };
+        let (status, local) = runtime.call("suplex_get_system_health", &none).await.unwrap();
+        assert_eq!(status, 200, "{local}");
+        let ids = |snapshot: &Value| snapshot["checks"].as_array().unwrap().iter().map(|check| check["id"].clone()).collect::<Vec<_>>();
+        assert_eq!(ids(&local), ids(&bridged));
+
+        set_system_health_grant(&agent, false);
+        assert_eq!(agent.call(reqwest::Method::GET, "/api/agent/health", None).await.0, 403, "revocation applies to the next request");
+        let (status, refused) = bridge.call("suplex_get_system_health", &none).await.unwrap();
+        assert_eq!((status, refused["code"].as_str()), (403, Some("system_health_grant_required")));
+        let revoked = runtime.call("suplex_get_system_health", &none).await.unwrap_err();
+        let (status, body) = crate::integrations::suplex::runtime::failure(revoked.as_ref());
+        assert_eq!((status, body.clone()), (403, refused), "both transports refuse alike");
     }
 
     fn telemetry_sent(agent: &Agent) -> Vec<Value> {

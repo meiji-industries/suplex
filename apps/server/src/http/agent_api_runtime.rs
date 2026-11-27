@@ -64,7 +64,7 @@ pub(crate) fn body_failure(status_code: StatusCode, runtime: bool) -> Response {
 
 /// `agentApiTaskFailureCode`: the runtime code for a task failure.
 fn runtime_task_code(status_code: u16, code: &str, message: &str) -> &'static str {
-    const PASSED: [&str; 27] = [
+    const PASSED: [&str; 28] = [
         "cursor_invalid",
         "native_session_unavailable",
         "project_not_found",
@@ -88,6 +88,7 @@ fn runtime_task_code(status_code: u16, code: &str, message: &str) -> &'static st
         "moves_grant_required",
         "transcripts_grant_required",
         "project_agents_grant_required",
+        "system_health_grant_required",
         "task_not_waiting",
         "question_stale",
         "human_decision_required",

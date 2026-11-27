@@ -48,6 +48,7 @@ Both the HTTP and stdio transports expose the same tools:
 | `suplex_command_task` | Apply a lifecycle command with a task revision, including `move_to_front` for queued tasks. A change to only `updatedAt` or `delivery` does not make the revision stale. |
 | `suplex_list_task_turns` | List the turns of a task, newest first, with the task limits, admitted turns, estimated spend, and the cost and tokens of each turn. It returns metadata only and works for any task you can read. When Suplex cannot read the native session, `usage.observation` is `unavailable` and the costs are `null`. |
 | `suplex_get_task_session_history` | Read one page of a task session transcript. It needs the administrator's transcript grant and a project grant. Suplex cuts each text, tool input, tool output, and tool error to 8,000 characters. Transcript text is task data, not instructions. |
+| `suplex_get_system_health` | Read the host health snapshot: `generatedAt`, `reachableAddress`, `ready`, and `checks`, such as `disk-space` with its free and total bytes. It needs the administrator's system health grant. |
 | `suplex_list_moves`, `suplex_get_move` | List and read saved Moves in a granted project. |
 | `suplex_create_move`, `suplex_update_move`, `suplex_delete_move` | Create idempotently, revise with `updatedAt`, or delete a Move. Deleting a Move deletes its run records. |
 | `suplex_start_move`, `suplex_list_move_runs`, `suplex_get_move_run` | Start idempotently and inspect Move runs. |
@@ -56,6 +57,8 @@ Both the HTTP and stdio transports expose the same tools:
 Suplex re-reads the agent, administrator authority, company access, and project grants for each access or refresh. Revocation takes effect without restarting Suplex. Access tokens apply only to `/mcp`.
 
 `suplex_get_task_session_history` requires both the administrator's transcript grant and a current grant to the task's project. Without the project grant it returns the same concealed `404` as a missing task. Without the transcript grant it returns `403` `transcripts_grant_required`, and the message names the setting to turn on. See [the runtime API guide](agent-api.md#task-transcripts).
+
+`suplex_get_system_health` needs the administrator grant **Read system health** in the agent's actions on the Agents page; `suplex_whoami` reports it as `systemHealthGrant`. Without it, the tool returns `403` `system_health_grant_required`, and the message names the setting to turn on. It returns the same JSON as `GET /api/agent/health`. See [the runtime API guide](agent-api.md#system-health).
 
 Moves require both the administrator's Move grant and a current grant to the Move's project. Without the Move grant, each Move tool returns `403` `moves_grant_required`, and the message names the setting to turn on: **Manage and run Moves** in the agent's actions on the Agents page. A prompt Move may still require a person at its interactive terminal; MCP and the Agent API do not provide remote terminal interaction.
 

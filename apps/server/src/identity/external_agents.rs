@@ -59,6 +59,8 @@ pub struct Principal {
     pub transcripts_grant: bool,
     /// Read from the database on every request. A project write checks it again.
     pub project_agents_grant: bool,
+    /// Read from the database on every request, so revocation applies immediately.
+    pub system_health_grant: bool,
 }
 
 crate::shared::wire_enum! {
@@ -104,6 +106,8 @@ pub struct AdminAgent {
     pub transcripts_granted_at: Option<String>,
     pub project_agents_granted_by_user_id: Option<String>,
     pub project_agents_granted_at: Option<String>,
+    pub system_health_granted_by_user_id: Option<String>,
+    pub system_health_granted_at: Option<String>,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -409,7 +413,7 @@ const ADMIN_COLUMNS: &str = "SELECT e.id, ag.name, ag.avatar_seed, e.company_id,
     e.paired_at, \
     (SELECT c.created_at FROM suplex_external_agent_credentials c WHERE c.agent_id = e.id AND c.revoked_at IS NULL ORDER BY c.created_at DESC LIMIT 1) AS credential_created_at, \
     CASE WHEN EXISTS (SELECT 1 FROM suplex_oauth_grants og WHERE og.agent_id = e.id) THEN 'oauth' ELSE 'credential' END AS connection_kind, \
-    e.last_used_at, e.revoked_at, e.created_at, e.updated_at, e.answer_granted_by_user_id, e.answer_granted_at, e.moves_granted_by_user_id, e.moves_granted_at, e.transcripts_granted_by_user_id, e.transcripts_granted_at, e.project_agents_granted_by_user_id, e.project_agents_granted_at \
+    e.last_used_at, e.revoked_at, e.created_at, e.updated_at, e.answer_granted_by_user_id, e.answer_granted_at, e.moves_granted_by_user_id, e.moves_granted_at, e.transcripts_granted_by_user_id, e.transcripts_granted_at, e.project_agents_granted_by_user_id, e.project_agents_granted_at, e.system_health_granted_by_user_id, e.system_health_granted_at \
     FROM suplex_external_agents e JOIN suplex_agents ag ON ag.id = e.id";
 
 fn admin_row(row: &Row<'_>) -> rusqlite::Result<AdminAgent> {
@@ -436,6 +440,8 @@ fn admin_row(row: &Row<'_>) -> rusqlite::Result<AdminAgent> {
         transcripts_granted_at: row.get(19)?,
         project_agents_granted_by_user_id: row.get(20)?,
         project_agents_granted_at: row.get(21)?,
+        system_health_granted_by_user_id: row.get(22)?,
+        system_health_granted_at: row.get(23)?,
         created_at: row.get(12)?,
         updated_at: row.get(13)?,
     })
@@ -705,12 +711,76 @@ pub fn set_project_agents_grant(
     admin_agent(database, agent_id)
 }
 
-/// The Moves, transcripts, and project agents grants as stored now.
-fn stored_grants(database: &SuplexDatabase, agent_id: &str) -> DatabaseResult<(bool, bool, bool)> {
+/// Let an external agent read the host health snapshot, or revoke that authority.
+pub fn set_system_health_grant(
+    database: &mut SuplexDatabase,
+    actor_user_id: &str,
+    agent_id: &str,
+    granted: bool,
+    now: DateTime<Utc>,
+) -> DatabaseResult<AdminAgent> {
+    require_admin(database, actor_user_id)?;
+    if !valid_id(agent_id) {
+        return Err(not_found("agent_not_found"));
+    }
+    let stamp = rfc3339_millis(now);
+    database.transaction(false, |database| {
+        let company_id = match agent_state(database, agent_id)? { Some((company_id, status)) if status != ExternalAgentStatus::Revoked => company_id, _ => return Err(not_found("agent_not_found")) };
+        database.connection().execute(
+            "UPDATE suplex_external_agents SET system_health_granted_by_user_id = ?1, system_health_granted_at = ?2, updated_at = ?4 WHERE id = ?3",
+            params![granted.then_some(actor_user_id), granted.then_some(&stamp), agent_id, stamp],
+        )?;
+        audit(database, (Some(actor_user_id), None), "external_agent_system_health_grant_updated", &company_id, metadata(&[("agentId", agent_id), ("systemHealthGranted", if granted { "true" } else { "false" })]), now)
+    })?;
+    admin_agent(database, agent_id)
+}
+
+/// The host health snapshot needs the administrator's system health grant,
+/// read now so a revocation applies to the next call. The agent already reads
+/// its grant from `/me`, so a missing grant says how to get it.
+pub fn require_system_health_grant(
+    database: &SuplexDatabase,
+    principal: &Principal,
+) -> DatabaseResult<()> {
+    let granted: Option<bool> = database
+        .connection()
+        .query_row(
+            "SELECT system_health_granted_at IS NOT NULL FROM suplex_external_agents WHERE id = ?1",
+            [&principal.agent_id],
+            |row| row.get(0),
+        )
+        .optional()?;
+    if granted == Some(true) {
+        return Ok(());
+    }
+    Err(IdentityError::external_agent(
+        "An administrator must turn on \"Read system health\" for this agent in its actions on the Agents page",
+        403,
+        "system_health_grant_required",
+    )
+    .into())
+}
+
+/// The administrator grants of one agent as stored now.
+struct StoredGrants {
+    moves: bool,
+    transcripts: bool,
+    project_agents: bool,
+    system_health: bool,
+}
+
+fn stored_grants(database: &SuplexDatabase, agent_id: &str) -> DatabaseResult<StoredGrants> {
     Ok(database.connection().query_row(
-        "SELECT moves_granted_at IS NOT NULL, transcripts_granted_at IS NOT NULL, project_agents_granted_at IS NOT NULL FROM suplex_external_agents WHERE id = ?1",
+        "SELECT moves_granted_at IS NOT NULL, transcripts_granted_at IS NOT NULL, project_agents_granted_at IS NOT NULL, system_health_granted_at IS NOT NULL FROM suplex_external_agents WHERE id = ?1",
         [agent_id],
-        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        |row| {
+            Ok(StoredGrants {
+                moves: row.get(0)?,
+                transcripts: row.get(1)?,
+                project_agents: row.get(2)?,
+                system_health: row.get(3)?,
+            })
+        },
     )?)
 }
 
@@ -900,7 +970,7 @@ pub fn authenticate(
         };
         let project_ids = grants(database, &agent_id)?;
         let answer_grant = answer_grant_repository::read(database, &agent_id)?;
-        let (moves_grant, transcripts_grant, project_agents_grant) = stored_grants(database, &agent_id)?;
+        let stored = stored_grants(database, &agent_id)?;
         database.connection().execute(
             "UPDATE suplex_external_agent_credentials SET last_used_at = ?1 WHERE id = ?2",
             params![now_iso, credential_id],
@@ -916,9 +986,10 @@ pub fn authenticate(
             project_ids,
             cursor_key: credential_hash,
             answer_grant,
-            moves_grant,
-            transcripts_grant,
-            project_agents_grant,
+            moves_grant: stored.moves,
+            transcripts_grant: stored.transcripts,
+            project_agents_grant: stored.project_agents,
+            system_health_grant: stored.system_health,
         })
     })
 }
@@ -1007,6 +1078,7 @@ pub fn provision_oauth_agent(
         moves_grant: false,
         transcripts_grant: false,
         project_agents_grant: false,
+        system_health_grant: false,
     })
 }
 
@@ -1031,7 +1103,7 @@ pub fn oauth_principal(
         };
         let project_ids = grants(database, agent_id)?;
         let answer_grant = answer_grant_repository::read(database, agent_id)?;
-        let (moves_grant, transcripts_grant, project_agents_grant) = stored_grants(database, agent_id)?;
+        let stored = stored_grants(database, agent_id)?;
         database.connection().execute(
             "UPDATE suplex_external_agents SET last_used_at = ?1, updated_at = ?1 WHERE id = ?2",
             params![now_iso, agent_id],
@@ -1043,9 +1115,10 @@ pub fn oauth_principal(
             project_ids,
             cursor_key: cursor_key.to_owned(),
             answer_grant,
-            moves_grant,
-            transcripts_grant,
-            project_agents_grant,
+            moves_grant: stored.moves,
+            transcripts_grant: stored.transcripts,
+            project_agents_grant: stored.project_agents,
+            system_health_grant: stored.system_health,
         })
     })
 }

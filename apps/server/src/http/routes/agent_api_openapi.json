@@ -146,6 +146,82 @@
         }
       }
     },
+    "/api/agent/health": {
+      "get": {
+        "operationId": "getAgentApiSystemHealth",
+        "summary": "Read the host health snapshot",
+        "description": "Returns the host health snapshot of the Suplex health page, the same JSON as GET /api/health: generatedAt, reachableAddress, ready, and checks. The disk-space check has freeBytes, minFreeBytes, worktreeFreeBytes, worktreeTotalBytes, artifactFreeBytes, and artifactTotalBytes in its details. Provider checks do not include a project's providers. Needs the administrator grant Read system health, read on each request; GET /api/agent/me reports it as systemHealthGrant. Without the grant, the response is 403 system_health_grant_required with a message that names the setting. The response has Cache-Control: private, no-store.",
+        "security": [
+          {
+            "AgentApiBearer": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "generatedAt": {
+                      "type": "string"
+                    },
+                    "reachableAddress": {
+                      "type": "string"
+                    },
+                    "ready": {
+                      "type": "boolean"
+                    },
+                    "checks": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "label": {
+                            "type": "string"
+                          },
+                          "status": {
+                            "type": "string",
+                            "enum": [
+                              "healthy",
+                              "warning",
+                              "unhealthy"
+                            ]
+                          },
+                          "summary": {
+                            "type": "string"
+                          },
+                          "details": {
+                            "type": "object",
+                            "additionalProperties": {}
+                          }
+                        }
+                      }
+                    }
+                  },
+                  "required": [
+                    "generatedAt",
+                    "reachableAddress",
+                    "ready",
+                    "checks"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication failed"
+          },
+          "403": {
+            "description": "system_health_grant_required: an administrator must turn on Read system health for this agent"
+          }
+        }
+      }
+    },
     "/api/agent/capabilities": {
       "get": {
         "operationId": "getAgentApiCapabilities",
@@ -203,6 +279,9 @@
                               "type": "boolean"
                             },
                             "transcripts": {
+                              "type": "boolean"
+                            },
+                            "systemHealth": {
                               "type": "boolean"
                             }
                           },

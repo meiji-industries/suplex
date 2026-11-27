@@ -74,6 +74,7 @@ pub fn capabilities(
     moves_grant: bool,
     transcripts_grant: bool,
     project_agents_grant: bool,
+    system_health_grant: bool,
 ) -> Value {
     let mut autonomous = vec![
         "create_backlog_task",
@@ -106,6 +107,9 @@ pub fn capabilities(
     if project_agents_grant {
         autonomous.push("update_project_agents");
     }
+    if system_health_grant {
+        autonomous.push("get_system_health");
+    }
     let mut unavailable = Vec::new();
     if !answers {
         unavailable.push(contracts::ANSWER_HUMAN_QUESTION);
@@ -122,7 +126,7 @@ pub fn capabilities(
     json!({
         "apiVersion": "v1",
         "capabilities": {
-            "read": {"task": true, "workflows": true, "templates": true, "moves": moves_grant, "transcripts": transcripts_grant, "profiles": true},
+            "read": {"task": true, "workflows": true, "templates": true, "moves": moves_grant, "transcripts": transcripts_grant, "profiles": true, "systemHealth": system_health_grant},
             "projectAgents": project_agents_grant,
             "create": {"backlogTask": true, "queuedTask": true, "deliveryTargets": ["local_worktree", "remote_branch", "pull_request_draft", "pull_request_ready", "merged"]},
             "taskControl": true, "delivery": agent_delivery, "merge": agent_delivery, "humanDecisions": answers,
@@ -141,6 +145,7 @@ pub fn router() -> Router<AppState> {
             .route(&format!("{prefix}/me"), get(me))
             .route(&format!("{prefix}/openapi.json"), get(openapi))
             .route(&format!("{prefix}/capabilities"), get(capabilities_route))
+            .route(&format!("{prefix}/health"), get(system_health))
             .route(&format!("{prefix}/workflows"), get(workflows))
             .route(&format!("{prefix}/templates"), get(templates))
             .route(&format!("{prefix}/profiles"), get(profiles))
@@ -625,8 +630,32 @@ async fn capabilities_route(State(state): State<AppState>, headers: HeaderMap) -
             principal.moves_grant,
             principal.transcripts_grant,
             principal.project_agents_grant,
+            principal.system_health_grant,
         ),
     )
+}
+
+/// The host health snapshot of `GET /api/health`, unchanged, for an agent with
+/// the administrator's system health grant. It has no provider context: that
+/// needs a signed-in user.
+async fn system_health(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    let principal = attempt!(bearer(&state, &headers, true));
+    respond(
+        agent_system_health(&state, &principal).await,
+        StatusCode::OK,
+        true,
+    )
+}
+
+/// The grant check and snapshot shared by the route and the in-process MCP tool.
+pub(crate) async fn agent_system_health(
+    state: &AppState,
+    principal: &Principal,
+) -> Result<Value, Box<dyn Error + Send + Sync>> {
+    state.with_database(|database| {
+        external_agents::require_system_health_grant(database, principal)
+    })?;
+    Ok(crate::platform::health::snapshot(state, Vec::new(), None).await)
 }
 
 async fn workflows(

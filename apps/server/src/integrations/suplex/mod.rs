@@ -225,7 +225,8 @@ mod tests {
                 "suplex_stop_move_run",
                 "suplex_archive_move_run",
                 "suplex_list_task_turns",
-                "suplex_get_task_session_history"
+                "suplex_get_task_session_history",
+                "suplex_get_system_health"
             ]
         );
         let command = tool("suplex_command_task").unwrap();

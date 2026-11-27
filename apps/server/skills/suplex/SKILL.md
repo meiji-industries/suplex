@@ -22,7 +22,7 @@ Use the first transport that is available. All three speak the same API:
    `suplex_delete_move`, `suplex_start_move`, `suplex_list_move_runs`,
    `suplex_get_move_run`, `suplex_get_move_run_transcript`,
    `suplex_stop_move_run`, `suplex_archive_move_run`, `suplex_list_task_turns`,
-   `suplex_get_task_session_history`.
+   `suplex_get_task_session_history`, `suplex_get_system_health`.
 2. **The hosted Streamable HTTP MCP endpoint** with OAuth. Read
    `{SUPLEX_BASE_URL}/.well-known/oauth-protected-resource/mcp`. When its
    `resource` is `{SUPLEX_BASE_URL}/mcp`, the host advertises the endpoint.
@@ -362,6 +362,17 @@ assert task["rootProfile"]["name"] == "Planner Coordinator"
 
 The task must be in the backlog or the queue. When no profile or several
 profiles have the name, ask the person you work for.
+
+### Read system health
+
+`suplex_get_system_health` (`GET /api/agent/health`,
+`client.get_system_health`) returns the host health snapshot that the Suplex
+health page shows: `generatedAt`, `reachableAddress`, `ready`, and `checks`.
+The `disk-space` check has the free and total bytes in its `details`. It needs
+the administrator grant **Read system health**; `suplex_whoami` reports it as
+`systemHealthGrant`. Without it, Suplex returns
+`403 system_health_grant_required`: tell the person you work for which setting
+to turn on.
 
 ### Change a project's default agents
 

@@ -232,6 +232,10 @@ class SuplexClient:
         suffix = f"?{urllib.parse.urlencode({'before': before})}" if before else ""
         return self.call("GET", f"/api/agent/tasks/{urllib.parse.quote(task_id, safe='')}/sessions/{urllib.parse.quote(session_id, safe='')}/history{suffix}")
 
+    def get_system_health(self) -> dict:
+        """The host health snapshot. Needs the administrator's system health grant."""
+        return self.call("GET", "/api/agent/health")
+
     # Moves. Served only when an administrator granted this agent Move access.
 
     def list_moves(self, project_id: str) -> dict:
@@ -306,12 +310,14 @@ def _self_check() -> None:
     client.get_task_session_history("t 1", "s/1", before="m")
     client.list_profiles(role="worker", project_id="p 1")
     client.update_project_agents("p/1", "2026-01-01T00:00:00.000Z", key="k", rootProfileId="r")
+    client.get_system_health()
     assert seen == [
         ("GET", "/api/agent/tasks/t%201/turns?limit=5&cursor=c"),
         ("GET", "/api/agent/tasks/t2/turns"),
         ("GET", "/api/agent/tasks/t%201/sessions/s%2F1/history?before=m"),
         ("GET", "/api/agent/profiles?includeArchived=false&role=worker&projectId=p+1"),
         ("PATCH", "/api/agent/projects/p%2F1/agents"),
+        ("GET", "/api/agent/health"),
     ], seen
     print("suplex_client self-check passed")
 

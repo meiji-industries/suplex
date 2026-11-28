@@ -77,7 +77,7 @@
       "path": "/api/agent/workflows",
       "method": "GET",
       "authentication": "agent credential",
-      "description": "List workflow records for a granted project and whether task creation permits each one."
+      "description": "List workflow records for a granted project, whether task creation permits each one, and the default Coordinator, Worker, and Advisor profiles a task in that project uses with each one."
     },
     {
       "path": "/api/agent/templates",
@@ -116,7 +116,7 @@
       "path": "/api/agent/tasks",
       "method": "POST",
       "authentication": "agent credential",
-      "description": "Create a backlog task, or a queued task with queue true. dryRun validates without writing state. An idempotency key is necessary unless dryRun is true. A queued task starts by itself only when every prerequisite is complete. Task input errors include project_not_found, dependency_not_found, root_profile_not_found, worker_profile_not_found, advisor_profile_not_found, source_issue_rejected, source_pull_request_rejected, source_branch_rejected, workflow_not_found, and template_not_found. They include field, value, and reason."
+      "description": "Create a backlog task, or a queued task with queue true. dryRun validates without writing state and reports the resolved rootProfile, workerProfile, and advisorProfiles. An idempotency key is necessary unless dryRun is true. A queued task starts by itself only when every prerequisite is complete. An unnamed profile takes the project's Agents defaults before the workflow record's profiles, each only when the project's provider policy allows it. Task input errors include project_not_found, dependency_not_found, root_profile_not_found, worker_profile_not_found, advisor_profile_not_found, profile_not_allowed, source_issue_rejected, source_pull_request_rejected, source_branch_rejected, workflow_not_found, and template_not_found. They include field, value, and reason."
     },
     {
       "path": "/api/agent/tasks/{taskId}",

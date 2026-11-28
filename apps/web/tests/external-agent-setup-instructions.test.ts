@@ -42,6 +42,8 @@ test("instructions default to the hosted MCP endpoint or the Python client", () 
   expect(access).toContain("`claude mcp add --transport http suplex " + origin + "/mcp`");
   expect(access).toContain("an administrator approves the company and projects");
   expect(access).toContain("use `suplex_client.py` over the agent HTTP API with the paired credential");
+  expect(access).toContain("From a shell, run its command line, for example `python3 suplex_client.py whoami`");
+  expect(access).not.toContain("--credential");
 });
 
 test("instructions keep the stdio bridge optional and never ask for the CLI", () => {

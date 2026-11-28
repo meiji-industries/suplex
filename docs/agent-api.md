@@ -152,6 +152,11 @@ with `id`, `name`, `description`, and `permittedForAgentTaskCreation`. `GET
 /api/agent/templates?projectId=...` returns the same fields for templates in
 that project. Both routes require a current project grant. Every listed
 workflow and template is permitted, so the permission flag is always `true`.
+Each workflow also reports `defaultProfiles`: `{ rootProfile, workerProfile,
+advisorProfiles }`, the profiles that a task in that project uses with the
+workflow when the request names none. Each profile is `{ id, name }`, and
+`advisorProfiles` is keyed by Advisor role. A role that no allowed profile can
+fill is `null`; it does not fail the listing.
 
 `GET /api/agent/tasks` returns every task in the caller's currently granted
 projects. It accepts these query
@@ -408,9 +413,25 @@ reports the applied `workflow`, `templateId`, `deliveryTarget`,
 and name when Suplex selected a workflow record, plus the engine that the task
 runs. A template task has a null workflow record ID and name.
 
+A workflow task fills each role that the request does not name in this order,
+using a profile only when the project's provider policy allows it:
+
+- Coordinator and Worker: the project's Agents default, the workflow record's
+  profile, then the first allowed active profile of that role.
+- Advisor: the role's default (the task's Coordinator for Plan A, the project's
+  Alt Coordinator otherwise), the project's other default Coordinator, then
+  the workflow record's Advisor profile.
+
+A named `rootProfileId`, `workerProfileId`, or `advisorProfileIds.<role>` that
+the policy does not allow returns `422 profile_not_allowed` with that `field`,
+the profile ID as `value`, and a `reason`. A role that no allowed profile can
+fill returns the same code with the role's field and the last profile the
+policy refused. A template task keeps the template's profiles.
+
 Send `"dryRun": true` to validate a create request and receive its projected
 result without writing a task, receipt, dependency, queue state, audit event,
-or image.
+or image. The projection reports `rootProfile`, `workerProfile`, and
+`advisorProfiles` (keyed by role), the same profiles the created task stores.
 
 ## Queued tasks
 

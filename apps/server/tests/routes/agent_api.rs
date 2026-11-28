@@ -2857,6 +2857,23 @@ pub(crate) mod tests {
             (200, json!({"id": "profile_test_builder", "name": "Builder Worker"})),
             "{preview}"
         );
+        assert_eq!(preview["advisorProfiles"], json!({}), "Standard has no Advisors: {preview}");
+        let (status, refused) = agent.call(reqwest::Method::POST, "/api/agent/tasks", Some(json!({"projectId": "project_api", "title": "Blocked worker", "idempotencyKey": "profile-blocked-001", "dryRun": true, "workerProfileId": "profile_test_outside"}))).await;
+        assert_eq!(
+            (status, refused["code"].as_str(), refused["field"].as_str(), refused["value"].as_str(), refused["reason"].is_string()),
+            (422, Some("profile_not_allowed"), Some("workerProfileId"), Some("profile_test_outside"), true),
+            "{refused}"
+        );
+        let (status, review) = agent.call(reqwest::Method::POST, "/api/agent/tasks", Some(json!({"projectId": "project_api", "title": "Review preview", "idempotencyKey": "profile-review-001", "dryRun": true, "workflowId": "workflow_native_independent_review"}))).await;
+        assert_eq!(status, 200, "{review}");
+        let (_, listed) = agent.call(reqwest::Method::GET, "/api/agent/workflows?projectId=project_api", None).await;
+        let listed = listed["workflows"].as_array().unwrap().iter().find(|workflow| workflow["id"] == "workflow_native_independent_review").unwrap().clone();
+        assert_eq!(
+            (&listed["defaultProfiles"]["rootProfile"], &listed["defaultProfiles"]["workerProfile"], &listed["defaultProfiles"]["advisorProfiles"]),
+            (&review["rootProfile"], &review["workerProfile"], &review["advisorProfiles"]),
+            "the listing reports the profiles a defaulted task uses: {listed}"
+        );
+        assert!(review["advisorProfiles"]["reviewer"]["id"].is_string(), "{review}");
         let task = agent.create("Profile change", "profile-change-001").await;
         assert_eq!(task["rootProfile"], json!({"id": "profile_native_root", "name": task["rootProfile"]["name"]}));
         assert!(task["rootProfile"]["name"].is_string() && task["workerProfile"]["name"].is_string(), "{task}");

@@ -585,6 +585,7 @@
       "get": {
         "operationId": "listAgentApiWorkflows",
         "summary": "List workflows available to a project",
+        "description": "Lists every non-archived workflow record. defaultProfiles reports the Coordinator, Worker, and Advisor profiles that a task in this project uses with the workflow when the request names none. A role that no allowed profile can fill is null and does not fail the listing.",
         "security": [
           {
             "AgentApiBearer": []
@@ -626,13 +627,87 @@
                           },
                           "permittedForAgentTaskCreation": {
                             "type": "boolean"
+                          },
+                          "defaultProfiles": {
+                            "type": "object",
+                            "description": "The profiles a task in this project uses with this workflow when the request names none: the project's Agents defaults first, then the workflow record's profiles, each only when the project's provider policy allows it. A role that no allowed profile can fill is null.",
+                            "properties": {
+                              "rootProfile": {
+                                "type": "object",
+                                "nullable": true,
+                                "description": "The agent profile. name is null when that profile no longer exists.",
+                                "properties": {
+                                  "id": {
+                                    "type": "string"
+                                  },
+                                  "name": {
+                                    "nullable": true,
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "id",
+                                  "name"
+                                ],
+                                "additionalProperties": false
+                              },
+                              "workerProfile": {
+                                "type": "object",
+                                "nullable": true,
+                                "description": "The agent profile. name is null when that profile no longer exists.",
+                                "properties": {
+                                  "id": {
+                                    "type": "string"
+                                  },
+                                  "name": {
+                                    "nullable": true,
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "id",
+                                  "name"
+                                ],
+                                "additionalProperties": false
+                              },
+                              "advisorProfiles": {
+                                "type": "object",
+                                "description": "One profile for each Advisor role of the workflow, keyed by role: reviewer, planner_a, planner_b, or rater.",
+                                "additionalProperties": {
+                                  "type": "object",
+                                  "nullable": true,
+                                  "description": "The agent profile. name is null when that profile no longer exists.",
+                                  "properties": {
+                                    "id": {
+                                      "type": "string"
+                                    },
+                                    "name": {
+                                      "nullable": true,
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": [
+                                    "id",
+                                    "name"
+                                  ],
+                                  "additionalProperties": false
+                                }
+                              }
+                            },
+                            "required": [
+                              "rootProfile",
+                              "workerProfile",
+                              "advisorProfiles"
+                            ],
+                            "additionalProperties": false
                           }
                         },
                         "required": [
                           "id",
                           "name",
                           "description",
-                          "permittedForAgentTaskCreation"
+                          "permittedForAgentTaskCreation",
+                          "defaultProfiles"
                         ],
                         "additionalProperties": false
                       }
@@ -1834,7 +1909,7 @@
       "post": {
         "operationId": "createAgentApiBacklogTask",
         "summary": "Create a backlog or queued task",
-        "description": "Creates a backlog task. With queue true, the task is queued: it starts now when every prerequisite is complete, and otherwise stays queued with zero sessions until the last prerequisite completes. Without queue, it never starts by itself. dryRun true validates the same request and returns its projection without writing a task, dependency, receipt, artifact, or audit event. The server defaults description to an empty string and rejects unknown fields with request_invalid. A request that does not name deliveryTarget, runProjectTests, or visualEvidence takes the project delivery defaults that GET /api/agent/me reports in deliveryDefaults (agentTaskPolicy is a deprecated alias with the same shape). dependsOn sets the prerequisites, shown as Blocked by. A prerequisite can be any task the agent can read in a granted project. The task waits for the prerequisite. A prerequisite task is complete when it is delivered. For a pull_request_draft, pull_request_ready, or merged target, its pull request must also merge. A self-reference, a cycle, or a task outside a granted project is rejected. Idempotency is scoped to the paired agent and company. An identical replay returns 200; reuse for a different request returns 409 with idempotency_conflict. GET /api/agent/tasks supports opaque cursors and returns nextCursor.",
+        "description": "Creates a backlog task. With queue true, the task is queued: it starts now when every prerequisite is complete, and otherwise stays queued with zero sessions until the last prerequisite completes. Without queue, it never starts by itself. dryRun true validates the same request and returns its projection without writing a task, dependency, receipt, artifact, or audit event. The server defaults description to an empty string and rejects unknown fields with request_invalid. A request that does not name deliveryTarget, runProjectTests, or visualEvidence takes the project delivery defaults that GET /api/agent/me reports in deliveryDefaults (agentTaskPolicy is a deprecated alias with the same shape). dependsOn sets the prerequisites, shown as Blocked by. A prerequisite can be any task the agent can read in a granted project. The task waits for the prerequisite. A prerequisite task is complete when it is delivered. For a pull_request_draft, pull_request_ready, or merged target, its pull request must also merge. A self-reference, a cycle, or a task outside a granted project is rejected. Idempotency is scoped to the paired agent and company. An identical replay returns 200; reuse for a different request returns 409 with idempotency_conflict. GET /api/agent/tasks supports opaque cursors and returns nextCursor. A workflow task fills each Coordinator, Worker, and Advisor role that the request does not name from the project's Agents defaults first, then from the workflow record's profiles, each only when the project's provider policy allows it. GET /api/agent/workflows reports these profiles in defaultProfiles. A named profile that the policy does not allow, or a role that no allowed profile can fill, returns 422 profile_not_allowed with field (rootProfileId, workerProfileId, or advisorProfileIds.<role>), value (the profile ID), and reason. The dry run reports rootProfile, workerProfile, and advisorProfiles.",
         "security": [
           {
             "AgentApiBearer": []
@@ -3111,6 +3186,28 @@
                               ],
                               "additionalProperties": false
                             },
+                            "advisorProfiles": {
+                              "type": "object",
+                              "description": "The Advisor profiles the task runs with, keyed by role: reviewer, planner_a, planner_b, or rater. A workflow without Advisors returns an empty object.",
+                              "additionalProperties": {
+                                "type": "object",
+                                "description": "The agent profile. name is null when that profile no longer exists.",
+                                "properties": {
+                                  "id": {
+                                    "type": "string"
+                                  },
+                                  "name": {
+                                    "nullable": true,
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "id",
+                                  "name"
+                                ],
+                                "additionalProperties": false
+                              }
+                            },
                             "deliveryTarget": {
                               "type": "string",
                               "enum": [
@@ -3154,6 +3251,7 @@
                             "templateId",
                             "rootProfile",
                             "workerProfile",
+                            "advisorProfiles",
                             "deliveryTarget",
                             "branch",
                             "dependsOn",
@@ -4789,6 +4887,61 @@
                           "type": "string"
                         },
                         "value": {
+                          "type": "string"
+                        },
+                        "reason": {
+                          "type": "string"
+                        },
+                        "findings": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "code": {
+                                "type": "string"
+                              },
+                              "field": {
+                                "type": "string"
+                              },
+                              "message": {
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "code",
+                              "field",
+                              "message"
+                            ],
+                            "additionalProperties": false
+                          }
+                        }
+                      },
+                      "required": [
+                        "error",
+                        "code",
+                        "field",
+                        "value",
+                        "reason"
+                      ],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "error": {
+                          "type": "string"
+                        },
+                        "code": {
+                          "type": "string",
+                          "enum": [
+                            "profile_not_allowed"
+                          ]
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "nullable": true,
                           "type": "string"
                         },
                         "reason": {

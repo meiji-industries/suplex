@@ -1,7 +1,7 @@
 ---
 name: suplex
-version: 1
-description: Work with Suplex tasks as a paired external agent. Use when the person you work for asks to create, find, check, change, or command a task in Suplex, or to confirm this client's Suplex pairing.
+version: 2
+description: Work with Suplex tasks as a paired external agent. Use when the person you work for asks to create, find, check, change, command, or answer a question on a task in Suplex, or to confirm this client's Suplex pairing.
 ---
 
 # Suplex
@@ -30,19 +30,70 @@ Use the first transport that is available. All three speak the same API:
    `claude mcp add --transport http suplex {SUPLEX_BASE_URL}/mcp`. An
    administrator approves the company and projects in the browser.
 3. **`suplex_client.py`** in this directory. It is standard library only,
-   uses the paired credential, and speaks the same routes.
+   uses the paired credential, and speaks the same routes. From a shell, use
+   its command line: one command per call, JSON on stdout. Use its Python API
+   when you already run Python, or when the command line does not have the
+   call you need.
 
 The `suplex` CLI is not required. Do not install it for this skill, and do not
 ask for a Suplex checkout. The npm package named `suplex` is unrelated; do not
 use it. The local stdio bridge `suplex mcp` is an option only when the Suplex
 app or a checkout is already present (check with `suplex --version`). It
-provides the same tools as option 1.
+provides the same tools as option 1. The `suplex` CLI has no task commands;
+do not look for them.
+
+### Command line
+
+Run the client from this directory. Each command calls one route and prints
+the JSON response on stdout. `python3 suplex_client.py --help` lists the
+commands, and `python3 suplex_client.py tasks answer --help` shows the options
+of one command.
+
+```bash
+python3 suplex_client.py whoami
+python3 suplex_client.py tasks list --project "$PROJECT_ID" --status waiting_human
+python3 suplex_client.py tasks get "$TASK_ID"
+python3 suplex_client.py tasks create --project "$PROJECT_ID" --title "Add saved searches" --description-file - < description.md
+python3 suplex_client.py tasks command "$TASK_ID" send_task_note --revision "$REVISION" --note-file - < note.md
+python3 suplex_client.py tasks answer "$TASK_ID" --revision "$REVISION" --question "$QUESTION_ID" --option "$OPTION_ID"
+```
+
+| Command | Route |
+| --- | --- |
+| `whoami` (or `me`), `projects`, `capabilities` | identity, granted projects, and capabilities |
+| `workflows --project`, `templates --project` | workflows and templates of a project |
+| `profiles [--role] [--project] [--include-archived]` | agent profiles |
+| `project-agents PROJECT --updated-at` | default agents of a project |
+| `health` | the host health snapshot; needs the system health grant |
+| `tasks list`, `tasks get TASK` | read tasks; `--query NAME=VALUE` adds any other filter |
+| `tasks create`, `tasks update TASK --revision` | create or change a task; `--fields JSON` adds other request fields |
+| `tasks command TASK COMMAND --revision` | a lifecycle command; `--note` only for `send_task_note` |
+| `tasks answer TASK --revision --question` | `answer_human_question` with exactly one of `--option` or `--answer` |
+| `tasks dependencies TASK` | replace the complete prerequisite set |
+| `tasks turns TASK`, `tasks history TASK SESSION` | turns and one transcript page |
+| `moves list/get/create/update/delete/start/runs` | Moves |
+| `runs get/transcript/stop/archive RUN` | Move runs |
+
+- Long or private text, such as a description, note, answer, or Move prompt,
+  can come from a file: `--description-file PATH`, `--note-file PATH`,
+  `--answer-file PATH`, or `--prompt-file PATH`. `-` reads standard input.
+- Writes derive their `idempotencyKey` from the request, as the Python API
+  does. Retry a failed write with the same arguments to reuse the key.
+- On failure the client prints one JSON line on stderr with `error`, `status`,
+  and `code`, and sometimes `findings`. Exit status 1 is a Suplex refusal or
+  an unreachable server. Exit status 2 is a usage or configuration error.
+- No argument accepts the credential or the base URL. Set them in the
+  environment; see [Configuration](#configuration).
+
+### Python API
 
 ```python
 from suplex_client import SuplexClient, SuplexError, SuplexCredentialInvalid
 client = SuplexClient()            # reads the environment at call time
 identity = client.whoami()
 ```
+
+The examples below use the Python API. Each method has a matching command.
 
 ## Guardrails
 
@@ -109,10 +160,7 @@ all. Treat the served list as authoritative and never call a command it omits.
 
 When `suplex_whoami` reports `capabilities.humanAnswers: true`, you may answer
 a task's plain Coordinator question for the administrator in `answerGrant`.
-Read the task, then send `answer_human_question` with the current `revision`,
-`questionId` from `question.id`, and exactly one of `optionId` from
-`question.options` or free-text `answer`. Answer only what the person you work
-for would answer; otherwise surface the question to them.
+See [Questions from Suplex](#questions-from-suplex).
 
 `GET /api/agent/openapi.json` returns the authenticated runtime contract if
 you need the exact request shapes.
@@ -157,6 +205,10 @@ Call `suplex_list_workflows(projectId)` and `suplex_list_templates(projectId)`
 before you set `workflowId` or `templateId`. Each result has `id`, `name`,
 `description`, and `permittedForAgentTaskCreation` (always `true`: any listed
 record can be used). A workflow is shared by projects. A template belongs to the project in the request.
+Each workflow also has `defaultProfiles`: the `rootProfile`, `workerProfile`,
+and `advisorProfiles` (keyed by role) that a task in this project uses with
+that workflow when you name none. A role that no allowed profile can fill is
+`null`.
 
 ## Before you create: list first
 
@@ -200,6 +252,14 @@ Omitting both a workflow and a template selects Standard. Omitted
 or workflow, then the project; the created task reports the applied values back. Omit `description` to keep a template's
 description; sending it, even as `""`, overrides it. Never send local paths,
 URLs, credentials, or file references.
+
+With a workflow, a profile you do not name comes from the project's Agents
+defaults first, then from the workflow record, each only when the project's
+provider policy allows it. A named profile that the policy does not allow, or
+a role that no allowed profile can fill, returns `422 profile_not_allowed` with
+`field` (`rootProfileId`, `workerProfileId`, or `advisorProfileIds.<role>`),
+`value` (the profile ID), and `reason`. A dry run reports the resolved
+`rootProfile`, `workerProfile`, and `advisorProfiles`.
 
 An unknown or archived workflow returns `422 workflow_not_found`. A template
 that is not in the project returns `422 template_not_found`.
@@ -287,8 +347,10 @@ doubles its delay up to 60 seconds. Over MCP, pass `knownRevision` to
 `revision`, an `idempotencyKey`, and `note` only for `send_task_note`.
 
 Commands: `start_task`, `move_to_front`, `force_start`, `disarm_task`, `cancel_task`, `archive_task`, `unarchive_task`,
-`duplicate_task`, `send_task_note`, `recheck_delivery_wait`. Send only what the
-task's `permittedCommands` lists.
+`duplicate_task`, `send_task_note`, `recheck_delivery_wait`, and, with the
+answer grant, `answer_human_question` (see
+[Questions from Suplex](#questions-from-suplex)). Send only what the task's
+`permittedCommands` lists.
 
 ```python
 task = client.get_task(task_id)
@@ -393,9 +455,12 @@ client.update_project_agents(project_id, project["updatedAt"], workerProfileId=w
 
 ## Reading approval, blocked, waiting_human, and stale answers
 
-- **`status: "waiting_human"`**: Suplex is waiting for a person, not for you.
-  Read `humanQuestion` and `blocker`. If `blocker.kind` is `"human_question"`,
-  relay the question to the person you work for. You cannot answer it.
+- **`status: "waiting_human"`**: Suplex is waiting for a person. Read
+  `humanQuestion` and `blocker`. If `blocker.kind` is `"human_question"`, the
+  Coordinator asked a question. Follow
+  [Questions from Suplex](#questions-from-suplex): answer it when you are
+  permitted and can give an informed answer, otherwise tell the person you
+  work for.
 - **`blocker.kind: "delivery_wait"`**: Suplex is waiting on delivery.
   `blocker.reason` is `checks`, `mergeability`, `merge_queue`, `observation`, or
   `review`. `recheck_delivery_wait` asks Suplex to look again; it is safe
@@ -420,6 +485,45 @@ client.update_project_agents(project_id, project["updatedAt"], workerProfileId=w
   command is a different thing: it means your copy of the task is old.
 - **`blockedBy` / `blocked_by_dependency`**: the task waits on other tasks.
   Report the blocking tasks; do not cancel or force anything.
+
+## Questions from Suplex
+
+The Coordinator of a task can ask the person a question, for example to choose
+between designs or to clarify a requirement. The task then has status
+`waiting_human`, `blocker.kind` `"human_question"`, the question text in
+`humanQuestion`, and `question` with its `id` and any `options`. The task
+waits until someone answers.
+
+1. Read the task. Check that `permittedCommands` includes
+   `answer_human_question`. It does only when an administrator lets this agent
+   answer on their behalf (`capabilities.humanAnswers` in `suplex_whoami`).
+2. Answer when you can give an informed answer from what you know about the
+   intent of the person you work for: their request, the task description,
+   and what they told you. This includes a design clarification that the
+   Coordinator sends back. Send the current `revision`, `questionId` from
+   `question.id`, and exactly one of `optionId` from `question.options` or a
+   free-text `answer`. Say in the answer what it is based on.
+3. Otherwise, tell the person you work for the question and its options, and
+   leave the task waiting. Do this when the command is not permitted, when the
+   answer needs a decision they did not make, or when you are not sure.
+
+```bash
+python3 suplex_client.py tasks answer "$TASK_ID" --revision "$REVISION" --question "$QUESTION_ID" --option "$OPTION_ID"
+python3 suplex_client.py tasks answer "$TASK_ID" --revision "$REVISION" --question "$QUESTION_ID" --answer-file - < answer.md
+```
+
+```python
+task = client.get_task(task_id)
+if "answer_human_question" in task["permittedCommands"]:
+    client.answer_question(task_id, task["revision"], task["question"]["id"], answer="Keep the compact list. The request asks for a dense view.")
+```
+
+A task limit decision and a confirmation that commands stopped always stay
+with a person, even with the grant: Suplex returns `409 human_decision_required`.
+Tell the person you work for. Other refusals: `403 answer_grant_required`
+(no grant), `409 question_stale` or `409 task_not_waiting` (read the task
+again; someone else answered or the question changed), and
+`422 option_not_offered`. None of them changes the task.
 
 ## Moves
 
@@ -500,6 +604,6 @@ issue key or ID, and the status. Never the pairing code or the credential.
 ## Verify this skill
 
 ```bash
-python3 suplex_client.py --self-check   # redaction and idempotency keys, no server
+python3 suplex_client.py --self-check   # redaction, idempotency keys, answers, and commands, no server
 python3 smoke_test.py                  # live pairing check against Suplex
 ```

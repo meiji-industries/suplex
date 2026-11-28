@@ -462,8 +462,9 @@ client.update_project_agents(project_id, project["updatedAt"], workerProfileId=w
   permitted and can give an informed answer, otherwise tell the person you
   work for.
 - **`blocker.kind: "delivery_wait"`**: Suplex is waiting on delivery.
-  `blocker.reason` is `checks`, `mergeability`, `merge_queue`, `observation`, or
-  `review`. `recheck_delivery_wait` asks Suplex to look again; it is safe
+  `blocker.reason` is `checks`, `mergeability`, `merge_queue`, `merge_turn`,
+  `observation`, or `review`. `merge_turn` means another task is merging into
+  the same base; Suplex retries automatically. `recheck_delivery_wait` asks Suplex to look again; it is safe
   and does not commit anything. `review` needs a person to review the pull
   request on GitHub. It is not for you to fix. Tell the person you work for if
   they ask; `integration.pullRequest.codeOwnerReviewers` names the reviewers.

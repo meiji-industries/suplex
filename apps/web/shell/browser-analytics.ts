@@ -32,7 +32,7 @@ const staticSegments = new Set([
   "quick-shell", "recent-repositories", "refresh", "rename", "repair", "replace-coordinator",
   "replace-worker", "repositories", "repository-defaults", "repository-owners", "repository-status",
   "restart", "restore", "revoke", "role", "rotate", "runs", "save-as-template", "select-agent", "sessions",
-  "settings", "setup", "sign-out", "start", "status", "subscription", "summary", "sync", "system",
+  "settings", "setup", "sign-out", "start", "status", "subscription", "summary", "sync", "system", "system-health-grant",
   "task-agents", "task-costs", "task-sources", "task-templates", "tasks", "telemetry", "templates",
   "terminal", "test", "timeline", "today", "transcript", "transcripts-grant", "transfer", "trial",
   "triggers", "turns", "unarchive", "update", "users", "web-push", "workflows", "worktree",

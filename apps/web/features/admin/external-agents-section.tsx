@@ -48,6 +48,7 @@ export function ExternalAgentsSection({
   onSetMovesGrant,
   onSetTranscriptsGrant,
   onSetProjectAgentsGrant,
+  onSetSystemHealthGrant,
   onRevokeAgent,
   onClearPendingAction,
 }: {
@@ -63,6 +64,7 @@ export function ExternalAgentsSection({
   onSetMovesGrant: (agent: ApiExternalAgent, granted: boolean) => Promise<void>;
   onSetTranscriptsGrant: (agent: ApiExternalAgent, granted: boolean) => Promise<void>;
   onSetProjectAgentsGrant: (agent: ApiExternalAgent, granted: boolean) => Promise<void>;
+  onSetSystemHealthGrant: (agent: ApiExternalAgent, granted: boolean) => Promise<void>;
   onRevokeAgent: (agent: ApiExternalAgent) => Promise<void>;
   onClearPendingAction: () => void;
 }): ReactElement {
@@ -87,6 +89,7 @@ export function ExternalAgentsSection({
             const movesGrantedAt = agent.movesGrantedAt;
             const transcriptsGrantedAt = agent.transcriptsGrantedAt;
             const projectAgentsGrantedAt = agent.projectAgentsGrantedAt;
+            const systemHealthGrantedAt = agent.systemHealthGrantedAt;
             return (
               <SettingsTableRow
                 aria-label={`External agent ${agent.name}`}
@@ -211,6 +214,12 @@ export function ExternalAgentsSection({
                           onCheckedChange={(checked) => void onSetTranscriptsGrant(agent, checked)}
                         >
                           Read task transcripts
+                        </DropdownMenuCheckboxItem>
+                        <DropdownMenuCheckboxItem
+                          checked={systemHealthGrantedAt !== null && systemHealthGrantedAt !== undefined}
+                          onCheckedChange={(checked) => void onSetSystemHealthGrant(agent, checked)}
+                        >
+                          Read system health
                         </DropdownMenuCheckboxItem>
                         <DropdownMenuCheckboxItem
                           checked={projectAgentsGrantedAt !== null && projectAgentsGrantedAt !== undefined}

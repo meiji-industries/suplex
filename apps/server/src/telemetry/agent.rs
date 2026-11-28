@@ -87,7 +87,7 @@ pub fn profile_hash(profile_id: &str) -> String {
 }
 
 /// Error codes that an agent surface returns. Any other code is `other`.
-const ERROR_CODES: [&str; 49] = [
+const ERROR_CODES: [&str; 50] = [
     "advisor_profile_not_found",
     "advisor_role_not_in_workflow",
     "alt_profile_not_found",
@@ -127,6 +127,7 @@ const ERROR_CODES: [&str; 49] = [
     "source_branch_rejected",
     "source_issue_rejected",
     "source_pull_request_rejected",
+    "system_health_grant_required",
     "task_failure",
     "task_not_waiting",
     "task_unavailable",

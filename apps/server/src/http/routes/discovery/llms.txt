@@ -30,6 +30,7 @@ Read /api/agent/openapi.json after pairing. That document is authoritative; this
 - GET /api/agent/workflows (agent credential): List workflow records for a granted project, whether task creation permits each one, and the default Coordinator, Worker, and Advisor profiles a task in that project uses with each one.
 - GET /api/agent/templates (agent credential): List task templates for a granted project and whether task creation permits each one.
 - GET /api/agent/profiles (agent credential): List agent profiles with role, provider, model, archive state, isDefaultForRole, and which granted projects allow each one. Filter by role, includeArchived, and projectId. Every paired agent can use it.
+- GET /api/agent/health (agent credential): Read the host health snapshot of the Suplex health page: generatedAt, reachableAddress, ready, and checks, such as disk-space with its free and total bytes. It needs the administrator's system health grant; without it the route answers 403 with system_health_grant_required.
 - PATCH /api/agent/projects/{projectId}/agents (agent credential): Change a granted project's default Coordinator, Worker, or Alt Coordinator with its updatedAt and an idempotency key. It needs the administrator's project agents grant; without it every project answers 404 with project_agents_grant_required. Rejected profiles report root_profile_not_found, worker_profile_not_found, alt_profile_not_found, or profile_not_allowed with field, value, and reason.
 - GET /api/agent/tasks (agent credential): List tasks in the agent's currently granted projects. Filter by pull request number, source branch, or title substring. HTTP defaults to the full view; MCP suplex_list_tasks defaults to summary and accepts view=full.
 - GET /api/agent/moves (agent credential): List Moves in a currently granted project when the agent also has the Move grant. Without the Move grant, Move routes answer 403 with moves_grant_required and name the setting an administrator turns on.
@@ -49,7 +50,7 @@ Read /api/agent/openapi.json after pairing. That document is authoritative; this
 
 ## Administration
 
-OAuth connections, pairing codes, credential rotation, revocation, project grants, and permission to answer questions, run Moves, read transcripts, and change project agents appear on the Agents page. An administrator controls them.
+OAuth connections, pairing codes, credential rotation, revocation, project grants, and permission to answer questions, run Moves, read transcripts, change project agents, and read system health appear on the Agents page. An administrator controls them.
 
 ## Notes
 

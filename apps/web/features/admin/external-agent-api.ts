@@ -27,6 +27,11 @@ export function setExternalAgentProjectAgentsGrant(agentId: string, granted: boo
   return readJsonUnchecked<ExternalAgentResult>(`${agentPath(agentId)}/project-agents-grant`, { method: "PUT", body: JSON.stringify({ granted }) });
 }
 
+/** Let the agent read the host health snapshot, or stop it. */
+export function setExternalAgentSystemHealthGrant(agentId: string, granted: boolean): Promise<ExternalAgentResult> {
+  return readJsonUnchecked<ExternalAgentResult>(`${agentPath(agentId)}/system-health-grant`, { method: "PUT", body: JSON.stringify({ granted }) });
+}
+
 /** Revocation answers 204 with no body. */
 export async function revokeExternalAgent(agentId: string): Promise<void> {
   await readJson(`${agentPath(agentId)}/revoke`, { method: "POST", body: "{}" });

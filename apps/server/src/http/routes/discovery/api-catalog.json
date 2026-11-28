@@ -92,6 +92,12 @@
       "description": "List agent profiles with role, provider, model, archive state, isDefaultForRole, and which granted projects allow each one. Filter by role, includeArchived, and projectId. Every paired agent can use it."
     },
     {
+      "path": "/api/agent/health",
+      "method": "GET",
+      "authentication": "agent credential",
+      "description": "Read the host health snapshot of the Suplex health page: generatedAt, reachableAddress, ready, and checks, such as disk-space with its free and total bytes. It needs the administrator's system health grant; without it the route answers 403 with system_health_grant_required."
+    },
+    {
       "path": "/api/agent/projects/{projectId}/agents",
       "method": "PATCH",
       "authentication": "agent credential",
@@ -138,7 +144,7 @@
     }
   ],
   "administration": {
-    "description": "OAuth connections, pairing codes, credential rotation, revocation, project grants, and permission to answer questions, run Moves, read transcripts, and change project agents appear on the Agents page. An administrator controls them."
+    "description": "OAuth connections, pairing codes, credential rotation, revocation, project grants, and permission to answer questions, run Moves, read transcripts, change project agents, and read system health appear on the Agents page. An administrator controls them."
   },
   "notes": [
     "Suplex conceals tasks that the caller cannot read. Denied and missing tasks both answer 404 with resource_not_found.",

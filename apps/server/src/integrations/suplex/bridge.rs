@@ -139,6 +139,10 @@ impl Bridge {
                 self.request(Method::GET, "/api/agent/capabilities", None, &[])
                     .await
             }
+            "suplex_get_system_health" => {
+                self.request(Method::GET, "/api/agent/health", None, &[])
+                    .await
+            }
             "suplex_list_workflows" | "suplex_list_templates" => {
                 let project_id = super::project_arguments(args).map_err(invalid)?;
                 let route = if name == "suplex_list_workflows" {

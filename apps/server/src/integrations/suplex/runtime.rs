@@ -55,8 +55,12 @@ impl SuplexMcpRuntime {
                     principal.moves_grant,
                     principal.transcripts_grant,
                     principal.project_agents_grant,
+                    principal.system_health_grant,
                 ),
             )),
+            "suplex_get_system_health" => {
+                Ok((200, routes::agent_system_health(state, principal).await?))
+            }
             "suplex_list_workflows" => {
                 let project_id = super::project_arguments(args)?;
                 let workflows = state.with_database(|database| {
@@ -594,7 +598,7 @@ mod tests {
         .await;
         assert_eq!(
             capabilities["result"]["structuredContent"]["body"],
-            crate::http::routes::agent_api::capabilities(true, false, true, false, false)
+            crate::http::routes::agent_api::capabilities(true, false, true, false, false, false)
         );
     }
 }

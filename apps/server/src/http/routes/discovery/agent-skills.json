@@ -3,7 +3,7 @@
   "skills": [
     {
       "name": "suplex",
-      "summary": "Work with Suplex tasks as a paired agent: discover capabilities, projects, workflows, templates, and agent profiles; create backlog tasks idempotently; update backlog and queued tasks; set their prerequisites; poll them; read the turns of a task and what they cost; send lifecycle commands; with an answer grant, answer a Coordinator question; and, with an administrator's Move grant, manage and run saved Moves, or, with a transcript grant, read task transcripts, or, with a project agents grant, change the default agents of a project.",
+      "summary": "Work with Suplex tasks as a paired agent: discover capabilities, projects, workflows, templates, and agent profiles; create backlog tasks idempotently; update backlog and queued tasks; set their prerequisites; poll them; read the turns of a task and what they cost; send lifecycle commands; with an answer grant, answer a Coordinator question; and, with an administrator's Move grant, manage and run saved Moves, or, with a transcript grant, read task transcripts, or, with a project agents grant, change the default agents of a project, or, with a system health grant, read the host health snapshot.",
       "source": "skills/suplex",
       "instructions": "skills/suplex/SKILL.md",
       "install": "docs/agent-skill.md",
@@ -39,7 +39,8 @@
             "suplex_stop_move_run",
             "suplex_archive_move_run",
             "suplex_list_task_turns",
-            "suplex_get_task_session_history"
+            "suplex_get_task_session_history",
+            "suplex_get_system_health"
           ],
           "description": "The remote MCP endpoint uses browser sign-in and explicit project approval.",
           "documentation": "docs/agent-mcp.md"
@@ -75,7 +76,8 @@
             "suplex_stop_move_run",
             "suplex_archive_move_run",
             "suplex_list_task_turns",
-            "suplex_get_task_session_history"
+            "suplex_get_task_session_history",
+            "suplex_get_system_health"
           ],
           "description": "An advanced local bridge that uses a paired-agent credential.",
           "documentation": "docs/agent-mcp.md"

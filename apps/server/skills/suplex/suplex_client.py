@@ -279,6 +279,10 @@ class SuplexClient:
         suffix = f"?{urllib.parse.urlencode({'before': before})}" if before else ""
         return self.call("GET", f"/api/agent/tasks/{urllib.parse.quote(task_id, safe='')}/sessions/{urllib.parse.quote(session_id, safe='')}/history{suffix}")
 
+    def get_system_health(self) -> dict:
+        """The host health snapshot. Needs the administrator's system health grant."""
+        return self.call("GET", "/api/agent/health")
+
     # Moves. Served only when an administrator granted this agent Move access.
 
     def list_moves(self, project_id: str) -> dict:
@@ -409,6 +413,7 @@ def build_parser() -> argparse.ArgumentParser:
     commands.add_parser("whoami", aliases=["me"], help="agent identity, granted projects, and grants")
     commands.add_parser("projects", help="granted projects with their defaults (the projects of whoami)")
     commands.add_parser("capabilities", help="commands and records this agent can use")
+    commands.add_parser("health", help="the host health snapshot; needs the system health grant")
     for name in ("workflows", "templates"):
         sub = commands.add_parser(name, help=f"list {name} for a project")
         sub.add_argument("--project", required=True)
@@ -524,6 +529,8 @@ def dispatch(client: SuplexClient, args: argparse.Namespace, stdin=None):
         return client.whoami().get("projects", [])
     if command == "capabilities":
         return client.capabilities()
+    if command == "health":
+        return client.get_system_health()
     if command == "workflows":
         return client.list_workflows(args.project)
     if command == "templates":
@@ -668,12 +675,14 @@ def _self_check() -> None:
     client.get_task_session_history("t 1", "s/1", before="m")
     client.list_profiles(role="worker", project_id="p 1")
     client.update_project_agents("p/1", "2026-01-01T00:00:00.000Z", key="k", rootProfileId="r")
+    client.get_system_health()
     assert [(method, path) for method, path, _ in seen] == [
         ("GET", "/api/agent/tasks/t%201/turns?limit=5&cursor=c"),
         ("GET", "/api/agent/tasks/t2/turns"),
         ("GET", "/api/agent/tasks/t%201/sessions/s%2F1/history?before=m"),
         ("GET", "/api/agent/profiles?includeArchived=false&role=worker&projectId=p+1"),
         ("PATCH", "/api/agent/projects/p%2F1/agents"),
+        ("GET", "/api/agent/health"),
     ], seen
 
     # answer_human_question: questionId and exactly one of optionId or answer, with a derived key.
@@ -707,6 +716,7 @@ def _self_check() -> None:
         (["whoami"], "GET", "/api/agent/me", None),
         (["me"], "GET", "/api/agent/me", None),
         (["capabilities"], "GET", "/api/agent/capabilities", None),
+        (["health"], "GET", "/api/agent/health", None),
         (["workflows", "--project", "p1"], "GET", "/api/agent/workflows?projectId=p1", None),
         (["templates", "--project", "p1"], "GET", "/api/agent/templates?projectId=p1", None),
         (["profiles", "--role", "root"], "GET", "/api/agent/profiles?includeArchived=false&role=root", None),

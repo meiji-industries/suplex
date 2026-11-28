@@ -367,6 +367,45 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
+    async fn administrators_toggle_system_health_grants_for_paired_agents() {
+        let server = server(None).await;
+        let admin = Some(server.admin_cookie.as_str());
+        let (_, created) = server.send(reqwest::Method::POST, "/api/admin/external-agents", admin, Some(json!({"name":"Health agent","companyId":"company_api","projectIds":["project_api"]}))).await;
+        assert!(created["agent"]["systemHealthGrantedAt"].is_null());
+        let id = created["agent"]["id"].as_str().unwrap();
+        let (_, paired) = server.send(reqwest::Method::POST, "/api/agent/pairing/exchange", None, Some(json!({"pairingCode":created["pairingCode"],"profileId":"system-health"}))).await;
+        let bearer = format!("Bearer {}", paired["credential"].as_str().unwrap());
+        let headers = [("authorization", bearer.as_str())];
+        async fn me(server: &Server, headers: &[(&str, &str)]) -> Value {
+            server.request(reqwest::Method::GET, "/api/agent/me", headers, None).await.json::<Value>().await.unwrap()
+        }
+        let audits = |granted: &str| -> i64 {
+            server.state.with_database(|database| database.connection().query_row(
+                "SELECT COUNT(*) FROM suplex_audit_events WHERE action = 'external_agent_system_health_grant_updated' AND json_extract(metadata_json, '$.agentId') = ?1 AND json_extract(metadata_json, '$.systemHealthGranted') = ?2",
+                [id, granted],
+                |row| row.get(0),
+            ).unwrap())
+        };
+        assert_eq!(me(&server, &headers).await["systemHealthGrant"], false);
+        assert_eq!(server.request(reqwest::Method::GET, "/api/agent/health", &headers, None).await.status(), 403);
+        let (status, granted) = server.send(reqwest::Method::PUT, &format!("/api/admin/external-agents/{id}/system-health-grant"), admin, Some(json!({"granted":true}))).await;
+        assert_eq!(status, 200);
+        assert!(granted["agent"]["systemHealthGrantedAt"].is_string());
+        assert!(granted["agent"]["systemHealthGrantedByUserId"].is_string());
+        assert_eq!(audits("true"), 1);
+        assert_eq!(me(&server, &headers).await["capabilities"]["systemHealth"], true);
+        assert_eq!(server.request(reqwest::Method::GET, "/api/agent/health", &headers, None).await.status(), 200);
+        let (status, revoked) = server.send(reqwest::Method::PUT, &format!("/api/admin/external-agents/{id}/system-health-grant"), admin, Some(json!({"granted":false}))).await;
+        assert_eq!(status, 200);
+        assert!(revoked["agent"]["systemHealthGrantedAt"].is_null());
+        assert!(revoked["agent"]["systemHealthGrantedByUserId"].is_null());
+        assert_eq!(audits("false"), 1);
+        assert_eq!(me(&server, &headers).await["systemHealthGrant"], false);
+        assert_eq!(server.request(reqwest::Method::GET, "/api/agent/health", &headers, None).await.status(), 403);
+        assert_eq!(server.send(reqwest::Method::PUT, &format!("/api/admin/external-agents/{id}/system-health-grant"), Some(server.member_cookie.as_str()), Some(json!({"granted":true}))).await.0, 404);
+    }
+
+    #[tokio::test]
     async fn administrators_toggle_project_agents_grants_for_paired_agents() {
         let server = server(None).await;
         let admin = Some(server.admin_cookie.as_str());
